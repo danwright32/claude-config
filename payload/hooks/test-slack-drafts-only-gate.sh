@@ -53,6 +53,12 @@ fi
 T="$(mktemp -d "${TMPDIR:-/tmp}/slack-gate.XXXXXXXX")" || exit 1
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
 trap 'rm -rf "$T"' EXIT
+# The gate keeps the judgements it allowed in a cache (claude-config#2918). Every case in this suite
+# runs with one of its own, so the cache is in front of every judgement below, and none of them reads
+# or writes the cache in this Mac's ~/.claude/state. The cost checks each start from an empty one, so
+# they measure a cold judgement.
+export SLACK_GATE_CACHE_DIR="$T/gate-cache"
+unset SLACK_GATE_CACHE_TRACE
 
 # payload <tool name> <tool_input JSON> [cwd]: one PreToolUse payload in the measured shape.
 payload() {
@@ -3941,9 +3947,9 @@ ratio = spent / unit
 print("ok" if ratio <= ceiling else "judging it took %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s"
       % (spent, ratio, unit, ceiling))
 PY
-  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
+  cost="$(SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
   check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
-  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
+  cost="$(SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
   check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
 fi
 
@@ -3956,8 +3962,13 @@ fi
 # inside the budget. Measured on 2026-11-13: about 22 readings before #2918 (21.5 to 24 under load),
 # about 15 after.
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
-  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 19 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  warm="$(mktemp -d "$T/warm.XXXXXX")"
+  cost="$(SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 19 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "bash tests/test-claude-sync.sh is judged within 19 readings of claude-sync, about half the budget (#2918)" "$cost"
+  # Judged again with nothing changed, it is answered from the judgement cache: every file it read
+  # and every disk test it answered is checked again, and nothing is walked.
+  cost="$(SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 2 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  check "judged a second time, bash tests/test-claude-sync.sh takes at most 2 readings of claude-sync, from the cache (#2918)" "$cost"
 else
   # L411: installed in ~/.claude there is no checkout, so no suite to judge.
   echo "SUITE-PART-UNMEASURED #2918: no claude-config checkout with tests/test-claude-sync.sh beside this suite, so the time to judge it was not measured"
@@ -4884,6 +4895,72 @@ read_refused "a shell run on a file named as TypeScript still reads it as comman
 # nothing and names no endpoint. Recorded here so the change is a decision, not a surprise.
 run_v "./node_modules/.bin/vitest run scripts/named.ts"
 allowed "shell commands in a file named as TypeScript, handed to a shell launcher, are read as TypeScript (no longer followed)"
+
+echo "slack drafts only: a judgement kept in the cache is used only while everything it read is unchanged (#2918)"
+# The gate keeps an allowed call's judgement, keyed on what it was given, with every file it read and
+# every disk test it answered recorded and checked again before the kept answer is used. A refusal is
+# never kept. The cache's own checks (the one route to the disk, the size bound) are in
+# test-judgement-cache.sh; these are the judgements themselves.
+JC="$T/jc"; mkdir -p "$JC/w"
+export SLACK_GATE_CACHE_DIR="$T/jc-cache" SLACK_GATE_CACHE_TRACE="$T/jc-trace"
+jc_run() { : > "$SLACK_GATE_CACHE_TRACE"; run_raw "$(payload Bash "$(bash_input "$1")" "$JC/w")"; }
+# traced <what> <start> [<also>]: a trace line starts with <start> (so "stored" is never "not stored")
+# and, where given, holds <also>.
+traced() { if awk -v p="$2" -v q="${3:-}" 'index($0, p) == 1 && (q == "" || index($0, q)) { f = 1 } END { exit !f }' "$SLACK_GATE_CACHE_TRACE"
+           then check "$1" ok; else check "$1" "the cache traced: $(tr '\n' '|' < "$SLACK_GATE_CACHE_TRACE")"; fi; }
+printf '%s\n' '#!/bin/bash' 'D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '. "$D/lib.sh"' 'bash "$D/later.sh"' > "$JC/run.sh"
+printf '%s\n' 'greet() { echo hi; }' > "$JC/lib.sh"
+POSTS="curl -s https://slack.com/api/chat""\x2epostMessage -d text=hi"
+jc_run "bash $JC/run.sh"
+allowed "a script sourcing a file that does not post is allowed"
+traced "its judgement is kept" "stored"
+jc_run "bash $JC/run.sh"
+allowed "judged again with nothing changed, it is allowed"
+traced "the second judgement is answered from the cache" "hit"
+# A changed sourced file: the kept judgement read lib.sh, so it is judged afresh and refused.
+cp "$JC/lib.sh" "$JC/lib.sh.was"
+printf "$POSTS\n" >> "$JC/lib.sh"
+jc_run "bash $JC/run.sh"
+refused "once the file it sources posts, the same command is refused"
+traced "the kept judgement is not used once a file it read has changed" "miss: read" "answers differently now"
+traced "a refusal is never kept" "not stored: refused"
+cp "$JC/lib.sh.was" "$JC/lib.sh"
+jc_run "bash $JC/run.sh"
+allowed "with the sourced file put back as it was, it is allowed"
+traced "and answered from the cache, which keys a file on what it holds" "hit"
+# A changed disk answer: later.sh was not there, so there was nothing to run. Made, and posting, it is.
+printf "$POSTS\n" > "$JC/later.sh"
+jc_run "bash $JC/run.sh"
+refused "once the script it runs is there and posts, the same command is refused"
+traced "the kept judgement is not used once a disk test it answered would answer differently" "miss: " "later.sh'] answers differently now"
+rm -f "$JC/later.sh"
+# A corrupt entry: unreadable as an entry, it is no judgement, and the call is judged afresh.
+for f in "$T/jc-cache"/*.json; do printf 'not an entry' > "$f"; done
+jc_run "bash $JC/run.sh"
+allowed "with its kept entry corrupt, the command is judged afresh and allowed"
+traced "a corrupt entry is not used" "miss: the entry is not an entry"
+traced "and the fresh judgement is kept in its place" "stored"
+for f in "$T/jc-cache"/*.json; do python3 -c 'import sys; p = sys.argv[1]; s = open(p).read(); open(p, "w").write(s[: len(s) // 2])' "$f"; done
+jc_run "bash $JC/run.sh"
+traced "an entry cut short is not used" "miss: the entry is not an entry"
+for f in "$T/jc-cache"/*.json; do
+  python3 -c 'import json, sys; p = sys.argv[1]; e = json.load(open(p)); e["reads"] = e["reads"][1:]; json.dump(e, open(p, "w"))' "$f"
+done
+jc_run "bash $JC/run.sh"
+traced "an entry with a recorded read taken out is not used" "miss: the entry is not a whole allow"
+# A change to anything the key covers is a different entry: an environment variable the gate reads.
+CDPATH="$JC" jc_run "bash $JC/run.sh"
+traced "a call judged with a different value of a variable the gate reads finds no entry" "miss: no entry"
+unset SLACK_GATE_CACHE_TRACE
+# Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
+# with no cache named it is off, so no suite reads or writes this Mac's.
+env -u SLACK_GATE_CACHE_DIR -u HOOK_TESTS_RUNNING HOME="$T/jc-home" bash "$HOOK" <<< "$(payload Bash "$(bash_input "bash $JC/run.sh")" "$JC/w")" >/dev/null 2>&1
+if ls "$T/jc-home/.claude/state/slack-gate-cache/"*.json >/dev/null 2>&1; then check "outside a test run the judgement is kept under ~/.claude/state/slack-gate-cache" ok
+else check "outside a test run the judgement is kept under ~/.claude/state/slack-gate-cache" "nothing was written there"; fi
+env -u SLACK_GATE_CACHE_DIR HOOK_TESTS_RUNNING=1 HOME="$T/jc-home2" bash "$HOOK" <<< "$(payload Bash "$(bash_input "bash $JC/run.sh")" "$JC/w")" >/dev/null 2>&1
+if [ -e "$T/jc-home2/.claude" ]; then check "under a test run with no cache named, nothing is kept" "$T/jc-home2/.claude was made"
+else check "under a test run with no cache named, nothing is kept" ok; fi
+export SLACK_GATE_CACHE_DIR="$T/gate-cache"
 
 echo
 echo "slack drafts only: harmless commands it misread (claude-config#2913, #2922, #2910)"
