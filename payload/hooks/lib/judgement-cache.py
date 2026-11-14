@@ -67,10 +67,15 @@ KEY_ENV = ("CARGO_TARGET_DIR", "CDPATH", "DATA_GUARDED_RE", "GATE_DIR", "HOME", 
 # proxied one imported inside a function or under another name, where it would bypass install().
 #   pure: reads no disk.  proxied: replaced by install()'s stand in.  audited: what it does to the disk
 #   raises an audit event (open, os.listdir, subprocess.Popen, ...) that marks the judgement not keepable.
+# A module first imported in the middle of a judgement reads its own files to load, which the audit
+# hook sees, so that judgement is not kept (the gate's lazy `import tokenize`, for instance).
 MODULES = {
     "ast": "proxied", "bisect": "pure", "fnmatch": "pure", "functools": "pure", "json": "pure", "re": "pure",
     "shlex": "pure", "signal": "pure", "sys": "pure", "time": "pure", "warnings": "pure", "zlib": "pure",
     "faulthandler": "pure", "hashlib": "pure", "tomllib": "pure", "atexit": "pure",
+    # generate_tokens over text in memory; tokenize.open would read a file, through the builtin open,
+    # which the audit hook sees.
+    "tokenize": "pure",
     "os": "proxied", "glob": "proxied", "importlib.util": "proxied", "importlib.machinery": "proxied",
     "io": "audited", "lzma": "audited", "tarfile": "audited", "zipfile": "audited", "configparser": "audited",
     "tempfile": "audited", "shutil": "audited", "subprocess": "audited",
