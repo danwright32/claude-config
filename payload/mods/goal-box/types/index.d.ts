@@ -25,8 +25,6 @@ declare module 'claude-code' {
       shown: GoalBoxShown[]
       /** The met goals the session has already been told to show the box for, by judgement id. */
       asked: string[]
-      /** The folder the session started in, where Claude Code files its transcript by its id (#2898). */
-      startCwd: string
     }
   }
 }

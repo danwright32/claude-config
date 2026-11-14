@@ -39,8 +39,10 @@ const shownRef = { plugin: 'goal-box', key: 'shown' } as const
 const askedRef = { plugin: 'goal-box', key: 'asked' } as const
 const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
-// The folder the session started in, where Claude Code files its transcript (#2898).
-const startCwdRef = { plugin: 'goal-box', key: 'startCwd' } as const
+// The folder the session started in, where Claude Code files its transcript (#2898), kept as
+// scope-modes keeps its own: set at every session start, which fires again at each fresh load of the
+// mod (#1703), so a reload sets it again.
+let startCwd: string | null = null
 // is it live's own record of this session's merges, read here; it may not be loaded at all.
 const owedRef = { plugin: 'is-it-live', key: 'owed' } as const
 const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
@@ -71,14 +73,8 @@ const atIdsPath = async ($: EngineInterface): Promise<{ path: string } | { misse
   }
   if (!home) return { missed, failed: ['HOME is not set'] }
   if (!SESSION_ID.test(id)) return { missed, failed: [`this session's id is not one (${JSON.stringify(id)})`] }
-  let started: string | undefined
-  try {
-    started = (await $.state.get(startCwdRef)).value
-  } catch (err) {
-    failed.push(`the folder this session started in could not be read (${errorText(err, MOD)}), so only the one it is in now was looked in`)
-  }
   const projects = `${home}/.claude/projects`
-  for (const dir of new Set([started, here].filter((d): d is string => typeof d === 'string' && !!d))) {
+  for (const dir of new Set([startCwd, here].filter((d): d is string => typeof d === 'string' && !!d))) {
     let places: string[]
     try {
       places = await transcriptPlaces(d => $.fs.list(d), projects, dir, id)
@@ -334,7 +330,7 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(interactiveRef, e.isInteractive === true)
-    if (typeof e.cwd === 'string' && e.cwd) await $.state.set(startCwdRef, e.cwd)
+    if (typeof e.cwd === 'string' && e.cwd) startCwd = e.cwd
     // Only where somebody is at the prompt to see it; offered in full, not behind a search, so the
     // session knows when to call it.
     if (e.isInteractive) await $.tool.register({ name: NAME, description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
