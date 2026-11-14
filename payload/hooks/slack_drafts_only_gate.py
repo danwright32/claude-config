@@ -72,6 +72,7 @@ import faulthandler
 import fnmatch
 import functools
 import glob
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -1241,10 +1242,21 @@ SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf",
 SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*|[0-9]+)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
 
 
+# The libraries this run loaded (LIBS), and the hash of the bytes each was run from (CODE), for the
+# judgement cache's key and stand ins (lib/judgement-cache.py, claude-config#2918). Each is run from
+# the very bytes hashed, so no edit can land between the two.
+LIBS = []
+CODE = {}
+
+
 def load_lib(name, file):
-    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, "lib", file))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    path = os.path.join(HERE, "lib", file)
+    with open(path, "rb") as f:
+        source = f.read()
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_file_location(name, path))
+    exec(compile(source, path, "exec"), vars(mod))
+    CODE[file] = hashlib.sha256(source).hexdigest()
+    LIBS.append(mod)
     return mod
 
 
@@ -1336,6 +1348,8 @@ def judged_by_name(name):
 
 
 ProgramRuns = _program_runs.make(MARKER, judged_by_name)
+# The cache of the calls this gate allowed (claude-config#2918).
+_cache = load_lib("judgement_cache", "judgement-cache.py")
 
 
 def draft_advice(where):
@@ -6387,7 +6401,16 @@ def main():
         return
     cmd = ti["command"]
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
-    judge = Judge(load_reader())
+    sw = load_reader()
+    # A call this gate allowed before, with every input it read unchanged, is allowed from the cache;
+    # any other is judged with each disk read recorded, and kept only if allowed (claude-config#2918).
+    kept, recorder = _cache.call(cmd, cwd, CODE, HERE, __file__, __name__ == "__main__"), None
+    if kept and kept.hit():
+        print("allow")
+        return
+    if kept:
+        recorder = kept.record([globals(), vars(sw)] + [vars(m) for m in LIBS if m is not _cache])
+    judge = Judge(sw)
     try:
         judge.watch()
         try:
@@ -6418,7 +6441,11 @@ def main():
         else:
             advice = draft_advice("with the same channel and thread")
         print("refuse\n" + lead + reason + ". " + advice)
+        if kept:
+            _cache.trace("not stored: refused")
     else:
+        if kept:
+            kept.keep(recorder)
         print("allow")
 
 
