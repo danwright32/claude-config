@@ -143,10 +143,13 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
     piped from a run, SCRIPT_FILTERS or a python3 -c that _python_reads_only(). The loops are
     unrolled and each $NAME filled in from the command's own values, so each file a run reads is
     judged with every text its one heredoc write can have put there, and with its present text,
-    which a write that fails or is skipped leaves. Anything else (another command, a file no
-    heredoc or two heredocs write, a relative path, a substitution or an unset variable anywhere,
-    an unquoted glob, a background job, a compound command other than for, a name in
-    SCRIPT_DENIED_NAMES) leaves the command to the readings above, which ask. A write found
+    which a write that fails or is skipped leaves. A write must name a .sql file in full that a
+    run reads before anything writes it again, so an approved command can only replace a .sql
+    file that was missing or held one read only statement, with another a run then reads.
+    Anything else (another command, a file no heredoc or two heredocs write, a relative path, a
+    substitution or an unset variable anywhere, an unquoted glob, a background job, a compound
+    command other than for, a run reading no file the command wrote, a variable name
+    _script_name_ok() refuses) leaves the command to the readings above, which ask. A write found
     there is asked about, never Applicable: an Apply covers only a run that stands alone.
     python3 -c puts its directory first on the import path, so a json.py where it runs would be
     imported in place of the standard one; that is not seen.
@@ -1040,44 +1043,76 @@ SCRIPT_VARIABLE = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z
 SCRIPT_DENIED_NAMES = {"PATH", "IFS", "CDPATH", "HOME", "ENV", "PWD", "OLDPWD", "SHELLOPTS", "BASHOPTS",
                        "GLOBIGNORE", "PS4"}
 SCRIPT_DENIED_PREFIXES = ("BASH", "LD_", "DYLD_", "PYTHON", "SUPABASE", "PG")
+
+
+def _script_name_ok(name):
+    """Whether the command may set a shell variable of this name. An assignment to a name already
+    exported changes the environment of every program after it, and exported names are, by
+    convention, upper case: so only a single letter or a name with a lower case letter in it, never
+    one naming a proxy (http_proxy is lower case too), and never one listed above."""
+    return (name not in SCRIPT_DENIED_NAMES and not name.startswith(SCRIPT_DENIED_PREFIXES)
+            and "proxy" not in name.lower() and (len(name) == 1 or name != name.upper()))
 SCRIPT_RESERVED = {"do", "done", "then", "else", "elif", "fi", "if", "while", "until", "case", "esac",
                    "select", "function", "time", "!", "{", "}", "(", ")"}
-# python3 -c, read only: these modules, sys only for its streams, argv and exit, no name or
-# attribute starting with an underscore (the way back to open and __import__), and none of these.
+# python3 -c, read only: these modules, imported under their own names; sys only for its streams,
+# argv and exit; no name or attribute starting with an underscore (the way back to open and
+# __import__); none of PY_BANNED (type, called on a stream, is a class that opens any file); and no
+# module reached through an allowed one, by attribute or by import (statistics.sys, json.codecs),
+# which is checked against the real modules.
 PY_MODULES = {"json", "sys", "csv", "collections", "datetime", "decimal", "re", "math", "statistics",
               "itertools", "functools", "textwrap"}
 PY_SYS = {"stdin", "stdout", "stderr", "argv", "exit", "maxsize"}
 PY_BANNED = {"open", "exec", "eval", "compile", "getattr", "setattr", "delattr", "globals", "locals",
-             "vars", "breakpoint", "input", "help"}
+             "vars", "breakpoint", "input", "help", "type", "super", "object"}
 
 
 def _python_reads_only(code):
     """Whether a python3 -c program can do nothing but read its input and print: it imports only
-    PY_MODULES, touches sys only for PY_SYS, and names nothing in PY_BANNED or starting with _."""
+    PY_MODULES, each under its own name, touches sys only for PY_SYS, reaches no module through
+    another, and names nothing in PY_BANNED or starting with _."""
     import ast
+    import importlib
+    import types
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return False
-    parent = {}
+    parent, modules = {}, set()
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             parent[child] = node
-    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(a.name not in PY_MODULES or (a.name == "sys" and a.asname) for a in node.names):
+            if any(a.name not in PY_MODULES or a.asname for a in node.names):
                 return False
+            modules.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in PY_MODULES or any(a.name == "*" for a in node.names):
+            if node.level or node.module not in PY_MODULES:
                 return False
-            if node.module == "sys" and any(a.name not in PY_SYS for a in node.names):
-                return False
-        elif isinstance(node, ast.Name):
+            found = importlib.import_module(node.module)
+            for a in node.names:
+                if (a.name == "*" or a.name.startswith("_") or (node.module == "sys" and a.name not in PY_SYS)
+                        or not hasattr(found, a.name) or isinstance(getattr(found, a.name), types.ModuleType)):
+                    return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
             if node.id.startswith("_") or node.id in PY_BANNED:
                 return False
-            up = parent.get(node)
-            if node.id == "sys" and not (isinstance(up, ast.Attribute) and up.value is node and up.attr in PY_SYS):
+            if node.id not in modules:
+                continue
+            # A module's name stands only at the root of an attribute chain, each step of which is
+            # looked up on the real module and must be there and be no module itself.
+            up, value, first = parent.get(node), importlib.import_module(node.id), True
+            if not (isinstance(up, ast.Attribute) and up.value is node):
                 return False
+            while isinstance(up, ast.Attribute):
+                if (up.attr.startswith("_") or (node.id == "sys" and first and up.attr not in PY_SYS)
+                        or not hasattr(value, up.attr)):
+                    return False
+                value, first = getattr(value, up.attr), False
+                if isinstance(value, types.ModuleType):
+                    return False
+                above = parent.get(up)
+                up = above if isinstance(above, ast.Attribute) and above.value is up else None
         elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
             return False
     return True
@@ -1201,13 +1236,15 @@ def scripted_queries(command, sw, cwd):
     None when the command is not that shape (claude-config#2952). A file's texts are every heredoc
     text its one write can have put there before that read, each loop value put in, and the file's
     present text, which a write that fails or is skipped leaves in place. Every file a run reads
-    must be named by an absolute path that exactly one heredoc write in the command names."""
+    must be named by an absolute path that exactly one heredoc write in the command names, every
+    file written must be a .sql file a run reads before it is written again, and at least one run
+    must read such a file."""
     if not isinstance(cwd, str) or not cwd.startswith("/") or "supabase" not in command:
         return None
     tree = _script_tree(command, sw, cwd)
     if tree is None:
         return None
-    env, source, texts, disk, runs = {}, {}, {}, {}, {}
+    env, source, texts, disk, runs, unread = {}, {}, {}, {}, {}, set()
     steps = [0]
     pipe = [None]
 
@@ -1252,7 +1289,7 @@ def scripted_queries(command, sw, cwd):
                 return False
             for w in words:
                 name, _, value = w.partition("=")
-                if name in SCRIPT_DENIED_NAMES or name.startswith(SCRIPT_DENIED_PREFIXES):
+                if not _script_name_ok(name):
                     return False
                 env[name] = value
             return True
@@ -1263,16 +1300,19 @@ def scripted_queries(command, sw, cwd):
             target = [t for op, t in redirects if op in (">", ">|")]
             if how == "|" or len(redirects) != 2 or ops[0] not in ("<<", "<<-") or ops[1] not in (">", ">|"):
                 return False
-            if not target[0].startswith("/"):
+            # Only a .sql file, named in full, which a run then reads before anything writes it
+            # again: so every text written is judged, and so is what the file held before.
+            key = os.path.realpath(target[0])
+            if not target[0].startswith("/") or not key.endswith(".sql") or key in unread:
                 return False
             quoted, _, body = heredoc
             text = body if quoted else _script_expand(body, env, heredoc=True)
             if text is None:
                 return False
-            key = os.path.realpath(target[0])
             if source.setdefault(key, id(node)) != id(node):
                 return False
             texts.setdefault(key, []).append(text)
+            unread.add(key)
             return True
         if words[0] in SCRIPT_TIMEOUTS and len(words) > 2 and SCRIPT_DURATION.match(words[1]):
             words = words[2:]
@@ -1290,6 +1330,7 @@ def scripted_queries(command, sw, cwd):
             key = os.path.realpath(value)
             if key not in texts:
                 return False
+            unread.discard(key)
             if key not in disk:
                 disk[key] = None
                 if os.path.lexists(key):
@@ -1322,7 +1363,7 @@ def scripted_queries(command, sw, cwd):
                 return False
             if (len(words) < 3 or words[0] != "for" or words[2] != "in"
                     or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", words[1])
-                    or words[1] in SCRIPT_DENIED_NAMES or words[1].startswith(SCRIPT_DENIED_PREFIXES)):
+                    or not _script_name_ok(words[1])):
                 return False
             for value in words[3:]:
                 env[words[1]] = value
@@ -1330,7 +1371,8 @@ def scripted_queries(command, sw, cwd):
                     return False
         return True
 
-    if not walk(tree) or pipe[0] is not None or not runs:
+    # A command whose runs read no file it wrote is not this shape, and is read as before.
+    if not walk(tree) or pipe[0] is not None or unread or not any(files for files, _ in runs.values()):
         return None
     return [("supabase db query", files, statements) for files, statements in runs.values()]
 
@@ -1349,8 +1391,11 @@ def _scripted_findings(queries, judge):
 def cli_read_approval(command, cwd, judge, sw):
     """(True, why) when the whole Bash command is one Supabase CLI run that changes nothing: a `db
     query` whose every statement, in its words or its -f files, judge() shows to be read only, or a
-    `db push --dry-run`. Else (False, why not). db-write-ask.sh asks about neither, by the same
-    reading (bash_findings()), so the two hooks cannot disagree about one (L342)."""
+    `db push --dry-run`; or, since #2952, a command whose `db query` runs read files it writes
+    itself from heredocs (scripted_queries()), when every text those files can hold and every
+    statement in the runs' words judge() shows to be read only. Else (False, why not).
+    db-write-ask.sh asks about none of these, by the same reading (bash_findings()), so the two
+    hooks cannot disagree about one (L342)."""
     plain = plain_supabase(command, sw, cwd)
     if plain is None:
         scripted = scripted_queries(command, sw, cwd)

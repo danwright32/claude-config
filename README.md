@@ -3894,9 +3894,11 @@ What it approves:
   runs (behind a `timeout` too), and `grep`, `head`, `tail`, `cut`, `wc`, `tr`, `jq` or a `python3 -c`
   that only reads its input and prints, piped from a run. Each file's heredoc text is judged with
   every loop value put in, and so is the file's present text, which a failed write would leave. A
-  file named by a variable the command never sets, a heredoc holding a substitution or an unset
-  variable, a file written by two heredocs or any other way, a background job, or any other command
-  leaves the call to the usual check, and `db-write-ask.sh` asks. The reading is
+  write must name a `.sql` file in full that a run reads before it is written again. A file named
+  by a variable the command never sets, a heredoc holding a substitution or an unset variable, a
+  file written by two heredocs or any other way, a variable named in upper case (longer than one
+  letter) or naming a proxy, a background job, or any other command leaves the call to the usual
+  check, and `db-write-ask.sh` asks. The reading is
   `scripted_queries()` in `lib/db-write-calls.py`.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
