@@ -297,6 +297,33 @@ export const textsOf = (input: Record<string, unknown>): string[] => {
 export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(text) || /\bsome\s+View\b/.test(text) || /:\s*View\s*\{/.test(text)
 
 /**
+ * Each name in a text that ends in a dot and letters, as the one pattern
+ * `/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g` matched them, in linear time (#2948). That pattern, tried from
+ * every place in a long run of name characters holding no dot and letters, read to the run's end and
+ * back each time: about 1.2 s for 40,000 such characters, inside the hooks worker's heartbeat. Its
+ * match in a run always started where the run does and ended after the run's last dot and letters
+ * that no word character follows, and nothing after that matched; so each run is found once, and that
+ * end is looked for once, from its own end.
+ */
+const NAME_RUN = /[\w./~@+*[\]()-]+/g
+const dottedNames = function* (text: string): Generator<string> {
+  for (const m of text.matchAll(NAME_RUN)) {
+    const run = m[0]
+    // From the end: the last place a maximal run of letters ends, a dot before it, no word character after.
+    let i = run.length
+    while (i > 0) {
+      let j = i
+      while (j > 0 && /[A-Za-z]/.test(run[j - 1] as string)) j--
+      if (j < i && j > 0 && run[j - 1] === '.' && (i === run.length || !/\w/.test(run[i] as string))) {
+        if (j - 1 > 0) yield run.slice(0, i)
+        break
+      }
+      i = j < i ? j : i - 1
+    }
+  }
+}
+
+/**
  * The look changing files a command's text names, for a write its words do not name (an inline
  * script, a patch). A Next.js dynamic segment or route group (`[SO_ID]`, `(shop)`) is part of the
  * name (#1010): read as where the name starts, `src/app/booking/[SO_ID]/page.tsx` was `/page.tsx`, a
@@ -306,11 +333,10 @@ export const isSwiftUI = (text: string): boolean => /\bimport\s+SwiftUI\b/.test(
  */
 export const mentionedLookFiles = (text: string): string[] => {
   const out: string[] = []
-  for (const m of text.matchAll(/[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g)) {
+  for (const raw of dottedNames(text)) {
     // `open(app/page.tsx` is a call around a name and `x(1)/page.tsx` a folder holding parentheses,
     // and the spelling cannot tell them apart, so both readings are kept and either holds. Only an
     // absolute name after a call's parenthesis is that name alone (lessons review of #1010).
-    const raw = m[0]
     const call = raw.replace(/^(?:[\w$.]+\()+/, '')
     for (let word of call === raw || /^[/~$]/.test(call) ? [call] : [call, raw]) {
       word = word.replace(/^[.]+(?=[^./])/, '')
@@ -633,6 +659,38 @@ export const nameFromVariable = (word: string): boolean => {
   return /\$[^\s'"(]/.test(last) && !FOLDER_VARIABLE.test(last)
 }
 
+// The temp folder alone, or a name in it that never climbs out (#2960).
+const IN_TMPDIR = /^\$(?:\{TMPDIR\}|TMPDIR(?![\w]))(?:(?!.*\/\.\.(?:\/|$))\/[^$`]*)?$/
+
+/**
+ * What fills in a removal's name anywhere in it (#2960), its folder included, for a removal mod-kit
+ * gave neither a path nor a folder: `output` for a command substitution or backticks
+ * (`$(git rev-parse --show-toplevel)/app`), `variable` for a shell variable (`$ROOT/app`, `$PWD`),
+ * nothing for a word holding neither, or one only the temp folder starts (`$TMPDIR/build`) with no
+ * `..` in it. #2934 read only the last part, so `rm -rf "$ROOT/app"` took a folder away unasked: its
+ * name `app` is no look changing one, yet it may hold every screen. Read from the word as mod-kit
+ * gives it, its quotes taken off; a word whose every $ the shell leaves as written mod-kit places.
+ */
+export const removalFilledIn = (word: string): 'output' | 'variable' | null => {
+  if (word.includes('$(') || word.includes('`')) return 'output'
+  if (!/\$[^\s'"(]/.test(word)) return null
+  return IN_TMPDIR.test(word) ? null : 'variable'
+}
+
+/**
+ * The variable a removal's name starts from where the rest is a plain name inside it (#2960):
+ * `$D` for `$D/sub` or `${D}/a/page.tsx`, and for `$D` itself, so a folder the command makes with bare
+ * mktemp is read as #2171 reads the variable alone. None where the rest holds another $, backticks,
+ * or a `..` that may climb out.
+ */
+export const leadingVariable = (word: string): string | undefined => {
+  const m = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(\/.*)?$/.exec(word)
+  if (!m) return undefined
+  const rest = m[3] ?? ''
+  if (/[$`]/.test(rest) || /(?:^|\/)\.\.(?:\/|$)/.test(rest)) return undefined
+  return `$${m[1] ?? m[2]}`
+}
+
 /**
  * Whether every command substitution in a word is one Dan trusts to print no file name (#1832, Dan,
  * 2026-10-27, picker answer "git rev-parse only"): `git rev-parse` run alone, as in
@@ -737,6 +795,20 @@ export const patternMayBeLook = (word: string): 'look' | 'not' | 'unread' => {
   }
   return all.some(s => LOOK_ATOMS.some(l => overlap(atomsOf(s), l))) ? 'look' : 'not'
 }
+
+/**
+ * Whether a find -delete limited to these -name and -iname patterns (mod-kit's `names`: it takes away
+ * only an entry matching every one) can take away no file the guard judges (seen 2026-11-13: one
+ * clearing `lr_history*.pyc` was held for a page under the folder). True where one pattern can name
+ * no look changing file (patternMayBeLook, read without regard to case, as -iname matches) and ends
+ * in a plain extension that no mod's TypeScript hook file has (isModHookTs): `*.pyc`, `x.log`. A
+ * pattern ending in a group or a bracket (`*.p[y]c`), or naming no extension, does not say so.
+ */
+export const findNamesReachNoLook = (names: readonly string[]): boolean =>
+  names.some(p => {
+    const ext = /\.([A-Za-z0-9]+)$/.exec(p)?.[1]
+    return ext !== undefined && !/^[mc]?ts$/i.test(ext) && patternMayBeLook(p) === 'not'
+  })
 
 /**
  * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's
@@ -3509,7 +3581,18 @@ export const stale = (file: string): string =>
   `Blocked: this edit would not apply to ${file} as it stands: the text it replaces is not in the file (after its earlier changes, for a MultiEdit), or is in it more than once without replace_all, so the design round guard cannot read what it would change. ` +
   'Read the file and send the edit again with the text it replaces exactly as the file holds it; it is judged then as any edit is. Nothing is asked of Dan for an edit that would not apply.'
 
-export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
+// #2727: the words Claude Code fails a hook in when it heard nothing back in time, a missed heartbeat
+// of its hooks worker above all (#2726), or a hook timing out, each with its time, so a path or a
+// name in the failure that merely holds the word (`/w/timeout/page.tsx`) is no timeout.
+const TIMED_OUT = /\bno answer to a heartbeat within \d+ ?ms\b|\btimed out after \d+ ?m?s\b/i
+/**
+ * Why a call the guard could not check was stopped. A failure that was a timeout says so, and that it
+ * is no refusal (#2727): the same call sent again is judged as any is, where a refusal would repeat.
+ */
+export const cannotCheck = (why: string): string =>
+  TIMED_OUT.test(why)
+    ? `Blocked: the design round guard could not check this call because it timed out (${why}), so it was stopped. This is not a refusal: try the same call again; if it keeps timing out, tell Dan.`
+    : `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
 
 /**
  * A call the guard passes on its tool and input alone, before reading anything (#2726): not the

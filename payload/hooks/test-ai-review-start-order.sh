@@ -314,6 +314,14 @@ with open(os.path.join(log, "calls"), "a") as f:
     f.write("called\n")
 with open(os.path.join(log, "args"), "w") as f:
     f.write("\x1e".join(sys.argv[1:]))
+# The lessons arrive in a file the runner removes once claude ends (claude-config#2975), so what it
+# held, and who could read it, is kept here while it still exists.
+if "--append-system-prompt-file" in sys.argv:
+    src = sys.argv[sys.argv.index("--append-system-prompt-file") + 1]
+    with open(src, "rb") as f, open(os.path.join(log, "appended"), "wb") as g:
+        g.write(f.read())
+    with open(os.path.join(log, "appended-mode"), "w") as g:
+        g.write(oct(os.stat(src).st_mode & 0o777))
 sys.stdin.read()
 mode = os.environ.get("FAKE_MODE", "ok")
 text = os.environ.get("FAKE_TEXT", "No issues found.")
@@ -367,7 +375,7 @@ review(){   # $1 = name; runs the runner in the foreground, reviewing a fresh co
   cp "$E2E/input.diff" "$E2E/$1.diff"
   PATH="$FAKEBIN:$PATH" python3 "$RUNNER" --state-dir "$E2E/state" --key k --sha "$1" --name "$1" \
     --repo-label repo --branch b --repo-dir "$E2E/repo" --model sonnet --prompt-file "$E2E/prompt.txt" \
-    --lessons-dir "$E2E/lessons" --diff-file "$E2E/$1.diff" --deadline "${DEADLINE:-120}" --started "$(date +%s)"
+    --lessons-dir "${LESSONS_DIR:-$E2E/lessons}" --diff-file "$E2E/$1.diff" --deadline "${DEADLINE:-120}" --started "$(date +%s)"
 }
 body_of(){ cat "$E2E/state/$1.txt" 2>/dev/null; }
 lock_free(){ python3 -c 'import fcntl, os, sys
@@ -452,6 +460,66 @@ b="$(body_of errored)"; check "a result claude marks as an error is an error" "s
 FAKE_MODE=ok FAKE_TEXT="" review blank
 b="$(body_of blank)"; check "a result with no text is empty" "status=empty" "$b"; check "saying the answer was empty" "answer was empty" "$b"
 check_not "and not that nothing was printed, which is another cause" "printed nothing" "$b"
+
+# 5. Lessons larger than one command line argument may be (claude-config#2975). Linux refuses any
+#    single argument over 131,072 bytes (MAX_ARG_STRLEN) before the program starts, and the lessons
+#    index passed that on 2026-11-14 (131,104 bytes), so on the CI runner no review started at all.
+#    macOS has no per argument cap, so the review starting is not enough here: the arguments claude
+#    receives are measured too, and the lessons must reach it whole by another route. The lines are
+#    a real index line repeated, so the size is the only thing about them that is unusual.
+BIG="$WORKDIR/big-lessons"; mkdir -p "$BIG"
+python3 - "$BIG" <<'EOF'
+import os, sys
+line = "- L1. A test or guard is only real once it has been seen to fail.\n"
+for name in ("one", "two"):
+    with open(os.path.join(sys.argv[1], f"LESSONS-INDEX-{name}.md"), "w", encoding="utf-8") as f:
+        f.write(line * (70000 // len(line) + 1))
+EOF
+big_size="$(cat "$BIG"/LESSONS-INDEX-*.md | wc -c | tr -d ' ')"
+[ "$big_size" -gt 131072 ] && ok || bad "the fixture's lessons are over the 131,072 byte argument cap (got $big_size)"
+calls_before="$(wc -l < "$FAKE_LOG/calls" | tr -d ' ')"
+rm -f "$FAKE_LOG/appended" "$FAKE_LOG/appended-mode"
+LESSONS_DIR="$BIG" FAKE_MODE=ok review big
+calls_after="$(wc -l < "$FAKE_LOG/calls" | tr -d ' ')"
+[ "$((calls_after - calls_before))" -eq 1 ] && ok \
+  || bad "a review with lessons over the argument cap still starts claude exactly once (started $((calls_after - calls_before)))"
+check "and is recorded as a review" "status=ok" "$(body_of big)"
+python3 - "$FAKE_LOG/args" "$FAKE_LOG/appended" "$BIG" <<'EOF' && ok || bad "no argument claude receives is over 131,072 bytes, and the lessons reach it whole, through --append-system-prompt-file and not --append-system-prompt"
+import glob, os, sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+over = [len(a.encode("utf-8")) for a in args if len(a.encode("utf-8")) > 131072]
+if over:
+    print(f"  {len(over)} argument(s) over the cap, of {max(over)} bytes")
+    sys.exit(1)
+if "--append-system-prompt" in args or args.count("--append-system-prompt-file") != 1:
+    print(f"  --append-system-prompt {args.count('--append-system-prompt')} times,"
+          f" --append-system-prompt-file {args.count('--append-system-prompt-file')} times")
+    sys.exit(1)
+files = sorted(glob.glob(os.path.join(sys.argv[3], "LESSONS-INDEX-*.md")))
+expected = "===== LESSONS\n\n" + "\n\n".join(open(f, encoding="utf-8").read().strip() for f in files)
+got = open(sys.argv[2], encoding="utf-8").read() if os.path.exists(sys.argv[2]) else None
+if got != expected:
+    print(f"  the appended system prompt is not exactly the lessons (sent {None if got is None else len(got)},"
+          f" expected {len(expected)})")
+    sys.exit(1)
+EOF
+check "the lessons file is readable by its owner only" "0o600" "$(cat "$FAKE_LOG/appended-mode" 2>/dev/null)"
+lessons_path(){ python3 -c 'import sys
+a = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+print(a[a.index("--append-system-prompt-file") + 1] if "--append-system-prompt-file" in a else "")' "$FAKE_LOG/args"; }
+p="$(lessons_path)"
+[ -n "$p" ] && [ ! -e "$p" ] && ok || bad "the lessons file is removed once the review has ended (path: ${p:-none})"
+# And when the review fails, the file goes all the same.
+LESSONS_DIR="$BIG" FAKE_MODE=error-result review bigfailed
+check "a failed review with large lessons is recorded as failed" "status=error" "$(body_of bigfailed)"
+p="$(lessons_path)"
+[ -n "$p" ] && [ ! -e "$p" ] && ok || bad "and its lessons file is removed too (path: ${p:-none})"
+# With no lessons index there is no file and no flag at all, as before.
+mkdir -p "$WORKDIR/no-lessons"
+LESSONS_DIR="$WORKDIR/no-lessons" FAKE_MODE=ok review nolessons
+args_none="$(tr '\036' '\n' < "$FAKE_LOG/args")"
+check_not "a review with no lessons index passes no lessons file" "--append-system-prompt" "$args_none"
+check "and still notes that it ran without them" "without the lessons index" "$(body_of nolessons)"
 
 echo
 echo "passed: $pass, failed: $fail"
