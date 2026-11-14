@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1038. A branch treating a family as its one member mishandles every later one; switch on the member and refuse unknowns.
 - L848. Anchor a scanning guard's file exclusion to its directory and suffix; a bare name pattern silently exempts matching source files.
 - L780. Map every decision in a settled design to a numbered requirement and issue before building; an unmapped one ships as the old screen.
 - L217. A guard whose forbidden values are DERIVED from a shipped dataset covers only what that dataset contains, so a real value never in it is exempt.
