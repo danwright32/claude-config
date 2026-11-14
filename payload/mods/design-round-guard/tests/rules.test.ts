@@ -56,6 +56,7 @@ import {
   outputTrusted,
   freshTemp,
   inScratchpad,
+  inSessionNotes,
   namesScratchpad,
   joinedOnly,
   addedOntoFolder,
@@ -425,6 +426,26 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
 // session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
+test('#2792: the session notes folder is known by the home folder, any session of any project, and nothing shaped like it elsewhere', () => {
+  const home = `${'/Users'}/dan`
+  const notes = `${home}/.claude/state/session-notes`
+  expect(inSessionNotes(`${notes}/-w-slate/s1/review/slate-copy`, home)).toBe(true)
+  expect(inSessionNotes(`${notes}/-w-slate/s1/review/slate-copy/app/page.tsx`, home)).toBe(true)
+  // Another session's, and another project's: a copy an earlier session left is a throwaway too.
+  expect(inSessionNotes(`${notes}/-w-other/s2/handoff.md`, home)).toBe(true)
+  expect(inSessionNotes(`${notes}/-w-slate`, `${home}/`)).toBe(true)
+  // The notes folder itself, a name that only starts like it, and a climb out are not in it.
+  expect(inSessionNotes(notes, home)).toBe(false)
+  expect(inSessionNotes(`${notes}/`, home)).toBe(false)
+  expect(inSessionNotes(`${notes}-old/-w-slate/s1/app/page.tsx`, home)).toBe(false)
+  expect(inSessionNotes(`${notes}/-w-slate/s1/../../../../../../../w/slate/app/page.tsx`, home)).toBe(false)
+  // A folder shaped like it anywhere else, a checkout included, another home's, and no home at all.
+  expect(inSessionNotes('/w/slate/.claude/state/session-notes/-w-slate/s1/app/page.tsx', home)).toBe(false)
+  expect(inSessionNotes(`${'/Users'}/eve/.claude/state/session-notes/-w-slate/s1/app/page.tsx`, home)).toBe(false)
+  expect(inSessionNotes('/.claude/state/session-notes/-w-slate/s1/app/page.tsx', '')).toBe(false)
+  expect(inSessionNotes('dan/.claude/state/session-notes/-w-slate/s1/app/page.tsx', 'dan')).toBe(false)
+})
+
 test("the session's scratchpad is known by the session's id, under Claude Code's own temp folder", () => {
   // CLAUDE_CODE_TMPDIR when it is set, else /tmp; macOS spells /tmp and /var under /private too.
   expect(tempRoots(undefined)).toEqual(['/tmp', '/private/tmp'])

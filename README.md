@@ -6776,7 +6776,13 @@ beside it) and any name when the disk cannot answer. The gap, from the lessons r
 reads text, not the folder a join's variable holds, so a new look changing file at the very top of a
 checkout, joined onto the checkout by a program that also names the scratchpad, passes. Every
 refusal of a look changing edit, and Dan's Run /design-rounds, says a round's files go in the
-scratchpad, so a held round is never sent back to /design-rounds, which held it. Since #1165 a
+scratchpad, so a held round is never sent back to /design-rounds, which held it. Since #2792 a file
+or folder taken away (`rm`, `rm -rf`, a pattern) in the session's scratchpad, or anywhere inside the
+session notes folder (`~/.claude/state/session-notes/`, any session's, known by the home folder), is
+never held and its files are never listed, whatever checkout it is: a copy of a repository an agent
+cloned there to read is a checkout of its own, and deleting it was held as a look change. A write
+into such a copy, a delete in a folder only shaped like the notes folder, and one that climbs out of
+it are judged as before. Since #1165 a
 python program is judged only by the names it can open, never those in what it holds as data (a
 comment, a block spanning lines it puts in a file), read from mod-kit's `code`; where data cannot be
 told from code (another language, a program that runs a process, builds code at run time or cuts
