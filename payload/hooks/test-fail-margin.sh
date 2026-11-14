@@ -6,10 +6,10 @@
 # The runner prints a failing suite's FAIL line and only the lines indented further than it; a line
 # back at the margin, or a blank one, ends the message (claude-config#253). So a finding written at
 # the margin is dropped from a full run's report, and the run says the suite failed without saying
-# what it found. #2854 found this in test-lib-bytecode-importers.sh and #2916 in 22 more suites,
-# each now indenting what its FAIL helper prints after the first line. This fails the next one on
-# the day it lands (L613), with no list of suites excused from it. lib/fail-margin.py says what it
-# reads and what it cannot.
+# what it found. #2854 found this in test-lib-bytecode-importers.sh and #2916 in 22 more suites
+# on 2026-11-13, each now indenting what its FAIL helper prints after the first line. This fails
+# the next one on the day it lands (L613), with no list of suites excused from it.
+# lib/fail-margin.py says what it reads and what it cannot.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
