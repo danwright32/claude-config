@@ -810,6 +810,24 @@ test('a script handed a folder holding held files is held once, naming each, and
   ])
 })
 
+test('a file under a folder whose judging throws is passed and kept in the error file, and the rest are still held once (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.existsFails.push(`${APP}/src/big.ts`)
+  const why = refusal(await bash($ as never, w, SCRIPT_SRC))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).not.toContain('also holds')
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', session: 's1', path: `${APP}/src/big.ts` })
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b2')).result).toBe('done')
+})
+
+test('a folder every one of whose files throws while judged holds nothing, each kept in the error file (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.existsFails.push(`${APP}/src/big.ts`, `${APP}/src/lib/slack.ts`)
+  expect((await bash($ as never, w, SCRIPT_SRC)).result).toBe('done')
+  expect(w.records(ERRORS).map(x => x.path)).toEqual([`${APP}/src/big.ts`, `${APP}/src/lib/slack.ts`])
+})
+
 test('a folder whose held files all show one issue is held once and folds into it for every file (#2920)', KIT, async ($, on) => {
   const w = genWorld($, on, 2)
   const why = refusal(await bash($ as never, w, 'python3 rewrite.py gen'))
