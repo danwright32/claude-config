@@ -76,6 +76,8 @@ const WRITES: Record<string, unknown> = {
   'bash scan.sh src/ && bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash rewrite.sh src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash scan.sh src/ && bash scan.sh ./src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: './src', path: '/w/app/src' }] }] },
+  // #2920: a node script handed a module to load and a folder to read, its output redirected.
+  'node measure.mjs lib/rules.ts src/ > /tmp/notes/out.txt': { files: [{ word: '/tmp/notes/out.txt', path: '/tmp/notes/out.txt' }], changes: [], unnamed: [], runs: [{ what: 'a node script file', script: 'measure.mjs', path: '/w/app/measure.mjs', args: [{ word: 'lib/rules.ts', path: '/w/app/lib/rules.ts' }, { word: 'src/', path: '/w/app/src' }] }], stdout: [{ word: '/tmp/notes/out.txt', path: '/tmp/notes/out.txt' }] },
   // #2527: a check like tools/check-mods.sh handed a folder, held by Dan's decision, and a loop handing
   // a script quoted search terms, plain words, and words it cannot read.
   'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
@@ -1094,6 +1096,40 @@ test('a script that writes nothing still runs judging no file, though it holds a
   expect(ran).toEqual(STILL_READ_ONLY.map(([what]) => `ran: a script that ${what}`))
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'script-reads').map(x => x.decision)).toEqual(STILL_READ_ONLY.map(() => 'passed'))
+})
+
+// #2920: a node script handed project folders it only reads, its output redirected into a notes folder,
+// that loads the module it is handed by a computed name (`await import(rulesPath)`), as the #2792
+// builder's count did on 2026-11-14. Its own text writes nothing, as a script importing a local module
+// by a fixed name reads, so the folder it is handed is read, not written. The same script whose text
+// also writes, runs a process or runs code it builds is still held for the files under the folder.
+const MEASURE = 'node measure.mjs lib/rules.ts src/ > /tmp/notes/out.txt'
+const LOADS = "import { readFileSync, readdirSync } from 'node:fs'\nconst [rulesPath, ...roots] = process.argv.slice(2)\nconst rules = await import(rulesPath)\nfor (const r of roots) for (const n of readdirSync(r)) console.log(rules.count(readFileSync(`${r}/${n}`, 'utf8')))\n"
+
+test('a node script that only reads the folder it is handed, loading a module by a computed name, runs judging no file (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.mjs`] = LOADS
+  expect((await bash($ as never, w, MEASURE)).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', script: `${APP}/measure.mjs`, decision: 'passed', placed: 0 }])
+})
+
+const LOADS_AND: [string, string][] = [
+  ['writes a file', "import { writeFileSync } from 'node:fs'\nwriteFileSync(`${process.argv[3]}/gen.ts`, 'x')\n"],
+  ['runs a process', "import { execFileSync } from 'node:child_process'\nexecFileSync('git', ['-C', process.argv[3], 'ls-files'])\n"],
+  ['runs code it builds', 'eval(process.argv[4])\n'],
+]
+
+test('a node script loading a module by a computed name that also writes, runs a process or builds code is still held (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, extra]] of LOADS_AND.entries()) {
+    w.files[`${APP}/measure.mjs`] = `${extra}${LOADS}`
+    const r = await bash($ as never, w, MEASURE, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: one that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: one that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(LOADS_AND.map(([what]) => `held: one that ${what}`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
 })
 
 // #2619: the one line function form was a gap in mod-kit's reader itself, so a write typed in a

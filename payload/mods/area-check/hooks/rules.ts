@@ -285,7 +285,12 @@ export const scriptReach = (w: ModKitWrites, folder: string, home?: string): { r
   if (run) return { reaches: `it runs ${run.what} (${run.script}), whose writes are not read` }
   const placed: ScriptPlaced[] = []
   const nowhere = (p: string) => p === SCRIPT_ROOT || p.startsWith(`${SCRIPT_ROOT}/`)
-  for (const t of shellTargets(w, home)) {
+  // A program whose only unread part is a module it loads by a computed name (#2920, mod-kit's
+  // `onlyLoads`) writes nothing in its own text, as one importing a local module by a fixed name
+  // reads: the folder it is handed is read, not written. Only here, for a script's own text; the same
+  // program typed in a command is judged as before.
+  const own = { ...w, unnamed: w.unnamed.filter(u => !u.onlyLoads) }
+  for (const t of shellTargets(own, home)) {
     if ('path' in t) {
       if (nowhere(t.path)) return { reaches: `it writes ${t.word}, which lands wherever it is run from` }
       placed.push({ word: t.word, path: t.path, ...(t.tree ? { tree: true as const } : {}) })

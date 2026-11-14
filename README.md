@@ -7735,7 +7735,12 @@ held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. A loop over quoted
+arithmetic names no command. A script in another language (node, python, ruby) whose only part
+mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
+`importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
+importing a local module by a fixed name reads, so the folder it is handed is read, not written
+(#2920); one whose text also writes, runs a process (`execFileSync('git', ...)`) or runs code it
+builds (eval, new Function, vm) keeps the hold. A loop over quoted
 search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).
