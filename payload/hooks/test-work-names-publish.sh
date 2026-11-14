@@ -381,5 +381,45 @@ redirected "gh api behind an error redirection" '2>/dev/null gh api repos/danwri
 run '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'
 check "#2235 control: clean text behind a redirection passes: $out" passed
 
+# ---------------------------------------------------------------- the path of a body file, and a cd (claude-config#2909)
+# A session in a work project keeps its files in a notes folder named after the project, so the path
+# of every body file it writes carries the name, and so does a cd into its checkout. Neither is posted:
+# what is judged is the title, the body and the text of the body file. Here the invented work
+# repository acme-widgets stands in for that project.
+NOTES="$WORK/session-notes/acme-widgets/s1"; mkdir -p "$NOTES"
+WORKCO="$WORK/apps/acme-widgets"; mkdir -p "$WORKCO"
+printf 'A report that names no work repository.\n' > "$NOTES/body.md"
+printf 'Seen first in the zephyr checkout.\n' > "$NOTES/named.md"
+printf 'A report that names no work repository.\n' > "$WORKCO/clean.md"
+run "gh issue create --repo danwright-test/public-notes --title \"x\" --body-file $NOTES/body.md"
+check "#2909 a clean body file whose path names a work repository passes: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title \"x\" --body-file=$NOTES/body.md"
+check "#2909 and written --body-file=path: $out" passed
+run "gh pr comment 5 --repo danwright-test/public-notes -F \"$NOTES/body.md\""
+check "#2909 and as a quoted -F on a pull request comment: $out" passed
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"x\" --body-file clean.md"
+check "#2909 a cd into a checkout named after a work repository is not posted: $out" passed
+run "cd \"$WORKCO\"
+gh issue create --repo danwright-test/public-notes --title \"x\" --body-file $NOTES/body.md"
+check "#2909 a quoted cd on its own line, and a body file in the notes folder: $out" passed
+# What is posted is still judged.
+run "gh issue create --repo danwright-test/public-notes --title \"x\" --body-file $NOTES/named.md"
+check "#2909 a body file in that folder whose text names one is refused: $out" refused
+check "#2909 and names the name in its text: $out" has "$out" "zephyr"
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"the acme-widgets bug\" --body-file $NOTES/body.md"
+check "#2909 a title naming one is refused, cd and path aside: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"x\" --label acme-widgets --body-file $NOTES/body.md"
+check "#2909 a name in another argument that is posted (a label) is refused: $out" refused
+run "cd $WORKCO && echo 'the acme-widgets board' > made.md && gh issue create --repo danwright-test/public-notes --title x --body-file made.md"
+check "#2909 a body file this command writes from text naming one is refused: $out" refused
+run "cd \"\$(echo $WORKCO)\" && gh issue create --repo danwright-test/public-notes --title x --body-file clean.md"
+check "#2909 (control) a cd whose directory comes from a substitution is still judged as written: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/nowhere.md"
+check "#2909 a body file that cannot be read is refused: $out" refused
+check "#2909 saying it could not be read: $out" has "$out" "could not be read"
+check "#2909 not that the text names a work repository: $out" lacks "$out" 'names `'
+run "gh issue create --repo danwright-test/private-notes --title x --body-file $NOTES/nowhere.md"
+check "#2909 (control) a private repository is not asked about its body file: $out" passed
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

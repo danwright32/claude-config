@@ -185,6 +185,27 @@ sys.exit(r.returncode)'
 check "(control) a clean body on standard input posts: rc=$rc $out" [ "$rc" -eq 0 ]
 check "and the real gh reads the same bytes the script sent" [ "$(cat "$STDIN_SAVE" 2>/dev/null)" = "Clean notes" ]
 
+# claude-config#2909: a body file's path is not posted, so a notes folder named after a work project
+# does not refuse it; its text still does, and a file that cannot be read is refused for that.
+mkdir -p "$CO/notes/acme-widgets"
+printf 'Clean notes\n' > "$CO/notes/acme-widgets/clean.md"
+printf 'Notes from the zephyr board\n' > "$CO/notes/acme-widgets/named.md"
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "create", "--repo", "danwright-test/public-notes", "--title", "x", "--body-file", "notes/acme-widgets/clean.md"])
+sys.exit(r.returncode)'
+check "#2909 a clean body file in a folder named after a work repository posts through the guard: rc=$rc $out" [ "$rc" -eq 0 ]
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "create", "--repo", "danwright-test/public-notes", "--title", "x", "--body-file", "notes/acme-widgets/named.md"])
+sys.exit(r.returncode)'
+check "#2909 the same folder with a body naming one is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2909 and never posted" not_posted
+guard 'import subprocess, sys
+r = subprocess.run(["gh", "issue", "create", "--repo", "danwright-test/public-notes", "--title", "x", "--body-file", "notes/acme-widgets/nowhere.md"])
+sys.exit(r.returncode)'
+check "#2909 a body file the guard cannot read is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2909 saying it could not be read: $out" has "$out" "could not be read"
+check "#2909 and withholding its path, which can hold the name: $out" lacks "$out" "acme-widgets"
+
 guard 'import subprocess, sys
 r = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/private-notes", "--body", "acme-widgets"])
 sys.exit(r.returncode)'

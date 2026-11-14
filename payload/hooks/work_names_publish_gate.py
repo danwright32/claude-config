@@ -16,7 +16,10 @@ other names for these (gh pr new, gh issue new, gh release new and the rest) are
 form by lib/shell-words.py. Only where the target is PUBLIC: a private repository passes without the
 list ever being read, and so does a secret gist. A public repository owned by a work owner passes
 too, a work repository naming its own work. The text judged is the whole command (so a heredoc fed
-body is read) and every body, notes or gist file it names that can be read.
+body is read) and every body, notes or gist file it names that can be read. Since claude-config#2909
+two parts of the command that are never posted are left out of that (posted_text): a plain cd, and
+the path after a gh pr or issue command's --body-file or -F, whose file is judged by its text and
+refused when it cannot be read.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -517,10 +520,15 @@ def _file_bodies(args, command, place, flags, shown_as):
             bodies.append(("%s %s" % (shown_as, word), detail))
         elif state == "mixed":
             unseen.append(MIXED_INPUT % ("%s %s" % (shown_as, word)))
+        elif state in ("missing", "unreadable"):
+            # Its path is not judged (posted_text), so a file that cannot be read is refused here, in a
+            # message of its own, never passed as clean (claude-config#2909).
+            unseen.append(UNREAD_FILE % (("the file %s names" % shown_as, "it is missing or empty, or its path cannot be worked out")
+                                         if _WITHHOLD else ("%s %s" % (shown_as, word), detail)))
     return bodies, unseen
 
 
-def judge_release(kind, what, args, envs, place, where, command):
+def judge_release(kind, what, args, envs, place, where, command, posted=None):
     """gh release create and edit post their title and notes on the release page (claude-config#2398):
     --notes on the command line, --notes-file read here, and the notes gh has GitHub generate or takes
     from the tag refused in a public repository, since this check cannot read them."""
@@ -532,7 +540,7 @@ def judge_release(kind, what, args, envs, place, where, command):
         more, unread = _stdin_bodies(kind, command, place, NOTES_FILE_FLAGS, NOTES_STDIN, NOTES_UNREAD)
         bodies += more
         unseen += unread
-    return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen)
 
 
 def _reads_stdin(args, flags):
@@ -906,6 +914,106 @@ def alias_runs(command):
     return out
 
 
+def _word_spans(text):
+    """[(word, start, end)] for one simple command's text, quotes removed as the shell removes them, or
+    None for anything past plain words: an operator or redirection, a substitution, a backquote, a
+    comment, a quote left open. None is never an error, only "judge this command as written"."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text[i] in " \t\n":
+            i += 1
+            continue
+        if text[i] == "#":
+            return None
+        start, val = i, []
+        while i < n and text[i] not in " \t\n":
+            c = text[i]
+            if c in ";&|<>()`":
+                return None
+            if c == "$" and text[i + 1:i + 2] == "(":
+                return None
+            if c == "'":
+                j = text.find("'", i + 1)
+                if j < 0:
+                    return None
+                val.append(text[i + 1:j])
+                i = j + 1
+            elif c == '"':
+                i += 1
+                while i < n and text[i] != '"':
+                    if text[i] == "`" or (text[i] == "$" and text[i + 1:i + 2] == "("):
+                        return None
+                    if text[i] == "\\" and i + 1 < n and text[i + 1] in '"\\':
+                        val.append(text[i + 1])
+                        i += 2
+                    else:
+                        val.append(text[i])
+                        i += 1
+                if i >= n:
+                    return None
+                i += 1
+            elif c == "\\":
+                if i + 1 >= n or text[i + 1] == "\n":
+                    return None
+                val.append(text[i + 1])
+                i += 2
+            else:
+                val.append(c)
+                i += 1
+        out.append(("".join(val), start, i))
+    return out
+
+
+def posted_text(command):
+    """command as it is judged for what it posts (claude-config#2909): the text of every plain cd, and
+    the path after each --body-file or -F of a gh pr or issue command, blanked out. Neither is posted:
+    a cd's directory is where the command runs, and a body file is judged by what it holds, read by
+    _file_bodies, which refuses one it cannot read. On 2026-11-13 a report filed from a work project
+    was refused for the project's name in its notes folder path and in a cd into its checkout, while
+    its title and its file named nothing.
+
+    Only a simple command made of plain words is touched, and only when those words are exactly the
+    ones the shared reader (lib/shell-words.py) cuts from it, so a reading the two disagree on leaves
+    the command judged as written. A cd or gh with a substitution, a redirection, a heredoc or a
+    variable assignment in front is judged whole, as before; so is a body file named inside clustered
+    short flags (`-dF path`) or as `-Fpath`. Anything that goes wrong here returns command unchanged:
+    blanking less can only refuse more."""
+    try:
+        parts = []
+        found = scan._sw.commands(command, parts=parts)
+        blank = []
+        for _entry, part in zip(found, parts):
+            if part.get("inner") or part.get("openers"):
+                continue
+            start, end = part["start"], part["end"]
+            text = command[start:end]
+            spans = _word_spans(text)
+            if not spans or [w for w, _s, _e in spans] != scan._sw.shell_tokens(text):
+                continue
+            words = [w for w, _s, _e in spans]
+            if words[0] == "cd" and scan._sw.cd_target(text) is not None:
+                blank.append((start + spans[0][1], start + spans[-1][2]))
+                continue
+            if words[0] != "gh":
+                continue
+            got = scan.gh_command(words)
+            if not got or got[0] not in ("pr", "issue") or tuple(got[:2]) not in KINDS:
+                continue
+            files = set(scan.flag_values(words[1:], *BODY_FILE_FLAGS))
+            for k, (w, s, e) in enumerate(spans):
+                if w in BODY_FILE_FLAGS and k + 1 < len(spans) and spans[k + 1][0] in files \
+                        and spans[k + 1][0] != "-":
+                    blank.append((start + spans[k + 1][1], start + spans[k + 1][2]))
+                elif w.startswith("--body-file=") and w[len("--body-file="):] in files and w != "--body-file=-":
+                    blank.append((start + s, start + e))
+        out = list(command)
+        for s, e in blank:
+            out[s:e] = [" "] * (e - s)
+        return "".join(out)
+    except Exception:  # noqa: BLE001  the reader failing leaves the whole command judged, never less
+        return command
+
+
 def evaluate(command, cwd, depth=0):
     """-> [reasons]. Raises nothing: what cannot be told is a reason.
 
@@ -934,6 +1042,8 @@ def evaluate(command, cwd, depth=0):
                               "text, so whether that text names a work organisation or repository cannot "
                               "be told." % e]
         return reasons
+    # What is posted, for the name check: the command less its cds and body file paths (#2909).
+    posted = posted_text(command)
     for kind, args, envs, place in found:
         what = "gh %s %s" % kind
         where = place.cwd or place.start or cwd
@@ -943,7 +1053,7 @@ def evaluate(command, cwd, depth=0):
             elif kind == REPO_SYNC:
                 why = judge_repo_sync(what, args, where)
             elif kind in RELEASE:
-                why = judge_release(kind, what, args, envs, place, where, command)
+                why = judge_release(kind, what, args, envs, place, where, command, posted)
             elif kind == GIST_CREATE:
                 why = judge_gist(what, args, place, command)
             elif kind == GIST_EDIT:
@@ -951,7 +1061,7 @@ def evaluate(command, cwd, depth=0):
             elif kind == REPO_EDIT:
                 why = judge_repo_edit(what, args, envs, place, where, command)
             else:
-                why = _judge_text(kind, what, args, envs, place, where, command)
+                why = _judge_text(kind, what, args, envs, place, where, command, posted)
         except CannotTell as e:
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
@@ -959,7 +1069,7 @@ def evaluate(command, cwd, depth=0):
     for slug, files in apis:
         try:
             bodies = [("the file %s" % p, _read(p, cwd)) for p in files]
-            why = judge("gh api", slug, cwd, None, command, bodies)
+            why = judge("gh api", slug, cwd, None, posted, bodies)
         except CannotTell as e:
             why = "gh api: %s." % e
         if why and why not in reasons:
@@ -967,7 +1077,7 @@ def evaluate(command, cwd, depth=0):
     return reasons
 
 
-def _judge_text(kind, what, args, envs, place, where, command):
+def _judge_text(kind, what, args, envs, place, where, command, posted=None):
     """judge() for one gh pr or issue command: its body files, and what it posts that is not on its
     command line (claude-config#2326). Raises CannotTell."""
     slugs, gh_repo = _repo_of(kind, args, envs, place)
@@ -984,7 +1094,7 @@ def _judge_text(kind, what, args, envs, place, where, command):
             # With no --head, gh pushes the branch when it is not fully pushed and it can ask where.
             bodies.append(("what it may push (the branch's name and the commits no remote holds)",
                            lambda: pushed_text(where, False)))
-    return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen)
 
 
 # The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so
