@@ -34,7 +34,14 @@ export GH_POLL_LOCK_SLEEP=true
 unset GH_POLL_PER_MINUTE GH_POLL_RATE_FIRST_SECONDS GH_POLL_RATE_MAX_SECONDS 2>/dev/null || true
 
 # One loop's call into the library, in a process of its own: $1 = session, then the shell to run.
-loop(){ local s="$1"; shift; CLAUDE_CODE_SESSION_ID="$s" bash -c ". '$LIB' || exit 99; $*" 2>&1; }
+# The call is written into a driver beside the suite's scratch, which sources the library by its path
+# written out: a double quoted bash -c string sourcing it is one the Slack drafts gate cannot work out,
+# and refuses (claude-config#2538).
+loop(){
+  local s="$1"; shift
+  printf '. %q || exit 99\n%s\n' "$LIB" "$*" > "$WORKDIR/loop-call.sh"
+  CLAUDE_CODE_SESSION_ID="$s" bash "$WORKDIR/loop-call.sh" 2>&1
+}
 
 if [ ! -f "$LIB" ]; then
   bad "#1482 lib/gh-poll.sh exists"
@@ -106,7 +113,7 @@ check_eq "#2715 and the next waits for the minute, as any look would" "wait cap 
 rm -rf "$GH_POLL_STATE_DIR"
 
 # No session (a helper run by hand): its own key, never a crash, never another session's budget.
-out="$(env -u CLAUDE_CODE_SESSION_ID bash -c ". '$LIB'; ghp_session_key")"
+out="$(env -u CLAUDE_CODE_SESSION_ID bash -c '. "$1"; ghp_session_key' _ "$LIB")"
 check_eq "#1482 with no session the key is no-session" "no-session" "$out"
 check_eq "#1482 a session id is kept to a file name's characters" "a_b_c" "$(loop 'a/b c' 'ghp_session_key')"
 
