@@ -233,7 +233,11 @@ reset_world noshort
 run L901
 check_eq "noshort: exits 0" "0" "$rc"
 check "noshort: title uses the rule" "Lesson L901 sweep: Short rule with no short form." "$(cat "$FAKE/created")"
-check "noshort: a non digest source excludes nothing" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created")"
+check "noshort: files in bidboard" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created")"
+check "noshort: a source outside the digest gives bidboard the another project wording" \
+  "A new lesson was recorded in another project" "$(cat "$FAKE/body-Acme-Corp_bidboard" 2>/dev/null)"
+check_not "noshort: and never the came from here wording" "recorded from a defect found in this project" \
+  "$(cat "$FAKE"/body-* 2>/dev/null)"
 
 # ---- 3. a rerun files nothing twice: matched by number ----
 reset_world rerun
