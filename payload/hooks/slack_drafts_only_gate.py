@@ -1085,6 +1085,35 @@ SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset
               r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
 # export and readonly with no = keep a name's value, so sh_binds does not count them as binding it.
 SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
+# A run of word characters, as the lookarounds in SH_BINDERS and sh_bind_patterns see one.
+SH_WORD_RUN = re.compile(r"\w+")
+# A run of the characters a function name is mentioned between (sh_walk's called_after).
+SH_FUNC_RUN = re.compile(r"[\w.:/-]+")
+
+
+def sh_cut(text, spans):
+    """text with each span [a, b) taken out, last first, each from what the one after it left. Where
+    the spans are apart, that is one join of the pieces between them, rather than a copy of the whole
+    text for each span (claude-config#2918); spans that touch each other or repeat are taken out one
+    by one, as before."""
+    order = sorted(spans, reverse=True)
+    if all(0 <= a <= b for a, b in order) and all(order[k + 1][1] <= order[k][0] for k in range(len(order) - 1)):
+        pieces, upto = [], 0
+        for a, b in reversed(order):
+            pieces.append(text[upto:a])
+            upto = b
+        pieces.append(text[upto:])
+        return "".join(pieces)
+    for a, b in order:
+        text = text[:a] + text[b:]
+    return text
+
+
+def sh_words_in(text):
+    """Every name sh_binds could find text binding: each run of word characters, and each one that
+    follows a v, for printf -vNAME, the one form whose name has a word character before it."""
+    words = set(SH_WORD_RUN.findall(text))
+    return words | {w[1:] for w in words if w[:1] == "v"}
 
 
 def sh_comment_at(text, at):
@@ -1257,7 +1286,17 @@ def remember_readings(mod):
             rests[text] = plain_rest(text)  # (rest, assigns), two strings
         return rests[text]
 
-    mod.commands, mod.command_rest = commands, command_rest
+    # cd_target(text) too, a reading of one command's words: asked of each command by the reader as it
+    # cuts a text and again by the walk of its variables, 30,000 readings of claude-sync's commands for
+    # one claude-sync line (claude-config#2918). A string or None, so every caller may share it.
+    plain_cd, cds = mod.cd_target, {}
+
+    def cd_target(text):
+        if text not in cds:
+            cds[text] = plain_cd(text)
+        return cds[text]
+
+    mod.commands, mod.command_rest, mod.cd_target = commands, command_rest, cd_target
 
 
 def load_reader():
@@ -1383,6 +1422,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         self.clean = {}
         self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
         self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
+        self.indirect_memo = {}  # {a command's text: sh_indirect's answer for it}
+        self.cwd_spans = {}  # {id of a walk's result: (it, its uncertain spans in order), for sh_cwd_at}
+        self.struct_memo = {}  # {(a text, the directory it is read from): sh_struct of it}, for sh_struct_of
+        self.redir_memo = {}  # {a command's text: its words and redirections}, for redirections
         # The files and directories an earlier command of this call writes (claude-config#2525), by
         # real path: {file: [(kind, the path or the text, its name for a refusal)]}, kind "file",
         # "text" or "unknown" (text that cannot be worked out, claude-config#2721), and {directory:
@@ -1750,7 +1793,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
 
     def redirections(self, text):
         """(its words as written, its redirections as (operator, target or None), whether it holds an
-        operator that is neither, such as a process substitution) for one command."""
+        operator that is neither, such as a process substitution) for one command. Worked out once
+        for each text, which is all it depends on, and each caller is given lists of its own: a
+        suite repeats many of its commands word for word (claude-config#2918)."""
+        got = self.redir_memo.get(text)
+        if got is None:
+            args, redirs, odd = self.redirections_read(text)
+            got = self.redir_memo[text] = (tuple(args), tuple(redirs), odd)
+        return list(got[0]), list(got[1]), got[2]
+
+    def redirections_read(self, text):
+        """redirections, read afresh."""
         rest, _ = self.sw.command_rest(text)
         toks = self.sh_tokens(self.sh_strip_openers(rest))
         args, redirs, odd, k = [], [], False, 0
@@ -2848,11 +2901,25 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return SH_UNKNOWN_DIR
         return self.sh_dir(d)
 
-    @staticmethod
-    def sh_cwd_at(known, at):
+    def sh_cwd_at(self, known, at):
         """Whether sh_walk found the directory certain at offset at: before where the walk ended, in no
-        function body (which runs wherever it is called from), and past no cd that may have failed."""
-        return at < known["top"] and not any(a <= at < b for a, b in known["lost"] + known["bodies"])
+        function body (which runs wherever it is called from), and past no cd that may have failed.
+        The spans are put in order once for each walk's result, and at found among them by bisection:
+        asked of every word of every command, a scan of claude-sync's 300 function bodies each time was
+        a tenth of judging a claude-sync line (claude-config#2918)."""
+        if at >= known["top"]:
+            return False
+        got = self.cwd_spans.get(id(known))
+        if got is None or got[0] is not known:
+            spans = sorted(known["lost"] + known["bodies"])
+            reach, most = [], None
+            for _, b in spans:
+                most = b if most is None or b > most else most
+                reach.append(most)
+            got = self.cwd_spans[id(known)] = (known, [a for a, _ in spans], reach)
+        _, starts, reach = got
+        k = bisect.bisect_right(starts, at)
+        return not (k and reach[k - 1] > at)
 
     @staticmethod
     def sh_dir(d):
@@ -3063,7 +3130,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return {"regions": {}, "top": 0, "lost": [], "bodies": []}
         items = list(zip(cmds, parts))
-        struct = self.sh_struct(items, s)
+        struct = self.sh_struct_of(s, cwd, items)
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
@@ -3105,7 +3172,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 bound, more, callees = set(), False, []
                 for o, c in fbody.get(name, ()):
                     body = s[items[o][1]["start"]:items[c][1]["end"]]
-                    bound |= {n for n in allnames if self.sh_binds(n, body)}
+                    bound |= self.sh_binds_any(allnames, body)
                     for k in range(o, c + 1):
                         if len(items[k][1]["scope"]) > 1:
                             continue
@@ -3204,7 +3271,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                      and not any(a <= items[k][1]["start"] < b for a, b in bodies)]
             if any(self.sw.cd_target(head_of(k)) is not None for k in inner if head_of(k)):
                 lost.append((start, len(s)))
-            for n in {n for n in allnames | set(env) if self.sh_binds(n, s[start:items[j][1]["end"]])}:
+            for n in self.sh_binds_any(allnames | set(env), s[start:items[j][1]["end"]]):
                 setv(n, None, start)
             for k in inner:
                 if head_of(k):
@@ -3315,27 +3382,48 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if whole and not any(self.sh_indirect(head_of(k)) or
                              self.sh_eval_unsafe(head_of(k), evals, items[k][0][0]) for k in unfollowed):
             for n in final:
-                rest = s
-                for a, b in sorted(spans.get(n, ()), reverse=True):
-                    rest = rest[:a] + rest[b:]
-                if n not in tainted and not self.sh_binds(n, rest, temp.get(n, 0)):
+                if n not in tainted and not self.sh_binds(n, sh_cut(s, spans.get(n, ())), temp.get(n, 0)):
                     cand.add(n)
+
+        sbodies = sorted(bodies)  # in order once, not once for each value carved (claude-config#2918)
 
         def carve(a, b):
             """[a, b) less every function body: a value the walk saw at one point, not to the end."""
             out = []
-            for x, y in sorted(bodies):
-                if y <= a or x >= b:
+            for x, y in sbodies:
+                if x >= b:
+                    break  # in order of start, so every body after it starts past b too
+                if y <= a:
                     continue
                 if x > a:
                     out.append((a, x))
                 a = max(a, y)
             return out + [(a, b)] if a < b else out
 
-        mentions, after_memo = {}, {}
+        mentions, after_memo, runs = {}, {}, {}
+
+        def mentioned(f):
+            """Where f is spelled in s as a whole word, no [\\w.:/-] either side. A function name is made
+            of those characters, so each is a whole run of them, and one pass over s finds every
+            function's, where a search of s for each function took a third of judging a claude-sync
+            line (claude-config#2918). A name with any other character is searched for by itself."""
+            if not SH_FUNC_RUN.fullmatch(f):
+                return [m.start() for m in re.finditer(r"(?<![\w.:/-])" + re.escape(f) + r"(?![\w.:/-])", s)]
+            if not runs:
+                runs[None] = []
+                for m in SH_FUNC_RUN.finditer(s):
+                    if m.group(0) in fbody:
+                        runs.setdefault(m.group(0), []).append(m.start())
+            return runs.get(f, [])
+
+        # Where each function's bodies are, and their text, worked out once: every lasting name asked
+        # of every body, and every mention of a function, worked them out afresh (claude-config#2918).
+        fspan = {f: [(items[o][1]["start"], items[c][1]["end"]) for o, c in fbody[f]] for f in fbody}
 
         def fspans(f):
-            return [(items[o][1]["start"], items[c][1]["end"]) for o, c in fbody.get(f, ())]
+            return fspan.get(f, [])
+
+        ftexts = [(f, x, y, s[x:y]) for f in fbody for x, y in fspans(f)]
 
         def called_after(f, a, seen=()):
             """Whether every mention of the function of s named f, outside its own bodies, is past
@@ -3350,8 +3438,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return after_memo[f, a]
             if f not in mentions:
                 own_f, found = fspans(f), []
-                for m in re.finditer(r"(?<![\w.:/-])" + re.escape(f) + r"(?![\w.:/-])", s):
-                    at = m.start()
+                for at in mentioned(f):
                     if any(x <= at < y for x, y in own_f) or sh_comment_at(s, at):
                         continue
                     found.append((at, [g for g in fbody if g != f and any(x <= at < y for x, y in fspans(g))]))
@@ -3372,8 +3459,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             for n, (a, v) in final.items():
                 kept = [(a, len(s))] if n in cand else carve(a, top)
                 if n in cand:
-                    kept += [(x, y) for f in fbody for x, y in fspans(f) if y <= a and
-                             ("$" + n in s[x:y] or "${" + n in s[x:y]) and called_after(f, a)]
+                    kept += [(x, y) for f, x, y, body in ftexts if y <= a and
+                             ("$" + n in body or "${" + n in body) and called_after(f, a)]
                 known["regions"].setdefault(n, []).extend((x, y, v) for x, y in kept)
             for n, r in self.sh_locals(s, items, struct, known, script).items():
                 known["regions"].setdefault(n, []).extend(r)
@@ -3476,11 +3563,30 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             at = text.find(name, end + 1)
         return False
 
+    @staticmethod
+    def sh_binds_any(names, text):
+        """The names of names that text can bind (sh_binds, nothing allowed), asking sh_binds only of a
+        name that is one of text's words (sh_words_in). Every form sh_binds matches has the name with no
+        word character either side, except printf -vNAME, so any other name it cannot bind; asked of
+        each of claude-sync's 1,100 names for each compound command and function body, the asking
+        alone was a sixth of judging one claude-sync line (claude-config#2918)."""
+        words = sh_words_in(text)
+        return {n for n in names if (n in words or not SH_WORD_RUN.fullmatch(n)) and Judge.sh_binds(n, text)}
+
     def sh_indirect(self, text):
         """Whether a command can bind a name it does not spell out, so no name is certain past it: eval,
         a nameref (declare -n), a name handed through a variable to read, mapfile, getopts, unset,
         printf -v, let or declare, or $NAME = in (( )). Its words are read as written (sh_tokens), so
-        a value such as $(( ... )) stays one word, and a name is one only with no $ or ` in it."""
+        a value such as $(( ... )) stays one word, and a name is one only with no $ or ` in it.
+        Worked out once for each text: it depends on the text alone, and the walk asks it of the same
+        command from several places, 16,000 times for one claude-sync line (claude-config#2918)."""
+        got = self.indirect_memo.get(text)
+        if got is None:
+            got = self.indirect_memo[text] = self.sh_indirect_read(text)
+        return got
+
+    def sh_indirect_read(self, text):
+        """sh_indirect, read afresh."""
         if re.search(r"\(\([^()]*\$\{?\w+\}?\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", text):
             return True
         # A case branch's pattern comes with its first command (`unset) : ;;` read as unset ":"), and
@@ -3670,6 +3776,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             setv(n, self.sh_word(raw, where(dj), var, script, True)[0], pj["end"])
         return True
 
+    def sh_struct_of(self, s, cwd, items):
+        """sh_struct of s's commands read from cwd (items, as parsed gives them), worked out once for
+        each text: the walk of its variables and the reading of what a script writes (raw_runs_once)
+        each worked it out, a seventh of judging the claude-sync suite (claude-config#2918). Neither
+        changes what it is given."""
+        key = (s, cwd)
+        if key not in self.struct_memo:
+            self.struct_memo[key] = self.sh_struct(items, s)
+        return self.struct_memo[key]
+
     @staticmethod
     def sh_struct(items, s=None):
         """The compound commands around each command, for sh_locals: (rows, blocks), a row for each of
@@ -3812,6 +3928,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         rows, blocks = struct
         sealed = None
         shopt = []  # whether s runs shopt, read once for all its locals: one search of claude-sync is 10 ms
+        # Every function body's span and words (sh_words_in), found once, and the bodies that can bind
+        # each name: a body that does not hold the name as a word cannot bind it, and for each of
+        # claude-sync's 449 locals every body was cut and asked afresh (claude-config#2918).
+        bodies, binders = [], {}
+
+        def func_bodies():
+            if not bodies:
+                for x in blocks:
+                    if x["kind"] == "func":
+                        a0, b0 = items[x["open"]][1]["start"], items[x["close"]][1]["end"]
+                        bodies.append((a0, b0, sh_words_in(s[a0:b0])))
+                bodies.append(None)
+            return bodies[:-1]
+
         for idx, ((d, t), p) in enumerate(items):
             if rows[idx] is None:
                 continue
@@ -3853,16 +3983,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         shopt.append(bool(re.search(r"\bshopt\b", s)))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
                                                            script, here, shopt[0])
+                if v is None or sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
+                    continue  # before the text without it is cut and read, which these do not need
                 is_local = False
                 if toks[:1] == [("word", "local")]:
                     # A local is this function's own: what another function binds by that name
                     # changes it only when called from here, so where one does, below, any call ends
                     # the value as though the text were not sealed (check-free-space.sh keeps a local
                     # `here` in two functions; claude-config#2538).
-                    others = [(items[x["open"]][1]["start"], items[x["close"]][1]["end"]) for x in blocks
-                              if x["kind"] == "func" and not (items[x["open"]][1]["start"] <= p["start"]
-                                                               < items[x["close"]][1]["end"])]
-                    is_local = any(self.sh_binds(n, s[a0:b0]) for a0, b0 in others)
+                    others = [(a0, b0) for a0, b0, _ in func_bodies() if not a0 <= p["start"] < b0]
+                    if n not in binders:
+                        binders[n] = [(a0, b0) for a0, b0, words in func_bodies()
+                                      if n in words and self.sh_binds(n, s[a0:b0])]
+                    is_local = any(not a0 <= p["start"] < b0 for a0, b0 in binders[n])
                     spans += others
                 cut, upto = [], 0
                 for a0, b0 in sorted(spans):
@@ -3870,8 +4003,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         cut.append(s[upto:a0])
                     upto = max(upto, b0)
                 cut = "".join(cut) + s[upto:]
-                if v is None or self.sh_binds(n, cut) or \
-                        sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
+                if self.sh_binds(n, cut):
                     continue
                 b = items[end][1]["start"]
                 if sealed is None:
@@ -4139,10 +4271,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # with mostly the same names: lib/ai-review-common.sh was read whole 8 times judging the
         # merge helper. Whether a text binds a name depends on nothing else, so each answer is kept
         # for the run, by the text itself (claude-config#2576).
+        # A name that is not one of the text's words it cannot bind (sh_binds_any), and most names a
+        # file is asked about are not in it (claude-config#2918).
         told = self.binds_memo.setdefault(text, {})
+        words = None
         for n in names:
             if n not in told:
-                told[n] = self.sh_binds(n, text)
+                if words is None:
+                    words = sh_words_in(text)
+                told[n] = (n in words or not SH_WORD_RUN.fullmatch(n)) and self.sh_binds(n, text)
         bound = {n for n in names if told[n]}
         try:
             cmds, parts = self.parsed(text, cwd)

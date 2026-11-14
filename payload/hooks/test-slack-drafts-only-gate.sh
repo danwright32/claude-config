@@ -3913,7 +3913,8 @@ PY
   cat > "$T/cost.py" <<'PY'
 import importlib.util, json, resource, statistics, subprocess, sys, time
 hook, reader, cs, ceiling = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
-line = " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[5:])
+# --line <command line> judges that line instead of claude-sync lessons (#2918).
+line = sys.argv[6] if sys.argv[5] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[5:])
 spec = importlib.util.spec_from_file_location("shell_words", reader)
 sw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sw)
@@ -3942,6 +3943,22 @@ PY
   check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
   cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
   check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
+fi
+
+# Since #2911 the gate reads every file the claude-sync suite sources, and judging
+# `bash tests/test-claude-sync.sh` took 7.5 s of the 11 s budget at a load of 14, and ran out of it on
+# a slow CI runner (PR #2917, 2026-11-13). Profiled, the time was work repeated per name, per local
+# and per command over the same text, now done once (#2918). Held in readings of claude-sync, as
+# above, so no load moves it: at about 0.31 s a reading the 11 s budget is about 35 readings, and the
+# ceiling of 19 is about half of it, which leaves a runner at least half again as slow per reading
+# inside the budget. Measured on 2026-11-13: about 22 readings before #2918 (21.5 to 24 under load),
+# about 15 after.
+if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
+  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 19 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  check "bash tests/test-claude-sync.sh is judged within 19 readings of claude-sync, about half the budget (#2918)" "$cost"
+else
+  # L411: installed in ~/.claude there is no checkout, so no suite to judge.
+  echo "SUITE-PART-UNMEASURED #2918: no claude-config checkout with tests/test-claude-sync.sh beside this suite, so the time to judge it was not measured"
 fi
 
 echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"

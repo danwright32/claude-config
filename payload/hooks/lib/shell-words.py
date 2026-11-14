@@ -1667,21 +1667,26 @@ def script_text(path, d, wrapper):
     return path, text
 
 
-def _records(s, cwd, depth, scripts=None):
+def _records(s, cwd, depth, scripts=None, fields=True):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
     0x1d the reason for one whose string cannot be read; depth is how many wrappers it is inside; crude
     says s itself could only be read by the crude cut. scripts, a list, asks for the commands of each
     script file a command runs as well, right after its record, and is given (path, text) for each
-    one read (claude-config#2301)."""
+    one read (claude-config#2301). fields=False leaves each field "" for a caller that reads none: it
+    is a reading of each command's words, and every_command, which drops it, asked for all 14,000 of
+    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918)."""
     try:
         cut, crude = commands(s, cwd), False
     except Unreadable:
         cut, crude = crude_commands(s, cwd), True
     out = []
     for d, t in cut:
-        rest, assigns, field = program_field(t)
+        if fields:
+            rest, assigns, field = program_field(t)
+        else:
+            (rest, assigns), field = command_rest(t), ""
         found = wrapped(rest)
         if found is None:
             out.append((d, t, "", rest, assigns, field, depth))
@@ -1696,14 +1701,14 @@ def _records(s, cwd, depth, scripts=None):
                 scripts.append(found_script)
                 at = len(scripts) - 1
                 # Its commands, never its reason: the script's record keeps WHY_FILE below.
-                inner, _ = _records(found_script[1], d, depth + 1, scripts)
+                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields)
                 if not inner:
                     del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1, scripts)
+                inner, inner_crude = _records(string, d, depth + 1, scripts, fields)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -1728,7 +1733,7 @@ def every_command(s, cwd="", scripts=None):
     record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
     relative script name is resolved only against an absolute cwd, so pass the session's directory."""
     out = []
-    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts)[0]:
+    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts, fields=False)[0]:
         wrapper, _, why = wrap.partition("\x1d")
         out.append((d, t, wrapper, why, depth))
     return out
