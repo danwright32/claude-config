@@ -330,6 +330,77 @@ export const withoutComments = (text: string, hash: boolean): string =>
   text.replace(new RegExp(hash ? HASH_TOKENS : C_TOKENS, 'g'), t => (t.startsWith('#') || t.startsWith('//') || t.startsWith('/*') ? ' ' : t))
 
 /**
+ * Where each string of a shell script starts that only a log can read (#2792): an argument of an
+ * echo or printf whose output goes to the error stream and nowhere else (`echo "..." >&2`, `>&2
+ * echo "..."`), alone, after a test, or in a branch or a group. The guard follows no send in a shell
+ * script, so until this every string in one that posts was held, a log line included.
+ *
+ * Never a log, since each can carry the text to a send: standard output (a caller may capture it), a
+ * pipe that takes the error stream, a file, a variable, any other command, a string that runs a
+ * command itself (`$(...)`, backticks), a line of a heredoc's body, and any line of a script that
+ * points its own error stream somewhere (exec with a redirection). The gap, decided with the rule:
+ * a caller that joins the error stream of the function a log line is in to what it posts (`tell 2>&1
+ * | curl ...`) is not followed.
+ */
+export const shellLogStrings = (text: string): Set<number> => {
+  const out = new Set<number>()
+  // The strings, and the text with each string's inside and each comment blanked, so that a line of
+  // it is a line of commands whatever its strings hold.
+  const spans: { at: number; body: string }[] = []
+  let code = ''
+  let last = 0
+  for (const m of text.matchAll(new RegExp(HASH_TOKENS, 'g'))) {
+    const [t, at] = [m[0], m.index ?? 0]
+    const comment = t.startsWith('#')
+    code += text.slice(last, at) + (comment ? ' '.repeat(t.length) : `${t[0]}${'S'.repeat(t.length - 2)}${t[t.length - 1]}`)
+    if (!comment) spans.push({ at, body: t.slice(1, -1) })
+    last = at + t.length
+  }
+  code += text.slice(last)
+  if (/(^|[\n;&|({])\s*exec\s[^\n]*[<>]/.test(code)) return out
+  // Where each line of a heredoc's body starts.
+  const inDoc = new Set<number>()
+  let closes: { word: string; tabs: boolean } | undefined
+  let offset = 0
+  for (const line of text.split('\n')) {
+    if (closes) {
+      if ((closes.tabs ? line.replace(/^\t+/, '') : line) === closes.word) closes = undefined
+      else inDoc.add(offset)
+    } else {
+      const m = /(?<!<)<<(?!<)(-?)\s*(['"]?)([A-Za-z_][\w.-]*)\2/.exec(line)
+      if (m) closes = { word: m[3] as string, tabs: m[1] === '-' }
+    }
+    offset += line.length + 1
+  }
+  for (const s of spans) {
+    const from = code.lastIndexOf('\n', s.at) + 1
+    if (inDoc.has(from)) continue
+    const to = code.indexOf('\n', s.at)
+    const line = code.slice(from, to < 0 ? code.length : to)
+    // The one command of the line the string is in: cut at each ; && || | and &, never the & of >&2.
+    const pos = s.at - from
+    let start = 0
+    let end = line.length
+    for (const m of line.matchAll(/\|\||&&|;|\||(?<!>)&(?!&)/g)) {
+      const i = m.index ?? 0
+      if (i > pos) {
+        end = i
+        break
+      }
+      start = i + m[0].length
+    }
+    // A pipe that takes the error stream too (|&) carries the line on.
+    if (line.slice(end, end + 2) === '|&') continue
+    const command = line.slice(start, end).trim().replace(/^(?:(?:then|else|do|!|\{)\s+)+/, '')
+    if (!/^(?:echo|printf)(?:\s[^<>()`]*)?\s1?>&2$/.test(command) && !/^1?>&2\s+(?:echo|printf)(?:\s[^<>()`]*)?$/.test(command)) continue
+    // A string of the command that runs a command itself can post by itself.
+    if (spans.some(x => x.at >= from + start && x.at < from + end && /\$\(|`/.test(x.body))) continue
+    out.add(s.at + 1)
+  }
+  return out
+}
+
+/**
  * A YAML file's plain (unquoted) values, each line's text after its key or list mark; quoted ones are
  * read by literalsOf. A script block (`script: |`, as github-script takes) is JavaScript, whose words
  * are code and whose wording is only ever quoted, so its lines are never plain values (#2371).

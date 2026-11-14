@@ -39,7 +39,9 @@ import {
   refusal,
   removalKey,
   renderedProblem,
+  requestLanguage,
   shellKey,
+  shellLogStrings,
   isSender,
   stringsOf,
   testFile,
@@ -508,6 +510,14 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
     if (edited === undefined) return holdFor(change, untraced(UNTRACED_EDIT))
+    // In a shell script, wording that only a log reads is left out (#2792): a string every place of
+    // which is an echo or printf sent to the error stream and nowhere else (rules.ts shellLogStrings).
+    if (requestLanguage(path, current || after) === 'shell') {
+      const [logBefore, logAfter] = [shellLogStrings(before), shellLogStrings(after)]
+      const logged = (lits: Lit[], log: Set<number>) => (s: string) => lits.filter(l => l.text === s).every(l => l.start >= 0 && log.has(l.start))
+      const sent: Part = { added: change.added.filter(s => !logged(afterLits, logAfter)(s)), removed: change.removed.filter(s => !logged(beforeLits, logBefore)(s)) }
+      return sent.added.length || sent.removed.length ? holdFor(sent, untraced(UNTRACED_LANGUAGE)) : PASS
+    }
     if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))
     const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
     const was = scanWork()
