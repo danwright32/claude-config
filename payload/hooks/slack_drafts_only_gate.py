@@ -88,9 +88,10 @@ sys.dont_write_bytecode = True
 HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ISSUE = "claude-config#2302"
 
-# Refusing a file run or sourced by a path the gate cannot work out (Judge.unworked_path), OFF until
-# Dan decides from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10:
-# "measure first", as #2538 does for sourcing). It only ever adds refusals, so the environment may
+# Refusing a file RUN by a path the gate cannot work out (Judge.unworked_path), OFF until Dan decides
+# from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10: "measure
+# first"). A file SOURCED by one is refused whatever this says, since claude-config#2538 measured and
+# rewrote what that newly refused (Dan, 2026-11-13: "Do all of it, switch on"). It only ever adds refusals, so the environment may
 # switch it on anywhere (SLACK_GATE_UNWORKED_PATHS=refuse, as the measurement and the suite do), and
 # nothing switches it off once this is True.
 REFUSE_UNWORKED_PATHS = False
@@ -4935,9 +4936,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
             # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
             # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
-            # that still cannot be worked out is not read, as before. Refusing it is the half of #2465
-            # kept off: on 2026-11-09 it still newly refused 80 of this repository's scripts, whose
-            # causes are the follow up issue's to explain before it is turned on (Dan, 2026-11-09).
+            # that still cannot be worked out is refused unread (claude-config#2538, on since
+            # 2026-11-13, once the scripts it newly refused were read or rewritten).
             v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
             if bad:
                 raw = self.sh_source_target(text)
@@ -5055,7 +5055,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         which path, in which script and on which line, and what the gate could not follow, so whoever
         wrote the script can tell which line to make plain (the wording #2538's measurement used for a
         sourced path)."""
-        if not unworked_paths_refused():
+        # A file sourced by such a path is refused whatever the switch says (Dan, 2026-11-13: "Do all
+        # of it, switch on", claude-config#2538): it runs in this shell, where nothing else reads it.
+        # A file run by one stays behind the switch.
+        if not unworked_paths_refused() and verb != "sources":
             return None
         words = self.raw_words(text)
         if slot == "operand":
@@ -5066,7 +5069,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return None
         ctx = self.shell
         v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, ctx["script"], False)
-        if v is not None and not splits:
+        # A value worked out is a path only once its directory is too: a relative one where that is not
+        # certain is as unread as an unknown one (#2538: `go() { local p="lib/x.sh"; . "$p"; }` passed).
+        if v is not None and not splits and (os.path.isabs(os.path.expanduser(v)) or
+                                             self.sh_cwd(d) != SH_UNKNOWN_DIR):
             return None
         at = ctx["at"]
         where = f"the script {ctx['script']}" if ctx["script"] else "this command"

@@ -34,8 +34,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/slack-drafts-only-gate.sh"
-# The gate's switched off refusal (#2683) is switched on only where run_ur asks for it, never by
-# whatever the caller's environment holds.
+# The gate's switched off refusal of a file run by a path it cannot work out (#2683) is switched on
+# only where run_ur asks for it, never by whatever the caller's environment holds. A file sourced by
+# one is refused either way (#2538).
 unset SLACK_GATE_UNWORKED_PATHS
 NUDGE="$(cd "$DIR/.." && pwd)/skills/nudge/nudge.py"
 
@@ -1400,8 +1401,11 @@ SH
 # A script the reader can only cut crudely gives no place to its commands, so where it pipes what it
 # is handed cannot be followed.
 printf '%s\n' '#!/bin/bash' 'cat "$1" | wc -l' "echo 'never closed" > "$T/ip/crude.sh"
-for acts in "zero.sh:(.)" "py-c.sh:subprocess" "node-e.sh:child_process" "ruby-e.sh:does not read" "py-doc.sh:urllib" \
-  "os-run.sh:uses os for more" "os-loose.sh:uses os for more" "sh-doc.sh:(.)" "doc-expands.sh:a heredoc that expands it" \
+# zero.sh and sh-doc.sh source the file they are handed, by a positional the gate cannot work out, so
+# since #2538 they are refused as that path, before what the sourcing would do to it is read.
+for acts in "zero.sh:sources \"\$0\", a path the gate cannot work out" "py-c.sh:subprocess" "node-e.sh:child_process" \
+  "ruby-e.sh:does not read" "py-doc.sh:urllib" "os-run.sh:uses os for more" "os-loose.sh:uses os for more" \
+  "sh-doc.sh:sources \"\$1\", a path the gate cannot work out" "doc-expands.sh:a heredoc that expands it" \
   "no-code.sh:code from its input" "pipe.sh:through a pipe (bash)" "pipe-far.sh:through a pipe (sh)" \
   "pipe-loop.sh:loop or block" "pipe-block.sh:loop or block" "pipe-func.sh:a function" "pipe-script.sh:helper.sh" \
   "pipe-py.sh:(exec)" "here-string.sh:a here string" "env-handed.sh:(exec)" "env-rebound.sh:(exec)" \
@@ -1591,8 +1595,8 @@ for shape in hookdir twice local default realpath cdquiet groupsub fibrace funcs
 done
 # The shapes #2538's measurement found the gate could not follow in this repository's own scripts.
 # Each is in both trees: where lib/x.sh posts, the file is read and refused as the post it is; before
-# each was read it was let through unread (the refusal of an unread path was off), so refused is what
-# the reader fix changes, and the quiet tree shows nothing else in the shape refuses.
+# each was read it was let through unread (the refusal of an unread path was off then; it is refused
+# unread now), and the quiet tree, allowed, shows the path is worked out and nothing else refuses.
 for tree in posts quiet; do
   # claude-sync's library lookup: one path kept where a file is there, another where it is not, then
   # sourced behind the same test. A file test is answered from the disk as the gate reads the command.
@@ -1646,7 +1650,8 @@ run_bash "bash $T/sv/posts/filenot.sh"
 allowed "#2538 a path replaced where its file test fails is read as the replacement, which is not there to post"
 printf '%s\n' '#!/bin/bash' 'cd "$1"' 'P=lib/x.sh' '[ -f "$P" ] || P=none/x.sh' '. "./$P"' > "$T/sv/posts/filerel.sh"
 run_bash "cd $T/sv/posts && bash filerel.sh /nonexistent-2538"
-allowed "#2538 the refusal is off: a relative file test where the folder is not certain is not answered"
+refused "#2538 the sources refusal is on: a relative file test where the folder is not certain is not answered"
+says "#2538 and it is refused unread: a relative file test where the folder is not certain is not answered" "a path the gate cannot work out"
 # A quoted NAME=value handed to export, local or declare still binds it, and so does a trap's string;
 # a wait whose condition is built from a variable can bind anything. Each leaves ROOT unknown in go.
 for form in "export 'ROOT=/elsewhere'" "local x 'ROOT=/elsewhere'" "trap 'ROOT=/elsewhere' RETURN" \
@@ -1654,7 +1659,8 @@ for form in "export 'ROOT=/elsewhere'" "local x 'ROOT=/elsewhere'" "trap 'ROOT=/
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' "mk() { $form; }" 'mk' 'go' \
     > "$T/sv/posts/stillbinds.sh"
   run_bash "bash $T/sv/posts/stillbinds.sh"
-  allowed "#2538 the refusal is off: a name a quoted word or a wait can still bind is not worked out after it: $form"
+  refused "#2538 the sources refusal is on: a name a quoted word or a wait can still bind is not worked out after it: $form"
+  says "#2538 and it is refused unread: a name a quoted word or a wait can still bind is not worked out after it: $form" "a path the gate cannot work out"
 done
 for tree in posts quiet; do
   # pr-merge-quiz.sh's and check-wrapped-commands.sh's: a function written above the line that sets
@@ -1683,19 +1689,21 @@ for form in 'load' 'x="$(load)"' 'trap load EXIT' '( load )' 'echo "load runs"' 
     'case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac' \
     'HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"' 'load' > "$T/sv/posts/calledabove.sh"
   run_bash "bash $T/sv/posts/calledabove.sh"
-  allowed "#2538 the refusal is off: a function mentioned before its folder is set is not read with that folder: $form"
+  refused "#2538 the sources refusal is on: a function mentioned before its folder is set is not read with that folder: $form"
+  says "#2538 and it is refused unread: a function mentioned before its folder is set is not read with that folder: $form" "a path the gate cannot work out"
 done
 for form in '[ -n "$UNSET_2538" ] || d=/elsewhere' 'case "$UNSET_2538" in x) d=/elsewhere ;; esac'; do
   printf '%s\n' '#!/bin/bash' 'load() {' '  local d="${BASH_SOURCE[0]%/*}"' "  $form" '  . "$d/lib/x.sh"' '}' 'load' \
     > "$T/sv/posts/localnot.sh"
   run_bash "bash $T/sv/posts/localnot.sh"
-  allowed "#2538 the refusal is off: a local chosen by what the walk cannot answer is not worked out: $form"
+  refused "#2538 the sources refusal is on: a local chosen by what the walk cannot answer is not worked out: $form"
+  says "#2538 and it is refused unread: a local chosen by what the walk cannot answer is not worked out: $form" "a path the gate cannot work out"
 done
 # A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
 # Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
 # shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
-# posts, each would be refused; it is a path the gate cannot work out, so, with the refusal off, it
-# is let through unread. Turning the refusal on turns each of these red. (A loop or a function in
+# posts, each would be refused as the post; it is a path the gate cannot work out, so it is refused
+# unread, and the message says which. (A loop or a function in
 # the string also leaves $1 unknown where a positional is used inside or after it, and only there;
 # with the refusal off no fixture can tell that apart, as any loop that changes $1 really does
 # source the other file. One placed after every use changes nothing, checked below.)
@@ -1705,7 +1713,8 @@ printf '%s\n' '# sets its caller'"'"'s positionals' "set -e -- $Q" > "$T/sv/quie
 for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
             "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c '. \"\$1\"; . \"\$2\"' _ $T/sv/quiet/lib/resets.sh $P"; do
   run_bash "$form"
-  allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
+  refused "the sources refusal is on: a bash -c string whose \$1 has changed is not read as the argument: $form"
+  says "and it is refused unread: a bash -c string whose \$1 has changed is not read as the argument: $form" "a path the gate cannot work out"
 done
 run_bash "bash -c '. \"\$1\"' _ $P"
 refused "a bash -c string sourcing its argument, which posts, as a command typed"
@@ -1726,7 +1735,8 @@ says "that refusal is the post it read, past the backslash newline" "REFUSED: th
 for form in "bash -c 'for f in \"\$@\"; do . \"\$1\"; shift; done' _ $Q $P" \
             "bash -c 'f() { . \"\$1\"; }; f $Q' _ $P"; do
   run_bash "$form"
-  allowed "the refusal is off: a positional used inside or after a loop or function is not worked out: $form"
+  refused "the sources refusal is on: a positional used inside or after a loop or function is not worked out: $form"
+  says "and it is refused unread: a positional used inside or after a loop or function is not worked out: $form" "a path the gate cannot work out"
 done
 # BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
 run_bash "cd $T/sv/posts && bash hookdir.sh"
@@ -1735,10 +1745,9 @@ run_bash "cd $T/sv/quiet && bash hookdir.sh"
 allowed "the HOOK_DIR idiom run from the script's own folder, sourcing a file that does not post"
 run_bash "cd $T/sv/quiet && bash twice.sh"
 allowed "the set twice idiom run from the script's own folder, sourcing a file that does not post"
-# A path the gate cannot work out is not read, and NOT refused: that refusal is the half of #2465 kept off
-# until the 80 scripts it would newly refuse are explained (Dan, 2026-11-09). Every shape is in the tree
-# whose lib/x.sh posts, so a pass is the path left unread, exactly as on main; turning the refusal on
-# turns each of these red.
+# A path the gate cannot work out is not read, and is refused (claude-config#2538, on since 2026-11-13;
+# Dan, 2026-11-09, kept it off until the scripts it newly refused were explained). Every shape is in the
+# tree whose lib/x.sh posts, and each is refused as a path it could not work out, never as the post.
 printf '%s\n' '#!/bin/bash' '. "$NOT_SET_2465/lib/x.sh"' > "$T/sv/quiet/unknown.sh"
 printf '%s\n' '#!/bin/bash' 'source "$(some_tool --where)/x.sh"' > "$T/sv/quiet/subst.sh"
 printf '%s\n' '#!/bin/bash' "$SV_ROOT" '. "${LIB_2465:-$ROOT/lib}/x.sh"' > "$T/sv/quiet/envdefault.sh"
@@ -1755,10 +1764,12 @@ printf '%s\n' '#!/bin/bash' 'go() { local p="lib/x.sh"; . "$p"; }' 'go' > "$T/sv
 for shape in unknown subst envdefault onlyif nevercalled cdfails cdsubst aftercall localif rebound relative; do
   cp "$T/sv/quiet/$shape.sh" "$T/sv/posts/$shape.sh"
   run_bash "cd $T/sv/posts && bash $T/sv/posts/$shape.sh"
-  allowed "the refusal is off: a script sourcing a file whose path the gate cannot work out is let through unread: $shape.sh"
+  refused "the sources refusal is on: a script sourcing a file whose path the gate cannot work out is not read: $shape.sh"
+  says "and it is refused unread: a script sourcing a file whose path the gate cannot work out is not read: $shape.sh" "a path the gate cannot work out"
 done
 run_bash ". \"\$NOT_SET_2465/lib/x.sh\""
-allowed "the refusal is off: a command sourcing through a variable it did not set is let through unread"
+refused "the sources refusal is on: a command sourcing through a variable it did not set is not read"
+says "and it is refused unread: a command sourcing through a variable it did not set is not read" "a path the gate cannot work out"
 # The variables a script set are still followed past a helper it sources (claude-config#2465), so long
 # as the helper binds no name through a variable. whole-number.sh and disk-clean-units.sh returned
 # their result with printf -v "$2", which binds a name only running can tell, so every variable was
@@ -1781,10 +1792,11 @@ run_bash "bash $T/sv/posts/past-prints.sh"
 refused "and the file sourced after it is read: one that posts is refused"
 says "that refusal names the file sourced after the helper" "lib/x.sh"
 # The controls: a helper binding a name through a variable loses the script's variables after it, so
-# the file sourced next, which posts, is left unread (and, with the refusal off, let through).
+# the file sourced next, which posts, is left unread, and refused as a path it cannot work out (#2538).
 for kind in outparam evals; do
   run_bash "bash $T/sv/posts/past-$kind.sh"
-  allowed "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
+  refused "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
+  says "so the file sourced next is refused unread ($kind)" "a path the gate cannot work out"
 done
 # hang-wait.sh's waits evaluate a condition (their first or second argument) in the caller's shell on
 # purpose (#2538). Sourcing it binds nothing; a call binds what its condition binds, so the walk goes
@@ -1817,11 +1829,12 @@ for form in 'hang_wait "$cond"' "hang_wait 'ROOT=/elsewhere'" "window_wait 1 'cd
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" "$form" '. "$ROOT/lib/x.sh"' \
     > "$T/sv/posts/hw-unknown.sh"
   run_bash "bash $T/sv/posts/hw-unknown.sh"
-  allowed "the refusal is off: past a wait whose condition is not certain, the path is not worked out: $form"
+  refused "the sources refusal is on: past a wait whose condition is not certain, the path is not worked out: $form"
+  says "and it is refused unread: past a wait whose condition is not certain, the path is not worked out: $form" "a path the gate cannot work out"
 done
 # The real helpers: a script sourcing each, then a file through a variable path, is followed. In the
-# tree whose lib/x.sh posts that file is read and refused, which with the refusal off is the only
-# sign it was followed (a path not worked out is let through unread).
+# tree whose lib/x.sh posts that file is read and refused; in the quiet tree it is allowed, which is
+# the sign it was followed (a path not worked out is refused unread, #2538).
 for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh full-run-slot.sh \
               disk-clean-predicates.sh mods-replaced.sh hang-wait.sh; do
   for tree in posts quiet; do
@@ -2826,8 +2839,10 @@ printf '%s\n' '{"keys":{}}' > "$T/big/claude-issue-findings.session.manifest"
 # The same bytes with no extension, handed to a script that sources what it is handed: a file the
 # gate cannot tell from a script, which the script runs, so it reads it as one. (Handed to a script
 # that only counts its lines, it is that script's argument and is not read as code, #2797.)
+# (Sourced by its path written out: one sourced through "$1" is refused unread since #2538, before any
+# of it is read.)
 cp "$T/big/session.jsonl" "$T/big/session"
-printf '%s\n' '#!/usr/bin/env bash' '. "$1"' > "$T/big/count.sh"
+printf '%s\n' '#!/usr/bin/env bash' ". \"$T/big/session\"" > "$T/big/count.sh"
 
 run_budget() { # run_budget <tick budget> <command>: run_bash under a test run with the step clock
   local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
@@ -3379,7 +3394,12 @@ for lose in evald hang unset; do
   for form in "${UR_FORMS[@]}"; do
     f="$UR/posts/tests/$lose-${form%%:*}.sh"
     run_bash "bash $f"
-    allowed "switched off by default: a file run by a path the gate cannot work out is let through unread ($lose, ${form%%:*})"
+    case "${form%%:*}" in
+      source|dot)  # sourced, it is refused with the switch off too (#2538)
+        refused "switched off by default, a file sourced by a path the gate cannot work out is still refused ($lose, ${form%%:*})"
+        says "and it names the path ($lose, ${form%%:*})" "a path the gate cannot work out" ;;
+      *) allowed "switched off by default: a file run by a path the gate cannot work out is let through unread ($lose, ${form%%:*})" ;;
+    esac
     run_ur refuse "bash $f"
     refused "switched on: a file run by a path the gate cannot work out is refused ($lose, ${form%%:*})"
     says "it says it could not check, not that it found a post ($lose, ${form%%:*})" "REFUSED: the gate could not check whether this command posts to Slack"
@@ -4646,6 +4666,23 @@ if [ -n "$REPO2854" ]; then
   allowed "#2854 test-lib-bytecode-importers.sh is allowed run on its own"
 else
   printf 'SUITE-PART-UNMEASURED %s\n' "#2854 the bytecode suite run alone: this suite is not in a claude-config checkout"
+fi
+
+echo "slack drafts only: with the sources refusal on, the everyday tools are read whole and let through (claude-config#2538)"
+# Switched on, a file sourced by a path the gate cannot work out is refused, so a tool every session
+# runs has to set each path it sources plainly. Before #2538's rewrite run-all-tests.sh took its issue
+# spool library from HOOK_SPOOL_LIB and was refused, and with it plan-council's healthcheck.
+for f in run-all-tests.sh lib/merge-when-ready.sh lib/issue-spool.sh lib/suite-deadline.sh lib/push-scope.sh; do
+  run_bash "bash $DIR/$f"
+  allowed "#2538 the sources refusal is on, and hooks/$f is allowed"
+done
+if [ -n "$REPO2854" ]; then
+  for f in claude-sync tools/load-window.sh tests/test-claude-sync.sh; do
+    run_bash "bash $REPO2854/$f"
+    allowed "#2538 the sources refusal is on, and $f is allowed"
+  done
+else
+  printf 'SUITE-PART-UNMEASURED %s\n' "#2538 claude-sync, load-window and the claude-sync suite: this suite is not in a claude-config checkout"
 fi
 
 echo
