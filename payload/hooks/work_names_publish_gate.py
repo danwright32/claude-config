@@ -1345,6 +1345,11 @@ PLACE_GIT = {
     "symbolic-ref": frozenset({"--short", "--quiet", "-q", "HEAD"}),
     "branch": frozenset({"--show-current"}),
 }
+# git's own options in front of a lookup's subcommand, as the shared reader (lib/shell-words.py
+# git_read) separates them (#3007): the ones that leave what it prints alone, and the ones that move
+# it (-C, --git-dir, --work-tree), which MOVES then refuses as moved. Any other, -c above all, which
+# can rewrite a remote's URL as printed, makes it a program like any other.
+PLACE_GIT_FRONT = frozenset({"--no-pager", "-P", "--no-optional-locks", "-C", "--git-dir", "--work-tree"})
 # What takes a program somewhere this check cannot follow: a cd, pushd or popd in its substitution,
 # git's -C, --git-dir or --work-tree, env's -C or --chdir, and git's directory set in the environment.
 CHANGES_DIR = frozenset({"cd", "pushd", "popd"})
@@ -1360,9 +1365,18 @@ class Ran(str):
     printed = PLACE
 
 
-def _git_place(words):
-    """Whether git's words (git first) are a lookup of the checkout's place (PLACE_GIT)."""
-    sub, args = (words[1] if len(words) > 1 else ""), words[2:]
+def _git_place(read):
+    """Whether a git command, as the shared reader gives it ((sub, front, after) from git_read), is a
+    lookup of the checkout's place (PLACE_GIT) behind only the options PLACE_GIT_FRONT allows."""
+    if read is None:
+        return False
+    sub, front, args = read
+    j = 0
+    while j < len(front):
+        name = front[j].split("=", 1)[0]
+        if name not in PLACE_GIT_FRONT:
+            return False
+        j += 2 if front[j] in scan._sw.GIT_VALUED else 1
     if sub in PLACE_GIT:
         return all(a in PLACE_GIT[sub] for a in args)
     if sub == "remote":
@@ -1385,7 +1399,7 @@ def prints(text):
         return UNREAD
     if words[0] in PRINTS_OWN_WORDS:
         return OWN
-    if words[0] == "pwd" or (words[0] == "git" and _git_place(words)):
+    if words[0] == "pwd" or _git_place(scan._sw.git_read(words)):
         return PLACE
     rest = text.lstrip()
     if words[0] != "cat" or not rest.startswith("cat"):

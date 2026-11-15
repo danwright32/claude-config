@@ -688,6 +688,21 @@ run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && gi
 check "#2997 and git run after a cd in the substitution: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title \"\$(git -C .. remote -v)\" --body x"
 check "#2997 and git -C: $out" refused
+# git's own options in front of the subcommand are read by the shared reader (lib/shell-words.py
+# git_read), as every other hook reads them (#3007): a lookup behind one that leaves its output alone
+# is still a lookup of the checkout, one that moves it is refused as moved, and -c, which can rewrite
+# what the lookup prints, makes it a program like any other.
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git --no-pager rev-parse --show-prefix)\" --body x"
+check "#3007 a lookup behind --no-pager from a work checkout is refused: $out" refused
+check "#3007 and says the name where it runs holds, read as a lookup of the checkout: $out" has "$out" "acme-widgets"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git --no-pager rev-parse --show-toplevel)\" --body x"
+check "#3007 (control) and the same lookup from a checkout naming nothing passes: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -C .. rev-parse --show-toplevel)\" --body x"
+check "#3007 a lookup behind git -C is refused even from a clean checkout: $out" refused
+check "#3007 as run where a directory option takes it: $out" has "$out" "directory option"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -c url.x.insteadOf=y remote get-url origin)\" --body x"
+check "#3007 a lookup behind git -c is refused even from a clean checkout: $out" refused
+check "#3007 as printing what this check cannot read: $out" has "$out" "cannot read before the command runs"
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
 seen at \$(git remote get-url origin)
 EOF
