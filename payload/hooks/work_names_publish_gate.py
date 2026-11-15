@@ -28,13 +28,17 @@ substitution runs, in the posted text, in an unquoted heredoc body, or in a sh -
 string there, by what it prints (prints): echo, printf, date, basename and dirname their own words,
 cat the files it reads (cat_files), pwd and the git lookups of the checkout where they run (the
 directory's path and its git checkout's directories, remotes and branch, place_text). Any other
-program, whose output cannot be read before the command runs, is refused wherever it runs. A name
-counts as one of those programs only as the shell finds it (trusted_names): the bare word, in a
-command that defines no function or alias of it and changes neither PATH, git's environment nor
-anything else that decides which program it runs; ./git, a quoted cat or a git function is another
-program. A git lookup or a cat is read before the command runs, so it is refused as cannot be told
-when anything else the command runs could change what it reads first (changes_before): a git
-checkout or remote set-url, gh pr checkout, a script, a file written.
+program, whose output cannot be read before the command runs, is refused when the command runs from
+a work checkout. A name counts as one of those programs only as the shell finds it (trusted_names):
+the bare word, in a command that defines no function or alias of it and changes neither PATH, git's
+environment nor anything else that decides which program it runs; ./git, a quoted cat or a git
+function is another program. A git lookup or a cat is read before the command runs, so from a work
+checkout it is refused as cannot be told when anything else the command runs could change what it
+reads first (changes_before): a git checkout or remote set-url, gh pr checkout, a script, a file
+written. Those two refusals apply only in a work checkout (Dan, 2026-11-15, #3016): one whose path
+or git checkout names a work repository (work_checkout, the reading a lookup there is judged by).
+From a directory known to name nothing they post as before #2997; where the command cannot be placed,
+or a cd or directory option in the substitution takes the program elsewhere, they stay refused.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -55,8 +59,8 @@ unreadable, empty or of the wrong shape, the registry unreadable, the project li
 holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
 cannot be read but names a judged gh command, a variable or directory whose value cannot be known,
-a program a substitution runs whose output this check cannot read, one a cd or directory option in
-it takes elsewhere, one run where the command cannot be followed or git cannot read the checkout, a
+a program a substitution runs whose output this check cannot read (run from a work checkout or from
+where the command cannot be placed, #3016), one a cd or directory option in it takes elsewhere, one run where the command cannot be followed or git cannot read the checkout, a
 cat there reading standard input, a redirection, a name the shell changes as it runs (an expansion,
 a glob, a tilde) or a file that is missing, not a regular file or past CAT_LIMIT, and the time budget
 spent. No registry at all is fine.
@@ -1333,8 +1337,9 @@ READS_BACK = re.compile(r"\$_\b|\$\{_\}|\$\(|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 # their expansions judged on their own, and cat reading only a heredoc prints its body, read as text
 # itself; cat of files prints the files, read and judged (cat_files); pwd and the git lookups of the
 # checkout (PLACE_GIT) print where they run, judged by place_text. Any other program prints what this
-# check cannot read before the command runs, so it is refused wherever the command runs (the lessons
-# review of e4c7d07: head, sed, git log and the like print file text or commit messages). A word the
+# check cannot read before the command runs, so it is refused from a work checkout (the lessons
+# review of e4c7d07: head, sed, git log and the like print file text or commit messages; narrowed to
+# work checkouts by Dan on 2026-11-15, #3016, in variables_posted). A word the
 # shell fills with file names (an unquoted glob) makes a program's output unreadable too.
 PRINTS_OWN_WORDS = frozenset({"echo", "printf", "date", "basename", "dirname"})
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
@@ -1417,7 +1422,8 @@ def trusted_names(command, depth=0):
 # 02a97db): the gh commands that only post, gh api, and a few shell words that do nothing. A git
 # lookup and a cat are read before the command runs, so anything else in it may change what they
 # read first: a git checkout, switch, remote set-url or config, gh pr checkout or repo sync, a script,
-# a build, a file written. That is refused as cannot be told (changes_before).
+# a build, a file written. That is refused as cannot be told (changes_before), from a work checkout
+# only (#3016).
 POSTS_ONLY = (JUDGED - REPO_CREATE - {REPO_SYNC}) | {("auth", "token"), ("auth", "status")}
 NO_EFFECT = frozenset({"true", "false", ":", "fi", "done", "esac"})
 # Setting shell variables changes no file and no checkout (the ones that change which program a name
@@ -1618,6 +1624,23 @@ def place_text(where):
     return _PLACES[where]
 
 
+def work_checkout(place):
+    """Whether the command runs from a work checkout (#3016): True when the directory's path or its git
+    checkout, as place_text reads them, names a work organisation or repository (find), the reading a
+    pwd or a git lookup run there is judged by (#2981, #2997); False when the directory is known and
+    names none; None when where the command runs cannot be told (a cd this check cannot follow, or a
+    checkout git cannot read), which is never read as a personal checkout. Raises CannotTell when
+    the names cannot be read."""
+    if not place.cwd:
+        return None
+    try:
+        text = place_text(place.cwd)
+    except CannotTell:
+        return None
+    matcher, _owners, odd = names()
+    return find(text, matcher, odd) is not None
+
+
 # The most of a file cat_files reads: a device or pipe can be read for ever (the lessons review of
 # 17059ea), and no posted body comes near this. A file past it is refused, never read in part.
 CAT_LIMIT = 1 << 20
@@ -1669,7 +1692,9 @@ def variables_posted(text, place):
     Each program a substitution runs that prints more than its own words comes after them, shown as
     a Ran (#2997): (shown, what it prints, None), the files a cat reads (cat_files) or the directory's
     path and git checkout (place_text), or (shown, None, why not) where that cannot be told: a program
-    whose output cannot be read, and one a cd or directory option takes elsewhere, among them."""
+    whose output cannot be read, and one a cd or directory option takes elsewhere, among them. From a
+    directory known to name nothing (work_checkout False, #3016) a program whose output cannot be read
+    and is not taken elsewhere is left out, and a lookup or cat is judged as it reads now."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
@@ -1709,6 +1734,15 @@ def variables_posted(text, place):
     except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
         return out + [(Ran("its command substitutions"), None, "could not be read (%s: %s)"
                        % (type(e).__name__, e))]
+    # A program whose output cannot be read, and a lookup or cat beside something that can change what
+    # it reads, are refused only where the command may run from a work checkout (Dan, 2026-11-15,
+    # #3016). From a directory known to name nothing (work_checkout False) they post as they did before
+    # #2997; where the command cannot be placed, and for a program a cd or directory option in its
+    # substitution takes elsewhere, they stay refused. Raises CannotTell, refused by the caller, when the
+    # names cannot be read.
+    personal = False
+    if changer or any(p == UNREAD and not m for _c, p, m in runs):
+        personal = work_checkout(place) is False
     for command, printed, moved in runs:
         key = (" ".join(command.split()), printed)
         if key in seen:
@@ -1716,6 +1750,8 @@ def variables_posted(text, place):
         seen.add(key)
         shown = Ran("a substitution running %s" % key[0][:120])
         shown.printed = printed
+        if printed == UNREAD and personal and not moved:
+            continue
         if printed == UNREAD:
             out.append((shown, None, "prints what this check cannot read before the command runs"))
         elif moved:
@@ -1723,7 +1759,7 @@ def variables_posted(text, place):
                                      "takes it, which this check does not follow"))
         elif not place.cwd:
             out.append((shown, None, "runs it in a directory this check cannot follow the command to"))
-        elif changer and scan._sw.command_words(command)[:1] != ["pwd"]:
+        elif changer and not personal and scan._sw.command_words(command)[:1] != ["pwd"]:
             out.append((shown, None, "reads what another program this command runs can change before it "
                                      "does, while this check reads it only as it is now"))
         else:

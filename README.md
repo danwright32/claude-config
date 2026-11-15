@@ -3600,6 +3600,23 @@ refused there, since the runner counts as able to send. A file a package is hand
 x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
 `$0` or `BASH_SOURCE` is worked out as bash reads it.
 
+A test file's import of a module the same file replaces with a mock is not followed (#2359, recorded
+there on 2026-11-15: "Decided by Dan, 2026-11-15: pass an import the same test file mocks out (vi.mock
+or jest.mock of that path), with a test; a real unmocked import stays refused", a loosening he signed
+off), in `lib/js-mocks.py`. The rule is written the narrow way round: a mock counts only in a file
+plain enough that nothing in it can reach the original module. The file must be handed to vitest or
+jest as installed (the package by a launcher, or the runner's own script under `node_modules`:
+`.bin/vitest`, `.bin/jest`, or inside `vitest/`, `jest/` or `jest-cli/`; never run by node,
+tsx or bun itself, where a mock replaces nothing), be a test file by the runners' default naming
+(`.test` or `.spec` before the extension, or under `__tests__`), and call `vi.mock` or `jest.mock` as
+a top level statement of its own with the module's path written out, resolving to the same file, and
+a factory taking no parameters. It must name none of the runners' ways to the original or to taking a
+mock back (`importActual`, `requireActual`, `importOriginal`, `unmock`, `doMock` and the rest), in
+code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unrenamed import from
+`vitest` or `@jest/globals`; and reach no member by a computed name or run a string as code. Anything
+else leaves the import followed, so a real unmocked import stays refused. Only the file's own
+imports are affected.
+
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
 repository was refused whole because its config's imports pass 300, though nothing in it posts, and
@@ -5198,6 +5215,17 @@ Seconds between automatic sweeps of the tool's own scratch directory, read from 
 directory so a restarted process cannot reset it. Only mutating commands sweep, through the same
 handler that releases the sync lock, so no read-only command ever removes anything. `0` sweeps on
 every mutating run, and a value that is not a whole number is refused.
+
+</td></tr>
+<tr><td><code>SYNC_REVIEW_OPTION_PROBE_EVERY</code></td><td><code>86400</code></td><td>
+
+Seconds between the times `status` asks the installed claude whether it still accepts
+`--append-system-prompt-file`, the option the lessons review hands claude the lessons in
+(claude-config#2982). The question calls no model: claude is handed a file that does not exist,
+and its "file not found" error is the answer that the option is still known. The answer is kept in
+`~/.claude/state/review-option-probe.json` and asked again at once when the claude command changes.
+`status` says nothing while the option is accepted. `0` asks on every `status`, and a value that is
+not a whole number is refused.
 
 </td></tr>
 <tr><td><code>SYNC_SCRATCH_NOTE</code></td><td><code>1</code></td><td>
@@ -6952,7 +6980,12 @@ every top level name those use, through the imports between the mod's files; a t
 spacing draws nothing. Any other edit there passed, however it was worded, as did every edit to a
 `.ts` file that draws nothing (since #1841 one changing a message's words is held, below); a shell
 write is judged by the file it leaves (since #1576 one to a file that already draws too); a mod
-whose hook files cannot be listed or read is held. Since #1296 a value reaching what draws through a
+whose hook files cannot be listed or read is held. Since #3017 one only some of whose files cannot
+be read (a merge conflict left in one) is held only where the mod draws at all, read from its own
+code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named in any file of its hooks
+folder or the folders inside it (any `ui.` member but `log`, `toast` and `ask`; mod-kit's band row,
+pane, card or buttons), or a line built. A mod drawing nothing, such as this guard, is judged as
+code there. Since #1296 a value reaching what draws through a
 local or a function's parameter is followed too (a card's sentence handed to a function that draws
 it, a card's words held in a local, what a function a followed value calls returns), compared with
 what it treats as data taken out, so what a call it makes is handed, what a value is only tested

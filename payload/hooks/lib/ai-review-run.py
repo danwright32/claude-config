@@ -45,7 +45,9 @@ pending file, THEN removes the diff. The finished file lands first so there is n
 neither: a nudge that saw nothing would read it as no review having been started (L98). A review
 that ran out of time, a claude that exited non-zero, one that printed nothing, and a crash inside
 this script all still produce a finished file, each saying which it was in its own words (L11,
-L514). The deadline is enforced here with subprocess's own timeout because macOS has no `timeout`
+L514). A claude that refuses an option this runner passes as unknown is its own outcome, naming
+the option and the Claude Code version, because then no review can start at all
+(refused_option, claude-config#2982). The deadline is enforced here with subprocess's own timeout because macOS has no `timeout`
 command, and the whole process group is killed on expiry so a stuck child cannot outlive it.
 
 The finished file's first lines are `name=value` metadata (repo, repository, branch, sha, started, finished,
@@ -991,7 +993,156 @@ def remove_input_when_stopped(diff_file, also=None):
             signal.signal(s, stopped)
 
 
+# THE OPTION THE LESSONS RIDE IN (claude-config#2975, #2982), named once for the command main
+# builds and for the probe below, so the probe always asks about the option the reviews pass.
+# Claude Code 2.1.325 accepts it but does not list it in `claude --help`; it is known only by its
+# errors ("Append system prompt file not found" for a missing file, "unknown option" otherwise).
+LESSONS_OPTION = "--append-system-prompt-file"
+# How Claude Code refuses an option it does not know, measured on 2.1.325:
+# `error: unknown option '--append-system-prompt-filez'` on stderr, exit 1, before anything runs.
+UNKNOWN_OPTION = re.compile(r"""unknown option ['"]?(--[A-Za-z0-9][A-Za-z0-9-]*)""")
+# How it says a file for LESSONS_OPTION is missing, measured on 2.1.325: proof the option is known.
+MISSING_LESSONS_FILE = "Append system prompt file not found"
+# Between the fields of the probe's answer line: the ASCII unit separator, which no field carries.
+PROBE_SEP = "\x1f"
+
+
+def refused_option(errtext, cmd):
+    """The option of `cmd` that claude refused as unknown, or None (claude-config#2982). Only an
+    option the runner actually passed counts, compared whole, so a refusal of some other text is
+    left to the ordinary failure."""
+    for m in UNKNOWN_OPTION.finditer(errtext or ""):
+        if m.group(1) in cmd:
+            return m.group(1)
+    return None
+
+
+def claude_version(claude="claude", timeout=15):
+    """Claude Code's version as `claude --version` prints it ("2.1.325 (Claude Code)" gives
+    "2.1.325"), or None when it could not be read. Bounded, and in its own process group, the way a
+    review is (run_stream), so a claude that hangs cannot hold the runner."""
+    try:
+        rc, got, _err, timed_out = run_stream(["env", "-u", "CLAUDECODE", claude, "--version"],
+                                              subprocess.DEVNULL, timeout, lambda: None)
+    except OSError:
+        return None
+    if timed_out or rc != 0 or not got["other"]:
+        return None
+    v = got["other"][0].replace("(Claude Code)", "").strip()
+    return v or None
+
+
+def refused_body(option, version):
+    """What a review claude would not start says (claude-config#2982): the option, the version, and
+    that no review can start, never the ordinary "claude exited" of a failed review of this change."""
+    who = f"Claude Code {version}" if version else "This Claude Code (its version could not be read)"
+    return (f"{who} refused {option} as an unknown option, so no lessons review can start on this "
+            f"machine until hooks/lib/ai-review-run.py stops passing it. This is not a failed review "
+            f"of this change: the reviewer never started (claude-config#2982).")
+
+
+def probe_lessons_option(claude, timeout):
+    """(verdict, version, detail, lasting): whether the installed claude still accepts LESSONS_OPTION, asked
+    without calling any model (claude-config#2982). It is handed a file that does not exist, so the
+    option known reads "Append system prompt file not found" and the option dropped reads "unknown
+    option", both before anything is sent. The prompt is /model, which Claude Code answers locally,
+    so even a version that stopped checking the file up front calls no model. verdict is accepted,
+    refused, or unmeasured, with detail saying why for the last (L98, L11). lasting is False for
+    an answer that says nothing about this claude (it hung, or could not be run), so it is asked
+    again next time rather than kept for a day."""
+    version = claude_version(claude, timeout)
+    folder = tempfile.mkdtemp(prefix="ai-review-probe-")
+    missing = os.path.join(folder, "no-such-lessons-file.md")   # never created
+    # The rules are kept out on the launch all the same (CLAUDE_CODE_DISABLE_CLAUDE_MDS=1).
+    # prompt-cache-ok: nothing is cached at any lifetime, since claude refuses the missing file before it starts and /model is answered locally.
+    cmd =["env", "-u", "CLAUDECODE", "-u", "ANTHROPIC_MODEL", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
+           claude, "-p", "--bare", "--no-session-persistence", LESSONS_OPTION, missing, "/model"]
+    try:
+        rc, _got, err, timed_out = run_stream(cmd, subprocess.DEVNULL, timeout, lambda: None)
+    except OSError as e:
+        return "unmeasured", version, f"the claude command could not be run ({e})", False
+    finally:
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
+    errtext = err.decode("utf-8", errors="replace")
+    if timed_out:
+        return ("unmeasured", version,
+                f"the claude command did not answer within {timeout}s and was stopped", False)
+    if refused_option(errtext, [LESSONS_OPTION]):
+        return "refused", version, "", True
+    if MISSING_LESSONS_FILE in errtext:
+        return "accepted", version, "", True
+    return ("unmeasured", version,
+            f"handed a file that does not exist, it exited {rc} with neither the missing file error "
+            f"nor an unknown option error", True)
+
+
+def _probe_key(claude):
+    """Which claude answered: its resolved path, size and change time, so an update is asked at once
+    rather than up to a day later."""
+    real = os.path.realpath(claude)
+    st = os.stat(real)
+    return f"{real}|{st.st_size}|{st.st_mtime_ns}"
+
+
+def probe_main(argv):
+    """`ai-review-run.py --probe-lessons-option --claude BIN --cache FILE --every SECONDS --timeout
+    SECONDS`, for `claude-sync status` (claude-config#2982). Prints one line, separated by PROBE_SEP: verdict,
+    version, the epoch it was checked, the option, detail. Asks claude at most once per --every
+    seconds for the same claude command, reading the answer back from --cache in between."""
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--claude", required=True)
+    ap.add_argument("--cache", required=True)
+    ap.add_argument("--every", type=int, default=86400)
+    ap.add_argument("--timeout", type=int, default=30)
+    a = ap.parse_args(argv)
+    now = int(time.time())
+    try:
+        key = _probe_key(a.claude)
+    except OSError as e:
+        key = None
+        rec = {"verdict": "unmeasured", "version": "", "checked": now,
+               "detail": f"the claude command {a.claude} could not be read ({e.strerror})"}
+    if key is not None:
+        rec = None
+        try:
+            with open(a.cache, encoding="utf-8", errors="replace") as f:
+                old = json.load(f)
+            if (isinstance(old, dict) and old.get("key") == key and isinstance(old.get("checked"), int)
+                    and 0 <= now - old["checked"] < a.every):
+                rec = old
+        except (OSError, ValueError):
+            pass
+        if rec is None:
+            verdict, version, detail, lasting = probe_lessons_option(a.claude, a.timeout)
+            rec = {"key": key, "verdict": verdict, "version": version or "", "checked": now,
+                   "detail": detail}
+            # A hang or a claude that could not be run says nothing about this claude, so it is
+            # not kept and the next status asks again (lessons review of #2982).
+            if lasting:
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(a.cache)), exist_ok=True)
+                    tmp = a.cache + ".tmp"
+                    with open(tmp, "w", encoding="utf-8", errors="strict") as f:
+                        json.dump(rec, f)
+                    os.replace(tmp, a.cache)
+                except OSError:
+                    pass   # not recorded means asked again next time, never a wrong answer
+    fields = [rec.get("verdict", ""), rec.get("version", ""), str(rec.get("checked", "")),
+              LESSONS_OPTION, rec.get("detail", "")]
+    # The record came from JSON, which can carry a lone surrogate; printing one must not raise.
+    sys.stdout.reconfigure(errors="replace")
+    # Separated by the unit separator, never a tab: bash's read folds runs of whitespace IFS into
+    # one, so an empty version would shift every later field (lessons review of #2982).
+    print(PROBE_SEP.join(str(x).replace(PROBE_SEP, " ").replace("\n", " ") for x in fields))
+    return 0
+
+
 def main(argv):
+    if argv[:1] == ["--probe-lessons-option"]:
+        return probe_main(argv[1:])
     ap = argparse.ArgumentParser()
     for opt in ("--state-dir", "--key", "--sha", "--repo-label", "--branch", "--repo-dir",
                 "--model", "--prompt-file", "--lessons-dir", "--diff-file"):
@@ -1099,7 +1250,7 @@ def main(argv):
             lessons_files.append(write_lessons_file(fixed))
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
                "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
-               *(["--append-system-prompt-file", lessons_files[-1]] if fixed else []),
+               *([LESSONS_OPTION, lessons_files[-1]] if fixed else []),
                "--exclude-dynamic-system-prompt-sections",
                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
@@ -1129,7 +1280,17 @@ def main(argv):
             text = raw.strip() if isinstance(raw, str) else ""
             errtext = err.decode("utf-8", errors="replace").strip()
             printed = "\n".join(got["other"]).strip()
-            if rc != 0:
+            refused = refused_option(errtext, cmd) if rc != 0 else None
+            if refused:
+                # Claude Code no longer knows an option the runner passes, so no review can start
+                # here at all (claude-config#2982): said by name, with the version, never as the
+                # ordinary failure below, which reads as this change's review having failed.
+                status = "error"
+                version = claude_version()
+                meta["refused_option"] = refused
+                meta["claude_version"] = version or ""
+                body = refused_body(refused, version)
+            elif rc != 0:
                 status = "error"
                 # Never the raw stderr: settings warnings dropped and credentials redacted first.
                 safe = redact(errtext, stderr=True) if errtext else ""
