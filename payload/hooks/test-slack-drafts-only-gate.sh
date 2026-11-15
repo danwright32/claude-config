@@ -431,8 +431,8 @@ refused "an import after a block comment that never closes"
 # ../.claude-plugin/types/mod-kit/index.d.ts for its types and a worktree does not have that file.
 # Measured 2026-11-10 with bun 1.3.11, node 22.22.2 and deno: `import type ... from` never loads its
 # module, there or not, while `import { type A } from` is loaded by node, which only blanks the
-# names. So only the statement form is passed, only for a .d.ts, and only when the file is missing:
-# one that is there is read and judged as any module is.
+# names. So only the statement form is passed, and, where the file is missing, only for a .d.ts. One
+# that is there is not read for it either (#2890, cases at the end of this suite).
 mkdir -p "$T/imp/dts/tests"
 D2526="'../types/index.d.ts'"
 dts_case() { # dts_case <lines of the test file...>: judge a bun test run of a test holding them
@@ -481,11 +481,14 @@ refused "a value import of a missing declaration file beside a type only import 
 dts_case "import type { A } from $D2526" "fetch('https://slack.com/api/chat.postMessage');"
 refused "a test that posts by itself and imports types from a missing declaration file"
 says "that refusal is the endpoint the test names" "chat.postMessage"
-# A type only import of a file that is there is followed and judged as it always was.
+# A type only import of a file that is there loads nothing either, so it is not followed (#2890
+# reversed reading it, which refused a test whose only route to a module that posts was a type import).
 mkdir -p "$T/imp/dts/types"
 printf '%s\n' 'export type A = number;' "fetch('https://slack.com/api/chat.postMessage');" > "$T/imp/dts/types/index.d.ts"
 dts_case "import type { A } from $D2526"
-refused "a type only import of a declaration file that is there and posts"
+allowed "a type only import of a declaration file that is there and posts (#2890)"
+dts_case "import { type A } from $D2526"
+refused "a value import of the same declaration file is still followed, and posts"
 says "that refusal names the declaration file" "index.d.ts"
 says "and says it posts" "which posts to Slack"
 printf '%s\n' 'export type A = number;' > "$T/imp/dts/types/index.d.ts"
@@ -507,6 +510,18 @@ printf '%s\n' "import type { A } from $D2526" 'import { execSync } from "node:ch
   'import { readFileSync } from "node:fs";' 'execSync(readFileSync(process.argv[2], "utf8"));' > "$T/imp/dts/tests/count.ts"
 run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
 refused "a script that runs what it is handed, importing types from a missing declaration file"
+# A type only import of a package is erased the same way, so it does not make an inert script one that
+# may act (#2890's fold): only a value import of a package the gate does not know is read as acting.
+printf '%s\n' 'import type { Options } from "some-pkg";' 'import { readFileSync } from "node:fs";' \
+  'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+allowed "an inert script importing only types from a package, handed a file naming the endpoint"
+for line in 'import { Options } from "some-pkg";' 'import { type Options } from "some-pkg";' 'import "some-pkg";'; do
+  printf '%s\n' "$line" 'import { readFileSync } from "node:fs";' \
+    'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+  run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+  refused "the same script importing the package as: $line"
+done
 
 # Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
 # narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
@@ -5155,6 +5170,265 @@ run_kk 'for f in $(git diff --name-only HEAD); do cp "src/$f" "$f"; done; '"$K"'
 read_refused "#2910 a copy whose destination cannot be worked out, then a script run, is still refused"
 run_kk 'for f in $(git diff --name-only HEAD); do cp $f '"$K"'/out/x; done; '"$K"'/bin/scan.sh'
 read_refused "#2910 an unquoted copied word, which can split into the destination, is still refused"
+
+echo "slack drafts only: a binary file named in code is not read as commands, and a NUL byte is refused, not a crash (claude-config#2892)"
+
+# Two real commands from this Mac crashed the gate with "lstat: embedded null character in path"
+# (found 2026-11-13, replayed on main at 6ce6746): python3 heredocs editing a script and then running
+# it, whose code names /usr/bin/true or /bin/bash inside a string. Code that edits a file is judged
+# by every file it names (#2772), so the program's own bytes were added to the script and read as
+# shell commands, and a word cut from a Mach-O header held a NUL. bash refuses a file whose first line
+# holds a NUL ("cannot execute binary file"), so such a file is now searched for an endpoint and not
+# read as commands; any other NUL in text read as commands is refused as text the gate cannot read.
+G9="$T/g2892"
+mkdir -p "$G9/lw/tools" "$G9/uw/hooks/lib" "$G9/mix" "$G9/nul"
+printf '%s\n' '#!/usr/bin/env bash' 'limit=1; workers=0; spawners=0' \
+  'if [ $(( workers + spawners )) -gt 0 ]; then' 'bash -c '"'"'' '  lim=$1; n=$2; m=$3' \
+  '  wait'"'"' load-window-workers "$limit" "$workers" "$spawners" </dev/null >/dev/null 2>&1 &' 'wpid=$!' 'fi' \
+  > "$G9/lw/tools/load-window.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'echo ok' > "$G9/lw/tools/test-load-window.sh"
+cat > "$G9/row3823.txt" <<'CMD'
+cd @D@ && python3 - <<'PY'
+p='tools/load-window.sh'
+s=open(p).read()
+old='''if [ $(( workers + spawners )) -gt 0 ]; then
+bash -c '
+  lim=$1; n=$2; m=$3
+  (sleep "$lim"; kill -KILL 0) &
+  i=0; while [ "$i" -lt "$n" ]; do bash -c "while [ \\$SECONDS -lt $lim ]; do :; done" & i=$((i + 1)); done
+  i=0; while [ "$i" -lt "$m" ]; do bash -c "while [ \\$SECONDS -lt $lim ]; do /usr/bin/true; done" & i=$((i + 1)); done
+  wait' load-window-workers "$limit" "$workers" "$spawners" </dev/null >/dev/null 2>&1 &
+wpid=$!
+fi'''
+new='''if [ $(( workers + spawners )) -gt 0 ]; then
+  bash -c '
+    lim=$1; n=$2; m=$3
+    (sleep "$lim"; kill -KILL 0) &
+    i=0; while [ "$i" -lt "$n" ]; do bash -c "while [ \\$SECONDS -lt $lim ]; do :; done" & i=$((i + 1)); done
+    i=0; while [ "$i" -lt "$m" ]; do bash -c "while [ \\$SECONDS -lt $lim ]; do /usr/bin/true; done" & i=$((i + 1)); done
+    wait' load-window-workers "$limit" "$workers" "$spawners" </dev/null >/dev/null 2>&1 &
+  wpid=$!
+fi'''
+assert s.count(old)==1
+s=s.replace(old,new); open(p,'w').write(s)
+PY
+bash -n tools/load-window.sh && bash tools/test-load-window.sh 2>&1 | tail -8
+CMD
+printf '%s\n' '#!/usr/bin/env bash' '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/d.sh" || exit 1' \
+  'if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then' '  parents=x' 'fi' 'echo ok' > "$G9/uw/hooks/test-uw.sh"
+printf '%s\n' 'true' > "$G9/uw/hooks/lib/d.sh"
+cat > "$G9/row567.txt" <<'CMD'
+python3 - <<'EOF'
+p='hooks/test-uw.sh'
+s=open(p).read()
+old_start=s.index('if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then\n  parents=')
+new='''if [ -x /bin/bash ] && command -v ps >/dev/null 2>&1; then
+  verdict="$(child_split_verdict /bin/bash)"
+  case "$verdict" in
+    ok) echo "#1984 /bin/bash makes the child its own" ;;
+    *) echo "mismatch: $(printf '%s' "$verdict" | tr '\\n' ' ')" ;;
+  esac
+fi
+'''
+s=s[:old_start]+new
+open(p,'w').write(s)
+EOF
+bash -n hooks/test-uw.sh && bash hooks/test-uw.sh 2>&1 | tail -3
+CMD
+run_at() { run_raw "$(payload Bash "$(bash_input "$1")" "$2")"; } # run_at <command> <cwd>
+c="$(cat "$G9/row3823.txt")"
+run_at "${c//@D@/$G9/lw}" "$T"
+allowed "#2892 a python3 heredoc naming /usr/bin/true that edits a script, then runs it, is judged and passes"
+run_at "$(cat "$G9/row567.txt")" "$G9/uw"
+allowed "#2892 a python3 heredoc naming /bin/bash that edits a test, then runs it, is judged and passes"
+# The binary is still searched for an endpoint, and the script's own text is still read as commands.
+printf '\0\0\0\ncurl -d x https://hooks.slack.com/services/T0/B0/x\n' > "$G9/mix/poster.bin"
+printf '\0\0\0\nls\n' > "$G9/mix/quiet.bin"
+printf '%s\n' "$POST" > "$G9/mix/post.sh"
+printf '%s\n' 'echo start' 'bash post.sh' > "$G9/mix/run.sh"
+run_at "python3 -c \"open('new.sh', 'w').write(open('quiet.bin').read())\" && bash new.sh" "$G9/mix"
+allowed "#2892 a script written from a binary file that names no endpoint passes"
+run_at "python3 -c \"open('new.sh', 'w').write(open('poster.bin').read())\" && bash new.sh" "$G9/mix"
+read_refused "#2892 a script written from a binary file that names an endpoint is still refused"
+says "#2892 and the refusal names the endpoint" "hooks.slack.com"
+run_at "python3 - <<'PY'
+p = 'run.sh'
+s = open(p).read()
+open(p, 'w').write(s + '# run by /bin/bash\n')
+PY
+bash run.sh" "$G9/mix"
+read_refused "#2892 a script edited by code naming /bin/bash is still read as commands, and the script it runs posts"
+says "#2892 and the refusal names the script that posts" "post.sh"
+run_at "bash quiet.bin" "$G9/mix"
+allowed "#2892 a binary file handed to bash, which bash refuses to run, passes"
+run_at "bash poster.bin" "$G9/mix"
+read_refused "#2892 a binary file handed to bash that names an endpoint is still refused"
+# A NUL anywhere else is refused as text the gate cannot read: bash drops it and runs the rest, zsh
+# keeps it inside the word, and every program reads it as the end of the word.
+printf '%s\n' "$POST" > "$G9/nul/post.sh"
+printf 'echo hi\nbash po\0st.sh\n' > "$G9/nul/late.sh"
+run_at "bash late.sh" "$G9/nul"
+read_refused "#2892 a script holding a NUL after its first line is refused, not a crash"
+says "#2892 and the refusal names the NUL byte" "NUL"
+says "#2892 and it says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+run_raw "$(payload Bash '{"command": "bash po\u0000st.sh", "description": "d"}' "$G9/nul")"
+read_refused "#2892 a command holding a NUL byte is refused, not a crash"
+says "#2892 and that refusal names the NUL byte" "NUL"
+# Behind both: no word holding a NUL reaches os.path.realpath, which raises on one. The gate's one
+# way from a word to a path refuses it, and main() turns that into a refusal rather than a crash.
+check "#2892 a word holding a NUL is refused before it becomes a path, and main() refuses the call" "$(python3 - "$DIR" <<'PY' 2>&1
+import io, json, os, sys
+sys.dont_write_bytecode = True  # the gate is carried by the sync: leave no cache beside it (#2919)
+os.environ["GATE_DIR"] = sys.argv[1]
+sys.path.insert(0, sys.argv[1])
+import slack_drafts_only_gate as gate
+try:
+    gate.Judge.resolve(None, "po\0st.sh", "/tmp")
+    print("resolve gave a path for a word holding a NUL")
+    sys.exit(0)
+except gate.NulPath:
+    pass
+gate.Judge.line = lambda self, s, cwd, depth, whole: self.resolve("po\0st.sh", cwd)
+sys.stdin = io.TextIOWrapper(io.BytesIO(json.dumps(
+    {"tool_name": "Bash", "cwd": "/tmp", "tool_input": {"command": "bash post.sh"}}).encode()))
+buf = io.BytesIO()
+out = io.TextIOWrapper(buf, write_through=True)
+real_out, sys.stdout = sys.stdout, out
+try:
+    gate.main()
+    out.flush()
+    said = buf.getvalue().decode()
+finally:
+    sys.stdout = real_out
+print("ok" if said.startswith("refuse\n") and "NUL" in said else "main() said: %r" % said[:300])
+PY
+)"
+
+echo "slack drafts only: curl's default config is read, and perl -i takes no value (claude-config#2893)"
+
+# curl reads ~/.curlrc ($CURL_HOME/.curlrc, $XDG_CONFIG_HOME/curlrc) unless -q or --disable is its
+# first word, so a config written there earlier that names an endpoint makes a later plain curl post.
+# Only a config handed with -K or --config was read (#2889).
+CH="$T/g2893"
+mkdir -p "$CH/home" "$CH/xdg" "$CH/quiet" "$CH/empty" "$CH/wh" "$CH/later"
+printf '%s\n' 'url = "https://hooks.slack.com/services/T0/B0/x"' 'data = "text=hi"' > "$CH/home/.curlrc"
+printf '%s\n' 'url = "https://hooks.slack.com/services/T0/B0/x"' > "$CH/xdg/curlrc"
+printf '%s\n' 'silent' 'show-error' > "$CH/quiet/.curlrc"
+CURL_HOME="$CH/quiet" run_bash "curl -s https://example.com/status"
+allowed "#2893 the control: curl with a default config naming no endpoint passes"
+CURL_HOME="$CH/empty" run_bash "curl -s https://example.com/status"
+allowed "#2893 and with no default config there"
+CURL_HOME="$CH/home" run_bash "curl -s https://example.com/status"
+read_refused "#2893 a plain curl whose \$CURL_HOME/.curlrc names an endpoint is refused"
+says "#2893 and the refusal names the config file" ".curlrc"
+CURL_HOME="$CH/empty" HOME="$CH/home" run_bash "curl -s https://example.com/status"
+read_refused "#2893 a plain curl whose ~/.curlrc names an endpoint is refused"
+CURL_HOME="$CH/empty" XDG_CONFIG_HOME="$CH/xdg" run_bash "curl -s https://example.com/status"
+read_refused "#2893 a plain curl whose \$XDG_CONFIG_HOME/curlrc names an endpoint is refused"
+for first in "-q" "--disable"; do
+  CURL_HOME="$CH/home" run_bash "curl $first -s https://example.com/status"
+  allowed "#2893 curl with $first as its first word, which skips the default config, passes"
+done
+CURL_HOME="$CH/home" run_bash "curl -s -q https://example.com/status"
+read_refused "#2893 a -q that is not curl's first word does not skip the default config"
+run_bash "CURL_HOME=$CH/home curl -s https://example.com/status"
+read_refused "#2893 a CURL_HOME set on the command itself is read"
+run_bash "export CURL_HOME=$CH/home; curl -s https://example.com/status"
+read_refused "#2893 a CURL_HOME exported earlier in the command is read"
+CURL_HOME="$CH/empty" HOME="$CH/home" run_bash "curl -s -d HOME=$CH/quiet https://example.com/status"
+read_refused "#2893 a HOME= that is only curl's data does not stop ~/.curlrc being read"
+# Only an assignment moves where curl looks: a NAME= inside other text is not one (the replay of this
+# Mac's commands found `echo "CURL_HOME=${CURL_HOME:-unset}"; curl --version` refused).
+CURL_HOME="$CH/quiet" run_bash "echo \"CURL_HOME=\${CURL_HOME:-unset} XDG=\${XDG_CONFIG_HOME:-unset}\"; curl --version"
+allowed "#2893 a CURL_HOME= inside echoed text is no assignment, and the curl after it passes"
+run_bash "env CURL_HOME=$CH/home curl -s https://example.com/status"
+read_refused "#2893 a CURL_HOME set through env is read"
+run_bash "CURL_HOME=\"\$(mktemp -d)\" curl -s https://example.com/status"
+read_refused "#2893 a CURL_HOME the gate cannot work out is refused as unread"
+# A write that leaves a default config naming an endpoint is refused, so a later call cannot post.
+CURL_HOME="$CH/empty" HOME="$CH/wh" run_bash "printf 'url = https://hooks.slack.com/services/T0/B0/x\n' > ~/.curlrc"
+read_refused "#2893 writing ~/.curlrc with an endpoint in it is refused"
+says "#2893 and the refusal names the config file" ".curlrc"
+CURL_HOME="$CH/empty" HOME="$CH/wh" run_bash "printf 'silent\n' > ~/.curlrc"
+allowed "#2893 writing ~/.curlrc with no endpoint in it passes"
+CURL_HOME="$CH/empty" HOME="$CH/wh" run_bash "printf 'url = https://hooks.slack.com/services/T0/B0/x\n' > notes.txt"
+allowed "#2893 writing the same text to another file passes"
+CURL_HOME="$CH/empty" run_bash "printf 'url = https://hooks.slack.com/services/T0/B0/x\n' > $CH/later/.curlrc; CURL_HOME=$CH/later curl -s https://example.com/status"
+read_refused "#2893 a .curlrc written with an endpoint by a command that then runs curl is refused"
+# Neither the wrapper's quick pass nor the cache may keep an allowed curl once a default config
+# naming an endpoint appears (#2918): first with none there, then with one naming none, which the
+# gate judges and keeps, then with the same file naming one.
+CURL_HOME="$CH/later2" run_bash "curl -s https://example.com/later"
+allowed "#2893 before the config is there, a plain curl passes"
+mkdir -p "$CH/later2"
+printf '%s\n' 'silent' > "$CH/later2/.curlrc"
+CURL_HOME="$CH/later2" run_bash "curl -s https://example.com/later"
+allowed "#2893 with a config there naming no endpoint, it passes"
+printf '%s\n' 'url = "https://hooks.slack.com/services/T0/B0/x"' > "$CH/later2/.curlrc"
+CURL_HOME="$CH/later2" run_bash "curl -s https://example.com/later"
+read_refused "#2893 and once the config names one, the same call is refused, not served from the cache"
+# perl's -i takes no separate value: `perl -i -pe s/a/b/ post.sh` read -pe as -i's value and s/a/b/ as
+# the script, and refused for post.sh as perl's script, which it is not.
+printf '%s\n' "$POST" > "$CH/post.sh"
+run_at "perl -i -pe s/a/b/ post.sh" "$CH"
+read_refused "#2893 perl -i -pe editing a file is refused"
+says "#2893 for its -i switch" "-i switch"
+lacks "#2893 not for a script it does not run" "which perl may run as its script"
+run_at "perl -i.bak -pe s/a/b/ post.sh" "$CH"
+read_refused "#2893 perl -i.bak -pe editing a file is refused"
+lacks "#2893 not for a script it does not run, with a suffix either" "which perl may run as its script"
+# ruby's -i is the same (ruby -i[ext]), so the word after it is not its value either.
+run_at "ruby -i -pe 'x' post.sh" "$CH"
+read_refused "#2893 ruby -i -pe editing a file is refused"
+lacks "#2893 not for a script it does not run" "which ruby may run as its script"
+# bash -i (interactive) and node -i (the REPL) take no value either. Read as taking one, `node -i -e
+# CODE` took -e for -i's value, so the code was never read as code: an import of a file that posts
+# passed (measured at 07aed34).
+printf '%s\n' "fetch('https://slack.com/api/chat.postMessage');" > "$CH/post.mjs"
+run_at "node -i -e 'import(\"./post.mjs\")'" "$CH"
+read_refused "#2893 node -i -e importing a file that posts is refused"
+run_at "bash -i -c 'bash post.sh'" "$CH"
+read_refused "#2893 bash -i -c running a script that posts is refused"
+run_at "node -i -e 'console.log(1)'" "$CH"
+allowed "#2893 node -i -e with code that does nothing passes"
+
+echo "slack drafts only: a type only import of a file that is there is not followed (claude-config#2890)"
+
+# `import type ... from` is erased before anything runs, so no module is loaded for it, whether its
+# file is there or not (measured for #2526). Only a missing declaration file was passed, so a test whose
+# only route to a posting file was a type import was refused in a work repository (2026-11-12).
+TY="$T/g2890"
+mkdir -p "$TY"
+printf '%s\n' 'export type T = { a: number };' "export function send() { fetch('https://slack.com/api/chat.postMessage'); }" > "$TY/posts.ts"
+printf '%s\n' 'import type { T } from "./posts.ts";' 'export type U = T;' 'export const n = 1;' > "$TY/types.ts"
+ty_case() { # ty_case <lines of a.ts...>: judge node running a file holding them
+  printf '%s\n' "$@" 'console.log(1);' > "$TY/a.ts"
+  run_bash "node $TY/a.ts"
+}
+ty_case 'import { n } from "./missing-control.ts";'
+refused "#2890 the control: a value import of a missing file is refused"
+ty_case 'import type { T } from "./posts.ts";'
+allowed "#2890 a type only import of a file that posts passes"
+ty_case 'import type {' '  T,' '} from "./posts.ts";'
+allowed "#2890 the same import over several lines"
+ty_case 'import type * as P from "./posts.ts";'
+allowed "#2890 a type only namespace import"
+ty_case 'import { n } from "./types.ts";'
+allowed "#2890 a value import of a file whose only route to the poster is a type import"
+for line in 'import { send } from "./posts.ts";' \
+  'import { type T } from "./posts.ts";' \
+  'import { type T, send } from "./posts.ts";' \
+  'import type, { send } from "./posts.ts";' \
+  'import "./posts.ts";' \
+  'const p = await import("./posts.ts");' \
+  'const p = require("./posts.ts");' \
+  'export type { T } from "./posts.ts";' \
+  'export * from "./posts.ts";'; do
+  ty_case "$line"
+  refused "#2890 a file that posts reached as: $line"
+done
+ty_case 'import type { T } from "./posts.ts";' 'import { send } from "./posts.ts";'
+refused "#2890 a value import beside a type only import of the same file"
 
 echo
 echo "passed: $pass, failed: $fail"

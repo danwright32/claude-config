@@ -152,7 +152,9 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
     _script_name_ok() refuses) leaves the command to the readings above, which ask. A write found
     there is asked about, never Applicable: an Apply covers only a run that stands alone.
     python3 -c puts its directory first on the import path, so a json.py where it runs would be
-    imported in place of the standard one; that is not seen.
+    imported in place of the standard one: the folder the step runs in, followed through each cd,
+    must hold no module or package Python could import (_python_finds_nothing_in), or the step must
+    be python3 -I -c, which never puts it on the path (#2969).
   - a client run through CARRIERS (docker exec, ssh, npx, a secret runner) is read from the
     client's own name on, or from the quoted command line handed over.
 
@@ -1066,6 +1068,32 @@ PY_BANNED = {"open", "exec", "eval", "compile", "getattr", "setattr", "delattr",
              "vars", "breakpoint", "input", "help", "type", "super", "object"}
 
 
+def _python_finds_nothing_in(folder):
+    """Whether a python3 -c run in folder can import nothing from it (#2969). -c puts the folder it
+    runs in first on the import path, so a json.py there would run in place of the standard json, and
+    a module only an allowed one imports (fractions, under statistics) the same. So the folder must
+    hold no file Python imports as a module (any suffix this Python's import machinery loads) and no
+    package (a folder holding such an __init__), and PYTHONPATH and PYTHONHOME, which put folders of
+    their own ahead of the standard library, must be unset. False when folder is None (a cd this
+    cannot follow) or cannot be listed. python3 -I never puts the folder on the path, so it is not
+    asked this."""
+    import importlib.machinery
+    if folder is None or os.environ.get("PYTHONPATH") or os.environ.get("PYTHONHOME"):
+        return False
+    suffixes = tuple(importlib.machinery.all_suffixes())
+    try:
+        for name in os.listdir(folder):
+            if name.endswith(suffixes):
+                return False
+            path = os.path.join(folder, name)
+            if os.path.isdir(path) and any(
+                    inner.startswith("__init__.") and inner.endswith(suffixes) for inner in os.listdir(path)):
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def _python_reads_only(code):
     """Whether a python3 -c program can do nothing but read its input and print: it imports only
     PY_MODULES, each under its own name, touches sys only for PY_SYS, reaches no module through
@@ -1251,6 +1279,8 @@ def scripted_queries(command, sw, cwd):
     env, source, texts, disk, runs, unread = {}, {}, {}, {}, {}, set()
     steps = [0]
     pipe = [None]
+    # The folder the command is in at each step, None once a cd goes where this cannot follow (#2969).
+    here = [os.path.normpath(cwd)]
 
     def step(node):
         _, raw, how, heredoc, piped = node
@@ -1280,7 +1310,10 @@ def scripted_queries(command, sw, cwd):
             if heredoc is not None or not set(redirects) <= SCRIPT_QUIET or not pipe[0]:
                 return False
             if _base(words[0]) in SCRIPT_PYTHONS:
-                ok = len(words) == 3 and words[1] == "-c" and _python_reads_only(words[2])
+                isolated = len(words) == 4 and words[1:3] == ["-I", "-c"]
+                plain = len(words) == 3 and words[1] == "-c"
+                ok = (isolated or plain) and _python_reads_only(words[-1]) and (
+                    isolated or _python_finds_nothing_in(here[0]))
             else:
                 ok = words[0] in SCRIPT_FILTERS
             if not ok:
@@ -1298,7 +1331,18 @@ def scripted_queries(command, sw, cwd):
                 env[name] = value
             return True
         if words[0] == "cd":
-            return len(words) == 2 and not redirects and heredoc is None and how != "|"
+            if len(words) != 2 or redirects or heredoc is not None or how == "|":
+                return False
+            # Followed as the shell's cd does by default, logically: `..` after a link is the link's
+            # parent, so the path is normalised as written, never resolved through its links.
+            to = words[1]
+            if to.startswith("/"):
+                here[0] = os.path.normpath(to)
+            elif to == "-" or to.startswith("~") or here[0] is None:
+                here[0] = None
+            else:
+                here[0] = os.path.normpath(os.path.join(here[0], to))
+            return True
         if words == ["cat"] and heredoc is not None:
             ops = sorted(op for op, _ in redirects)
             target = [t for op, t in redirects if op in (">", ">|")]

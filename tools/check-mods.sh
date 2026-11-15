@@ -39,8 +39,16 @@ fi
 # the line carries three verdict lines at most, and a failure seen once (the ones behind #1778) left
 # nothing else to diagnose from. CHECK_MODS_FAILURE_OUTPUT moves the folder, or set EMPTY turns the
 # record off (`-`, not `:-`). The default sits beside the runner's suite timings, outside the config
-# directory, which mirrors itself to the other Mac. Pruned to the newest 20 (hooks/lib/kept-output.sh).
+# directory, which mirrors itself to the other Mac.
 KEPT_DIR="${CHECK_MODS_FAILURE_OUTPUT-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/mod-test-failures}"
+# Kept by age per mod (and per check, validate or test), never the newest 20 overall (#2959, as
+# #2895 did for the runner's flaky suites, L202): one noisy mod's failures evicted every other mod's
+# only saved one. A copy stays for 30 days, or while it is among the newest 3 of its own mod and check
+# however old, and 20 MB bounds the folder whatever the ages, oldest first. The same three numbers
+# as run-all-tests.sh, read by hooks/lib/kept-output.sh.
+KEPT_OUTPUT_MAX_DAYS=30
+KEPT_OUTPUT_PER_LABEL=3
+KEPT_OUTPUT_MAX_KB=20480
 _cm_kept_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/kept-output.sh"
 if [ -f "$_cm_kept_lib" ]; then
   . "$_cm_kept_lib"

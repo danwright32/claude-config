@@ -226,23 +226,34 @@ def published(slug, cwd, gh_repo):
     return full
 
 
-def judge(what, slug, cwd, gh_repo, command, bodies, unseen=()):
+def judge(what, slug, cwd, gh_repo, command, bodies, unseen=(), place=None):
     """None when it may post, else the reason. bodies: [(shown as, text, None when hidden, or a
     function returning the text, called only for a public repository)]. unseen: clauses saying what
     else the command posts that cannot be read (claude-config#2326), each refused for a public one."""
     full = published(slug, cwd, gh_repo)
     if full is None:
         return None
-    return judge_public(what, "to %s, a public repository," % full, command, bodies, unseen)
+    return judge_public(what, "to %s, a public repository," % full, command, bodies, unseen, place)
 
 
-def judge_public(what, to, command, bodies, unseen=()):
+def judge_public(what, to, command, bodies, unseen=(), place=None):
     """judge() once the text is known to be public: to says where it posts, "to o/x, a public
     repository," or "as a public gist," (claude-config#2398)."""
     matcher, _owners, odd = names()
     hit = find(command, matcher, odd)
     if hit:
         return "%s posts %s and its text names %s." % (what, to, _shown(hit))
+    # Each variable the posted text expands, by its value where the command runs (#2961).
+    unread = []
+    for shown, value, why in variables_posted(command, place):
+        if why:
+            unread.append("with %s in its text, which %s, so whether its value names a work organisation "
+                          "or repository cannot be told. Write the value out in the command." % (shown, why))
+            continue
+        hit = find(value, matcher, odd)
+        if hit:
+            return "%s posts %s and its text expands %s, whose value names %s." % (what, to, shown, _shown(hit))
+    unseen = list(unseen) + unread
     for shown, text in bodies:
         if callable(text):
             text = text()
@@ -393,10 +404,11 @@ def pushed_text(where, history):
     return "branch %s\n%s" % (names_, log.stdout)
 
 
-def judge_repo_create(what, args, where, command):
+def judge_repo_create(what, args, where, command, place=None):
     """gh repo create's own text, its name, description and homepage, is public on the new repository
     (claude-config#2398), and --push sends the whole history to it (#2326). Judged unless the
-    repository is made private or internal, or a work owner's."""
+    repository is made private or internal, or a work owner's. A variable in that text is judged by
+    its value, and refused where its value cannot be read, as judge_public does (#2961)."""
     if _given(args, ("--private", "--internal")):
         return None
     name = (_positionals(args, REPO_CREATE_VALUES) or [""])[0]
@@ -407,6 +419,15 @@ def judge_repo_create(what, args, where, command):
     hit = find(command, matcher, odd)
     if hit:
         return "%s makes %s, a public repository, and its text names %s." % (what, shown, _shown(hit))
+    for var, value, why in variables_posted(command, place):
+        if why:
+            return ("%s makes %s, a public repository, with %s in its text, which %s, so whether its value "
+                    "names a work organisation or repository cannot be told. Write the value out in the "
+                    "command." % (what, shown, var, why))
+        hit = find(value, matcher, odd)
+        if hit:
+            return "%s makes %s, a public repository, and its text expands %s, whose value names %s." % (
+                what, shown, var, _shown(hit))
     if not _given(args, ("--push",)):
         return None
     source = os.path.expanduser((scan.flag_values(args, "--source", "-s") or ["."])[-1])
@@ -470,10 +491,10 @@ def _repo_of(kind, args, envs, place):
     return slugs, (None if slugs else _env_value("GH_REPO", envs, place))
 
 
-def judge_repos(what, slugs, cwd, gh_repo, command, bodies, unseen=()):
+def judge_repos(what, slugs, cwd, gh_repo, command, bodies, unseen=(), place=None):
     """judge() for each repository a command may post to (_repo_of): the first refusal, else None."""
     for slug in slugs or [None]:
-        why = judge(what, slug, cwd, gh_repo, command, bodies, unseen)
+        why = judge(what, slug, cwd, gh_repo, command, bodies, unseen, place)
         if why:
             return why
     return None
@@ -546,7 +567,7 @@ def judge_release(kind, what, args, envs, place, where, command, posted=None):
         more, unread = _stdin_bodies(kind, command, place, NOTES_FILE_FLAGS, NOTES_STDIN, NOTES_UNREAD)
         bodies += more
         unseen += unread
-    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen, place)
 
 
 def _reads_stdin(args, flags):
@@ -614,7 +635,7 @@ def judge_gist(what, args, place, command):
     # bytes); here it cannot be read, alone or beside named files.
     unseen = [GIST_STDIN] if not files or "-" in args else []
     bodies, unread = _gist_files(files, command, place)
-    return judge_public(what, "as a public gist,", command, bodies, unseen + unread)
+    return judge_public(what, "as a public gist,", command, bodies, unseen + unread, place)
 
 
 def _gist_files(files, command, place):
@@ -683,7 +704,7 @@ def judge_gist_edit(what, args, place, command):
     if not files and not scan.flag_values(args, "--remove", "-r", clustered=True):
         unseen.append(GIST_EDITOR)
     bodies, unread = _gist_files([f for f in files if f != "-"], command, place)
-    return judge_public(what, "as a public gist,", command, bodies, unseen + unread)
+    return judge_public(what, "as a public gist,", command, bodies, unseen + unread, place)
 
 
 def judge_repo_edit(what, args, envs, place, where, command):
@@ -702,7 +723,7 @@ def judge_repo_edit(what, args, envs, place, where, command):
             return ("%s makes %s public, publishing every file, commit and issue it holds, which this check "
                     "cannot read, so whether any of it names a work organisation or repository cannot be "
                     "told. Check the repository, then change its visibility yourself." % (what, full))
-    return judge(what, slug, where, gh_repo, command, [])
+    return judge(what, slug, where, gh_repo, command, [], place=place)
 
 
 # The command hook names the name it matched: only the session sees it, and the session already holds
@@ -754,8 +775,30 @@ def api_writes(command, cwd):
             slug = None if PLACEHOLDER.match(o) or PLACEHOLDER.match(r) else "%s/%s" % (o, r)
             files = [v.split("=@", 1)[1] for v in scan.flag_values(args, "--field", "-F") if "=@" in v]
             files += scan.flag_values(args, "--input")
-            out.append((slug, [p for p in files if p != "-"]))
+            out.append((slug, [p for p in files if p != "-"], args))
     return out
+
+
+def _api_places(command, cwd):
+    """Each gh api command scan_gh_in_context reads, in order, as [words, Place, taken], so a write's
+    variables are judged with what the command set before it and its cd. Empty when it cannot read."""
+    try:
+        return [[found, place, False] for _kind, found, _envs, place
+                in scan.scan_gh_in_context(command, cwd, dict(os.environ), {("api", "")})]
+    except scan.Unreadable:
+        return []
+
+
+def _api_place(args, places, cwd):
+    """Where the next gh api write with these words runs: the first of places not yet taken with the same
+    words, so two writes worded alike each get their own (the lessons review of ce9f5b1). A bare Place,
+    which knows only the environment, when the two readers do not agree on the command: its variables
+    are then refused as unset rather than judged from the wrong place."""
+    for entry in places:
+        if not entry[2] and entry[0] == args:
+            entry[2] = True
+            return entry[1]
+    return scan.Place(cwd, dict(os.environ))
 
 
 # gh's own top level commands, with the other names gh answers to for them, its help topics, its hidden
@@ -977,7 +1020,7 @@ def _word_spans(text):
 READS_DIR = re.compile(r"\$|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 
 
-def posted_text(command):
+def posted_text(command, keep_cds=None):
     """command as it is judged for what it posts (claude-config#2909): the text of every plain cd, and
     the path after each --body-file or -F of a gh pr or issue command, blanked out. Neither is posted:
     a cd's directory is where the command runs, and a body file is judged by what it holds, read by
@@ -994,12 +1037,14 @@ def posted_text(command):
 
     A cd is left in whenever anything in the command could read back the directory it entered and
     post it (READS_DIR): any $ expansion, a backquote, pwd, dirs, ~+ or ~-, as in
-    `cd <checkout> && gh issue create --title "$(basename $PWD)"` (the lessons review of #2909)."""
+    `cd <checkout> && gh issue create --title "$(basename $PWD)"` (the lessons review of #2909).
+    keep_cds False blanks every plain cd whatever else the command holds, for variables_posted, which
+    judges $PWD by the directory the cd entered rather than by the cd's own words (#2961)."""
     try:
         parts = []
         found = scan._sw.commands(command, parts=parts)
         blank = []
-        keep_cd = bool(READS_DIR.search(command))
+        keep_cd = bool(READS_DIR.search(command)) if keep_cds is None else keep_cds
         for _entry, part in zip(found, parts):
             if part.get("inner") or part.get("openers"):
                 continue
@@ -1028,6 +1073,187 @@ def posted_text(command):
         return "".join(out)
     except Exception:  # noqa: BLE001  the reader failing leaves the whole command judged, never less
         return command
+
+
+# A variable in posted text (claude-config#2961). Its spelling names nothing, so `--title "$X"` passed
+# while the shell posted X's value, a work checkout's path for $CLAUDE_PROJECT_DIR on the work MacBook.
+# Each expansion the shell makes is judged by its value: from an assignment earlier in the command or
+# the environment every Bash call starts from (gh_issue_scan.UNSET says why that is the one), and
+# refused where neither holds it. What the shell leaves as text is not an expansion: single quotes, an
+# escaped $, a quoted heredoc's body, a comment.
+PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# One character parameters whose value is a number, a flag set, or the command's own words (the
+# arguments of a function or script), which the name check already reads as written. Not $_, the
+# last word of the command before, which can be a body file's path or a cd's directory, words this
+# check does not judge as posted (the lessons review of 6bb51da).
+SHOWN_PARAMS = frozenset("0123456789@*#?-$!")
+
+
+def _param_at(text, i):
+    """The parameter expansion a $ at text[i] starts, as (name, shown, end): name "" for one whose value
+    is shown or a number (SHOWN_PARAMS, a length), None for a form this check does not work out (an
+    operator, an index, indirection). None when it starts none: $( and $(( are read on as text."""
+    nxt = text[i + 1:i + 2]
+    if nxt == "{":
+        k = text.find("}", i + 2)
+        if k < 0:
+            return None, text[i:], len(text)
+        inner, shown = text[i + 2:k], text[i:k + 1]
+        if inner in SHOWN_PARAMS or inner.isdigit() or (inner[:1] == "#" and (
+                PARAM_NAME.fullmatch(inner[1:]) or inner[1:] in ("@", "*"))):
+            return "", shown, k + 1
+        if PARAM_NAME.fullmatch(inner):
+            return inner, shown, k + 1
+        return None, shown, k + 1
+    m = PARAM_NAME.match(text, i + 1)
+    if m:
+        return m.group(0), text[i:m.end()], m.end()
+    if nxt and nxt in SHOWN_PARAMS:
+        return "", text[i:i + 2], i + 2
+    return None
+
+
+def _heredoc_bodies(text, i, pending, out):
+    """Read the bodies of the heredocs a line opened, starting at text[i], adding the expansions of each
+    unquoted one to out. Returns where the text goes on."""
+    n = len(text)
+    for marker, strip, quoted in pending:
+        while i < n:
+            j = text.find("\n", i)
+            end = n if j < 0 else j
+            line = text[i:end]
+            i = n if j < 0 else j + 1
+            if (line.lstrip("\t") if strip else line) == marker:
+                break
+            k = 0
+            while not quoted and k < len(line):
+                if line[k] == "\\":
+                    k += 2
+                    continue
+                got = _param_at(line, k) if line[k] == "$" else None
+                if got:
+                    out.append(got[:2])
+                    k = got[2]
+                else:
+                    k += 1
+    return i
+
+
+def expansions(text):
+    """Every parameter expansion the shell makes in text, in order, as (name, shown) (_param_at).
+
+    Quotes are followed as the shell follows them, a $( or backquote opening a context of its own, so
+    the body of `--body "$(cat <<'EOF' ... EOF)"` is read as the quoted heredoc it is."""
+    out, i, n = [], 0, len(text)
+    frames = [[False, 0, None]]   # [inside double quotes, open parentheses, what closes the frame]
+    pending = []
+    while i < n:
+        frame = frames[-1]
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "$" and text.startswith("$(", i):
+            frames.append([False, 0, ")"])
+            i += 2
+            continue
+        if c == "`":
+            if frame[2] == "`":
+                frames.pop()
+            else:
+                frames.append([False, 0, "`"])
+            i += 1
+            continue
+        if c == "$":
+            got = _param_at(text, i)
+            if got:
+                out.append(got[:2])
+                i = got[2]
+                continue
+            if not frame[0] and text.startswith("$'", i):
+                k = i + 2
+                while k < n and text[k] != "'":
+                    k += 2 if text[k] == "\\" else 1
+                i = k + 1
+                continue
+            i += 1
+            continue
+        if frame[0]:
+            if c == '"':
+                frame[0] = False
+            i += 1
+            continue
+        if c == '"':
+            frame[0] = True
+        elif c == "'":
+            k = text.find("'", i + 1)
+            i = n if k < 0 else k
+        elif c == "(":
+            frame[1] += 1
+        elif c == ")":
+            if frame[1]:
+                frame[1] -= 1
+            elif frame[2] == ")":
+                frames.pop()
+        elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            k = text.find("\n", i)
+            i = n if k < 0 else k
+            continue
+        elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i):
+            op = scan._sw.heredoc_opener(text, i)
+            if op:
+                pending.append(op[:3])
+                i = op[3]
+                continue
+        elif c == "\n" and pending:
+            i = _heredoc_bodies(text, i + 1, pending, out)
+            pending = []
+            continue
+        i += 1
+    return out
+
+
+# What, besides a plain variable this check judges by its value ($PWD and $OLDPWD by the directory),
+# can read back the directory a cd entered: $_ (the cd's own argument), a substitution or backquote
+# (pwd, basename ., anything run there), pwd, dirs and the tilde forms. READS_DIR, less the plain $.
+READS_BACK = re.compile(r"\$_\b|\$\{_\}|\$\(|`|\bpwd\b|\bdirs\b|~[-+0-9]")
+
+
+def variables_posted(text, place):
+    """The variables text expands, judged where the command runs: [(shown, value, None)] for a value
+    this check can read, [(shown, None, why not)] for one it cannot. A body file's path is not posted
+    (posted_text), so its variables are left out. Neither is a cd's directory, unless something in
+    the rest of the command can read it back (READS_BACK), when the cd's own variables are judged too:
+    `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f)."""
+    place = place if place is not None else scan.Place(None, dict(os.environ))
+    out, seen = [], set()
+    judged = posted_text(text, keep_cds=False)
+    if READS_BACK.search(judged):
+        judged = posted_text(text, keep_cds=True)
+    for name, shown in expansions(judged):
+        if shown in seen or name == "":
+            continue
+        seen.add(shown)
+        if name is None:
+            out.append((shown, None, "is a form of expansion this check does not work out"))
+        elif name == "_":
+            out.append((shown, None, "is the last word of the command before it, which this check does not follow"))
+        elif name in ("PWD", "OLDPWD"):
+            where = place.cwd if name == "PWD" else place.previous
+            out.append((shown, where, None) if where else
+                       (shown, None, "is a directory this check cannot follow the command to"))
+        elif name in place.vars:
+            value = place.vars[name]
+            if value is None or value == scan.RUNTIME:
+                out.append((shown, None, "is set in this command from something only running it can tell"))
+            else:
+                out.append((shown, value, None))
+        elif name in (place.environ or {}):
+            out.append((shown, place.environ[name], None))
+        else:
+            out.append((shown, None, "is not set in this command, nor in the environment every Bash call "
+                                     "starts from"))
+    return out
 
 
 def evaluate(command, cwd, depth=0):
@@ -1065,7 +1291,7 @@ def evaluate(command, cwd, depth=0):
         where = place.cwd or place.start or cwd
         try:
             if kind in REPO_CREATE:
-                why = judge_repo_create(what, args, where, command)
+                why = judge_repo_create(what, args, where, command, place)
             elif kind == REPO_SYNC:
                 why = judge_repo_sync(what, args, where)
             elif kind in RELEASE:
@@ -1082,10 +1308,11 @@ def evaluate(command, cwd, depth=0):
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
             reasons.append(why)
-    for slug, files in apis:
+    places = _api_places(command, cwd) if apis else []
+    for slug, files, args in apis:
         try:
             bodies = [("the file %s" % p, _read(p, cwd)) for p in files]
-            why = judge("gh api", slug, cwd, None, posted, bodies)
+            why = judge("gh api", slug, cwd, None, posted, bodies, place=_api_place(args, places, cwd))
         except CannotTell as e:
             why = "gh api: %s." % e
         if why and why not in reasons:
@@ -1110,7 +1337,7 @@ def _judge_text(kind, what, args, envs, place, where, command, posted=None):
             # With no --head, gh pushes the branch when it is not fully pushed and it can ask where.
             bodies.append(("what it may push (the branch's name and the commits no remote holds)",
                            lambda: pushed_text(where, False)))
-    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command if posted is None else posted, bodies, unseen, place)
 
 
 # The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so

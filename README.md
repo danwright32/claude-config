@@ -2449,7 +2449,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2756,6 +2756,18 @@ notes folder root (#2490), not a push
 
 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it answers a
 command that never mentions a watch before loading anything
+
+</td></tr>
+<tr><td>
+
+`check-gh-view-comments.sh` (#2891)
+
+</td><td>
+
+2026-11-14: 0.029 to 0.033 seconds on `ls -la`, which names no comments flag and leaves before
+anything loads; 0.081 to 0.086 seconds on a command naming both `-c` and `view`, which it reads, and
+on `gh issue view 5 --comments`, refused. Five readings of each at load average 17 to 18, each
+reading including the start of the python3 that timed it
 
 </td></tr>
 <tr><td>
@@ -4060,6 +4072,23 @@ dry run, an older version included, and a dry run of another project's folder ar
 What it cannot see: a change on the database between the dry run and the push, or a `supabase link`
 to another project in the same directory between the dry run and the Apply.
 
+A test project needs no Apply (#2643). In a work repository every owner step on its test Supabase
+project is a SQL file its scripts write, and setting up one flow version on 2026-11-10 asked four
+times. Now a `supabase db query --linked -f <file>` write alone in its command (a `cd` aside, and only
+the flags an Apply allows) is answered "allow", with no reason and no notice, when the project in
+`supabase/.temp/project-ref` is listed in `.claude/supabase-test-projects` in the same directory: one
+ref per line, blank lines and lines starting with `#` ignored (Dan, 2026-11-14: a per project file,
+and a run passes silently). It fails closed: a list missing, unreadable, not text, or holding any
+other line marks nothing, and the run is asked about as before, the question saying why it is not a
+test project. An inline write, a push, `--db-url`, `--local` and a project not on the list are asked
+about as before. The list is trusted only as git has committed it: its bytes must be what `git show
+HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
+included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
+itself asked about, which is why the hook's registration now takes those three tools. Still open: a
+session that edits the list with a shell command and then commits it, in one call or several, is
+trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
+edit and commit.
+
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
 prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
@@ -4486,7 +4515,7 @@ each write a copy stays while it is under 30 days old by the time in its name, o
 the newest 3 copies of its own suite however old, and the folder is held under 20 MB in all, oldest
 first. It used to keep the newest 20 copies overall, about ten days of flakes, so the one log #1919
 named was gone before anyone read it (#2895, L202). Nothing else in the folder is touched
-(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which still keeps its newest 20). Set
+(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which keeps the same way per mod, #2959). Set
 it to empty to keep nothing, and the FAIL line says so.
 
 </td></tr>
@@ -5469,8 +5498,13 @@ else, nothing in it is uncommitted, nothing changed in the last six hours, and n
 working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
 every commit on its branch is also on another branch, local or remote (which covers work shipped in
 a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
-the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
-under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+the default branch. The sweep also keeps a worktree whose branch has an open pull request, and,
+while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
+session registry folder or a file it edited is inside it), because a pushed branch counts as kept
+elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
+the sleep record or a worker's places cannot be read, it removes nothing that run. The `--just-merged`
+removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
+alone, and asks neither question. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -7337,7 +7371,9 @@ permission prompts are approved, never a question or the plan approval and never
 beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
-write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
+write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
+written plainly, and a line running gh that way writing files only into the session notes folder
+or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
 included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
 created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
@@ -8084,7 +8120,7 @@ exit code and the last lines of output instead of an empty reason.
 A refused or failed mod's line carries three verdict lines at most, so the engine's whole output is
 kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (outside the config, which
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
-afterwards (#1788, L297). Pruned to the newest 20 after each write; a passing run writes nothing.
+afterwards (#1788, L297). A copy stays 30 days, or while it is one of the newest 3 of its own mod and check, under 20 MB in all (#2959); a passing run writes nothing.
 `CHECK_MODS_FAILURE_OUTPUT` moves the folder, or set empty keeps nothing and the line says so.
 `tests/test-mods.sh` points it at its own throwaway folder for every fixture, and leaves only its
 run over the real `payload/mods` writing to the real one.

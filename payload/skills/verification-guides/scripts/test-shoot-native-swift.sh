@@ -208,11 +208,19 @@ if [ "$rc" -eq 0 ] && [ "$executed" = "5 0" ]; then ok
 else bad "the camera's request tests (swift test exited $rc, executed and failed: ${executed:-none})" "$(tail -n 30 "$T/request.out")"
 fi
 
-# An ordinary test run, with no frame named, draws nothing and writes nothing: it skips.
-(cd "$PKG" && swift test --disable-sandbox --filter ShotFixtureTests.VerificationShotFixture) > "$T/plain.out" 2>&1
+# An ordinary test run, with no frame named, draws nothing and writes nothing: it skips. Every other
+# request variable is set, the file and row count paths included, so a camera that drew without a
+# frame named would have somewhere to write, and the check could see it (claude-config#2966: run with
+# nothing set, the camera had nowhere to write and the check could not fail).
+PLAIN_SHOT="$T/plain/shot.png"; PLAIN_ROWS="$T/plain/rows"
+mkdir -p "$T/plain"
+(cd "$PKG" && VERIFICATION_SHOT_FILE="$PLAIN_SHOT" VERIFICATION_SHOT_ROWS_FILE="$PLAIN_ROWS" \
+  VERIFICATION_SHOT_WIDTH=480 VERIFICATION_SHOT_HEIGHT=900 VERIFICATION_SHOT_THEME=light VERIFICATION_SHOT_MIN_ROWS=3 \
+  swift test --disable-sandbox --filter ShotFixtureTests.VerificationShotFixture) > "$T/plain.out" 2>&1
 rc=$?
-if [ "$rc" -eq 0 ] && grep -q "skipped" "$T/plain.out" && [ -z "$(ls "$RDIR"/*.png 2>/dev/null)" ]; then ok
-else bad "an ordinary run of the shot test should skip and write nothing (exit $rc)" "$(tail -n 20 "$T/plain.out")"
+if [ "$rc" -eq 0 ] && grep -q "skipped" "$T/plain.out" && [ ! -e "$PLAIN_SHOT" ] && [ ! -e "$PLAIN_ROWS" ] \
+  && [ -z "$(ls "$RDIR"/*.png 2>/dev/null)" ]; then ok
+else bad "an ordinary run of the shot test, every request variable set but the frame, should skip and write nothing (exit $rc; $(ls "$T/plain" 2>&1 | tr '\n' ' '))" "$(tail -n 20 "$T/plain.out")"
 fi
 
 for theme in light dark; do

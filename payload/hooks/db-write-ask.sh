@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # db-write-ask.sh
-# Claude Code PreToolUse(Bash|mcp__.*)
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|mcp__.*)
 # hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
 # and before an edge function deploy that turns JWT verification off, or may (#2660).
 #
@@ -61,10 +61,18 @@
 # Since #2952 neither is a command that writes its own -f files from heredocs and then runs them,
 # when every text each file can hold is a read and the command does nothing else
 # (lib/db-write-calls.py, "A COMMAND THAT WRITES ITS OWN FILES").
+# Since #2643, a `supabase db query -f <file>` write alone in its command (cd aside) passes with no
+# Apply, no reason and no notice when the project its directory is linked to is listed in that
+# directory's .claude/supabase-test-projects (Dan, 2026-11-14: a per project file, passing silently).
+# A list missing, unreadable or holding a line that is not a ref asks as before, as do an inline
+# write, a push, and any flag naming another target (lib/db-apply-approval.py, "A TEST PROJECT").
+# The list counts only as git has committed it, and an Edit, Write or MultiEdit of it is asked about
+# like a database write, which is why the hook is registered for those three tools too.
 #
-# THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
-# unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
-# about holds (test-db-write-ask.sh checks that), or names a Salesforce write tool.
+# THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
+# MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
+# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
+# name of the test project list, or names a Salesforce write tool.
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let
@@ -237,6 +245,25 @@ if not isinstance(tool, str):
 
 if tool in SF_WRITES:
     emit(None, sf_notice())
+# An Edit, Write or MultiEdit of the list of test Supabase projects of a checkout, whose file runs pass
+# unasked, is held like a database write (claude-config#2643). Anything else they write is passed.
+if tool in ("Edit", "Write", "MultiEdit"):
+    ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
+    if ap is None:
+        ti = d.get("tool_input")
+        fp = ti.get("file_path") if isinstance(ti, dict) else None
+        if isinstance(fp, str) and "supabase-test-projects" in fp:
+            ask(ap_why + ", so whether " + fp + " is a test project list could not be told", "2643",
+                "edit of a test project list")
+        sys.exit()
+    try:
+        listed = ap.is_test_list(tool, d.get("tool_input"))
+    except Exception as e:
+        listed = "the file (" + type(e).__name__ + " reading its path)"
+    if listed is not None:
+        ask(tool + " writes " + listed + ", the list of the test Supabase projects of this checkout, whose "
+            "supabase db query -f runs pass without asking", "2643", "edit of a test project list")
+    sys.exit()
 if tool not in (DB_SQL, DB_MIGRATION) and tool != "Bash" and not tool.startswith("mcp__"):
     sys.exit()
 
@@ -312,6 +339,20 @@ if tool == "Bash":
             if not calls.is_applicable(f):
                 kept.append(f)
                 continue
+            # A `db query -f` run on a project its checkout marks as test needs no Apply, and passes
+            # with nothing said (claude-config#2643). Any doubt about the list falls through to the
+            # Apply, then to the question, which says why neither covers it.
+            test_why = None
+            if f.file is not None:
+                if ap is None:
+                    test_why = ap_why
+                else:
+                    try:
+                        is_test, test_why = ap.on_test_project(f.workdir, f.flags)
+                    except Exception as e:
+                        is_test, test_why = False, "whether its project is a test one could not be checked (" + type(e).__name__ + ")"
+                    if is_test:
+                        continue
             if ap is None:
                 ok, why = False, ap_why
             else:
@@ -323,7 +364,11 @@ if tool == "Bash":
             if ok:
                 released.append(why)
             else:
-                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why, f[1]))
+                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why
+                             + ("" if test_why is None else "; nor a test project: " + test_why), f[1]))
+        if not kept and not released:
+            sys.stdout.write("pass\x1f")
+            sys.exit()
         if not kept:
             release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
         found = kept
@@ -390,6 +435,11 @@ if [ "$rc" -eq 0 ]; then
       # characters that need no escaping, as read-only-query-allow.sh's approval does.
       reason="${out#allow$US}"
       printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      exit 0 ;;
+    "pass$US"*)
+      # A file run on a project its checkout marks as test (claude-config#2643): let through with
+      # no reason and no notice, as Dan chose (2026-11-14).
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}\n'
       exit 0 ;;
   esac
 fi
