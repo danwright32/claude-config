@@ -267,7 +267,7 @@ const ENCODED = /^Content-Transfer-Encoding:[ \t]*(?!(?:7bit|8bit|binary)[ \t]*$
  * only in a changed line of another file. Those lines are read as the whole text was, so a file a
  * header names is found exactly as before. Undefined when the text has no such line (a normal diff,
  * an ed script) or is an encoded mail: then nothing says which files it changes, and the whole text
- * is read, as before. Scope modes' patchedPaths reads a git patch's paths for another question (what
+ * is read, as before. mod-kit's patchedPaths (hooks/patch.ts, #2992) reads a patch's paths for another question (what
  * a call changed, honouring -p); this one answers what a patch might write, so it keeps every line
  * that could name a file, for patch as well as git (L342).
  */

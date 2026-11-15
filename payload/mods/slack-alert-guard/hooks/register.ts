@@ -35,8 +35,6 @@ import {
   modelOnlyDecls,
   modelReading,
   outOfTime,
-  patchFiles,
-  patchPlacing,
   plainYamlValues,
   question,
   refusal,
@@ -62,6 +60,7 @@ import { type Reading, type Traced, consoleArgs, docstrings, jsSpans, pySpans, r
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { type InputFs, inputTexts } from './mod-kit/inputs.ts'
+import { patchFiles, patchPlacing, placedName } from './mod-kit/patch.ts'
 import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, waitingNamed } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
@@ -799,15 +798,15 @@ const judgePatch = async ($: EngineInterface, u: Unnamed, commands: ShellCommand
     const files = patchFiles(text)
     if (!files) return { unchecked: `a patch ${u.words.join(' ')} applies could not be read as a diff` }
     for (const forward of files) {
-      const gitNamed = (forward.to === null || forward.to.startsWith('b/')) && (forward.from === null || forward.from.startsWith('a/'))
       // Applied in reverse, each hunk takes its after back to its before (#2971 lessons review).
       const f = placing.reverse ? { from: forward.to, to: forward.from, hunks: forward.hunks.map(h => ({ before: h.after, after: h.before })) } : forward
-      if (f.to === null) continue
-      const strip = placing.strip ?? (isGit || gitNamed ? 1 : 0)
-      const rel = placing.target ?? f.to.split('/').slice(strip).join('/')
+      // A file with no hunk (a rename, a mode change) has no text changed (#2992).
+      if (f.to === null || !f.hunks.length) continue
+      const rel = placedName(f.to, forward, placing, isGit)
+      if (rel === undefined) continue
       // patch -d moves into its folder before anything else, a file it is named included.
       const path = rel.startsWith('/') ? rel : `${base}/${rel}`
-      if (!rel || !inScope(path, '#!')) continue
+      if (!inScope(path, '#!')) continue
       let v: Verdict
       if (f.from === null && !placing.target) v = await judgeEdit($, 'Write', { file_path: path, content: `${f.hunks.map(h => h.after).join('\n')}\n` })
       else {

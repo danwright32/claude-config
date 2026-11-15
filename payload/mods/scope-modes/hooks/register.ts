@@ -84,6 +84,7 @@ import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
+import { patchedPaths } from './mod-kit/patch.ts'
 import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -135,7 +136,6 @@ import {
   newBranchOf,
   newWork,
   outstanding,
-  patchedPaths,
   pgrepWords,
   porcelainFiles,
   prLinks,
@@ -4724,7 +4724,7 @@ const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<s
     const root = await gitCheckout($, g.dir)
     if (!root) continue
     const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
-    for (const t of texts) for (const p of patchedPaths(g.args, t)) out.push(`${root}/${p}`)
+    for (const t of texts) for (const p of patchedPaths(g.args, true, t)) out.push(`${root}/${p}`)
   }
   return out
 }

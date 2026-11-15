@@ -6216,7 +6216,13 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
+each name on both sides with git's quoting undone, each hunk walked by its header's counts, and how
+git apply or patch places the names by -p, folder, a named file and -R) is read only through
+`hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
+and the Slack alert guard each kept their own, and each read wrong a case the other read right);
+the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
+patch by hand. `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
@@ -7376,8 +7382,9 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
-written plainly, and a line running gh that way writing files only into the session notes folder
-or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
+written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
+expands, which rtk splits into a command, is refused as unread), and a line running gh that way
+writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
 included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
 created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
