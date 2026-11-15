@@ -3766,10 +3766,14 @@ got = [judge.sh_at(known, n, at) for n in ("KEEP", "LOSE", "CYC")]
 if got != ["/keep", None, None]:
     print("after the calls KEEP, LOSE and CYC read %r, not ['/keep', None, None]" % got); sys.exit()
 # A function reached through another that binds a name through a variable ends the walk at the call.
-stop = "KEEP=/keep\ng() {\n  h\n}\nh() {\n  eval \"$1\"\n}\n%s\n: after\n"
-ends = [judge.sh_cwd_at(judge.sh_known(stop % call, "/", None), (stop % call).index(": after")) for call in ("g", ": g")]
-if ends != [False, True]:
-    print("the walk past a call reaching eval, and past none, read %r, not [False, True]" % ends); sys.exit()
+# h evaluates its own argument, so since #2912 it is read at each call to it: g hands it text the gate
+# cannot read, which ends the walk; handed nothing (g0), it evaluates nothing, and the walk goes on.
+stop = "KEEP=/keep\ng() {\n  h \"$2\"\n}\ng0() {\n  h\n}\nh() {\n  eval \"$1\"\n}\n%s\n: after\n"
+ends = [judge.sh_cwd_at(judge.sh_known(stop % call, "/", None), (stop % call).index(": after"))
+        for call in ("g", ": g", "g0")]
+if ends != [False, True, True]:
+    print("the walk past a call reaching eval of what it cannot read, past none, and past one evaluating "
+          "nothing read %r, not [False, True, True]" % ends); sys.exit()
 print("ok" if count[0] < 1000 else "following 14 chained functions read %d commands for a name bound through a variable" % count[0])
 PY
 calls="$(python3 "$T/calls.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"

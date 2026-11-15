@@ -16,8 +16,9 @@ Before these, four routes ran a file the gate never read:
     argument open, which runs a name starting or ending in | as a command. Such a name was judged
     only where a file naming an endpoint was also handed to the code, and never where a glob the
     shell expands named it. Each is now judged as a command line (perl_pipe_names), and where perl
-    opens what it is handed, a name built by a substitution, backquotes, a brace expansion or a
-    variable the gate cannot work out is refused, as what it becomes cannot be seen.
+    opens what it is handed, a name built by a substitution, backquotes or a brace expansion is
+    refused, as what it becomes cannot be seen, and one from a variable the gate cannot work out is
+    refused with the #2683 switch on, as a file run by such a path is.
   * A file with a NUL in its first line run by zsh or dash (#2977): bash, sh and ksh refuse to run
     it, so #2892 only searched it for an endpoint, but zsh and dash run it. It is now read as the
     shell running it reads it (nul_reading).
@@ -68,10 +69,11 @@ NODE_WORD = re.compile(r'"([^"]*)"|(\S+)')
 NUL_REFUSERS = frozenset({"bash", "ksh"})
 
 
-def make(shell_bang, assign, marker, unknown_dir, max_depth):
+def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
     """The base class for the gate's Judge (module docstring). shell_bang is its SHELL_BANG, assign its
     CURL_ASSIGN (an assignment at a command's start, past export, env and the like), marker its
-    MARKER, unknown_dir its SH_UNKNOWN_DIR and max_depth its MAX_DEPTH."""
+    MARKER, unknown_dir its SH_UNKNOWN_DIR, max_depth its MAX_DEPTH and runs_refused its
+    unworked_paths_refused, the #2683 switch."""
 
     class CodeLoaders:
         # ---- PHP includes (#2978) -----------------------------------------------------------------
@@ -270,13 +272,21 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth):
             switches and the code (skip), and each name a glob in one expands to, is looked at, and
             the command such a name holds is judged as a command line. Where perl opens what it is
             handed (perl_opens_handed), a word the gate cannot work out, built from a substitution,
-            backquotes, a variable it does not know or a brace expansion, is refused, as the name it
-            becomes cannot be seen (#2912, the lessons review of #3010 at 73967ea: `perl -ne print
-            "$(printf 'bash post.sh|')"` passed). text is the command as written."""
+            backquotes or a brace expansion, is refused, as the name it becomes cannot be seen (#2912,
+            the lessons review of #3010 at 73967ea: `perl -ne print "$(printf 'bash post.sh|')"`
+            passed); one built only from a variable it does not know is refused with the #2683 switch
+            on, as a file run by such a path is. text is the command as written."""
             raws = self.raw_words(text) if text is not None else None
             if raws is not None and self.perl_opens_handed(words, skip):
+                # A word whose only unknown is a variable names a file the gate cannot read, as
+                # `bash "$X/a.sh"` runs one, so it is refused only with the #2683 switch on (runs_refused,
+                # pinned off in the gate suite). One the command builds itself, by a substitution,
+                # backquotes or a brace expansion, is refused whatever the switch says.
+                def built_here(r):
+                    return bool(re.search(r"\$\(|`", r) or
+                                PERL_BRACE.search(re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", "", r)))
                 if len(raws) != len(words):
-                    built = [r for r in raws[1:] if re.search(r"[$`{]", r)]
+                    built = [r for r in raws[1:] if re.search(r"[$`{]", r) and (runs_refused() or built_here(r))]
                     if built:
                         return self.unfollow(f"perl opens the names it is handed with <>, which runs one starting "
                                              f"or ending in | as a command, and is handed {built[0]}, whose name the "
@@ -288,7 +298,7 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth):
                         why = None
                         if re.search(r"[$`]", r):
                             v, splits = self.sh_word(r, self.sh_cwd(d), self.sh_source_var, self.shell["script"], False)
-                            if v is None or splits:
+                            if (v is None or splits) and (runs_refused() or built_here(r)):
                                 why = "built from what the gate cannot work out"
                         if why is None and PERL_BRACE.search(re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", "", r)):
                             why = "a brace expansion"

@@ -688,8 +688,22 @@ read_refused "#2912 a perl pipe name built by a substitution is refused"
 says "#2912 and it says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
 run_pg "perl -ne print \`printf 'bash post.sh|'\`"
 read_refused "#2912 the same built by backquotes is refused"
+# A name from a variable the gate cannot work out is a file it cannot read, as `bash "$X/a.sh"` runs
+# one: it stays behind the #2683 switch with that run, which the gate suite pins off (Dan, 2026-11-10:
+# "measure first"). Refusing it newly refused four of the repository's suites run directly,
+# tests/test-claude-sync.sh among them, which the gate suite pins as allowed.
 run_pg "perl -ne print \"\$NOPE_2912\""
-read_refused "#2912 a name from a variable the gate cannot work out is refused"
+allowed "#2912 a name from a variable the gate cannot work out passes with the #2683 switch off"
+run_pg "perl -pi -e 's/a/b/' \"\$NOPE_2912/a.txt\""
+allowed "#2912 the same for perl -pi, a path under it, passes with the switch off"
+SLACK_GATE_UNWORKED_PATHS=refuse run_pg "perl -ne print \"\$NOPE_2912\""
+read_refused "#2912 a name from a variable the gate cannot work out is refused with the #2683 switch on"
+SLACK_GATE_UNWORKED_PATHS=refuse run_pg "perl -pi -e 's/a/b/' \"\$NOPE_2912/a.txt\""
+read_refused "#2912 the same for perl -pi is refused with the switch on"
+run_pg "perl -ne print \"\$NOPE_2912\" \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 beside it, a substitution is still refused with the switch off"
+run_pg "perl -ne print \"\$NOPE_2912/\$(printf 'bash post.sh|')\""
+read_refused "#2912 and so is a word holding both"
 run_pg "perl -ne print 'bash post.sh'{,'|'}"
 read_refused "#2912 a perl pipe name made by a brace expansion is refused"
 run_pg "perl -e 'while (<>) { print }' \"\$(printf a.txt)\""
