@@ -276,6 +276,10 @@ if [ -z "$ONLY" ] && [ "${#paths[@]}" -gt 0 ]; then
   record="${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}"
   case "$(sleep_state "$record")" in
     asleep)
+      command -v python3 >/dev/null 2>&1 || {
+        echo "check-stale-worktrees: the Mac is asleep, and python3, which reads where its overnight sessions have worked, is not installed, so ${#paths[@]} worktree(s) are left unjudged rather than removed." >&2
+        exit 2
+      }
       sleepers="$(python3 "$_HD/lib/sleep-worker-places.py" "$record" "${CLAUDE_SESSION_REGISTRY_DIR:-$HOME/.claude/state/sessions}" 2>&1)" || {
         echo "check-stale-worktrees: the Mac is asleep, and where its overnight sessions have worked could not be read ($(printf '%s' "$sleepers" | tr '\n' ' ')), so ${#paths[@]} worktree(s) are left unjudged rather than removed." >&2
         exit 2
