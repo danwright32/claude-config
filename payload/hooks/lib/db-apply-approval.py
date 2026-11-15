@@ -85,14 +85,17 @@ into it by mistake, or by a session, is trusted like any other.
 The list is trusted only as git has committed it (the coordinator's review of #2643): its bytes must
 be what `git show HEAD:<it>` gives, so an uncommitted or untracked edit, a live ref added by any shell
 command included, is asked about until it is committed. And db-write-ask.sh holds an Edit, Write or
-MultiEdit of the list (is_test_list) as it holds a database write. Still open: a session that edits
-the list with a shell command and then commits it, in one call or several, is trusted once the
-commit lands. The commit check stops an edit left uncommitted, not a deliberate edit and commit.
+MultiEdit of the list (is_test_list) as it holds a database write, and since #2989 a shell command
+that writes it, or a `git commit` that would add a line to one (list_shell_change): before that, a
+session that appended a ref with a shell command and then committed it was trusted once the commit
+landed. What that still cannot see is in list_shell_change's own docstring.
 
   on_test_project(workdir, flags)
       (True, the ref) or (False, why the run's project is not one its checkout marks as test).
   is_test_list(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is a checkout's TEST_LIST, else None.
+  list_shell_change(command, cwd, sw, strip)
+      None, or why a Bash command may write a TEST_LIST or commit a line added to one (#2989).
 """
 import datetime
 import hashlib
@@ -100,6 +103,7 @@ import json
 import os
 import re
 import subprocess
+import time
 
 SOURCE = "db-apply"
 APPLY = "Apply"
@@ -386,6 +390,187 @@ def on_test_project(workdir, flags):
     if ref not in refs:
         return False, "project " + ref + " is not marked as test in " + TEST_LIST
     return True, ref
+
+
+# A shell command naming the list passes only when it is one of these, reading it (#2989), with no
+# redirection writing anywhere but /dev/null. Each takes no option that writes the file it names.
+LIST_READERS = {"cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "less", "more", "ls", "stat",
+                "file", "diff", "cmp", "md5", "shasum", "sha256sum", "test", "["}
+# And the git subcommands that only read, apart from a --output option.
+GIT_LIST_READS = {"diff", "show", "log", "status", "blame", "ls-files", "cat-file", "grep"}
+# The git subcommands that may come before a commit in its own command, when the checkout holds a
+# list: none of them can write a list the command does not name.
+GIT_BEFORE_COMMIT = GIT_LIST_READS | {"add", "rm"}
+# The whole of a run of git and every commit check in one command; the hook's own limit is 10 seconds.
+COMMIT_SECONDS = 6
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _list_name():
+    return TEST_LIST.split(os.sep)[-1]
+
+
+def _shown(text, most=160):
+    t = " ".join(text.split())
+    return t if len(t) <= most else t[:most] + " ..."
+
+
+def _words_of(text, sw, strip, found=None):
+    return sw.command_words(strip(sw.command_rest(text)[0], found))
+
+
+def _reads_list_only(text, sw, strip):
+    """Whether one simple command, which names the list, only reads it: a reader from LIST_READERS
+    or a reading git subcommand, every redirection an input, a descriptor copy or /dev/null."""
+    found = []
+    words = _words_of(text, sw, strip, found)
+    for op, target in found:
+        if ">" not in op:
+            continue
+        if target == "/dev/null" or (op.endswith("&") and re.fullmatch(r"\d+|-", target)):
+            continue
+        return False
+    if not words:
+        return False
+    if os.path.basename(words[0]) in LIST_READERS:
+        return True
+    g = sw.git_read(words)
+    return bool(g) and g[0] in GIT_LIST_READS and not any(w.startswith("--output") for w in words)
+
+
+def _git(folder, args, deadline):
+    """(the CompletedProcess, None) or (None, why git could not be run in folder before deadline)."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        return None, "git took longer than " + str(COMMIT_SECONDS) + " seconds"
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+    try:
+        return subprocess.run(["git", "-C", folder, "-c", "core.quotepath=off"] + args, capture_output=True,
+                              timeout=min(GIT_SECONDS, left), env=env, stdin=subprocess.DEVNULL), None
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, "git could not be run (" + type(e).__name__ + ")"
+
+
+def _counts(line):
+    s = line.strip()
+    return bool(s) and not s.startswith("#")
+
+
+def _list_additions(folder, deadline):
+    """(lists, added, None) for the checkout folder is in: whether it holds any list, tracked or
+    not ignored, and each (path, line) a commit there could add to one, from the index or the
+    working tree (which `git commit -a`, or an add in the same command, stages), a blank line or a
+    comment aside. ([], [], None) when folder is in no checkout; (None, None, why) when git fails."""
+    spec = ":(top,glob,icase)**/" + "/".join(TEST_LIST.split(os.sep))
+    r, why = _git(folder, ["ls-files", "-z", "-t", "-c", "-o", "--exclude-standard", "--", spec], deadline)
+    if r is None:
+        return None, None, why
+    if r.returncode != 0:
+        if b"not a git repository" in r.stderr:
+            return [], [], None
+        return None, None, "git ls-files failed (exit " + str(r.returncode) + ")"
+    entries = [e.decode("utf-8", "replace") for e in r.stdout.split(b"\0") if e]
+    lists = sorted({e[2:] for e in entries})
+    added = []
+    for e in entries:
+        if e.startswith("? "):
+            # Not tracked, so all of it would be new: read it as the commit would take it.
+            try:
+                with open(os.path.join(folder, e[2:]), "rb") as f:
+                    text = f.read(TEST_LIST_BYTES).decode("utf-8", "replace")
+            except OSError as err:
+                return None, None, e[2:] + " could not be read (" + type(err).__name__ + ")"
+            added.extend((e[2:], l.strip()) for l in text.splitlines() if _counts(l))
+    if len(lists) == len([e for e in entries if e.startswith("? ")]):
+        return lists, added, None
+    r, why = _git(folder, ["rev-parse", "-q", "--verify", "HEAD^{commit}"], deadline)
+    if r is None:
+        return None, None, why
+    base = "HEAD" if r.returncode == 0 else EMPTY_TREE
+    for cached in (["--cached"], []):
+        r, why = _git(folder, ["diff"] + cached + [base, "--text", "--unified=0", "--no-color", "--no-ext-diff",
+                               "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--", spec], deadline)
+        if r is None:
+            return None, None, why
+        if r.returncode != 0:
+            return None, None, "git diff failed (exit " + str(r.returncode) + ")"
+        path = None
+        for line in r.stdout.decode("utf-8", "replace").splitlines():
+            if line.startswith("+++ "):
+                path = line[6:] if line.startswith("+++ b/") else None
+            elif line.startswith("+") and _counts(line[1:]):
+                added.append((path or "a test project list", line[1:].strip()))
+    return lists, added, None
+
+
+def list_shell_change(command, cwd, sw, strip):
+    """None when a Bash command neither writes a checkout's TEST_LIST nor commits a line added to
+    one (claude-config#2989), else why it may. Before this, an `echo <ref> >>` into the list and
+    then `git commit` made the project trusted with no question.
+
+    A WRITE: any command naming the list (its file name, in any case, since macOS matches either)
+    that is not one only reading it (_reads_list_only), and a command that names it where no simple
+    command of it does (a heredoc body, a string it cannot read). A COMMIT: a `git commit` whose
+    checkout could add a line, other than a blank or a comment, to any list in it, from the index or
+    the working tree; one only removing lines passes. In a checkout holding a list, a commit after
+    any command other than cd, a reader or a git add, rm or read in the same call is asked about too,
+    since that command could write the list, by a glob or a variable, before the commit stages it.
+    A commit whose checkout cannot be told (a variable, --git-dir, GIT_DIR) is asked about.
+
+    WHAT IT CANNOT SEE: a list written by a script file run in an earlier call, or under a name
+    built at run time, and then committed by a command other than `git commit` (an alias,
+    `git commit-tree`, a merge, a cherry-pick, a pull). sw is lib/shell-words.py and strip db-write-calls'
+    strip_redirects, which with found lists the redirections it took out."""
+    name = _list_name()
+    named = name in command.lower()
+    if not named and "commit" not in command:
+        return None
+    here = cwd if isinstance(cwd, str) and cwd.startswith("/") else ""
+    records = sw.every_command(command, here)
+    rest = command
+    before = []
+    deadline = time.monotonic() + COMMIT_SECONDS
+    for d, text, wrapper, why, depth in records:
+        if name in text.lower():
+            if why or not _reads_list_only(text, sw, strip):
+                return ("the command `" + _shown(text) + "` names " + TEST_LIST + ", the list of the test "
+                        "Supabase projects of a checkout, and is not one that only reads it")
+            rest = rest.replace(text, "", 1)
+        words = _words_of(text, sw, strip)
+        g = sw.git_read(words) if words else None
+        if not g or g[0] != "commit":
+            before.append((text, words, g))
+            continue
+        front, assigns = g[1], sw.command_rest(text)[1]
+        if any(w.startswith(("--git-dir", "--work-tree")) for w in front) or re.search(r"\bGIT_(DIR|WORK_TREE)=", assigns):
+            return ("the command `" + _shown(text) + "` commits with git pointed at a checkout this hook "
+                    "cannot read, so whether it adds a project to a " + TEST_LIST + " could not be told")
+        where = sw.git_dir(sw.command_rest(text)[0])
+        folder = where if where.startswith("/") else os.path.join(d or here, where) if (d or here) else ""
+        if not folder.startswith("/") or "$" in folder or "`" in folder:
+            return ("the command `" + _shown(text) + "` commits in a checkout this hook cannot tell, so "
+                    "whether it adds a project to a " + TEST_LIST + " could not be told")
+        lists, added, why = _list_additions(folder, deadline)
+        if why is not None:
+            return ("the command `" + _shown(text) + "` commits, and whether it adds a project to a "
+                    + TEST_LIST + " could not be told: " + why)
+        if added:
+            shown = ", ".join("the line " + l + " added to " + p for p, l in added[:3]) + (", and more" if len(added) > 3 else "")
+            return ("the command `" + _shown(text) + "` would commit " + shown + ", and a project on a committed "
+                    + TEST_LIST + " has its supabase db query -f runs pass without asking")
+        if lists:
+            for t, w, gb in before:
+                base = os.path.basename(w[0]) if w else ""
+                if base == "cd" or base in LIST_READERS or (gb and gb[0] in GIT_BEFORE_COMMIT):
+                    continue
+                return ("the command commits in a checkout holding " + ", ".join(lists[:3]) + " after `"
+                        + _shown(t) + "`, which could write the list before the commit stages it")
+        before.append((text, words, g))
+    if named and name in rest.lower():
+        return ("the command names " + TEST_LIST + ", the list of the test Supabase projects of a "
+                "checkout, where this hook cannot tell whether it writes it (a heredoc, or a string it "
+                "cannot read)")
+    return None
 
 
 def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None):

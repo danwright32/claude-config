@@ -67,12 +67,16 @@
 # A list missing, unreadable or holding a line that is not a ref asks as before, as do an inline
 # write, a push, and any flag naming another target (lib/db-apply-approval.py, "A TEST PROJECT").
 # The list counts only as git has committed it, and an Edit, Write or MultiEdit of it is asked about
-# like a database write, which is why the hook is registered for those three tools too.
+# like a database write, which is why the hook is registered for those three tools too. Since #2989
+# a shell command that writes the list, or names it where no command of it can be read (a heredoc, a
+# string), is asked about too, as is a `git commit` that would add a line other than a blank or a
+# comment to any list in its checkout; one only removing lines passes (lib/db-apply-approval.py,
+# list_shell_change).
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
-# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
-# name of the test project list, or names a Salesforce write tool.
+# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as do the
+# name of the test project list and, since #2989, the word commit, or names a Salesforce write tool.
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let
@@ -92,7 +96,7 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
 # The screen: a payload holding none of these words, in any case, names no database call.
-DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
+DB_SCREEN_WORDS="sql quer commit statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
 db_call=0
 sf_call=0
 shopt -s nocasematch
@@ -264,6 +268,25 @@ if tool in ("Edit", "Write", "MultiEdit"):
         ask(tool + " writes " + listed + ", the list of the test Supabase projects of this checkout, whose "
             "supabase db query -f runs pass without asking", "2643", "edit of a test project list")
     sys.exit()
+# A shell command that writes that list, and a commit that adds a line to one, are held the same way
+# (claude-config#2989). lib/db-apply-approval.py says which commands those are.
+if tool == "Bash":
+    bti = d.get("tool_input")
+    bcmd = bti.get("command") if isinstance(bti, dict) else None
+    if isinstance(bcmd, str) and ("supabase-test-projects" in bcmd.lower() or "commit" in bcmd):
+        ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
+        bsw, bsw_why = part("shell_words_shared", "shell-words.py")
+        missing = ap_why or bsw_why or (calls_why if calls is None else None)
+        if missing:
+            ask(missing + ", so whether this command writes the test project list of a checkout, or commits a "
+                "project onto one, could not be told", "2989", "change to a test project list")
+        try:
+            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, calls.strip_redirects)
+        except Exception as e:
+            change = ("the command could not be read (" + type(e).__name__ + "), so whether it writes a "
+                      "test project list of a checkout, or commits a project onto one, could not be told")
+        if change is not None:
+            ask(change, "2989", "change to a test project list")
 if tool not in (DB_SQL, DB_MIGRATION) and tool != "Bash" and not tool.startswith("mcp__"):
     sys.exit()
 

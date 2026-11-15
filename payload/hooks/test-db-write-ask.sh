@@ -1105,6 +1105,81 @@ expect "a Write of a migration file is not, as before (#2643)" none "$(file_payl
 printf 'select count(*) from a;\n' > "$TESTP/look.sql"
 both "a read from a file on a test project is the read hook's, as before (#2643)" allow none "$(apply_payload 'supabase db query --linked -f look.sql' "$TESTP" s1 "$NONE_T")"
 
+# A shell command that writes the list, and a commit that adds a line to it, are held too
+# (claude-config#2989): `echo <ref> >> .claude/supabase-test-projects` and then `git commit` made a
+# project trusted with no question, since only an Edit, Write or MultiEdit of the list was asked
+# about. A command that only reads the list, and a commit that only removes lines from it, pass.
+shell_list() {  # shell_list <label> <want> <command> [cwd]
+  expect "$1 (#2989)" "$2" "$(apply_payload "$3" "${4:-$TESTP}" s1 "$NONE_T")"
+}
+shell_list "an append to the list by redirection is asked about" ask 'echo liveprojectref000009 >> .claude/supabase-test-projects'
+shell_list "an overwrite of the list by an absolute path is asked about" ask "printf 'liveprojectref000009\n' > $LIST"
+shell_list "a tee into the list is asked about" ask 'echo liveprojectref000009 | tee -a .claude/supabase-test-projects >/dev/null'
+shell_list "a sed edit of the list in place is asked about" ask "sed -i '' 's/000001/000009/' .claude/supabase-test-projects"
+shell_list "a copy over the list is asked about" ask 'cp /tmp/refs .claude/supabase-test-projects'
+shell_list "a write of the list named in another case is asked about" ask 'echo liveprojectref000009 >> .claude/Supabase-Test-Projects'
+shell_list "a reader redirected into the list is asked about" ask 'cat /tmp/refs > .claude/supabase-test-projects'
+shell_list "a write inside a shell string is asked about" ask 'bash -c "echo liveprojectref000009 >> .claude/supabase-test-projects"'
+shell_list "a write from a heredoc script is asked about" ask $'python3 - <<\'EOF\'\nopen(".claude/supabase-test-projects", "a").write("liveprojectref000009\\n")\nEOF'
+shell_list "a staging of the list is asked about" ask 'git add -f .claude/supabase-test-projects'
+r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'echo liveprojectref000009 >> .claude/supabase-test-projects' "$TESTP" s1 "$NONE_T")")"
+case "$(field "$r" reason)" in *supabase-test-projects*2989*) check "the question names the list and the issue (#2989)" ok ;; *) check "the question names the list and the issue (#2989)" "reason: $(field "$r" reason | head -c 400)" ;; esac
+shell_list "a cat of the list passes" none 'cat .claude/supabase-test-projects'
+shell_list "a grep of the list with errors thrown away passes" none 'grep -c ref .claude/supabase-test-projects 2>/dev/null'
+shell_list "a git diff of the list passes" none 'git diff -- .claude/supabase-test-projects'
+shell_list "a line count of the list piped on passes" none 'wc -l .claude/supabase-test-projects | head -1'
+# A commit is judged by what it would add to a list anywhere in the checkout: the index, and the
+# working tree too, since `git commit -a` or a `git add -A` in the same command stages it first.
+list_git() { "${TESTP_GIT[@]}" "$@" >/dev/null 2>&1; }
+printf "$LIST_TEXT"'liveprojectref000009\n' > "$LIST"; list_git add -f .claude/supabase-test-projects
+shell_list "a commit of a staged added ref is asked about" ask 'git commit -m "add a ref"'
+r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m "add a ref"' "$TESTP" s1 "$NONE_T")")"
+case "$(field "$r" reason)" in *liveprojectref000009*supabase-test-projects*) check "the question about a commit names the added line and the list (#2989)" ok ;; *) check "the question about a commit names the added line and the list (#2989)" "reason: $(field "$r" reason | head -c 400)" ;; esac
+shell_list "the same commit through git -C from elsewhere is asked about" ask "git -C $TESTP commit -m x" "$APPLY"
+shell_list "the same commit after a cd from elsewhere is asked about" ask "cd $TESTP && git commit -m x" "$APPLY"
+list_git reset -q -- .claude/supabase-test-projects
+shell_list "a commit -a of an unstaged added ref is asked about" ask 'git commit -am "add a ref"'
+shell_list "an add of everything then a commit is asked about" ask 'git add -A && git commit -m x'
+printf "$LIST_TEXT" > "$LIST"
+shell_list "a commit with the list unchanged passes" none 'git commit -am "other work"'
+printf '# the test projects of this checkout\n\ntestprojectref000001\n' > "$LIST"; list_git add -f .claude/supabase-test-projects
+shell_list "a commit that only removes a ref passes" none 'git commit -m "drop a ref"'
+printf "$LIST_TEXT"'# only a note\n' > "$LIST"; list_git add -f .claude/supabase-test-projects
+shell_list "a commit that adds only a comment passes" none 'git commit -m note'
+printf "$LIST_TEXT" > "$LIST"; list_git add -f .claude/supabase-test-projects
+mkdir -p "$TESTP/app/.claude"; printf 'liveprojectref000009\n' > "$TESTP/app/.claude/supabase-test-projects"
+shell_list "a commit that could add a new list in a subfolder is asked about" ask 'git add -A && git commit -m x'
+rm -rf "$TESTP/app"
+shell_list "a commit naming a checkout held in a variable is asked about" ask 'git -C "$REPO" commit -m x'
+shell_list "a commit outside any checkout passes" none 'git commit -m x' "$APPLY"
+FRESH="$APPLY/fresh"; mkdir -p "$FRESH/.claude"; git -C "$FRESH" init -q
+printf 'liveprojectref000009\n' > "$FRESH/.claude/supabase-test-projects"; git -C "$FRESH" add -f .claude/supabase-test-projects
+shell_list "a first commit of a list holding a ref is asked about" ask 'git commit -m first' "$FRESH"
+# Another command before the commit in the same call could write the list by a glob or a variable
+# before the commit stages it, so in a checkout holding a list that is asked about; elsewhere not.
+shell_list "a commit after another command in a checkout holding a list is asked about" ask 'npm run fmt && git commit -am x'
+shell_list "a commit after a read and an add there passes" none 'git status --short && git add -A && git commit -m x'
+NOLIST="$APPLY/nolist"; mkdir -p "$NOLIST"; git -C "$NOLIST" init -q
+shell_list "a commit after another command in a checkout with no list passes" none 'npm run fmt && git commit -am x' "$NOLIST"
+# git failing is asked about, saying so, and the library missing is asked about, naming it.
+GITSTUB="$APPLY/gitstub"; mkdir -p "$GITSTUB"
+printf '#!/bin/sh\necho "fatal: index file corrupt" >&2\nexit 3\n' > "$GITSTUB/git"; chmod +x "$GITSTUB/git"
+r="$(PATH="$GITSTUB:$PATH" run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*"could not be told: git ls-files failed (exit 3)"*) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" ok ;;
+  *) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" "$(decision "$r") $(field "$r" reason | head -c 400)" ;;
+esac
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-apply-approval.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*db-apply-approval.py*2989*) check "with lib/db-apply-approval.py missing, a commit is asked about, naming the file (#2989)" ok ;;
+  *) check "with lib/db-apply-approval.py missing, a commit is asked about, naming the file (#2989)" "$(decision "$r") $(field "$r" reason | head -c 400)" ;;
+esac
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'ls -la' "$TESTP" s1 "$NONE_T")")"
+[ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" ok || check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" "$(decision "$r")"
+rm -rf "$WORK/part"
+
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
 # drift into a shape the hooks never let through (L562).
 SKILL_MD="$DIR/../skills/db-apply/SKILL.md"

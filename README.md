@@ -4072,10 +4072,17 @@ test project. An inline write, a push, `--db-url`, `--local` and a project not o
 about as before. The list is trusted only as git has committed it: its bytes must be what `git show
 HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
 included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
-itself asked about, which is why the hook's registration now takes those three tools. Still open: a
-session that edits the list with a shell command and then commits it, in one call or several, is
-trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
-edit and commit.
+itself asked about, which is why the hook's registration now takes those three tools. Since #2989 a
+shell command that writes the list (any command naming it, in any case, other than a reader such as
+`cat`, `grep` or `git diff` with no redirection into a file) is asked about too, as is one naming it
+where the hook cannot read the command (a heredoc body, a string), and a `git commit` that would add
+a line other than a blank or a comment to any list in its checkout, from the index or the working
+tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
+other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
+about, since that command could write the list by a glob or a variable first. That is why `commit`
+is one of the hook's screen words. What it still cannot see: a list written under a name built at
+run time in an earlier call and then committed by something other than `git commit` (an alias,
+`commit-tree`, a merge, a cherry-pick, a pull).
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
