@@ -93,6 +93,9 @@ import {
   scriptLanguage,
   asProgram,
   mentionedModHookFiles,
+  namesInPieces,
+  PIECE_CHARS,
+  pacer,
   leavesGitAlone,
   pathRestore,
   indexSource,
@@ -2543,6 +2546,128 @@ test('#2948: mentionedLookFiles reads four times the text in under six times as 
   }
   const middle = [...ratios].sort((a, b) => a - b)[3] ?? Infinity
   expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+})
+
+// #2948, measured 2026-11-14 on Claude Code 2.1.325: a design round's captured page (capture-chrome.js)
+// inlines its fonts and images as base64, one run of 150,000 name characters for each font. Read before
+// #2972, a git apply of three such captures held the hooks worker past its heartbeat, and the engine's
+// own log named the design round guard. mentionedModHookFiles kept the same shape of pattern, so a
+// program carrying such a run (a heredoc writing a capture) still read it for minutes: 80,000
+// characters took 4 to 5 s. And each reader kept its names in a list it searched once per name, so
+// 40,000 distinct names took 2.9 s. Judged by growth between two sizes, the median of seven rounds,
+// as the test above is: four times the input took about sixteen times as long.
+const base64Run = (n: number): string => {
+  let seed = 2948
+  let s = ''
+  for (let i = 0; i < n; i++) {
+    seed = (seed * 1103515245 + 12345) >>> 0
+    s += String.fromCharCode((seed >>> 16) & 255)
+  }
+  return btoa(s)
+}
+const growth = (timed: (n: number) => number, small: number): number => {
+  timed(small / 10)
+  const ratios: number[] = []
+  for (let round = 0; round < 7; round++) {
+    const a = timed(small)
+    const b = timed(small * 4)
+    ratios.push(b / Math.max(a, 0.05))
+  }
+  return [...ratios].sort((a, b) => a - b)[3] ?? Infinity
+}
+test('#2948: mentionedModHookFiles reads four times a base64 run in under six times as long, and finds what its one pattern found', () => {
+  const ONE_PATTERN = /[\w./~@+-]+\.[cm]?ts\b/g
+  for (const text of [
+    "p = '/w/r/payload/mods/demo/hooks/rules.ts'; q = 'src/app.ts'; d = 'mods/x/hooks/t.d.ts'; m = \"mods/y/hooks/a.mts\"",
+    'mods/a/hooks/x.ts/mods/b/hooks/y.ts mods/c/hooks/z.tsx mods/d/hooks/w.ts-x mods/e/hooks/v.cts_1 ...mods/f/hooks/u.ts',
+    'mods/g/hooks/a.ts.ts mods/h/hooks/b.mts mods/h/hooks/b.mts @x/mods/i/hooks/c.ts~ ~/mods/j/hooks/d.ts+',
+    `${'a/'.repeat(60)}mods/k/hooks/e.ts ${base64Run(300)}`,
+    // A run starting with ts and ending in no hook file once never ended (lessons review of c510731).
+    'tsx tsc ts tsconfig.json tsts t.ts .ts ts.ts tstsx mods/l/hooks/f.ts',
+  ]) {
+    const expected: string[] = []
+    for (const m of text.matchAll(ONE_PATTERN)) {
+      const word = m[0].replace(/^[.]+(?=[^./])/, '')
+      if (/(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(ts|mts|cts)$/i.test(word) && !/\.d\.[mc]?ts$/i.test(word) && !expected.includes(word)) expected.push(word)
+    }
+    expect([text.slice(0, 80), mentionedModHookFiles(text)]).toEqual([text.slice(0, 80), expected])
+  }
+  const middle = growth(n => {
+    const text = `src: url("data:font/woff2;base64,${base64Run(n)}") mods/demo/hooks/rules.ts`
+    const start = performance.now()
+    expect(mentionedModHookFiles(text)).toEqual(['mods/demo/hooks/rules.ts'])
+    return performance.now() - start
+  }, 4000)
+  expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+})
+test('#2948: each name reader reads four times as many distinct names in under six times as long', () => {
+  for (const [name, read, named] of [
+    ['mentionedLookFiles', mentionedLookFiles, (i: number) => `app/p${i}.css`],
+    ['mentionedModHookFiles', mentionedModHookFiles, (i: number) => `mods/m/hooks/h${i}.ts`],
+  ] as const) {
+    const middle = growth(n => {
+      const text = Array.from({ length: n }, (_, i) => named(i)).join(' ')
+      const start = performance.now()
+      expect(read(text).length).toBe(n)
+      return performance.now() - start
+      // 5,000 names, not 2,000: at 2,000 a reading took a few ms, and once at load 49 on 12 cores
+      // (2026-11-15) the median ratio went over six with nothing changed.
+    }, 5000)
+    expect({ name, under: middle < 6 }).toEqual({ name, under: true })
+  }
+})
+
+// #2948: a reader of a text larger than the heartbeat allows for reads it in pieces, cut only where a
+// name cannot run on (whitespace), and pauses between them, so the hooks worker answers its heartbeat
+// however large the text. Every name is found exactly as one reading finds it, in the same order.
+test('#2948: namesInPieces finds what one reading finds, and pauses between pieces', async () => {
+  const font = `url("data:font/woff2;base64,${base64Run(PIECE_CHARS)}")`
+  const rows = Array.from({ length: 4000 }, (_, i) => `+<link href="app/p${i % 700}.css"> open('mods/m/hooks/h${i % 300}.ts') ${i % 9 === 0 ? font : ''}`).join('\n')
+  const text = `${rows}\napp/page.tsx\n${font}`
+  expect(text.length).toBeGreaterThan(PIECE_CHARS * 8)
+  for (const read of [mentionedLookFiles, mentionedModHookFiles]) {
+    let pauses = 0
+    const found = await namesInPieces(text, read, async () => {
+      pauses++
+    })
+    expect(found).toEqual(read(text))
+    // A base64 run longer than a piece is never cut: each piece holds whole runs.
+    expect(pauses).toBeGreaterThanOrEqual(8)
+    expect(pauses).toBeLessThan(text.length / PIECE_CHARS + 1)
+  }
+  // A text within one piece is read at once, with no pause.
+  let pauses = 0
+  expect(await namesInPieces('see app/page.tsx', mentionedLookFiles, async () => void pauses++)).toEqual(['app/page.tsx'])
+  expect(pauses).toBe(0)
+  // A pause that fails fails the reading, never a reading cut short.
+  await expect(namesInPieces(text, mentionedLookFiles, async () => {
+    throw new Error('pause failed')
+  })).rejects.toThrow('pause failed')
+})
+
+// #2948: a loop of steps of unknown cost (a guess at each name a patch holds reads the whole patch
+// again) pauses once a stretch has run, by the clock it is given, and not before.
+test('#2948: pacer pauses once a stretch has run, and not before', async () => {
+  let clock = 1000
+  let pauses = 0
+  const pace = pacer(() => clock, async () => {
+    pauses++
+    clock += 1
+  }, 50)
+  await pace()
+  clock += 49
+  await pace()
+  expect(pauses).toBe(0)
+  clock += 1
+  await pace()
+  expect(pauses).toBe(1)
+  // The stretch starts again from the pause.
+  clock += 49
+  await pace()
+  expect(pauses).toBe(1)
+  clock += 1
+  await pace()
+  expect(pauses).toBe(2)
 })
 
 // #2960: what fills in a removal's name where mod-kit gave it neither a path nor a folder: a command's

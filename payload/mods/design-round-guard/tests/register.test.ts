@@ -4278,6 +4278,77 @@ test('#2924: a program writing a test file whose text quotes a page passes; one 
   expect(w.ran.length).toBe(1)
 })
 
+// #2948: on 2026-11-13 and 14, in a work repository, one git apply of a 2,234 line patch changing seven
+// files under docs/design (three 720 line captured pages, four edits) failed five times, the hooks
+// worker missing its heartbeat. Measured 2026-11-14 on Claude Code 2.1.325 with every mod loaded: a
+// captured page is what capture-chrome.js writes, one stylesheet rule a line with each font inlined as
+// base64, and the guard's name reader before #2972 read such a patch for minutes, the engine's own log
+// naming the design round guard. The patch is still read whole, a piece at a time with a pause
+// between, and judged exactly as before: held on an issue Dan has not answered, from the main session
+// and a subagent alike, and run once he has said Skip them.
+const base64Of = (bytes: number): string => {
+  let seed = 2948
+  let s = ''
+  for (let i = 0; i < bytes; i++) {
+    seed = (seed * 1103515245 + 12345) >>> 0
+    s += String.fromCharCode((seed >>> 16) & 255)
+  }
+  return btoa(s)
+}
+const capturedPage = (name: string): string[] => {
+  const rules = [0, 1, 2, 3, 4].map(i => `@font-face { font-family: Inter; font-weight: ${300 + i * 100}; src: url("data:font/woff2;base64,${base64Of(110_000)}") format("woff2"); }`)
+  for (let k = 0; rules.length < 715; k++) rules.push(`.c-${k} { display: flex; gap: ${k % 16}px; color: var(--ink-${k % 5}); }`)
+  const body = Array.from({ length: 136 }, (_, i) => `<div class="flex"><img src="data:image/png;base64,${base64Of(300)}" alt=""><span>Agent ${i}</span></div>`).join('')
+  return ['<!doctype html>', `<!-- the ${name} page at 1280px; every stylesheet, font and image inlined -->`, `<html lang="en"><head><meta charset="utf-8"><style>${rules[0]}`, ...rules.slice(1), `</style></head><body><main>${body}</main></body></html>`]
+}
+const capturesPatch = (): string => {
+  const out: string[] = []
+  for (const name of ['before', 'after', 'settled']) {
+    const lines = capturedPage(name)
+    out.push(`diff --git a/docs/design/capture-${name}.html b/docs/design/capture-${name}.html`, 'new file mode 100644', '--- /dev/null', `+++ b/docs/design/capture-${name}.html`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map(l => `+${l}`))
+  }
+  for (const name of ['build.ts', 'settled.json', 'checks.ts', 'sealed.html'])
+    out.push(`diff --git a/docs/design/${name} b/docs/design/${name}`, `--- a/docs/design/${name}`, `+++ b/docs/design/${name}`, '@@ -1,3 +1,3 @@', ' first', '-old', '+new', ' last')
+  return `${out.join('\n')}\n`
+}
+test('#2948: a git apply of a 2,000 line patch of captured pages under docs/design is read whole and judged as before', withKit, async ($, on) => {
+  const patch = capturesPatch()
+  expect(patch.split('\n').length).toBeGreaterThanOrEqual(2000)
+  expect(patch.match(/^diff --git /gm)?.length).toBe(7)
+  expect(patch.length).toBeGreaterThan(2_000_000)
+  const edited = Object.fromEntries(['build.ts', 'settled.json', 'checks.ts', 'sealed.html'].map(n => [`/w/slate/docs/design/${n}`, 'first\nold\nlast\n']))
+  const w = world($, on, { files: { '/w/slate/design.patch': patch, ...edited } })
+  const apply = { tool: 'Bash', command: 'git apply design.patch' }
+  for (const extra of [{}, { agentId: 'agent-a1' }]) {
+    const why = refusalOf(await call($, { ...apply, ...extra }))
+    expect({ extra, held: why !== '', captures: ['before', 'after', 'settled'].every(n => why.includes(`capture-${n}.html`)) }).toEqual({ extra, held: true, captures: true })
+  }
+  expect(w.reads).toContain('/w/slate/design.patch')
+  expect(w.ran).toEqual([])
+  w.store['record:/w/slate|issue:978'] = { kind: 'skipped', at: T0, label: 'issue #978 in slate', reading: ISSUE_READING }
+  for (const extra of [{}, { agentId: 'agent-a1' }]) expect(refusalOf(await call($, { ...apply, ...extra }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// #2948: a program carrying a font inlined as base64 (a heredoc writing a captured page) was read for
+// minutes by the mod hook file reader, whose one pattern read a long run to its end and back from
+// every place in it: 4 to 5 s for 80,000 characters, about 200 s for this one. It is now read in
+// linear time, in pieces, and the mod hook file the program names and rewrites is judged as it was.
+test('#2948: a program holding a font inlined as base64 is read in time, and the mod hook file it rewrites is judged as before', withKit, async ($, on) => {
+  const w = world($, on, { files: WITH_SCRATCH })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const program = (font: string) =>
+    `cd /w/slate && python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['true'])\nfont = "${font}"\np = 'payload/mods/demo/hooks/keys.ts'\nopen(p, 'w').write(open(p).read() + 'x')\nEOF`
+  const plain = refusalOf(await call($, { tool: 'Bash', command: program('') }))
+  expect(plain).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  const font = base64Of(400_000)
+  expect(font.length).toBeGreaterThan(500_000)
+  const withFont = refusalOf(await call($, { tool: 'Bash', command: program(font) }))
+  expect(withFont.replace(/t\d+/g, 't')).toBe(plain.replace(/t\d+/g, 't'))
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
 // #2991: on 2026-11-14 a plain run of the design rounds skill's adapter suite (bash on
 // test-score-adapters.sh) was held as a write of chrome.html, app/index.html, edit.html and view.html.
 // The suite writes those only under its own mktemp folder, through python programs that add each

@@ -67,6 +67,8 @@ import {
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
+  namesInPieces,
+  pacer,
   leavesGitAlone,
   pathRestore,
   indexSource,
@@ -399,6 +401,14 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // ever: a copy can be pushed, and what is written into one can reach the product.
 const throwaway = (path: string | undefined, at: Where): boolean => path !== undefined && (inScratchpad(path, at.session, at.temps) || inSessionNotes(path, at.home))
 
+// #2948: the pause a long reading takes between pieces (rules.ts namesInPieces, pacer): a call to the
+// engine's clock, which crosses to the engine and back, so the hooks worker answers its heartbeat
+// meanwhile. Measured 2026-11-15 on Claude Code 2.1.325: 7 s of reading paced by it missed no
+// heartbeat, and the same 7 s in one stretch lost the worker (tests/test-large-git-apply-engine.sh).
+const pauseTurn = ($: EngineInterface) => async (): Promise<void> => {
+  await $.clock.now()
+}
+
 // A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
 // (#1191): where the command names the session's scratchpad, a relative name that `text` (where it
@@ -666,10 +676,15 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     // waits for ever, and one fed on standard input is the heredoc, already in the command.
     const texts = [command, ...(await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs))]
     const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
+    // A patch or script file is read in pieces, and each guess at a name it holds reads the whole text
+    // again, so both pause as they go (#2948): a 2,234 line patch of captured pages held the hooks
+    // worker past its heartbeat.
+    const pace = pacer(Date.now, pauseTurn($))
     for (const t of texts)
-      for (const m of mentionedLookFiles(t)) {
+      for (const m of await namesInPieces(t, mentionedLookFiles, pauseTurn($))) {
         const g = await guessAt($, m, at.cwd, at, named, t, command)
         if (g) targets.push(g)
+        await pace()
       }
   }
   // A write the words do not name, or a destination the reader could not follow, may be the record
@@ -719,9 +734,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       }
       scriptStore ||= mentionsStore(s.text)
       const text = u.code ?? u.program ?? ''
-      for (const m of mentionedModHookFiles(text)) {
+      const pace = pacer(Date.now, pauseTurn($))
+      for (const m of await namesInPieces(text, mentionedModHookFiles, pauseTurn($))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
+        await pace()
       }
       // #2991: a name the program only adds onto a folder in its own variable (`ch +
       // "/app/index.html"`, read here as `/app/index.html`) passes only where that variable is shown to
@@ -729,9 +746,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder), as
       // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, a value the guard
       // cannot read) it is judged where guessAt places it, as before.
-      for (const m of mentionedLookFiles(text).filter(x => /^(\/|~\/)/.test(x))) {
+      for (const m of (await namesInPieces(text, mentionedLookFiles, pauseTurn($))).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t?.path && !inScriptTemp(text, m, u.program ?? text, u.words, scriptsText)) targets.push({ ...t, inScript: s.word })
+        await pace()
       }
     }
   }
@@ -745,9 +763,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 // it in the folder the program runs in, as a guess at a file it writes.
 const programGuesses = async ($: EngineInterface, read: string, folder: string | undefined, at: Where, scratch: boolean, command: string): Promise<Target[]> => {
   const out: Target[] = []
-  for (const m of [...mentionedLookFiles(read), ...mentionedModHookFiles(read)]) {
+  const pace = pacer(Date.now, pauseTurn($))
+  for (const m of [...(await namesInPieces(read, mentionedLookFiles, pauseTurn($))), ...(await namesInPieces(read, mentionedModHookFiles, pauseTurn($)))]) {
     const t = await guessAt($, m, folder, at, scratch, read, command)
     if (t) out.push(t)
+    await pace()
   }
   return out
 }
