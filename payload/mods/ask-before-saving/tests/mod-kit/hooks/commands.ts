@@ -877,7 +877,7 @@ const printfText = (args: readonly string[]): string | undefined => {
  * `proxied` marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as
  * every runner is, unfiltered by rtk; `unread`, on one, says why what it runs cannot be read: given
  * one word, rtk splits it into the command itself, and a word the shell expands holds what nobody
- * can read before it runs. A guard reads an unread command as one it cannot judge.
+ * can read before it runs. Its words are never what runs; sleep mode refuses one.
  */
 export type Command = {
   words: string[]

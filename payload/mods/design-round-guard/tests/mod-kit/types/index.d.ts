@@ -371,7 +371,7 @@ export type ModKitCommand = {
    * Marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as every
    * runner is and unfiltered by rtk. `unread`, on one, says why what it runs cannot be read: given
    * one word, rtk splits that word into the command itself, and a word the shell expands holds what
-   * nobody can read before it runs. A guard reads an unread command as one it cannot judge.
+   * nobody can read before it runs. Its words are never what runs; sleep mode refuses one.
    */
   proxied?: true
   unread?: string
