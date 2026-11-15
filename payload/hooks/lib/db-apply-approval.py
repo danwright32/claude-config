@@ -545,7 +545,7 @@ def list_shell_change(command, cwd, sw, strip):
     rest = command
     before = []
     deadline = time.monotonic() + COMMIT_SECONDS
-    for d, text, wrapper, why, depth in records:
+    for d, text, _, why, _ in records:
         if name in text.lower():
             if why or not _reads_list_only(text, sw, strip):
                 return ("the command `" + _shown(text) + "` names " + TEST_LIST + ", the list of the test "
