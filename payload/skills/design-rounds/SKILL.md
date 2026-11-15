@@ -490,7 +490,8 @@ any other capture it says the picture half is unmeasured, so it is no score. It 
 that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder or its `screenShown` throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
-hold, and an exception without Dan's words, a date and where he said them.
+hold, an exception without Dan's words, a date and where he said them, and, for a design frozen from a
+settled one, every refusal the paragraph on frozen designs below lists.
 
 **A design whose frames were captured from different pages is still one file** (claude-config#1474).
 Bidspoke's lead validation design had its panel captured in edit mode and its card in view mode, and
@@ -522,6 +523,29 @@ exception. Only on his choice of an exception, add it to `settled.json`'s `excep
 the frame or the region of a frame it covers, his words quoted exactly, the date, and where he said
 them (the issue comment, or this session's link), then write the file again. The score skips it and
 lists it every time; nothing else excuses a difference.
+
+**A design frozen from a settled one names it, and answers its exceptions before sealing**
+(claude-config#2942). When a new design's page is taken from an earlier settled design (its chrome,
+header included), the differences Dan excepted there come with it. In a work repository on 2026-11-13
+a design frozen that way was sealed with none, its frames scored 99.9% with every differing pixel in
+the header region Dan had excepted on the source, and he was asked the same question again after the
+build was scored. So name the source in `settled.json` as `"frozenFrom": "<path to its settled
+file>"`. `make-settled.py` then refuses, writing nothing, until each of the source's exceptions that
+still covers what the new frames show is answered, and its refusal lists each one in Dan's words with
+its date, the new frames it fits (a region means the same place only in a frame of the same width, and
+a decision exception fits only the same decision saying the same thing), and the entries that carry
+it. Ask Dan once, one picker per exception, whether it carries across. On his yes, add the entries as
+given (`{"id", "frame", "region", "carriedFrom": "<source id>"}`): the words, date and where he said
+them are filled in from the source, never retyped, and the page says each was carried and from where.
+On his no, list its id in `"notCarried"`; carried onto some frames only, list it there too. The same
+answer recorded on several source frames is one question; another answer over the same region is
+asked on its own. Exceptions covering nothing the new design shows are left behind, and it says which.
+It also refuses a `"frozenFrom"` that is not text, not there or not a settled design, a carried
+exception whose words, date, source or region are not the source's, that names a frame for a decision
+exception or a decision for a frame one, or that goes onto a frame of another width or a decision of
+that id saying something else, a `"notCarried"` that is not a list of ids, a `"carriedFrom"` or
+`"notCarried"` naming an exception the source does not hold, or given with no `"frozenFrom"`, and an
+exception giving `"carriedFromDesign"` itself, which only `make-settled.py` writes.
 
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it
