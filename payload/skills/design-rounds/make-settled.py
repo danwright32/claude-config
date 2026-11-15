@@ -97,10 +97,13 @@ not hold, an intro that is not text, a requirements list that is empty or not in
 number not written as text, a requirement with no sentence, two sharing a number), a decision naming a
 requirement the list does not hold (check-decision-map.py's UNLISTED), an exception without Dan's
 words, a date and where he said them, and, for a design frozen from a settled one, a "frozenFrom" that is
-not a settled design, a source exception still covering this design that is neither carried nor in
-"notCarried", a carried exception whose words, date, source or region are not the source's, or that goes
-onto a frame of another width or a decision of that id saying something else, and a "carriedFrom" or "notCarried" naming an exception the source does
-not hold, or given with no "frozenFrom". Exit 2 with the reason.
+not text, not there or not a settled design, a source exception still covering this design that is
+neither carried nor in "notCarried", a carried exception whose words, date, source or region are not the
+source's, that names a frame for a decision exception or a decision for a frame one, or that goes onto a
+frame of another width or a decision of that id saying something else, a "notCarried" that is not a list
+of ids, a "carriedFrom" or "notCarried" naming an exception the source does not hold, or given with no
+"frozenFrom", and an exception giving "carriedFromDesign" itself, which only this tool writes. Exit 2 with
+the reason.
 """
 import html
 import json

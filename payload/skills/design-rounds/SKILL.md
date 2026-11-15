@@ -540,10 +540,12 @@ them are filled in from the source, never retyped, and the page says each was ca
 On his no, list its id in `"notCarried"`; carried onto some frames only, list it there too. The same
 answer recorded on several source frames is one question; another answer over the same region is
 asked on its own. Exceptions covering nothing the new design shows are left behind, and it says which.
-It also refuses a `"frozenFrom"` that is not a settled design, a carried exception whose words, date,
-source or region are not the source's, or that goes onto a frame of another width or a decision of
-that id saying something else, and a `"carriedFrom"` or `"notCarried"` naming an exception the source
-does not hold, or given with no `"frozenFrom"`.
+It also refuses a `"frozenFrom"` that is not text, not there or not a settled design, a carried
+exception whose words, date, source or region are not the source's, that names a frame for a decision
+exception or a decision for a frame one, or that goes onto a frame of another width or a decision of
+that id saying something else, a `"notCarried"` that is not a list of ids, a `"carriedFrom"` or
+`"notCarried"` naming an exception the source does not hold, or given with no `"frozenFrom"`, and an
+exception giving `"carriedFromDesign"` itself, which only `make-settled.py` writes.
 
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it
