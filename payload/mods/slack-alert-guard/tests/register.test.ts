@@ -69,7 +69,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 const withKit = { plugins: [secDefault, modKit] }
 // Scope modes, standing in (#2628): whether sleep mode is on, and the notes it would take for the
 // night's report. Absent from withKit, as a Mac without scope modes is awake.
-const night: { asleep: boolean; notes: Record<string, unknown>[]; fails: boolean } = { asleep: false, notes: [], fails: false }
+// `ends`: when each sleep ended, as scope modes reads them (#2993); `endsFail`: that read throws.
+const night: { asleep: boolean; notes: Record<string, unknown>[]; fails: boolean; ends: number[]; endsFail: boolean } = { asleep: false, notes: [], fails: false, ends: [], endsFail: false }
 const sleepKit: { name: string; register: Register } = {
   name: 'scope-modes',
   register: on => {
@@ -84,6 +85,7 @@ const sleepKit: { name: string; register: Register } = {
       const scopeModes = {
         isAsleep: async () => ask('isAsleep'),
         sleepNote: async (note: Record<string, unknown>) => ask('sleepNote', note),
+        sleepEnds: async () => ask('sleepEnds'),
       }
       return { ...built, scopeModes }
     })
@@ -94,6 +96,8 @@ const nightFresh = (asleep: boolean) => {
   night.asleep = asleep
   night.notes = []
   night.fails = false
+  night.ends = []
+  night.endsFail = false
 }
 
 const HOME = `${'/Users'}/dan`
@@ -183,6 +187,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (cmd === '__scope') {
       if (night.fails) return { value: { exitCode: 1, stdout: '', stderr: 'the sleep record could not be read', isStdoutTruncated: false, isStderrTruncated: false } } as never
       if (method === 'isAsleep') return ok(JSON.stringify(night.asleep))
+      if (method === 'sleepEnds') {
+        if (night.endsFail) return { value: { exitCode: 1, stdout: '', stderr: 'the ended sleep records could not be listed', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(JSON.stringify(night.ends))
+      }
       if (!night.asleep) return ok(JSON.stringify({ isNoted: false }))
       night.notes.push(JSON.parse(String(raw)))
       return ok(JSON.stringify({ isNoted: true }))
@@ -1896,9 +1904,13 @@ test('a choice is put to Dan in the session that made it or in its own repositor
   expect(away).not.toContain('AskUserQuestion')
   w.ctl.cwd = REPO
   expect(refusalOf(await call($, MERGE))).toContain(`Put it to him: call AskUserQuestion with one question and metadata {"source": "slack-alert-guard:chosen:${id}"}`)
-  // Expired, it is said only in its own repository, and saying nothing in B does not use up A's telling.
+  // Expired, it is said as expired only in its own repository. Unapproved for days by then, it is
+  // put to Dan once in B as well (#2993), and that does not use up A's telling.
   await w.clock.advance(3 * 24 * 60 * 60_000)
   w.ctl.cwd = SITE
+  const inB = await promptLines($)
+  expect(inB).not.toContain('expired unanswered')
+  expect(inB).toContain(`chosen:${id}`)
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   w.ctl.cwd = REPO
   const expired = await promptLines($)
@@ -1916,6 +1928,112 @@ test('a choice whose repository cannot be read is put to Dan in any session, as 
   w.night.session = 's2'
   w.ctl.cwd = SITE
   expect(await promptLines($)).toContain(`chosen:${id}`)
+})
+
+// #2993: a choice the morning question never reached (its session still open but not written in,
+// or Dan working in another project) is put to him by any awake session on the Mac once it is still
+// unapproved two hours after sleep ended, once in each session; once he approves or changes it, never.
+const HOUR = 60 * 60_000
+const count = (s: string, part: string) => s.split(part).length - 1
+const reasked = async ($: Caller, w: W, endsFail = false) => {
+  const id = await chooseReword($, w)
+  // Asleep for the rest of the night, then awake: sleep ended now, and a night before ended long ago.
+  await w.clock.advance(6 * HOUR)
+  night.asleep = false
+  night.ends = [T0 - 30 * HOUR, await w.readClock()]
+  night.endsFail = endsFail
+  return id
+}
+
+test('a choice still unapproved two hours after sleep ended is put to Dan by any awake session on the Mac, once in each, naming its project, file and wording (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  // The session that made it is still open, and Dan writes in another project's session.
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  await w.clock.advance(HOUR)
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  await w.clock.advance(HOUR + 60_000)
+  const lines = await promptLines($)
+  expect(count(lines, `"source": "slack-alert-guard:chosen:${id}"`)).toBe(1)
+  for (const part of ['danwright32/app', ALERT, SHOWN]) expect(lines).toContain(part)
+  expect(readsAsSend(lines)).toBe(false)
+  // Once in each session.
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  // The session that made it asks as before, never twice in one message.
+  w.night.session = 's1'
+  w.ctl.cwd = REPO
+  expect(count(await promptLines($), `chosen:${id}`)).toBe(1)
+  // Asked in another session, the picker names the project, the file and the wording, and never reads as sending.
+  w.night.session = 's3'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  await morning($, w, id, CHANGE)
+  const q = w.asked.at(-1)?.questions[0]
+  for (const part of ['danwright32/app', ALERT, SHOWN]) expect(q?.question).toContain(part)
+  expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  for (const o of q?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
+  // Changed, it is not asked again in a new session, and it still holds the merge.
+  w.night.session = 's4'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.ctl.cwd = REPO
+  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+})
+
+test('a Change wording answer that cannot be kept is said, and other sessions go on asking (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  await w.clock.advance(2 * HOUR + 60_000)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  w.ctl.storeSetFails = true
+  const r = await morning($, w, id, CHANGE)
+  expect(said(r)).toContain('what it should say')
+  expect(said(r)).toMatch(/His answer could not be kept \(.+\), so other sessions may put it to him again\./)
+  expect(Object.values(w.store).some(v => (v as { rejected?: number }).rejected !== undefined)).toBe(false)
+  w.ctl.storeSetFails = false
+  w.night.session = 's3'
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  // Kept, nothing more is said about it.
+  w.night.session = 's4'
+  expect(said(await morning($, w, id, CHANGE))).not.toContain('could not be kept')
+  w.night.session = 's5'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+})
+
+test('a choice approved in another session is never put to Dan again (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  await w.clock.advance(2 * HOUR + 60_000)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  await morning($, w, id, APPROVE)
+  w.night.session = 's3'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.night.session = 's1'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+})
+
+test('when sleep mode cannot say when it ended, the choice is put to Dan two hours after it was made, never left unasked (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  // Awake an hour: no end can be read, so the wait counts from the choice, made seven hours ago.
+  const id = await reasked($, w, true)
+  await w.clock.advance(HOUR)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  const lines = await promptLines($)
+  expect(lines).toContain(`chosen:${id}`)
+  expect(lines).not.toContain('sleep mode ended')
+  // Never while asleep: no question reaches Dan then.
+  night.asleep = true
+  w.night.session = 's3'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
 })
 
 test('taking away unapproved wording that is not on origin passes in any mode; wording origin holds is still held (#2628)', withNight, async ($, on) => {
