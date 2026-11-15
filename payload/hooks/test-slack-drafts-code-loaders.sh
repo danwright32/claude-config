@@ -5,7 +5,9 @@
 # Also the perl safe list's %SIG and sort by name, and lib/program-writes.py's raw_path and
 # raw_unchanged (#2912). And lib/data-names.py (#2913): an address only compared or listed told from
 # one sent to, a test file read the same way by npx vitest and the node_modules path, and a cd built
-# from $0 or BASH_SOURCE worked out. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# from $0 or BASH_SOURCE worked out. And lib/sh-walk-shapes.py (#2912): a for loop over words written
+# out sourcing a path built from its name, NAME=value for one command in a function, and a function
+# that evaluates its argument. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -523,6 +525,216 @@ done
 run_b9 "bash hooks/runs-moves.sh"
 refused "#2913 \$0 in a sourced file is the script that ran, not the sourced file"
 says "#2913 so the file it reaches is the one that posts" "REFUSED: this command posts to Slack"
+
+echo
+echo "slack drafts only: three sourced path shapes the variable walk now follows, and perl's built names (claude-config#2912)"
+
+# Since #2911 a sourced path the walk of a script's variables cannot work out is refused, and three
+# shapes it could not follow were refused that way however quiet the file: a for loop over literal
+# words sourcing "$LIB/$f" (tools/load-window.sh's), a per command NAME="$NAME" cmd in a function read
+# as the function binding NAME, and a call of a function of the script that evaluates its argument,
+# where the walk stopped. Measured 2026-11-14 on this branch's base: every case below that should
+# pass was refused as a path not worked out, and `ev "$2"` then `bash "$LIB/post.sh"`, a file RUN
+# past the stop (behind the #2683 switch, off), passed though post.sh posts.
+SP="$T/sp2912"
+mkdir -p "$SP/lib" "$SP/evil"
+printf '%s\n' 'echo a' > "$SP/lib/a.sh"
+printf '%s\n' 'echo b' > "$SP/lib/b.sh"
+printf '%s\n' "$POST" > "$SP/lib/post.sh"
+printf '%s\n' "$POST" > "$SP/evil/b.sh"
+printf '%s\n' 'echo a' > "$SP/evil/a.sh"
+printf '%s\n' 'LIB="$LIB/../evil"' > "$SP/lib/moves.sh"
+printf '%s\n' 'f=post.sh' > "$SP/lib/setf.sh"
+SPL='LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"'
+# The loop as tools/load-window.sh wrote it before #2911, then a source after it.
+sp_loop() { # sp_loop <file> <words>
+  printf '%s\n' '#!/usr/bin/env bash' "$SPL" "for f in $2; do" '  # shellcheck disable=SC1090' \
+    '  . "$LIB/$f" 2>/dev/null || { echo "$LIB/$f is missing" >&2; exit 1; }' 'done' '. "$LIB/b.sh"' > "$SP/$1"
+}
+sp_loop loopq.sh "a.sh b.sh"
+sp_loop loopp.sh "a.sh post.sh"
+sp_loop loopq2.sh "'a.sh' \"b.sh\""
+sp_loop loopglob.sh "*.sh"
+sp_loop loopvar.sh "a.sh \$NOPE_2912"
+sp_loop loopmoves.sh "moves.sh b.sh"
+sp_loop loopnone.sh ""
+printf '%s\n' "$SPL" 'for f in setf.sh a.sh; do . "$LIB/$f"; . "$LIB/$f"; done' > "$SP/loopsetf.sh"
+printf '%s\n' "$SPL" 'for f in a.sh b.sh; do f=post.sh; . "$LIB/$f"; done' > "$SP/loopbody.sh"
+printf '%s\n' "$SPL" 'for d in lib; do for f in a.sh b.sh; do . "$LIB/../$d/$f"; done; done' > "$SP/loopnestq.sh"
+printf '%s\n' "$SPL" 'for d in lib evil; do for f in a.sh b.sh; do . "$LIB/../$d/$f"; done; done' > "$SP/loopnestp.sh"
+run_sp() { run_raw "$(payload Bash "$(bash_input "$1")" "$SP")"; }
+run_sp "bash loopq.sh"
+allowed "#2912 a for loop over literal words sourcing \"\$LIB/\$f\", each file quiet, passes"
+run_sp "bash loopq2.sh"
+allowed "#2912 the same with the words quoted passes"
+# A loop over no words runs its body never, so it sources nothing (lessons review at 1b81a0c: the
+# gate read the first of no choices and crashed).
+run_sp "bash loopnone.sh"
+allowed "#2912 a for loop over no words, sourcing nothing, passes"
+run_sp "bash loopp.sh"
+refused "#2912 the same loop sourcing a file that posts is refused"
+says "#2912 as a post found, each file read" "REFUSED: this command posts to Slack"
+run_sp "bash loopglob.sh"
+refused "#2912 a loop over a glob is still refused"
+says "#2912 as a path it could not work out" "a path the gate cannot work out"
+run_sp "bash loopvar.sh"
+refused "#2912 a loop over a word built from a variable is still refused"
+says "#2912 as a path it could not work out, too" "a path the gate cannot work out"
+run_sp "bash loopmoves.sh"
+refused "#2912 a loop whose first file moves \$LIB, so the second is evil/b.sh, which posts, is refused"
+run_sp "bash loopsetf.sh"
+refused "#2912 a loop whose first file sets the loop's own name to a file that posts is refused"
+run_sp "bash loopbody.sh"
+refused "#2912 a loop whose body sets its own name to a file that posts is refused"
+run_sp "bash loopnestq.sh"
+allowed "#2912 a loop inside a loop, each over literal words, sourcing quiet files passes"
+run_sp "bash loopnestp.sh"
+refused "#2912 the same reaching a file that posts is refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+printf '%s\n' "$SPL" 'for f in a.sh gone.sh; do . "$LIB/$f"; done' > "$SP/loopgone.sh"
+run_sp "bash loopgone.sh"
+refused "#2912 a loop naming a file that is not there is refused, the walk ending there"
+says "#2912 as a path it could not work out" "a path the gate cannot work out"
+printf '%s\n' "$SPL" 'setf() { read -r f < /dev/null; }' 'for f in a.sh b.sh; do setf; . "$LIB/$f"; done' > "$SP/loopcall.sh"
+run_sp "bash loopcall.sh"
+refused "#2912 a loop calling a function that may set the loop's own name is refused"
+
+# NAME="$NAME" cmd sets NAME for that one command, in a function's body as anywhere else.
+printf '%s\n' "$SPL" 'run() { LIB="$LIB" env | head -1; }' 'run' '. "$LIB/a.sh"' > "$SP/fnq.sh"
+printf '%s\n' "$SPL" 'run() {' '  LIB="$LIB" bash -c true' '}' 'run' '. "$LIB/post.sh"' > "$SP/fnp.sh"
+printf '%s\n' "$SPL" 'run() { LIB=/nowhere; }' 'run' '. "$LIB/a.sh"' > "$SP/fnreal.sh"
+printf '%s\n' "$SPL" 'run() { LIB="$LIB/../evil" helper; }' 'helper() { :; }' 'run' '. "$LIB/b.sh"' > "$SP/fncalls.sh"
+run_sp "bash fnq.sh"
+allowed "#2912 a function setting NAME for one command of its own leaves NAME known past its call"
+run_sp "bash fnp.sh"
+refused "#2912 so a file that posts, sourced past the call, is read and refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+run_sp "bash fnreal.sh"
+refused "#2912 a function that really sets NAME still leaves it unknown past its call"
+run_sp "bash fncalls.sh"
+refused "#2912 NAME=value in front of a call of a function of the script still counts as binding it"
+
+# A call of a function of the script that evaluates its argument: one written out is followed as
+# though written in its place, as lib/hang-wait.sh's calls are. One the gate cannot read still ends
+# the walk, and past it a file run by a path built from a variable is refused as a sourced one is,
+# whatever the #2683 switch says, since the walk's end is what made the path unknown. So is the same
+# past a plain eval of what the gate cannot read. The call itself is judged as `eval "$2"` always was.
+SPE='ev() { eval "$1"; }'
+printf '%s\n' "$SPL" "$SPE" 'ev "echo hi"' '. "$LIB/a.sh"' > "$SP/evq.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "echo hi"' '. "$LIB/post.sh"' > "$SP/evp.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "$2"' '. "$LIB/a.sh"' > "$SP/evn.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "$2"' 'bash "$LIB/post.sh"' > "$SP/evrun.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "$(cat cmd.txt)"' 'bash "$LIB/a.sh"' > "$SP/evcat.sh"
+printf '%s\n' "$SPL" 'eval "$2"' 'bash "$LIB/post.sh"' > "$SP/evplain.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "$2"' 'bash lib/a.sh' > "$SP/evlit.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "$2"' > "$SP/evonly.sh"
+printf '%s\n' "$SPL" "$SPE" 'ev "LIB=/nowhere"' '. "$LIB/a.sh"' > "$SP/evbinds.sh"
+printf '%s\n' "$SPL" 'f() { local c="$1"; eval "$c"; }' 'f "echo hi"' '. "$LIB/a.sh"' > "$SP/evlocal.sh"
+printf '%s\n' "$SPL" "$SPE" 'if true; then ev "$2"; fi' '. "$LIB/a.sh"' > "$SP/evif.sh"
+printf '%s\n' "$SPL" "$SPE" 'g() { ev "$1"; }' 'g "$2"' '. "$LIB/a.sh"' > "$SP/evvia.sh"
+printf '%s\n' "$SPL" "$SPE" '. "$LIB/a.sh"' > "$SP/evnone.sh"
+run_sp "bash evq.sh"
+allowed "#2912 a call of an evaluating function with its argument written out is followed, and the walk goes on"
+run_sp "bash evp.sh"
+refused "#2912 so a file that posts, sourced past it, is read and refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+run_sp "bash evnone.sh"
+allowed "#2912 the control: an evaluating function never called changes nothing"
+for s in evn evif evvia evlocal; do
+  run_sp "bash $s.sh"
+  read_refused "#2912 a sourced path past an eval of text the gate cannot read is refused: $s"
+  says "#2912 and it says the check could not be made: $s" "REFUSED: the gate could not check whether this command posts to Slack"
+done
+run_sp "bash evn.sh"
+says "#2912 and the refusal names the call the walk ended at" 'ev "$2"'
+# A file RUN past it (evrun, evcat, evplain) stays behind the #2683 switch, as the gate suite pins for
+# `eval "$1"` and hang_wait "$cond": refusing it is Dan's decision (2026-11-10, "measure first").
+for s in evrun evcat evplain; do
+  SLACK_GATE_UNWORKED_PATHS=refuse run_sp "bash $s.sh"
+  refused "#2912 switched on, a file run past an eval the gate cannot read is refused: $s"
+done
+printf '%s\n' "$SPL" "$SPE" 'ev "[ \"\${X:-0}\" -gt 3 ]"' '. "$LIB/a.sh"' > "$SP/evesc.sh"
+printf '%s\n' "$SPE" 'ev "bash \"lib/post.sh\""' > "$SP/evescp.sh"
+run_sp "bash evesc.sh"
+allowed "#2912 an argument in double quotes with every \$ and quote escaped is written out, and followed"
+run_sp "bash evescp.sh"
+refused "#2912 so the command it evaluates is judged, and one running a file that posts is refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+run_sp "bash evlit.sh"
+allowed "#2912 the control: a file run by a path written out, past the same call, is read and passes"
+run_sp "bash evonly.sh"
+allowed "#2912 the control: the call alone is judged as eval \"\$2\" is, and passes"
+run_sp "bash evbinds.sh"
+refused "#2912 an argument written out that binds NAME leaves NAME unknown past the call"
+# What such a call evaluates, written out, is judged as a command line: measured 2026-11-14 on this
+# branch's base, `ev "bash lib/post.sh"` passed, and so did hang_wait from a sourced file handed it.
+printf '%s\n' "$SPE" 'ev "bash lib/post.sh"' > "$SP/evruns.sh"
+printf '%s\n' "$SPE" "ev 'bash lib/a.sh'" > "$SP/evrunsq.sh"
+printf '%s\n' 'hang_wait() { eval "$1"; }' > "$SP/lib/hw.sh"
+printf '%s\n' '. lib/hw.sh' 'hang_wait "bash lib/post.sh"' > "$SP/hwruns.sh"
+printf '%s\n' '. lib/hw.sh' 'go() { hang_wait "bash lib/post.sh"; }' 'go' > "$SP/hwbody.sh"
+run_sp "bash evruns.sh"
+refused "#2912 a function of the script evaluating a command written out that runs a file that posts is refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+run_sp "bash evrunsq.sh"
+allowed "#2912 the control: the same running a quiet file passes"
+run_sp "bash hwruns.sh"
+refused "#2912 a sourced file's evaluating function handed a command that posts is refused"
+says "#2912 as a post found" "REFUSED: this command posts to Slack"
+run_sp "bash hwbody.sh"
+refused "#2912 the same call inside a function of the script is refused"
+
+# perl's <> opens a name a $(...) or backquote builds, or a variable the gate cannot work out, as
+# readily as one written out (lessons review of #3010 at 73967ea: `perl -ne print "$(printf 'bash
+# post.sh|')"` passed, measured). Where perl opens what it is handed (-n, -p, -i, or <> in its code)
+# such a word is refused, as the gate cannot see the name it becomes.
+run_pg "perl -ne print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 a perl pipe name built by a substitution is refused"
+says "#2912 and it says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+run_pg "perl -ne print \`printf 'bash post.sh|'\`"
+read_refused "#2912 the same built by backquotes is refused"
+# A name from a variable the gate cannot work out is a file it cannot read, as `bash "$X/a.sh"` runs
+# one: it stays behind the #2683 switch with that run, which the gate suite pins off (Dan, 2026-11-10:
+# "measure first"). Refusing it newly refused four of the repository's suites run directly,
+# tests/test-claude-sync.sh among them, which the gate suite pins as allowed.
+run_pg "perl -ne print \"\$NOPE_2912\""
+allowed "#2912 a name from a variable the gate cannot work out passes with the #2683 switch off"
+run_pg "perl -pi -e 's/a/b/' \"\$NOPE_2912/a.txt\""
+allowed "#2912 the same for perl -pi, a path under it, passes with the switch off"
+SLACK_GATE_UNWORKED_PATHS=refuse run_pg "perl -ne print \"\$NOPE_2912\""
+read_refused "#2912 a name from a variable the gate cannot work out is refused with the #2683 switch on"
+SLACK_GATE_UNWORKED_PATHS=refuse run_pg "perl -pi -e 's/a/b/' \"\$NOPE_2912/a.txt\""
+read_refused "#2912 the same for perl -pi is refused with the switch on"
+run_pg "perl -ne print \"\$NOPE_2912\" \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 beside it, a substitution is still refused with the switch off"
+run_pg "perl -ne print \"\$NOPE_2912/\$(printf 'bash post.sh|')\""
+read_refused "#2912 and so is a word holding both"
+run_pg "perl -ne print 'bash post.sh'{,'|'}"
+read_refused "#2912 a perl pipe name made by a brace expansion is refused"
+run_pg "perl -e 'while (<>) { print }' \"\$(printf a.txt)\""
+read_refused "#2912 the same where the code reads <> itself is refused"
+run_pg "perl -pi -e 's/a/b/' \"\$(printf a.txt)\""
+read_refused "#2912 the same for perl -pi is refused"
+# -a implies -n and -F implies -a (perl 5.20 on); -0 takes only digits, and the cluster goes on past
+# them (lessons review at 1b81a0c).
+run_pg "perl -ae print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 the same for perl -a, which implies -n, is refused"
+run_pg "perl -F, -e print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 the same for perl -F, which implies -a, is refused"
+run_pg "perl -0777ne print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 the same for -n behind -0777 in one cluster is refused"
+run_pg "perl -00pe print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 the same for -p behind -00 is refused"
+run_pg "perl -0x1Fne print \"\$(printf 'bash post.sh|')\""
+read_refused "#2912 the same for -n behind a hex -0x1F is refused"
+run_pg "perl -0777 -e 'print 1' \"\$(printf a.txt)\""
+allowed "#2912 the control: -0 alone does not open what perl is handed"
+run_pg "f='bash post.sh|'; perl -ne print \"\$f\""
+read_refused "#2912 a variable the gate works out is read, and its pipe name judged"
+run_pg "perl -e 'print 1' \"\$(printf a.txt)\""
+allowed "#2912 the control: perl that never opens what it is handed passes a substitution"
+run_pg "f=a.txt; perl -ne print \"\$f\""
+allowed "#2912 the control: a variable worked out to a plain file passes"
 
 echo
 
