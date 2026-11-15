@@ -3,7 +3,9 @@
 # naming it as a script (claude-config#2912, #2977, #2978): a PHP include, the modules NODE_OPTIONS
 # names, a name perl's <> runs as a command, a file with a NUL in its first line run by zsh or dash.
 # Also the perl safe list's %SIG and sort by name, and lib/program-writes.py's raw_path and
-# raw_unchanged (#2912). Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# raw_unchanged (#2912). And lib/data-names.py (#2913): an address only compared or listed told from
+# one sent to, a test file read the same way by npx vitest and the node_modules path, and a cd built
+# from $0 or BASH_SOURCE worked out. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -327,6 +329,200 @@ for s in back group sub; do
   run_bg "bash $s.sh"
   read_refused "#2912 a program started in the background before the write may rewrite the module: $s"
 done
+
+echo "slack drafts only: an address held only as data, compared or listed, is told from one sent to (claude-config#2913)"
+
+# Dan's decision of 2026-11-14 on #2913: teach the gate to tell a Slack posting address that is only
+# compared against or listed (a refusal list of hosts in a guard's own code) from one that is sent to,
+# with no exemption list, and to keep refusing any it cannot classify. A name counts as data only where
+# it sits in a string that is an element of a list literal, an operand of a comparison, the argument of
+# a test such as includes or startswith, or a regex pattern, or in a comment; and only where nothing in
+# the program that holds it (the script, every module it reaches, and any other code run in the same
+# process) can send a request or run code, since a list or a comparison can still feed a send.
+D9="$T/d2913"
+mkdir -p "$D9/src" "$D9/scripts" "$D9/py" "$D9/node_modules/.bin" "$D9/node_modules/vitest/dist"
+printf '%s\n' '// Scripts may not post to Slack: hooks.slack.com and chat.postMessage are refused.' \
+  'export const REFUSED_HOSTS = ["hooks.slack.com", "example.invalid"];' \
+  'export const REFUSED_METHODS = new Set(["chat.postMessage", "chat.scheduleMessage"]);' \
+  'export function refuses(url: string): boolean {' \
+  '  const host = new URL(url).host;' \
+  '  if (host === "hooks.slack.com" || url.includes("chat.postMessage")) return true;' \
+  '  if (/hooks\.slack\.com/.test(url)) return true;' \
+  '  return REFUSED_HOSTS.some((h) => host === h);' \
+  '}' > "$D9/src/refuse.ts"
+printf '%s\n' 'import { refuses } from "../src/refuse.ts";' 'import { readFileSync } from "node:fs";' \
+  'const lines = readFileSync(process.argv[2], "utf8").split("\n");' 'console.log(lines.filter((l) => refuses(l)).length);' \
+  > "$D9/scripts/count.ts"
+printf '%s\n' 'import assert from "node:assert";' 'import { readFileSync } from "node:fs";' 'import { refuses } from "../src/refuse.ts";' \
+  'const urls = JSON.parse(readFileSync("scripts/fixture.json", "utf8"));' 'for (const u of urls) assert.equal(refuses(u), true);' \
+  > "$D9/scripts/refuse.test.ts"
+printf '%s\n' '["https://example.invalid/a"]' > "$D9/scripts/fixture.json"
+printf 'a\nb\n' > "$D9/data.txt"
+# The same list, sent to: by the script that imports it, and by one that only compares and then sends.
+printf '%s\n' 'import { REFUSED_HOSTS } from "../src/refuse.ts";' \
+  'await fetch("https://" + REFUSED_HOSTS[0] + "/services/T0/B0/x", { method: "POST", body: "hi" });' > "$D9/scripts/send-listed.ts"
+printf '%s\n' 'import { refuses } from "../src/refuse.ts";' 'const u = process.env.HOOK ?? "";' \
+  'if (refuses(u)) await fetch(u, { method: "POST", body: "hi" });' > "$D9/scripts/send-compared.ts"
+printf '%s\n' 'import { refuses } from "../src/refuse.ts";' 'import { execFileSync } from "node:child_process";' \
+  'if (refuses(process.argv[2])) execFileSync("curl", ["-d", "hi", process.argv[2]]);' > "$D9/scripts/run-compared.ts"
+# A loader run in the same process, able to run code, beside a script that holds the name only as data.
+printf '%s\n' 'import { register } from "node:module";' 'register("./hooks.mjs", import.meta.url);' > "$D9/scripts/loader.mjs"
+printf '%s\n' 'export async function load(u, c, next) { return next(u, c); }' > "$D9/scripts/hooks.mjs"
+# Shapes that are not data: a string handed to a call, held in an object, indexed, or built into a URL.
+printf '%s\n' 'console.log("https://hooks.slack.com/services/T0/B0/x");' > "$D9/scripts/arg.ts"
+printf '%s\n' 'export const target = { url: "https://hooks.slack.com/services/T0/B0/x" };' > "$D9/src/object.ts"
+printf '%s\n' 'import { target } from "../src/object.ts";' 'console.log(target);' > "$D9/scripts/object.ts"
+printf '%s\n' 'const t: Record<string, number> = {};' 'console.log(t["chat.postMessage"]);' > "$D9/scripts/index.ts"
+printf '%s\n' 'const id = process.argv[2];' 'console.log(`https://hooks.slack.com/services/${id}`);' > "$D9/scripts/template.ts"
+printf '%s\n' 'const pick = (a: string, b: string) => b;' 'console.log(pick("a", "hooks.slack.com"));' > "$D9/scripts/call-args.ts"
+run_d9() { run_raw "$(payload Bash "$(bash_input "$1")" "$D9")"; }
+run_d9 "node --experimental-strip-types scripts/count.ts data.txt"
+allowed "#2913 a script whose import names the host only in a refusal list, a comparison, a regex and a comment passes"
+run_d9 "node --experimental-strip-types scripts/refuse.test.ts"
+allowed "#2913 a single node test whose chain names the host only as data, reading a fixture, passes"
+run_d9 "node --experimental-strip-types scripts/send-listed.ts"
+read_refused "#2913 a script sending to an address taken from the refusal list is still refused"
+says "#2913 the refusal names the module and what the script can do" "refuse.ts), which posts to Slack (it names hooks.slack.com"
+run_d9 "node --experimental-strip-types scripts/send-compared.ts"
+read_refused "#2913 a script that only compares an address against the host and then sends to it is still refused"
+run_d9 "node --experimental-strip-types scripts/run-compared.ts https://hooks.slack.com/services/T0/B0/x"
+read_refused "#2913 a script that compares then hands the address to a program is still refused"
+run_d9 "node --experimental-strip-types --import ./scripts/loader.mjs scripts/count.ts data.txt"
+read_refused "#2913 a loader able to run code in the same process as data only names is refused"
+says "#2913 the refusal names the loader" "loader.mjs"
+for s in arg object index template call-args; do
+  run_d9 "node --experimental-strip-types scripts/$s.ts"
+  read_refused "#2913 a name not compared or listed is refused even where nothing can send: $s"
+done
+# Python, read the same way: a set, a tuple, a comparison, startswith and a match case are data; a
+# program that can send, or a name handed to a call, is not.
+printf '%s\n' '"""Refuses any address on Slack."""' 'HOSTS = {"hooks.slack.com", "example.invalid"}' 'METHODS = ("chat.postMessage",)' \
+  'def refuses(url):' '    if url == "https://hooks.slack.com/" or url.startswith("https://hooks.slack.com/"):' '        return True' \
+  '    match url:' '        case "chat.postMessage":' '            return True' '    return any(h in url for h in HOSTS)' > "$D9/py/guard.py"
+printf '%s\n' 'import sys' 'from guard import refuses' 'print(sum(refuses(l) for l in open(sys.argv[1])))' > "$D9/py/count.py"
+printf '%s\n' 'import sys, urllib.request' 'from guard import HOSTS' \
+  'urllib.request.urlopen("https://" + sorted(HOSTS)[0] + "/services/T0/B0/x", data=b"hi")' > "$D9/py/send.py"
+printf '%s\n' 'print("https://hooks.slack.com/services/T0/B0/x")' > "$D9/py/arg.py"
+run_d9 "python3 py/count.py data.txt"
+allowed "#2913 a Python script importing a guard that names the host only as data passes"
+run_d9 "python3 py/send.py"
+read_refused "#2913 a Python script sending to a host taken from the guard's set is still refused"
+run_d9 "python3 py/arg.py"
+read_refused "#2913 a Python script handing the name to a call is still refused"
+# Real sends in the same shapes are refused as before: the name sent to directly beside a list.
+printf '%s\n' 'const HOSTS = ["hooks.slack.com"];' 'await fetch("https://hooks.slack.com/services/T0/B0/x", { method: "POST" });' > "$D9/scripts/both.ts"
+run_d9 "node --experimental-strip-types scripts/both.ts"
+read_refused "#2913 a script listing the host and also sending to it is refused"
+says "#2913 the refusal names what it sends to" "posts to Slack (it names hooks.slack.com)"
+# What a program prints or writes can carry a listed address to a sender in the same command, and a
+# computed name reaches fetch unnamed, so each of these, sending for real, is refused (found probing
+# the first build of this change, 2026-11-14).
+printf '%s\n' 'console.log(["https://hooks.slack.com/services/T0/B0/x"][0]);' > "$D9/scripts/prints.ts"
+printf '%s\n' 'import { writeFileSync } from "node:fs";' 'writeFileSync("u.txt", ["https://hooks.slack.com/services/T0/B0/x"][0]);' > "$D9/scripts/writes.ts"
+printf '%s\n' 'const H = ["hooks.slack.com"];' 'globalThis["fe" + "tch"]("https://" + H[0] + "/services/T0/B0/x", { method: "POST" });' > "$D9/scripts/computed.ts"
+printf '%s\n' 'const H = ["hooks.slack.com"];' 'const load = process["getBuiltin" + "Module"];' > "$D9/scripts/process-index.ts"
+printf '%s\n' 'print(["https://hooks.slack.com/services/T0/B0/x"][0])' > "$D9/py/prints.py"
+printf '%s\n' 'import { promises as p } from "node:fs";' 'const H = ["hooks.slack.com"];' \
+  'await p["write" + "File"]("u.cfg", "url = https://" + H[0] + "/services/T0/B0/x");' > "$D9/scripts/computed-write.ts"
+printf '%s\n' 'const H = ["hooks.slack.com", "example.invalid"];' 'for (let i = 0; i < H.length; i++) console.log(H[i].length);' > "$D9/scripts/var-index.ts"
+for runs in "node scripts/computed-write.ts && curl -d hi -K u.cfg" "node scripts/var-index.ts"; do
+  run_d9 "$runs"
+  read_refused "#2913 a computed name other than a number or a string can reach a write, so it is refused: $runs"
+done
+run_d9 "node scripts/var-index.ts"
+says "#2913 the refusal names the computed name" "by a computed name"
+for runs in "node scripts/prints.ts | xargs curl -d hi" "curl -d hi \$(node scripts/prints.ts)" \
+  "node scripts/prints.ts > u.txt; curl -d hi \$(cat u.txt)" "U=\`node scripts/prints.ts\`; curl -d hi \"\$U\"" \
+  "node scripts/prints.ts | tail -1 | xargs curl -d hi" "python3 py/prints.py | xargs curl -d hi" \
+  "node scripts/writes.ts" "node scripts/computed.ts" "node scripts/process-index.ts"; do
+  run_d9 "$runs"
+  read_refused "#2913 a listed address that can still reach a sender is refused: $runs"
+done
+# A module NODE_OPTIONS preloads shares the process with whatever node then runs, which can read what
+# it leaves on the global object (lessons review at 73967ea), so a name it holds only as data is
+# refused as before.
+printf '%s\n' 'globalThis.H = ["hooks.slack.com"];' > "$D9/scripts/preload.mjs"
+printf '%s\n' 'await fetch("https://" + globalThis.H[0] + "/services/T0/B0/x", { method: "POST" });' > "$D9/scripts/uses-preload.mjs"
+run_d9 "NODE_OPTIONS='--import ./scripts/preload.mjs' node scripts/uses-preload.mjs"
+read_refused "#2913 a module NODE_OPTIONS preloads, holding the host only as data, beside a script that sends, is refused"
+says "#2913 the refusal names the preloaded module" "preload.mjs"
+printf '%s\n' '#!/usr/bin/env bash' 'out=$(node scripts/prints.ts)' 'curl -d hi "$out"' > "$D9/scripts/captures.sh"
+run_d9 "bash scripts/captures.sh"
+read_refused "#2913 a script capturing what a program holding a listed address prints is refused"
+printf '%s\n' '#!/usr/bin/env bash' 'node --experimental-strip-types scripts/count.ts data.txt' > "$D9/scripts/runs-count.sh"
+run_d9 "bash scripts/runs-count.sh | xargs curl -d hi"
+read_refused "#2913 a script's output piped on carries what the program inside it prints"
+for runs in "node --experimental-strip-types scripts/count.ts data.txt 2>&1 | tail -20" \
+  "node --experimental-strip-types scripts/count.ts data.txt > /dev/null && echo done" "bash scripts/runs-count.sh"; do
+  run_d9 "$runs"
+  allowed "#2913 output that only reaches the terminal, a filter or nowhere passes: $runs"
+done
+
+echo "slack drafts only: npx vitest and the node_modules path read a test file the same way (claude-config#2913)"
+
+# Before this, `npx vitest run x.test.ts` judged the test file by its own text only (#2865), while
+# `./node_modules/.bin/vitest run x.test.ts` followed its imports, so a test importing a module that
+# posts passed one spelling and was refused by the other. A package a launcher runs counts as able to
+# run what it is handed, so a file it is handed that says it is JavaScript, TypeScript or Python is now
+# read as a script, its imports followed, by every launcher; one another program only may have
+# rewritten is read as it is on disk, as before.
+printf '%s\n' '#!/usr/bin/env node' "import './dist/cli.js'" > "$D9/node_modules/vitest/vitest.mjs"
+printf '%s\n' "import { fork } from 'node:child_process'" 'for (const f of process.argv.slice(3)) fork(f)' > "$D9/node_modules/vitest/dist/cli.js"
+ln -s ../vitest/vitest.mjs "$D9/node_modules/.bin/vitest"
+printf '%s\n' 'export const post = (t: string) => fetch("https://hooks.slack.com/services/T0/B0/x", { method: "POST", body: t });' > "$D9/src/poster.ts"
+printf '%s\n' 'import { it } from "vitest";' 'import { post } from "./poster";' 'it("posts", () => post("hi"));' > "$D9/src/poster.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'it("adds", () => {});' > "$D9/src/quiet.test.ts"
+for runs in "npx vitest run src/poster.test.ts" "./node_modules/.bin/vitest run src/poster.test.ts" "bunx vitest run src/poster.test.ts" \
+  "pnpm dlx vitest run src/poster.test.ts" "npm exec -- vitest run src/poster.test.ts" "yarn dlx vitest run src/poster.test.ts"; do
+  run_d9 "$runs"
+  read_refused "#2913 a test importing a module that posts is refused by every spelling: $runs"
+  says "#2913 and the refusal follows the import: $runs" "poster"
+done
+for runs in "npx vitest run src/quiet.test.ts" "./node_modules/.bin/vitest run src/quiet.test.ts" "pnpm dlx vitest run src/quiet.test.ts"; do
+  run_d9 "$runs"
+  allowed "#2913 the control: a quiet test passes by every spelling: $runs"
+done
+run_d9 "npx prettier --write src/quiet.test.ts >/dev/null && npx vitest run src/quiet.test.ts"
+allowed "#2913 a test a formatter only may rewrite is still read as it is on disk when a package is handed it"
+# A shell script handed to a package is still judged by its own text, as before: only a file that says
+# it is JavaScript, TypeScript or Python is followed.
+printf '%s\n' 'sh scripts/poster.sh' > "$D9/scripts/lint-me.sh"
+printf '%s\n' 'curl -d hi https://hooks.slack.com/services/T0/B0/x' > "$D9/scripts/poster.sh"
+run_d9 "npx shellcheck scripts/lint-me.sh"
+allowed "#2913 a shell script handed to a package is not read as commands"
+
+echo "slack drafts only: a sourced path from BASH_SOURCE is worked out after a cd in the script (claude-config#2913)"
+
+# Found by the #2914 builder: a suite named by a relative path, which moves with
+# cd "$(dirname "$0")/.." before sourcing "$(dirname "${BASH_SOURCE[0]}")/lib/...", was refused as a
+# path the gate could not work out. $0 of a script that is run is the word that ran it, as its
+# BASH_SOURCE is; of a sourced file, the caller's. A cd to a directory built only from those is now
+# worked out, and the sourced path read from where the cd moved to, as bash reads it.
+B9="$T/b2913"
+mkdir -p "$B9/hooks/lib" "$B9/q/hooks/lib"
+printf '%s\n' 'echo quiet' > "$B9/q/hooks/lib/helper.sh"
+printf '%s\n' 'curl -d hi https://hooks.slack.com/services/T0/B0/x' > "$B9/hooks/lib/helper.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'cd "$(dirname "$0")/.."' '. "$(dirname "${BASH_SOURCE[0]}")/lib/helper.sh"' > "$B9/hooks/up.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'cd "$(dirname "$0")"' 'cd ..' '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/helper.sh"' > "$B9/hooks/upcd.sh"
+cp "$B9/hooks/up.sh" "$B9/q/hooks/up.sh"
+cp "$B9/hooks/upcd.sh" "$B9/q/hooks/upcd.sh"
+# $0 in a sourced file is the script that ran: lib/moves.sh moves to the runner's folder, so ./b.sh is
+# hooks/b.sh (which posts), never hooks/lib/b.sh.
+printf '%s\n' 'cd "$(dirname "$0")"' '. ./b.sh' > "$B9/hooks/lib/moves.sh"
+printf '%s\n' 'echo quiet' > "$B9/hooks/lib/b.sh"
+printf '%s\n' 'curl -d hi https://hooks.slack.com/services/T0/B0/x' > "$B9/hooks/b.sh"
+printf '%s\n' '#!/usr/bin/env bash' '. "$(dirname "${BASH_SOURCE[0]}")/lib/moves.sh"' > "$B9/hooks/runs-moves.sh"
+run_b9() { run_raw "$(payload Bash "$(bash_input "$1")" "$B9")"; }
+for s in up upcd; do
+  run_b9 "cd $B9/q && bash hooks/$s.sh"
+  allowed "#2913 a relative suite sourcing a quiet helper after a cd built from \$0 passes: $s"
+  run_b9 "cd $B9 && bash hooks/$s.sh"
+  refused "#2913 the same sourcing a helper that posts is refused: $s"
+  says "#2913 as a post found, not a path it could not work out: $s" "REFUSED: this command posts to Slack"
+done
+run_b9 "bash hooks/runs-moves.sh"
+refused "#2913 \$0 in a sourced file is the script that ran, not the sourced file"
+says "#2913 so the file it reaches is the one that posts" "REFUSED: this command posts to Slack"
 
 echo
 
