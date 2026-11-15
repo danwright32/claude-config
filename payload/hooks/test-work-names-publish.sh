@@ -577,6 +577,12 @@ seen in \$(echo ~+)
 EOF
 )\""
 check "#2981 and ~+ in a substitution in an unquoted heredoc body: $out" refused
+# And pwd written with a backslash or quotes, which the shell runs all the same (the lessons review
+# of 5d2a327).
+run "gh issue create --repo danwright-test/public-notes --title \"\$(\\pwd)\" --body x"
+check "#2981 and pwd behind a backslash: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$('pwd') \$(p\\wd)\" --body x"
+check "#2981 and pwd quoted: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title ~1 --body x"
 check "#2981 and a directory stack entry: $out" refused
 # Controls: a clean directory, and text the shell does not expand.

@@ -1120,21 +1120,42 @@ def _param_at(text, i):
 PHYSICAL = "PWD -P"
 # A substitution that is pwd alone, the directory it prints known: $(pwd), `pwd`, with -L or -P.
 PWD_SUBST = re.compile(r"\$\(\s*pwd(?:\s+-([LP]))?\s*\)|`\s*pwd(?:\s+-([LP]))?\s*`")
-# pwd or dirs as an unquoted word anywhere else in a substitution, whose output this check cannot work
-# out: $(pwd | tr a-z A-Z), $(cd .. && pwd), and pwd run by another word, $(command pwd), $(env pwd),
+# pwd or dirs as a word anywhere else in a substitution, whose output this check cannot work out:
+# $(pwd | tr a-z A-Z), $(cd .. && pwd), and pwd run by another word, $(command pwd), $(env pwd),
 # $(builtin pwd) (the lessons review of 913e483). Any such word, not one starting a command, since
-# what runs it cannot be listed; $(echo pwd) is refused with them.
-DIR_COMMAND = re.compile(r"(?:pwd|dirs)(?![\w.-])")
+# what runs it cannot be listed; $(echo pwd) is refused with them. Each word is read with its quoting
+# removed, so \pwd, 'pwd' and p\wd, which the shell runs as pwd, are seen too (the lessons review of
+# 5d2a327).
+DIR_WORDS = frozenset({"pwd", "dirs"})
 WORD_BEFORE = " \t\n;&|(`{"
+WORD_END = " \t\n;&|()<>`"
 # The same in an unquoted heredoc body, read a line at a time from the substitution's opening, so
 # quotes there are text: a pwd or dirs word, or a directory tilde prefix, on the rest of that line.
-DIR_IN_SUBST = re.compile(r"(?:\$\(|`)[^\n]*?(?<=[\s;&|(`{=])(?:(?:pwd|dirs)(?![\w.-])"
+DIR_IN_SUBST = re.compile(r"(?:\$\(|`)[^\n]*?(?<=[\s;&|(`{=])(?:['\"\\]?(?:pwd|dirs)(?![\w.-])"
                           r"|~(?:[+-][0-9]*|[0-9]+)(?=$|[\s/;&|()<>`]))")
 # A tilde prefix the shell expands to a directory, measured in bash 3.2 and zsh 5.9 (2026-11-14): at
 # the start of a word, unquoted, and ended by the word's end or a slash. ~+ and ~- are the directory
 # and the one before; with a number they are directory stack entries, which this check does not follow.
 TILDE_DIR = re.compile(r"~([+-]?)([0-9]*)(?=$|[\s/;&|()<>`])")
 TILDE_BEFORE = " \t\n;&|()<>`="
+
+
+def _plain_word(text, i):
+    """The word starting at text[i] with its quotes and backslashes removed, or None when it holds an
+    expansion (a $), whose value is judged on its own."""
+    out, n = [], len(text)
+    while i < n and text[i] not in WORD_END:
+        c = text[i]
+        if c == "$":
+            return None
+        if c == "\\":
+            out.append(text[i + 1:i + 2])
+            i += 2
+            continue
+        if c not in "'\"":
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _dir_subst_at(text, i):
@@ -1204,6 +1225,10 @@ def expansions(text):
     while i < n:
         frame = frames[-1]
         c = text[i]
+        if len(frames) > 1 and not frame[0] and text[i - 1] in WORD_BEFORE and c not in WORD_BEFORE:
+            word = _plain_word(text, i)
+            if word in DIR_WORDS:
+                out.append((None, "a substitution running %s" % word))
         if c == "\\":
             i += 2
             continue
@@ -1215,12 +1240,6 @@ def expansions(text):
         if c == "$" and text.startswith("$(", i):
             frames.append([False, 0, ")"])
             i += 2
-            continue
-        if c in "pd" and not frame[0] and len(frames) > 1 and text[i - 1] in WORD_BEFORE \
-                and DIR_COMMAND.match(text, i):
-            word = DIR_COMMAND.match(text, i)
-            out.append((None, "a substitution running %s" % word.group(0)))
-            i = word.end()
             continue
         if c == "~" and not frame[0]:
             got = _tilde_at(text, i)
