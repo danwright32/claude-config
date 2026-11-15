@@ -444,6 +444,8 @@ def _perl_unsafe(code):
                 # `sort $name LIST` calls the sub $name names, a string chosen at run time (#2912):
                 # a scalar straight after sort with a term, not an operator or comma, after it.
                 k = peek(j)
+                if code[k:k + 1] == "(":
+                    k = peek(k + 1)  # sort($name LIST) is the same call
                 v = PERL_NAME.match(code, k + 1) if code[k:k + 1] == "$" else None
                 if v and re.match(r"\s*[$@%(\w'\"]", code[v.end():]) and \
                         not re.match(r"\s*(?:x|lt|gt|le|ge|eq|ne|cmp|and|or|xor)\b", code[v.end():]):

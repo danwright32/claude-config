@@ -33,6 +33,7 @@ import re
 # that ends the code, the start of a heredoc, or a word.
 PHP_LEX = re.compile(r"""'(?:[^'\\]|\\.)*'?|"(?:[^"\\]|\\.)*"?|/\*.*?(?:\*/|\Z)|(?://|\#(?!\[))(?:[^\n?]|\?(?!>))*"""
                      r"""|\?>|<<<|([A-Za-z_]\w*)""", re.S)
+PHP_WORD = re.compile(r"([A-Za-z_]\w*)")
 PHP_INCLUDES = frozenset({"include", "include_once", "require", "require_once"})
 # The one shape of include whose path is certain: a single string with no variable and no escape in
 # it (a single quoted one may hold \' and \\), bracketed or not, ending the statement or expression.
@@ -45,6 +46,8 @@ PHP_BANG = re.compile(r"^#!.*\bphp\b")
 PERL_PIPE = re.compile(r"^\s*\||\|\s*$")
 # A variable's own value, which a command adding to it keeps (NODE_OPTIONS="$NODE_OPTIONS ...").
 NODE_SELF = re.compile(r"\$\{NODE_OPTIONS\}|\$NODE_OPTIONS(?!\w)")
+# One assignment of NODE_OPTIONS among a command's leading assignments.
+NODE_ASSIGN = re.compile(r"(?<![\w$])NODE_OPTIONS\+?=")
 # Each word of NODE_OPTIONS, which node splits at white space outside double quotes.
 NODE_WORD = re.compile(r'"([^"]*)"|(\S+)')
 # The shells that refuse to run a file with a NUL in its first line ("cannot execute binary file",
@@ -69,7 +72,7 @@ def make(shell_bang, assign, marker, unknown_dir):
             out, k = [], 1
             while k < len(words):
                 w = words[k]
-                if w in PHP_CODE_OPTIONS and k + 1 < len(words):
+                if w in PHP_CODE_OPTIONS and k + 1 < len(words):  # separate
                     out.append(words[k + 1])
                     k += 2
                     continue
@@ -104,13 +107,16 @@ def make(shell_bang, assign, marker, unknown_dir):
                         return
                     code, i = True, m.end()
                     continue
-                m = PHP_LEX.search(text, i)
+                # Past a heredoc its text is not told from code: from there on every word is a
+                # token, no quote starts a string that could hide an include, and no ?> ends the
+                # code (an apostrophe in the heredoc's text would otherwise swallow the rest).
+                m = (PHP_WORD if heredoc else PHP_LEX).search(text, i)
                 if not m:
                     return
                 i = m.end()
                 tok = m.group(0)
                 if tok == "<<<":
-                    heredoc = True  # its text is read as code from here on, and no ?> ends it
+                    heredoc = True
                     continue
                 if tok == "?>" or (tok[:1] in "/#" and not tok.startswith("/*") and text.startswith("?>", i)):
                     if not heredoc:
@@ -161,23 +167,28 @@ def make(shell_bang, assign, marker, unknown_dir):
             or a plain assignment, whatever program the command runs."""
             if "NODE_OPTIONS" not in text:
                 return None
-            m = re.search(assign % r"NODE_OPTIONS\+?", text, re.M)
-            if not m:
-                return None
-            raw = NODE_SELF.sub("", text[m.end():self.sh_word_end(text, m.end())])
-            value = self.sh_value(raw, d) if raw else ""
-            if value is None:
-                return self.unfollow("it sets NODE_OPTIONS, the modules node loads before any code it runs, to a "
-                                     "value the gate cannot work out, so it cannot see what that loads")
-            for quoted, plain in NODE_WORD.findall(value):
-                w = quoted or plain
-                if w.startswith("-"):
-                    w = w.partition("=")[2]
-                if not w:
-                    continue
-                reason = self.script(w, d, depth, False, "js", f"the module {w}, which NODE_OPTIONS has node load,")
-                if reason:
-                    return reason
+            # Every assignment is read, not only the first: the shell and env keep the last of
+            # `env NODE_OPTIONS=a NODE_OPTIONS=b node`, and a write the gate cannot place in order
+            # costs only a refusal.
+            # The assignment pattern ends at one NODE_OPTIONS= of a command's prefix, its assignments
+            # before it included, so every NODE_OPTIONS= in what it matched is one of them.
+            starts = [k.end() for m in re.finditer(assign % r"NODE_OPTIONS\+?", text, re.M)
+                      for k in NODE_ASSIGN.finditer(text, m.start(), m.end())]
+            for at in starts:
+                raw = NODE_SELF.sub("", text[at:self.sh_word_end(text, at)])
+                value = self.sh_value(raw, d) if raw else ""
+                if value is None:
+                    return self.unfollow("it sets NODE_OPTIONS, the modules node loads before any code it runs, to "
+                                         "a value the gate cannot work out, so it cannot see what that loads")
+                for quoted, plain in NODE_WORD.findall(value):
+                    w = quoted or plain
+                    if w.startswith("-"):
+                        w = w.partition("=")[2]
+                    if not w:
+                        continue
+                    reason = self.script(w, d, depth, False, "js", f"the module {w}, which NODE_OPTIONS has node load,")
+                    if reason:
+                        return reason
             return None
 
         # ---- A name perl's <> runs as a command (#2912) --------------------------------------------
@@ -191,7 +202,7 @@ def make(shell_bang, assign, marker, unknown_dir):
                 return [word]
             base = d or os.getcwd()
             names = []
-            for found in glob.glob(os.path.join(base, word)):
+            for found in glob.glob(os.path.join(glob.escape(base), word)):  # a [ or * in the folder is literal
                 if os.path.isabs(word):
                     names.append(found)
                 else:
