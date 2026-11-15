@@ -3588,6 +3588,23 @@ refused there, since the runner counts as able to send. A file a package is hand
 x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
 `$0` or `BASH_SOURCE` is worked out as bash reads it.
 
+A test file's import of a module the same file replaces with a mock is not followed (#2359, recorded
+there on 2026-11-15: "Decided by Dan, 2026-11-15: pass an import the same test file mocks out (vi.mock
+or jest.mock of that path), with a test; a real unmocked import stays refused", a loosening he signed
+off), in `lib/js-mocks.py`. The rule is written the narrow way round: a mock counts only in a file
+plain enough that nothing in it can reach the original module. The file must be handed to vitest or
+jest as installed (the package by a launcher, or the runner's own script under `node_modules`:
+`.bin/vitest`, `.bin/jest`, or inside `vitest/`, `jest/` or `jest-cli/`; never run by node,
+tsx or bun itself, where a mock replaces nothing), be a test file by the runners' default naming
+(`.test` or `.spec` before the extension, or under `__tests__`), and call `vi.mock` or `jest.mock` as
+a top level statement of its own with the module's path written out, resolving to the same file, and
+a factory taking no parameters. It must name none of the runners' ways to the original or to taking a
+mock back (`importActual`, `requireActual`, `importOriginal`, `unmock`, `doMock` and the rest), in
+code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unrenamed import from
+`vitest` or `@jest/globals`; and reach no member by a computed name or run a string as code. Anything
+else leaves the import followed, so a real unmocked import stays refused. Only the file's own
+imports are affected.
+
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
 repository was refused whole because its config's imports pass 300, though nothing in it posts, and
