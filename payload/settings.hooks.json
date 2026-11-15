@@ -361,7 +361,7 @@
         ]
       },
       {
-        "matcher": "Bash|mcp__claude_ai_Supabase__.*|mcp__claude_ai_SFDC_USE__.*|mcp__.*",
+        "matcher": "Bash|Edit|Write|MultiEdit|mcp__claude_ai_Supabase__.*|mcp__claude_ai_SFDC_USE__.*|mcp__.*",
         "hooks": [
           {
             "type": "command",

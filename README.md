@@ -4072,6 +4072,23 @@ dry run, an older version included, and a dry run of another project's folder ar
 What it cannot see: a change on the database between the dry run and the push, or a `supabase link`
 to another project in the same directory between the dry run and the Apply.
 
+A test project needs no Apply (#2643). In a work repository every owner step on its test Supabase
+project is a SQL file its scripts write, and setting up one flow version on 2026-11-10 asked four
+times. Now a `supabase db query --linked -f <file>` write alone in its command (a `cd` aside, and only
+the flags an Apply allows) is answered "allow", with no reason and no notice, when the project in
+`supabase/.temp/project-ref` is listed in `.claude/supabase-test-projects` in the same directory: one
+ref per line, blank lines and lines starting with `#` ignored (Dan, 2026-11-14: a per project file,
+and a run passes silently). It fails closed: a list missing, unreadable, not text, or holding any
+other line marks nothing, and the run is asked about as before, the question saying why it is not a
+test project. An inline write, a push, `--db-url`, `--local` and a project not on the list are asked
+about as before. The list is trusted only as git has committed it: its bytes must be what `git show
+HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
+included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
+itself asked about, which is why the hook's registration now takes those three tools. Still open: a
+session that edits the list with a shell command and then commits it, in one call or several, is
+trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
+edit and commit.
+
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
 prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
@@ -4498,7 +4515,7 @@ each write a copy stays while it is under 30 days old by the time in its name, o
 the newest 3 copies of its own suite however old, and the folder is held under 20 MB in all, oldest
 first. It used to keep the newest 20 copies overall, about ten days of flakes, so the one log #1919
 named was gone before anyone read it (#2895, L202). Nothing else in the folder is touched
-(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which still keeps its newest 20). Set
+(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which keeps the same way per mod, #2959). Set
 it to empty to keep nothing, and the FAIL line says so.
 
 </td></tr>
@@ -7975,6 +7992,12 @@ that declares it. A route's 409 answer, a log line or a thrown error beside the 
 whose sends cannot be traced (a workflow, a shell script, any other language, a send the reading
 cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
 docstring is never message text (#2574).
+An edit that changes no words but newly hands a send text the same file already held is held as
+new wording of that text (#2529): a line only a log printed, now posted, or a model's own
+instructions handed to the send as well. As the trace follows a model's answer into the send, a
+model's instructions count as routed only when only a model read them before the edit and more
+than a model reads them after it. Text another file holds, brought in by a new import, is not read
+(#2837).
 One kind of string passes in a shell script that posts (#2792): one whose every place in the script
 is a whole argument of an `echo` or `printf` sent to the error stream and nowhere else
 (`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch, a group or a function.
@@ -8037,6 +8060,10 @@ that cannot be read, holds the call as could not check, which trying again may g
 gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
 told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
 tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
+A call the guard has judged and passed on in its tool.call hook is replayed as it settled beneath
+it when a hook beneath fails, a wedged hooks worker included (#2948), so that failure is said by
+the hook that failed, never as the Slack alert guard being unable to check the call. Its tool.check
+hook still holds on any failure, since a call it holds has asked the checks beneath first.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
@@ -8088,7 +8115,7 @@ exit code and the last lines of output instead of an empty reason.
 A refused or failed mod's line carries three verdict lines at most, so the engine's whole output is
 kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (outside the config, which
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
-afterwards (#1788, L297). Pruned to the newest 20 after each write; a passing run writes nothing.
+afterwards (#1788, L297). A copy stays 30 days, or while it is one of the newest 3 of its own mod and check, under 20 MB in all (#2959); a passing run writes nothing.
 `CHECK_MODS_FAILURE_OUTPUT` moves the folder, or set empty keeps nothing and the line says so.
 `tests/test-mods.sh` points it at its own throwaway folder for every fixture, and leaves only its
 run over the real `payload/mods` writing to the real one.

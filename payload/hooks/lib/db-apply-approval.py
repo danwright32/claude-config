@@ -69,12 +69,37 @@ CLI's own writes to supabase/.temp were not measured, so its files are not timed
       for a push, else the absolute path of the -f file a `db query` runs. dry_dir(command, cwd)
       is the directory a Bash command dry runs a push of, or None (db-write-calls dry_push_dir);
       without it no dry run is found, so no push is covered.
+
+A TEST PROJECT (claude-config#2643). In a work repository every owner step on its test Supabase
+project is a SQL file its scripts write, and each run was asked about (four times for one flow
+version on 2026-11-10), with no Apply to cover it. Dan, 2026-11-14: the test refs live in a per
+project file the hook reads, and a run on one passes silently, with no notice. So a `supabase db
+query -f <file>` that is the whole of its command, with only the flags QUERY_FLAGS allows, passes
+when the project its directory is linked to (supabase/.temp/project-ref) is listed in that
+directory's .claude/supabase-test-projects. It needs no Apply, and covers no push and no inline
+statement. Fails closed: a list missing, unreadable, not text, or holding any line that is neither a
+ref nor a comment marks nothing, so the run is asked about as before. What it cannot see: whether a
+ref on the list really is a test project. The list is the checkout's own word, so a ref written
+into it by mistake, or by a session, is trusted like any other.
+
+The list is trusted only as git has committed it (the coordinator's review of #2643): its bytes must
+be what `git show HEAD:<it>` gives, so an uncommitted or untracked edit, a live ref added by any shell
+command included, is asked about until it is committed. And db-write-ask.sh holds an Edit, Write or
+MultiEdit of the list (is_test_list) as it holds a database write. Still open: a session that edits
+the list with a shell command and then commits it, in one call or several, is trusted once the
+commit lands. The commit check stops an edit left uncommitted, not a deliberate edit and commit.
+
+  on_test_project(workdir, flags)
+      (True, the ref) or (False, why the run's project is not one its checkout marks as test).
+  is_test_list(tool, tool_input)
+      The path an Edit, Write or MultiEdit writes when it is a checkout's TEST_LIST, else None.
 """
 import datetime
 import hashlib
 import json
 import os
 import re
+import subprocess
 
 SOURCE = "db-apply"
 APPLY = "Apply"
@@ -86,6 +111,14 @@ PUSH_FLAGS = {"--linked", "--yes", "--workdir", "--debug"}
 QUERY_FLAGS = {"--linked", "--remote", "--yes", "--workdir", "--debug", "-f", "--file", "-o", "--output"}
 TRUE_WORDS = {"true", "1", "t"}
 REF = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# The checkout's list of its test Supabase projects (claude-config#2643): one ref per line, blank
+# lines and lines starting with # ignored, read from beside the supabase folder the run uses.
+TEST_LIST = os.path.join(".claude", "supabase-test-projects")
+TEST_LIST_BYTES = 64 * 1024
+# How long git may take to show the committed list; the hook's own limit is 10 seconds.
+GIT_SECONDS = 4
+# The edits of that list an Edit, Write or MultiEdit makes are held like a database write.
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 SHA = re.compile(r"[0-9a-f]{64}")
 
 
@@ -259,33 +292,118 @@ def _why_not(meta, dries, ref, folder, names, file, workdir, dry_dir):
     return None
 
 
-def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None):
-    """(True, the sentence naming the Apply) when Dan's Apply in this session covers a run in
-    workdir with flags [(name, written with =, value)]: a `db push` when file is None, else a
-    `db query` running the statements of file, an absolute path. Else (False, why not). dry_dir
-    reads which directory a Bash command dry runs a push of (module docstring)."""
-    allowed, what = (PUSH_FLAGS, "a push") if file is None else (QUERY_FLAGS, "a run")
+def _flags_why_not(flags, allowed, covers):
+    """None when flags [(name, written with =, value)] name only the linked project and flags in
+    allowed, else why not, ending with covers ("an Apply covers only a push")."""
     extra = sorted({name for name, _, _ in flags} - allowed)
     if extra:
-        return False, ("it carries " + ", ".join(extra) + ", and an Apply covers only " + what
-                       + " to the linked project")
+        return "it carries " + ", ".join(extra) + ", and " + covers + " to the linked project"
     for name, eq, value in flags:
         if name == "--linked" and eq and value.lower() not in TRUE_WORDS:
-            return False, ("it carries " + name + "=" + value[:20] + ", and an Apply covers only " + what
-                           + " to the linked project")
-    if not isinstance(session_id, str) or not session_id:
-        return False, "the call names no session, so no Apply in it could be found"
-    if not isinstance(transcript_path, str) or not transcript_path:
-        return False, "the call names no session transcript, where Dan's Apply would be"
+            return "it carries " + name + "=" + value[:20] + ", and " + covers + " to the linked project"
+    return None
+
+
+def _linked_ref(workdir):
+    """(the ref of the project workdir is linked to, None), or (None, why it could not be read)."""
     try:
         with open(os.path.join(workdir, "supabase", ".temp", "project-ref"), "rb") as f:
             # A ref that is not UTF-8 is no ref: refusing it is the decision.
             ref = f.read(200).decode("utf-8", "strict").strip()
     except (OSError, UnicodeDecodeError) as e:
-        return False, ("the project it is linked to could not be read from supabase/.temp/project-ref ("
-                       + type(e).__name__ + ")")
+        return None, ("the project it is linked to could not be read from supabase/.temp/project-ref ("
+                      + type(e).__name__ + ")")
     if not REF.fullmatch(ref):
-        return False, "supabase/.temp/project-ref does not hold a project ref"
+        return None, "supabase/.temp/project-ref does not hold a project ref"
+    return ref, None
+
+
+def is_test_list(tool, tool_input):
+    """The file_path an Edit, Write or MultiEdit writes when it names a .claude/supabase-test-projects
+    (by its last two parts, so a relative path counts too), else None."""
+    if tool not in EDIT_TOOLS or not isinstance(tool_input, dict):
+        return None
+    path = tool_input.get("file_path")
+    if not isinstance(path, str):
+        return None
+    parts = os.path.normpath(path.replace("\\", "/")).split("/")
+    return path if parts[-2:] == TEST_LIST.split(os.sep) else None
+
+
+def _uncommitted(path, raw):
+    """None when raw, the bytes of the file at path, are what git has committed for it at HEAD,
+    else why not. Only a committed list is trusted, so a session that adds a live ref to it, which
+    it can do with any shell command, is asked about until the change is committed."""
+    folder, name = os.path.split(path)
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+    try:
+        r = subprocess.run(["git", "-C", folder, "show", "HEAD:./" + name], capture_output=True,
+                           timeout=GIT_SECONDS, env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "could not be compared with what git has committed (" + type(e).__name__ + ")"
+    if r.returncode != 0:
+        return "is not committed in git, and only a committed list is trusted"
+    if r.stdout != raw:
+        return "differs from what git has committed, and only a committed list is trusted"
+    return None
+
+
+def on_test_project(workdir, flags):
+    """(True, the ref) when a `supabase db query -f` run in workdir with flags goes to a project its
+    checkout marks as test (TEST_LIST, claude-config#2643), else (False, why not). Fails closed: a
+    list missing, unreadable, not text, larger than TEST_LIST_BYTES, other than what git has committed
+    for it, or holding any line that is not a ref or a comment marks nothing."""
+    why = _flags_why_not(flags, QUERY_FLAGS, "a test project's list covers only a run")
+    if why is not None:
+        return False, why
+    ref, why = _linked_ref(workdir)
+    if ref is None:
+        return False, why
+    path = os.path.join(workdir, TEST_LIST)
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(TEST_LIST_BYTES + 1)
+    except OSError as e:
+        return False, "project " + ref + " is not marked as test: " + TEST_LIST + " could not be read (" + type(e).__name__ + ")"
+    if len(raw) > TEST_LIST_BYTES:
+        return False, "project " + ref + " is not marked as test: " + TEST_LIST + " is larger than a list of refs"
+    why = _uncommitted(path, raw)
+    if why is not None:
+        return False, "project " + ref + " is not marked as test: " + TEST_LIST + " " + why
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return False, "project " + ref + " is not marked as test: " + TEST_LIST + " is not text"
+    refs = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not REF.fullmatch(line):
+            return False, ("project " + ref + " is not marked as test: " + TEST_LIST
+                           + " holds a line that is not a project ref, so none of it is read")
+        refs.add(line)
+    if ref not in refs:
+        return False, "project " + ref + " is not marked as test in " + TEST_LIST
+    return True, ref
+
+
+def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None):
+    """(True, the sentence naming the Apply) when Dan's Apply in this session covers a run in
+    workdir with flags [(name, written with =, value)]: a `db push` when file is None, else a
+    `db query` running the statements of file, an absolute path. Else (False, why not). dry_dir
+    reads which directory a Bash command dry runs a push of (module docstring)."""
+    why = _flags_why_not(flags, PUSH_FLAGS if file is None else QUERY_FLAGS, "an Apply covers only "
+                         + ("a push" if file is None else "a run"))
+    if why is not None:
+        return False, why
+    if not isinstance(session_id, str) or not session_id:
+        return False, "the call names no session, so no Apply in it could be found"
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return False, "the call names no session transcript, where Dan's Apply would be"
+    ref, why = _linked_ref(workdir)
+    if ref is None:
+        return False, why
     folder, names = os.path.join(workdir, "supabase", "migrations"), [None]
     if file is None:
         try:
