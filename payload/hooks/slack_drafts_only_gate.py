@@ -5518,7 +5518,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # 2026-11-13, once the scripts it newly refused were read or rewritten).
             # Inside a for loop over words written out, each value's file is read (#2912).
             choices = self.sh_source_choices(text, d)
-            if choices[0][1]:
+            # A loop over no words sources nothing: no choices, and nothing read (#2912).
+            if choices and choices[0][1]:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
                 # One built from what cannot be worked out is unread, and refused whatever the switch says

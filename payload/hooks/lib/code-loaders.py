@@ -248,8 +248,8 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
             return names or [word]
 
         def perl_opens_handed(self, words, skip):
-            """Whether perl opens the names it is handed with <>'s two argument open: a switch -n, -p
-            or -i (alone or in a cluster, before any letter that takes the rest of it), code that
+            """Whether perl opens the names it is handed with <>'s two argument open: a switch -n, -p,
+            -i, -a or -F (alone or in a cluster, before any letter that takes the rest of it), code that
             reads <>, <ARGV>, readline(ARGV) or eof() (never <<>>, whose open runs nothing), or code
             the gate is not given here (a script file, or its input), which may do either."""
             if not skip:
@@ -259,11 +259,26 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
                     break  # the code: what follows is handed to it
                 if not w.startswith("-") or w.startswith("--"):
                     continue
-                for ch in w[1:]:
-                    if ch in "npi":
-                        return True
-                    if ch in "eEMmIxdDF0C":
+                i = 1
+                while i < len(w):
+                    ch = w[i]
+                    if ch in "npiaF":
+                        return True  # -a implies -n, and -F implies -a (perl 5.20 on)
+                    if ch == "0":
+                        # -0 takes only octal digits, or x and hex ones, and the cluster goes on past
+                        # them: -0777ne is -0777 then -n (lessons review at 1b81a0c).
+                        i += 1
+                        if i < len(w) and w[i] in "xX":
+                            i += 1
+                            while i < len(w) and w[i] in "0123456789abcdefABCDEF":
+                                i += 1
+                        else:
+                            while i < len(w) and w[i] in "01234567":
+                                i += 1
+                        continue
+                    if ch in "eEMmIxdDC":
                         break  # takes the rest of the word as its value
+                    i += 1
             return any(PERL_READS_HANDED.search(code) for code in skip)
 
         def perl_pipe_names(self, words, skip, d, depth, text=None):
