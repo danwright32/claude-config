@@ -584,56 +584,14 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
 
 // ---- rtk proxy (#2937) ----
 
-// rtk's proxy runs the words after its own options as they stand, unfiltered (rtk 0.31.0 `rtk proxy
-// --help`: -v, -u, --skip-env and -h, none taking a value). mod-kit's reader passes over rtk but not
-// its proxy, so `rtk proxy gh issue view 5` reached this judge as a command named proxy, and its gh
-// as a word of another command, refused as a write to a repository that could not be resolved: on
-// the night of 13 to 14 November 2026 that refused a builder's reads of its own issue. Its git was
-// judged by nothing at all (`rtk proxy git push --force` went ahead). So whatever rtk's proxy runs
-// is judged exactly as the same command written plainly.
-//
-// Everything here is asked of mod-kit's own reader, never worked out from the words or the line's
-// text by this judge (three lessons reviews, of 7cb8876, 1346447 and c6efef7: a text match took a
-// program named proxy for rtk's beside `echo rtk proxy`, and words quoted back as text lost which of
-// them were quoted, so `--body '> x'` read as a redirection). The line is read twice more:
-// - with every word rtk renamed to a program no reader passes over, so a command that comes back
-//   named so, with proxy after rtk's own options, is one rtk's proxy runs, and a program of its own
-//   named proxy is no proxy;
-// - with `rtk` and its options kept and `proxy` left out after them, so the reader reads what proxy
-//   runs past rtk exactly as it reads `rtk gh ...`: quotes, heredocs, redirections and all.
-// The command at the same place in the second reading then stands for the proxy command.
-//
-// What cannot be read that way fails closed (lessons review of 9c3b530: a proxy left unswapped ran
-// its git unjudged). A command rtk's proxy runs that the second reading could not take proxy out of
-// (`rtk 'proxy' ...`), and a line naming rtk whose readings do not line up command for command, are
-// refused whole. A command named proxy that is not swapped (a program of its own, or rtk spelled so
-// the first reading cannot find it) is judged as before, where a gh among its words is refused as
-// unresolved, and so is a git among them, below.
-const RTK_WORD = /(^|[\s;&|(`'"/])rtk(?=[\s;&|)`'"]|$)/g
-const NAMES_RTK = new RegExp(RTK_WORD.source)
-const RTK_RENAMED = 'rtk-read-as-a-program'
-const RTK_THEN_PROXY = /(^|[\s;&|(`'"/])rtk((?:[ \t]+-[A-Za-z-]+)*)[ \t]+proxy(?=[ \t])/g
+// rtk's proxy runs the words after its own options unfiltered. Until #2983 mod-kit's reader passed
+// over rtk but not its proxy, so `rtk proxy gh issue view 5` reached this judge as a command named
+// proxy (on the night of 13 to 14 November 2026 that refused a builder's reads of its own issue, and
+// `rtk proxy git push --force` went ahead), and #2937 read the line again here to work round it.
+// mod-kit now reads what the proxy runs as the command itself, for every mod, and marks it
+// `proxied`; one it could not read (a single word the shell expands, which rtk splits into the
+// command) carries `unread`, and is refused here whole.
 const PROXY_UNREAD = 'run a command through rtk proxy that could not be read as written plainly'
-// Each command rtk's proxy runs, by its place in call.commands, read as written without the proxy;
-// `unread` when one cannot be.
-const rtkProxied = async (call: OvernightCall): Promise<{ swaps: ReadonlyMap<number, Cmd> } | { unread: true }> => {
-  const swaps = new Map<number, Cmd>()
-  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return { swaps }
-  const renamed = await call.read(call.raw.replace(RTK_WORD, `$1${RTK_RENAMED}`))
-  const unproxied = await call.read(call.raw.replace(RTK_THEN_PROXY, '$1rtk$2'))
-  if (renamed.length !== call.commands.length || unproxied.length !== call.commands.length)
-    return NAMES_RTK.test(call.raw) ? { unread: true } : { swaps }
-  for (const [i, r] of renamed.entries()) {
-    if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') continue
-    let k = 1
-    while (k < r.words.length && (r.words[k] as string).startsWith('-')) k++
-    if (r.words[k] !== 'proxy') continue
-    const plain = unproxied[i]
-    if (!plain || name(plain.words[0]) === 'proxy') return { unread: true }
-    swaps.set(i, plain)
-  }
-  return { swaps }
-}
 // Where the files a line writes may be, when a gh in it runs through rtk proxy (Dan's standing rule
 // for this repository, recorded on the PR for #2937's open question): the null device, the session
 // notes folder and the scratchpad, never any other path. Taken from mod-kit's write reader, which
@@ -744,17 +702,12 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
-  const byProxy = await rtkProxied(call)
-  if ('unread' in byProxy) return PROXY_UNREAD
-  for (const [at, written] of call.commands.entries()) {
-    // What rtk's proxy runs is judged as that command written plainly (#2937).
-    const proxied = byProxy.swaps.get(at)
-    const c = proxied ?? written
+  // What rtk's proxy runs is read by mod-kit as that command, marked proxied (#2983).
+  if (call.commands.some(c => c.unread)) return PROXY_UNREAD
+  for (const c of call.commands) {
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
     const cmd = name(words[0])
-    // A proxy not swapped above runs what follows it, and nothing below judges a git that way.
-    if (cmd === 'proxy' && words.slice(1).some((w, i) => name(w) === 'git' && runsGitFrom(words.slice(i + 2)))) return 'run git through a command named proxy, which could not be judged'
     if (cmd === '(') {
       stack.push(dir)
       continue
@@ -795,7 +748,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (cmd === 'gh') {
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
-      const out = proxied && proxiedOutputRefusal(call.writes, call.home)
+      const out = c.proxied && proxiedOutputRefusal(call.writes, call.home)
       if (out) return out
       if (v && 'write' in v) {
         const to = await writeTarget(v.write, dir, call, look)
