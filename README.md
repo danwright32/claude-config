@@ -4088,10 +4088,19 @@ test project. An inline write, a push, `--db-url`, `--local` and a project not o
 about as before. The list is trusted only as git has committed it: its bytes must be what `git show
 HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
 included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
-itself asked about, which is why the hook's registration now takes those three tools. Still open: a
-session that edits the list with a shell command and then commits it, in one call or several, is
-trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
-edit and commit.
+itself asked about, which is why the hook's registration now takes those three tools. Since #2989 a
+shell command that writes the list (any command naming it, in any case, other than a reader such as
+`cat`, `grep` or `git diff` with no redirection into a file) is asked about too, as is one naming it
+where the hook cannot read the command (a heredoc body, a string), and a `git commit` that would add
+a line other than a blank or a comment to any list in its checkout, from the index or the working
+tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
+other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
+about, since that command could write the list by a glob or a variable first. So a Bash call holding
+the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
+commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
+then. What it still cannot see: a list written under a name built at
+run time in an earlier call and then committed by something other than `git commit` (an alias,
+`commit-tree`, a merge, a cherry-pick, a pull).
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -6803,7 +6812,10 @@ saying why), a program whose text names the files it writes (since #2847 also a 
 script file the command runs, its own code read as inline code is, a name its code writes where the
 folder cannot be followed held as could not check; since #2855 also a shell script's own commands
 and the scripts it runs, a script named through a variable the command sets, a script the command
-writes first from a heredoc, read as that text, and the local modules a script imports), and a
+writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
+a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
+passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
+`mktemp -d`, so a suite writing pages under its own temp folder runs), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -7044,8 +7056,10 @@ finding the words changed; the yes or no wrapper
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
-for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
-schema's description pass, a property the schema names `reason` or `text` being no message. Since
+for, is judged as before; since #2991 so does taking away any look changing file git has never had
+in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent,
+the logic around it, and a tool's or its input schema's description pass, a property the schema
+names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code
 alone passes even where the reading follows a message less far after it than before (a verdict
 handed through a helper that hands it straight back), and a comment holds no string. Since
@@ -7129,7 +7143,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855
+#1954, #2261, #2830, #2845, #2847, #2855, #2991
 
 </td></tr>
 <tr><td>
