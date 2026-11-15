@@ -46,6 +46,7 @@ import {
   isModHook,
   isModHookTs,
   drawnParts,
+  drawsNothing,
   modHookTsChange,
   messageWords,
   type Worded,
@@ -170,6 +171,11 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing; one
 //   changing the words of a message a person reads was held from #1841 until #2845, and since then
 //   passes, recorded naming those words (below).
+// - Since #3017 (Dan, 2026-11-15): a mod file that cannot be read beside it (a merge conflict) no
+//   longer holds such a file whole where the mod draws nothing at all, read from its own code (rules.ts
+//   drawsNothing): no TSX or JSX file, no surface named in any file of its hooks folder or the folders
+//   inside it, and no line built. This guard's own hooks are judged as code so; a mod with a band, a
+//   pane or a card is held as before.
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside a command that may change what it puts back
@@ -337,7 +343,8 @@ const fromAgent = new Set<string>()
 // `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
 // .ts file is judged by rules.ts modHookTsChange over `files` (#2845). `record` for a settled design under docs/design a
 // script run is handed (#1593), judged after by the design rounds skill's seal check (sealedAfter).
-type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true; record?: true }
+// `beyond`, for a .ts file, the files in the folders inside the mod's hooks folder (hooksBeyond, #3017).
+type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; beyond?: ModFile[] | null; tsx?: true; record?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
 // by the tool.check hook, which judges them, and taken by the tool.call hook around them.
 const watching = new Map<string, Watched[]>()
@@ -1064,6 +1071,7 @@ const drawingChange = async (
   } catch {
     return 'held'
   }
+  const beyond = await hooksBeyond($, dir)
   let now = files.find(f => f.name === name)?.text
   let after: string | undefined
   if (t.from !== undefined) {
@@ -1079,13 +1087,14 @@ const drawingChange = async (
     // Held where the file draws now. One that only sends a message passes (#2845), unrecorded: what
     // the call would change in it cannot be read, so no words can be named.
     if (tool !== 'Bash') {
-      const change = modHookTsChange(files, name, undefined, now)
+      const change = modHookTsChange(files, name, undefined, now, beyond)
       return change && 'look' in change ? 'held' : 'pass'
     }
-    // A file whose drawing cannot be read now could not be judged after either: held.
-    if (drawnParts(files, name) === null) return 'held'
+    // A file whose drawing cannot be read now could not be judged after either: held, unless its
+    // mod draws nothing (#3017), when what the command leaves is judged as an edit there would be.
+    if (drawnParts(files, name) === null && !drawsNothing(files, name, now, now, beyond)) return 'held'
     // Once per file, however many of the command's words write it (lessons review).
-    if (!watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
+    if (!watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files, beyond })
     return 'pass'
   }
   if (now !== undefined && commentOnlyChange(now, after, /\.(tsx|jsx)$/i.test(name))) return 'pass'
@@ -1106,14 +1115,37 @@ const drawingChange = async (
       }
       if (nowOpen && was !== undefined) return 'pass'
     } else if (nowOpen && was !== undefined) {
-      const change = modHookTsChange(files, name, was, after)
+      const change = modHookTsChange(files, name, was, after, beyond)
       if (change && 'look' in change) return 'held'
       midEdits.delete(t.path)
       return change ?? 'pass'
     }
   }
-  const change = modHookTsChange(files, name, now, after)
+  const change = modHookTsChange(files, name, now, after, beyond)
   return !change ? 'pass' : 'look' in change ? 'held' : change
+}
+
+// The code files in the folders inside a mod's hooks folder `dir` (a mod-kit copy, say), each named by
+// its path below `dir`, as rules.ts drawsNothing reads them (#3017): a surface named only there makes
+// the mod one that draws. Null where any folder or file cannot be listed or read, which proves nothing.
+// Five folders deep at most, past which the mod is not shown to draw nothing either.
+const hooksBeyond = async ($: EngineInterface, dir: string): Promise<ModFile[] | null> => {
+  const out: ModFile[] = []
+  const walk = async (sub: string, depth: number): Promise<boolean> => {
+    for (const e of await $.fs.list(`${dir}/${sub}`)) {
+      const rel = `${sub}/${e.name}`
+      if (e.kind === 'dir') {
+        if (depth >= 5 || !(await walk(rel, depth + 1))) return false
+      } else if (e.kind === 'file' && /\.(ts|tsx|mts|cts|jsx|js|mjs|cjs)$/i.test(e.name) && !/\.d\.[mc]?ts$/i.test(e.name)) out.push({ name: rel, text: String(await $.fs.read(`${dir}/${rel}`)) })
+    }
+    return true
+  }
+  try {
+    for (const e of await $.fs.list(dir)) if (e.kind === 'dir' && !(await walk(e.name, 1))) return null
+  } catch {
+    return null
+  }
+  return out
 }
 
 // The file a command copies whole into `path`, when the command is one cp alone with no option, naming
@@ -1809,7 +1841,7 @@ const afterShell = async (
     }
     // A TSX or JSX hook file by the rule its Edit is judged by (#1576); one made or taken away is a change.
     if (!w.tsx) {
-      const change = modHookTsChange(w.files, w.name, w.before, after)
+      const change = modHookTsChange(w.files, w.name, w.before, after, w.beyond ?? null)
       if (change) changed.push({ w, after, ...('words' in change ? { words: change.words } : {}) })
       continue
     }

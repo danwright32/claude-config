@@ -3407,10 +3407,46 @@ export type Worded = { file: string; words: string }
  * 2026-10-27: "message wording should be asked about"), #1925 and #1934 made, and so #2161's
  * narrowing of them, which is gone. A file made or taken away is read as one with no text.
  */
-export const modHookTsChange = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookChange | undefined => {
-  if (drawsChange(files, name, before, after)) return { look: true }
+export const modHookTsChange = (
+  files: readonly ModFile[],
+  name: string,
+  before: string | undefined,
+  after: string | undefined,
+  beyond: readonly ModFile[] | null = [],
+): HookChange | undefined => {
+  // #3017: drawsChange holds a file whose mod cannot be read whole (a merge conflict left beside it);
+  // that is right only where the mod draws at all.
+  const blank = () => drawsNothing(files, name, before, after, beyond)
+  if (drawsChange(files, name, before, after) && !blank()) return { look: true }
   const words = messageWords(files, name, before, after)
+  // A mod drawing nothing whose messages cannot be read is judged as code: no words are claimed.
+  if (words === '' && blank()) return undefined
   return words === undefined ? undefined : { words }
+}
+
+// #3017: where a mod draws, read in its raw text, comments and strings included, so text no reader
+// can follow (a merge conflict) is read too, and a mention counts: a hold costs Dan one answer, a
+// pass a look he never saw. Any member of Claude Code's `ui` but the words a person reads (a
+// transcript line, a toast, a question), its `ui.*` events included; and mod-kit's band row, pane,
+// boxed card and buttons. A file in TSX or JSX draws by its name.
+const SURFACE = /\bui\s*\.\s*(?!(?:log|toast|ask)\b)[A-Za-z_$]|\bmodkit\s*\.\s*(?:bandRow|clearBandRow|pane|clearPane|card|clickable|press)\b/
+
+/** Whether a mod's file registers anything drawn on screen (#3017): a TSX or JSX file, or a surface named in its text (SURFACE). */
+export const registersSurface = (file: ModFile): boolean => /\.(tsx|jsx)$/i.test(file.name) || SURFACE.test(file.text)
+
+/**
+ * Whether the mod whose hook file `name` changes from `before` to `after` (undefined for a file not
+ * there) draws nothing on either side (#3017), read from its own code: no file of it, in its hooks
+ * folder (`files`) or the folders inside it (`beyond`, null where they could not be read, which
+ * proves nothing), registers a surface (registersSurface), and no file read on its own builds what
+ * mod-kit draws (drawnParts), a file no reader can follow on its own being judged by its surfaces alone.
+ */
+export const drawsNothing = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined, beyond: readonly ModFile[] | null): boolean => {
+  if (beyond === null) return false
+  const sides = [before, after].flatMap(text => (text === undefined ? [] : [{ name, text }]))
+  const all = [...files.filter(f => f.name !== name), ...sides, ...beyond]
+  if (all.some(registersSurface)) return false
+  return ![...files.filter(f => f.name !== name), ...sides].some(f => (drawnParts([f], f.name)?.length ?? 0) > 0)
 }
 
 // #2788: the text of every string, template text and JSX text in a file that stands in `a` and `b` a
