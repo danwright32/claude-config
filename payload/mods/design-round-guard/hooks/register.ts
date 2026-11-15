@@ -59,6 +59,11 @@ import {
   scriptUnplaced,
   scriptsRunIn,
   type ScriptRun,
+  type ScriptReading,
+  type RunCommand,
+  closedScripts,
+  trapBodies,
+  joinTests,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -320,6 +325,14 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   commands and the repository's scripts none newly held a command. A destination a variable the
 //   script does not set fills in, a loop's or the environment's variable naming a script, and a module
 //   found only through sys.path or an installed package are not read (docs/mods-design.md).
+// - Since #2924: a shell script that cannot write what it is handed is not judged as writing its
+//   arguments (#1586). It cannot where, read whole as mod-kit reads a command (with its trap bodies),
+//   every file its commands write, empty or take away is a name its own text spells or a temporary
+//   file it made itself, every program in it names what it writes, it runs no other script and no
+//   text or command a value decides (eval, `"$@"`, a trap or alias), and each file it sources, found
+//   beside it by the usual `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)` idiom, is read and the
+//   same (rules.ts closedScripts). milestone-candidates.sh handed an issue title naming page.html runs.
+//   A python or node script's arguments, and any script the guard cannot read whole, are judged as before.
 // - Since #2830: a git checkout or restore beside other commands is measured by what git puts back
 //   wherever nothing before it, or beside it in a pipe or the background, can change its source: a
 //   command that only reads, git reading only, or another restore of named paths (rules.ts
@@ -557,6 +570,36 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     if (g.tree && g.path) trees.push({ word: g.word, path: g.path, ...(g.does === 'remove' ? { removes: true as const } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
   }
   for (const x of trees) targets.push(...(await underTargets($, x)))
+  // Each script file the command runs that the guard reads (#2847, #2855, scriptsRun below), with
+  // what mod-kit's write reader gives of its text, read once here for both uses below. A shell
+  // script's trap bodies are read with its text (#2924, rules.ts trapBodies), since what a trap runs
+  // later is in no command the reader reads.
+  const runs = await scriptsRun($, command, at)
+  // The command and every script text read for it, for #2991's madeTemp: a variable another script it
+  // reads in may set is held to every assignment in any of them, and a TMPDIR the command sets
+  // (`TMPDIR=app bash suite.sh`) counts as one the script sets.
+  const scriptsText = [command, ...runs.map(r => ('unread' in r ? '' : r.text))].join('\n')
+  const readings = new Map<ScriptRun, { read: ScriptReading & Awaited<ReturnType<typeof $.modkit.writes>>; commands?: readonly RunCommand[] }>()
+  for (const s of runs) {
+    if ('unread' in s) continue
+    const cwd = s.folder ?? UNPLACED
+    if (s.lang !== 'shell') {
+      readings.set(s, { read: await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd, home: at.home }) })
+      continue
+    }
+    const own = (await $.modkit.pipeline({ command: joinTests(s.text), cwd, home: at.home })) as readonly RunCommand[]
+    const later = trapBodies(own)
+    const text = later.length ? `${s.text}${s.text.endsWith('\n') ? '' : '\n'}${later.join('\n')}\n` : s.text
+    const read = await $.modkit.writes({ command: text, cwd, home: at.home })
+    const commands = later.length ? ((await $.modkit.pipeline({ command: joinTests(text), cwd, home: at.home })) as readonly RunCommand[]) : own
+    readings.set(s, { read, commands })
+  }
+  // #2924: a shell script that cannot write what it is handed (rules.ts closedScripts: every file its
+  // own commands write named in its own text or a temporary file it made, nothing run later from a
+  // value, no other script run, every file it sources the same), whose arguments are therefore not
+  // judged as writes. On 2026-11-13 milestone-candidates.sh handed an issue title naming page.html
+  // was held as writing a file of that name.
+  const closed = closedScripts(runs, s => readings.get(s), scriptsText, at.home)
   // A script file the command runs (#1586, measured live on 2026-10-23: `python3 gen.py app/page.tsx`
   // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
   // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
@@ -565,6 +608,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // The spool helper's note writes none of what it is handed (#1747, rules.ts spoolNote).
   for (const r of w.runs ?? []) {
     if (spoolNote(r, at.home)) continue
+    // Its own text read whole, a shell script that cannot write what it is handed (#2924); a tool or
+    // module (npx, python -m) has no file of its own here, and is judged as before.
+    if (r.path !== undefined && !r.tool && closed.has(r.path)) continue
     for (const a of r.args) {
       // A pattern the shell matched against no file, every pattern character quoted (#1951: the
       // search term '*push*' a sweep script was handed), reaches a script file as its characters, so
@@ -642,17 +688,12 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // writes are not all named and whose text names the plugin store may write the guard's record,
   // refused as a command naming the store is.
   let scriptStore = false
-  const runs = await scriptsRun($, command, at)
-  // The command and every script text read for it, for #2991's madeTemp: a variable another script it
-  // reads in may set is held to every assignment in any of them, and a TMPDIR the command sets
-  // (`TMPDIR=app bash suite.sh`) counts as one the script sets.
-  const scriptsText = [command, ...runs.map(r => ('unread' in r ? '' : r.text))].join('\n')
   for (const s of runs) {
     if ('unread' in s) {
       targets.push({ word: s.word, unread: s.unread, inScript: s.word })
       continue
     }
-    const read = await $.modkit.writes({ command: s.lang === 'shell' ? s.text : asProgram(s.lang, s.text), cwd: s.folder ?? UNPLACED, home: at.home })
+    const read = (readings.get(s) as { read: Awaited<ReturnType<typeof $.modkit.writes>> }).read
     const named = scratch || namesScratchpad(s.text, at.session, at.temps)
     // #2855: a shell script's own commands, read as mod-kit reads a command line: each file they write,
     // take away or empty by a name the reader places is judged as a write of it. A name placed only

@@ -56,6 +56,11 @@ import {
   outputTrusted,
   freshTemp,
   madeTemp,
+  argumentUnreached,
+  trapBodies,
+  joinTests,
+  ownFolderVar,
+  type RunCommand,
   argvStart,
   argvIndex,
   inScriptTemp,
@@ -2797,6 +2802,90 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
   expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
   expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
   expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])
+})
+
+// #2924: a shell script's arguments are not judged as writes only where argumentUnreached finds no
+// route by which one may reach a write. Each route below is named by its own reason, so a control
+// held in the register tests is known to be held by the rule meant to hold it.
+const unreached = (text: string, sourced = true): string | undefined => {
+  const own = pipelineIn(joinTests(text), '/s', '/h') as readonly RunCommand[]
+  const later = trapBodies(own)
+  const all = later.length ? `${text}\n${later.join('\n')}\n` : text
+  const temp = (word: string) => {
+    const v = /^\$(?:\{(\w+)\}|(\w+))$/.exec(word)
+    return v !== null && madeTemp((v[1] ?? v[2]) as string, all, new Set(), true)
+  }
+  return argumentUnreached(commandWrites(all, '/s', '/h'), pipelineIn(joinTests(all), '/s', '/h') as readonly RunCommand[], temp, () => sourced)
+}
+const BASE_2924 = 'like="${2:-}"\nif [[ -z "$like" || "$like" == --* ]]; then exit 2; fi\nwhile [[ $# -gt 0 && -n "$(printf %s "$1")" ]]; do shift; done\ngh_err="$(mktemp)"\ntrap \'rm -f "$gh_err"\' EXIT\nout=""\nout="$(mktemp)"\ngh issue list >"$out" 2>"$gh_err"\nprintf \'%s\' "$like" | python3 -c \'import sys; print(sys.stdin.read(), sys.argv[1])\' "$like"\nprintf x > /s/notes.txt\nsource /s/catch-all.sh\n'
+
+test('#2924: argumentUnreached finds no route to a write in a script writing only its own names and temporary files', () => {
+  expect(unreached(BASE_2924)).toBeUndefined()
+  for (const [add, why] of [
+    ['cp a "$like"', 'it writes $like'],
+    ["printf x > \"$like\"", 'it writes $like'],
+    ['rm -f "$like"', 'it writes $like'],
+    [': > "$like"', 'it writes $like'],
+    ['gh_err="$like"', 'it writes $gh_err'],
+    ['keep() { cat > "$1"; }', 'it writes $1'],
+    ['cd "$like" && printf x > index.html', 'it writes index.html'],
+    ['git checkout -- "$like"', 'it writes $like'],
+    ['eval "$like"', 'it runs eval'],
+    ['"$@"', 'it runs a command named by $@'],
+    ['$like', 'it runs a command named by $like'],
+    // A command after a test is never joined into it.
+    ['[[ -n "$like" ]] && "$1"', 'it runs a command named by $1'],
+    ['[[ -n "$(printf "%s" "$like")" ]] || eval "$like"', 'it runs eval'],
+    ['[[ -n "$like" &&\n "$1" ]] && "$1"', 'it runs a command named by $1'],
+    ["trap 'rm -f \"$like\"' EXIT", 'it writes $like'],
+    ['trap "$cleanup" EXIT', 'it runs a command named by $cleanup'],
+    ['python3 -c \'import sys; open(sys.argv[1], "w")\' "$like"', 'it runs a program whose writes are not all named'],
+    ['bash /s/other.sh "$like"', 'it runs /s/other.sh'],
+    // mod-kit's pipeline gives the command xargs runs, and the name it fills in is no path.
+    ['printf %s "$like" | xargs -I{} cp a {}', 'it writes {}'],
+    ['printf %s "$like" | xargs rm', 'it runs a program whose writes are not all named'],
+    // mod-kit's pipeline gives the command `command` runs, as it does xargs's.
+    ['command cp a "$like"', 'it writes $like'],
+    ['exec > "$like"', 'it writes $like'],
+    ['alias ls="cp a $like"', 'it runs alias'],
+  ] as [string, string][])
+    expect({ add, why: unreached(`${BASE_2924}${add}\n`) }).toEqual({ add, why })
+  // A file sourced that could not be read whole.
+  expect(unreached(BASE_2924, false)).toBe('it sources /s/catch-all.sh, which could not be read whole')
+  // `command -v` only looks a name up.
+  expect(unreached(`${BASE_2924}command -v gh >/dev/null 2>&1\n`)).toBeUndefined()
+})
+
+test('#2924: joinTests joins only a test it can follow to its end on one line', () => {
+  expect(joinTests('if [[ -z "$r" || "$r" == --* ]]; then exit; fi && x')).toBe('if [[ -z "$r" -o "$r" == --* ]]; then exit; fi && x')
+  expect(joinTests('[[ -n "$(a && b)" && -f x ]] && y')).toBe('[[ -n "$(a && b)" -a -f x ]] && y')
+  expect(joinTests("echo '[[ a || b ]]' && x")).toBe("echo '[[ a || b ]]' && x")
+  // Unfollowable, returned as written: a test across lines, a ; inside one, one never closed.
+  for (const text of ['[[ a ||\n b ]] && c', '[[ a; b || c ]]', '[[ a || b'])
+    expect(joinTests(text)).toBe(text)
+})
+
+test('#2924: ownFolderVar reads the one usual idiom for a script\'s own folder, and nothing that may name another', () => {
+  const idiom = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+  expect(ownFolderVar('HERE', `set -u\n${idiom}\nsource "$HERE/x.sh"\n`)).toBe(true)
+  expect(ownFolderVar('HERE', `  ${idiom.replace('${BASH_SOURCE[0]}', '$BASH_SOURCE').replace('&& pwd', '>/dev/null && pwd -P')}\n`)).toBe(true)
+  for (const text of [
+    `cd /tmp\n${idiom}\n`,
+    `${idiom}\nHERE=/w/slate/app\n`,
+    `${idiom}\nHERE+=/app\n`,
+    `${idiom}\nread HERE\n`,
+    `${idiom}\nfor HERE in a b; do :; done\n`,
+    `${idiom}\n: "\${HERE:=/w}"\n`,
+    idiom.replace('${BASH_SOURCE[0]}', '$0'),
+    `x=1; ${idiom}\n`,
+    'HERE="$(pwd)"\n',
+  ])
+    expect({ text, own: ownFolderVar('HERE', text) }).toEqual({ text, own: false })
+  // A temporary file and an empty value count for a write's own variable, never for a joined folder.
+  expect(madeTemp('f', 'f=""\nf="$(mktemp)"\nf=$(mktemp)\n', new Set(), true)).toBe(true)
+  expect(madeTemp('f', 'f="$(mktemp)"\n')).toBe(false)
+  expect(madeTemp('f', 'f=""\n', new Set(), true)).toBe(false)
+  expect(madeTemp('f', 'f="$(mktemp)"\nf="$1"\n', new Set(), true)).toBe(false)
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were
