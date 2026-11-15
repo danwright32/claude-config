@@ -1692,7 +1692,9 @@ def variables_posted(text, place):
     Each program a substitution runs that prints more than its own words comes after them, shown as
     a Ran (#2997): (shown, what it prints, None), the files a cat reads (cat_files) or the directory's
     path and git checkout (place_text), or (shown, None, why not) where that cannot be told: a program
-    whose output cannot be read, and one a cd or directory option takes elsewhere, among them."""
+    whose output cannot be read, and one a cd or directory option takes elsewhere, among them. From a
+    directory known to name nothing (work_checkout False, #3016) a program whose output cannot be read
+    and is not taken elsewhere is left out, and a lookup or cat is judged as it reads now."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
