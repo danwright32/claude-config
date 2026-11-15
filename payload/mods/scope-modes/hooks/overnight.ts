@@ -278,12 +278,25 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
 // while the code runs (`built`), since the whole command arrives then (#2225). A quote with a
 // letter straight after it is an apostrophe (`gh's own store`), not the string's end. Either way
 // the program may be named by its path after another word (`sudo /opt/homebrew/bin/gh`, #2225).
-const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
-  const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
+// sitesFrom gives where in the text each such run starts, at the program's own name (past any path
+// before it), so each one can be judged on its own (#2939); runsFrom is whether there is any.
+const sitesFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
+  const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`, 'g')
   const followed = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
   const bare = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}(?=[ \\t]*(?:['"\`](?![A-Za-z])|[{$%]|$))`, 'g')
+  const tail = new RegExp(`${program}[ \\t]+(?:-[\\w-]*|[a-z][\\w-]*)$`)
   const wordsAfter = (text: string, m: RegExpExecArray): string[] => [m[1] ?? '', ...(text.slice((m.index ?? 0) + m[0].length).match(/[\w-]+/g) ?? [])]
-  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0))) || [...text.matchAll(bare)].some(m => built(text, m.index ?? 0))
+  return (text: string): number[] => {
+    const at = new Set<number>()
+    for (const m of text.matchAll(starts)) at.add(m.index + m[0].length - program.length)
+    for (const m of text.matchAll(followed)) if (calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index))) at.add(m.index + (tail.exec(m[0])?.index ?? 0))
+    for (const m of text.matchAll(bare)) if (built(text, m.index)) at.add(m.index + m[0].length - program.length)
+    return [...at].sort((a, b) => a - b)
+  }
+}
+const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
+  const sites = sitesFrom(program, calls, built)
+  return (text: string): boolean => sites(text).length > 0
 }
 // Whether the string a word at `at` sits in is built while the code runs, so whatever follows the
 // word there is only known then: a placeholder inside it after the word (`{sub}`, `%s`, `$SUB`), or
@@ -330,6 +343,96 @@ const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
 const runsGitFrom = callsWith(GIT_SUBCOMMANDS)
 export const runsGit = runsFrom('git', runsGitFrom)
+
+// #2939: code whose every git call is a local read goes ahead overnight. Each place runsGit finds a
+// git running is read on its own, and the code passes only when every one is a read: git's options
+// before the subcommand are only those that pick a repository or quiet the pager, the subcommand is
+// written out in the code and reads without writing or reaching a remote, and no --output follows
+// it. A call is read in one of two shapes. As an element of a list of arguments (`['git', '-C', wt,
+// 'show', ref]`, `execFileSync('git', [...])`), each later element is one argument, a quoted string
+// is one written out and anything else is known only when the code runs: allowed after the
+// subcommand, never before it. As a command line in a string or a script (`'git log -5'`), its words
+// run up to the string's end or a command boundary, and the string must not be built while the code
+// runs (builtAround), since a placeholder there could carry a second command. Anything else (git
+// alone in its string with its subcommand joined on later, a subcommand in a variable, -c, an
+// unknown option) is not a read, so the code stays refused.
+const GIT_LOCAL_READS: ReadonlySet<string> = new Set(['show', 'cat-file', 'log', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'merge-base', 'show-ref', 'for-each-ref', 'blame', 'describe', 'shortlog'])
+const GIT_VALUED: ReadonlySet<string> = new Set(['-C', '--git-dir', '--work-tree', '--namespace'])
+const GIT_PLAIN: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-replace-objects', '--literal-pathspecs', '--no-optional-locks', '--bare'])
+type Arg = { lit: boolean; v: string }
+const gitArgsRead = (args: readonly Arg[]): boolean => {
+  let k = 0
+  for (; k < args.length; k++) {
+    const a = args[k] as Arg
+    if (!a.lit) return false
+    if (!a.v.startsWith('-')) break
+    if (GIT_VALUED.has(a.v)) k++
+    else if (!GIT_PLAIN.has(a.v) && ![...GIT_VALUED].some(o => o.startsWith('--') && a.v.startsWith(`${o}=`))) return false
+  }
+  const sub = args[k]
+  if (!sub?.lit || !GIT_LOCAL_READS.has(sub.v)) return false
+  // --output writes a file; git takes any unambiguous prefix of four characters or more (--outp).
+  return !args.slice(k + 1).some(a => {
+    const flag = a.v.split('=')[0] ?? ''
+    return a.lit && flag.length >= 4 && '--output'.startsWith(flag)
+  })
+}
+// The elements of a list of arguments from `from` to its closing bracket, or undefined when it never closes.
+const listArgs = (text: string, from: number): Arg[] | undefined => {
+  const out: Arg[] = []
+  let i = from
+  let opened = false
+  while (i < text.length) {
+    const ch = text[i] as string
+    if (/[\s,]/.test(ch)) { i++; continue }
+    if (ch === '[' && !opened && out.length === 0) { opened = true; i++; continue }
+    if (ch === ']' || ch === ')') return out
+    // One element: up to a comma or closing bracket outside any bracket or string of its own.
+    const start = i
+    let depth = 0
+    while (i < text.length) {
+      const c = text[i] as string
+      if (QUOTES.includes(c)) {
+        const end = text.indexOf(c, i + 1)
+        if (end < 0) return undefined
+        i = end + 1
+        continue
+      }
+      if ('([{'.includes(c)) depth++
+      else if (')]}'.includes(c)) { if (depth === 0) break; depth-- }
+      else if (c === ',' && depth === 0) break
+      i++
+    }
+    const el = text.slice(start, i).trim()
+    const q = el[0] ?? ''
+    // Written out: one quoted string and nothing joined on, with nothing inside a template can fill.
+    const lit = QUOTES.includes(q) && el.length >= 2 && el.endsWith(q) && !el.slice(1, -1).includes(q) && !el.includes('\\') && !(q === '`' && el.includes('${'))
+    out.push({ lit, v: lit ? el.slice(1, -1) : el })
+  }
+  return undefined
+}
+const gitSites = sitesFrom('git', runsGitFrom)
+const gitCallReads = (text: string, at: number): boolean => {
+  const end = at + 'git'.length
+  let word = at
+  while (word > 0 && /[\w.~/-]/.test(text[word - 1] ?? '')) word--
+  const before = text[word - 1] ?? ''
+  const after = text[end] ?? ''
+  if (QUOTES.includes(before) && after === before) {
+    const args = listArgs(text, end + 1)
+    return args !== undefined && gitArgsRead(args)
+  }
+  if (after !== ' ' && after !== '\t') return false
+  if (builtAround(text, at)) return false
+  const stop = text.slice(end).search(/[\n;|&)'"`]/)
+  const line = stop < 0 ? text.slice(end) : text.slice(end, end + stop)
+  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>]/.test(v), v })))
+}
+/** Whether every git call runsGit finds in the code is a local read (#2939); false when it finds none. */
+export const gitReadsOnly = (text: string): boolean => {
+  const sites = gitSites(text)
+  return sites.length > 0 && sites.every(at => gitCallReads(text, at))
+}
 // gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
 // the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
@@ -731,7 +834,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // claude-sync, which would reach what the list bans past every rule above.
     if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
-    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || runsGit(c.program.text) || runsGh(c.program.text)))
+    // Code whose every git call is a local read is judged by that reading and goes ahead (#2939).
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !gitReadsOnly(c.program.text)) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the

@@ -757,6 +757,47 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
   })
+  // #2939 (night of 13 to 14 November 2026): a builder compared two JSON files with cmp, then ran an
+  // inline python script that read a third from a commit with git -C <worktree> show HEAD:<path>
+  // through subprocess. It wrote nothing and reached no remote, and was refused. Code whose every git
+  // call is a local read, its subcommand written out where the code is read, now goes ahead.
+  test('code whose only git calls are local reads goes ahead overnight (#2939)', async () => {
+    const wt = `${'/Users'}/x/repo/.claude/worktrees/w1`
+    for (const c of [
+      // The refused shape, in the form the issue describes.
+      `cmp /notes/a.json /notes/b.json; python3 -I -c 'import json, subprocess; a = json.load(open("/notes/a.json")); b = json.loads(subprocess.run(["git", "-C", "${wt}", "show", "HEAD:payload/x.json"], capture_output=True, text=True, check=True).stdout); print(sorted(k for k in a if a[k] != b.get(k)))'`,
+      `python3 -c "import subprocess; p = 'payload/x.json'; print(subprocess.check_output(['git', '-C', '${wt}', '--no-pager', 'show', 'HEAD:' + p]))"`,
+      `python3 -c "import subprocess; ref = 'HEAD'; print(subprocess.check_output(['git', 'cat-file', '-p', ref]))"`,
+      `python3 -c "import subprocess; print(subprocess.check_output('git log --oneline -5', shell=True))"`,
+      `python3 -c "import subprocess; a = subprocess.check_output(['git', 'diff', 'main', '--stat']); b = subprocess.check_output(['git', 'rev-parse', 'HEAD'])"`,
+      `node -e "const wt = '${wt}'; console.log(require('child_process').execFileSync('git', ['-C', wt, 'diff', 'origin/main', '--stat']).toString())"`,
+      `python3 -c "import subprocess; subprocess.run(['/usr/bin/env', 'git', 'ls-files', '-z'])"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
+  test('code with any git call that is not a plain local read, or whose subcommand is only known when it runs, is still refused (#2939)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    for (const c of [
+      // A read beside a write: every call must be a read.
+      `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:x']); subprocess.run(['git', 'push'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'commit', '-m', 'x'])"`,
+      `python3 -c "import subprocess; subprocess.run('git show HEAD:x; git push origin main', shell=True)"`,
+      // A subcommand, or a string run through a shell, known only when the code runs.
+      `python3 -c "import subprocess; sub = 'push'; subprocess.run(['git', sub, 'HEAD'])"`,
+      `python3 -c "import subprocess; ref = 'HEAD'; subprocess.run(f'git show {ref}', shell=True)"`,
+      `python3 -c "import subprocess; wt = '/x'; subprocess.run('git -C ' + wt + ' show HEAD:x', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run(['git'] + ['show'])"`,
+      // Options that run a program, change the config, or write a file.
+      `python3 -c "import subprocess; subprocess.run(['git', '-c', 'alias.show=!rm -rf x', 'show'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', '--exec-path=/tmp/x', 'show'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'show', '--output=/tmp/x', 'HEAD'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'grep', '-O', 'x'])"`,
+      // A read beside gh or a database client is still refused for those.
+      `python3 -c "import subprocess; subprocess.run(['git', 'log']); subprocess.run(['gh', 'pr', 'merge', '5'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'log']); subprocess.run(['psql', '-c', 'select 1'])"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
+  })
 })
 
 describe('what is never approved, and the disk readers', () => {
