@@ -609,10 +609,12 @@ check "#2981 (control) a private repository is not asked about its directory: $o
 # ---------------------------------------------------------------- programs a substitution runs (claude-config#2997)
 # A substitution running git, or any program this check cannot show prints no directory or remote,
 # was judged by its spelling, so "$(git rev-parse --show-toplevel)" or "$(git remote get-url origin)"
-# run from a work checkout posted the checkout's path or repository and passed. Each is judged by where
-# it runs: the directory's path and, in a git checkout, its git directories and remotes. A program run
-# after a cd or with git -C, where this check cannot follow it, is refused wherever the command runs.
-# Commands in a sh -c or bash -c string and in an unquoted heredoc body are read the same way.
+# run from a work checkout posted the checkout's path or repository and passed. Each program is judged
+# by what it can print: pwd and the git lookups of the checkout by where they run (the directory's
+# path, and in a git checkout its git directories, remotes and branch), cat by the files it reads, and
+# any program whose output this check cannot read is refused wherever the command runs (the lessons
+# review of e4c7d07), as is one a cd or git -C takes where this check cannot follow it. Commands in a
+# sh -c or bash -c string and in an unquoted heredoc body are read the same way.
 REMOTECO="$WORK/apps/plain-notes"; mkdir -p "$REMOTECO"
 git -C "$REMOTECO" init -q
 git -C "$REMOTECO" remote add origin https://github.com/Acme-Corp/acme-widgets.git
@@ -633,11 +635,29 @@ check "#2997 and the remote read from git config: $out" refused
 RUN_DIR="$REMOTECO" run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$(git rev-parse --show-toplevel)\""
 check "#2997 and a gh api write posting the top level lookup: $out" refused
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
-check "#2997 cat of a file from a work checkout is judged by where it runs: $out" refused
+check "#2997 (control) cat prints only its file, so a clean file passes even from a work checkout: $out" passed
+# A program whose output this check cannot read is refused wherever it runs (the lessons review of
+# e4c7d07): file text by another program, commit messages, and a git lookup with other options.
+printf 'Nothing to see.\n' > "$CO/clean-2997.md"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(head -1 clean-2997.md)\""
+check "#2997 head of a file is refused from a clean directory: $out" refused
+check "#2997 saying its output cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(command cat clean-2997.md)\""
+check "#2997 and so is cat run through command: $out" refused
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git log -1 --format=%s)\" --body x"
+check "#2997 and git log, whose commit messages are not read, from a clean checkout: $out" refused
+LONG="--show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse $LONG) \$(git rev-parse $LONG --since=x)\" --body x"
+check "#2997 two programs alike for their first 120 characters are each judged: $out" refused
+BRANCHCO="$WORK/apps/fern-notes"; mkdir -p "$BRANCHCO"
+git -C "$BRANCHCO" init -q
+git -C "$BRANCHCO" symbolic-ref HEAD refs/heads/fix-acme-widgets
+RUN_DIR="$BRANCHCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
+check "#2997 the branch lookup from a checkout whose branch names a work repository is refused: $out" refused
+check "#2997 and says the name: $out" has "$out" "acme-widgets"
 # cat's output is the file's text, which is read and judged wherever it runs (the lessons review of
 # 028d7e6): here from a directory whose path names nothing.
 printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
-printf 'Nothing to see.\n' > "$CO/clean-2997.md"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat named-2997.md)\""
 check "#2997 cat of a file naming a work repository is refused from a clean directory: $out" refused
 check "#2997 and says the name the file holds: $out" has "$out" "zephyr"
@@ -691,6 +711,8 @@ EOF
 check "#2997 (control) and cat of an unquoted heredoc: $out" passed
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body \"\$(git remote get-url origin)\""
 check "#2997 (control) git from a checkout whose path and remote name nothing passes: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current) \$(git config --get remote.origin.url) \$(git rev-parse --abbrev-ref HEAD)\" --body x"
+check "#2997 (control) and so do the branch and remote lookups there: $out" passed
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git rev-parse --show-toplevel')\" --body x"
 check "#2997 (control) and so does git run by sh -c there: $out" passed
 RUN_DIR="$WORKCO" run "cd \"\$(git rev-parse --show-toplevel)\" && gh issue create --repo danwright-test/public-notes --title x --body y"

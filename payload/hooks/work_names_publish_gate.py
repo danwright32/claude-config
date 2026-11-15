@@ -25,9 +25,10 @@ is judged by its text and refused when it cannot be read.
 What the shell puts into that text is judged too (variables_posted): a variable by its value (#2961),
 ~+, ~- and a pwd substitution by the directory (#2981), and since #2997 every program a command
 substitution runs, in the posted text, in an unquoted heredoc body, or in a sh -c, bash -c or eval
-string there, by what it can print of where it runs: the directory's path and its git checkout's
-directories and remotes (place_text), and for cat the files it reads (cat_files). echo, printf and
-date without a glob, and cat reading only a heredoc, are shown to print none of that and pass.
+string there, by what it prints (prints): echo, printf, date, basename and dirname their own words,
+cat the files it reads (cat_files), pwd and the git lookups of the checkout where they run (the
+directory's path and its git checkout's directories, remotes and branch, place_text). Any other
+program, whose output cannot be read before the command runs, is refused wherever it runs.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -48,9 +49,11 @@ unreadable, empty or of the wrong shape, the registry unreadable, the project li
 holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
 cannot be read but names a judged gh command, a variable or directory whose value cannot be known,
-a program a substitution runs that a cd or directory option in it takes elsewhere, or that runs where
-the command cannot be followed or git cannot read the checkout, a file a cat there reads that is
-missing, not a regular file or past CAT_LIMIT, and the time budget spent. No registry at all is fine.
+a program a substitution runs whose output this check cannot read, one a cd or directory option in
+it takes elsewhere, one run where the command cannot be followed or git cannot read the checkout, a
+cat there reading standard input, a redirection, a name the shell changes as it runs (an expansion,
+a glob, a tilde) or a file that is missing, not a regular file or past CAT_LIMIT, and the time budget
+spent. No registry at all is fine.
 
 The refusal names the name it matched. It goes only to the session, which already holds the command
 text the name is in; it is never written to a file or a log.
@@ -1319,36 +1322,74 @@ READS_BACK = re.compile(r"\$_\b|\$\{_\}|\$\(|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 
 # A program a substitution runs (claude-config#2997). Its spelling names nothing, so a title of
 # "$(git rev-parse --show-toplevel)" or "$(git remote get-url origin)", run from a work checkout,
-# posted the checkout's path or repository and passed. Each program is judged by what it can print of
-# where it runs (place_text): the directory's path and, in a git checkout, its git directories and
-# remotes. Only a few are shown to print none of that: echo and printf print their own words, judged
-# as written with their expansions judged on their own, date prints the time, and cat with nothing but
-# a heredoc to read prints the body, read as text itself. A word the shell fills with file names (an
-# unquoted glob) makes echo or printf one whose output is not shown.
-PRINTS_OWN_WORDS = frozenset({"echo", "printf", "date"})
+# posted the checkout's path or repository and passed. Each program is judged by what it can print
+# (prints): echo, printf, date, basename and dirname print their own words, judged as written with
+# their expansions judged on their own, and cat reading only a heredoc prints its body, read as text
+# itself; cat of files prints the files, read and judged (cat_files); pwd and the git lookups of the
+# checkout (PLACE_GIT) print where they run, judged by place_text. Any other program prints what this
+# check cannot read before the command runs, so it is refused wherever the command runs (the lessons
+# review of e4c7d07: head, sed, git log and the like print file text or commit messages). A word the
+# shell fills with file names (an unquoted glob) makes a program's output unreadable too.
+PRINTS_OWN_WORDS = frozenset({"echo", "printf", "date", "basename", "dirname"})
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 GLOB = re.compile(r"[*?\[]")
+# git lookups whose output is the checkout's place, as (subcommand, the arguments it may take): its
+# directories, its remotes, its branch. An argument outside these makes it a program like any other.
+REMOTE_NAME = re.compile(r"[A-Za-z0-9_.-]+\Z")
+PLACE_GIT = {
+    "rev-parse": frozenset({"--show-toplevel", "--show-prefix", "--show-cdup", "--git-dir",
+                            "--absolute-git-dir", "--git-common-dir", "--show-superproject-working-tree",
+                            "--is-inside-work-tree", "--is-inside-git-dir", "--is-bare-repository",
+                            "--path-format=absolute", "--path-format=relative", "--abbrev-ref",
+                            "--symbolic-full-name", "--verify", "--quiet", "-q", "HEAD"}),
+    "symbolic-ref": frozenset({"--short", "--quiet", "-q", "HEAD"}),
+    "branch": frozenset({"--show-current"}),
+}
 # What takes a program somewhere this check cannot follow: a cd, pushd or popd in its substitution,
 # git's -C, --git-dir or --work-tree, env's -C or --chdir, and git's directory set in the environment.
 CHANGES_DIR = frozenset({"cd", "pushd", "popd"})
 MOVES = re.compile(r"(?:^|\s)(?:-C|--chdir|--git-dir|--work-tree)(?=[\s=]|$)"
                    r"|\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)=")
+# What a program prints, as prints() names it.
+OWN, FILES, PLACE, UNREAD = "own words", "files", "place", "unread"
 
 
 class Ran(str):
-    """How a program a substitution runs is shown in a refusal; judged by where it runs, not its value."""
+    """How a program a substitution runs is shown in a refusal; judged by what it prints, not a value.
+    printed is what prints() said it prints."""
+    printed = PLACE
 
 
-def _prints_no_place(text):
-    """Whether the one command text is shown to print nothing of where it runs (PRINTS_OWN_WORDS)."""
+def _git_place(words):
+    """Whether git's words (git first) are a lookup of the checkout's place (PLACE_GIT)."""
+    sub, args = (words[1] if len(words) > 1 else ""), words[2:]
+    if sub in PLACE_GIT:
+        return all(a in PLACE_GIT[sub] for a in args)
+    if sub == "remote":
+        if args[:1] == ["get-url"]:
+            names = [a for a in args[1:] if a not in ("--push", "--all")]
+            return len(names) == 1 and bool(REMOTE_NAME.match(names[0]))
+        return all(a in ("-v", "--verbose") for a in args)
+    if sub == "config":
+        keys = [a for a in args if a not in ("--get", "--get-all", "--local")]
+        return len(keys) == 1 and keys[0].lower().startswith("remote.") and "=" not in keys[0]
+    return False
+
+
+def prints(text):
+    """What the one command text prints (OWN, FILES, PLACE or UNREAD), as the comment above says."""
     words = scan._sw.command_words(text)
     if not words:
-        return True
+        return OWN
+    if GLOB.search(QUOTED.sub("", text)):
+        return UNREAD
     if words[0] in PRINTS_OWN_WORDS:
-        return not GLOB.search(QUOTED.sub("", text))
+        return OWN
+    if words[0] == "pwd" or (words[0] == "git" and _git_place(words)):
+        return PLACE
     rest = text.lstrip()
     if words[0] != "cat" or not rest.startswith("cat"):
-        return False
+        return UNREAD
     i, n = 3, len(rest)
     while i < n:
         if rest[i] in " \t\n":
@@ -1356,15 +1397,16 @@ def _prints_no_place(text):
             continue
         op = scan._sw.heredoc_opener(rest, i) if rest.startswith("<<", i) else None
         if not op:
-            return False
+            return FILES
         i = op[3]
-    return True
+    return OWN
 
 
 def _group_runs(texts, depth):
-    """(the commands among texts not shown to print nothing of where they run, whether one of them
-    can be taken elsewhere) for the commands of one substitution. A string a shell, eval or env -S
-    runs is read as commands of the same substitution; one that cannot be read is taken as moving."""
+    """([(command, what it prints)] for the commands among texts that print more than their own words,
+    whether one of them can be taken elsewhere) for the commands of one substitution. A string a
+    shell, eval or env -S runs is read as commands of the same substitution; one that cannot be read
+    is a program whose output cannot be read, and is taken as moving."""
     runs, moved = [], False
     for text in texts:
         words = scan._sw.command_words(text)
@@ -1377,21 +1419,23 @@ def _group_runs(texts, depth):
                     raise scan._sw.Unreadable("wrapped too deep")
                 inner = [t for _d, t in scan._sw.commands(wrap[1])]
             except scan._sw.Unreadable:
-                runs.append(text)
+                runs.append((text, UNREAD))
                 moved = True
                 continue
             more, went = _group_runs(inner, depth + 1)
             runs += more
             moved = moved or went
-        elif not _prints_no_place(text):
-            runs.append(text)
+            continue
+        printed = prints(text)
+        if printed != OWN:
+            runs.append((text, printed))
     return runs, moved
 
 
 def substitution_runs(text):
-    """[(command, moved)] for each command a substitution in text runs that is not shown to print
-    nothing of where it runs (_prints_no_place), moved when something in its substitution can take it
-    elsewhere (CHANGES_DIR, MOVES). The commands of an unquoted heredoc body's substitutions count
+    """[(command, what it prints, moved)] for each command a substitution in text runs that prints
+    more than its own words (prints), moved when something in its substitution can take it elsewhere
+    (CHANGES_DIR, MOVES). The commands of an unquoted heredoc body's substitutions count
     (claude-config#2053), and so do those of a string a sh -c, bash -c or eval there runs. A
     substitution that is a cd's directory is left out: its output is where the command runs, which
     is judged as that, not posted. Raises scan._sw.Unreadable."""
@@ -1410,8 +1454,8 @@ def substitution_runs(text):
         group = [text[p["start"]:p["end"]] for p in parts if lo <= p["start"] and p["end"] <= hi]
         runs, moved = _group_runs(group, 0)
         # The program a cd takes elsewhere is named before the cd that takes it.
-        runs.sort(key=lambda run: scan._sw.command_words(run)[:1] in (["cd"], ["pushd"], ["popd"]))
-        out += [(run, moved) for run in runs]
+        runs.sort(key=lambda run: scan._sw.command_words(run[0])[:1] in (["cd"], ["pushd"], ["popd"]))
+        out += [(run, printed, moved) for run, printed in runs]
     return out
 
 
@@ -1421,7 +1465,8 @@ _PLACES = {}
 def place_text(where):
     """What a program run in where can print of it, for the name check: the directory's path, as
     given and with its links resolved, and in a git checkout its top level, git directories, the
-    superproject's top level and every remote's URL as git remote -v gives them, rewrites applied.
+    superproject's top level, every remote's URL as configured and as git remote -v gives it with
+    rewrites applied, and the branch HEAD is on.
     Raises CannotTell when git cannot read the checkout."""
     if where not in _PLACES:
         reading = "the checkout a substitution runs in"
@@ -1438,9 +1483,11 @@ def place_text(where):
                 raise CannotTell("git could not list the remotes of the checkout a substitution runs in "
                                  "(%s)" % (remotes.stderr or "").strip()[:200])
             found += [dirs.stdout, remotes.stdout]
-            for flag in ("--show-toplevel", "--show-superproject-working-tree"):
-                top = _git(where, "rev-parse", flag, reading=reading)
-                found.append(top.stdout if top.returncode == 0 else "")
+            # The remotes as configured, before a rewrite, and the branch HEAD is on; each may be absent.
+            for args in (("rev-parse", "--show-toplevel"), ("rev-parse", "--show-superproject-working-tree"),
+                         ("config", "--get-regexp", r"^remote\."), ("symbolic-ref", "--quiet", "HEAD")):
+                got = _git(where, *args, reading=reading)
+                found.append(got.stdout if got.returncode == 0 else "")
         _PLACES[where] = "\n".join(found)
     return _PLACES[where]
 
@@ -1475,9 +1522,11 @@ def cat_files(command, where):
 
 def _expanded(shown, hit):
     """How the text a name was found in reached the posted text, for a refusal."""
+    if isinstance(shown, Ran) and shown.printed == FILES:
+        return "has %s, and the file it prints names %s" % (shown, _shown(hit))
     if isinstance(shown, Ran):
-        return ("has %s, which runs where the command does, and what it can print there (that "
-                "directory's path and git checkout, or the files it reads) names %s" % (shown, _shown(hit)))
+        return ("has %s, which runs where the command does, and the path or git checkout there names %s"
+                % (shown, _shown(hit)))
     return "expands %s, whose value names %s" % (shown, _shown(hit))
 
 
@@ -1489,10 +1538,10 @@ def variables_posted(text, place):
     `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f).
     ~+, ~- and a pwd substitution are judged as $PWD and $OLDPWD are, by the directory (#2981).
 
-    Each program a substitution runs that is not shown to print nothing of where it runs comes after
-    them, shown as a Ran (#2997): (shown, what it can print there, None), the directory's path and git
-    checkout (place_text) and the files a cat reads (cat_files), or (shown, None, why not) where that
-    cannot be told, one a cd or directory option takes elsewhere among them."""
+    Each program a substitution runs that prints more than its own words comes after them, shown as
+    a Ran (#2997): (shown, what it prints, None), the files a cat reads (cat_files) or the directory's
+    path and git checkout (place_text), or (shown, None, why not) where that cannot be told: a program
+    whose output cannot be read, and one a cd or directory option takes elsewhere, among them."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
@@ -1530,19 +1579,24 @@ def variables_posted(text, place):
     except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
         return out + [(Ran("its command substitutions"), None, "could not be read (%s: %s)"
                        % (type(e).__name__, e))]
-    for command, moved in runs:
-        shown = Ran("a substitution running %s" % " ".join(command.split())[:120])
-        if shown in seen:
+    for command, printed, moved in runs:
+        key = (" ".join(command.split()), printed)
+        if key in seen:
             continue
-        seen.add(shown)
-        if moved:
+        seen.add(key)
+        shown = Ran("a substitution running %s" % key[0][:120])
+        shown.printed = printed
+        if printed == UNREAD:
+            out.append((shown, None, "prints what this check cannot read before the command runs"))
+        elif moved:
             out.append((shown, None, "runs it where a cd or a directory option in that substitution "
                                      "takes it, which this check does not follow"))
         elif not place.cwd:
             out.append((shown, None, "runs it in a directory this check cannot follow the command to"))
         else:
             try:
-                out.append((shown, place_text(place.cwd) + "\n" + cat_files(command, place.cwd), None))
+                value = cat_files(command, place.cwd) if printed == FILES else place_text(place.cwd)
+                out.append((shown, value, None))
             except CannotTell as e:
                 out.append((shown, None, "runs where the command does, and %s" % e))
     return out
