@@ -1145,6 +1145,26 @@ SH_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 SH_COMPOUND = re.compile(r"^(?:(?:if|then|elif|else|fi|do|done|while|until|for|select|case|esac|function|coproc|time|!)"
                          r"(?=[\s;&|()]|$)|[{}()]|\[\[)")
 SH_FUNC_DEF = re.compile(r"^[A-Za-z_][\w:.-]*\s*\(\s*\)")
+# A control operator, as Judge.sh_tokens reads one past the redirections.
+SH_TOKEN_OP = re.compile(r"&&|\|\||;;|[;&|()]")
+# The characters Judge.sh_word_end only steps over, outside double quotes and inside them: all but a
+# backslash, a quote, a $ and (outside) white space (\s is exactly str.isspace) and an operator.
+SH_WORD_PLAIN = re.compile(r"""[^\\'"$;&|<>()\s]*""")
+SH_WORD_PLAIN_DQ = re.compile(r'[^\\"$]*')
+# A character that makes a raw word other than its own value (Judge.sh_value).
+SH_VALUE_SPECIAL = re.compile(r"[$`\\\"' \t*?\[\]{}~();&|<>]")
+# What sh_strip_openers takes off a command's front, besides a function's own header (SH_FUNC_DEF).
+SH_FUNCTION_KW = re.compile(r"function\s+[A-Za-z_][\w:.-]*(?:\s*\(\s*\))?")
+SH_OPENER_KW = re.compile(r"(?:if|then|elif|else|do|while|until|time|!|\{)(?=[\s;&|]|$)")
+# How Judge.sh_struct reads the front of a command: a keyword that carries a block on, one that opens
+# an if or a loop, a for, select or case header, and a group's brace.
+SH_STRUCT_CARRY = re.compile(r"(?:then|else|do|elif|!|time)(?=[\s;&|()]|$)\s*")
+SH_STRUCT_OPEN = re.compile(r"(if|while|until)(?=[\s;&|()]|$)\s*")
+SH_STRUCT_HEADED = re.compile(r"(?:for|select|case)(?=\s|$)")
+SH_STRUCT_BRACE = re.compile(r"\{(?=\s|$)")
+SH_STRUCT_FUNCTION = re.compile(r"function\s+[^\s(){}]+(?:\s*\(\s*\))?\s*")
+SH_STRUCT_FUNC = re.compile(r"[A-Za-z_][\w:.-]*\s*\(\s*\)\s*")
+SH_STRUCT_CLOSE = re.compile(r"(fi|done|esac|\})(?=[\s;&|<>)]|$)")
 # printf binds a name only through -v (claude-config#2683): read like the others, every suite's
 # closing `printf 'SUITE-RESULT passed=...'` bound SUITE, and a quoted `make-settled.py` bound py.
 SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let)\b"
@@ -1288,6 +1308,17 @@ def sh_eval_mention(names):
     return re.compile(r"(?<![\w.:-])(?:" + "|".join(re.escape(f) for f in names) + r")(?![\w.:-])")
 
 
+@functools.lru_cache(maxsize=None)
+def sh_strip_openers_of(t):
+    """Judge.sh_strip_openers, read afresh: a string for a string, so every caller can share it."""
+    t = t.strip()
+    while True:
+        m = SH_FUNC_DEF.match(t) or SH_FUNCTION_KW.match(t) or SH_OPENER_KW.match(t)
+        if not m or m.end() == 0:
+            return t
+        t = t[m.end():].lstrip()
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -1394,7 +1425,18 @@ def remember_readings(mod):
             cds[text] = plain_cd(text) if SH_CD_SPELLED.search(text) else None
         return cds[text]
 
-    mod.commands, mod.command_rest, mod.cd_target = commands, command_rest, cd_target
+    # first_word(s) too, the reader's shlex reading of a command's first word, which wrapped() and
+    # past_runners() ask of every command and again of what follows each runner: 72,000 shlex
+    # readings judging the claude-sync suite (claude-config#2918). A pair of strings, so shared.
+    plain_first, firsts = mod.first_word, {}
+
+    def first_word(s):
+        got = firsts.get(s)
+        if got is None:
+            got = firsts[s] = plain_first(s)
+        return got
+
+    mod.commands, mod.command_rest, mod.cd_target, mod.first_word = commands, command_rest, cd_target, first_word
 
 
 def load_reader():
@@ -1993,7 +2035,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if not home:
                 return None
             raw = "'" + home.replace("'", "'\\''") + "'" + raw[1:]
-        if not re.search(r"[$`\\\"' \t*?\[\]{}~();&|<>]", raw):
+        if not SH_VALUE_SPECIAL.search(raw):
             return raw
         v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, self.shell["script"], False)
         return None if splits else v
@@ -4239,28 +4281,29 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             last_end = max(last_end, p["end"])
             head, pending = t.strip(), brace
             while head:
-                m = re.match(r"(?:then|else|do|elif|!|time)(?=[\s;&|()]|$)\s*", head)
+                # Compiled once (SH_STRUCT_*): asked of every command of every text walked, 218,000
+                # pattern lookups judging the claude-sync suite (claude-config#2918).
+                m = SH_STRUCT_CARRY.match(head)
                 if m:
                     head = head[m.end():]
                     continue
-                m = re.match(r"(if|while|until)(?=[\s;&|()]|$)\s*", head)
+                m = SH_STRUCT_OPEN.match(head)
                 if m:
                     push("if" if m.group(1) == "if" else "loop")
                     head = head[m.end():]
                     continue
-                if re.match(r"(?:for|select|case)(?=\s|$)", head):
+                if SH_STRUCT_HEADED.match(head):
                     push("case" if head.startswith("case") else "loop")
                     head = ""  # its words are no command
                     break
-                if re.match(r"\{(?=\s|$)", head):
+                if SH_STRUCT_BRACE.match(head):
                     if brace:
                         brace = False  # the body of the function opened on the command before
                     else:
                         push("group")
                     head = head[1:].lstrip()
                     continue
-                m = re.match(r"function\s+[^\s(){}]+(?:\s*\(\s*\))?\s*", head) or \
-                    re.match(r"[A-Za-z_][\w:.-]*\s*\(\s*\)\s*", head)
+                m = SH_STRUCT_FUNCTION.match(head) or SH_STRUCT_FUNC.match(head)
                 if m:
                     if brace:
                         return None
@@ -4287,7 +4330,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return None
             # A closing keyword, and any that follow it in the same command: `f(){ if x; then y; fi }`
             # closes the if and the function's body together (test-merged-prs.sh; claude-config#2538).
-            m = re.match(r"(fi|done|esac|\})(?=[\s;&|<>)]|$)", head)
+            m = SH_STRUCT_CLOSE.match(head)
             while m:
                 want = {"fi": ("if",), "done": ("loop",), "esac": ("case",), "}": ("group", "func")}[m.group(1)]
                 if not stack or blocks[stack[-1]]["kind"] not in want:
@@ -4524,14 +4567,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """t with what opens or carries on a compound command taken off its front (a function's
         `name() {`, `function name {`, if, then, do, while, until, else, !, a brace), so the command
         it runs is the one judged: `f() { eval "$1=1"; }` on one line read as a call to f() and its
-        eval went unseen (claude-config#2465)."""
-        t = t.strip()
-        while True:
-            m = SH_FUNC_DEF.match(t) or re.match(r"function\s+[A-Za-z_][\w:.-]*(?:\s*\(\s*\))?", t) or \
-                re.match(r"(?:if|then|elif|else|do|while|until|time|!|\{)(?=[\s;&|]|$)", t)
-            if not m or m.end() == 0:
-                return t
-            t = t[m.end():].lstrip()
+        eval went unseen (claude-config#2465). Worked out once for each text: it depends on the text
+        alone, and the walk and the judging of each command ask it of the same commands, 65,000 times
+        judging the claude-sync suite (claude-config#2918)."""
+        return sh_strip_openers_of(t)
 
     def sh_evaluator(self, text, items, struct, k):
         """(name, n) where items[k] is `eval "$n"` directly in the body of the function name of text,
@@ -4808,10 +4847,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 out.append(("op", m.group(0)))
                 i = m.end()
                 continue
-            m = re.match(r"&&|\|\||;;|[;&|()]", s[i:])
+            # Matched where it stands, not on a copy of the rest of s for every token (#2918).
+            m = SH_TOKEN_OP.match(s, i)
             if m:
                 out.append(("op", m.group(0)))
-                i += len(m.group(0))
+                i = m.end()
                 continue
             end = self.sh_word_end(s, i)
             out.append(("word", s[i:end]))
@@ -4851,6 +4891,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """Where the shell word starting at i ends: at unquoted space or an operator."""
         dq, n = False, len(s)
         while i < n:
+            # Past the characters that only carry the word on (SH_WORD_PLAIN): every word of every
+            # command was stepped one character at a time, 175,000 words judging the claude-sync
+            # suite (claude-config#2918).
+            i = (SH_WORD_PLAIN_DQ if dq else SH_WORD_PLAIN).match(s, i).end()
+            if i >= n:
+                break
             c = s[i]
             if c == "\\":
                 i += 2

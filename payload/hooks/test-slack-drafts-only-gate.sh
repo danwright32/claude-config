@@ -4148,15 +4148,24 @@ def before(head, evals):
     return lits
 
 # A command naming none of the functions is searched by no pattern and cut of no openers.
+# Both routes to a search are counted: re.search (a pattern built per call) and the pattern for the
+# set of names (sh_eval_mention), so taking out the test that comes before either is seen.
 searched, stripped = [], []
-real_search, real_strip = gate.re.search, j.sh_strip_openers
+real_search, real_strip, real_mention = gate.re.search, j.sh_strip_openers, gate.sh_eval_mention
 gate.re.search = lambda *a, **k: searched.append(a[0]) or real_search(*a, **k)
+gate.sh_eval_mention = lambda names: searched.append(names) or real_mention(names)
 j.sh_strip_openers = lambda t: stripped.append(t) or real_strip(t)
 j.shell = dict(j.shell, known={"evals": evals})
 for head in ("echo hi there", "if git status --short; then", "  ok \"it ran\""):
     if j.sh_eval_call(head, evals) is not None or j.sh_eval_text_reason(head, {}, 0) is not None:
         wrong.append("%r, which names no evaluating function, was read as calling one" % head)
-gate.re.search, j.sh_strip_openers = real_search, real_strip
+# A command that does name one is still searched, so the counting above is seen to count.
+before_call, before_strip = len(searched), len(stripped)
+j.sh_eval_call("check 'n' 'true'", evals)
+if len(searched) == before_call or len(stripped) == before_strip:
+    wrong.append("a command calling check was not searched and cut, so the counts above measure nothing")
+del searched[before_call:], stripped[before_strip:]
+gate.re.search, j.sh_strip_openers, gate.sh_eval_mention = real_search, real_strip, real_mention
 if searched or stripped:
     wrong.append("a command naming no evaluating function was searched %d times and cut of its openers %d times, not 0"
                  % (len(searched), len(stripped)))
@@ -4187,10 +4196,69 @@ if differ:
     wrong.append("sh_eval_call answered differently for %d of %d commands, first %r" % (len(differ), 3 * len(heads), differ[0]))
 if len(heads) < 1000 and extra:
     wrong.append("only %d commands were compared" % len(heads))
+
+# sh_word_end goes past the characters that only carry a word on in one step, not one at a time, and
+# ends every word where it did: checked against the reading it replaced from every offset of every line.
+def word_end_before(s, i):
+    dq, n = False, len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and not dq:
+            jq = s.find("'", i + 1)
+            if jq < 0:
+                return n
+            i = jq + 1
+            continue
+        if c == '"':
+            dq = not dq
+        elif s.startswith("$(", i):
+            jq = gate.Judge.sh_close(s, i + 2)
+            if jq is None:
+                return n
+            i = jq
+        elif s.startswith("${", i):
+            jq = gate.Judge.sh_brace_close(s, i + 2)
+            if jq is None:
+                jq = s.find("}", i)
+            if jq < 0:
+                return n
+            i = jq
+        elif not dq and (c.isspace() or c in ";&|<>()"):
+            return i
+        i += 1
+    return n
+
+taken = [0]
+class Counted(str):
+    def __getitem__(self, k):
+        taken[0] += 1
+        return str.__getitem__(self, k)
+for word in ("x" * 5000, '"%s"' % ("y z " * 1250), "a=%s$(date)%s" % ("b" * 2500, "c" * 2500)):
+    taken[0] = 0
+    got = j.sh_word_end(Counted(word + " next"), 0)
+    if got != len(word):
+        wrong.append("sh_word_end ended %r... at %d, not %d" % (word[:20], got, len(word)))
+    if taken[0] > 50:
+        wrong.append("sh_word_end took %d characters of a %d character word one at a time" % (taken[0], len(word)))
+ends = 0
+crafted = ["a b c", "x\x1cy z", "\"a b\" c", "'q r' s", "${x:-it's} y", "a\\ b c", "\"$(echo \")\") x"]
+for head in heads + crafted:
+    # Every offset of a crafted text; where a word starts, as sh_tokens asks, in the others.
+    for i in (range(len(head)) if head in crafted else
+              [k for k in range(len(head)) if k == 0 or head[k - 1].isspace()]):
+        ends += 1
+        if j.sh_word_end(head, i) != word_end_before(head, i):
+            wrong.append("sh_word_end(%r, %d) gave %r, before %r" % (head[:60], i, j.sh_word_end(head, i), word_end_before(head, i)))
+            break
+if ends < 100000 and extra:
+    wrong.append("sh_word_end was compared at only %d places" % ends)
 print("; ".join(wrong) or "ok")
 PY
 evalcuts="$(python3 -B "$T/evalcuts.py" "$DIR/slack_drafts_only_gate.py" ${CS:+"$CS"} ${REPO:+"$REPO/tests/test-claude-sync.sh"} 2>&1)"
-check "a command naming no function that evaluates its argument is read no further, and sh_eval_call answers as before (#2918)" "$evalcuts"
+check "a command naming no function that evaluates its argument is read no further, a word's plain characters are passed in one step, and each answers as before (#2918)" "$evalcuts"
 
 echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"
 
