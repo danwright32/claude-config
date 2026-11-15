@@ -3542,7 +3542,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
-Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
+(made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
+missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
+runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest

@@ -108,7 +108,9 @@ have_scope=""
 
 command -v python3 >/dev/null 2>&1 || couldnt "python3 is not on the PATH"
 
-out="$(printf '%s' "$payload" | GATE_DIR="$HOOK_DIR" python3 "$HOOK_DIR/slack_drafts_only_gate.py" 2>&1)"
+# String hashing fixed, so the gate iterates its sets in the same order on every run and a judgement
+# it keeps is the one a fresh run would make: the cache keeps and uses nothing otherwise (#2965).
+out="$(printf '%s' "$payload" | GATE_DIR="$HOOK_DIR" PYTHONHASHSEED=0 python3 "$HOOK_DIR/slack_drafts_only_gate.py" 2>&1)"
 rc=$?
 verdict="${out%%$'\n'*}"
 detail=""
