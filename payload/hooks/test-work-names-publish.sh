@@ -146,6 +146,9 @@ run(){   # $1 = the command; output in out, exit code in rc, the decision in dec
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
 passed(){ [ "$rc" -eq 0 ] && [ -z "$decision" ]; }
+# Refused as a program whose output cannot be read, never by the name where it runs: from a work
+# checkout a git lookup is refused either way, so only the reason shows which reading was taken.
+refused_unread(){ refused && has "$out" "cannot read before the command runs"; }
 
 # ---------------------------------------------------------------- 1. refused in a public repository
 run 'gh pr create --repo danwright32-test/x --title "Fix it" --body "copied from the acme-widgets issue"'
@@ -621,6 +624,9 @@ git -C "$REMOTECO" remote add origin https://github.com/Acme-Corp/acme-widgets.g
 CLEANGIT="$WORK/apps/garden-notes"; mkdir -p "$CLEANGIT"
 git -C "$CLEANGIT" init -q
 git -C "$CLEANGIT" remote add origin https://github.com/danwright-test/public-notes.git
+BRANCHCO="$WORK/apps/fern-notes"; mkdir -p "$BRANCHCO"
+git -C "$BRANCHCO" init -q
+git -C "$BRANCHCO" symbolic-ref HEAD refs/heads/fix-acme-widgets
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-prefix)\" --body x"
 check "#2997 a substitution running git from a work checkout is refused: $out" refused
 check "#2997 and says the name where it runs holds: $out" has "$out" "acme-widgets"
@@ -636,22 +642,35 @@ RUN_DIR="$REMOTECO" run "gh api repos/danwright-test/public-notes/issues/5/comme
 check "#2997 and a gh api write posting the top level lookup: $out" refused
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
 check "#2997 (control) cat prints only its file, so a clean file passes even from a work checkout: $out" passed
-# A program whose output this check cannot read is refused wherever it runs (the lessons review of
-# e4c7d07): file text by another program, commit messages, and a git lookup with other options.
+# A program whose output this check cannot read is refused when the command runs from a work checkout
+# (the lessons review of e4c7d07, narrowed to work checkouts by Dan on 2026-11-15, #3016): file text
+# by another program, commit messages, and a git lookup with other options. A work checkout is one
+# whose path or git checkout names a work repository, the same reading a git lookup there is judged
+# by. From a directory naming nothing the command posts as it did before #2997, and one the check
+# cannot place anywhere stays refused.
 printf 'Nothing to see.\n' > "$CO/clean-2997.md"
-run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(head -1 clean-2997.md)\""
-check "#2997 head of a file is refused from a clean directory: $out" refused
+printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(head -1 clean.md)\""
+check "#2997 head of a file is refused from a work checkout: $out" refused
 check "#2997 saying its output cannot be told: $out" has "$out" "cannot be told"
-run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(command cat clean-2997.md)\""
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(command cat clean.md)\""
 check "#2997 and so is cat run through command: $out" refused
+RUN_DIR="$REMOTECO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git log -1 --format=%s)\" --body x"
+check "#2997 and git log, whose commit messages are not read, from a checkout whose remote is a work repository: $out" refused
+check "#2997 as a program whose output this check cannot read: $out" has "$out" "cannot read before the command runs"
+RUN_DIR="$BRANCHCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git log -1 --format=%s)\" --body x"
+check "#3016 and from one whose branch names a work repository: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(head -1 clean-2997.md)\""
+check "#3016 head of a file from a directory naming nothing posts as before #2997: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(command cat clean-2997.md)\""
+check "#3016 and so does cat run through command there: $out" passed
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git log -1 --format=%s)\" --body x"
-check "#2997 and git log, whose commit messages are not read, from a clean checkout: $out" refused
-LONG="--show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel --show-toplevel"
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse $LONG) \$(git rev-parse $LONG --since=x)\" --body x"
+check "#3016 and git log from a checkout whose path, remote and branch name nothing: $out" passed
+run "cd \"\$(mktemp -d)\" && gh issue create --repo danwright-test/public-notes --title x --body \"\$(head -1 clean-2997.md)\""
+check "#3016 a program run where the check cannot follow the command stays refused: $out" refused
+LONG="clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md clean.md"
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(cat $LONG) \$(cat $LONG -)\" --body x"
 check "#2997 two programs alike for their first 120 characters are each judged: $out" refused
-BRANCHCO="$WORK/apps/fern-notes"; mkdir -p "$BRANCHCO"
-git -C "$BRANCHCO" init -q
-git -C "$BRANCHCO" symbolic-ref HEAD refs/heads/fix-acme-widgets
 RUN_DIR="$BRANCHCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
 check "#2997 the branch lookup from a checkout whose branch names a work repository is refused: $out" refused
 check "#2997 and says the name: $out" has "$out" "acme-widgets"
@@ -659,61 +678,84 @@ check "#2997 and says the name: $out" has "$out" "acme-widgets"
 # review of a45f8c1, the four rounds taken together): the bare word, which nothing in the command
 # makes run something else. A path ending in git, a function or alias of the name, a changed PATH or
 # hash, git's environment, a sourced file, or a quoted name is a program whose output this check
-# cannot read, refused even from a checkout that names nothing.
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(./git rev-parse --show-toplevel)\" --body x"
-check "#2997 a program at ./git is not git: $out" refused
+# cannot read, refused from a work checkout (#3016), and named as that rather than by where it runs.
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(./git rev-parse --show-toplevel)\" --body x"
+check "#2997 a program at ./git is not git: $out" refused_unread
 check "#2997 refused as a program whose output this check cannot read: $out" has "$out" "cannot read before the command runs"
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(/tmp/x/git remote get-url origin)\" --body x"
-check "#2997 nor one at any other path ending in git: $out" refused
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$('git' remote -v)\" --body x"
-check "#2997 nor a quoted git, which an alias would not reach: $out" refused
-RUN_DIR="$CLEANGIT" run "git() { cat named.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
-check "#2997 nor git once the command defines a function of that name: $out" refused
-RUN_DIR="$CLEANGIT" run "function git {
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(/tmp/x/git remote get-url origin)\" --body x"
+check "#2997 nor one at any other path ending in git: $out" refused_unread
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$('git' remote -v)\" --body x"
+check "#2997 nor a quoted git, which an alias would not reach: $out" refused_unread
+RUN_DIR="$WORKCO" run "git() { cat named.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#2997 nor git once the command defines a function of that name: $out" refused_unread
+RUN_DIR="$WORKCO" run "function git {
   cat named.md
 }
 gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
-check "#2997 nor one defined with the function keyword over several lines: $out" refused
-RUN_DIR="$CLEANGIT" run "functions[git]='cat named.md'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
-check "#2997 nor one set in zsh's function table: $out" refused
-RUN_DIR="$CLEANGIT" run "alias git='cat named.md'
+check "#2997 nor one defined with the function keyword over several lines: $out" refused_unread
+RUN_DIR="$WORKCO" run "functions[git]='cat named.md'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor one set in zsh's function table: $out" refused_unread
+RUN_DIR="$WORKCO" run "alias git='cat named.md'
 gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
-check "#2997 nor git behind an alias the command defines: $out" refused
-RUN_DIR="$CLEANGIT" run "export PATH=/tmp/x:\$PATH; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
-check "#2997 nor git after the command changes PATH: $out" refused
-RUN_DIR="$CLEANGIT" run "hash -p /tmp/x/git git; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
-check "#2997 nor after it points the shell's hash at another program: $out" refused
-RUN_DIR="$CLEANGIT" run "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.x.insteadOf GIT_CONFIG_VALUE_0=y; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
-check "#2997 nor after it sets git's configuration in the environment: $out" refused
-RUN_DIR="$CLEANGIT" run ". ./helpers.sh; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
-check "#2997 nor after it sources a file, which can define anything: $out" refused
-RUN_DIR="$CLEANGIT" run "eval 'git() { cat named.md; }'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
-check "#2997 nor after a function defined in an eval string: $out" refused
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git() { cat named.md; }; git remote -v')\" --body x"
-check "#2997 nor inside a sh -c string the substitution runs: $out" refused
-run "cat() { head -1 \"\$@\"; }; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
-check "#2997 and cat is held to the same rule: $out" refused
-run "pwd() { cat named-2997.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(pwd)\" --body x"
-check "#2997 and so is pwd: $out" refused
+check "#2997 nor git behind an alias the command defines: $out" refused_unread
+RUN_DIR="$WORKCO" run "export PATH=/tmp/x:\$PATH; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor git after the command changes PATH: $out" refused_unread
+RUN_DIR="$WORKCO" run "hash -p /tmp/x/git git; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor after it points the shell's hash at another program: $out" refused_unread
+RUN_DIR="$WORKCO" run "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.x.insteadOf GIT_CONFIG_VALUE_0=y; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor after it sets git's configuration in the environment: $out" refused_unread
+RUN_DIR="$WORKCO" run ". ./helpers.sh; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor after it sources a file, which can define anything: $out" refused_unread
+RUN_DIR="$WORKCO" run "eval 'git() { cat named.md; }'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor after a function defined in an eval string: $out" refused_unread
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git() { cat named.md; }; git remote -v')\" --body x"
+check "#2997 nor inside a sh -c string the substitution runs: $out" refused_unread
+RUN_DIR="$WORKCO" run "cat() { head -1 \"\$@\"; }; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
+check "#2997 and cat is held to the same rule: $out" refused_unread
+# From a work checkout whose path is clean, so the directory itself names nothing.
+RUN_DIR="$REMOTECO" run "pwd() { cat named.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(pwd)\" --body x"
+check "#2997 and so is pwd: $out" refused_unread
 RUN_DIR="$CLEANGIT" run "f() { :; }; GH_TOKEN=x gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
 check "#2997 (control) a function of another name and an assignment that changes no lookup leave git as git: $out" passed
-# The checkout and a cat's files are read before the command runs, so the reading holds only while
-# nothing else the command runs can change them first (the lessons review of 02a97db): a git command
-# other than a lookup, a gh command that is not a posting one, a script, or any program not shown to
-# change nothing.
-RUN_DIR="$CLEANGIT" run "git remote set-url origin https://example.com/garden.git && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
-check "#2997 a remote lookup after the command sets the remote is refused: $out" refused
+RUN_DIR="$WORKCO" run "f() { :; }; GH_TOKEN=x gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
+check "#3016 (control) and leave cat as cat in a work checkout, so a clean file passes there: $out" passed
+RUN_DIR="$WORKCO" run "f() { :; }; GH_TOKEN=x gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3016 (control) and git as git there, judged by the name where it runs: $out" has "$out" "acme-widgets"
+check "#3016 (control) not as a program whose output cannot be read: $out" lacks "$out" "cannot read before the command runs"
+# The checkout and a cat's files are read before the command runs, so from a work checkout the
+# reading holds only while nothing else the command runs can change them first (the lessons review of
+# 02a97db, narrowed to work checkouts by Dan on 2026-11-15, #3016): a git command other than a lookup,
+# a gh command that is not a posting one, a script, or any program not shown to change nothing.
+RUN_DIR="$REMOTECO" run "git remote set-url origin https://example.com/garden.git && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 a remote lookup after the command sets the remote is refused in a work checkout: $out" refused
 check "#2997 saying what else it runs can change it: $out" has "$out" "can change"
-RUN_DIR="$CLEANGIT" run "git checkout -b topic-7 && gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
-check "#2997 and a branch lookup after it makes a branch: $out" refused
-RUN_DIR="$CLEANGIT" run "gh pr checkout 5 && gh pr comment 5 --repo danwright-test/public-notes --body \"\$(git branch --show-current)\""
-check "#2997 and after a gh command that changes the branch: $out" refused
-RUN_DIR="$CLEANGIT" run "./release.sh && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+RUN_DIR="$REMOTECO" run "git checkout -b topic-7 && gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
+check "#2997 and a branch lookup after it makes a branch: $out" has "$out" "can change"
+RUN_DIR="$REMOTECO" run "gh pr checkout 5 && gh pr comment 5 --repo danwright-test/public-notes --body \"\$(git branch --show-current)\""
+check "#2997 and after a gh command that changes the branch: $out" has "$out" "can change"
+RUN_DIR="$REMOTECO" run "./release.sh && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
 check "#2997 and after a script, which can run git: $out" refused
-run "printf hello > clean-2997.md; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+RUN_DIR="$WORKCO" run "printf hello > clean.md; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
 check "#2997 and cat of a file the command writes first: $out" refused
-RUN_DIR="$CLEANGIT" run "echo start; cd \"$CLEANGIT\" && gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x || true"
-check "#2997 (control) echo, a cd and true change nothing a lookup reads: $out" passed
+check "#2997 refused as something it runs can change: $out" has "$out" "can change"
+RUN_DIR="$WORKCO" run "echo start; cd . && gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\" || true"
+check "#2997 (control) echo, a cd and true change nothing a cat reads: $out" passed
+# From a checkout whose path, remote and branch name nothing, the same commands post as they did
+# before #2997 (#3016): the lookup and the cat are judged as they read now.
+RUN_DIR="$CLEANGIT" run "git remote set-url origin https://example.com/garden.git && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#3016 a remote lookup after setting the remote passes from a checkout naming nothing: $out" passed
+RUN_DIR="$CLEANGIT" run "git checkout -b topic-7 && gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
+check "#3016 and a branch lookup after making a branch: $out" passed
+RUN_DIR="$CLEANGIT" run "gh pr checkout 5 && gh pr comment 5 --repo danwright-test/public-notes --body \"\$(git branch --show-current)\""
+check "#3016 and after checking out a pull request: $out" passed
+RUN_DIR="$CLEANGIT" run "./release.sh && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#3016 and after a script: $out" passed
+run "printf hello > clean-2997.md; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+check "#3016 and cat of a file the command writes first: $out" passed
+run "printf hello > clean-2997.md; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat named-2997.md)\""
+check "#3016 while cat of a file naming a work repository is still judged by its text there: $out" refused
+run "cd \"\$(mktemp -d)\" && ./release.sh && gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+check "#3016 and a command the check cannot place stays refused: $out" refused
 RUN_DIR="$CLEANGIT" run "git push -u origin HEAD && gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
 a body written here
 EOF
@@ -721,13 +763,14 @@ EOF
 check "#2997 (control) and a push does not stop a heredoc body, which reads nothing: $out" passed
 # cat's output is the file's text, which is read and judged wherever it runs (the lessons review of
 # 028d7e6): here from a directory whose path names nothing.
-printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat named-2997.md)\""
 check "#2997 cat of a file naming a work repository is refused from a clean directory: $out" refused
 check "#2997 and says the name the file holds: $out" has "$out" "zephyr"
-run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(< named-2997.md)\""
-check "#2997 and so is the same file printed by an input redirection alone: $out" refused
-run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(<named-2997.md)\""
+# An input redirection alone is read as a program whose output cannot be read, so it is refused from
+# a work checkout (#3016) and posts as before #2997 from a directory naming nothing.
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(< clean.md)\""
+check "#2997 a file printed by an input redirection alone is refused from a work checkout: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(<clean.md)\""
 check "#2997 and by one written without a space: $out" refused
 check "#2997 as a program whose output this check cannot read: $out" has "$out" "cannot read before the command runs"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat missing-2997.md)\""
@@ -745,6 +788,8 @@ run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ca
 check "#2997 and so is a file past the size it reads: $out" has "$out" "cannot be told"
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../*)\""
 check "#2997 and echo of a glob, which the shell fills with file names: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../*)\""
+check "#3016 which posts as before #2997 from a directory naming nothing: $out" passed
 # sh -c and bash -c strings, and unquoted heredoc bodies, are read too (the review of #2981).
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git rev-parse --show-prefix')\" --body x"
 check "#2997 git run by sh -c from a work checkout is refused: $out" refused
@@ -755,6 +800,8 @@ check "#2997 a sh -c string that changes directory is refused wherever it runs: 
 check "#2997 saying it cannot be told: $out" has "$out" "cannot be told"
 run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && git remote -v)\" --body x"
 check "#2997 and git run after a cd in the substitution: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && head -1 x.md)\" --body x"
+check "#3016 and a program whose output cannot be read after a cd there, even from a directory naming nothing: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title \"\$(git -C .. remote -v)\" --body x"
 check "#2997 and git -C: $out" refused
 # git's own options in front of the subcommand are read by the shared reader (lib/shell-words.py
@@ -769,9 +816,11 @@ check "#3007 (control) and the same lookup from a checkout naming nothing passes
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -C .. rev-parse --show-toplevel)\" --body x"
 check "#3007 a lookup behind git -C is refused even from a clean checkout: $out" refused
 check "#3007 as run where a directory option takes it: $out" has "$out" "directory option"
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -c url.x.insteadOf=y remote get-url origin)\" --body x"
-check "#3007 a lookup behind git -c is refused even from a clean checkout: $out" refused
+RUN_DIR="$REMOTECO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -c url.x.insteadOf=y remote get-url origin)\" --body x"
+check "#3007 a lookup behind git -c is refused from a work checkout: $out" refused
 check "#3007 as printing what this check cannot read: $out" has "$out" "cannot read before the command runs"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git -c url.x.insteadOf=y remote get-url origin)\" --body x"
+check "#3016 and posts as before #2997 from a checkout naming nothing: $out" passed
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
 seen at \$(git remote get-url origin)
 EOF
