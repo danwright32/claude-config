@@ -4054,7 +4054,8 @@ def commands(*a, **k):
         pass
     return got
 PY
-  base="$(sed -n 's/^one-lesson .*: \([0-9.]*\) (.*/\1/p' "$T/cost.log" | head -1)"
+  base="$(sed -n 's/^one-lesson .*: \([0-9.]*\) (.*/\1/p' "$T/cost.log")"
+  base="${base%%$'\n'*}"
   if [ -n "$base" ]; then
     over="$(awk -v b="$base" 'BEGIN { printf "%.1f", b * 1.25 }')"
     cost="$(SLACK_GATE_COST_LABEL=slow-reader SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$slow/slack-drafts-only-gate.sh" "$CS" "$over" L174 2>&1)"
