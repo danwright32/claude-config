@@ -4473,6 +4473,9 @@ test('#2991: a suite whose programs write only under a folder in a variable runs
     const why = refusalOf(await call($, { tool: 'Bash', command: runs[0] }))
     expect({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: why.includes(SKIP_QUESTION), named: why.includes('app/index.html') }).toEqual({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: true, named: true })
   }
+  // Nor where the command tells mktemp where to make its folder.
+  w.files[SUITE_2991_AT] = SUITE_2991
+  expect(refusalOf(await call($, { tool: 'Bash', command: `TMPDIR=/w/slate/app ${runs[0]}` }))).toContain('app/index.html')
   // And a program whose name follows the shell's braces, which the shell fills in before it runs.
   w.files[SUITE_2991_AT] = `${SUITE_2991}python3 - <<PY\nopen("\${APP}/index.html", "w").write("x")\nPY\n`
   expect(refusalOf(await call($, { tool: 'Bash', command: runs[0] }))).toContain(SKIP_QUESTION)

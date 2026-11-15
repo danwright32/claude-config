@@ -636,9 +636,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // refused as a command naming the store is.
   let scriptStore = false
   const runs = await scriptsRun($, command, at)
-  // Every script text read for this command, for #2991's madeTemp: a variable another script it reads
-  // in may set is held to every assignment in any of them.
-  const scriptsText = runs.map(r => ('unread' in r ? '' : r.text)).join('\n')
+  // The command and every script text read for it, for #2991's madeTemp: a variable another script it
+  // reads in may set is held to every assignment in any of them, and a TMPDIR the command sets
+  // (`TMPDIR=app bash suite.sh`) counts as one the script sets.
+  const scriptsText = [command, ...runs.map(r => ('unread' in r ? '' : r.text))].join('\n')
   for (const s of runs) {
     if ('unread' in s) {
       targets.push({ word: s.word, unread: s.unread, inScript: s.word })

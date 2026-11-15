@@ -840,7 +840,10 @@ export const argvIndex = (program: string, v: string): number | undefined => {
     const stop = program.indexOf('\n', i)
     const line = program.slice(start, stop < 0 ? program.length : stop)
     if (/\b(?:for|as|def|lambda|global|nonlocal|del|import|class|except)\b/.test(program.slice(start, i))) return undefined
-    const bound = /^\s*(?:,\s*[A-Za-z_]\w*\s*)*([-+*/%&|^@:]?)=(?!=)/.exec(program.slice(i + v.length, stop < 0 ? program.length : stop))
+    const after = program.slice(i + v.length, stop < 0 ? program.length : stop)
+    // An annotated assignment (`ch: str = "."`) binds it too.
+    if (/^\s*:[^=\n]*=(?!=)/.test(after)) return undefined
+    const bound = /^\s*(?:,\s*[A-Za-z_]\w*\s*)*([-+*/%&|^@:]?)=(?!=)/.exec(after)
     if (!bound) continue
     if (bound[1]) return undefined
     const whole = /^\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*=(?!=)\s*(.*?)\s*$/.exec(line)

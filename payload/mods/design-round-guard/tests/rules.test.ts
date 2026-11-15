@@ -453,6 +453,7 @@ test('#2991: a python program binds a variable to one of its arguments only by a
     'ch = "."\n',
     'ch = sys.argv[1]\nch = "."\n',
     'ch = sys.argv[1]\nch += "/x"\n',
+    'ch = sys.argv[1]\nch: str = "."\n',
     'ch = sys.argv[0]\n',
     'ch = sys.argv[1]\nsys.argv[1] = "."\n',
     'ch = sys.argv[1]\nsys.argv.insert(1, ".")\n',
