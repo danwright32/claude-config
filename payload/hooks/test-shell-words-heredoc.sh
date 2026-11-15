@@ -272,6 +272,48 @@ a=("x" # the note'"'"'s; "y")|echo after'
 [ "$array_read" = "$want" ] && check "#2683 a comment in an array ends at the line break, newline or flattened" ok \
   || check "#2683 a comment in an array ends at the line break, newline or flattened" "got [$array_read]"
 
+# Inside single quotes nothing but the closing quote changes the reading, and inside double quotes or
+# an unquoted heredoc body only a backslash, a $, a backquote (and in double quotes the closing ")
+# do, so the reader goes straight to the next of those, or to the end of the body it is in, rather
+# than one character at a time: the 1.8 MB claude-sync suite is mostly quoted text, and reading it
+# was a fifth of the Slack drafts gate's time judging it (claude-config#2918). Counted by the
+# characters the reader takes one at a time, and checked for the same reading at every stop.
+stepped_py="$(mktemp "${TMPDIR:-/tmp}/sw-stepped.XXXXXX")" || exit 1
+cat > "$stepped_py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+taken = [0]
+class Counted(str):
+    def __getitem__(self, k):
+        taken[0] += 1
+        return str.__getitem__(self, k)
+wrong = []
+long = "x y " * 2500
+for label, text, want in (
+        ("single quotes", "echo '%s'; git push" % long, ["echo '%s'" % long, "git push"]),
+        ("double quotes", 'echo "%s $(date) %s"; git push' % (long, long), ["date", 'echo "%s $(date) %s"' % (long, long), "git push"]),
+        ("a heredoc body", "cat <<EOF\n%s\n$(date)\n%s\nEOF\ngit push" % (long, long), ["cat <<EOF", "date", "git push"])):
+    taken[0] = 0
+    got = [t.strip() for d, t in sw.commands(Counted(text), "/")]
+    if got != want:
+        wrong.append("%s read as %r" % (label, [g[:30] for g in got]))
+    if taken[0] > 400:
+        wrong.append("%s: %d characters taken one at a time, of %d" % (label, taken[0], len(text)))
+# A quote left open where a heredoc body ends is still refused, as the shell finds the closing line first.
+for text in ("cat <<EOF\n$(echo 'x\nEOF\n", "cat <<EOF\n$(echo \"x\nEOF\n", "echo 'never closed"):
+    try:
+        sw.commands(text, "/")
+        wrong.append("%r was read, not refused" % text)
+    except sw.Unreadable:
+        pass
+print("; ".join(wrong) or "ok")
+PY
+stepped="$(python3 -B "$stepped_py" "$SW" 2>&1)"
+rm -f "$stepped_py"
+check "#2918 the reader goes straight through quoted text and heredoc bodies, and reads them as before" "$stepped"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
