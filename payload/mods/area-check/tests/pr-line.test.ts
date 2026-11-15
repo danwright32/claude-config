@@ -373,6 +373,9 @@ test('the hook failing before its check holds a pull request command through its
   // to answer it); the refusal carries that reason, never the fallback's "unknown failure".
   expect(why).toContain('session.cwd')
   expect(why).not.toContain('unknown failure')
+  // Failing before its own catch, nothing kept the error, so the refusal never says it is kept (#2906 lessons review).
+  expect(why).not.toContain('errors.jsonl')
+  expect(w.written()).toEqual([])
   expect(ranBash(w, pr)).toBe(false)
   const other = 'gh issue list'
   expect(refusal(await bash($ as never, w, other, {}, 'b2'))).toBe('')
@@ -568,6 +571,25 @@ test("CLAUDE_AREA_CHECK_DIR set: the check's own failure is kept in that folder'
   expect(w.records(`${AREA}/errors.jsonl`)[0]).toMatchObject({ kind: 'error', path: SLACK, error: 'git could not be asked' })
   expect(w.records(ERRORS)).toEqual([])
   expect(w.logs.filter(l => l.includes('area check'))).toEqual([`The area check could not look at src/lib/slack.ts (git could not be asked), so the edit went ahead unchecked; the error is kept in ${AREA}/errors.jsonl.`])
+})
+
+test("CLAUDE_AREA_CHECK_DIR set: the check's own failure on a pull request command is kept in that folder, and the refusal names it", KIT, async ($, on) => {
+  const w = world($, on, { areaDir: AREA })
+  w.ctl.branchThrows = true
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain(`the error is kept in ${AREA}/errors.jsonl`)
+  expect(why).not.toContain('~/.claude-area-check')
+  expect(w.written()).toEqual([`${AREA}/errors.jsonl`])
+})
+
+test("CLAUDE_AREA_CHECK_DIR naming a relative folder: a pull request refusal says the error could not be kept, never that it is (#2906 lessons review)", KIT, async ($, on) => {
+  const w = world($, on, { areaDir: 'scratch/area' })
+  w.ctl.branchThrows = true
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain('The area check refused this pull request command')
+  expect(why).toContain('could not be kept')
+  expect(why).not.toContain('the error is kept')
+  expect(w.written()).toEqual([])
 })
 
 test('CLAUDE_AREA_CHECK_DIR naming a relative folder writes nothing anywhere, and says why, never falling back to the real log', KIT, async ($, on) => {

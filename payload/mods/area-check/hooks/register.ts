@@ -1270,8 +1270,7 @@ export const register: Register = on => {
     // Each repository and branch is read once per Bash call, and the lines any read could not read
     // are said once, together.
     const malformed = new Set<string>()
-    const shown = await shownOf($)
-    const logShown = `${shown}/${LOG}`
+    const logShown = `${await shownOf($)}/${LOG}`
     try {
       const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
       const reads = new Map<string, Promise<LogRead>>()
@@ -1296,8 +1295,7 @@ export const register: Register = on => {
     } catch (err) {
       const why = err instanceof Late ? LATE : msg(err)
       if (mayActOnPr(command)) {
-        await keepError($, cwd, why)
-        return { deny: checkFailedRefusal(why, `${shown}/${ERRORS}`) }
+        return { deny: checkFailedRefusal(why, await keepError($, cwd, why)) }
       }
       await failed($, cwd, new Error(why), 'command')
     }

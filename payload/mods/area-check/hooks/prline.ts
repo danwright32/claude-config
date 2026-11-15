@@ -244,15 +244,15 @@ export const bodyUnreadableRefusal = (verb: string, file: string, why: string): 
 export const mayActOnPr = (command: string): boolean =>
   /merge-when-ready/.test(command) || (/\bgh\b/.test(command) && /\bpr\b/.test(command) && /\b(?:create|edit|merge)\b/.test(command))
 
-export const ERRORS_SHOWN = `${DIR_SHOWN}/errors.jsonl`
-
 /**
  * The check itself failed on a pull request command (#2173): held, as every guard's failure holds
  * its call (#2148), never let through. A merge is the last check, and the one at merge time runs the
  * same code on this Mac only, so it is no backstop for a description that was never checked.
  */
-export const checkFailedRefusal = (why: string, errors: string = ERRORS_SHOWN): string =>
-  `The area check refused this pull request command: its check failed (${shorten(why)}), so it cannot tell whether the description carries a line for each file decided on this branch. Run the command again; if it fails the same way, the area check itself needs fixing, and the error is kept in ${errors}.`
+// `kept` is keepError's sentence saying where the error went (#2906); without one, as when the hook
+// failed before its own catch could keep anything, the refusal claims nothing about it.
+export const checkFailedRefusal = (why: string, kept?: string): string =>
+  `The area check refused this pull request command: its check failed (${shorten(why)}), so it cannot tell whether the description carries a line for each file decided on this branch. Run the command again; if it fails the same way, the area check itself needs fixing${kept ? `, and ${kept}` : ''}.`
 
 /** The log could not be read: named, with why and the way back, never read as no decisions. */
 export const logUnreadableRefusal = (verb: string, why: string, log: string = LOG_SHOWN): string =>
