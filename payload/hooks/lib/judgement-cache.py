@@ -567,14 +567,16 @@ def _read_key(path):
     this user's, readable or writable by anyone else, or not KEY_BYTES long."""
     try:
         # Judged before it is opened, so a link or a pipe is never followed or waited on, and again
-        # once open: the same file (device and inode), so nothing swapped in between is read.
+        # once open: the same file (device and inode), every test passed again on what was opened.
+        def usable(st):
+            return (_stat.S_ISREG(st.st_mode) and st.st_uid == _os.getuid() and not st.st_mode & 0o077
+                    and st.st_size == KEY_BYTES)
         named = _os.lstat(path)
-        if (not _stat.S_ISREG(named.st_mode) or named.st_uid != _os.getuid() or named.st_mode & 0o077
-                or named.st_size != KEY_BYTES):
+        if not usable(named):
             return None
         with builtins.open(path, mode="rb", buffering=0) as f:
             opened = _os.fstat(f.fileno())
-            if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino) or opened.st_mode != named.st_mode:
+            if not usable(opened) or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
                 return None
             data = f.read(KEY_BYTES + 1)
     except OSError:

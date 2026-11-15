@@ -192,6 +192,9 @@ trace = os.path.join(work, "trace")
 os.environ["SLACK_GATE_CACHE_TRACE"] = trace
 def traced():
     return open(trace).read() if os.path.exists(trace) else ""
+def untraced():
+    """Empty the trace, so the next check's line can only come from what follows."""
+    open(trace, "w").close()
 src = os.path.join(work, "src.sh")
 open(src, "w").write("echo one\n")
 r = jc.Recorder()
@@ -257,6 +260,7 @@ expect("an entry carries no key", secret.hex() not in open(entry).read())
 forged = {"format": jc.FORMAT, "key": "k5", "verdict": "allow", "reads": []}
 forged["sig"] = forged["sum"] = __import__("hashlib").sha256(json.dumps(forged, sort_keys=True).encode()).hexdigest()
 json.dump(forged, open(os.path.join(cache, "k5.json"), "w"))
+untraced()
 expect("an entry not signed with this cache's key is a miss", not jc.lookup(cache, "k5")
        and "miss: the entry is not a whole allow" in traced())
 # The same entry signed with another key.
@@ -271,7 +275,9 @@ def kept_now(name):
     return os.path.exists(os.path.join(cache, name + ".json"))
 # A key anyone else can read is no key: nothing is used and nothing is kept.
 os.chmod(keyfile, 0o644)
+untraced()
 expect("with a key others can read, a kept entry is a miss", not jc.lookup(cache, "k3") and "miss: no signing key" in traced())
+untraced()
 expect("and nothing is kept", not kept_now("k6") and "not stored: no signing key" in traced())
 os.chmod(keyfile, 0o600)
 expect("with the key put right, the entry is found again", jc.lookup(cache, "k3"))
@@ -291,6 +297,7 @@ os.unlink(keyfile)
 os.rename(keyfile + ".was", keyfile)
 # A missing key: a lookup never makes one, and every entry signed with the old one is a miss.
 os.rename(keyfile, keyfile + ".was")
+untraced()
 expect("with no key, a kept entry is a miss", not jc.lookup(cache, "k3") and "miss: no signing key" in traced())
 expect("and a lookup does not make one", not os.path.lexists(keyfile))
 expect("keeping a judgement makes a new one", kept_now("k7") and os.path.isfile(keyfile))
@@ -303,6 +310,7 @@ os.chmod(nokey, 0o500)
 if os.access(nokey, os.W_OK):
     print("SUITE-PART-UNMEASURED a key that cannot be made, because this user writes a folder with no write permission")
 else:
+    untraced()  # before the recorder is in place, where emptying the trace would be a write it saw
     r = jc.Recorder()
     jc.install(r, [vars(gate)])
     gate.open(src).read()
