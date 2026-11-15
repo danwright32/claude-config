@@ -1174,6 +1174,48 @@ case "$(decision "$r")|$(field "$r" reason)" in
   "ask rc=0|"*"could not be told: git ls-files failed (exit 3)"*) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" ok ;;
   *) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
 esac
+# A git that lists a list and then fails its diff is asked about, saying the diff failed.
+printf '#!/bin/sh\ncase " $* " in\n  *" ls-files "*) printf "H .claude/supabase-test-projects\\000"; exit 0 ;;\n  *" rev-parse "*) exit 0 ;;\n  *) echo "fatal: bad object" >&2; exit 5 ;;\nesac\n' > "$GITSTUB/git"
+r="$(PATH="$GITSTUB:$PATH" run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*"could not be told: git diff failed (exit 5)"*) check "a commit whose git diff fails is asked about, saying so (#2989)" ok ;;
+  *) check "a commit whose git diff fails is asked about, saying so (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# An untracked list that cannot be read is asked about, saying so.
+mkdir -p "$TESTP/locked/.claude"; printf 'liveprojectref000009\n' > "$TESTP/locked/.claude/supabase-test-projects"
+chmod 000 "$TESTP/locked/.claude/supabase-test-projects"
+if cat "$TESTP/locked/.claude/supabase-test-projects" >/dev/null 2>&1; then
+  check "an unreadable untracked list is asked about (#2989)" "UNMEASURED: this user can read a file with no permissions (root?), so the unreadable case cannot be made"
+else
+  r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"locked/.claude/supabase-test-projects could not be read (PermissionError)"*) check "an unreadable untracked list is asked about (#2989)" ok ;;
+    *) check "an unreadable untracked list is asked about (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
+fi
+chmod 600 "$TESTP/locked/.claude/supabase-test-projects"; rm -rf "$TESTP/locked"
+# The time limits, set short rather than waited out (L524): a git outlasting its own limit, and a
+# check past the whole budget before git starts, are each asked about, saying which.
+SLOWGIT="$APPLY/slowgit"; mkdir -p "$SLOWGIT"
+printf '#!/bin/sh\nexec sleep 5\n' > "$SLOWGIT/git"; chmod +x "$SLOWGIT/git"
+limits="$(PATH="$SLOWGIT:$PATH" python3 -I -B - "$DIR/lib" "$TESTP" <<'PY'
+import importlib.util, sys
+def load(name, file):
+    spec = importlib.util.spec_from_file_location(name, sys.argv[1] + "/" + file)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+ap = load("ap", "db-apply-approval.py")
+sw = load("sw", "shell-words.py")
+calls = load("calls", "db-write-calls.py")
+ap.GIT_SECONDS = 0.3
+print(ap.list_shell_change("git commit -m x", sys.argv[2], sw, calls.strip_redirects))
+ap.GIT_SECONDS, ap.COMMIT_SECONDS = 4, 0
+print(ap.list_shell_change("git commit -m x", sys.argv[2], sw, calls.strip_redirects))
+PY
+)"
+case "$limits" in *"git could not be run (TimeoutExpired)"*) check "a git outlasting its limit is asked about, saying it timed out (#2989)" ok ;; *) check "a git outlasting its limit is asked about, saying it timed out (#2989)" "got: $limits" ;; esac
+case "$limits" in *"git took longer than 0 seconds"*) check "a check past its whole budget is asked about, saying so (#2989)" ok ;; *) check "a check past its whole budget is asked about, saying so (#2989)" "got: $limits" ;; esac
 rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
 cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-apply-approval.py"
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
