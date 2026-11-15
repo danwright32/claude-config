@@ -65,9 +65,9 @@
 #   8. Its branch was not pushed in the last day with no pull request yet (claude-config#2988). At
 #      08:33 ET on 2026-11-14 rule 1 removed two worktrees here, pushed and idle past six hours,
 #      whose PRs were opened 17 and 13 minutes later: a builder hands back a pushed branch and the
-#      main session opens its PR later, often hours later in a queue. When the branch has no merged
-#      PR, and its remote copy moved in the last STALE_WT_PUSHED_HOURS (pushed_at below), it is kept
-#      unless a PR of it was closed unmerged. The closed list is one more call, made only when such a
+#      main session opens its PR later, often hours later in a queue. When no merged PR holds its
+#      HEAD, and its remote copy moved in the last STALE_WT_PUSHED_HOURS (pushed_at below), it is
+#      kept unless a PR of it was closed unmerged. The closed list is one more call, made only when such a
 #      branch is found; one that fails keeps that worktree, saying so.
 #   Rules 6, 7 and 8 are the sweep's: --just-merged (below) asks none, its caller having just merged
 #   the branch's own pull request, and the session it was run from never being the one it removes.
@@ -102,9 +102,10 @@
 # it bounds how long one run holds the lock that keeps the next one waiting. One removal measured
 # at 0.13 to 0.18 seconds on 2026-10-14, so the default leaves room for hundreds.
 #
-# TWO network calls, never one per worktree: the merged PRs come back in a single list, and the open
-# ones in another (rule 6, the sweep only; --just-merged makes the first alone). A repo where git
-# lists no worktree but the main checkout costs nothing at all.
+# At most THREE network calls, never one per worktree: the merged PRs come back in a single list, the
+# open ones in another (rule 6, the sweep only; --just-merged makes the first alone), and the ones
+# closed unmerged in a third, made only when a branch pushed in the last day is found (rule 8). A
+# repo where git lists no worktree but the main checkout costs nothing at all.
 #
 # Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [--just-merged <worktree>] [repo-dir]
 #
@@ -504,24 +505,26 @@ for i in "${!paths[@]}"; do
       # Rule 8 (#2988): pushed in the last day with no pull request yet. A builder hands back a
       # pushed branch and the main session opens its PR later, often hours later in a queue, so the
       # pushed copy that qualified it under rule 1 says nothing of whether anybody is done with it.
-      # A branch with a merged PR is not here; one whose PR was closed unmerged follows rule 1.
-      if [ "$verdict" = "unmerged" ]; then
-        IFS=$'\t' read -r pat psrc <<<"$(pushed_at "$b")"
-        if [ -n "$pat" ] && [ $(( $(date +%s) - pat )) -lt $(( PUSHED_HOURS * 3600 )) ]; then
-          page=$(( ($(date +%s) - pat) / 3600 )); [ "$page" -ge 0 ] || page=0
-          if [ "$psrc" = push ]; then pushed="its branch was pushed $page hour(s) ago"
-          else pushed="its branch's remote copy holds a commit made $page hour(s) ago"; fi
-          if [ "$closed_state" = unread ]; then
-            if closed="$(cd "$top" && closed_prs "$GH" "$LIMIT")"; then closed_state=read; else closed_state=failed; closed=""; fi
-          fi
-          if [ "$closed_state" = failed ]; then
-            echo "  keeping $name [$b]: $pushed, and whether a pull request of it was closed unmerged could not be read, so it is kept as one whose pull request may still be opened"
-            continue
-          fi
-          if [ -z "$(closed_pr_of "$b")" ]; then
-            echo "  keeping $name [$b]: $pushed and has no pull request yet, so one may still be opened for it; it is kept until that is $PUSHED_HOURS hours old"
-            continue
-          fi
+      # A branch whose merged PR holds HEAD is not here. One whose PR merged but which has commits
+      # since (newer, or merged at a commit not here) holds pushed work no PR has covered yet, and is
+      # kept the same way. One with a PR closed unmerged follows rule 1.
+      IFS=$'\t' read -r pat psrc <<<"$(pushed_at "$b")"
+      if [ -n "$pat" ] && [ $(( $(date +%s) - pat )) -lt $(( PUSHED_HOURS * 3600 )) ]; then
+        page=$(( ($(date +%s) - pat) / 3600 )); [ "$page" -ge 0 ] || page=0
+        if [ "$psrc" = push ]; then pushed="its branch was pushed $page hour(s) ago"
+        else pushed="its branch's remote copy holds a commit made $page hour(s) ago"; fi
+        if [ "$verdict" = "unmerged" ]; then nopr="has no pull request yet"
+        else nopr="holds commits no merged pull request held"; fi
+        if [ "$closed_state" = unread ]; then
+          if closed="$(cd "$top" && closed_prs "$GH" "$LIMIT")"; then closed_state=read; else closed_state=failed; closed=""; fi
+        fi
+        if [ "$closed_state" = failed ]; then
+          echo "  keeping $name [$b]: $pushed, and whether a pull request of it was closed unmerged could not be read, so it is kept as one whose pull request may still be opened"
+          continue
+        fi
+        if [ -z "$(closed_pr_of "$b")" ]; then
+          echo "  keeping $name [$b]: $pushed and $nopr, so one may still be opened for it; it is kept until that is $PUSHED_HOURS hours old"
+          continue
         fi
       fi
       stale_why="every commit on it is also on another branch, local or remote, and nothing is uncommitted"

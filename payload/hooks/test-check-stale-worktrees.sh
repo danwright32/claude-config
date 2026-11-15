@@ -830,12 +830,15 @@ check "#2988 and names the worker and why" "session s-odd's registry record hold
 printf '{"v":1,"sessionId":"s-odd","cwd":"%s","edits":["%s/agent-sleeper/a.txt","relative/notes.txt"]}\n' "$SREPO" "$SWT" >"$TMP/sessions/s-odd.json"
 POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
 check_eq "#2988 and one with a usable place beside one that is not an absolute path" 1 "$PRC"
+check "#2988 naming that place as the one it cannot use" 'cannot use ("relative/notes.txt")' "$POUT"
 printf '{"v":1,"sessionId":"s-odd","cwd":"%s","edits":["%s/agent-sleeper/\\n"]}\n' "$SREPO" "$SWT" >"$TMP/sessions/s-odd.json"
 POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
 check_eq "#2988 and one with a newline closing an edit, a shape this Mac's registry held on 2026-11-14" 1 "$PRC"
+check "#2988 naming that place as the one it cannot use" 'agent-sleeper/\n")' "$POUT"
 printf '{"v":1,"sessionId":"s-odd","edits":[]}\n' >"$TMP/sessions/s-odd.json"
 POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
 check_eq "#2988 and one whose record names no folder at all" 1 "$PRC"
+check "#2988 naming the missing folder as the place it cannot use" "cannot use (null)" "$POUT"
 # The sweep, on a night that worker is working: nothing is removed, and it says why.
 printf '{"v":1,"sessionId":"s-odd","cwd":"%s/agent-sleeper\\tx","edits":[]}\n' "$SWT" >"$TMP/sessions/s-odd.json"
 sleep_record "$((NOW_MS + 3600000))" '["s-odd"]'
@@ -862,8 +865,18 @@ PUSHED_AT="$FRESH" sadd fix/806-fresh agent-fresh
 PUSHED_AT="$FRESH" sadd fix/807-closed agent-closed
 PUSHED_AT="$FRESH" sadd fix/808-merged agent-fmerged
 merged fix/808-merged "$SWT/agent-fmerged" HEAD 808
+# A branch whose PR merged, with a commit made since and pushed now: work no PR has covered yet.
+G -C "$SREPO" worktree add -q -b fix/810-again "$SWT/agent-again" >/dev/null 2>&1
+G -C "$SWT/agent-again" commit -q --allow-empty -m "work on fix/810-again"
+merged fix/810-again "$SWT/agent-again" HEAD 810
+G -C "$SWT/agent-again" commit -q --allow-empty -m "a follow up after the merge"
+GIT_COMMITTER_DATE="$FRESH" G -C "$SWT/agent-again" push -q origin fix/810-again >/dev/null 2>&1
+find "$SWT/agent-again" -exec touch -t 202601010000 {} + 2>/dev/null
 printf 'fix/807-closed\t807\n' >"$GH_CLOSED"
 run --remove "$SREPO"
+check "#2988 a branch whose PR merged, with a commit since pushed in the last day, is kept too" \
+  "keeping agent-again [fix/810-again]: its branch was pushed 0 hour(s) ago and holds commits no merged pull request held" "$OUT"
+check_eq "#2988 and is still there" no "$(sgone agent-again)"
 check "#2988 a worktree whose branch was pushed in the last day with no pull request yet is kept" \
   "keeping agent-fresh [fix/806-fresh]: its branch was pushed 0 hour(s) ago and has no pull request yet" "$OUT"
 check_eq "#2988 and is still there" no "$(sgone agent-fresh)"
