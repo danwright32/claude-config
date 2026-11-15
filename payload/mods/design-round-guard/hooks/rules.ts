@@ -3412,10 +3412,11 @@ export const modHookTsChange = (
   name: string,
   before: string | undefined,
   after: string | undefined,
-  beyond: readonly ModFile[] | null = [],
+  beyond: readonly ModFile[] | null = null,
 ): HookChange | undefined => {
   // #3017: drawsChange holds a file whose mod cannot be read whole (a merge conflict left beside it);
-  // that is right only where the mod draws at all.
+  // that is right only where the mod draws at all. `beyond` is what the folders inside the hooks
+  // folder hold; a caller handing none has read nothing there, which proves nothing (lessons review).
   const blank = () => drawsNothing(files, name, before, after, beyond)
   if (drawsChange(files, name, before, after) && !blank()) return { look: true }
   const words = messageWords(files, name, before, after)

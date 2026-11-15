@@ -1235,7 +1235,9 @@ test("#1841, #2845: the wording of a toast, a refusal or a tool's result in a mo
   // register.tsx); since #3017 (Dan, 2026-11-15) a mod drawing nothing is judged as code instead.
   const unreadable = { name: 'place.ts', text: "const x = 'open" }
   expect(changeOf([unreadable, { name: 'register.tsx', text: 'export const Card = () => <Box />\n' }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
-  expect(changeOf([unreadable], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('passes')
+  expect(changeOf([unreadable], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'), [])).toBe('passes')
+  // Only once the folders inside the hooks folder are read: a caller handing none proves nothing.
+  expect(changeOf([unreadable], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
 })
 
 // #1925: on 2026-10-29 the #1904 builder's Edit adding "or wording" to the skip question's answers in
