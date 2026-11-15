@@ -245,7 +245,8 @@ expect("put back as it was kept, the entry is found again", jc.lookup(cache, "k3
 
 # Signed (claude-config#2965): an entry is used only when it carries the signature of a key that only
 # this user can read, kept beside the cache folder and never in it. No key value is ever printed.
-keyfile = cache + ".key"
+keyfile = os.path.normpath(cache) + ".key"  # as the cache spells it: $TMPDIR can end in a slash
+expect("the key is where the cache looks for it", jc.key_path(cache) == keyfile)
 st = os.lstat(keyfile) if os.path.lexists(keyfile) else None
 expect("keeping a judgement made the key beside the cache folder, not in it",
        st is not None and os.path.dirname(keyfile) != cache and not os.path.exists(os.path.join(cache, ".key")))
@@ -281,6 +282,27 @@ untraced()
 expect("and nothing is kept", not kept_now("k6") and "not stored: no signing key" in traced())
 os.chmod(keyfile, 0o600)
 expect("with the key put right, the entry is found again", jc.lookup(cache, "k3"))
+# Changed between the check of its name and its open: what is opened must pass every test again.
+class _NamedAsItWas:
+    """os, but lstat answers as it did before the key was changed (a change in that gap)."""
+    def __init__(self, before):
+        self.before = before
+    def __getattr__(self, name):
+        return getattr(os, name)
+    def lstat(self, path):
+        return self.before if path == keyfile else os.lstat(path)
+before = os.lstat(keyfile)
+for change, why in ((lambda: os.chmod(keyfile, 0o644), "readable by others"),
+                    (lambda: open(keyfile, "ab").write(b"x"), "a byte longer")):
+    change()
+    real_os, jc._os = jc._os, _NamedAsItWas(before)
+    try:
+        expect("a key made %s after its name was checked is no key" % why, jc.signing_key(cache, False) is None)
+    finally:
+        jc._os = real_os
+    os.chmod(keyfile, 0o600)
+open(keyfile, "r+b").truncate(32)
+expect("with the key as it was, the entry is found again", os.lstat(keyfile).st_size == 32 and jc.lookup(cache, "k3"))
 # A key that cannot be read is no key.
 os.chmod(keyfile, 0)
 if os.access(keyfile, os.R_OK):
