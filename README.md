@@ -3561,6 +3561,18 @@ runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order
 cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
+Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
+(`parse-<key>.json`, #2918, Dan's decision of 2026-11-15), so a different call reading the same file,
+or the same call after some other file changed, is spared reading it: for the claude-sync suite that
+is its 1.8 MB and claude-sync's 1 MB, about a fifth of the judgement. A parse is keyed on the text's
+whole contents, the reader's code, the directory and HOME, never a path or a time, so a changed file
+is read afresh; it is signed with the same key, and given back exactly or not at all.
+
+The suite's cost checks (`test-slack-drafts-only-gate.sh`) hold the gate's processor time in units of
+a fixed workload that shares nothing with the gate (0.095 s each on the personal MacBook), the least
+of several samples taken in the same run, and print each measurement, so a CI runner's can be read
+back from its log.
+
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
@@ -6862,7 +6874,11 @@ and the scripts it runs, a script named through a variable the command sets, a s
 writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
 a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
 passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
-`mktemp -d`, so a suite writing pages under its own temp folder runs), and a
+`mktemp -d`, so a suite writing pages under its own temp folder runs; since #2924 a shell script
+whose own commands, read whole, write only names its text spells or temporary files it made, run no
+other script and no text a value decides, and source only files read the same, is not judged as
+writing the arguments it is handed, so `milestone-candidates.sh --like "<title naming page.html>"`
+runs), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -7195,7 +7211,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855, #2991
+#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991
 
 </td></tr>
 <tr><td>
