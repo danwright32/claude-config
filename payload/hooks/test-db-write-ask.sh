@@ -1166,21 +1166,10 @@ shell_list "a git read with config set in front is asked about" ask 'git -c diff
 shell_list "a pager on the list is asked about" ask 'less .claude/supabase-test-projects'
 NOLIST="$APPLY/nolist"; mkdir -p "$NOLIST"; git -C "$NOLIST" init -q
 shell_list "a commit after another command in a checkout with no list passes" none 'npm run fmt && git commit -am x' "$NOLIST"
-# git failing is asked about, saying so, and the library missing is asked about, naming it.
-GITSTUB="$APPLY/gitstub"; mkdir -p "$GITSTUB"
-printf '#!/bin/sh\necho "fatal: index file corrupt" >&2\nexit 3\n' > "$GITSTUB/git"; chmod +x "$GITSTUB/git"
-r="$(PATH="$GITSTUB:$PATH" run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
-case "$(decision "$r")|$(field "$r" reason)" in
-  "ask rc=0|"*"could not be told: git ls-files failed (exit 3)"*) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" ok ;;
-  *) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
-esac
-# A git that lists a list and then fails its diff is asked about, saying the diff failed.
-printf '#!/bin/sh\ncase " $* " in\n  *" ls-files "*) printf "H .claude/supabase-test-projects\\000"; exit 0 ;;\n  *" rev-parse "*) exit 0 ;;\n  *) echo "fatal: bad object" >&2; exit 5 ;;\nesac\n' > "$GITSTUB/git"
-r="$(PATH="$GITSTUB:$PATH" run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
-case "$(decision "$r")|$(field "$r" reason)" in
-  "ask rc=0|"*"could not be told: git diff failed (exit 5)"*) check "a commit whose git diff fails is asked about, saying so (#2989)" ok ;;
-  *) check "a commit whose git diff fails is asked about, saying so (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
-esac
+# git itself failing (its listing, or its diff after a listing) is asked about, saying which, in
+# test-db-write-ask-git-fails.sh: a fake git there names the git command that lists a checkout,
+# and the push gate runs any suite naming it before every push, which this one is too slow for
+# (PR #2999, see that suite's header). The library missing is asked about, naming it, below.
 # An untracked list that cannot be read is asked about, saying so.
 mkdir -p "$TESTP/locked/.claude"; printf 'liveprojectref000009\n' > "$TESTP/locked/.claude/supabase-test-projects"
 chmod 000 "$TESTP/locked/.claude/supabase-test-projects"
