@@ -212,6 +212,15 @@ def split(s, limit=None):
 # and dropped when it closes, which is the shell's own rule: a cd inside ( ) or $( ) ends with it.
 RESERVED = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time"}
 COMMAND_FRAMES = {"top", "sub", "subst", "tick"}
+# For each frame commands() reads as quoted text: (whether a character changes the reading there, a
+# search for the next one that does). Single quotes end only at a quote. Double quotes end at a quote
+# and hold a backslash, a $ (a substitution, an arithmetic or a parameter) and a backquote. An
+# unquoted heredoc body holds the same but its quotes are only text (claude-config#2053, #2918).
+QUOTED_STOPS = {
+    "'": ("'".__eq__, re.compile(r"'").search),
+    '"': (frozenset('"\\$`').__contains__, re.compile(r'["\\$`]').search),
+    "hd": (frozenset("\\$`").__contains__, re.compile(r"[\\$`]").search),
+}
 # A heredoc's opener up to its end marker word: <<, or <<- which strips leading tabs, and blanks.
 HEREDOC_START = re.compile(r"<<(-?)[ \t]*")
 # What ends the end marker word, as the shell reads a word.
@@ -524,12 +533,22 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             i = bodies.pop()["next"]
             continue
         c = s[i]
-        nx = s[i + 1] if i + 1 < n else ""
         f = frames[-1]
         k = f["k"]
+        # Inside single quotes only the closing quote changes the reading, and inside double quotes
+        # or an unquoted heredoc body only the characters QUOTED_STOPS names: the reader goes
+        # straight to the next of them, or to where the heredoc body it is in ends, which the top of
+        # this loop reads first, as it did stepping one character at a time (claude-config#2918).
+        stops = QUOTED_STOPS.get(k)
+        if stops is not None and not stops[0](c):
+            m = stops[1](s, i + 1)
+            j = m.start() if m else n
+            stop_at = bodies[-1]["end"] if bodies else n
+            i = j if j < stop_at else stop_at
+            continue
+        nx = s[i + 1] if i + 1 < n else ""
         if k == "'":
-            if c == "'":
-                frames.pop()
+            frames.pop()  # c is the closing quote: anything else was gone past above
             i += 1
             continue
         if k == "ansi":
