@@ -610,12 +610,19 @@ const envSplit = (words: readonly string[], at: number): { value: string; next: 
 // Where the command begins: past assignments, the reserved words that lead a command, and the
 // words that only run the next command. A runner with no command after it (a bare env) is the
 // command itself. env -S's string is split into the words it runs, which carry no place in the
-// text; and a command xargs runs is marked, since xargs gives it operands from its own input.
-type Begun = { words: string[]; starts: number[]; xargs: boolean }
-const begins = (words: string[], starts: number[]): Begun => {
+// text; and a command xargs runs is marked, since xargs gives it operands from its own input. So is
+// one rtk's proxy runs (#2983), with `unread` saying why one it split from a word cannot be read;
+// `expands` says whether the word at a place in the text holds a $ or backtick the shell expands.
+// A caller that knows no places (a find -exec's words) takes every $ and backtick as one the shell
+// expands, so a word it cannot place is unread, never read as written (lessons review of 7677fc0).
+type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string }
+const MAY_EXPAND = (word: string): boolean => /[$`]/.test(word)
+const begins = (words: string[], starts: number[], expands: (word: string, start: number) => boolean = MAY_EXPAND): Begun => {
   let w = words
   let s = starts
   let xargs = false
+  let proxied = false
+  let unread: string | undefined
   let i = 0
   for (;;) {
     const word = w[i] ?? ''
@@ -637,9 +644,88 @@ const begins = (words: string[], starts: number[]): Begun => {
     const next = runs(w, i, runner)
     if (next === undefined) break
     if (name === 'xargs') xargs = true
+    const proxy = name === 'rtk' && w[next] === 'proxy' ? proxyRuns(w, next) : undefined
+    if (proxy === null) break
+    if (proxy !== undefined) {
+      proxied = true
+      // The words rtk is given, the shell having taken the redirects away.
+      const given: number[] = []
+      for (let k = proxy; k < w.length; k++) {
+        const r = redirectAt(w, k)
+        if (r) k += r - 1
+        else given.push(k)
+      }
+      const one = given.length === 1 ? (given[0] as number) : undefined
+      if (one === undefined) {
+        i = proxy
+        continue
+      }
+      // One word: rtk splits it into the command itself, so its words carry no place in the text,
+      // and what a word the shell expands holds is not known before it runs. The redirects stay.
+      const text = w[one] as string
+      if (expands(text, s[one] ?? -1)) unread = PROXY_UNREAD
+      const inner = rtkSplit(text)
+      const rest = w.map((_, k) => k).filter(k => k >= proxy && k !== one)
+      w = [...inner, ...rest.map(k => w[k] as string)]
+      s = [...inner.map(() => -1), ...rest.map(k => s[k] ?? -1)]
+      i = 0
+      continue
+    }
     i = next
   }
-  return { words: w.slice(i), starts: s.slice(i), xargs }
+  return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}) }
+}
+
+// rtk's proxy (#2983, measured on rtk 0.31.0, `rtk proxy --help`): -v (repeatable), -u and
+// --skip-env take no value, and -h or --help prints its help and runs nothing. Where the command it
+// runs begins, or null when it runs none. An option it does not know is the command to rtk, which
+// then fails to start it; reading past one instead judges the words after it as the command.
+const proxyRuns = (words: readonly string[], at: number): number | null => {
+  let i = at + 1
+  for (; i < words.length; i++) {
+    const w = words[i] as string
+    if (w === '--') {
+      i++
+      break
+    }
+    if (w === '--help') return null
+    if (w.startsWith('--')) continue
+    if (!w.startsWith('-') || w === '-') break
+    if (w.includes('h')) return null
+  }
+  return i < words.length ? i : null
+}
+// How many words a redirect at `k` takes, its target included, or 0 when the word is none. Read on
+// words with their quotes removed, as operandsOf reads them.
+const redirectAt = (words: readonly string[], k: number): number => {
+  const a = words[k] as string
+  const o = OUTPUT_WORD.exec(a)
+  const n = a.startsWith('<(') ? null : INPUT_WORD.exec(a)
+  if (!o && !n) return 0
+  return (o ? o[1] : n?.[3]) ? 1 : 2
+}
+const PROXY_UNREAD = 'split by rtk proxy from one word the shell expands, so what it runs cannot be read'
+/**
+ * How rtk's proxy splits the one word it is given into a command, measured on rtk 0.31.0: on blanks
+ * outside quotes, a single or double quote running to its match (or to the end when it has none), no
+ * backslash escape anywhere, an empty word dropped, and no shell, so ; | and $ are characters.
+ */
+const rtkSplit = (text: string): string[] => {
+  const out: string[] = []
+  let word = ''
+  let quote: string | undefined
+  for (const c of text) {
+    if (quote) {
+      if (c === quote) quote = undefined
+      else word += c
+    } else if (c === "'" || c === '"') quote = c
+    else if (/\s/.test(c)) {
+      if (word) out.push(word)
+      word = ''
+    } else word += c
+  }
+  if (word) out.push(word)
+  return out
 }
 
 const HEREDOC_WORD = /^(\d*)<<(?!<)/
@@ -696,10 +782,9 @@ const operandsOf = (args: readonly string[]): string[] => {
   const out: string[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string
-    const o = OUTPUT_WORD.exec(a)
-    const n = a.startsWith('<(') ? null : INPUT_WORD.exec(a)
-    if (o || n) {
-      if (!(o ? o[1] : n?.[3])) i++
+    const r = redirectAt(args, i)
+    if (r) {
+      i += r - 1
       continue
     }
     if (a.startsWith('-') && a !== '-') continue
@@ -789,6 +874,10 @@ const printfText = (args: readonly string[]): string | undefined => {
  * backslash (#1953), or is a $ the shell leaves as written (#2320, leftAsWritten: `"bar$"`, foo$), so
  * the shell hands it on with no expansion; absent where no word is one. Read for every shell, where
  * `splits` is for one that splits words.
+ * `proxied` marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as
+ * every runner is, unfiltered by rtk; `unread`, on one, says why what it runs cannot be read: given
+ * one word, rtk splits it into the command itself, and a word the shell expands holds what nobody
+ * can read before it runs. Its words are never what runs; sleep mode refuses one.
  */
 export type Command = {
   words: string[]
@@ -796,6 +885,8 @@ export type Command = {
   heredocs?: Fed
   xargs?: true
   found?: string[]
+  proxied?: true
+  unread?: string
   language?: Lang
   program?: Program
   script?: Script
@@ -903,8 +994,21 @@ export type Line = (Command | { sub: Line })[]
 // What feeds the commands of one read: the command a | feeds them from, what is on their standard
 // input, and whether xargs runs them, each given to every command no | of its own feeds. `splits`
 // says the shell running them splits an unquoted expansion's value into words (#1834): the one a
-// Bash call runs in, at the top, and the shell itself for the script it is given.
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean }
+// Bash call runs in, at the top, and the shell itself for the script it is given. `proxied` and
+// `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983).
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string }
+// The marks a feed gives each command it feeds.
+const carried = (f: Feed) => ({
+  ...(f.xargs ? { xargs: true as const } : {}),
+  ...(f.found ? { found: f.found } : {}),
+  ...(f.proxied ? { proxied: true as const } : {}),
+  ...(f.unread ? { unread: f.unread } : {}),
+})
+// The marks the runners in front of a command give it, beside those of the feed it is read in.
+const marksOf = (b: Begun, outer: Feed): Feed => {
+  const unread = b.unread ?? outer.unread
+  return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}) }
+}
 
 // A command's output redirects that name a file, each with its target: `> f`, `>> f`, `>| f`,
 // `&> f`, `2> f`, and a `>&` whose target is no descriptor. A descriptor copy (2>&1) names none.
@@ -937,13 +1041,13 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
     const splitting = splitsWords(words[0]) ? { splits: true } : {}
-    out.push(...readLine(program.text, opts, { ...inner, ...(feed.xargs ? { xargs: true } : {}), ...(feed.found ? { found: feed.found } : {}), ...splitting }))
+    out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...splitting }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
     // reader of redirects sees the file.
     const own = ownRedirects(words)
-    if (own.length) out.push({ words: [words[0] as string, ...own], ...(feed.xargs ? { xargs: true as const } : {}), ...(feed.found ? { found: feed.found } : {}) })
+    if (own.length) out.push({ words: [words[0] as string, ...own], ...carried(feed) })
     return
   }
   // The language is said only where there is a program or script in it to read.
@@ -953,8 +1057,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     words,
     ...(feed.pipedFrom ? { pipedFrom: feed.pipedFrom } : {}),
     ...(fed.length ? { heredocs: fed } : {}),
-    ...(feed.xargs ? { xargs: true as const } : {}),
-    ...(feed.found ? { found: feed.found } : {}),
+    ...carried(feed),
     ...(language ? { language } : {}),
     ...(program ? { program } : {}),
     ...(script ? { script } : {}),
@@ -971,7 +1074,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   const roots = findRoots(words)
   for (const inner of execsOf(words)) {
     const b = begins(inner, inner.map(() => -1))
-    if (b.words.length) emit(b.words, [], { ...(b.xargs ? { xargs: true } : {}), found: roots }, out, opts)
+    if (b.words.length) emit(b.words, [], { ...marksOf(b, { proxied: feed.proxied, unread: feed.unread }), found: roots }, out, opts)
   }
 }
 
@@ -1031,7 +1134,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // Each word's command substitutions, by its place in the text (#2141).
   const subbed = new Map<number, InWord[]>()
   const read = split(text, bare, literal, unexpanded, subbed)
-  const begun = read.map(r => begins(r.words, r.starts))
+  const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does.
   const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}) }
   // Each substitution, by the command it sits in: the last one starting at or before it.
@@ -1115,7 +1218,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       const feeder = f.words.length ? f.words : (read[r.from] as Split).words
       feed = { pipedFrom: feeder, stdin: piped(feeder, fedOf(f)) }
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
-    if (b.xargs || outer.xargs) feed = { ...feed, xargs: true }
+    feed = { ...feed, ...marksOf(b, outer) }
     if (outer.found) feed = { ...feed, found: outer.found }
     emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b))
   })

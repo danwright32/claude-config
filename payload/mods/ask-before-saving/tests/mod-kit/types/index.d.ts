@@ -57,7 +57,7 @@ export type ModKit = {
   /**
    * The simple commands a Bash call would run, each as its words with quotes removed: heredoc
    * bodies dropped, assignments, the reserved words leading a command (then, do, else, `{`, `!`) and
-   * sudo, env, timeout, nice, xargs and the like looked past, each runner by its own options, a
+   * sudo, env, timeout, nice, xargs, rtk and its proxy (#2983) and the like looked past, each runner by its own options, a
    * shell's -c read as the commands it runs (alone or in a cluster, `bash -lc`, `zsh -ec`, `sh -ce`,
    * for sh, bash, zsh, dash and ksh), and so is a shell's script fed on standard input (a heredoc, a
    * here-string, or what echo, printf or cat pipes in, #712), env -S's string split into the command
@@ -367,6 +367,14 @@ export type ModKitCommand = {
   heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   xargs?: true
   found?: string[]
+  /**
+   * Marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as every
+   * runner is and unfiltered by rtk. `unread`, on one, says why what it runs cannot be read: given
+   * one word, rtk splits that word into the command itself, and a word the shell expands holds what
+   * nobody can read before it runs. Its words are never what runs; sleep mode refuses one.
+   */
+  proxied?: true
+  unread?: string
   language?: ModKitLanguage
   program?: ModKitProgram
   script?: { files: string[]; stdin?: true }
