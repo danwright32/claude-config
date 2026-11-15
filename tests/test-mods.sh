@@ -1587,6 +1587,24 @@ for m in quoted-escape quoted-token quoted-walk; do
     || check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" "$out"
 done
 case "$out" in *clean-asks-quoted*) check "#2467: a mod asking the copy of hooks/quoted.ts passes" "$out" ;; *) check "#2467: a mod asking the copy of hooks/quoted.ts passes" ok ;; esac
+# #2992: scope modes and the Slack alert guard each read a patch's names, strip level, folder and hunks
+# their own way, and each got a case the other got right wrong. Both read with the copy of mod-kit's
+# hooks/patch.ts now, so a mod reading git's diff line, a +++ header, a hunk header or a binary patch
+# by hand fails the run, pointed at that copy (the spellings each copy used). A mod asking the copy
+# passes, and so does ask before saving's cut of the lines that might name a file, another question.
+M9D="$TMPROOT/m9-patch-reader"
+mkmodsrc "$M9D" clean-asks-patch "const files = patchFiles(text); const paths = patchedPaths(g.args, true, text); const NAMES_A_FILE = /^[ \\t]*(?:diff |--- |\\+\\+\\+ |Index: )/"
+mkmodsrc "$M9D" patch-git-line "const d = /^diff --git (.+)\$/.exec(line)"
+mkmodsrc "$M9D" patch-header "if (line.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')) file = line"
+mkmodsrc "$M9D" patch-hunk "const h = /^@@ -\\d+(?:,(\\d+))? \\+\\d+(?:,(\\d+))? @@/.exec(line)"
+mkmodsrc "$M9D" patch-binary "if (/^GIT binary patch\$/.test(line)) return undefined"
+out="$(bash "$SHARED" "$M9D" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2992: a mod reading a patch by hand fails the run" ok || check "#2992: a mod reading a patch by hand fails the run" "exit=$code out=$out"
+for m in patch-git-line patch-header patch-hunk patch-binary; do
+  printf '%s\n' "$out" | grep "$m keeps its own patch-reader" | grep -q 'hooks/mod-kit/patch.ts' && check "#2992: and names $m, pointing it at the copy of hooks/patch.ts" ok \
+    || check "#2992: and names $m, pointing it at the copy of hooks/patch.ts" "$out"
+done
+case "$out" in *clean-asks-patch*) check "#2992: a mod asking the copy of hooks/patch.ts, or cutting a patch to the lines that might name a file, passes" "$out" ;; *) check "#2992: a mod asking the copy of hooks/patch.ts, or cutting a patch to the lines that might name a file, passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the

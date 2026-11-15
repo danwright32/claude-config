@@ -3,8 +3,6 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
   WORDING_PATH,
-  patchFiles,
-  patchPlacing,
   hookFailed,
   agentRefusal,
   ciMessages,
@@ -43,6 +41,7 @@ import {
   wordingKey,
   wordingOf,
 } from '../hooks/rules.ts'
+import { patchFiles, patchPlacing } from '../hooks/mod-kit/patch.ts'
 import { readsAsSend } from './send-wording.ts'
 
 // The Slack alert guard's pure rules (claude-config#2242). Dan, 2026-11-04: "anytime a slack alert
@@ -206,6 +205,11 @@ test('a patch is read file by file, each hunk as its lines before and after; tex
   expect(patchFiles('--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n')).toBeUndefined()
   expect(patchFiles('--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n*old\n+new\n')).toBeUndefined()
   expect(patchFiles('diff --git a/x.ts b/x.ts\nGIT binary patch\nliteral 3\n')).toBeUndefined()
+  // #2992: mod-kit's one patch reader reads git's own diff line, as scope modes' did, so a rename with
+  // no change to its text is a file with no hunks, never a patch that cannot be read; and a name git
+  // quotes is read with its escapes undone.
+  expect(patchFiles('diff --git a/old.ts b/lib/new.ts\nsimilarity index 100%\nrename from old.ts\nrename to lib/new.ts\n')).toEqual([{ from: 'a/old.ts', to: 'b/lib/new.ts', hunks: [] }])
+  expect(patchFiles('--- "a/caf\\303\\251.ts"\n+++ "b/caf\\303\\251.ts"\n@@ -1 +1 @@\n-a\n+b\n')).toEqual([{ from: 'a/café.ts', to: 'b/café.ts', hunks: [{ before: 'a', after: 'b' }] }])
 })
 
 test('a patch command places its names by its -p, its folder, and for patch a file named to take it (#2971)', () => {

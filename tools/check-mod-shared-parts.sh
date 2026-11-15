@@ -107,6 +107,14 @@
 #             /''/g, a pattern matching '(?:'' for a single     round guard read TypeScript strings its own
 #             quoted scalar, or a walk to `] === q)`)            way and the Slack alert guard GitLab's flow
 #                                                               lists; $.modkit.commands reads shell only)
+#   patch-reader                                                readPatch, patchFiles, patchPlacing,
+#             reading a patch by hand: git's diff line, a       placedName and patchedPaths from the copy
+#             +++ header in quotes, a hunk header (^@@), or     of hooks/patch.ts kept at
+#             a binary patch                                    hooks/mod-kit/patch.ts (#2992: scope modes
+#                                                               and the Slack alert guard each read names,
+#                                                               strip, folder and hunks their own way).
+#                                                               Ask before saving's cut of every line that
+#                                                               might name a file is another question.
 #   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -239,6 +247,9 @@ PARTS=(
   # undone (/''/g), a single quoted YAML scalar matched by a pattern ('(?:''|), or a string walked to
   # the quote it opened with (] === q)). These are the spellings the two copies used, not every one.
   "quoted-reader|/''/g|'\\(\\?:''\\||\\] === (q|quote)\\)|quotedEnd, yamlScalar and yamlFlowList from the copy of hooks/quoted.ts kept at hooks/mod-kit/quoted.ts"
+  # #2992: a patch read by hand, by the spellings the two copies used: git's diff line, a +++ header
+  # as a quoted string, a hunk header matched from a line's start, or git's binary patch line.
+  "patch-reader|diff --git|[\"'\`]\\+\\+\\+ |\\^@@|GIT binary patch|readPatch, patchFiles, patchPlacing, placedName and patchedPaths from the copy of hooks/patch.ts kept at hooks/mod-kit/patch.ts"
 )
 
 n=0

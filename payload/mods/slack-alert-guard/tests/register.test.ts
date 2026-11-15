@@ -2589,6 +2589,17 @@ test('a patch to a file that sends nothing passes; a patch making a sender is he
   expect(w.ran.length).toBe(2)
 })
 
+// #2992: the guard reads patches with mod-kit's one reader, which reads git's own diff line, so a
+// rename that changes no text is a file with no hunk and passes, where it was held as unreadable.
+const RENAME_PATCH = ['diff --git a/lib/alert.ts b/lib/alerts.ts', 'similarity index 100%', 'rename from lib/alert.ts', 'rename to lib/alerts.ts', ''].join('\n')
+test('a patch that only renames a file that posts changes no text, so it passes; one rewording it in the same patch is still held (#2992)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [ALERT]: ALERT_TEXT, '/w/app/rename.patch': RENAME_PATCH, '/w/app/both.patch': `${RENAME_PATCH}${DIFF}` } })
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply rename.patch' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply both.patch' }))).toContain('failed on production')
+  expect(w.ran.length).toBe(1)
+})
+
 test('a patch applied in reverse is judged by what it leaves, and patch -d places a file it is named inside its folder (#2971 lessons review)', withKit, async ($, on) => {
   const reworded = ALERT_TEXT.replace('Deploy ${id} failed', REWORDED)
   const w = world($, on, { files: { [ALERT]: reworded, '/w/app/fix.patch': DIFF } })
