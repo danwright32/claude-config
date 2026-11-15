@@ -24,14 +24,24 @@ FAIL CLOSED. A judgement is kept only when it is an allow and the recording is w
 stand ins do not know (an os attribute not classified here), any disk event Python raises outside
 them (an audit hook sees open, listdir, scandir, subprocesses and the rest, from any route), a file
 larger than MAX_READ, or a question answered two ways within one judgement marks it not keepable.
-Any doubt on the way back (an entry that cannot be read, is not an entry, fails its checksum, names
-an operation not listed here, or finds one answer changed) is a miss, and the call is judged afresh.
-A refusal is never kept, so the cache can only skip the work of an allow, never turn a refusal into
-one. Anything that can write the cache can also edit the gate, so the entries are checksummed
-against damage, not signed.
+Any doubt on the way back (an entry that cannot be read, is not an entry, is not signed with this
+cache's key, names an operation not listed here, or finds one answer changed) is a miss, and the call
+is judged afresh. A refusal is never kept, so the cache can only skip the work of an allow, never
+turn a refusal into one.
+
+SIGNED (claude-config#2965). Each entry carries an HMAC of its body under a 32 byte key in
+<cache folder>.key, beside the folder and never in it, made on the first store with mode 600. A key
+that is missing (on a lookup), unreadable, a link, not this user's, or open to anyone else means no
+cache: nothing is used or kept, and nothing unsigned ever is. So a process that can write entries
+but not read that key cannot forge a kept allow. The key's bytes are never printed or traced.
+
+ORDERED (claude-config#2965). Python iterates a set of strings in an order salted afresh in each
+process, so a verdict resting on that order could differ between a kept judgement and a fresh one.
+Nothing is kept or used unless string hashing is fixed (order_fixed()); the gate's wrapper runs it
+with PYTHONHASHSEED=0, so the order is the same on every run.
 
 WHERE: $HOME/.claude/state/slack-gate-cache (the sync never carries ~/.claude/state), or
-SLACK_GATE_CACHE_DIR. Under a test run (HOOK_TESTS_RUNNING=1) it is off unless a directory is named,
+SLACK_GATE_CACHE_DIR, with the key beside it. Under a test run (HOOK_TESTS_RUNNING=1) it is off unless a directory is named,
 so no suite reads or writes this Mac's. At most MAX_ENTRIES entries and MAX_TOTAL bytes, the least
 recently used removed first; one file per key, written to a temporary name and renamed into place.
 SLACK_GATE_CACHE_TRACE names a file each run appends what the cache did to (a suite's view of it).
@@ -40,16 +50,19 @@ import ast as _ast
 import builtins
 import glob as _glob
 import hashlib
+import hmac
 import importlib.machinery as _machinery
 import importlib.util as _util
 import io
 import json
 import os as _os
+import secrets
+import stat as _stat
 import sys
 import tempfile
 import time
 
-FORMAT = 1
+FORMAT = 2  # 2: signed with the cache's key rather than checksummed (claude-config#2965)
 MAX_ENTRIES = 200
 MAX_ENTRY = 4 * 1024 * 1024  # bytes of one entry; a larger judgement is not kept
 MAX_TOTAL = 64 * 1024 * 1024  # bytes of all entries
@@ -523,9 +536,87 @@ def key(command, cwd, code):
     return _sha(json.dumps(parts, sort_keys=True).encode("utf-8", errors="surrogatepass"))
 
 
-def _checksum(entry):
+ORDER_RANDOM = ("string hashing is random in this process (the gate was not run with PYTHONHASHSEED=0), "
+                "so the order it iterates a set in, and any verdict resting on that order, can differ "
+                "from one run to the next")
+
+
+def order_fixed():
+    """Whether the order this process iterates a set in is the same in every run given the same
+    inputs. Python orders a set of strings by their hashes, salted afresh in each process unless
+    hashing is fixed. The gate's sets hold strings and tuples of them, and its sets of id() values
+    (which differ between runs) are only asked whether they hold one, never iterated (read on
+    2026-11-14). So with hashing fixed (the interpreter's own flag, which PYTHONHASHSEED=0
+    clears and -E, -I or -R set again) a judgement is as deterministic as its recorded inputs, and
+    sys.flags in the key keeps one made otherwise apart. Without it nothing is kept or used: a kept
+    verdict would be one ordering's, where a fresh one could take another (claude-config#2965)."""
+    return sys.flags.hash_randomization == 0
+
+
+KEY_BYTES = 32
+
+
+def key_path(dirpath):
+    """Where the signing key for the cache in dirpath lives: beside the folder, never in it, so
+    nothing that writes or evicts entries touches it."""
+    return _os.path.normpath(dirpath) + ".key"
+
+
+def _read_key(path):
+    """The key's bytes, or None where there is no usable key: missing, a link, not a regular file, not
+    this user's, readable or writable by anyone else, or not KEY_BYTES long."""
+    try:
+        # Judged before it is opened, so a link or a pipe is never followed or waited on, and again
+        # once open: the same file (device and inode), every test passed again on what was opened.
+        def usable(st):
+            return (_stat.S_ISREG(st.st_mode) and st.st_uid == _os.getuid() and not st.st_mode & 0o077
+                    and st.st_size == KEY_BYTES)
+        named = _os.lstat(path)
+        if not usable(named):
+            return None
+        with builtins.open(path, mode="rb", buffering=0) as f:
+            opened = _os.fstat(f.fileno())
+            if not usable(opened) or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+                return None
+            data = f.read(KEY_BYTES + 1)
+    except OSError:
+        return None
+    return data if len(data) == KEY_BYTES else None
+
+
+def signing_key(dirpath, create):
+    """The key the entries in dirpath are signed with, or None, which means no cache: nothing is used
+    and nothing is kept, never an unsigned entry. Only store() makes one (create=True), mode 600,
+    written whole under a temporary name and linked into place, so a reader never sees half of it and
+    of two runs making one at once, the first link wins and both use it. A key that is there but
+    unusable (unreadable, readable by others, a link) is never replaced: it stays no key until put
+    right. The key's bytes are never printed or traced."""
+    path = key_path(dirpath)
+    found = _read_key(path)
+    if found is not None or not create or _os.path.lexists(path):
+        return found
+    parent = _os.path.dirname(path) or "."
+    try:
+        _os.makedirs(parent, mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=parent, prefix=".tmp-key-", suffix=".part")  # made mode 600
+        try:
+            with _os.fdopen(fd, "wb") as f:
+                f.write(secrets.token_bytes(KEY_BYTES))
+            try:
+                _os.link(tmp, path)
+            except FileExistsError:
+                pass  # another run linked its key first, and that key is the one
+        finally:
+            _os.unlink(tmp)
+    except OSError:
+        return None
+    return _read_key(path)
+
+
+def _signature(secret, entry):
     body = {k: entry[k] for k in ("format", "key", "verdict", "reads")}
-    return _sha(json.dumps(body, sort_keys=True).encode("utf-8", errors="surrogatepass"))
+    data = json.dumps(body, sort_keys=True).encode("utf-8", errors="surrogatepass")
+    return hmac.new(secret, data, hashlib.sha256).hexdigest()
 
 
 def changed(reads):
@@ -545,6 +636,13 @@ def changed(reads):
 def lookup(dirpath, k):
     """True when the kept judgement for key k is an allow and every question it asked is answered the
     same now. Any doubt is False."""
+    if not order_fixed():
+        trace("miss: " + ORDER_RANDOM)
+        return False
+    secret = signing_key(dirpath, False)
+    if secret is None:
+        trace("miss: no signing key")
+        return False
     path = _os.path.join(dirpath, k + ".json")
     try:
         with builtins.open(path, mode="rb") as f:
@@ -559,8 +657,9 @@ def lookup(dirpath, k):
         entry = json.loads(raw)
         ok = (isinstance(entry, dict) and entry.get("format") == FORMAT and entry.get("key") == k
               and entry.get("verdict") == "allow" and isinstance(entry.get("reads"), list)
-              and entry.get("sum") == _checksum(entry) and len(raw) <= MAX_ENTRY
-              and all(isinstance(r, list) and len(r) == 3 for r in entry["reads"]))
+              and isinstance(entry.get("sig"), str) and len(raw) <= MAX_ENTRY
+              and all(isinstance(r, list) and len(r) == 3 for r in entry["reads"])
+              and hmac.compare_digest(entry["sig"], _signature(secret, entry)))
     except Exception as e:  # anything at all wrong with it is no judgement
         trace(f"miss: the entry is not an entry ({type(e).__name__})")
         return False
@@ -593,8 +692,15 @@ def store(dirpath, k, recorder):
     if why:
         trace("not stored: something changed while it was judged: " + why)
         return
+    if not order_fixed():
+        trace("not stored: " + ORDER_RANDOM)
+        return
+    secret = signing_key(dirpath, True)
+    if secret is None:
+        trace("not stored: no signing key")
+        return
     entry = {"format": FORMAT, "key": k, "verdict": "allow", "reads": reads}
-    entry["sum"] = _checksum(entry)
+    entry["sig"] = _signature(secret, entry)
     data = json.dumps(entry).encode("utf-8", errors="surrogatepass")
     if len(data) > MAX_ENTRY:
         trace(f"not stored: the entry would be {len(data)} bytes")
