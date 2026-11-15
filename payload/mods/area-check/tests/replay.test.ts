@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { RULE_VERSION, replay, type ReplayInput } from '../hooks/rules.ts'
+import { RULE_VERSION, replay, type ReplayInput, type ReplaySummary } from '../hooks/rules.ts'
 import { MEASURED, PATHS } from './replay-fixture/index.ts'
 
 // The replay (#1508): 30 days of a real repository's commits through these rules, each commit standing
@@ -10,10 +10,13 @@ import { MEASURED, PATHS } from './replay-fixture/index.ts'
 // edited (L48, L354): node tools/area-check-replay.ts . --repo danwright32/claude-config
 // --fixture payload/mods/area-check/tests/replay-fixture
 
+// The fixture imports nothing outside its folder and spells its own types (claude-config#2681), so
+// these two annotations are what hold it to the rules' types when the mod is type checked.
 const input: ReplayInput = { ...MEASURED.input, sessions: MEASURED.input.sessions.map(s => ({ ...s, files: s.files.map(i => PATHS[i] as string) })) }
+const measuredSummary: ReplaySummary = MEASURED.summary
 
 test('the measured month replays to the holds per session it was measured with', () => {
-  expect(replay(input).summary).toEqual(MEASURED.summary)
+  expect(replay(input).summary).toEqual(measuredSummary)
 })
 
 test('the fixture is a real month, not a handful of rows (L606): hundreds of sessions, held and quiet both', () => {

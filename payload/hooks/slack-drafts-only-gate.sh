@@ -69,6 +69,9 @@ RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
+# NODE_OPTIONS set for any program, which loads the modules it names in every node that program
+# starts (claude-config#2912).
+RUNS+='|NODE_OPTIONS'
 # A shell a pipe feeds its code (`cat post.sh | sh`, ending the command, so no space follows it), and
 # curl handed a config file, which is the request it describes (claude-config#2887). Under nocasematch
 # -K also matches curl's -k, which only sends that call to python3.
@@ -108,7 +111,9 @@ have_scope=""
 
 command -v python3 >/dev/null 2>&1 || couldnt "python3 is not on the PATH"
 
-out="$(printf '%s' "$payload" | GATE_DIR="$HOOK_DIR" python3 "$HOOK_DIR/slack_drafts_only_gate.py" 2>&1)"
+# String hashing fixed, so the gate iterates its sets in the same order on every run and a judgement
+# it keeps is the one a fresh run would make: the cache keeps and uses nothing otherwise (#2965).
+out="$(printf '%s' "$payload" | GATE_DIR="$HOOK_DIR" PYTHONHASHSEED=0 python3 "$HOOK_DIR/slack_drafts_only_gate.py" 2>&1)"
 rc=$?
 verdict="${out%%$'\n'*}"
 detail=""

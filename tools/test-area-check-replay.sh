@@ -77,14 +77,19 @@ case "$code $r" in "0 same "*'"withHold":1'*) check "--fixture writes a folder w
 [ ! -e "$W/fx/sessions-9.ts" ] && check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" ok || check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" "$(ls "$W/fx")"
 n="$(grep -c '"day":' "$W/fx/sessions-1.ts" 2>/dev/null)"
 [ "${n:-0}" -eq 4 ] && check "each session is a line of its own" ok || check "each session is a line of its own" "${n:-none} session lines in $(ls "$W/fx" 2>&1)"
-# The files written import the rules' types by their path from the fixture folder, the lines the
-# committed month carries. The writer names that path once and puts it into each line it writes
-# (claude-config#2678), and a type import is erased before anything runs, so a wrong path there
-# fails no replay: only this reads it.
-grep -q -x -F "import type { ReplayInput, ReplaySummary } from '../../hooks/rules.ts'" "$W/fx/index.ts" 2>/dev/null \
-  && grep -q -x -F "import type { CachedIssue } from '../../hooks/rules.ts'" "$W/fx/issues-1.ts" 2>/dev/null \
-  && check "the written files import the rules' types by their path from the fixture folder" ok \
-  || check "the written files import the rules' types by their path from the fixture folder" "$(grep -h 'import type' "$W/fx/index.ts" "$W/fx/issues-1.ts" 2>&1)"
+# The files written import nothing but each other (claude-config#2681). The writer imports what it
+# wrote to read it back, so the Slack drafts gate reads every import in the text it writes, from the
+# writer's own folder; an import of the rules from the fixture folder named nothing from there and
+# was refused, and the path held in a variable only hid it from the gate. The types the rows are
+# held to are spelt in the files, and the mod's replay test holds them to the rules' own types.
+outside="$(grep -h -n -E "(from|import)[[:space:]]*\(?[[:space:]]*['\"\`]" "$W/fx"/*.ts 2>/dev/null | grep -v -E "from '\./[a-z]+-[0-9]+\.ts'")"
+[ -f "$W/fx/index.ts" ] && [ -z "$outside" ] \
+  && check "the files written import only the parts beside them, nothing outside the fixture folder" ok \
+  || check "the files written import only the parts beside them, nothing outside the fixture folder" "${outside:-no index.ts written}"
+outside="$(grep -h -n -E "(from|import)[[:space:]]*\(?[[:space:]]*['\"\`]" "$DIR/../payload/mods/area-check/tests/replay-fixture"/*.ts 2>/dev/null | grep -v -E "from '\./[a-z]+-[0-9]+\.ts'")"
+[ -z "$outside" ] \
+  && check "the committed month imports only its own parts" ok \
+  || check "the committed month imports only its own parts" "$outside"
 
 out="$(PATH="$W/bin:$PATH" AREA_CHECK_FIXTURE_PART_BYTES=300 node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx2" 2>&1)"; code=$?
 r="$(fixture_replays "$W/fx2")"

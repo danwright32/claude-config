@@ -757,6 +757,91 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
   })
+  // #2939 (night of 13 to 14 November 2026): a builder compared two JSON files with cmp, then ran an
+  // inline python script that read a third from a commit with git -C <worktree> show HEAD:<path>
+  // through subprocess. It wrote nothing and reached no remote, and was refused. Code whose every git
+  // call is a local read, its subcommand written out where the code is read, now goes ahead.
+  test('code whose only git calls are local reads goes ahead overnight (#2939)', async () => {
+    const wt = `${'/Users'}/x/repo/.claude/worktrees/w1`
+    for (const c of [
+      // The refused shape, in the form the issue describes.
+      `cmp /notes/a.json /notes/b.json; python3 -I -c 'import json, subprocess; a = json.load(open("/notes/a.json")); b = json.loads(subprocess.run(["git", "-C", "${wt}", "show", "HEAD:payload/x.json"], capture_output=True, text=True, check=True).stdout); print(sorted(k for k in a if a[k] != b.get(k)))'`,
+      // The folder -C names may be known only when the code runs; it picks the repository read.
+      `python3 -c "import subprocess; wt = '${wt}'; print(subprocess.check_output(['git', '-C', wt, '--no-pager', 'show', 'HEAD:payload/x.json']))"`,
+      `python3 -c "import subprocess; print(subprocess.check_output(['git', 'cat-file', '-p', 'HEAD']))"`,
+      `python3 -c "import subprocess; print(subprocess.check_output('git log --oneline -5', shell=True))"`,
+      `python3 -c "import subprocess; a = subprocess.check_output(['git', 'diff', 'main', '--stat']); b = subprocess.check_output(['git', 'rev-parse', 'HEAD'])"`,
+      `node -e "const wt = '${wt}'; console.log(require('child_process').execFileSync('git', ['-C', wt, 'diff', 'origin/main', '--stat']).toString())"`,
+      `python3 -c "import subprocess; subprocess.run(['/usr/bin/env', 'git', 'ls-files', '-z'])"`,
+      // The list as the whole argument by keyword, or held in a variable assigned once and handed
+      // whole to the call with nothing else touching it.
+      `python3 -c "import subprocess; subprocess.run(args=['git', 'log', '-5'], check=True)"`,
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log', '-5']", 'print(subprocess.run(cmd, check=True))', 'PY'].join('\n'),
+      `node -e "const args = ['log', '-5']; console.log(require('child_process').execFileSync('git', ['diff', '--stat']).toString())"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
+  // The lessons review of PR #3009 at 47802f0: the list was read only up to its closing bracket, so
+  // anything joined onto it after that bracket, or done to a variable holding it, passed as a read
+  // though it can add --output. The list must be the whole argument the call is handed.
+  test('a list of git arguments with anything joined on or done to it after it closes is refused (#2939)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    const cases = [
+      `python3 -c "import subprocess; subprocess.run(['git', 'log'] + ['--output=/tmp/x'])"`,
+      `python3 -c "import subprocess; extra = ['--output=/tmp/x']; subprocess.run(args=['git', 'log'] + extra)"`,
+      `python3 -c "import subprocess; subprocess.run(('git', 'log') + ('--output=/tmp/x',))"`,
+      `python3 -c "import subprocess; subprocess.run([*['git', 'log'], '--output=/tmp/x'])"`,
+      `node -e "const extra = ['--output=/tmp/x']; require('child_process').execFileSync('git', ['log'].concat(extra))"`,
+      `node -e "const [c, ...a] = ['git', 'log'].concat(['--output=/tmp/x']); require('child_process').execFileSync(c, a)"`,
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd += ['--output=/tmp/x']", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.append('--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.extend(['--output=/tmp/x'])", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.insert(2, '--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd[2:] = ['--output=/tmp/x']", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", 'subprocess.run(cmd + extra)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", 'subprocess.run(cmd)', "cmd.append('--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      `node -e "const cmd = ['log']; cmd.push('--output=/tmp/x'); require('child_process').execFileSync('git', cmd)"`,
+      `node -e "const cmd = ['git', 'log']; cmd.push('--output=/tmp/x'); require('child_process').execFileSync(cmd[0], cmd.slice(1))"`,
+      `python3 -c "import subprocess; cmd = ['git', 'log']; c2 = cmd; c2.append('--output=/tmp/x'); subprocess.run(cmd)"`,
+      // Handed whole, but to a function of the code's own, which can add to it before running it.
+      ["python3 - <<'PY'", 'import subprocess', 'def go(c):', "    c.append('--output=/tmp/x')", '    subprocess.run(c)', "go(['git', 'log'])", 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', 'def run(c):', "    c.append('--output=/tmp/x')", '    subprocess.run(c)', "run(['git', 'log'])", 'PY'].join('\n'),
+    ]
+    // Every spelling is judged before comparing, so a failure names each one that passed.
+    const got: { c: string; r: string | undefined }[] = []
+    for (const c of cases) got.push({ c, r: await bash(c) })
+    expect(got).toEqual(cases.map(c => ({ c, r: runs })))
+  })
+  test('code with any git call that is not a plain local read, or whose subcommand is only known when it runs, is still refused (#2939)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    for (const c of [
+      // A read beside a write: every call must be a read.
+      `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:x']); subprocess.run(['git', 'push'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'commit', '-m', 'x'])"`,
+      `python3 -c "import subprocess; subprocess.run('git show HEAD:x; git push origin main', shell=True)"`,
+      // A subcommand, or a string run through a shell, known only when the code runs.
+      `python3 -c "import subprocess; sub = 'push'; subprocess.run(['git', sub, 'HEAD'])"`,
+      `python3 -c "import subprocess; ref = 'HEAD'; subprocess.run(f'git show {ref}', shell=True)"`,
+      `python3 -c "import subprocess; wt = '/x'; subprocess.run('git -C ' + wt + ' show HEAD:x', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run(['git'] + ['show'])"`,
+      // An argument after the subcommand known only when the code runs could be --output, so the
+      // call cannot be read as a read: a shell variable, a variable, a join, a placeholder, a glob.
+      ["python3 - <<'PY'", 'import subprocess', `subprocess.run('git log "$X"', shell=True)`, 'PY'].join('\n'),
+      `python3 -c "import subprocess; ref = 'HEAD'; subprocess.run(['git', 'log', ref])"`,
+      `python3 -c "import subprocess; p = 'x.json'; subprocess.run(['git', 'show', 'HEAD:' + p])"`,
+      `python3 -c "import subprocess; p = 'x.json'; subprocess.run(['git', 'show', f'HEAD:{p}'])"`,
+      `python3 -c "import subprocess; subprocess.run('git log -- *.json', shell=True)"`,
+      // Options that run a program, change the config, or write a file.
+      `python3 -c "import subprocess; subprocess.run(['git', '-c', 'alias.show=!rm -rf x', 'show'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', '--exec-path=/tmp/x', 'show'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'show', '--output=/tmp/x', 'HEAD'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'grep', '-O', 'x'])"`,
+      // A read beside gh or a database client is still refused for those.
+      `python3 -c "import subprocess; subprocess.run(['git', 'log']); subprocess.run(['gh', 'pr', 'merge', '5'])"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'log']); subprocess.run(['psql', '-c', 'select 1'])"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
+  })
 })
 
 describe('what is never approved, and the disk readers', () => {
@@ -857,11 +942,22 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash('echo rtk proxy && proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
     expect(await bash(`echo 'rtk proxy' ; proxy gh issue view 7 -R other/x`, { look: nowhere })).toBe(unresolved)
   })
-  test('what cannot be read as written plainly fails closed, git included (lessons review of 9c3b530)', async () => {
-    expect(await bash(`rtk 'proxy' git push --force origin main`)).toBe('run a command through rtk proxy that could not be read as written plainly')
-    expect(await bash(`rtk 'proxy' gh issue view 7 -R other/x`, { look: nowhere })).toBe('run a command through rtk proxy that could not be read as written plainly')
-    expect(await bash('proxy git push --force origin main')).toBe('run git through a command named proxy, which could not be judged')
-    expect(await bash(`echo rtk proxy; proxy -v git branch -D main`)).toBe('run git through a command named proxy, which could not be judged')
+  // #2983: mod-kit's reader now reads rtk's proxy as every mod reads it, so a quoted proxy is a
+  // proxy, and one word rtk splits into a command is that command.
+  test('a quoted proxy, and one word rtk splits, are read as the command they run', async () => {
+    expect(await bash(`rtk 'proxy' git push --force origin main`)).toBe('force push')
+    expect(await bash(`rtk 'proxy' gh issue view 7 -R other/x`, { look: nowhere })).toBeUndefined()
+    expect(await bash(`rtk proxy 'git push --force origin main'`)).toBe('force push')
+    expect(await bash(`rtk proxy 'gh issue view 7 -R other/x' > ${notes}/i7.txt`, { look: nowhere })).toBeUndefined()
+    expect(await bash(`rtk proxy 'gh issue view 7 -R other/x' > out.txt`, { look: nowhere })).toBe(outside(`${CWD}/out.txt`))
+  })
+  test('what cannot be read fails closed: one word the shell expands, which rtk splits into a command', async () => {
+    const unread = 'run a command through rtk proxy that could not be read as written plainly'
+    expect(await bash('rtk proxy "$CMD"')).toBe(unread)
+    expect(await bash('rtk proxy "gh issue view $N -R other/x"', { look: nowhere })).toBe(unread)
+    expect(await bash(`rtk proxy "git push $(cat flags.txt)"`)).toBe(unread)
+    // Two words or more reach the command as they stand, as they would written plainly.
+    expect(await bash('rtk proxy gh issue view "$N" -R other/x', { look: nowhere })).toBeUndefined()
   })
   test('rtk named by its path, or behind another runner, is still rtk', async () => {
     expect(await bash('/opt/homebrew/bin/rtk proxy gh issue view 7 -R other/x', { look: nowhere })).toBeUndefined()

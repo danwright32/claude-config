@@ -12,6 +12,7 @@ payload/hooks/test-branch-issue-reader.sh
 payload/hooks/test-check-home-paths.sh
 payload/hooks/test-check-root-guard.sh
 payload/hooks/test-checkout-root.sh
+payload/hooks/test-db-write-ask-git-fails.sh
 payload/hooks/test-fail-margin.sh
 payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-written-lib-list.sh
@@ -34,6 +35,7 @@ payload/hooks/test-whole-number.sh
 tests/test-ci-environment-tools.sh
 tests/test-ci-parts-real-tree.sh
 tests/test-dev-update-registry.sh
+tests/test-hang-wait-suites-gate.sh
 tests/test-moved-to-local.sh
 tests/test-payload-secret-scan.sh
 tests/test-stat-order.sh

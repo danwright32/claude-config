@@ -3554,7 +3554,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
-Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
+(made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
+missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
+runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
@@ -3570,6 +3574,19 @@ imports followed, each module read once, so a cycle ends. So repo-digest's `npm 
 refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
 gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
 real script of ours reaches 11).
+
+An endpoint a program only compares or lists is told from one it sends to (#2913; Dan, 2026-11-14:
+"Teach the gate", with no exemption list), in `lib/data-names.py`. A name counts as data only in a
+string that is a list's element, a comparison's operand, the argument of a test such as `includes`
+or `startswith`, a regex pattern, or a JavaScript comment; any other use refuses as before. It is let
+through only where nothing in the program (the script, every module it reaches, a loader or runner
+in the same process) can send a request, run code or write a file, no JavaScript member is reached by
+a computed name, and what the program prints reaches only the terminal or a filter such as `tail`.
+So a script or a single node test reaching a guard's refusal list passes, and the same list read
+out and sent, printed into `curl`, or written to a file is refused. A vitest or node:test test stays
+refused there, since the runner counts as able to send. A file a package is handed (`npx vitest run
+x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
+`$0` or `BASH_SOURCE` is worked out as bash reads it.
 
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
@@ -4084,10 +4101,19 @@ test project. An inline write, a push, `--db-url`, `--local` and a project not o
 about as before. The list is trusted only as git has committed it: its bytes must be what `git show
 HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
 included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
-itself asked about, which is why the hook's registration now takes those three tools. Still open: a
-session that edits the list with a shell command and then commits it, in one call or several, is
-trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
-edit and commit.
+itself asked about, which is why the hook's registration now takes those three tools. Since #2989 a
+shell command that writes the list (any command naming it, in any case, other than a reader such as
+`cat`, `grep` or `git diff` with no redirection into a file) is asked about too, as is one naming it
+where the hook cannot read the command (a heredoc body, a string), and a `git commit` that would add
+a line other than a blank or a comment to any list in its checkout, from the index or the working
+tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
+other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
+about, since that command could write the list by a glob or a variable first. So a Bash call holding
+the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
+commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
+then. What it still cannot see: a list written under a name built at
+run time in an earlier call and then committed by something other than `git commit` (an alias,
+`commit-tree`, a merge, a cherry-pick, a pull).
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -5513,9 +5539,14 @@ the default branch. The sweep also keeps a worktree whose branch has an open pul
 while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
 session registry folder or a file it edited is inside it), because a pushed branch counts as kept
 elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
-the sleep record or a worker's places cannot be read, it removes nothing that run. The `--just-merged`
+the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
+a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
+unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
 removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
-alone, and asks neither question. Anything it cannot read (the folder, git's
+alone, and asks none of these questions. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -6223,7 +6254,13 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
+each name on both sides with git's quoting undone, each hunk walked by its header's counts, and how
+git apply or patch places the names by -p, folder, a named file and -R) is read only through
+`hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
+and the Slack alert guard each kept their own, and each read wrong a case the other read right);
+the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
+patch by hand. `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
@@ -6805,7 +6842,10 @@ saying why), a program whose text names the files it writes (since #2847 also a 
 script file the command runs, its own code read as inline code is, a name its code writes where the
 folder cannot be followed held as could not check; since #2855 also a shell script's own commands
 and the scripts it runs, a script named through a variable the command sets, a script the command
-writes first from a heredoc, read as that text, and the local modules a script imports), and a
+writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
+a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
+passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
+`mktemp -d`, so a suite writing pages under its own temp folder runs), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -7046,8 +7086,10 @@ finding the words changed; the yes or no wrapper
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
-for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
-schema's description pass, a property the schema names `reason` or `text` being no message. Since
+for, is judged as before; since #2991 so does taking away any look changing file git has never had
+in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent,
+the logic around it, and a tool's or its input schema's description pass, a property the schema
+names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code
 alone passes even where the reading follows a message less far after it than before (a verdict
 handed through a helper that hands it straight back), and a comment holds no string. Since
@@ -7131,7 +7173,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855
+#1954, #2261, #2830, #2845, #2847, #2855, #2991
 
 </td></tr>
 <tr><td>
@@ -7363,8 +7405,9 @@ of its own and note each step as `progress`, counted by its own counter on disk,
 breaker (3 blocks or 20 active minutes with no new commit, claim or note; a commit is one on the
 claim's `sleep/N` branch or in its reserved worktree, whoever made it, #1119), the night's cap, the
 weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a Stop while the
-session's own subagent is still working (running, and not judged quiet by the job watcher) or a job
-it kept has not stalled is no idle turn: the session rests, unblocked, until that work's report
+session's own subagent is still working (running, and not judged quiet by the job watcher), a job
+it kept has not stalled, or a Monitor is listed as running in the stop's own `background_tasks`
+(#2897) is no idle turn: the session rests, unblocked, until that work's report
 starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
 afresh from it (#2511, `hooks/busy.ts`); a claim is parked
 after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
@@ -7383,10 +7426,12 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
-written plainly, and a line running gh that way writing files only into the session notes folder
-or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
-included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
-created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
+written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
+expands, which rtk splits into a command, is refused as unread), and a line running gh that way
+writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
@@ -7399,7 +7444,9 @@ with its environment changed; since #1106 that clone's pull is claude-config's d
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
 morning otherwise); git in a throwaway repository under the temp folder (a path there, or one
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
-refused for git only where it would run git, never for the word in prose (#1124). At wake, the
+refused for git only where it would run git, never for the word in prose (#1124), and goes ahead
+when every git call in it is a local read (show, cat-file, log, diff and the like) with its
+subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
 and deploy runs since sleep began, and notes each for the top of the report. It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
@@ -7874,7 +7921,11 @@ SHA-256 of its repository and word (#2246), since a held command's word can pass
 character key limit; an answer kept under the earlier key form is still read for its week (#2256
 removes that read).
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
+session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
+to an absolute path: the mod then writes, reads and rotates its log and error file in that folder,
+and the weekly line's runner reads the same one (#2906). A relative path is refused, and nothing is
+written anywhere. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
 later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
 renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that

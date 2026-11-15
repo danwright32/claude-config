@@ -11,6 +11,14 @@
 // watcher has not measured it stalled. Anything that cannot be read (the agent list, or the job
 // watcher not loaded or failing, so working cannot be told from hung) counts as no work, logged, so
 // the breaker still trips as it did before.
+//
+// #2897: a Monitor counts while Claude Code lists it as running in the stop's own list of the
+// session's work in flight (background_tasks), by its type 'monitor' (the Stop hook's schema in
+// 2.1.325 documents 'shell', 'subagent', 'monitor' and 'workflow'). The job watcher keeps no record
+// of a Monitor, so that list is the only reading. A finished one is left out of the list or listed
+// with another status, and a list that is missing or not a list counts none, logged, as above. A
+// Monitor that never ends cannot rest the night away: a rest counts against the night's cap, and
+// the claim's active time still runs toward its stuck limit (driver.ts).
 
 import type { EngineInterface } from 'claude-code'
 import { busyWords } from './driver.ts'
@@ -20,7 +28,7 @@ type JobsNoun = { list: () => Promise<unknown>; agents: () => Promise<unknown> }
 
 // A function declaration, since the engine follows $ past an import only into one; the job
 // watcher's noun is called in place each time, as it requires, never held in a variable.
-export async function busyNow($: EngineInterface): Promise<string | null> {
+export async function busyNow($: EngineInterface, backgroundTasks?: unknown): Promise<string | null> {
   let subagents = 0
   try {
     const listed: unknown = await $.agent.list()
@@ -46,5 +54,16 @@ export async function busyNow($: EngineInterface): Promise<string | null> {
   } catch (err) {
     $.ui.log(`scope-modes: the overnight driver could not read this session's kept jobs, so it counts none: ${errorText(err, 'scope-modes')}`, { to: 'debug' })
   }
-  return busyWords(subagents, kept)
+  const monitors = runningMonitors(backgroundTasks)
+  if (monitors === undefined) $.ui.log("scope-modes: the overnight driver could not read the stop's list of work in flight, so it counts no Monitor", { to: 'debug' })
+  return busyWords(subagents, kept, monitors ?? 0)
+}
+
+/** How many Monitors the stop's background_tasks lists as running (#2897), or undefined when that list is not a list. */
+export const runningMonitors = (raw: unknown): number | undefined => {
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter(t => {
+    const e = (typeof t === 'object' && t !== null ? t : {}) as { type?: unknown; status?: unknown }
+    return e.type === 'monitor' && e.status === 'running'
+  }).length
 }
