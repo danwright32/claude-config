@@ -58,6 +58,16 @@ export FAKE_LOG="$WORKDIR/fakelog"; mkdir -p "$FAKE_LOG"
 export FAKE_STREAM="$DIR/lib/fake-claude-stream.py"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
+# `claude --version` answers as Claude Code does, so a runner naming the version has one to name.
+[ "${1:-}" = --version ] && { echo "${FAKE_CLAUDE_VERSION:-2.1.325} (Claude Code)"; exit 0; }
+# FAKE_CLAUDE_REFUSE_OPTION=<option>: a Claude Code that no longer knows that option, answering as
+# 2.1.325 answers a misspelt one (claude-config#2982): one line on stderr, exit 1, before reading
+# anything and before any stream starts.
+if [ -n "${FAKE_CLAUDE_REFUSE_OPTION:-}" ]; then
+  for a in "$@"; do
+    [ "$a" = "$FAKE_CLAUDE_REFUSE_OPTION" ] && { echo "error: unknown option '$a'" >&2; exit 1; }
+  done
+fi
 # The reviewer is asked for the stream (claude-config#1619): the text below is wrapped in its
 # events by the one converter, lib/fake-claude-stream.py.
 for a in "$@"; do
@@ -538,6 +548,33 @@ wait_final "$HEAD_SHA" || bad "the failed review wrote its file"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "a failed review refuses" "1" "$rc"
 check "saying it failed and why" "claude exited 3" "$out"
+check_not "#2982 an ordinary failure is not reported as a refused option" "unknown option" "$out"
+
+# 3e1. Claude Code refuses an option the runner passes (claude-config#2982). Since #2975 the lessons
+#      ride in --append-system-prompt-file, which 2.1.325 accepts but its --help does not list. If an
+#      update drops it, every review stops starting, which read on 2026-11-14 as "exactly one review
+#      was started, got 0". That is said by name, with the version, as no review being able to start,
+#      never as an ordinary failed review of this change.
+reset_state
+FAKE_CLAUDE_REFUSE_OPTION=--append-system-prompt-file FAKE_CLAUDE_VERSION=2.1.999 \
+  prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "#2982 the refused review wrote its file"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+stored="$(cat "$(final_of "$HEAD_SHA")")"
+check_eq "#2982 a review claude refused to start refuses the merge" "1" "$rc"
+check "#2982 naming the option claude refused" "refused --append-system-prompt-file as an unknown option" "$out"
+check "#2982 and the Claude Code version that refused it" "Claude Code 2.1.999" "$out"
+check "#2982 and that no review can start until the runner changes" "no lessons review can start" "$out"
+check_not "#2982 never as an ordinary failed review" "no review was read back" "$out"
+check "#2982 the stored review records the refused option for any reader" "refused_option=--append-system-prompt-file" "$stored"
+check "#2982 and the version" "claude_version=2.1.999" "$stored"
+# Another option refused is named the same way: the runner passes several, and losing any one stops
+# every review (L30).
+reset_state
+FAKE_CLAUDE_REFUSE_OPTION=--exclude-dynamic-system-prompt-sections prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+wait_final "$HEAD_SHA" || bad "#2982 the review refusing another option wrote its file"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check "#2982 any option the runner passes is named when refused" "refused --exclude-dynamic-system-prompt-sections as an unknown option" "$out"
 
 # 3e2. the reviewer failed and its stderr carried SECRETS (claude-config#581). On 2026-09-24 in
 #      Bidspoke a failed start printed Claude Code's warnings about wildcard permission rules, which

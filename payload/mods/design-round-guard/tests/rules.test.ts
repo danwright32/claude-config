@@ -55,6 +55,10 @@ import {
   editWouldNotApply,
   outputTrusted,
   freshTemp,
+  madeTemp,
+  argvStart,
+  argvIndex,
+  inScriptTemp,
   inScratchpad,
   inSessionNotes,
   namesScratchpad,
@@ -407,6 +411,77 @@ test('#2171: only a variable every assignment gives bare mktemp or mktemp -d nam
     ['$T', [], 'cat app/page.tsx > "$T"'],
   ] as const)
     expect([command, freshTemp(word, [...values], command)]).toEqual([command, false])
+})
+
+test('#2991: a variable holds a temporary folder the script made only where every assignment is mktemp -d or a name inside one', () => {
+  const T = 'T="$(mktemp -d)"\n'
+  for (const [name, script] of [
+    ['T', T],
+    ['T', 'T=$(mktemp -d)\n'],
+    ['CH', `${T}CH="$T/chain"\n`],
+    ['CH', `${T}CH="\${T}/a/b"\nCH="$T/c"\n`],
+    ['X', `${T}CH="$T/chain"\nX="$CH/app"\n`],
+  ] as const)
+    expect([script, madeTemp(name, script)]).toEqual([script, true])
+  for (const [name, script] of [
+    ['CH', 'CH="$(pwd)"\n'],
+    ['CH', 'CH=.\n'],
+    ['CH', `${T}CH="$T/chain"\nCH=/w/slate\n`],
+    ['CH', `${T}CH="$T/../.."\n`],
+    ['CH', `${T}CH="$T/$U"\n`],
+    ['CH', `${T}CH="$T/chain"\nCH+=/x\n`],
+    ['CH', `${T}CH="$T/chain"\nread CH\n`],
+    ['CH', `${T}for CH in /w/slate; do :; done\n`],
+    ['CH', `${T}CH="$T/chain"\n: "\${CH:=/w/slate}"\n`],
+    ['CH', 'CH=\'$(mktemp -d)\'\n'],
+    ['T', 'T="$(mktemp -d -t x)"\n'],
+    ['T', `TMPDIR=/w/slate ${T}`],
+    ['T', `mktemp() { echo /w/slate; }\n${T}`],
+    ['T', `PATH=/w/bin:$PATH\n${T}`],
+    ['T', 'T="$T"\n'],
+    ['CH', ''],
+  ] as const)
+    expect([script, madeTemp(name, script)]).toEqual([script, false])
+})
+
+test('#2991: a python program binds a variable to one of its arguments only by a plain or tuple assignment from sys.argv', () => {
+  expect(argvStart(['python3', '-', '$CH', '$1', '<<PY'])).toBe(1)
+  expect(argvStart(['python3', '-I', '-', '$CH'])).toBe(2)
+  expect(argvStart(['python3', '-c', 'x', '$CH'])).toBe(2)
+  expect(argvStart(['python3', 'gen.py', '$CH'])).toBeUndefined()
+  expect(argvStart(['node', '-', '$CH'])).toBeUndefined()
+  expect(argvIndex('import sys\nch, heading = sys.argv[1], sys.argv[2]\nopen(ch + "/a.html")\n', 'ch')).toBe(1)
+  expect(argvIndex('import sys\nmc = sys.argv[2]\n', 'mc')).toBe(2)
+  for (const program of [
+    'ch = "."\n',
+    'ch = sys.argv[1]\nch = "."\n',
+    'ch = sys.argv[1]\nch += "/x"\n',
+    'ch = sys.argv[1]\nch: str = "."\n',
+    'ch = sys.argv[0]\n',
+    'ch = sys.argv[1]\nsys.argv[1] = "."\n',
+    'ch = sys.argv[1]\nsys.argv.insert(1, ".")\n',
+    'for ch in ["."]:\n  pass\n',
+    'ch = sys.argv[1]\nwith open("x") as ch:\n  pass\n',
+    'ch, h = sys.argv[1]\n',
+    'open(ch + "/a.html")\n',
+  ]) expect([program, argvIndex(program, 'ch')]).toEqual([program, undefined])
+  const program = 'import sys\nch = sys.argv[1]\nopen(ch + "/app/index.html", "w")\n'
+  const script = 'T="$(mktemp -d)"\nCH="$T/chain"\n'
+  expect(inScriptTemp(program, '/app/index.html', program, ['python3', '-', '$CH'], script)).toBe(true)
+  expect(inScriptTemp(program, '/app/index.html', program, ['python3', '-', '$OTHER'], script)).toBe(false)
+  expect(inScriptTemp(program, '/app/index.html', program, ['python3', '-', '$CH'], 'CH="$(pwd)"\n')).toBe(false)
+  const both = `${program}open("/app/index.html")\n`
+  expect(inScriptTemp(both, '/app/index.html', both, ['python3', '-', '$CH'], script)).toBe(false)
+  const climbs = 'import sys\nch = sys.argv[1]\nopen(ch + "/../../w/slate/app/index.html", "w")\n'
+  expect(inScriptTemp(climbs, '/../../w/slate/app/index.html', climbs, ['python3', '-', '$CH'], script)).toBe(false)
+  const attribute = 'import sys\nch = sys.argv[1]\nopen(self.ch + "/app/index.html", "w")\n'
+  expect(inScriptTemp(attribute, '/app/index.html', attribute, ['python3', '-', '$CH'], script)).toBe(false)
+  const fstring = 'import sys\nch = sys.argv[1]\nopen(f"{ch}/app/index.html", "w")\n'
+  expect(inScriptTemp(fstring, '/app/index.html', fstring, ['python3', '-', '$CH'], script)).toBe(true)
+  const plainBraces = 'import sys\nch = sys.argv[1]\nopen("{ch}/app/index.html", "w")\n'
+  expect(inScriptTemp(plainBraces, '/app/index.html', plainBraces, ['python3', '-', '$CH'], script)).toBe(false)
+  const braces = 'open("${CH}/app/index.html", "w")\n'
+  expect(inScriptTemp(braces, '/app/index.html', braces, ['python3', '-', '$CH'], script)).toBe(false)
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
@@ -1159,8 +1234,13 @@ test("#1841, #2845: the wording of a toast, a refusal or a tool's result in a mo
   expect(changeOf([], 'register.ts', undefined, SECRET_TS)).toBe('words')
   expect(changeOf([], 'register.ts', SECRET_TS, undefined)).toBe('words')
   expect(changeOf([], 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe('passes')
-  // A mod file beside it that cannot be read holds every edit.
-  expect(changeOf([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
+  // A mod file beside it that cannot be read holds every edit where the mod draws (here through a
+  // register.tsx); since #3017 (Dan, 2026-11-15) a mod drawing nothing is judged as code instead.
+  const unreadable = { name: 'place.ts', text: "const x = 'open" }
+  expect(changeOf([unreadable, { name: 'register.tsx', text: 'export const Card = () => <Box />\n' }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
+  expect(changeOf([unreadable], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'), [])).toBe('passes')
+  // Only once the folders inside the hooks folder are read: a caller handing none proves nothing.
+  expect(changeOf([unreadable], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
 })
 
 // #1925: on 2026-10-29 the #1904 builder's Edit adding "or wording" to the skip question's answers in
@@ -2842,4 +2922,67 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
   expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
   expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
   expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])
+})
+
+// #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were
+// held as look changes. A merge had left rules.ts beside it as text the reader cannot follow (each
+// side opening a block its own way), and a mod hook file read beside one is judged whole as drawing
+// (drawsChange). This mod draws nothing: no file in TSX or JSX, and no surface named anywhere in
+// it. What a mod draws on, read from its own code, now decides such a file: one drawing nothing is
+// judged as code; one registering a band, a pane, a card or any rendering stays held.
+const GUARD_RULES_CONFLICT = [
+  'export const tooLong = (what: string): boolean => {',
+  '<<<<<<< HEAD',
+  '  if (what.length > 3) {',
+  '=======',
+  "  if (what.length > 3 && what !== 'ok') {",
+  '>>>>>>> main',
+  '    return true',
+  '  }',
+  '  return false',
+  '}',
+  '',
+].join('\n')
+const GUARD_REGISTER = [
+  "import type { EngineInterface } from 'claude-code'",
+  "import { tooLong } from './rules.ts'",
+  'export const refuse = async ($: EngineInterface, what: string) => {',
+  "  if (tooLong(what)) await $.ui.toast('Blocked an edit that changes the look.')",
+  "  $.ui.log('design-round-guard: refused', { to: 'debug' })",
+  '}',
+  '',
+].join('\n')
+
+test('#3017: a hook file of a mod that draws nothing is judged as code beside a sibling no reader can follow; one in a mod registering a surface stays held', () => {
+  const conflicted = [{ name: 'register.ts', text: GUARD_REGISTER }, { name: 'rules.ts', text: GUARD_RULES_CONFLICT }]
+  const logic = GUARD_REGISTER.replace('tooLong(what)', 'tooLong(what.trim())')
+  // The control: drawsChange alone reads the unreadable sibling as drawing, as it did on 2026-11-15.
+  expect(drawsChange(conflicted, 'register.ts', GUARD_REGISTER, logic)).toBe(true)
+  // A guard drawing nothing: a logic change, and the file written as it was, pass with nothing named.
+  expect(changeOf(conflicted, 'register.ts', GUARD_REGISTER, logic, [])).toBe('passes')
+  expect(changeOf(conflicted, 'register.ts', GUARD_REGISTER, GUARD_REGISTER, [])).toBe('passes')
+  // Its own mod-kit copies, read beside it, name no surface either.
+  expect(changeOf(conflicted, 'register.ts', GUARD_REGISTER, logic, [{ name: 'mod-kit/hold.ts', text: 'export const hold = async () => {}\n' }])).toBe('passes')
+  // Held: a mod registering a band, a pane or a card anywhere, in this file or beside it, in a
+  // mod-kit copy, through JSX, through Claude Code's own rendering, or newly added by this change.
+  const surfaces = [
+    "  await $.modkit.bandRow({ mod: 'g', id: 'x', slot: 'steps', lines: [] })",
+    "  await $.modkit.pane({ mod: 'g', id: 'x', lines: [] })",
+    '  await $.modkit.card({ toolUseId: id, title: what })',
+    "  $.ui.open({ id: 'panel' })",
+    "  on('ui.render', { component: 'ToolUse' }, ($, e, next) => next(e))",
+  ]
+  for (const line of surfaces) {
+    const drawing = GUARD_REGISTER.replace("  $.ui.log('design-round-guard: refused', { to: 'debug' })", line)
+    const drawnLogic = drawing.replace('tooLong(what)', 'tooLong(what.trim())')
+    const files = [{ name: 'register.ts', text: drawing }, { name: 'rules.ts', text: GUARD_RULES_CONFLICT }]
+    expect({ line, change: changeOf(files, 'register.ts', drawing, drawnLogic, []) }).toEqual({ line, change: 'look' })
+    expect({ line, added: changeOf(conflicted, 'register.ts', GUARD_REGISTER, drawing, []) }).toEqual({ line, added: 'look' })
+    expect({ line, copy: changeOf(conflicted, 'register.ts', GUARD_REGISTER, logic, [{ name: 'mod-kit/band.ts', text: `export const show = async ($: never) => {\n${line}\n}\n` }]) }).toEqual({ line, copy: 'look' })
+  }
+  expect(changeOf([...conflicted, { name: 'panel.tsx', text: 'export const Panel = () => <Box />\n' }], 'register.ts', GUARD_REGISTER, logic, [])).toBe('look')
+  // A mod whose other folders could not be read is not shown to draw nothing: held, as before.
+  expect(changeOf(conflicted, 'register.ts', GUARD_REGISTER, logic, null)).toBe('look')
+  // A file that builds a line run where it can be read stays held, though no surface is named.
+  expect(changeOf(conflicted, 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n", [])).toBe('look')
 })

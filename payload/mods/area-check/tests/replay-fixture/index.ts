@@ -1,7 +1,6 @@
 // Measured by tools/area-check-replay.ts from danwright32/claude-config on 2026-11-02: 30 days to de5db413a8, rules v2.
 // Generated; measure again rather than edit (L48). The rows are in the parts beside this file, one
 // per line (#2097), and each session's files are places in PATHS.
-import type { ReplayInput, ReplaySummary } from '../../hooks/rules.ts'
 import { ROWS as paths1 } from './paths-1.ts'
 import { ROWS as issues1 } from './issues-1.ts'
 import { ROWS as tracked1 } from './tracked-1.ts'
@@ -44,7 +43,7 @@ const DAYS: string[] = [
   "2026-11-01",
   "2026-11-02",
 ]
-const days: ReplayInput['days'] = {}
+const days: Record<string, { growth: Record<string, { net: number; fixes: number }>; sizes: Record<string, number> }> = {}
 for (const d of DAYS) days[d] = { growth: {}, sizes: {} }
 for (const [d, p, net, fixes, lines] of [...growth1]) {
   const day = days[d] ?? (days[d] = { growth: {}, sizes: {} })
@@ -52,7 +51,7 @@ for (const [d, p, net, fixes, lines] of [...growth1]) {
   day.sizes[p] = lines
 }
 
-export const MEASURED: { repo: string; head: string; rule: number; input: Omit<ReplayInput, 'sessions'> & { sessions: { id: string; day: string; own: number[]; files: number[] }[] }; summary: ReplaySummary } = {
+export const MEASURED: { repo: string; head: string; rule: number; input: { issues: { n: number; structural: string[]; priority: string | null; refs: string[] }[]; tracked: string[]; days: Record<string, { growth: Record<string, { net: number; fixes: number }>; sizes: Record<string, number> }>; sessions: { id: string; day: string; own: number[]; files: number[] }[] }; summary: { sessions: number; judgedSessions: number; withHold: number; holds: number; byIssues: number; byGrowth: number; fourOrMore: number; histogram: Record<string, number> } } = {
   repo: "danwright32/claude-config",
   head: "de5db413a81799552cb75fc2b6cdb184d73f1fbb",
   rule: 2,

@@ -164,7 +164,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     afterWrite?: (path: string) => void
     rmFails?: boolean
     // #1933: the paths a Bash command takes away when it runs; the files git has never tracked (every
-    // other file the test put is tracked); and git's ls-files failing to run.
+    // other path is tracked, put on the disk or not); and git's ls-files failing to run.
     gone?: string[]
     untracked?: string[]
     lsFilesFails?: boolean
@@ -286,7 +286,9 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (ctl.lsFilesFails) throw new Error('spawn git ENOENT')
       const rel = String(args[5]).replace(/^:\(literal,icase\)/, '')
       const path = `${args[1]}/${rel}`.toLowerCase()
-      const tracked = Object.keys(files).some(f => f.toLowerCase() === path) && !(ctl.untracked ?? []).some(f => f.toLowerCase() === path)
+      // A path a test never put on the disk is tracked too (#2991): git's index answers for a file
+      // whatever the disk holds, and a test naming a project file means one the project has.
+      const tracked = !(ctl.untracked ?? []).some(f => f.toLowerCase() === path)
       return ok(tracked ? `${rel}\0` : '')
     }
     // Taking away a file a shell write made (#1296): `rm -f -- <path>`.
@@ -4345,4 +4347,334 @@ test('#2948: a program holding a font inlined as base64 is read in time, and the
   const withFont = refusalOf(await call($, { tool: 'Bash', command: program(font) }))
   expect(withFont.replace(/t\d+/g, 't')).toBe(plain.replace(/t\d+/g, 't'))
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+// #2991: on 2026-11-14 a plain run of the design rounds skill's adapter suite (bash on
+// test-score-adapters.sh) was held as a write of chrome.html, app/index.html, edit.html and view.html.
+// The suite writes those only under its own mktemp folder, through python programs that add each
+// name onto a folder in a variable (`open(ch + "/app/index.html", "w")`). Such a name looks absolute
+// only to mentionedLookFiles; it is the variable's folder's, which the guard cannot read, so a script
+// whose writes are not all named is judged by the names it spells from the top of the disk or home,
+// as #2847 meant, and never by these. The suite below is lines 46 to 48 and 166 to 315 of the real
+// one, word for word.
+const SUITE_2991 = String.raw`
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+pass=0; fail=0
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled file was not scored end to end"
+else
+  CH="$T/chain"
+  mkdir -p "$CH"
+  cat > "$CH/chrome.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 40px; background: #14213d; color: #fff; padding: 8px; } main { padding: 12px; }</style>
+</head><body><header>App</header><main id="main"></main></body></html>
+HTML
+  cat > "$CH/builder.js" <<'JS'
+function buildScreen(variant) {
+  var box = document.createElement("div");
+  var h = document.createElement("h1");
+  h.textContent = window.HEADING || "Team capacity";
+  var p = document.createElement("p");
+  p.textContent = variant.day + ": " + window.DESIGN_FIXTURE.open[variant.day] + " calls open";
+  box.append(h, p);
+  return box;
+}
+JS
+  printf '{"open": {"Tue": 42, "Wed": 17}}\n' > "$CH/fixture.json"
+  cat > "$CH/settled.json" <<'JSON'
+{"title": "Chain", "builder": "builder.js", "fixture": "fixture.json",
+ "chrome": {"captured": "chrome.html", "from": "the fixture app, 2026-10-19", "slot": "#main", "width": 600},
+ "frames": [{"id": "f1", "title": "Tuesday", "width": 600, "height": 200, "variant": {"day": "Tue"}},
+            {"id": "f2", "title": "Wednesday", "width": 600, "height": 200, "variant": {"day": "Wed"}}],
+ "decisions": [{"id": "D1", "decision": "The heading reads Team capacity", "requirement": "1",
+                "frames": ["f1", "f2"], "check": "the h1 reads Team capacity"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function (doc) { var h = doc.querySelector('h1'); return {ok: !!h && h.textContent === 'Team capacity', detail: h ? h.textContent : 'no heading'}; }}];" > "$CH/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$CH/settled.json" "$CH/settled.html" > "$CH/make.log" 2>&1 \
+    || bad "make-settled.py writes the chain's settled design" "$(cat "$CH/make.log")"
+  # The app: the same chrome, the same builder and fixture, the frame chosen by ?frame=<id>.
+  build_app() {  # build_app <heading>
+    python3 - "$CH" "$1" <<'PY'
+import json, sys
+ch, heading = sys.argv[1], sys.argv[2]
+page = open(ch + "/chrome.html").read()
+script = ("<script>window.DESIGN_FIXTURE = %s; window.HEADING = %s;</script><script>%s</script>"
+          "<script>var V = {f1: {day: 'Tue'}, f2: {day: 'Wed'}}[new URLSearchParams(location.search).get('frame')];"
+          "document.getElementById('main').replaceChildren(buildScreen(V));</script>"
+          % (open(ch + "/fixture.json").read(), json.dumps(heading), open(ch + "/builder.js").read()))
+open(ch + "/app/index.html", "w").write(page.replace("</body>", script + "</body>"))
+PY
+  }
+  mkdir -p "$CH/app"
+  build_app "Team capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/match" --channel chrome --repo "$APP" > "$CH/match.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$CH/match.log"; then ok; else bad "a settled file make-settled.py wrote, against an app drawing the same fixture, scores 100% on both halves (rc=$rc)" "$(cat "$CH/match.log")"; fi
+  build_app "Capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/off" --channel chrome --repo "$APP" > "$CH/off.log" 2>&1; rc=$?
+  if [ "$rc" -eq 1 ] && said "UNMET D1" "$CH/off.log" && said "Capacity" "$CH/off.log"; then ok; else bad "the same app with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$CH/off.log")"; fi
+  # The same design written from a builder whose screenShown throws on f2 (claude-config#1539): its f2 is
+  # drawn without whatever screenShown draws, so it is not the design, and the score says so by frame in
+  # the builder's own words, as no score, though the app draws exactly the same pictures.
+  { cat "$CH/builder.js"; printf '%s\n' 'function screenShown(variant) { if (variant.day === "Wed") throw new Error("no partner list for Wed"); }'; } > "$CH/builder-shown.js"
+  sed 's/"builder.js"/"builder-shown.js"/' "$CH/settled.json" > "$CH/settled-shown.json"
+  cp "$CH/settled.checks.js" "$CH/settled-shown.checks.js"
+  python3 "$SKILL/make-settled.py" "$CH/settled-shown.json" "$CH/settled-shown.html" > "$CH/make-shown.log" 2>&1 \
+    || bad "make-settled.py writes the design whose screenShown throws on f2" "$(cat "$CH/make-shown.log")"
+  build_app "Team capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled-shown.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/shown" --channel chrome --repo "$APP" > "$CH/shown.log" 2>&1; rc=$?
+  if [ "$rc" -eq 2 ] && said "frame f2" "$CH/shown.log" && said "screenShown threw (no partner list for Wed)" "$CH/shown.log" && ! said "frame f1:" "$CH/shown.log"; then ok; else bad "a settled frame whose builder's screenShown throws is no score, naming that frame and the builder's words (rc=$rc)" "$(cat "$CH/shown.log")"; fi
+fi
+
+# --- 3g. the chain for a design whose frames were captured from different pages (claude-config#1474) ----
+# One settled file, its f1 drawn in a page captured in edit mode and its f2 in one captured in view mode,
+# as Bidspoke's lead validation design was (bidspoke#2590). The app draws each frame in the
+# matching mode and scores 100% on both halves; drawing f2 in edit mode instead takes f2's picture below
+# 100% and leaves f1's whole, so each frame is scored against its own page and no other.
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled file of several captured pages was not scored end to end"
+else
+  MC="$T/multi"
+  mkdir -p "$MC/app"
+  cat > "$MC/edit.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 40px; background: #14213d; color: #fff; padding: 8px; } main { padding: 12px; }</style>
+</head><body><header>Editing lead 7</header><main id="main"></main></body></html>
+HTML
+  cat > "$MC/view.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 64px; background: #2d6a4f; color: #fff; padding: 8px; } .card { margin: 24px; padding: 12px; background: #f6efe3; }</style>
+</head><body><header>Lead 7</header><section class="card" id="card"></section></body></html>
+HTML
+  cat > "$MC/builder.js" <<'JS'
+function buildScreen(variant) {
+  var box = document.createElement("div");
+  var h = document.createElement("h1");
+  h.textContent = "Team capacity";
+  var p = document.createElement("p");
+  p.textContent = variant.day + ": " + window.DESIGN_FIXTURE.open[variant.day] + " calls open";
+  box.append(h, p);
+  return box;
+}
+JS
+  printf '{"open": {"Tue": 42, "Wed": 17}}\n' > "$MC/fixture.json"
+  cat > "$MC/settled.json" <<'JSON'
+{"title": "Lead validation", "builder": "builder.js", "fixture": "fixture.json",
+ "chromes": [{"name": "edit", "captured": "edit.html", "from": "the fixture app, edit mode, 2026-10-22", "slot": "#main", "width": 600},
+             {"name": "view", "captured": "view.html", "from": "the fixture app, view mode, 2026-10-22", "slot": "#card", "width": 600}],
+ "frames": [{"id": "f1", "title": "The panel, editing", "chrome": "edit", "width": 600, "height": 200, "variant": {"day": "Tue"}},
+            {"id": "f2", "title": "The card", "chrome": "view", "width": 600, "height": 240, "variant": {"day": "Wed"}}],
+ "decisions": [{"id": "D1", "decision": "The heading reads Team capacity", "requirement": "1",
+                "frames": ["f1", "f2"], "check": "the h1 reads Team capacity"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function (doc) { var h = doc.querySelector('h1'); return {ok: !!h && h.textContent === 'Team capacity', detail: h ? h.textContent : 'no heading'}; }}];" > "$MC/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$MC/settled.json" "$MC/settled.html" > "$MC/make.log" 2>&1 \
+    || bad "make-settled.py writes a settled design of several captured pages" "$(cat "$MC/make.log")"
+  # The app's fixture route: the frame picked by ?frame=<id> is drawn in the page its mode shows, f1 in
+  # edit mode and f2 in view mode, or, given edit, f2 in edit mode too.
+  multi_app() {  # multi_app <f2's mode: view or edit>
+    python3 - "$MC" "$1" <<'PY'
+import json, sys
+mc, f2 = sys.argv[1], sys.argv[2]
+pages = {"edit": [open(mc + "/edit.html").read(), "main"], "view": [open(mc + "/view.html").read(), "card"]}
+safe = lambda v: json.dumps(v).replace("</", "<\\/")
+page = ("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>"
+        "<script>window.DESIGN_FIXTURE = %s;</script><script>%s</script><script>"
+        "var frame = new URLSearchParams(location.search).get('frame');"
+        "var mode = {f1: 'edit', f2: %s}[frame], day = {f1: 'Tue', f2: 'Wed'}[frame], P = %s[mode];"
+        "var doc = new DOMParser().parseFromString(P[0], 'text/html');"
+        "document.head.replaceWith(document.importNode(doc.head, true));"
+        "document.body.replaceWith(document.importNode(doc.body, true));"
+        "document.getElementById(P[1]).replaceChildren(buildScreen({day: day}));"
+        "</script></body></html>"
+        % (open(mc + "/fixture.json").read(), open(mc + "/builder.js").read(), safe(f2), safe(pages)))
+open(mc + "/app/index.html", "w").write(page)
+PY
+  }
+  multi_app view
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$MC/settled.html" --build "file://$MC/app/index.html" \
+    --fixture "$MC/fixture.json" --out "$MC/match" --channel chrome --repo "$APP" > "$MC/match.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$MC/match.log" && said "f1 .* wide in edit" "$MC/match.log" && said "f2 .* wide in view" "$MC/match.log"; then ok; else bad "a settled file of several captured pages, against an app drawing each frame in its own mode, scores 100% on both halves and names each frame's page (rc=$rc)" "$(cat "$MC/match.log")"; fi
+  multi_app edit
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$MC/settled.html" --build "file://$MC/app/index.html" \
+    --fixture "$MC/fixture.json" --out "$MC/off" --channel chrome --repo "$APP" > "$MC/off.log" 2>&1; rc=$?
+  if [ "$rc" -eq 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); f={x["id"]: x for x in s["pictures"]["frames"]}; sys.exit(0 if f["f1"]["matched"] == f["f1"]["compared"] and f["f2"]["matched"] < f["f2"]["compared"] and f["f2"]["chrome"] == "view" else 1)' "$MC/off/score.json" 2>/dev/null; then ok; else bad "the same app drawing f2 in edit mode takes f2's picture below 100% and leaves f1's whole (rc=$rc)" "$(cat "$MC/off.log")"; fi
+fi
+
+# --- 3c. the same chain for a design with no product page around it (claude-config#1393) ---------------
+`
+const SUITE_2991_AT = '/w/slate/payload/skills/design-rounds/score/test-score-adapters.sh'
+test('#2991: a suite whose programs write only under a folder in a variable runs; one writing a screen file by its full name is still held', withKit, async ($, on) => {
+  const w = world($, on, { files: { [SUITE_2991_AT]: SUITE_2991, '/w/slate/app/index.html': '<main></main>\n' } })
+  const runs = ['bash payload/skills/design-rounds/score/test-score-adapters.sh', `bash ${SUITE_2991_AT}`, 'cd /w/slate && bash payload/skills/design-rounds/score/test-score-adapters.sh 2>&1 | tail -5']
+  for (const command of runs) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(runs.length)
+  // Controls: the same suite's program writing the project's screen file by its full name, and its
+  // own shell writing one, are held as before.
+  for (const text of [
+    SUITE_2991.replace('open(ch + "/app/index.html", "w")', 'open("/w/slate/app/index.html", "w")'),
+    SUITE_2991.replace('open(mc + "/app/index.html", "w")', 'open("/w/slate/app/index.html", "w")'),
+    `${SUITE_2991}printf x > /w/slate/app/index.html\n`,
+  ]) {
+    w.files[SUITE_2991_AT] = text
+    const why = refusalOf(await call($, { tool: 'Bash', command: runs[0] }))
+    expect({ held: why.includes(SKIP_QUESTION), named: why.includes('app/index.html') }).toEqual({ held: true, named: true })
+  }
+  // A name added onto a variable passes only where that variable holds a folder the script made with
+  // mktemp -d: one holding the folder the script runs in, the checkout itself, or a value set anywhere
+  // else, is judged where it lands, as before.
+  for (const text of [
+    SUITE_2991.replace('CH="$T/chain"', 'CH="$(pwd)"'),
+    SUITE_2991.replace('CH="$T/chain"', 'CH=.'),
+    SUITE_2991.replace('CH="$T/chain"', 'CH="$T/chain"\n  CH=/w/slate'),
+    SUITE_2991.replace('T="$(mktemp -d)"', 'T="$(pwd)"'),
+    SUITE_2991.replace('ch, heading = sys.argv[1], sys.argv[2]', 'ch, heading = ".", sys.argv[2]'),
+    SUITE_2991.replace('ch, heading = sys.argv[1], sys.argv[2]', 'ch, heading = sys.argv[1], sys.argv[2]\nch = os.getcwd()'),
+  ]) {
+    w.files[SUITE_2991_AT] = text
+    const why = refusalOf(await call($, { tool: 'Bash', command: runs[0] }))
+    expect({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: why.includes(SKIP_QUESTION), named: why.includes('app/index.html') }).toEqual({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: true, named: true })
+  }
+  // Nor where the command tells mktemp where to make its folder.
+  w.files[SUITE_2991_AT] = SUITE_2991
+  expect(refusalOf(await call($, { tool: 'Bash', command: `TMPDIR=/w/slate/app ${runs[0]}` }))).toContain('app/index.html')
+  // And a program whose name follows the shell's braces, which the shell fills in before it runs.
+  w.files[SUITE_2991_AT] = `${SUITE_2991}python3 - <<PY\nopen("\${APP}/index.html", "w").write("x")\nPY\n`
+  expect(refusalOf(await call($, { tool: 'Bash', command: runs[0] }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(runs.length)
+})
+
+// #2991: on 2026-11-14 a builder made an untracked copy of the mods folder in its worktree
+// (.claude/onemod) to run tools/check-mods.sh on one mod, and its rm -rf and mv of that copy were held
+// because the copy's mod-kit/hooks/register.tsx "changes how the screen looks". A file git has never
+// had in its index (never committed, never staged) is no screen of the product, so taking it away,
+// by rm or as the source mv moves, passes, as #1933 already let a mod hook file's scratch copy go.
+// What mv writes is judged as ever, and a tracked or staged file, or one git cannot answer for, stays held.
+const ONEMOD = '/w/slate-wt/.claude/onemod'
+const ONEMOD_FILES = {
+  [`${ONEMOD}/mod-kit/hooks/register.tsx`]: 'export const register = () => <Box />\n',
+  [`${ONEMOD}/mod-kit/hooks/card.tsx`]: 'export const Card = () => <Text>card</Text>\n',
+  [`${ONEMOD}/mod-kit/.claude-plugin/plugin.json`]: '{ "name": "mod-kit" }\n',
+}
+test('#2991: taking away an untracked copy of the mods folder in a worktree runs; a tracked or staged screen file, a write, and a file git cannot answer for stay held', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', files: { ...ONEMOD_FILES, '/w/slate-wt/app/page.tsx': 'export default function Page() { return <main /> }\n', [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.untracked = Object.keys(ONEMOD_FILES)
+  const passes = [`rm -rf ${ONEMOD}`, 'rm -rf .claude/onemod', 'cd /w/slate-wt && rm -rf .claude/onemod', `mv ${ONEMOD} ${SCRATCH}/onemod`, `rm ${ONEMOD}/mod-kit/hooks/card.tsx`]
+  for (const command of passes) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(passes.length)
+  // Still held: the copy's file moved onto a screen path of the product, a tracked screen file taken
+  // away beside the copy, the copy once one of its files is staged, and a file git cannot answer for.
+  for (const [command, shown] of [
+    [`mv ${ONEMOD}/mod-kit/hooks/card.tsx /w/slate-wt/app/card.tsx`, 'app/card.tsx'],
+    ['rm -f /w/slate-wt/app/page.tsx', 'app/page.tsx'],
+    [`rm -rf ${ONEMOD} /w/slate-wt/app`, 'app/page.tsx'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(shown) }).toEqual({ command, held: true })
+  }
+  w.ctl.untracked = [`${ONEMOD}/mod-kit/hooks/card.tsx`]
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toContain('register.tsx')
+  w.ctl.untracked = Object.keys(ONEMOD_FILES)
+  w.ctl.lsFilesFails = true
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${ONEMOD}/mod-kit/hooks/card.tsx` }))).toContain('card.tsx')
+  expect(w.ran.length).toBe(passes.length)
+})
+
+// #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own hooks/register.ts
+// were held as look changes (design-round-guard:toolu_01KmiW39jfkxkeHsC7KYRzb7 and
+// toolu_01UJepFgEhh5JTiFYp8davXi): the merge had left rules.ts beside it as text no reader can follow,
+// and a mod hook file read beside one was judged whole as drawing. The guard draws nothing, so its
+// hook files are judged as code; a mod registering a band, a pane or a card stays held. Shaped after
+// the guard: register.ts toasts and logs, rules.ts holds the conflict, hooks/mod-kit holds a copy.
+const DRG = '/w/slate/payload/mods/design-round-guard'
+const DRG_REL = 'payload/mods/design-round-guard/hooks'
+const DRG_RULES_OURS = 'export const tooLong = (what: string): boolean => {\n  if (what.length > 3) {\n    return true\n  }\n  return false\n}\n'
+const DRG_RULES_CONFLICT = DRG_RULES_OURS.replace('  if (what.length > 3) {\n', "<<<<<<< HEAD\n  if (what.length > 3) {\n=======\n  if (what.length > 3 && what !== 'ok') {\n>>>>>>> main\n")
+const DRG_LOG = "  $.ui.log('design-round-guard: refused', { to: 'debug' })"
+const DRG_REGISTER = [
+  "import type { EngineInterface } from 'claude-code'",
+  "import { tooLong } from './rules.ts'",
+  'export const refuse = async ($: EngineInterface, what: string) => {',
+  "  if (tooLong(what)) await $.ui.toast('Blocked an edit that changes the look.')",
+  DRG_LOG,
+  '}',
+  '',
+].join('\n')
+const DRG_FILES = {
+  [`${DRG}/.claude-plugin/plugin.json`]: '{ "name": "design-round-guard" }',
+  [`${DRG}/hooks/register.ts`]: DRG_REGISTER,
+  [`${DRG}/hooks/rules.ts`]: DRG_RULES_CONFLICT,
+  [`${DRG}/hooks/mod-kit/hold.ts`]: 'export const hold = async (ms: number) => ms\n',
+  [`${SCRATCH}/.keep`]: '',
+}
+const DRG_LOGIC = { tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: 'tooLong(what)', new_string: 'tooLong(what.trim())' }
+
+test('#3017: an edit, a shell write and a conflict rewrite of a hook file of a mod that draws nothing pass beside a sibling no reader can follow', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: { ...DRG_FILES },
+    blobs: {
+      [`/w/slate :2:${DRG_REL}/register.ts`]: DRG_REGISTER,
+      [`/w/slate :3:${DRG_REL}/register.ts`]: DRG_REGISTER.replace("'debug'", "'transcript'"),
+      [`/w/slate :2:${DRG_REL}/rules.ts`]: DRG_RULES_OURS,
+      [`/w/slate :3:${DRG_REL}/rules.ts`]: DRG_RULES_OURS.replace('> 3', '> 5'),
+    },
+  })
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  // The conflict written again, and this branch's side of both files taken, as #3008's fix was.
+  for (const command of [`git checkout --conflict=diff3 -- ${DRG_REL}/register.ts`, `git checkout --ours -- ${DRG_REL}/register.ts ${DRG_REL}/rules.ts`])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  // A shell write there, judged by what it leaves once it ran.
+  w.ctl.shell = { [`${DRG}/hooks/register.ts`]: String(w.files[`${DRG}/hooks/register.ts`]).replace("'debug'", "'transcript'") }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `sed -i '' 's/debug/transcript/' ${DRG_REL}/register.ts` }))).toBe('')
+  expect(w.ran.length).toBe(4)
+  expect(w.asked).toEqual([])
+})
+
+test('#3017: beside a sibling no reader can follow, a mod registering a band, a pane or a card, or an edit adding one, is still held', withKit, async ($, on) => {
+  const surfaces = [
+    "  await $.modkit.bandRow({ mod: 'g', id: 'x', slot: 'steps', lines: [] })",
+    "  await $.modkit.pane({ mod: 'g', id: 'x', lines: [] })",
+    "  await $.modkit.card({ toolUseId: 'x', title: what })",
+  ]
+  const w = world($, on, { files: { ...DRG_FILES } })
+  const held = (input: Record<string, unknown>) => call($, input).then(r => refusalOf(r).includes(SKIP_QUESTION))
+  for (const line of surfaces) {
+    // Registered in register.ts itself.
+    w.files[`${DRG}/hooks/register.ts`] = DRG_REGISTER.replace(DRG_LOG, line)
+    expect({ line, own: await held(DRG_LOGIC) }).toEqual({ line, own: true })
+    // Registered only in a copy inside its hooks folder.
+    w.files[`${DRG}/hooks/register.ts`] = DRG_REGISTER
+    w.files[`${DRG}/hooks/mod-kit/band.ts`] = `export const show = async ($: never) => {\n${line}\n}\n`
+    expect({ line, copy: await held(DRG_LOGIC) }).toEqual({ line, copy: true })
+    delete w.files[`${DRG}/hooks/mod-kit/band.ts`]
+    // Added by the edit itself.
+    expect({ line, added: await held({ tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: DRG_LOG, new_string: line }) }).toEqual({ line, added: true })
+  }
+  // A pane opened from a plain JavaScript file beside it (lessons review).
+  w.files[`${DRG}/hooks/open.mjs`] = "export const open = ($) => $.ui.open({ id: 'panel' })\n"
+  expect(await held(DRG_LOGIC)).toBe(true)
+  delete w.files[`${DRG}/hooks/open.mjs`]
+  // A panel drawn through JSX beside it.
+  w.files[`${DRG}/hooks/panel.tsx`] = 'export const Panel = () => <Box />\n'
+  expect(await held(DRG_LOGIC)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('#3017: an untracked scratch copy of a rendering mod file is judged as #2991 left it: written, held; taken away, run', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', files: { ...ONEMOD_FILES, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.untracked = Object.keys(ONEMOD_FILES)
+  const write = { tool: 'Write', file_path: `${ONEMOD}/mod-kit/hooks/register.tsx`, content: 'export const register = () => <Box padding={2} />\n' }
+  expect(refusalOf(await call($, write))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
 })

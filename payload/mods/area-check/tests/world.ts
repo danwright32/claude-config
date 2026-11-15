@@ -91,9 +91,12 @@ export const ISSUES: Issue[] = [
 ]
 
 export type Run = { exitCode: number; stdout: string; stderr: string }
-export type Init = { branch?: string; goal?: string; issues?: Issue[] }
+// areaDir: the folder CLAUDE_AREA_CHECK_DIR names for the run (#2906), which the log is then kept in.
+export type Init = { branch?: string; goal?: string; issues?: Issue[]; areaDir?: string }
 export type Engine = Parameters<typeof standInCore>[0]
 export const world = ($: unknown, on: On, init: Init = {}) => {
+  const dir = init.areaDir ?? DIR
+  const log = `${dir}/log.jsonl`
   const files: Record<string, string> = { [`${APP}/src/lib/slack.ts`]: 'x', [`${APP}/src/big.ts`]: 'x', [`${APP}/src/pay/stripe.ts`]: 'x', [`${APP}/docs/x.md`]: 'x' }
   const store: Record<string, unknown> = {}
   const ran: string[] = []
@@ -170,7 +173,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     goal: init.goal ?? null,
   }
   const clock = mock.clock(on, { now: T0 })
-  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_AREA_CHECK_DIR' ? init.areaDir : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => {
     if (ctl.cwdThrows) throw new Error('the session folder could not be read')
@@ -299,14 +302,14 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (typeof timeoutMs === 'number') timeouts.push(timeoutMs)
     // The read of one branch's decisions (#2143): the decision files, any .rotating file, then the
     // log, filtered as READ_SCRIPT's awk filters them (the repo suite proves the real script).
-    if (argv[0] === '/bin/sh' && argv[2] === READ_SCRIPT && argv[4] === DIR) {
+    if (argv[0] === '/bin/sh' && argv[2] === READ_SCRIPT && argv[4] === dir) {
       const [repo, branch, m1, m2] = [argv[5] as string, argv[6] as string, argv[7] as string, argv[8] as string]
       const names = Object.keys(ctl.rotated)
       const rotated = [...names.filter(n => n.endsWith('.decisions.jsonl')).sort(), ...names.filter(n => n.endsWith('.rotating')).sort()]
-      if (ctl.log === 'missing' && !rotated.length) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/log.jsonl: No such file or directory` })
-      if (ctl.rotatedUnreadable) return answer({ exitCode: 2, stdout: '', stderr: `${DIR}/rotated/${ctl.rotatedUnreadable}: Permission denied` })
-      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `${LOG}: Permission denied` })
-      const lines = [...rotated.flatMap(n => ctl.rotated[n] as string[]), ...(ctl.log === 'missing' ? [] : [...(appended[LOG] ?? '').split('\n'), ...ctl.seeded])]
+      if (ctl.log === 'missing' && !rotated.length) return answer({ exitCode: 2, stdout: '', stderr: `${dir}/log.jsonl: No such file or directory` })
+      if (ctl.rotatedUnreadable) return answer({ exitCode: 2, stdout: '', stderr: `${dir}/rotated/${ctl.rotatedUnreadable}: Permission denied` })
+      if (ctl.log === 'unreadable') return answer({ exitCode: 2, stdout: '', stderr: `${log}: Permission denied` })
+      const lines = [...rotated.flatMap(n => ctl.rotated[n] as string[]), ...(ctl.log === 'missing' ? [] : [...(appended[log] ?? '').split('\n'), ...ctl.seeded])]
       const out: string[] = []
       let n = 0
       for (const l of lines) {
@@ -325,20 +328,20 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     }
     // The rotation at session start (#2143): the log moved whole into rotated/<stamp>.rotating once
     // over argv[6] bytes. Settling is not faked; tests/test-area-check-log-rotation.sh proves it.
-    if (argv[0] === '/bin/sh' && argv[2] === ROTATE_SCRIPT && argv[4] === DIR) {
+    if (argv[0] === '/bin/sh' && argv[2] === ROTATE_SCRIPT && argv[4] === dir) {
       if (ctl.rotateFails) return answer({ exitCode: 1, stdout: '', stderr: ctl.rotateFails })
-      const lines = [...(appended[LOG] ?? '').split('\n').filter(Boolean), ...ctl.seeded]
+      const lines = [...(appended[log] ?? '').split('\n').filter(Boolean), ...ctl.seeded]
       const utf8 = new TextEncoder()
       const bytes = lines.reduce((s, l) => s + utf8.encode(l).length + 1, 0)
       if (bytes > Number(argv[6])) {
         ctl.rotated[`${argv[5]}.rotating`] = lines
-        appended[LOG] = ''
+        appended[log] = ''
         ctl.seeded.splice(0)
       }
       return answer(ok(''))
     }
     if (argv[0] === '/bin/sh') {
-      if (ctl.logFails && argv[argv.length - 1] === LOG) return answer({ exitCode: 1, stdout: '', stderr: 'No space left on device' })
+      if (ctl.logFails && argv[argv.length - 1] === log) return answer({ exitCode: 1, stdout: '', stderr: 'No space left on device' })
       const file = argv[argv.length - 1] as string
       appended[file] = (appended[file] ?? '') + stdin
       return answer(ok(''))
@@ -388,9 +391,11 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return answer(ctl.prView(argv.slice(3)))
     throw new Error(`unexpected run: ${line}`)
   })
-  const records = (file = LOG) => (appended[file] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
+  const records = (file = log) => (appended[file] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l) as Record<string, unknown>)
   const judged = () => records().filter(r => r.kind === 'judged')
-  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, cards, asked, notes, holds, tools, toolDescriptions }
+  // Every file the mod appended to, by its path (#2906).
+  const written = () => Object.keys(appended).filter(f => appended[f])
+  return { clock, ctl, ran, logs, passed, timeouts, store, files, records, judged, written, cards, asked, notes, holds, tools, toolDescriptions }
 }
 
 export type T$ = { tool: { call: (e: never) => Promise<unknown> }; session: { start: (e: never) => Promise<unknown> }; prompt: { submit: (e: never) => Promise<unknown> } }

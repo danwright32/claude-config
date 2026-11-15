@@ -278,12 +278,25 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
 // while the code runs (`built`), since the whole command arrives then (#2225). A quote with a
 // letter straight after it is an apostrophe (`gh's own store`), not the string's end. Either way
 // the program may be named by its path after another word (`sudo /opt/homebrew/bin/gh`, #2225).
-const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
-  const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
+// sitesFrom gives where in the text each such run starts, at the program's own name (past any path
+// before it), so each one can be judged on its own (#2939); runsFrom is whether there is any.
+const sitesFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
+  const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`, 'g')
   const followed = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
   const bare = new RegExp(`(?<![\\w.$/-])(?:[\\w.~/-]*\\/)?${program}(?=[ \\t]*(?:['"\`](?![A-Za-z])|[{$%]|$))`, 'g')
+  const tail = new RegExp(`${program}[ \\t]+(?:-[\\w-]*|[a-z][\\w-]*)$`)
   const wordsAfter = (text: string, m: RegExpExecArray): string[] => [m[1] ?? '', ...(text.slice((m.index ?? 0) + m[0].length).match(/[\w-]+/g) ?? [])]
-  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index ?? 0))) || [...text.matchAll(bare)].some(m => built(text, m.index ?? 0))
+  return (text: string): number[] => {
+    const at = new Set<number>()
+    for (const m of text.matchAll(starts)) at.add(m.index + m[0].length - program.length)
+    for (const m of text.matchAll(followed)) if (calls(wordsAfter(text, m)) || ((m[1] ?? '').startsWith('-') && built(text, m.index))) at.add(m.index + (tail.exec(m[0])?.index ?? 0))
+    for (const m of text.matchAll(bare)) if (built(text, m.index)) at.add(m.index + m[0].length - program.length)
+    return [...at].sort((a, b) => a - b)
+  }
+}
+const runsFrom = (program: string, calls: (after: readonly string[]) => boolean, built: (text: string, at: number) => boolean = () => false) => {
+  const sites = sitesFrom(program, calls, built)
+  return (text: string): boolean => sites(text).length > 0
 }
 // Whether the string a word at `at` sits in is built while the code runs, so whatever follows the
 // word there is only known then: a placeholder inside it after the word (`{sub}`, `%s`, `$SUB`), or
@@ -330,6 +343,223 @@ const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
 const runsGitFrom = callsWith(GIT_SUBCOMMANDS)
 export const runsGit = runsFrom('git', runsGitFrom)
+
+// #2939: code whose every git call is a local read goes ahead overnight. Each place runsGit finds a
+// git running is read on its own, and the code passes only when every one is a read. A call's
+// arguments are taken from the code in one of two shapes. As an element of a list of arguments
+// (`['git', '-C', wt, 'show', ref]`, `execFileSync('git', [...])`), each later element is one
+// argument: a quoted string is one written out, and anything else is known only when the code runs,
+// which only the folder -C names may be, since after the subcommand it could be --output. The list
+// must also be the whole argument the process call is handed (handedWhole), or nothing is read.
+// As a command line in a string or a script (`'git log -5'`), its words run up to the string's end or
+// a command boundary, and the string must not be built while the code runs (builtAround), since a
+// placeholder there could carry a second command. The arguments are then handed, each written out or
+// marked unread, to mod-kit's one reading of a git command (through the call's own reader), which
+// finds the subcommand. The call is a read when that subcommand is written out and reads without
+// writing or reaching a remote, nothing before it but -C and its folder or an option that only quiets
+// git, and no --output after it. Anything else (git alone in its string with its subcommand joined on
+// later, a subcommand in a variable, -c, any other option) is not a read, so the code stays refused.
+const GIT_LOCAL_READS: ReadonlySet<string> = new Set(['show', 'cat-file', 'log', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'merge-base', 'show-ref', 'for-each-ref', 'blame', 'describe', 'shortlog'])
+const GIT_QUIET: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-optional-locks', '--literal-pathspecs', '--no-replace-objects'])
+// The word an argument known only when the code runs stands as: no subcommand and no option.
+const UNREAD_ARG = '<unread>'
+type Arg = { lit: boolean; v: string }
+const gitArgsRead = async (args: readonly Arg[], read: OvernightCall['read']): Promise<boolean> => {
+  const words = ['git', ...args.map(a => (a.lit ? a.v : UNREAD_ARG))]
+  const cmds = await read(words.map(w => `'${w.replace(/'/g, `'\\''`)}'`).join(' '))
+  const c = cmds[0]
+  // Read back as the one command it was written as, word for word, or it is not this call.
+  if (cmds.length !== 1 || !c?.git?.sub || c.words.length !== words.length || c.words.some((w, i) => w !== words[i])) return false
+  const { sub, args: after } = c.git
+  if (!GIT_LOCAL_READS.has(sub)) return false
+  const before = c.words.slice(1, c.words.length - after.length - 1)
+  for (let i = 0; i < before.length; i++) {
+    if (before[i] === '-C' && i + 1 < before.length) i++
+    else if (!GIT_QUIET.has(before[i] as string)) return false
+  }
+  // An argument known only when the code runs could be --output, so the call is not read as a read.
+  if (after.includes(UNREAD_ARG)) return false
+  // --output writes a file; git takes any unambiguous prefix of four characters or more (--outp).
+  return !after.some(a => {
+    const flag = a.split('=')[0] ?? ''
+    return flag.length >= 4 && '--output'.startsWith(flag)
+  })
+}
+// The elements of a list of arguments from `from` to its closing bracket, with where that bracket is
+// and whether the list opened its own `[` after `from` (`execFileSync('git', [...])`), or undefined
+// when it never closes.
+type ListRead = { args: Arg[]; close: number; own: boolean }
+const listArgs = (text: string, from: number): ListRead | undefined => {
+  const out: Arg[] = []
+  let i = from
+  let opened = false
+  while (i < text.length) {
+    const ch = text[i] as string
+    if (/[\s,]/.test(ch)) { i++; continue }
+    if (ch === '[' && !opened && out.length === 0) { opened = true; i++; continue }
+    if (ch === ']' || ch === ')') return { args: out, close: i, own: opened }
+    // One element: up to a comma or closing bracket outside any bracket or string of its own.
+    const start = i
+    let depth = 0
+    while (i < text.length) {
+      const c = text[i] as string
+      if (QUOTES.includes(c)) {
+        const end = text.indexOf(c, i + 1)
+        if (end < 0) return undefined
+        i = end + 1
+        continue
+      }
+      if ('([{'.includes(c)) depth++
+      else if (')]}'.includes(c)) { if (depth === 0) break; depth-- }
+      else if (c === ',' && depth === 0) break
+      i++
+    }
+    const el = text.slice(start, i).trim()
+    const q = el[0] ?? ''
+    // Written out: one quoted string and nothing joined on, with nothing inside a template can fill.
+    const lit = QUOTES.includes(q) && el.length >= 2 && el.endsWith(q) && !el.slice(1, -1).includes(q) && !el.includes('\\') && !(q === '`' && el.includes('${'))
+    out.push({ lit, v: lit ? el.slice(1, -1) : el })
+  }
+  return undefined
+}
+// The lessons review of #3009: a list read only up to its closing bracket says nothing about what the
+// code does with it after, and `['git', 'log'] + extra`, `.concat(extra)`, `cmd += [...]`,
+// `cmd.append(...)` or a list handed to a function of the code's own can each add --output. So the
+// list passes only when it is the whole argument a process call is handed: the first positional
+// argument of a call named in PROCESS_CALLS (or its `args=` keyword), or a variable assigned the list
+// once and named nowhere else but as that whole argument; or, in `execFileSync('git', [...])`, the
+// list after git in the call itself. After its closing bracket comes only the call's own closing or a
+// separator. Anything else cannot be read, so the code stays refused.
+const PROCESS_CALLS: ReadonlySet<string> = new Set(['run', 'call', 'check_call', 'check_output', 'Popen', 'execv', 'execvp', 'execvpe', 'execl', 'execlp', 'execle', 'execlpe', 'posix_spawn', 'posix_spawnp', 'execFileSync', 'execFile', 'spawnSync', 'spawn', 'system', 'exec', 'capture2', 'capture2e', 'capture3', 'popen3'])
+const reEscape = (s: string) => s.replace(/[$]/g, '\\$')
+// The index and character of the first one at or before `i` that is not white space ('' at the start).
+const backTo = (text: string, i: number): [number, string] => {
+  while (i >= 0 && /\s/.test(text[i] ?? '')) i--
+  return [i, text[i] ?? '']
+}
+const forwardTo = (text: string, i: number): [number, string] => {
+  while (i < text.length && /\s/.test(text[i] ?? '')) i++
+  return [i, text[i] ?? '']
+}
+// Whether the `(` at `paren` opens a call to a process: its name is one of PROCESS_CALLS and the code
+// does not define or rebind that name itself, where it could do anything with the list first.
+const processCall = (text: string, paren: number): boolean => {
+  const n = /(?:^|[^\w$])([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0, paren))?.[1]
+  if (n === undefined || !PROCESS_CALLS.has(n)) return false
+  const e = reEscape(n)
+  return !new RegExp(`\\b(?:def|function|class|const|let|var|as)\\s+${e}(?![\\w$])|(?<![\\w$.])${e}\\s*=(?!=)`).test(text)
+}
+// The bracket the list git is in opens at: back from git's opening quote over white space, commas
+// and written out strings only; -1 when anything else comes first (a variable, a spread, a join).
+const listOpen = (text: string, quote: number): number => {
+  let i = quote - 1
+  while (i >= 0) {
+    const ch = text[i] ?? ''
+    if (/[\s,]/.test(ch)) { i--; continue }
+    if (QUOTES.includes(ch)) {
+      const o = text.lastIndexOf(ch, i - 1)
+      if (o < 0) return -1
+      i = o - 1
+      continue
+    }
+    return ch === '[' || ch === '(' ? i : -1
+  }
+  return -1
+}
+// Whether what follows the argument ending at `close` is the call's own closing or the next argument.
+const argumentEnds = (text: string, close: number): boolean => {
+  const next = forwardTo(text, close + 1)[1]
+  return next === ')' || next === ','
+}
+// Whether the expression from `start` to `close` (a list literal, or a variable's name) is the whole
+// first argument of a process call, or its whole `args=` keyword argument.
+const wholeArgument = (text: string, start: number, close: number): boolean => {
+  if (!argumentEnds(text, close)) return false
+  const [p, prev] = backTo(text, start - 1)
+  if (prev === '(') return processCall(text, p)
+  if (prev !== '=' || /[=!<>+\-*/%&|^:~]/.test(text[p - 1] ?? '')) return false
+  const k = backTo(text, p - 1)[0]
+  if (!/(?<![\w$.])args$/.test(text.slice(0, k + 1))) return false
+  const [, sep] = backTo(text, k - 4)
+  if (sep !== '(' && sep !== ',') return false
+  // The keyword's call: the innermost bracket left open before it, which must be a process call's.
+  let depth = 0
+  for (let i = k - 4; i >= 0; i--) {
+    const ch = text[i] ?? ''
+    if (')]}'.includes(ch)) depth++
+    else if ('([{'.includes(ch)) {
+      if (depth > 0) { depth--; continue }
+      return ch === '(' && processCall(text, i)
+    }
+  }
+  return false
+}
+// Whether the list git is in, from `open` to `close`, is assigned to a variable the code names once
+// more, and that once as the whole argument of a process call: nothing else can have changed it.
+const heldWhole = (text: string, open: number, close: number): boolean => {
+  const [p, prev] = backTo(text, open - 1)
+  if (prev !== '=' || /[=!<>+\-*/%&|^:~]/.test(text[p - 1] ?? '')) return false
+  const assigned = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0, p))
+  const name = assigned?.[1]
+  if (assigned === null || name === undefined) return false
+  // The assignment ends its statement: a `;`, the end, or a new line that starts another statement
+  // (not one continuing the expression, such as `.concat(` on the next line).
+  let i = close + 1
+  let line = false
+  while (i < text.length && /\s/.test(text[i] ?? '')) { if (text[i] === '\n') line = true; i++ }
+  const next = text[i] ?? ''
+  if (!(next === '' || next === ';' || (line && /[A-Za-z_$#}]/.test(next)))) return false
+  // The name twice in the whole code: the assignment, then the one use after the list.
+  const named = [...text.matchAll(new RegExp(`(?<![\\w$.])${reEscape(name)}(?![\\w$])`, 'g'))].map(m => m.index)
+  const use = named[1]
+  if (named.length !== 2 || named[0] !== assigned.index || use === undefined || use <= close) return false
+  return wholeArgument(text, use, use + name.length - 1)
+}
+// Whether the list of git's arguments, git's quote at `quote`, is the whole of what the code hands the
+// process call (see PROCESS_CALLS).
+const handedWhole = (text: string, quote: number, list: ListRead): boolean => {
+  const open = listOpen(text, quote)
+  if (open < 0) return false
+  if (list.own) return text[open] === '(' && processCall(text, open) && text[list.close] === ']' && argumentEnds(text, list.close)
+  if (text[list.close] !== (text[open] === '[' ? ']' : ')')) return false
+  // `system('git', 'log')`: the call's own brackets hold the arguments, so its closing is theirs.
+  if (text[open] === '(' && processCall(text, open)) return true
+  // A `(` straight after a name is some other call's (`print(`, a function of the code's own).
+  if (text[open] === '(' && /[\w$)\]]$/.test(text.slice(0, open).trimEnd())) return false
+  return wholeArgument(text, open, list.close) || heldWhole(text, open, list.close)
+}
+const gitSites = sitesFrom('git', runsGitFrom)
+const gitCallReads = async (text: string, at: number, read: OvernightCall['read']): Promise<boolean> => {
+  const end = at + 'git'.length
+  let word = at
+  while (word > 0 && /[\w.~/-]/.test(text[word - 1] ?? '')) word--
+  const before = text[word - 1] ?? ''
+  const after = text[end] ?? ''
+  if (QUOTES.includes(before) && after === before) {
+    const list = listArgs(text, end + 1)
+    return list !== undefined && handedWhole(text, word - 1, list) && (await gitArgsRead(list.args, read))
+  }
+  if (after !== ' ' && after !== '\t') return false
+  if (builtAround(text, at)) return false
+  // A string git starts ends at its own closing quote; git anywhere else runs to a command boundary,
+  // and a quote in a word there leaves the word unread. A word a shell would expand (a variable, a
+  // substitution, a glob, a leading ~) or quote is unread too, so after the subcommand it refuses.
+  let body = text.slice(end)
+  if (QUOTES.includes(before)) {
+    const close = body.indexOf(before)
+    if (close < 0) return false
+    body = body.slice(0, close)
+  }
+  const stop = body.search(/[\n;|&)]/)
+  const line = stop < 0 ? body : body.slice(0, stop)
+  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>[\]]/.test(v) && !v.startsWith('~'), v })), read)
+}
+/** Whether every git call runsGit finds in the code is a local read (#2939); false when it finds none. */
+export const gitReadsOnly = async (text: string, read: OvernightCall['read']): Promise<boolean> => {
+  const sites = gitSites(text)
+  for (const at of sites) if (!(await gitCallReads(text, at, read))) return false
+  return sites.length > 0
+}
 // gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
 // the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
@@ -731,7 +961,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // claude-sync, which would reach what the list bans past every rule above.
     if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
-    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || runsGit(c.program.text) || runsGh(c.program.text)))
+    // Code whose every git call is a local read is judged by that reading and goes ahead (#2939).
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !(await gitReadsOnly(c.program.text, call.read))) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
