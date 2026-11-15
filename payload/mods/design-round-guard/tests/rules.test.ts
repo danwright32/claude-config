@@ -2497,6 +2497,8 @@ test('#2948: mentionedModHookFiles reads four times a base64 run in under six ti
     'mods/a/hooks/x.ts/mods/b/hooks/y.ts mods/c/hooks/z.tsx mods/d/hooks/w.ts-x mods/e/hooks/v.cts_1 ...mods/f/hooks/u.ts',
     'mods/g/hooks/a.ts.ts mods/h/hooks/b.mts mods/h/hooks/b.mts @x/mods/i/hooks/c.ts~ ~/mods/j/hooks/d.ts+',
     `${'a/'.repeat(60)}mods/k/hooks/e.ts ${base64Run(300)}`,
+    // A run starting with ts and ending in no hook file once never ended (lessons review of c510731).
+    'tsx tsc ts tsconfig.json tsts t.ts .ts ts.ts tstsx mods/l/hooks/f.ts',
   ]) {
     const expected: string[] = []
     for (const m of text.matchAll(ONE_PATTERN)) {
@@ -2523,7 +2525,9 @@ test('#2948: each name reader reads four times as many distinct names in under s
       const start = performance.now()
       expect(read(text).length).toBe(n)
       return performance.now() - start
-    }, 2000)
+      // 5,000 names, not 2,000: at 2,000 a reading took a few ms, and once at load 49 on 12 cores
+      // (2026-11-15) the median ratio went over six with nothing changed.
+    }, 5000)
     expect({ name, under: middle < 6 }).toEqual({ name, under: true })
   }
 })

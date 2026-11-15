@@ -1847,7 +1847,9 @@ export const mentionedModHookFiles = (text: string): string[] => {
   const out = new Set<string>()
   for (const m of text.matchAll(/[\w./~@+-]+/g)) {
     const run = m[0]
-    for (let e = run.lastIndexOf('ts') + 2; e >= 2; e = run.lastIndexOf('ts', e - 3) + 2) {
+    // A name ends at the earliest four characters in (`x.ts`), so a `ts` nearer the start ends the
+    // search: there, lastIndexOf would find the same `ts` again for ever (lessons review of c510731).
+    for (let e = run.lastIndexOf('ts') + 2; e >= 4; e = run.lastIndexOf('ts', e - 3) + 2) {
       if (e < run.length && /\w/.test(run[e] as string)) continue
       const dot = run[e - 3] === '.' ? e - 3 : (run[e - 3] === 'c' || run[e - 3] === 'm') && run[e - 4] === '.' ? e - 4 : -1
       if (dot < 1) continue
