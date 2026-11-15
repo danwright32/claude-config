@@ -345,36 +345,40 @@ const runsGitFrom = callsWith(GIT_SUBCOMMANDS)
 export const runsGit = runsFrom('git', runsGitFrom)
 
 // #2939: code whose every git call is a local read goes ahead overnight. Each place runsGit finds a
-// git running is read on its own, and the code passes only when every one is a read: git's options
-// before the subcommand are only those that pick a repository or quiet the pager, the subcommand is
-// written out in the code and reads without writing or reaching a remote, and no --output follows
-// it. A call is read in one of two shapes. As an element of a list of arguments (`['git', '-C', wt,
-// 'show', ref]`, `execFileSync('git', [...])`), each later element is one argument, a quoted string
-// is one written out and anything else is known only when the code runs: allowed after the
-// subcommand, never before it. As a command line in a string or a script (`'git log -5'`), its words
-// run up to the string's end or a command boundary, and the string must not be built while the code
-// runs (builtAround), since a placeholder there could carry a second command. Anything else (git
-// alone in its string with its subcommand joined on later, a subcommand in a variable, -c, an
-// unknown option) is not a read, so the code stays refused.
+// git running is read on its own, and the code passes only when every one is a read. A call's
+// arguments are taken from the code in one of two shapes. As an element of a list of arguments
+// (`['git', '-C', wt, 'show', ref]`, `execFileSync('git', [...])`), each later element is one
+// argument: a quoted string is one written out, and anything else is known only when the code runs.
+// As a command line in a string or a script (`'git log -5'`), its words run up to the string's end or
+// a command boundary, and the string must not be built while the code runs (builtAround), since a
+// placeholder there could carry a second command. The arguments are then handed, each written out or
+// marked unread, to mod-kit's one reading of a git command (through the call's own reader), which
+// finds the subcommand. The call is a read when that subcommand is written out and reads without
+// writing or reaching a remote, nothing before it but -C and its folder or an option that only quiets
+// git, and no --output after it. Anything else (git alone in its string with its subcommand joined on
+// later, a subcommand in a variable, -c, any other option) is not a read, so the code stays refused.
 const GIT_LOCAL_READS: ReadonlySet<string> = new Set(['show', 'cat-file', 'log', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'merge-base', 'show-ref', 'for-each-ref', 'blame', 'describe', 'shortlog'])
-const GIT_VALUED: ReadonlySet<string> = new Set(['-C', '--git-dir', '--work-tree', '--namespace'])
-const GIT_PLAIN: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-replace-objects', '--literal-pathspecs', '--no-optional-locks', '--bare'])
+const GIT_QUIET: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-optional-locks', '--literal-pathspecs', '--no-replace-objects'])
+// The word an argument known only when the code runs stands as: no subcommand and no option.
+const UNREAD_ARG = '<unread>'
 type Arg = { lit: boolean; v: string }
-const gitArgsRead = (args: readonly Arg[]): boolean => {
-  let k = 0
-  for (; k < args.length; k++) {
-    const a = args[k] as Arg
-    if (!a.lit) return false
-    if (!a.v.startsWith('-')) break
-    if (GIT_VALUED.has(a.v)) k++
-    else if (!GIT_PLAIN.has(a.v) && ![...GIT_VALUED].some(o => o.startsWith('--') && a.v.startsWith(`${o}=`))) return false
+const gitArgsRead = async (args: readonly Arg[], read: OvernightCall['read']): Promise<boolean> => {
+  const words = ['git', ...args.map(a => (a.lit ? a.v : UNREAD_ARG))]
+  const cmds = await read(words.map(w => `'${w.replace(/'/g, `'\\''`)}'`).join(' '))
+  const c = cmds[0]
+  // Read back as the one command it was written as, word for word, or it is not this call.
+  if (cmds.length !== 1 || !c?.git?.sub || c.words.length !== words.length || c.words.some((w, i) => w !== words[i])) return false
+  const { sub, args: after } = c.git
+  if (!GIT_LOCAL_READS.has(sub)) return false
+  const before = c.words.slice(1, c.words.length - after.length - 1)
+  for (let i = 0; i < before.length; i++) {
+    if (before[i] === '-C' && i + 1 < before.length) i++
+    else if (!GIT_QUIET.has(before[i] as string)) return false
   }
-  const sub = args[k]
-  if (!sub?.lit || !GIT_LOCAL_READS.has(sub.v)) return false
   // --output writes a file; git takes any unambiguous prefix of four characters or more (--outp).
-  return !args.slice(k + 1).some(a => {
-    const flag = a.v.split('=')[0] ?? ''
-    return a.lit && flag.length >= 4 && '--output'.startsWith(flag)
+  return !after.some(a => {
+    const flag = a.split('=')[0] ?? ''
+    return flag.length >= 4 && '--output'.startsWith(flag)
   })
 }
 // The elements of a list of arguments from `from` to its closing bracket, or undefined when it never closes.
@@ -412,7 +416,7 @@ const listArgs = (text: string, from: number): Arg[] | undefined => {
   return undefined
 }
 const gitSites = sitesFrom('git', runsGitFrom)
-const gitCallReads = (text: string, at: number): boolean => {
+const gitCallReads = async (text: string, at: number, read: OvernightCall['read']): Promise<boolean> => {
   const end = at + 'git'.length
   let word = at
   while (word > 0 && /[\w.~/-]/.test(text[word - 1] ?? '')) word--
@@ -420,18 +424,19 @@ const gitCallReads = (text: string, at: number): boolean => {
   const after = text[end] ?? ''
   if (QUOTES.includes(before) && after === before) {
     const args = listArgs(text, end + 1)
-    return args !== undefined && gitArgsRead(args)
+    return args !== undefined && (await gitArgsRead(args, read))
   }
   if (after !== ' ' && after !== '\t') return false
   if (builtAround(text, at)) return false
   const stop = text.slice(end).search(/[\n;|&)'"`]/)
   const line = stop < 0 ? text.slice(end) : text.slice(end, end + stop)
-  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>]/.test(v), v })))
+  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>]/.test(v), v })), read)
 }
 /** Whether every git call runsGit finds in the code is a local read (#2939); false when it finds none. */
-export const gitReadsOnly = (text: string): boolean => {
+export const gitReadsOnly = async (text: string, read: OvernightCall['read']): Promise<boolean> => {
   const sites = gitSites(text)
-  return sites.length > 0 && sites.every(at => gitCallReads(text, at))
+  for (const at of sites) if (!(await gitCallReads(text, at, read))) return false
+  return sites.length > 0
 }
 // gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
 // the backstop.
@@ -835,7 +840,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
     // Code whose every git call is a local read is judged by that reading and goes ahead (#2939).
-    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !gitReadsOnly(c.program.text)) || runsGh(c.program.text)))
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !(await gitReadsOnly(c.program.text, call.read))) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
