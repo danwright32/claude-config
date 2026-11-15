@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchesPushedInto, branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, liveRuns, mergeRunOf, mergeRunsIn, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesPushedInto, branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, liveRuns, mergeRunOf, mergeRunsIn, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { patchedPaths } from '../hooks/mod-kit/patch.ts'
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
@@ -547,12 +548,17 @@ describe('whose uncommitted files they are (#1108)', () => {
       '--- a/gone.ts',
       '+++ /dev/null',
     ].join('\n')
-    expect(patchedPaths([], patch)).toEqual(['src/app.ts', 'old name.md', 'docs/new name.md', 'gone.ts'])
-    expect(patchedPaths(['-p2'], '--- a/x/y.ts\t2026-01-01\n+++ b/x/y.ts\t2026-01-02\n')).toEqual(['y.ts'])
-    expect(patchedPaths(['--directory=sub', '-p', '0'], '--- y.ts\n+++ y.ts\n')).toEqual(['sub/y.ts'])
-    expect(patchedPaths([], 'not a patch')).toEqual([])
+    expect(patchedPaths([], true, patch)).toEqual(['src/app.ts', 'old name.md', 'docs/new name.md', 'gone.ts'])
+    expect(patchedPaths(['-p2'], true, '--- a/x/y.ts\t2026-01-01\n+++ b/x/y.ts\t2026-01-02\n')).toEqual(['y.ts'])
+    expect(patchedPaths(['--directory=sub', '-p', '0'], true, '--- y.ts\n+++ y.ts\n')).toEqual(['sub/y.ts'])
+    expect(patchedPaths([], true, 'not a patch')).toEqual([])
     // A removed line reading "-- x" inside a hunk is no header.
-    expect(patchedPaths([], '--- a/k.ts\n+++ b/k.ts\n@@ -1,2 +1 @@\n--- a/not/a/path\n-x\n')).toEqual(['k.ts'])
+    expect(patchedPaths([], true, '--- a/k.ts\n+++ b/k.ts\n@@ -1,2 +1 @@\n--- a/not/a/path\n-x\n')).toEqual(['k.ts'])
+    // #2992: mod-kit's one patch reader walks each hunk by its header, as the Slack alert guard's did,
+    // so a removed line reading "-- x" over an added one reading "++ y" is content, never a header;
+    // and a name git quotes is read as git wrote it, its escapes undone.
+    expect(patchedPaths([], true, '--- a/k.ts\n+++ b/k.ts\n@@ -1 +1 @@\n--- a/x\n+++ b/y\n')).toEqual(['k.ts'])
+    expect(patchedPaths([], true, 'diff --git "a/caf\\303\\251 \\"q\\".ts" "b/caf\\303\\251 \\"q\\".ts"\n--- "a/caf\\303\\251 \\"q\\".ts"\n+++ "b/caf\\303\\251 \\"q\\".ts"\n')).toEqual(['café "q".ts'])
   })
   test('a stash pop or apply names the stash it takes, the newest by default; any other stash command none', () => {
     expect(stashTaken(['pop'])).toBe('stash@{0}')

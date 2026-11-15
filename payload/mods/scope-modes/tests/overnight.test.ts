@@ -857,11 +857,22 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash('echo rtk proxy && proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
     expect(await bash(`echo 'rtk proxy' ; proxy gh issue view 7 -R other/x`, { look: nowhere })).toBe(unresolved)
   })
-  test('what cannot be read as written plainly fails closed, git included (lessons review of 9c3b530)', async () => {
-    expect(await bash(`rtk 'proxy' git push --force origin main`)).toBe('run a command through rtk proxy that could not be read as written plainly')
-    expect(await bash(`rtk 'proxy' gh issue view 7 -R other/x`, { look: nowhere })).toBe('run a command through rtk proxy that could not be read as written plainly')
-    expect(await bash('proxy git push --force origin main')).toBe('run git through a command named proxy, which could not be judged')
-    expect(await bash(`echo rtk proxy; proxy -v git branch -D main`)).toBe('run git through a command named proxy, which could not be judged')
+  // #2983: mod-kit's reader now reads rtk's proxy as every mod reads it, so a quoted proxy is a
+  // proxy, and one word rtk splits into a command is that command.
+  test('a quoted proxy, and one word rtk splits, are read as the command they run', async () => {
+    expect(await bash(`rtk 'proxy' git push --force origin main`)).toBe('force push')
+    expect(await bash(`rtk 'proxy' gh issue view 7 -R other/x`, { look: nowhere })).toBeUndefined()
+    expect(await bash(`rtk proxy 'git push --force origin main'`)).toBe('force push')
+    expect(await bash(`rtk proxy 'gh issue view 7 -R other/x' > ${notes}/i7.txt`, { look: nowhere })).toBeUndefined()
+    expect(await bash(`rtk proxy 'gh issue view 7 -R other/x' > out.txt`, { look: nowhere })).toBe(outside(`${CWD}/out.txt`))
+  })
+  test('what cannot be read fails closed: one word the shell expands, which rtk splits into a command', async () => {
+    const unread = 'run a command through rtk proxy that could not be read as written plainly'
+    expect(await bash('rtk proxy "$CMD"')).toBe(unread)
+    expect(await bash('rtk proxy "gh issue view $N -R other/x"', { look: nowhere })).toBe(unread)
+    expect(await bash(`rtk proxy "git push $(cat flags.txt)"`)).toBe(unread)
+    // Two words or more reach the command as they stand, as they would written plainly.
+    expect(await bash('rtk proxy gh issue view "$N" -R other/x', { look: nowhere })).toBeUndefined()
   })
   test('rtk named by its path, or behind another runner, is still rtk', async () => {
     expect(await bash('/opt/homebrew/bin/rtk proxy gh issue view 7 -R other/x', { look: nowhere })).toBeUndefined()
