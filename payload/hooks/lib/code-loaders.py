@@ -199,9 +199,17 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth):
                         w = w.partition("=")[2]
                     if not w:
                         continue
+                    names = len(self.held_names())
                     reason = self.script(w, d, depth, False, "js", f"the module {w}, which NODE_OPTIONS has node load,")
                     if reason:
                         return reason
+                    if len(self.held_names()) > names:
+                        # It shares a process with whatever node runs, which can read what it leaves on
+                        # the global object, and that code is judged apart from it, so a name it holds
+                        # only as data is refused as before (#2913, lessons review at 73967ea).
+                        where, name = self.held_names()[names]
+                        return (f"{where.rstrip(',')}, which posts to Slack (it names {name}, held there only as data, but "
+                                "NODE_OPTIONS has node load it beside code judged apart from it, which can send it)")
             return None
 
         # ---- A name perl's <> runs as a command (#2912) --------------------------------------------
