@@ -784,6 +784,10 @@ allowed "#2359 an async factory, handed to the runner by npx"
 MK_RUN="./node_modules/.bin/vitest run"
 mk_case a.test.ts 'import { send } from "./posts.ts";' 'describe("x", () => {' '  vi.mock("./posts.ts", () => ({ send: vi.fn() }));' '});'
 read_refused "#2359 a vi.mock inside a block is refused too"
+mk_case a.test.ts 'import { vi, beforeAll } from "vitest"' 'import { send } from "./posts.ts"' 'beforeAll(() => {})' 'vi.mock("./posts.ts", () => ({ send: vi.fn() }))'
+allowed "#2359 a mock as its own statement in a file written without semicolons"
+mk_case a.test.ts 'import { send } from "./posts.ts";' 'vi.mock<typeof import("./posts.ts")>("./posts.ts", () => ({ send: vi.fn() }));'
+allowed "#2359 a mock with a type argument"
 mk_case __tests__/a.ts 'import { send } from "../posts.ts";' 'vi.mock("../posts.ts", () => ({ send: vi.fn() }));'
 allowed "#2359 a file in a __tests__ folder"
 mk_case a.ts 'import { send } from "./posts.ts";' 'vi.mock("./posts.ts", () => ({ send: vi.fn() }));'
@@ -818,7 +822,14 @@ for line in 'vi.mock("./posts.ts");' \
   'jest.mock("./posts.ts", () => ({}));  jest.dontMock("./posts.ts");' \
   'vi.mock("./posts.ts", () => ({}));  vi.doUnmock("./posts.ts");' \
   'vi.mock("./posts.ts", () => ({}));  const m = await vi.importMock("./posts.ts");' \
-  'jest.mock("./posts.ts", () => ({}));  const m = jest.createMockFromModule("./posts.ts");'; do
+  'jest.mock("./posts.ts", () => ({}));  const m = jest.createMockFromModule("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  const real = await vi.importActual<typeof import("./posts.ts")>("./posts.ts");' \
+  'jest.mock("./posts.ts", () => ({}));  const real = jest.requireActual<typeof import("./posts")>("./posts");' \
+  'vi.mock("./posts.ts", () => ({}));  const load = vi.importActual;' \
+  'const setup = () => vi.mock("./posts.ts", () => ({}));' \
+  'if (process.env.MOCK) vi.mock("./posts.ts", () => ({}));' \
+  'process.env.MOCK && vi.mock("./posts.ts", () => ({}));' \
+  'void vi.mock("./posts.ts", () => ({}));'; do
   mk_case a.test.ts 'import { send } from "./posts.ts";' "$line"
   read_refused "#2359 a test file importing a module that posts stays refused beside: $line"
 done
