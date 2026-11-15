@@ -1123,7 +1123,7 @@ shell_list "a write inside a shell string is asked about" ask 'bash -c "echo liv
 shell_list "a write from a heredoc script is asked about" ask $'python3 - <<\'EOF\'\nopen(".claude/supabase-test-projects", "a").write("liveprojectref000009\\n")\nEOF'
 shell_list "a staging of the list is asked about" ask 'git add -f .claude/supabase-test-projects'
 r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'echo liveprojectref000009 >> .claude/supabase-test-projects' "$TESTP" s1 "$NONE_T")")"
-case "$(field "$r" reason)" in *supabase-test-projects*2989*) check "the question names the list and the issue (#2989)" ok ;; *) check "the question names the list and the issue (#2989)" "reason: $(field "$r" reason | head -c 400)" ;; esac
+case "$(field "$r" reason)" in *supabase-test-projects*2989*) check "the question names the list and the issue (#2989)" ok ;; *) check "the question names the list and the issue (#2989)" "reason: $(field "$r" reason)" ;; esac
 shell_list "a cat of the list passes" none 'cat .claude/supabase-test-projects'
 shell_list "a grep of the list with errors thrown away passes" none 'grep -c ref .claude/supabase-test-projects 2>/dev/null'
 shell_list "a git diff of the list passes" none 'git diff -- .claude/supabase-test-projects'
@@ -1134,7 +1134,7 @@ list_git() { "${TESTP_GIT[@]}" "$@" >/dev/null 2>&1; }
 printf "$LIST_TEXT"'liveprojectref000009\n' > "$LIST"; list_git add -f .claude/supabase-test-projects
 shell_list "a commit of a staged added ref is asked about" ask 'git commit -m "add a ref"'
 r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m "add a ref"' "$TESTP" s1 "$NONE_T")")"
-case "$(field "$r" reason)" in *liveprojectref000009*supabase-test-projects*) check "the question about a commit names the added line and the list (#2989)" ok ;; *) check "the question about a commit names the added line and the list (#2989)" "reason: $(field "$r" reason | head -c 400)" ;; esac
+case "$(field "$r" reason)" in *liveprojectref000009*supabase-test-projects*) check "the question about a commit names the added line and the list (#2989)" ok ;; *) check "the question about a commit names the added line and the list (#2989)" "reason: $(field "$r" reason)" ;; esac
 shell_list "the same commit through git -C from elsewhere is asked about" ask "git -C $TESTP commit -m x" "$APPLY"
 shell_list "the same commit after a cd from elsewhere is asked about" ask "cd $TESTP && git commit -m x" "$APPLY"
 list_git reset -q -- .claude/supabase-test-projects
@@ -1167,14 +1167,14 @@ printf '#!/bin/sh\necho "fatal: index file corrupt" >&2\nexit 3\n' > "$GITSTUB/g
 r="$(PATH="$GITSTUB:$PATH" run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
 case "$(decision "$r")|$(field "$r" reason)" in
   "ask rc=0|"*"could not be told: git ls-files failed (exit 3)"*) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" ok ;;
-  *) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" "$(decision "$r") $(field "$r" reason | head -c 400)" ;;
+  *) check "a commit whose checkout git cannot read is asked about, saying git failed (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
 esac
 rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
 cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-apply-approval.py"
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
 case "$(decision "$r")|$(field "$r" reason)" in
   "ask rc=0|"*db-apply-approval.py*2989*) check "with lib/db-apply-approval.py missing, a commit is asked about, naming the file (#2989)" ok ;;
-  *) check "with lib/db-apply-approval.py missing, a commit is asked about, naming the file (#2989)" "$(decision "$r") $(field "$r" reason | head -c 400)" ;;
+  *) check "with lib/db-apply-approval.py missing, a commit is asked about, naming the file (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
 esac
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'ls -la' "$TESTP" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" ok || check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" "$(decision "$r")"
