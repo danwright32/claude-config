@@ -6957,7 +6957,12 @@ every top level name those use, through the imports between the mod's files; a t
 spacing draws nothing. Any other edit there passed, however it was worded, as did every edit to a
 `.ts` file that draws nothing (since #1841 one changing a message's words is held, below); a shell
 write is judged by the file it leaves (since #1576 one to a file that already draws too); a mod
-whose hook files cannot be listed or read is held. Since #1296 a value reaching what draws through a
+whose hook files cannot be listed or read is held. Since #3017 one only some of whose files cannot
+be read (a merge conflict left in one) is held only where the mod draws at all, read from its own
+code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named in any file of its hooks
+folder or the folders inside it (any `ui.` member but `log`, `toast` and `ask`; mod-kit's band row,
+pane, card or buttons), or a line built. A mod drawing nothing, such as this guard, is judged as
+code there. Since #1296 a value reaching what draws through a
 local or a function's parameter is followed too (a card's sentence handed to a function that draws
 it, a card's words held in a local, what a function a followed value calls returns), compared with
 what it treats as data taken out, so what a call it makes is handed, what a value is only tested
