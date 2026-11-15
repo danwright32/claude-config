@@ -62,7 +62,7 @@ import { type Reading, type Traced, consoleArgs, docstrings, jsSpans, pySpans, r
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { type InputFs, inputTexts } from './mod-kit/inputs.ts'
-import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, waitingNamed } from './night.ts'
+import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf, waitingNamed } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -75,6 +75,8 @@ import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PRE
 const pendingRef = { plugin: 'slack-alert-guard', key: 'pending' } as const
 // The expired choices this session has named to Dan (#2628), so each is said once per session.
 const toldRef = { plugin: 'slack-alert-guard', key: 'told' } as const
+// The choices this session put to Dan again two hours after sleep ended (#2993), so each is asked once per session.
+const reaskedRef = { plugin: 'slack-alert-guard', key: 'reasked' } as const
 
 // A subagent's calls this guard judged and let through in its tool.call hook, so the tool.check
 // beneath does not judge them again.
@@ -232,13 +234,28 @@ const unapproved = async ($: EngineInterface, keys: string[], file?: string): Pr
 
 // Scope modes, called in place (#2628). Not loaded, or a sleep record it cannot read, is awake: the
 // guard then holds as it always has, never the looser way.
-type SleepModes = { isAsleep: () => Promise<boolean>; sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }> }
+type SleepModes = { isAsleep: () => Promise<boolean>; sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>; sleepEnds: () => Promise<number[]> }
 const isAsleep = async ($: EngineInterface): Promise<boolean> => {
   try {
     return (await ($ as unknown as { scopeModes: SleepModes }).scopeModes.isAsleep()) === true
   } catch (err) {
     if (missingOf(err)?.noun !== 'scopeModes') $.ui.log(`slack-alert-guard: whether sleep mode is on could not be read, so it is taken as off: ${message(err)}`, { to: 'debug' })
     return false
+  }
+}
+
+// When each sleep on this Mac ended (#2993), or null when scope modes cannot say (not loaded, a
+// version without the noun, or the ended records unreadable): each choice then waits from when it
+// was made (night.ts reaskDue), so it is asked early rather than never.
+const sleepEnds = async ($: EngineInterface): Promise<number[] | null> => {
+  try {
+    const ends: unknown = await ($ as unknown as { scopeModes: SleepModes }).scopeModes.sleepEnds()
+    if (Array.isArray(ends) && ends.every(t => typeof t === 'number' && Number.isFinite(t))) return ends as number[]
+    $.ui.log('slack-alert-guard: scope modes said when sleep ended in a shape this guard cannot read, so each choice waits from when it was made', { to: 'debug' })
+    return null
+  } catch (err) {
+    if (missingOf(err)?.noun !== 'scopeModes') $.ui.log(`slack-alert-guard: when sleep mode ended could not be read, so each choice waits from when it was made: ${message(err)}`, { to: 'debug' })
+    return null
   }
 }
 
@@ -977,7 +994,8 @@ export const register: Register = on => {
       if (await isAsleep($)) return { deny: 'Dan is asleep (sleep mode), so the wording chosen overnight is put to him in the morning, not now.' }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
-      const q = morningQuestion(c)
+      // Named with the project it was chosen in (#2993), as it may be asked in a session in another.
+      const q = morningQuestion(c, c.places?.[0]?.repo ?? (await repoOf($, c.file)))
       const r = await next({ ...e, questions: [{ question: q, header: HEADER, options: MORNING_OPTIONS, multiSelect: false }] } as typeof e)
       if (r.deny !== undefined || r.isError) return r
       const out = (r.result ?? {}) as AskResult
@@ -986,7 +1004,17 @@ export const register: Register = on => {
       if (out.afkTimeoutMs !== undefined) return say(r, `Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${still}. It is put to him again at his next message.`)
       const chosen = out.answers?.[shown] ?? out.answers?.[q]
       if (typeof chosen !== 'string' || !chosen.trim()) return say(r, `Dan gave no answer, so nothing is recorded and ${still}. It is put to him again at his next message.`)
-      if (chosen === CHANGE) return say(r, `Dan answered ${CHANGE}: nothing is recorded, and ${still}. Ask him what it should say, change it in ${c.file}, and show him the new message, which is asked about as any new wording is.`)
+      if (chosen === CHANGE) {
+        // Recorded as his answer (#2993), so no other session puts it to him again; it stays held.
+        let unkept = ''
+        try {
+          const at = await $.clock.now()
+          for (const k of keys) await $.store.set(k, { ...((await $.store.get(k)) as SlackAlertChoice), rejected: at } satisfies SlackAlertChoice)
+        } catch (err) {
+          unkept = ` His answer could not be kept (${message(err)}), so other sessions may put it to him again.`
+        }
+        return say(r, `Dan answered ${CHANGE}: nothing is approved, and ${still}. Ask him what it should say, change it in ${c.file}, and show him the new message, which is asked about as any new wording is.${unkept}`)
+      }
       if (chosen !== APPROVE) {
         const again = 'put the wording chosen overnight to him again'
         try {
@@ -1128,7 +1156,8 @@ export const register: Register = on => {
 
   // In the morning (#2628): each choice waiting on Dan is put to him by the session that made it, or
   // once that one ended, by a session working in the repository it was made in (#2833); one past its
-  // time is marked expired, said once in each such session, and stays held.
+  // time is marked expired, said once in each such session, and stays held. One still unapproved two
+  // hours after sleep ended is put to him once by every other awake session on the Mac (#2993).
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
     if (r.drop !== undefined) return r
@@ -1147,6 +1176,17 @@ export const register: Register = on => {
       const lines = morningLines(mine, self, told)
       const fresh = mine.filter(c => c.expired !== undefined && !told.includes(c.id)).map(c => c.id)
       if (fresh.length) await $.state.set(toldRef, [...told, ...fresh])
+      // Still unapproved two hours after sleep ended (#2993): put to Dan once by this session too,
+      // whatever its repository, unless its morning lines already reach it.
+      // Kept with the session it was asked in, so a session id that changes under the same state (a
+      // /clear) asks afresh.
+      const kept = (await $.state.get(reaskedRef)).value
+      const done = kept?.session === self ? kept.ids : []
+      const reached = new Set(mine.filter(c => morningReaches(c, self)).map(c => c.id))
+      const ends = await sleepEnds($)
+      const due = reaskDue(all, now, ends, done, reached)
+      for (const c of due) lines.push(reaskLine(c, c.places?.[0]?.repo ?? (await repoOf($, c.file)), sleepEndOf(c, ends) !== null))
+      if (due.length) await $.state.set(reaskedRef, { session: self, ids: [...done, ...due.map(c => c.id)] })
       return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
     } catch (err) {
       // Never read as nothing waiting: Claude is told, so Dan hears that a choice may be unasked.
