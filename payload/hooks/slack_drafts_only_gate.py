@@ -1402,7 +1402,7 @@ def judged_by_name(name):
 ProgramRuns = _program_runs.make(MARKER, judged_by_name)
 # Code a command loads without naming it: a PHP include, NODE_OPTIONS, a name perl's <> runs, a file
 # with a NUL in its first line run by zsh or dash (claude-config#2912, #2977, #2978).
-CodeLoaders = load_lib("code_loaders", "code-loaders.py").make(SHELL_BANG, CURL_ASSIGN, MARKER, SH_UNKNOWN_DIR)
+CodeLoaders = load_lib("code_loaders", "code-loaders.py").make(SHELL_BANG, CURL_ASSIGN, MARKER, SH_UNKNOWN_DIR, MAX_DEPTH)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 

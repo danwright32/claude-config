@@ -146,6 +146,17 @@ read_refused "#2978 a bare name is still looked for in the including script's fo
 printf '%s\n' '<?php echo <<<EOT' "don't" 'EOT;' 'include "post.php";' > "$P8/here.php"
 run_p8 "php here.php"
 read_refused "#2978 an include after a heredoc whose text holds a quote is followed"
+# The heredoc ends at its closing label, and the code then goes on as before: a ?> after it ends the
+# code, so the page text past it is not read as an include. A nowdoc's text is never code.
+printf '%s\n' '<?php echo <<<EOT' 'hi' 'EOT;' '?>' '<p>include the header here, then require login</p>' > "$P8/herepage.php"
+run_p8 "php herepage.php"
+allowed "#2978 page text after a heredoc and a ?> is not read as code"
+printf '%s\n' "<?php echo <<<'EOT'" 'include $f;' 'EOT;' 'include "quiet.php";' > "$P8/nowdoc.php"
+run_p8 "php nowdoc.php"
+allowed "#2978 the text of a nowdoc is not code"
+printf '%s\n' '<?php echo <<<EOT' 'include $f;' 'EOT;' > "$P8/heretext.php"
+run_p8 "php heretext.php"
+refused "#2978 a heredoc's own text, which can run code in {\${...}}, is still read word by word"
 run_p8 "./runx"
 read_refused "#2978 a script run by its #! naming php is followed"
 run_p8 "php -i"
@@ -261,6 +272,14 @@ printf '%s\n' "$POST" > "$PB/post.sh"
 printf 'x\n' > "$PB/bash post.sh|"
 run_pg "perl -ne print *" "$PB"
 read_refused "#2912 a glob is still expanded where the folder perl runs in holds a ["
+# A name that holds the very command naming it ("perl -ne print *|", which * matches) is read only as
+# deep as the gate reads any nesting, then refused as not checked; it had no bound and ran past 120s.
+PL="$T/pl2912"
+mkdir -p "$PL"
+printf 'x\n' > "$PL/perl -ne print *|"
+run_pg "perl -ne print *" "$PL"
+refused "#2912 a perl pipe name that runs itself is refused, not followed for ever"
+says "#2912 and it says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
 # The safe list: a sub named by a string, through %SIG or sort, is off it.
 run_pg "perl -ne '\$SIG{__WARN__} = \"main::x\"; print' marked.txt"
 read_refused "#2912 perl code setting a handler in %SIG, handed a file naming an endpoint, is refused"

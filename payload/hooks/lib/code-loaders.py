@@ -34,6 +34,8 @@ import re
 PHP_LEX = re.compile(r"""'(?:[^'\\]|\\.)*'?|"(?:[^"\\]|\\.)*"?|/\*.*?(?:\*/|\Z)|(?://|\#(?!\[))(?:[^\n?]|\?(?!>))*"""
                      r"""|\?>|<<<|([A-Za-z_]\w*)""", re.S)
 PHP_WORD = re.compile(r"([A-Za-z_]\w*)")
+# What follows <<<: the label of a heredoc, or a nowdoc's in single quotes, ending its line.
+PHP_DOC_LABEL = re.compile(r"""[ \t]*(["']?)([A-Za-z_]\w*)\1[ \t]*\r?\n""")
 PHP_INCLUDES = frozenset({"include", "include_once", "require", "require_once"})
 # The one shape of include whose path is certain: a single string with no variable and no escape in
 # it (a single quoted one may hold \' and \\), bracketed or not, ending the statement or expression.
@@ -57,10 +59,10 @@ NODE_WORD = re.compile(r'"([^"]*)"|(\S+)')
 NUL_REFUSERS = frozenset({"bash", "ksh"})
 
 
-def make(shell_bang, assign, marker, unknown_dir):
+def make(shell_bang, assign, marker, unknown_dir, max_depth):
     """The base class for the gate's Judge (module docstring). shell_bang is its SHELL_BANG, assign its
     CURL_ASSIGN (an assignment at a command's start, past export, env and the like), marker its
-    MARKER and unknown_dir its SH_UNKNOWN_DIR."""
+    MARKER, unknown_dir its SH_UNKNOWN_DIR and max_depth its MAX_DEPTH."""
 
     class CodeLoaders:
         # ---- PHP includes (#2978) -----------------------------------------------------------------
@@ -100,6 +102,7 @@ def make(shell_bang, assign, marker, unknown_dir):
             followed, and is refused rather than passed (the issue's decision). A word include inside
             a string or a comment is not one, nor is a variable, method or namespaced name spelt so."""
             code, i, n, heredoc = not tagged, 0, len(text), False
+            doc_end = n
             while i < n:
                 if not code:
                     m = PHP_OPEN.search(text, i)
@@ -107,16 +110,25 @@ def make(shell_bang, assign, marker, unknown_dir):
                         return
                     code, i = True, m.end()
                     continue
-                # Past a heredoc its text is not told from code: from there on every word is a
-                # token, no quote starts a string that could hide an include, and no ?> ends the
-                # code (an apostrophe in the heredoc's text would otherwise swallow the rest).
-                m = (PHP_WORD if heredoc else PHP_LEX).search(text, i)
+                # A heredoc's text can run code ({${...}}), so up to its closing label every word in
+                # it is a token, no quote starts a string that could hide an include and no ?> ends
+                # the code (an apostrophe in its text would otherwise swallow the rest); past the
+                # label the code is read as before. One whose end cannot be found reads so to the end.
+                m = PHP_WORD.search(text, i, doc_end) if heredoc else PHP_LEX.search(text, i)
+                if heredoc and not m:
+                    heredoc, i, doc_end = False, doc_end, n
+                    continue
                 if not m:
                     return
                 i = m.end()
                 tok = m.group(0)
                 if tok == "<<<":
-                    heredoc = True
+                    label = PHP_DOC_LABEL.match(text, i)
+                    close = label and re.compile(r"^[ \t]*%s(?!\w)" % label.group(2), re.M).search(text, label.end())
+                    if close and label.group(1) == "'":
+                        i = close.end()  # a nowdoc's text is never code
+                        continue
+                    heredoc, doc_end = True, close.end() if close else n
                     continue
                 if tok == "?>" or (tok[:1] in "/#" and not tok.startswith("/*") and text.startswith("?>", i)):
                     if not heredoc:
@@ -230,6 +242,11 @@ def make(shell_bang, assign, marker, unknown_dir):
                     cmd = name.strip().strip("|").strip()
                     if not cmd:
                         continue
+                    if depth >= max_depth:
+                        # A name can hold the command that names it ("perl -ne print *|", which *
+                        # matches), so the reading stops where the gate's other nesting does.
+                        return self.unfollow(f"perl's <> opens {name!r} as a command nested deeper than "
+                                             "the gate reads")
                     try:
                         inner = self.line(cmd, d, depth + 1, cmd)
                     except self.sw.Unreadable:
