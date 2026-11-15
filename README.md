@@ -3589,10 +3589,12 @@ x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, a
 `$0` or `BASH_SOURCE` is worked out as bash reads it.
 
 A test file's import of a module the same file replaces with a mock is not followed (#2359; Dan,
-2026-11-15, a loosening he signed off), in `lib/js-mocks.py`. The file must be a test file by the
-runners' default naming (`.test` or `.spec` before the extension, or under `__tests__`), and must call
-`vi.mock` or `jest.mock` as code with the module's path written out, resolving to the same file, and
-a factory taking no parameters. A mock with no factory, a factory handed the original, the original
+2026-11-15, a loosening he signed off), in `lib/js-mocks.py`. The file must be handed to vitest or
+jest (never run by node, tsx or bun itself, where a mock replaces nothing), be a test file by the
+runners' default naming (`.test` or `.spec` before the extension, or under `__tests__`), and call
+`vi.mock` or `jest.mock` as code at its top level with the module's path written out, resolving to
+the same file, and a factory taking no parameters. A mock inside a block (babel-jest lifts it only to
+the top of that block), a mock with no factory, a factory handed the original, the original
 fetched by `importActual` or `requireActual`, a mock taken back (`unmock`, `doUnmock`, `dontMock`), a
 `doMock`, a mock of another path and a path the gate cannot read each leave the import followed, so a
 real unmocked import stays refused. Only the file's own imports are affected.

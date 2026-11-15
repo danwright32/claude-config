@@ -2863,15 +2863,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         that is there, or of a missing declaration file, is left out too (erased_import,
         claude-config#2526, #2890). A PHP include is read by php_includes, tagged for a file's text
         (claude-config#2978). An import written as code in a test file, path, of a module that file
-        replaces with a mock and a factory is left out (lib/js-mocks.py, claude-config#2359)."""
+        handed to vitest or jest replaces with a mock and a factory is left out (lib/js-mocks.py, #2359)."""
         if kind == "php":
             yield from self.php_includes(text, cur_dir, root, tagged)
             return
         if kind == "js":
             code, quoted = js_scan(text)
-            # A module a test file replaces with a mock and a factory is never loaded (lib/js-mocks.py,
-            # claude-config#2359, a loosening Dan signed off on 2026-11-15).
-            mocked = _js_mocks.replaced(path, code, quoted, lambda s: self.resolve_import(s, cur_dir))
+            # A module a test file handed to vitest or jest replaces with a mock and a factory is never
+            # loaded (lib/js-mocks.py, claude-config#2359, a loosening Dan signed off on 2026-11-15).
+            mocked = _js_mocks.replaced(path, code, quoted, lambda s: self.resolve_import(s, cur_dir)) \
+                if getattr(self, "mock_runner", False) else set()
             for m in IMPORT_SPEC.finditer(code):
                 if not strings and quoted[m.start()] == 1:
                     continue
@@ -6010,8 +6011,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             runs = script_acts(runs_only=True)
             if not runs:
                 continue
-            why = self.script(w, d, depth, shell_hint and not self.own_language(self.resolve(w, d)), lang, w,
-                              maybe=maybe)
+            # Handed to vitest or jest, a test file's mocks replace what it imports (lib/js-mocks.py, #2359).
+            saved, self.mock_runner = getattr(self, "mock_runner", False), _js_mocks.runner(script_label)
+            try:
+                why = self.script(w, d, depth, shell_hint and not self.own_language(self.resolve(w, d)), lang, w,
+                                  maybe=maybe)
+            finally:
+                self.mock_runner = saved
             return f"{script_label} {runs}, and is handed {why}" if why else None
         return None
 
