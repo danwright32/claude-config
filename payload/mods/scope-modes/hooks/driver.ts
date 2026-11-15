@@ -560,12 +560,13 @@ export const REST_RESUME = 'Sleep mode: this session rested so its mods could lo
 
 /**
  * The background work still working, counted (#2511): a subagent the job watcher has seen move in
- * the last twenty minutes, and a job this session kept that has not stalled. Null for none.
+ * the last twenty minutes, a job this session kept that has not stalled, and a Monitor Claude Code
+ * lists as running with the stop (#2897), named by its tool. Null for none.
  */
-export const busyWords = (subagents: number, keptJobs: number): string | null => {
+export const busyWords = (subagents: number, keptJobs: number, monitors = 0): string | null => {
   const part = (n: number, one: string) => (n > 0 ? [`${n} ${one}${n === 1 ? '' : 's'}`] : [])
-  const parts = [...part(subagents, 'subagent'), ...part(keptJobs, 'kept job')]
-  return parts.length ? parts.join(' and ') : null
+  const parts = [...part(subagents, 'subagent'), ...part(keptJobs, 'kept job'), ...part(monitors, 'Monitor')]
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? null)
 }
 
 /** The words a session is started again with once its wait is over: after a rest for mods out of step, a rest on its own work (#2511), or an API error. */
