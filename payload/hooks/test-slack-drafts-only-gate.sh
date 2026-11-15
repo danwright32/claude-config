@@ -4061,7 +4061,7 @@ PY
     cost="$(SLACK_GATE_COST_LABEL=slow-reader SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$slow/slack-drafts-only-gate.sh" "$CS" "$over" L174 2>&1)"
     case "$cost" in
       "judging it took"*) cost=ok ;;
-      *) cost="$cost; the yardstick moved with the gate: $(grep '^slow-reader' "$T/cost.log")" ;;
+      ok) cost="the slowed gate read as no dearer, so the yardstick moved with the gate: $(grep '^slow-reader' "$T/cost.log")" ;;
     esac
     check "a gate whose reader is four times as slow is measured as dearer, past $over against $base (#2918)" "$cost"
   else
