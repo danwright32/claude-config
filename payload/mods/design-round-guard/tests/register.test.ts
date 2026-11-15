@@ -4517,3 +4517,93 @@ test('#2991: taking away an untracked copy of the mods folder in a worktree runs
   expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${ONEMOD}/mod-kit/hooks/card.tsx` }))).toContain('card.tsx')
   expect(w.ran.length).toBe(passes.length)
 })
+
+// #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own hooks/register.ts
+// were held as look changes (design-round-guard:toolu_01KmiW39jfkxkeHsC7KYRzb7 and
+// toolu_01UJepFgEhh5JTiFYp8davXi): the merge had left rules.ts beside it as text no reader can follow,
+// and a mod hook file read beside one was judged whole as drawing. The guard draws nothing, so its
+// hook files are judged as code; a mod registering a band, a pane or a card stays held. Shaped after
+// the guard: register.ts toasts and logs, rules.ts holds the conflict, hooks/mod-kit holds a copy.
+const DRG = '/w/slate/payload/mods/design-round-guard'
+const DRG_REL = 'payload/mods/design-round-guard/hooks'
+const DRG_RULES_OURS = 'export const tooLong = (what: string): boolean => {\n  if (what.length > 3) {\n    return true\n  }\n  return false\n}\n'
+const DRG_RULES_CONFLICT = DRG_RULES_OURS.replace('  if (what.length > 3) {\n', "<<<<<<< HEAD\n  if (what.length > 3) {\n=======\n  if (what.length > 3 && what !== 'ok') {\n>>>>>>> main\n")
+const DRG_LOG = "  $.ui.log('design-round-guard: refused', { to: 'debug' })"
+const DRG_REGISTER = [
+  "import type { EngineInterface } from 'claude-code'",
+  "import { tooLong } from './rules.ts'",
+  'export const refuse = async ($: EngineInterface, what: string) => {',
+  "  if (tooLong(what)) await $.ui.toast('Blocked an edit that changes the look.')",
+  DRG_LOG,
+  '}',
+  '',
+].join('\n')
+const DRG_FILES = {
+  [`${DRG}/.claude-plugin/plugin.json`]: '{ "name": "design-round-guard" }',
+  [`${DRG}/hooks/register.ts`]: DRG_REGISTER,
+  [`${DRG}/hooks/rules.ts`]: DRG_RULES_CONFLICT,
+  [`${DRG}/hooks/mod-kit/hold.ts`]: 'export const hold = async (ms: number) => ms\n',
+  [`${SCRATCH}/.keep`]: '',
+}
+const DRG_LOGIC = { tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: 'tooLong(what)', new_string: 'tooLong(what.trim())' }
+
+test('#3017: an edit, a shell write and a conflict rewrite of a hook file of a mod that draws nothing pass beside a sibling no reader can follow', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: { ...DRG_FILES },
+    blobs: {
+      [`/w/slate :2:${DRG_REL}/register.ts`]: DRG_REGISTER,
+      [`/w/slate :3:${DRG_REL}/register.ts`]: DRG_REGISTER.replace("'debug'", "'transcript'"),
+      [`/w/slate :2:${DRG_REL}/rules.ts`]: DRG_RULES_OURS,
+      [`/w/slate :3:${DRG_REL}/rules.ts`]: DRG_RULES_OURS.replace('> 3', '> 5'),
+    },
+  })
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  // The conflict written again, and this branch's side of both files taken, as #3008's fix was.
+  for (const command of [`git checkout --conflict=diff3 -- ${DRG_REL}/register.ts`, `git checkout --ours -- ${DRG_REL}/register.ts ${DRG_REL}/rules.ts`])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  // A shell write there, judged by what it leaves once it ran.
+  w.ctl.shell = { [`${DRG}/hooks/register.ts`]: String(w.files[`${DRG}/hooks/register.ts`]).replace("'debug'", "'transcript'") }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `sed -i '' 's/debug/transcript/' ${DRG_REL}/register.ts` }))).toBe('')
+  expect(w.ran.length).toBe(4)
+  expect(w.asked).toEqual([])
+})
+
+test('#3017: beside a sibling no reader can follow, a mod registering a band, a pane or a card, or an edit adding one, is still held', withKit, async ($, on) => {
+  const surfaces = [
+    "  await $.modkit.bandRow({ mod: 'g', id: 'x', slot: 'steps', lines: [] })",
+    "  await $.modkit.pane({ mod: 'g', id: 'x', lines: [] })",
+    "  await $.modkit.card({ toolUseId: 'x', title: what })",
+  ]
+  const w = world($, on, { files: { ...DRG_FILES } })
+  const held = (input: Record<string, unknown>) => call($, input).then(r => refusalOf(r).includes(SKIP_QUESTION))
+  for (const line of surfaces) {
+    // Registered in register.ts itself.
+    w.files[`${DRG}/hooks/register.ts`] = DRG_REGISTER.replace(DRG_LOG, line)
+    expect({ line, own: await held(DRG_LOGIC) }).toEqual({ line, own: true })
+    // Registered only in a copy inside its hooks folder.
+    w.files[`${DRG}/hooks/register.ts`] = DRG_REGISTER
+    w.files[`${DRG}/hooks/mod-kit/band.ts`] = `export const show = async ($: never) => {\n${line}\n}\n`
+    expect({ line, copy: await held(DRG_LOGIC) }).toEqual({ line, copy: true })
+    delete w.files[`${DRG}/hooks/mod-kit/band.ts`]
+    // Added by the edit itself.
+    expect({ line, added: await held({ tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: DRG_LOG, new_string: line }) }).toEqual({ line, added: true })
+  }
+  // A pane opened from a plain JavaScript file beside it (lessons review).
+  w.files[`${DRG}/hooks/open.mjs`] = "export const open = ($) => $.ui.open({ id: 'panel' })\n"
+  expect(await held(DRG_LOGIC)).toBe(true)
+  delete w.files[`${DRG}/hooks/open.mjs`]
+  // A panel drawn through JSX beside it.
+  w.files[`${DRG}/hooks/panel.tsx`] = 'export const Panel = () => <Box />\n'
+  expect(await held(DRG_LOGIC)).toBe(true)
+  expect(w.ran).toEqual([])
+})
+
+test('#3017: an untracked scratch copy of a rendering mod file is judged as #2991 left it: written, held; taken away, run', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', files: { ...ONEMOD_FILES, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.untracked = Object.keys(ONEMOD_FILES)
+  const write = { tool: 'Write', file_path: `${ONEMOD}/mod-kit/hooks/register.tsx`, content: 'export const register = () => <Box padding={2} />\n' }
+  expect(refusalOf(await call($, write))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
