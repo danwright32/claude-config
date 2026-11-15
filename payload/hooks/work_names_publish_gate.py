@@ -1120,13 +1120,16 @@ def _param_at(text, i):
 PHYSICAL = "PWD -P"
 # A substitution that is pwd alone, the directory it prints known: $(pwd), `pwd`, with -L or -P.
 PWD_SUBST = re.compile(r"\$\(\s*pwd(?:\s+-([LP]))?\s*\)|`\s*pwd(?:\s+-([LP]))?\s*`")
-# pwd or dirs run as a command anywhere else in a substitution, whose output this check cannot work
-# out ($(pwd | tr a-z A-Z), $(cd .. && pwd)): a word starting a command.
+# pwd or dirs as an unquoted word anywhere else in a substitution, whose output this check cannot work
+# out: $(pwd | tr a-z A-Z), $(cd .. && pwd), and pwd run by another word, $(command pwd), $(env pwd),
+# $(builtin pwd) (the lessons review of 913e483). Any such word, not one starting a command, since
+# what runs it cannot be listed; $(echo pwd) is refused with them.
 DIR_COMMAND = re.compile(r"(?:pwd|dirs)(?![\w.-])")
-COMMAND_START = ("$(", "`", "|", ";", "&", "(", "{", "\n")
+WORD_BEFORE = " \t\n;&|(`{"
 # The same in an unquoted heredoc body, read a line at a time from the substitution's opening, so
-# quotes there are text: pwd or dirs starting a command on the rest of that line.
-DIR_IN_SUBST = re.compile(r"(?:\$\(|`)(?:[^\n]*?[|;&({`])?\s*(?:pwd|dirs)(?![\w.-])")
+# quotes there are text: a pwd or dirs word, or a directory tilde prefix, on the rest of that line.
+DIR_IN_SUBST = re.compile(r"(?:\$\(|`)[^\n]*?(?<=[\s;&|(`{=])(?:(?:pwd|dirs)(?![\w.-])"
+                          r"|~(?:[+-][0-9]*|[0-9]+)(?=$|[\s/;&|()<>`]))")
 # A tilde prefix the shell expands to a directory, measured in bash 3.2 and zsh 5.9 (2026-11-14): at
 # the start of a word, unquoted, and ended by the word's end or a slash. ~+ and ~- are the directory
 # and the one before; with a number they are directory stack entries, which this check does not follow.
@@ -1178,7 +1181,7 @@ def _heredoc_bodies(text, i, pending, out):
                     k = got[2]
                     continue
                 if (line.startswith("$(", k) or line[k] == "`") and DIR_IN_SUBST.match(line, k):
-                    out.append((None, "a substitution running pwd or dirs"))
+                    out.append((None, "a substitution reading the directory"))
                 got = _param_at(line, k) if line[k] == "$" else None
                 if got:
                     out.append(got[:2])
@@ -1213,8 +1216,8 @@ def expansions(text):
             frames.append([False, 0, ")"])
             i += 2
             continue
-        if c in "pd" and not frame[0] and len(frames) > 1 and DIR_COMMAND.match(text, i) \
-                and text[:i].rstrip(" \t").endswith(COMMAND_START):
+        if c in "pd" and not frame[0] and len(frames) > 1 and text[i - 1] in WORD_BEFORE \
+                and DIR_COMMAND.match(text, i):
             word = DIR_COMMAND.match(text, i)
             out.append((None, "a substitution running %s" % word.group(0)))
             i = word.end()

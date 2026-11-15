@@ -567,6 +567,16 @@ run "gh issue create --repo danwright-test/public-notes --title \"\$(pwd | tr a-
 check "#2981 a substitution that runs pwd and changes its output is refused: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && pwd)\" --body x"
 check "#2981 and so is one that runs pwd somewhere else: $out" refused
+# pwd run after a word that runs it in turn prints the directory too (the lessons review of 913e483).
+run "gh issue create --repo danwright-test/public-notes --title \"\$(command pwd)\" --body x"
+check "#2981 and pwd run through command: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$(builtin pwd) \`env pwd\`\" --body x"
+check "#2981 and through builtin or env: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$(echo ~+)
+EOF
+)\""
+check "#2981 and ~+ in a substitution in an unquoted heredoc body: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title ~1 --body x"
 check "#2981 and a directory stack entry: $out" refused
 # Controls: a clean directory, and text the shell does not expand.
