@@ -1982,6 +1982,28 @@ test('a choice still unapproved two hours after sleep ended is put to Dan by any
   expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
 })
 
+test('a Change wording answer that cannot be kept is said, and other sessions go on asking (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  await w.clock.advance(2 * HOUR + 60_000)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  w.ctl.storeSetFails = true
+  const r = await morning($, w, id, CHANGE)
+  expect(said(r)).toContain('what it should say')
+  expect(said(r)).toMatch(/His answer could not be kept \(.+\), so other sessions may put it to him again\./)
+  expect(Object.values(w.store).some(v => (v as { rejected?: number }).rejected !== undefined)).toBe(false)
+  w.ctl.storeSetFails = false
+  w.night.session = 's3'
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  // Kept, nothing more is said about it.
+  w.night.session = 's4'
+  expect(said(await morning($, w, id, CHANGE))).not.toContain('could not be kept')
+  w.night.session = 's5'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+})
+
 test('a choice approved in another session is never put to Dan again (#2993)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
