@@ -430,7 +430,7 @@ const listArgs = (text: string, from: number): ListRead | undefined => {
 // once and named nowhere else but as that whole argument; or, in `execFileSync('git', [...])`, the
 // list after git in the call itself. After its closing bracket comes only the call's own closing or a
 // separator. Anything else cannot be read, so the code stays refused.
-const PROCESS_CALLS: ReadonlySet<string> = new Set(['run', 'call', 'check_call', 'check_output', 'Popen', 'create_subprocess_exec', 'execv', 'execvp', 'execvpe', 'execl', 'execlp', 'execle', 'execlpe', 'posix_spawn', 'posix_spawnp', 'execFileSync', 'execFile', 'spawnSync', 'spawn', 'system', 'exec', 'capture2', 'capture2e', 'capture3', 'popen3'])
+const PROCESS_CALLS: ReadonlySet<string> = new Set(['run', 'call', 'check_call', 'check_output', 'Popen', 'execv', 'execvp', 'execvpe', 'execl', 'execlp', 'execle', 'execlpe', 'posix_spawn', 'posix_spawnp', 'execFileSync', 'execFile', 'spawnSync', 'spawn', 'system', 'exec', 'capture2', 'capture2e', 'capture3', 'popen3'])
 const reEscape = (s: string) => s.replace(/[$]/g, '\\$')
 // The index and character of the first one at or before `i` that is not white space ('' at the start).
 const backTo = (text: string, i: number): [number, string] => {
