@@ -6106,6 +6106,36 @@ for (const [what, o, plugins] of noWork) {
   })
 }
 
+// #2897: a worker waiting on a Monitor it started (for CI, for a push) is waiting on its own work,
+// as one waiting on a subagent is. Claude Code lists a Monitor in the stop's background_tasks with the
+// type 'monitor' (the Stop hook's schema in 2.1.325 names 'shell', 'subagent', 'monitor' and
+// 'workflow'), and the job watcher keeps no record of one, so the stop's own list is the reading.
+const monitorTask = (status: string, id = 'bm1') => ({ id, type: 'monitor', status, description: 'wait for CI on PR 12' })
+const shellTask = { id: 'b9', type: 'shell', status: 'running', description: 'sleep', command: 'sleep 900' }
+test('a worker whose only live work is a running Monitor rests at each Stop, never failed by the breaker; a finished one is no work (#2897)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7 })
+  await start($ as never, clock)
+  for (let n = 0; n < 5; n++) expect((await stopWith($ as never, [monitorTask('running')])).block).toBeUndefined()
+  expect(w.released).toEqual([])
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ stopped: null, idleBlocks: 0, waitingOn: '1 Monitor', resumeAt: T0 + 10 * MIN })
+  expect((await stopWith($ as never, [monitorTask('running'), monitorTask('running', 'bm2')])).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: '2 Monitors' })
+  // A finished Monitor, a shell task nobody kept, and a list that is not a list are no work: the
+  // breaker counts afresh from the rest and fails the claim as before.
+  expect((await stopWith($ as never, [monitorTask('completed'), shellTask])).block).toBeDefined()
+  expect((await stopWith($ as never, { bm1: 'running' })).block).toBeDefined()
+  expect((await stopWith($ as never, [monitorTask('killed')])).block).toBeDefined()
+  expect((await stopWith($ as never, [monitorTask('failed')])).block).toBeUndefined()
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', BREAKER]])
+})
+
+test('a running Monitor counts with no job watcher loaded, since it is read from the stop itself (#2897)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7 })
+  await start($ as never, clock)
+  expect((await stopWith($ as never, [monitorTask('running')])).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: '1 Monitor' })
+})
+
 test('a counter that cannot be written still ends the claim in hand, on a Stop and on an API error (#844)', withDeps, async ($, on) => {
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
   const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, driverWriteFails: [1] })

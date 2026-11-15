@@ -3303,7 +3303,9 @@ const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
 const parkedHere = new Map<string, string>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
-const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> =>
+// backgroundTasks is Claude Code's list of the session's work in flight sent with the stop, from which
+// a running Monitor is work (#2897).
+const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ block: string } | null | 'not-driven'> =>
   oneAtATime(async () => {
     const en = await enrolledNow($)
     if (!en) return 'not-driven' as const
@@ -3331,7 +3333,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal), skew: skewMet,
-      busy: await busyNow($),
+      busy: await busyNow($, backgroundTasks),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     // A rest is for the skew met so far: one met after it, in the turn it starts, is met anew (#1281).
@@ -5812,7 +5814,7 @@ export const register: Register = on => {
     // breaker), and the night's limits held only while a goal happened to be met. The settings Stop
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     hear(e)
-    const driven = await driveStop($)
+    const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
     if (driven !== 'not-driven') return driven ?? {}
     // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
     // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
