@@ -58,6 +58,7 @@ import {
   madeTemp,
   argumentUnreached,
   trapBodies,
+  joinTests,
   ownFolderVar,
   type RunCommand,
   argvStart,
@@ -2802,16 +2803,16 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
 // route by which one may reach a write. Each route below is named by its own reason, so a control
 // held in the register tests is known to be held by the rule meant to hold it.
 const unreached = (text: string, sourced = true): string | undefined => {
-  const own = pipelineIn(text, '/s', '/h') as readonly RunCommand[]
+  const own = pipelineIn(joinTests(text), '/s', '/h') as readonly RunCommand[]
   const later = trapBodies(own)
   const all = later.length ? `${text}\n${later.join('\n')}\n` : text
   const temp = (word: string) => {
     const v = /^\$(?:\{(\w+)\}|(\w+))$/.exec(word)
     return v !== null && madeTemp((v[1] ?? v[2]) as string, all, new Set(), true)
   }
-  return argumentUnreached(commandWrites(all, '/s', '/h'), pipelineIn(all, '/s', '/h') as readonly RunCommand[], temp, () => sourced)
+  return argumentUnreached(commandWrites(all, '/s', '/h'), pipelineIn(joinTests(all), '/s', '/h') as readonly RunCommand[], temp, () => sourced)
 }
-const BASE_2924 = 'like="${2:-}"\ngh_err="$(mktemp)"\ntrap \'rm -f "$gh_err"\' EXIT\nout=""\nout="$(mktemp)"\ngh issue list >"$out" 2>"$gh_err"\nprintf \'%s\' "$like" | python3 -c \'import sys; print(sys.stdin.read(), sys.argv[1])\' "$like"\nprintf x > /s/notes.txt\nsource /s/catch-all.sh\n'
+const BASE_2924 = 'like="${2:-}"\nif [[ -z "$like" || "$like" == --* ]]; then exit 2; fi\nwhile [[ $# -gt 0 && -n "$(printf %s "$1")" ]]; do shift; done\ngh_err="$(mktemp)"\ntrap \'rm -f "$gh_err"\' EXIT\nout=""\nout="$(mktemp)"\ngh issue list >"$out" 2>"$gh_err"\nprintf \'%s\' "$like" | python3 -c \'import sys; print(sys.stdin.read(), sys.argv[1])\' "$like"\nprintf x > /s/notes.txt\nsource /s/catch-all.sh\n'
 
 test('#2924: argumentUnreached finds no route to a write in a script writing only its own names and temporary files', () => {
   expect(unreached(BASE_2924)).toBeUndefined()
@@ -2827,6 +2828,10 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
     ['eval "$like"', 'it runs eval'],
     ['"$@"', 'it runs a command named by $@'],
     ['$like', 'it runs a command named by $like'],
+    // A command after a test is never joined into it.
+    ['[[ -n "$like" ]] && "$1"', 'it runs a command named by $1'],
+    ['[[ -n "$(printf "%s" "$like")" ]] || eval "$like"', 'it runs eval'],
+    ['[[ -n "$like" &&\n "$1" ]] && "$1"', 'it runs a command named by $1'],
     ["trap 'rm -f \"$like\"' EXIT", 'it writes $like'],
     ['trap "$cleanup" EXIT', 'it runs a command named by $cleanup'],
     ['python3 -c \'import sys; open(sys.argv[1], "w")\' "$like"', 'it runs a program whose writes are not all named'],
@@ -2844,6 +2849,15 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
   expect(unreached(BASE_2924, false)).toBe('it sources /s/catch-all.sh, which could not be read whole')
   // `command -v` only looks a name up.
   expect(unreached(`${BASE_2924}command -v gh >/dev/null 2>&1\n`)).toBeUndefined()
+})
+
+test('#2924: joinTests joins only a test it can follow to its end on one line', () => {
+  expect(joinTests('if [[ -z "$r" || "$r" == --* ]]; then exit; fi && x')).toBe('if [[ -z "$r" -o "$r" == --* ]]; then exit; fi && x')
+  expect(joinTests('[[ -n "$(a && b)" && -f x ]] && y')).toBe('[[ -n "$(a && b)" -a -f x ]] && y')
+  expect(joinTests("echo '[[ a || b ]]' && x")).toBe("echo '[[ a || b ]]' && x")
+  // Unfollowable, returned as written: a test across lines, a ; inside one, one never closed.
+  for (const text of ['[[ a ||\n b ]] && c', '[[ a; b || c ]]', '[[ a || b'])
+    expect(joinTests(text)).toBe(text)
 })
 
 test('#2924: ownFolderVar reads the one usual idiom for a script\'s own folder, and nothing that may name another', () => {

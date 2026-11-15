@@ -4538,6 +4538,11 @@ const MC_TEXT = [
   'fi',
   'source "$HERE/catch-all.sh"',
   'repo="${1:-}"',
+  // mod-kit's pipeline splits a test at its ||, reading `"$repo" == --* ]]` as a command (joinTests).
+  'if [[ -z "$repo" || "$repo" == --* ]]; then',
+  '  echo "Usage: milestone-candidates.sh <owner/name> --like \\"<the idea\'s title>\\"" >&2',
+  '  exit 2',
+  'fi',
   'shift',
   'like=""',
   'closed_since=""',

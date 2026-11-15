@@ -62,6 +62,7 @@ import {
   type RunCommand,
   closedScripts,
   trapBodies,
+  joinTests,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -579,11 +580,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       readings.set(s, { read: await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd, home: at.home }) })
       continue
     }
-    const own = (await $.modkit.pipeline({ command: s.text, cwd, home: at.home })) as readonly RunCommand[]
+    const own = (await $.modkit.pipeline({ command: joinTests(s.text), cwd, home: at.home })) as readonly RunCommand[]
     const later = trapBodies(own)
     const text = later.length ? `${s.text}${s.text.endsWith('\n') ? '' : '\n'}${later.join('\n')}\n` : s.text
     const read = await $.modkit.writes({ command: text, cwd, home: at.home })
-    const commands = later.length ? ((await $.modkit.pipeline({ command: text, cwd, home: at.home })) as readonly RunCommand[]) : own
+    const commands = later.length ? ((await $.modkit.pipeline({ command: joinTests(text), cwd, home: at.home })) as readonly RunCommand[]) : own
     readings.set(s, { read, commands })
   }
   // #2924: a shell script that cannot write what it is handed (rules.ts closedScripts: every file its

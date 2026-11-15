@@ -1917,6 +1917,91 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
   return out
 }
 
+/**
+ * A shell text with each `&&` and `||` inside a `[[ ... ]]` test written as `-a` and `-o` (#2924),
+ * for mod-kit's pipeline, which splits a test at them, so `[[ -z "$repo" || "$repo" == --* ]]` read as
+ * a command named by `$repo`. A test is found only from a `[[` standing as a word outside quotes to
+ * its `]]` on the same line, with no `;` and no command substitution of its own left open; a test
+ * that cannot be followed is left as written, so a command after a test is never joined into it.
+ */
+export const joinTests = (text: string): string => {
+  let out = ''
+  let quote = ''
+  let test = false
+  let depth = 0
+  // Where the open test starts, in the text and in what is written.
+  let from = 0
+  let kept = 0
+  for (let i = 0; i < text.length; ) {
+    const ch = text[i] as string
+    const next = text[i + 1] ?? ''
+    if (quote) {
+      if (ch === '\\' && quote === '"') {
+        out += ch + next
+        i += 2
+        continue
+      }
+      if (ch === quote) quote = ''
+      out += ch
+      i++
+      continue
+    }
+    if (ch === '\\') {
+      out += ch + next
+      i += 2
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      out += ch
+      i++
+      continue
+    }
+    if (!test) {
+      if (ch === '#' && (i === 0 || /\s/.test(text[i - 1] as string))) {
+        const end = text.indexOf('\n', i)
+        out += text.slice(i, end < 0 ? text.length : end)
+        i = end < 0 ? text.length : end
+        continue
+      }
+      if (ch === '[' && next === '[' && (i === 0 || /[\s;&|(!]/.test(text[i - 1] as string)) && /\s/.test(text[i + 2] ?? '')) {
+        test = true
+        depth = 0
+        from = i
+        kept = out.length
+        out += '[['
+        i += 2
+        continue
+      }
+      out += ch
+      i++
+      continue
+    }
+    if (ch === '\n' || (ch === ';' && depth === 0)) {
+      // Not followed to its end: written as it stands, and read on from here as any other text.
+      out = out.slice(0, kept) + text.slice(from, i)
+      test = false
+      continue
+    }
+    if (ch === '$' && next === '(') depth++
+    else if (ch === ')' && depth > 0) depth--
+    if (depth === 0 && ch === ']' && next === ']') {
+      test = false
+      out += ']]'
+      i += 2
+      continue
+    }
+    if (depth === 0 && ((ch === '&' && next === '&') || (ch === '|' && next === '|'))) {
+      out += ch === '&' ? '-a' : '-o'
+      i += 2
+      continue
+    }
+    out += ch
+    i++
+  }
+  return test ? out.slice(0, kept) + text.slice(from) : out
+}
+
 /** The usual idiom a script finds its own folder by (#2924), as one value in double quotes. */
 const OWN_FOLDER = /^"\$\(cd (?:-P )?"\$\(dirname "\$(?:\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE)"\)"(?: (?:>|&>) ?\/dev\/null(?: 2>&1)?)? && pwd(?: -P)?\)"$/
 
