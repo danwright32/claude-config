@@ -1015,6 +1015,96 @@ both "an ad hoc write from a file edited since the Apply is asked about" none as
 reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
 case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
 
+# A write from a file run on a project marked as test (claude-config#2643). In a work repository
+# every owner step on its test Supabase project is a SQL file its scripts write, and each run was
+# asked about, four times for one flow version on 2026-11-10. Dan, 2026-11-14: the test refs live in
+# a per project file the hook reads, .claude/supabase-test-projects beside the supabase folder, and
+# such a run passes silently, with no notice. Anything the file cannot vouch for asks as before: the
+# file missing, unreadable or holding a line that is not a ref, a project not on it, no link, an
+# inline write, a push, any target flag, or anything else in the command. Every ref is invented.
+# The list is trusted only as git has committed it, so a session that adds a live ref to it is asked
+# about, and an Edit or Write of the list is itself held (the coordinator's review of #2643).
+TESTP="$APPLY/testproj"
+mkdir -p "$TESTP/supabase/.temp" "$TESTP/.claude"
+printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
+LIST="$TESTP/.claude/supabase-test-projects"
+TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null)
+"${TESTP_GIT[@]}" init -q
+commit_list() {  # commit_list <printf format>: the list holding that text, committed
+  printf "$1" > "$LIST"
+  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects && "${TESTP_GIT[@]}" commit -q -m list
+}
+LIST_TEXT='# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n'
+commit_list "$LIST_TEXT"
+printf 'update a set note = 1 where id = 7;\n' > "$TESTP/carry.sql"
+CARRY='supabase db query --linked --yes -f carry.sql'
+both "a write from a file on a project marked as test passes (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+both "the same run after a cd to the project passes (#2643)" none allow "$(apply_payload "cd $TESTP && supabase db query --linked -f $TESTP/carry.sql" "$APPLY/elsewhere" s1 "$NONE_T")"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")"
+case "$r" in
+  *systemMessage*|*permissionDecisionReason*) check "a run on a test project passes with no notice and no reason shown (#2643)" "output: ${r:0:300}" ;;
+  *) check "a run on a test project passes with no notice and no reason shown (#2643)" ok ;;
+esac
+both "an inline write on a test project is still asked about (#2643)" none ask "$(apply_payload "supabase db query --linked --yes 'update a set note = 1'" "$TESTP" s1 "$NONE_T")"
+both "a file run on a test project with a statement beside it is asked about (#2643)" none ask "$(apply_payload "$CARRY 'delete from a'" "$TESTP" s1 "$NONE_T")"
+both "a file run on a test project beside another command is asked about (#2643)" none ask "$(apply_payload "$CARRY && rm -f note.txt" "$TESTP" s1 "$NONE_T")"
+both "a file run naming --db-url from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --yes --db-url postgresql://x -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a file run with --local from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --local -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a file run with --linked=false from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --linked=false -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a push on a test project is still asked about (#2643)" none ask "$(apply_payload 'supabase db push --linked --yes' "$TESTP" s1 "$NONE_T")"
+printf 'liveprojectref000009' > "$TESTP/supabase/.temp/project-ref"
+both "a file run on a project not marked as test is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")" reason)"
+case "$reason" in *liveprojectref000009*supabase-test-projects*) check "the question names the project and the test list it is not on (#2643)" ok ;; *) check "the question names the project and the test list it is not on (#2643)" "reason: ${reason:0:400}" ;; esac
+rm "$TESTP/supabase/.temp/project-ref"
+both "a file run from a checkout linked to no project is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+printf 'liveprojectref000009' > "$TESTP/supabase/.temp/project-ref"
+# A live ref added to the list and not committed is not trusted, nor is any other uncommitted edit.
+printf "$LIST_TEXT"'liveprojectref000009\n' > "$LIST"
+both "a live ref added to the list without a commit is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")" reason)"
+case "$reason" in *committed*) check "the question says the list differs from what git has committed (#2643)" ok ;; *) check "the question says the list differs from what git has committed (#2643)" "reason: ${reason:0:400}" ;; esac
+printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
+printf "$LIST_TEXT"'# a note\n' > "$LIST"
+both "a test ref in a list with any uncommitted edit is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+commit_list "$LIST_TEXT"
+both "the list as committed again passes (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+UNTRACKED="$APPLY/untracked"
+mkdir -p "$UNTRACKED/supabase/.temp" "$UNTRACKED/.claude"
+printf 'testprojectref000001' > "$UNTRACKED/supabase/.temp/project-ref"
+printf "$LIST_TEXT" > "$UNTRACKED/.claude/supabase-test-projects"
+printf 'update a set note = 1 where id = 7;\n' > "$UNTRACKED/carry.sql"
+both "a list in a checkout git does not track is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$UNTRACKED" s1 "$NONE_T")"
+git -C "$UNTRACKED" init -q
+both "a list git has never committed is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$UNTRACKED" s1 "$NONE_T")"
+mv "$LIST" "$TESTP/.claude/away"
+both "a file run with no test list is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+mkdir "$LIST"
+both "a test list that is a folder is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+rmdir "$LIST"
+commit_list 'testprojectref000001\nnot a ref; drop table a\n'
+both "a committed test list holding a line that is not a ref is asked about, the good line included (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+commit_list 'testprojectref000001 \n'
+both "a ref with trailing space on its line still reads as that ref (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+commit_list '\xff\xfe\n'
+both "a committed test list that is not text is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+rm "$TESTP/.claude/away"; commit_list "$LIST_TEXT"
+# An Edit or Write of the list is held like a database write; other files, and a file of that name
+# outside a .claude folder, are not.
+file_payload() {  # file_payload <tool> <file path>: an edit of that file, as Claude Code sends it
+  python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": {"file_path": sys.argv[2], "old_string": "a", "new_string": "b", "content": "liveprojectref000009"}}))' "$1" "$2"
+}
+expect "an Edit of a checkout's test project list is asked about (#2643)" ask "$(file_payload Edit "$LIST")"
+expect "a Write of a checkout's test project list is asked about (#2643)" ask "$(file_payload Write "$LIST")"
+expect "a MultiEdit of a checkout's test project list is asked about (#2643)" ask "$(file_payload MultiEdit "$LIST")"
+expect "a Write of the list by a relative path is asked about (#2643)" ask "$(file_payload Write .claude/supabase-test-projects)"
+expect "an Edit of another file in .claude is not (#2643)" none "$(file_payload Edit "$TESTP/.claude/settings.json")"
+expect "a Write of a file of that name outside .claude is not (#2643)" none "$(file_payload Write "$TESTP/notes/supabase-test-projects")"
+expect "a Write of a migration file is not, as before (#2643)" none "$(file_payload Write "$TESTP/supabase/migrations/003.sql")"
+# The read hook still decides a read from a file there, and this hook says nothing about it.
+printf 'select count(*) from a;\n' > "$TESTP/look.sql"
+both "a read from a file on a test project is the read hook's, as before (#2643)" allow none "$(apply_payload 'supabase db query --linked -f look.sql' "$TESTP" s1 "$NONE_T")"
+
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
 # drift into a shape the hooks never let through (L562).
 SKILL_MD="$DIR/../skills/db-apply/SKILL.md"
@@ -1089,6 +1179,31 @@ both "a heredoc write to a file no query reads is asked about" none ask "$(apply
 both "a heredoc write to a file not named .sql is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fourteen.txt <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fourteen.txt')" "$PROJ" s1 "$NONE_T")"
 both "python reaching a module through an allowed one is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fifteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fifteen.sql | python3 -c "import statistics; statistics.sys.modules"')" "$PROJ" s1 "$NONE_T")"
 both "python taking a module from an allowed one by import is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/sixteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/sixteen.sql | python3 -c "from json import codecs; print(codecs)"')" "$PROJ" s1 "$NONE_T")"
+# python3 -c puts the folder it runs in first on the import path, so a module file there runs in
+# place of the standard one the program imports, directly or through another (#2969). Read where the
+# step will run: after a cd, or where the command starts. With -I that folder is never on the path.
+SHADOW="$APPLY/shadow"; mkdir -p "$SHADOW" "$APPLY/deep" "$APPLY/plainfolder"
+printf 'import os\n' > "$SHADOW/json.py"
+printf 'import os\n' > "$APPLY/deep/fractions.py"
+printf 'notes\n' > "$APPLY/plainfolder/notes.txt"
+PY_STEP='| python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+both "python run beside a json.py of its own is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twenty.sql <<EOF\nselect 1;\nEOF\n'"cd $SHADOW && supabase db query --linked -f @NOTES@/twenty.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+both "and where the command starts beside one, with no cd (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentyone.sql <<EOF\nselect 1;\nEOF\n'"supabase db query --linked -f @NOTES@/twentyone.sql $PY_STEP")" "$SHADOW" s1 "$NONE_T")"
+both "and beside a module only an allowed one imports, fractions under statistics (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentytwo.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/deep && supabase db query --linked -f @NOTES@/twentytwo.sql | python3 -c \"import statistics,sys; print(statistics.mean([1]))\"")" "$PROJ" s1 "$NONE_T")"
+both "python after a cd this check cannot follow is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentythree.sql <<EOF\nselect 1;\nEOF\n'"cd - && supabase db query --linked -f @NOTES@/twentythree.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+both "(control) python run with -I beside a json.py is approved, the folder never on its path (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfour.sql <<EOF\nselect 1;\nEOF\n'"cd $SHADOW && supabase db query --linked -f @NOTES@/twentyfour.sql | python3 -I -c \"import json,sys; print(len(json.load(sys.stdin)))\"")" "$PROJ" s1 "$NONE_T")"
+both "(control) python run in a folder holding no module is approved (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfive.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/plainfolder && supabase db query --linked -f @NOTES@/twentyfive.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+# The shell's cd .. is logical: after cd through a link it goes to the link's parent, never the
+# parent of where the link points (the lessons review of 1029c9f).
+mkdir -p "$APPLY/logical" "$APPLY/plainfolder/sub"
+printf 'import os\n' > "$APPLY/logical/json.py"
+ln -sfn "$APPLY/plainfolder/sub" "$APPLY/logical/hop"
+both "python after cd through a link and back up, beside a json.py, is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentyseven.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/logical/hop && cd .. && supabase db query --linked -f @NOTES@/twentyseven.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+# PYTHONPATH puts its folders ahead of the standard library too; the one here holds no module, so
+# the hooks' own python is unchanged by it, and only the rule can make the step ask.
+export PYTHONPATH="$APPLY/plainfolder"
+both "python run while PYTHONPATH is set is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentysix.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/plainfolder && supabase db query --linked -f @NOTES@/twentysix.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+unset PYTHONPATH
 both "python calling type on a stream is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/seventeen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/seventeen.sql | python3 -c "import sys; type(sys.stdin.buffer.raw)"')" "$PROJ" s1 "$NONE_T")"
 both "a proxy setting assigned by the command is asked about" none ask "$(apply_payload "$(scripted $'HTTPS_PROXY=http://127.0.0.1:9; cat > @NOTES@/eighteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/eighteen.sql')" "$PROJ" s1 "$NONE_T")"
 both "a query with its statement in its words, piped, is still left to the usual check" none none "$(apply_payload 'supabase db query --linked "select 1" 2>&1 | head -5' "$PROJ" s1 "$NONE_T")"
@@ -1116,7 +1231,7 @@ case "$(field "$r" reason)" in *db-apply-approval.py*) check "the question names
 expect "apply_migration is still asked about" ask "$(payload "$MIG_TOOL" "alter table a add column note text")"
 expect "merge_branch is still asked about" ask "$(tool_payload "${SB}merge_branch" '{"branch_id": "b9"}')"
 
-# --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
+# --- the settings run it for Bash, Edit, Write, MultiEdit and every MCP tool, and refuse on failure
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
 d = json.load(open(sys.argv[1]))
@@ -1134,15 +1249,17 @@ want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_
         "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
         "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch",
         # Since #2660: an edge function deploy, asked about when it turns JWT verification off.
-        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction"]
-never = ["Edit", "Write", "Read", "Monitor", "Agent"]
+        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction",
+        # Since #2643: an Edit or Write of the test project list of a checkout.
+        "Edit", "Write", "MultiEdit"]
+never = ["Read", "Monitor", "Agent", "Glob"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":
     bad.append("onFailure is not block, so a crash or a timeout would let a write through unasked")
 print("ok" if not bad else "matcher %s: %s" % (m, ", ".join(bad)))
 PY
 )"
-check "the settings run the hook for Bash and every MCP tool, blocking on failure" "$wiring"
+check "the settings run the hook for Bash, Edit, Write, MultiEdit and every MCP tool, blocking on failure" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
