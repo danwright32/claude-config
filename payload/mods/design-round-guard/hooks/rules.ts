@@ -332,7 +332,8 @@ const dottedNames = function* (text: string): Generator<string> {
  * readings are given.
  */
 export const mentionedLookFiles = (text: string): string[] => {
-  const out: string[] = []
+  // A set, first place first: a list searched once for each name took 2.9 s for 40,000 names (#2948).
+  const out = new Set<string>()
   for (const raw of dottedNames(text)) {
     // `open(app/page.tsx` is a call around a name and `x(1)/page.tsx` a folder holding parentheses,
     // and the spelling cannot tell them apart, so both readings are kept and either holds. Only an
@@ -349,10 +350,55 @@ export const mentionedLookFiles = (text: string): string[] => {
           break
         }
       }
-      if (shapeKind(word) !== null && !out.includes(word)) out.push(word)
+      if (shapeKind(word) !== null) out.add(word)
     }
   }
-  return out
+  return [...out]
+}
+
+/**
+ * How much of a text one reading takes before it pauses (#2948): 256 KB, about 5 ms of either name
+ * reader. Measured 2026-11-15 on Claude Code 2.1.325, a hook reading for 7 s in stretches of 50 ms
+ * with a `$.clock.now()` between them kept the hooks worker answering its heartbeat, where the same
+ * 7 s in one stretch lost the worker (tests/test-large-git-apply-engine.sh holds both).
+ */
+export const PIECE_CHARS = 256 * 1024
+
+/**
+ * The names `read` finds in `text`, read a piece at a time with `pause` awaited between pieces
+ * (#2948), so a patch or a program of any size never holds the hooks worker past its heartbeat. A
+ * piece is cut only at whitespace, where no name runs on, so each name is found exactly as one
+ * reading finds it, first place first; a run with no whitespace longer than a piece (a font inlined as
+ * base64) stays whole in its piece. A pause that fails fails the reading. The hooks pass a call to
+ * the engine's clock (register.ts pauseTurn), which the worker answers its heartbeat during.
+ */
+export const namesInPieces = async (text: string, read: (piece: string) => string[], pause: () => Promise<void>, size: number = PIECE_CHARS): Promise<string[]> => {
+  const found = new Set<string>()
+  for (let at = 0; at < text.length; ) {
+    let end = Math.min(text.length, at + size)
+    while (end < text.length && !/\s/.test(text[end] as string)) end++
+    for (const name of read(text.slice(at, end))) found.add(name)
+    at = end
+    if (at < text.length) await pause()
+  }
+  return [...found]
+}
+
+/** How long a hook reads before it pauses, where its work comes in steps of unknown cost (#2948). */
+export const PACE_MS = 50
+
+/**
+ * A step to await after each piece of work in a loop (#2948): it pauses once `stretchMs` have passed
+ * by `now` since the last pause, and otherwise returns at once, so a loop of many cheap steps pays
+ * for few pauses and one of costly steps never holds the hooks worker past its heartbeat.
+ */
+export const pacer = (now: () => number, pause: () => Promise<void>, stretchMs: number = PACE_MS): (() => Promise<void>) => {
+  let since = now()
+  return async () => {
+    if (now() - since < stretchMs) return
+    await pause()
+    since = now()
+  }
 }
 
 /**
@@ -1789,14 +1835,28 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
  * changing ones: a mod's plain .ts hook file may build what it draws (#1275), and a program that
  * writes files without naming every one may write such a file it names. Judged as a shell write to
  * it is, read again once the command ran, so one only read passes.
+ *
+ * Each name is what the one pattern `/[\w./~@+-]+\.[cm]?ts\b/g` matched, found in linear time
+ * (#2948): that pattern, tried from every place in a long run of its characters holding no such
+ * ending (a font inlined as base64), read to the run's end and back each time, 4 to 5 s for 80,000
+ * characters. Its match in a run starts where the run does and ends at the run's last `.ts`, `.cts`
+ * or `.mts` that no word character follows, with something before the dot; so that end is looked for
+ * once, from the run's own end.
  */
 export const mentionedModHookFiles = (text: string): string[] => {
-  const out: string[] = []
-  for (const m of text.matchAll(/[\w./~@+-]+\.[cm]?ts\b/g)) {
-    const word = m[0].replace(/^[.]+(?=[^./])/, '')
-    if (isModHookTs(word) && !out.includes(word)) out.push(word)
+  const out = new Set<string>()
+  for (const m of text.matchAll(/[\w./~@+-]+/g)) {
+    const run = m[0]
+    for (let e = run.lastIndexOf('ts') + 2; e >= 2; e = run.lastIndexOf('ts', e - 3) + 2) {
+      if (e < run.length && /\w/.test(run[e] as string)) continue
+      const dot = run[e - 3] === '.' ? e - 3 : (run[e - 3] === 'c' || run[e - 3] === 'm') && run[e - 4] === '.' ? e - 4 : -1
+      if (dot < 1) continue
+      const word = run.slice(0, e).replace(/^[.]+(?=[^./])/, '')
+      if (isModHookTs(word)) out.add(word)
+      break
+    }
   }
-  return out
+  return [...out]
 }
 
 

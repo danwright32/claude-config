@@ -1,0 +1,6 @@
+{
+  "name": "large-apply-probe",
+  "version": "0.1.0",
+  "description": "A test fixture for tests/test-large-git-apply-engine.sh: a stand-in hook that reads slowly, all at once or in pieces, so the suite is seen to catch a hooks worker that stops answering, and to see that a reading in pieces keeps it answering (#2948).",
+  "author": { "name": "Dan Wright" }
+}
