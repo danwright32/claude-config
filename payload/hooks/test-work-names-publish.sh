@@ -697,6 +697,28 @@ run "pwd() { cat named-2997.md; }; gh issue create --repo danwright-test/public-
 check "#2997 and so is pwd: $out" refused
 RUN_DIR="$CLEANGIT" run "f() { :; }; GH_TOKEN=x gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
 check "#2997 (control) a function of another name and an assignment that changes no lookup leave git as git: $out" passed
+# The checkout and a cat's files are read before the command runs, so the reading holds only while
+# nothing else the command runs can change them first (the lessons review of 02a97db): a git command
+# other than a lookup, a gh command that is not a posting one, a script, or any program not shown to
+# change nothing.
+RUN_DIR="$CLEANGIT" run "git remote set-url origin https://example.com/garden.git && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 a remote lookup after the command sets the remote is refused: $out" refused
+check "#2997 saying what else it runs can change it: $out" has "$out" "can change"
+RUN_DIR="$CLEANGIT" run "git checkout -b topic-7 && gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
+check "#2997 and a branch lookup after it makes a branch: $out" refused
+RUN_DIR="$CLEANGIT" run "gh pr checkout 5 && gh pr comment 5 --repo danwright-test/public-notes --body \"\$(git branch --show-current)\""
+check "#2997 and after a gh command that changes the branch: $out" refused
+RUN_DIR="$CLEANGIT" run "./release.sh && gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 and after a script, which can run git: $out" refused
+run "printf hello > clean-2997.md; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+check "#2997 and cat of a file the command writes first: $out" refused
+RUN_DIR="$CLEANGIT" run "echo start; cd \"$CLEANGIT\" && gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x || true"
+check "#2997 (control) echo, a cd and true change nothing a lookup reads: $out" passed
+RUN_DIR="$CLEANGIT" run "git push -u origin HEAD && gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+a body written here
+EOF
+)\""
+check "#2997 (control) and a push does not stop a heredoc body, which reads nothing: $out" passed
 # cat's output is the file's text, which is read and judged wherever it runs (the lessons review of
 # 028d7e6): here from a directory whose path names nothing.
 printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"

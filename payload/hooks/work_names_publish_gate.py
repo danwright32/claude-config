@@ -32,7 +32,9 @@ program, whose output cannot be read before the command runs, is refused whereve
 counts as one of those programs only as the shell finds it (trusted_names): the bare word, in a
 command that defines no function or alias of it and changes neither PATH, git's environment nor
 anything else that decides which program it runs; ./git, a quoted cat or a git function is another
-program.
+program. A git lookup or a cat is read before the command runs, so it is refused as cannot be told
+when anything else the command runs could change what it reads first (changes_before): a git
+checkout or remote set-url, gh pr checkout, a script, a file written.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -1411,6 +1413,58 @@ def trusted_names(command, depth=0):
     return out
 
 
+# What runs beside a posting and changes nothing a git lookup or a cat reads (the lessons review of
+# 02a97db): the gh commands that only post, gh api, and a few shell words that do nothing. A git
+# lookup and a cat are read before the command runs, so anything else in it may change what they
+# read first: a git checkout, switch, remote set-url or config, gh pr checkout or repo sync, a script,
+# a build, a file written. That is refused as cannot be told (changes_before).
+POSTS_ONLY = (JUDGED - REPO_CREATE - {REPO_SYNC}) | {("auth", "token"), ("auth", "status")}
+NO_EFFECT = frozenset({"true", "false", ":", "fi", "done", "esac"})
+# Setting shell variables changes no file and no checkout (the ones that change which program a name
+# runs are trusted_names' to refuse): a command of assignments alone, or export and the like given
+# assignments and names.
+SETS_VARS = frozenset({"export", "local", "declare", "typeset", "readonly"})
+VAR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _sets_vars(words):
+    """Whether one command's words only set shell variables."""
+    if words[0] in SETS_VARS:
+        return all(ASSIGNED.match(w) or VAR_NAME.match(w) for w in words[1:])
+    return all(ASSIGNED.match(w) for w in words)
+
+
+def changes_before(command, trusted, depth=0):
+    """The first command in command, as written, that can change what a git lookup or a cat reads
+    before they run, or None when every one is shown to change nothing: a program prints() trusts
+    (trusted, from trusted_names), a cd, pushd or popd (followed as where the command runs), a gh
+    command in POSTS_ONLY or gh api, or one of NO_EFFECT; none of them writing a file. A string an
+    eval, sh -c or env -S runs is read the same way. Raises scan._sw.Unreadable."""
+    for _d, text in scan._sw.commands(command):
+        fn = DEFINES.match(text)
+        if fn:  # a definition runs nothing; the body's first command, cut with it, is judged as run
+            text = text[fn.end():].lstrip(" \t\n{(")
+        words = scan._sw.command_words(text)
+        if not words or text.strip() in ("}", ")"):
+            continue
+        writes = [p for p, _a, _s in scan.file_writes(text) if not p.startswith("/dev/")]
+        wrap = scan._sw.wrapped_words(words)
+        if wrap and not writes:
+            if wrap[1] is None or depth >= scan._sw.MAX_DEPTH:
+                return text.strip()
+            inner = changes_before(wrap[1], trusted, depth + 1)
+            if inner:
+                return inner
+            continue
+        gh = scan._sw.gh_command(words)
+        inert = (words[0] in CHANGES_DIR or words[0] in NO_EFFECT or _sets_vars(words)
+                 or (gh is not None and (gh[0] == "api" or gh[:2] in POSTS_ONLY))
+                 or prints(text, trusted) != UNREAD)
+        if writes or not inert:
+            return text.strip()
+    return None
+
+
 class Ran(str):
     """How a program a substitution runs is shown in a refusal; judged by what it prints, not a value.
     printed is what prints() said it prints."""
@@ -1502,16 +1556,15 @@ def _group_runs(texts, depth, trusted):
     return runs, moved
 
 
-def substitution_runs(text, command):
+def substitution_runs(text, trusted):
     """[(command, what it prints, moved)] for each command a substitution in text runs that prints
     more than its own words (prints), moved when something in its substitution can take it elsewhere
     (CHANGES_DIR, MOVES). The commands of an unquoted heredoc body's substitutions count
     (claude-config#2053), and so do those of a string a sh -c, bash -c or eval there runs. A
     substitution that is a cd's directory is left out: its output is where the command runs, which
-    is judged as that, not posted. A program is taken for what its name says only where the whole
-    command, given as command, leaves that name running it (trusted_names). Raises
+    is judged as that, not posted. A program is taken for what its name says only when its name is
+    in trusted, the names the whole command leaves running what they name (trusted_names). Raises
     scan._sw.Unreadable."""
-    trusted = trusted_names(command)
     parts, heredocs, spans = [], [], []
     scan._sw.commands(text, heredocs=heredocs, parts=parts, spans=spans)
     regions = []
@@ -1650,7 +1703,9 @@ def variables_posted(text, place):
         return out
     # Each program a substitution runs, by where it runs (#2997).
     try:
-        runs = substitution_runs(judged, text)
+        trusted = trusted_names(text)
+        runs = substitution_runs(judged, trusted)
+        changer = changes_before(text, trusted) if any(p in (FILES, PLACE) for _c, p, _m in runs) else None
     except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
         return out + [(Ran("its command substitutions"), None, "could not be read (%s: %s)"
                        % (type(e).__name__, e))]
@@ -1668,6 +1723,9 @@ def variables_posted(text, place):
                                      "takes it, which this check does not follow"))
         elif not place.cwd:
             out.append((shown, None, "runs it in a directory this check cannot follow the command to"))
+        elif changer and scan._sw.command_words(command)[:1] != ["pwd"]:
+            out.append((shown, None, "reads what another program this command runs can change before it "
+                                     "does, while this check reads it only as it is now"))
         else:
             try:
                 value = cat_files(command, place.cwd) if printed == FILES else place_text(place.cwd)
