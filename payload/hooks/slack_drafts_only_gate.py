@@ -3411,8 +3411,6 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             binds nothing, #2912), and ends the walk where the body sources a file, binds a name
             through a variable, or calls a function of s that does. A function of s that evaluates
             its own argument is read as a sourced file's is (sh_evaluator, #2912);
-          - the walk's end at an eval of text it cannot read is recorded ("unread"): past it a file
-            run by a path built from a variable is refused, as a sourced one is (#2912);
           - a pipeline's commands and a backgrounded one run in shells of their own, as a subshell's
             do, and set nothing here (unless the script turns on lastpipe);
           - a sourced file whose path is worked out leaves every name it binds (it, or a file it
@@ -3490,7 +3488,6 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         self_evals.add(k)
         loops = self.sh_for_loops(s, items, blocks)
         allnames |= {lp[2] for lp in loops}  # so what a call or a sourced file binds is asked of them too
-        unread = []  # (where, the command, the function) of a call the walk ends at, refused (#2912)
         # A loop whose name something in its body may set has values the walk cannot trust (spoiled),
         # and one a sourced path was worked out from (used): setting a used one ends the walk.
         spoiled, used = set(), set()
@@ -3504,10 +3501,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
         # What the body of the function of s named name does by itself: (the names it can bind,
         # whether it sources a file or binds a name through a variable, the functions of s it
-        # calls, whether it evaluates text the gate cannot read). Worked out once for each function.
+        # calls). Worked out once for each function.
         def body_of(name):
             if name not in own:
-                bound, more, callees, unreadable = set(), False, [], False
+                bound, more, callees = set(), False, []
                 for o, c in fbody.get(name, ()):
                     body = s[items[o][1]["start"]:items[c][1]["end"]]
                     # NAME=value in front of one of its commands sets NAME for that command alone (#2912).
@@ -3519,40 +3516,36 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                             continue
                         h = head_of(k)
                         words = self.words_of(self.rest_of(h)[0])
-                        unsafe = self.sh_eval_unsafe(h, evals, items[k][0][0])
-                        if self.sh_source_target(h) is not None or self.sh_indirect(h) or unsafe:
+                        if self.sh_source_target(h) is not None or self.sh_indirect(h) or \
+                                self.sh_eval_unsafe(h, evals, items[k][0][0]):
                             more = True
-                            # An eval of anything not written out, or a call handing an evaluating
-                            # function what the gate cannot read.
-                            unreadable = unreadable or unsafe or self.sh_evals_unread(h)
                         elif words and words[0] in fbody:
                             callees.append(words[0])
                         for lit in self.sh_eval_call(h, evals) or ():
                             callees += [w[0] for w in (self.sw.command_words(self.sw.command_rest(x)[0])
                                                        for x in self.sh_lit_heads(lit, items[k][0][0]) or ())
                                         if w and w[0] in fbody]
-                own[name] = (bound, more, callees, unreadable)
+                own[name] = (bound, more, callees)
             return own[name]
 
         def calls(name):
             """(the names a call to the function of s named name can bind, whether it can do more than
-            that: source a file, bind a name through a variable, or call a function of s that does,
-            and whether that more is evaluating text the gate cannot read)."""
+            that: source a file, bind a name through a variable, or call a function of s that does)."""
             # A call takes in every function it reaches, each once. Followed again down every path
             # of calls to it, a chain of functions that each call the next twice cost two to the
             # power of its length, and the merge helper's own functions were walked 2,430 times for
             # one judgement (claude-config#2576). What is reached is the same either way.
             if name not in reached:
-                bound, more, unreadable, todo, seen = set(), False, False, [name], set()
+                bound, more, todo, seen = set(), False, [name], set()
                 while todo:
                     f = todo.pop()
                     if f in seen:
                         continue
                     seen.add(f)
-                    b, m, callees, u = body_of(f)
-                    bound, more, unreadable = bound | b, more or m, unreadable or u
+                    b, m, callees = body_of(f)
+                    bound, more = bound | b, more or m
                     todo += callees
-                reached[name] = (bound, more, unreadable)
+                reached[name] = (bound, more)
             return reached[name]
 
         def effects(d, head, p, run, when=None):
@@ -3575,15 +3568,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             rest, _ = self.rest_of(head)
             words = self.words_of(rest)
             if self.sh_indirect(head):
-                if self.sh_evals_unread(head):
-                    unread.append((p["start"], head, "eval"))  # see below (#2912)
                 return "dead"
-            # A call to a function a sourced file defined to evaluate its argument here (hang_wait):
-            # what it evaluates is followed as though written in its place (claude-config#2538).
+            # A call to a function a sourced file, or s itself (#2912), defined to evaluate its
+            # argument here (hang_wait): what it evaluates is followed as though written in its place
+            # (claude-config#2538).
             if self.sh_eval_unsafe(head, evals, d):
-                # Past it a file run by a path built from a variable is refused, as a sourced one is,
-                # rather than passed unread behind the #2683 switch (sh_past_unread, #2912).
-                unread.append((p["start"], head, words[0] if words else "eval"))
                 return "dead"
             for lit in self.sh_eval_call(head, evals) or ():
                 for h in self.sh_lit_heads(lit, d):
@@ -3618,10 +3607,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             named = [x for x in words if x in fbody] if words[:1] == ["trap"] else \
                 words[:1] if words and words[0] in fbody else []
             for f in named:
-                b, more, unreadable = calls(f)
+                b, more = calls(f)
                 if more:
-                    if unreadable:
-                        unread.append((p["start"], head, f))
                     return "stop"
                 if b & own_names and spoil(b, p["start"]):
                     return "dead"
@@ -3833,13 +3820,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # bind none of the names that last; dropping one can change those paths, so this goes round
         # until it settles.
         while True:
-            # The for loops the walk followed, whose values a sourced path is worked out from, the
-            # call it ended at for evaluating what the gate cannot read, and the functions of s and
-            # of the files it sources that evaluate an argument, for the gate's judging (#2912).
+            # The for loops the walk followed, whose values a sourced path is worked out from, and the
+            # functions of s and of the files it sources that evaluate an argument, for the gate's
+            # judging (#2912).
             known = {"regions": {}, "top": top, "lost": lost, "bodies": bodies,
                      "each": [lp for lp in loops if lp[5] <= top and lp[0] not in spoiled
                               and not any(a <= lp[4] < b for a, b in bodies)],
-                     "unread": unread[0] if unread else None, "evals": evals}
+                     "evals": evals}
             for n, r in regions.items():
                 for a, b, v in r:
                     known["regions"].setdefault(n, []).extend((x, y, v) for x, y in carve(a, b))
@@ -5654,9 +5641,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # A file sourced by such a path is refused whatever the switch says (Dan, 2026-11-13: "Do all
         # of it, switch on", claude-config#2538): it runs in this shell, where nothing else reads it.
         # A file run by one stays behind the switch.
-        # And a file run past where the walk of the script's variables ended at an eval of text the
-        # gate cannot read, which is what made the path unknown (#2912).
-        if not unworked_paths_refused() and verb != "sources" and not self.sh_past_unread():
+        if not unworked_paths_refused() and verb != "sources":
             return None
         words = self.raw_words(text)
         if slot == "operand":

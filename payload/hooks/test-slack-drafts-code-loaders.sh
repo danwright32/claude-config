@@ -635,13 +635,19 @@ refused "#2912 so a file that posts, sourced past it, is read and refused"
 says "#2912 as a post found" "REFUSED: this command posts to Slack"
 run_sp "bash evnone.sh"
 allowed "#2912 the control: an evaluating function never called changes nothing"
-for s in evn evrun evcat evplain evif evvia evlocal; do
+for s in evn evif evvia evlocal; do
   run_sp "bash $s.sh"
-  read_refused "#2912 a path past an eval of text the gate cannot read is refused: $s"
+  read_refused "#2912 a sourced path past an eval of text the gate cannot read is refused: $s"
   says "#2912 and it says the check could not be made: $s" "REFUSED: the gate could not check whether this command posts to Slack"
 done
-run_sp "bash evrun.sh"
+run_sp "bash evn.sh"
 says "#2912 and the refusal names the call the walk ended at" 'ev "$2"'
+# A file RUN past it (evrun, evcat, evplain) stays behind the #2683 switch, as the gate suite pins for
+# `eval "$1"` and hang_wait "$cond": refusing it is Dan's decision (2026-11-10, "measure first").
+for s in evrun evcat evplain; do
+  SLACK_GATE_UNWORKED_PATHS=refuse run_sp "bash $s.sh"
+  refused "#2912 switched on, a file run past an eval the gate cannot read is refused: $s"
+done
 printf '%s\n' "$SPL" "$SPE" 'ev "[ \"\${X:-0}\" -gt 3 ]"' '. "$LIB/a.sh"' > "$SP/evesc.sh"
 printf '%s\n' "$SPE" 'ev "bash \"lib/post.sh\""' > "$SP/evescp.sh"
 run_sp "bash evesc.sh"

@@ -20,10 +20,9 @@ shapes were refused that way however quiet the files they named:
     written out (in double quotes too, with every $, ` and " escaped) is followed as though written
     in its place, and what it evaluates is judged as a command line, so `ev "bash post.sh"` is
     refused as the post it is, through hang_wait too, where before it passed (sh_eval_text_reason).
-    A call whose argument the gate cannot read, of a function that evaluates anything else, or a
-    plain eval of what it cannot read, still ends the walk, and past it a file run by a path built
-    from a variable is refused as a sourced one is, whatever the #2683 switch says, since the walk's
-    end is what made it unknown (sh_past_unread). The call itself is judged as `eval "$2"` always was.
+    A call whose argument the gate cannot read still ends the walk: a sourced path past it is
+    refused, and a file run past it stays behind the #2683 switch, which the gate suite pins for
+    exactly this shape (Dan, 2026-11-10: "measure first").
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/code-loaders.py's, so the methods use the Judge's own readers (rest_of, words_of,
@@ -146,33 +145,5 @@ def make(sh_special, sh_param):
                     return f"{text.strip()[:120]} evaluates {lit!r} in this shell, and that posts: {inner}"
             return None
 
-        def sh_evals_unread(self, head):
-            """Whether a command is eval of text not written out whole: a variable, a substitution,
-            anything sh_literal_word does not read as one string. A redirection's target is not
-            evaluated, so it is left out."""
-            words = self.raw_words(head)
-            if not words or words[0] != "eval":
-                return False
-            k, rest = 1, []
-            while k < len(words):
-                if re.fullmatch(r"\d*(?:[<>]&?|>>|<<<?|&>>?)", words[k]):
-                    k += 2  # the redirection and its target
-                    continue
-                if not re.match(r"\d*(?:[<>]|&>)", words[k]):
-                    rest.append(words[k])
-                k += 1
-            return any(self.sh_literal_word(w) is None for w in rest)
-
-        def sh_past_unread(self):
-            """Whether the command being read comes after the place where the walk of the text's
-            variables ended at an eval of text the gate cannot read, directly or through a function
-            that evaluates it (sh_walk's "unread"): every variable past there is unknown because of
-            it, so a file run by a path built from one is refused whatever the #2683 switch says, as
-            a sourced one already is. The walk is worked out here, as unworked_path asks for it."""
-            ctx = self.shell
-            if ctx["at"] is None:
-                return False
-            hit = self.sh_ctx_known().get("unread")
-            return bool(hit) and ctx["at"] > hit[0]
 
     return ShWalkShapes
