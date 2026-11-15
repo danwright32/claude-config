@@ -7872,7 +7872,11 @@ SHA-256 of its repository and word (#2246), since a held command's word can pass
 character key limit; an answer kept under the earlier key form is still read for its week (#2256
 removes that read).
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
+session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
+to an absolute path: the mod then writes, reads and rotates its log and error file in that folder,
+and the weekly line's runner reads the same one (#2906). A relative path is refused, and nothing is
+written anywhere. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
 later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
 renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that
