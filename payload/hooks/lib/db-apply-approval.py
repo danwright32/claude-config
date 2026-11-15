@@ -448,11 +448,6 @@ def _only_reads(text, sw, strip, subs, also=()):
             and not any(w.startswith(GIT_ACTING) for w in words))
 
 
-def _reads_list_only(text, sw, strip):
-    """Whether one simple command, which names the list, only reads it (_only_reads)."""
-    return _only_reads(text, sw, strip, GIT_LIST_READS)
-
-
 def _git(folder, args, deadline):
     """(the CompletedProcess, None) or (None, why git could not be run in folder before deadline)."""
     left = deadline - time.monotonic()
@@ -524,7 +519,7 @@ def list_shell_change(command, cwd, sw, strip):
     then `git commit` made the project trusted with no question.
 
     A WRITE: any command naming the list (its file name, in any case, since macOS matches either)
-    that is not one only reading it (_reads_list_only), and a command that names it where no simple
+    that is not one only reading it (_only_reads), and a command that names it where no simple
     command of it does (a heredoc body, a string it cannot read). A COMMIT: a `git commit` whose
     checkout could add a line, other than a blank or a comment, to any list in it, from the index or
     the working tree; one only removing lines passes. In a checkout holding a list, a commit after
@@ -547,7 +542,7 @@ def list_shell_change(command, cwd, sw, strip):
     deadline = time.monotonic() + COMMIT_SECONDS
     for d, text, _, why, _ in records:
         if name in text.lower():
-            if why or not _reads_list_only(text, sw, strip):
+            if why or not _only_reads(text, sw, strip, GIT_LIST_READS):
                 return ("the command `" + _shown(text) + "` names " + TEST_LIST + ", the list of the test "
                         "Supabase projects of a checkout, and is not one that only reads it")
             rest = rest.replace(text, "", 1)
