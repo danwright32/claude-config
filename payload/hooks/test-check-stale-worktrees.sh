@@ -43,18 +43,29 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
 # --- the fake gh -----------------------------------------------------------
-# It answers the merged pull request list, which is the one question the check asks.
+# It answers the two questions the check asks: the merged pull request list, and the open one
+# (#2943), each already in the shape the check's --jq asks for.
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_CALLS"
 if [ -n "${GH_FAIL:-}" ]; then echo "gh: simulated failure" >&2; exit 1; fi
-cat "$GH_MERGED"
+case " $* " in
+  *" --state open "*)
+    if [ -n "${GH_OPEN_FAIL:-}" ]; then echo "gh: simulated failure reading open pull requests" >&2; exit 1; fi
+    cat "$GH_OPEN" ;;
+  *) cat "$GH_MERGED" ;;
+esac
 STUB
 chmod +x "$TMP/bin/gh"
 export GH_CALLS="$TMP/calls.log"
 export GH_MERGED="$TMP/merged.tsv"
-: >"$GH_MERGED"
+export GH_OPEN="$TMP/open.tsv"
+: >"$GH_MERGED"; : >"$GH_OPEN"
+# The Mac's own sleep record and session registry are never read: a suite run on its own, outside
+# the runner, would otherwise be judged by whatever the Mac is doing tonight (#2943).
+export CLAUDE_SLEEP_RECORD="$TMP/sleep/current.json"
+export CLAUDE_SESSION_REGISTRY_DIR="$TMP/sessions"
 
 OUT=""; RC=0
 run(){ : >"$GH_CALLS"; OUT="$(STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" "$@" 2>&1)"; RC=$?; }
@@ -147,7 +158,9 @@ else
   echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so whether a busy worktree is seen cannot be tested"
 fi
 check_eq "the merged PRs are read once for the whole run, not once per worktree" \
-  1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
+  1 "$(grep -c 'pr list --state merged' "$GH_CALLS" || true)"
+check_eq "#2943 and the open PRs once, not once per worktree" \
+  1 "$(grep -c 'pr list --state open' "$GH_CALLS" || true)"
 check_eq "it removes nothing without --remove, including the ones it called stale" 9 "$(ls "$WT" | wc -l | tr -d ' ')"
 
 # What a worktree costs to inspect is paid only by one that could be removed (#1247). Asking git
@@ -659,7 +672,8 @@ check_eq "#1521 its folder is gone" yes "$(jgone agent-fresh)"
 check_eq "#1521 its branch is kept" 0 "$(G -C "$JREPO" rev-parse -q --verify fix/700-fresh >/dev/null; echo $?)"
 check_not "#1521 no other worktree is judged, so none is named" "agent-other" "$OUT"
 check_eq "#1521 and the other landed one, aged and removable by the sweep, is left for the sweep" no "$(jgone agent-other)"
-check_eq "#1521 the merged pull requests are read once" 1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
+check_eq "#1521 the merged pull requests are read once" 1 "$(grep -c 'pr list --state merged' "$GH_CALLS" || true)"
+check_eq "#2943 and the open ones not at all: the caller has just merged this branch's own" 0 "$(grep -c 'pr list --state open' "$GH_CALLS" || true)"
 check "#1521 the summary counts the one worktree judged" "removed 1 of 1 worktree(s)" "$OUT"
 
 run --remove --just-merged "$JWT/agent-jdirty" "$JREPO"
@@ -685,6 +699,122 @@ run --remove --just-merged "$JWT/agent-nothing-here" "$JREPO"
 check_eq "#1521 so does a worktree git does not list" 2 "$RC"
 run --just-merged
 check_eq "#1521 --just-merged with no folder named is refused" 2 "$RC"
+
+# --- #2943: an open pull request, or a session working overnight, keeps its worktree ----------
+# What happened in a work repository on the night of 2026-11-13: a session's worktree, its branch
+# pushed and its pull request open, untouched for seven hours while the session slept, was removed
+# by the sweep under "every commit on it is also on another branch", the pushed copy being that
+# other branch. The same rule removed agent-a881fb0ec22bfa0f7 here at 08:33 ET on 2026-11-14 while
+# its PR, #2929, was open. Each worktree below is pushed, clean, aged and idle, so every one of them
+# passes every rule the sweep had before #2943: only the open PR or the sleeping worker keeps it.
+SREPO="$TMP/srepo"; mkdir -p "$SREPO"; G -C "$SREPO" init -q -b main
+printf 'x\n' >"$SREPO/f.txt"; G -C "$SREPO" add f.txt; G -C "$SREPO" commit -qm base
+G init -q --bare "$TMP/sorigin.git"; G -C "$SREPO" remote add origin "$TMP/sorigin.git"
+G -C "$SREPO" push -q origin main >/dev/null 2>&1
+SWT="$SREPO/.claude/worktrees"; mkdir -p "$SWT"
+SWT_REAL="$(cd "$SREPO" && pwd -P)/.claude/worktrees"
+sadd(){
+  G -C "$SREPO" worktree add -q -b "$1" "$SWT/$2" >/dev/null 2>&1
+  G -C "$SWT/$2" commit -q --allow-empty -m "work on $1"
+  G -C "$SWT/$2" push -q origin "$1" >/dev/null 2>&1
+  find "$SWT/$2" -exec touch -t 202601010000 {} + 2>/dev/null
+}
+sgone(){ [ -e "$SWT/$1" ] && echo no || echo yes; }
+: >"$GH_MERGED"; : >"$GH_OPEN"
+
+sadd fix/800-open-pr agent-openpr
+sadd fix/801-pushed agent-pushed
+printf 'fix/800-open-pr\t800\n' >"$GH_OPEN"
+run --remove "$SREPO"
+check "#2943 a worktree whose branch has an open pull request is kept, naming it" "keeping agent-openpr [fix/800-open-pr]: its branch has an open pull request, #800" "$OUT"
+check_eq "#2943 and is still there" no "$(sgone agent-openpr)"
+check "#2943 control: a pushed worktree with no open pull request is still removed" "removed agent-pushed [fix/801-pushed]: every commit on it is also on another branch" "$OUT"
+check_eq "#2943 control: and is gone" yes "$(sgone agent-pushed)"
+
+# The open pull requests cannot be read: nothing is removed, and the log the runner keeps (the
+# check's stderr, in its .last record) says why.
+sadd fix/802-unread agent-unread
+GH_OPEN_FAIL=1 run --remove "$SREPO"
+check_eq "#2943 an unreadable open pull request list exits 2" 2 "$RC"
+check "#2943 and says so" "could not read the open pull requests" "$OUT"
+check_eq "#2943 and removes nothing" no "$(sgone agent-unread)"
+# A page as full as the limit asked may have left an open one out, which would read as none (L24).
+STALE_WT_OPEN_LIMIT=1 run --remove "$SREPO"
+check_eq "#2943 an open pull request list as long as its limit exits 2" 2 "$RC"
+check "#2943 and says the list may be cut short" "as many as were asked for" "$OUT"
+check_eq "#2943 and removes nothing" no "$(sgone agent-unread)"
+
+# Sleep mode: a worker session the record names has edited a file in a worktree whose branch has no
+# pull request yet. The record is valid for this boot: its boot time is this boot's where sysctl
+# can read it, and with no boot session the time decides (lib/sleep.sh).
+mkdir -p "$TMP/sleep" "$TMP/sessions"
+BOOT_NOW="$(sysctl -n kern.boottime 2>/dev/null | sed -n '1s/^[^0-9]*sec *= *\([0-9][0-9]*\).*/\1/p')"
+NOW_MS="$(( $(date +%s) * 1000 ))"
+sleep_record(){ # sleep_record <until ms> <workers as a JSON list>
+  printf '{"v":1,"generation":"g1","since":%s,"until":%s,"night":"2026-11-13","bootTime":%s,"report":"/dev/null","startedBy":{"sessionId":"s-bed","cwd":"%s"},"workers":%s,"placeBefore":"home"}\n' \
+    "$NOW_MS" "$1" "${BOOT_NOW:-0}" "$SREPO" "$2" >"$CLAUDE_SLEEP_RECORD"
+}
+sadd fix/803-sleeper agent-sleeper
+printf '{"v":1,"sessionId":"s-worker","cwd":"%s","repoRoot":"%s","startedAt":%s,"lastSeen":%s,"closedAt":null,"edits":["%s/agent-sleeper/notes.txt"]}\n' \
+  "$SREPO" "$SREPO" "$NOW_MS" "$NOW_MS" "$SWT" >"$TMP/sessions/s-worker.json"
+sleep_record "$((NOW_MS + 3600000))" '["s-worker"]'
+run --remove "$SREPO"
+check "#2943 a worktree a session working overnight has edited in is kept while sleep mode holds" "keeping agent-sleeper [fix/803-sleeper]: session s-worker, working overnight in sleep mode, has worked in it" "$OUT"
+check_eq "#2943 and is still there" no "$(sgone agent-sleeper)"
+check "#2943 control: the other one, no worker's, is removed the same night" "removed agent-unread [fix/802-unread]" "$OUT"
+# The record's paths and git's can differ by a symlink (/var and /private/var here), so a worker
+# naming the real path counts too.
+printf '{"v":1,"sessionId":"s-worker","cwd":"%s/agent-sleeper","repoRoot":"%s","startedAt":%s,"lastSeen":%s,"closedAt":null,"edits":[]}\n' \
+  "$SWT_REAL" "$SREPO" "$NOW_MS" "$NOW_MS" >"$TMP/sessions/s-worker.json"
+run --remove "$SREPO"
+check "#2943 a worker whose folder is the worktree, by its real path, keeps it too" "keeping agent-sleeper [fix/803-sleeper]: session s-worker" "$OUT"
+
+# A worker the registry has no record of: where it worked cannot be read, so nothing is removed.
+sadd fix/804-unknown agent-unknown
+sleep_record "$((NOW_MS + 3600000))" '["s-worker","s-nowhere"]'
+run --remove "$SREPO"
+check_eq "#2943 a worker the session registry cannot place exits 2" 2 "$RC"
+check "#2943 and names the worker" "s-nowhere" "$OUT"
+check_eq "#2943 and removes nothing" no "$(sgone agent-unknown)"
+# One the registry moved to its archive is still read there.
+mkdir -p "$TMP/sessions-archive/2026-11-13"
+printf '{"v":1,"sessionId":"s-nowhere","cwd":"%s","startedAt":1,"lastSeen":1,"closedAt":2,"edits":[]}\n' "$SREPO" \
+  >"$TMP/sessions-archive/2026-11-13/s-nowhere.json"
+run --remove "$SREPO"
+check "#2943 a worker found in the registry's archive is read there" "removed agent-unknown [fix/804-unknown]" "$OUT"
+check "#2943 and the sleeper is still kept" "keeping agent-sleeper [fix/803-sleeper]" "$OUT"
+# A folder that has gone has no real path to read. It must not be matched as "/", which every
+# worker's absolute place is under, and be credited to a worker that never touched it.
+sadd fix/805-vanished agent-vanished
+rm -rf "$SWT/agent-vanished"
+run --remove "$SREPO"
+check_not "#2943 a worktree whose folder has gone is not credited to a worker" "keeping agent-vanished [fix/805-vanished]: session" "$OUT"
+check "#2943 it is kept for the folder being gone instead" "keeping agent-vanished [fix/805-vanished]: its folder is not there" "$OUT"
+G -C "$SREPO" worktree prune
+
+# lib/sleep-worker-places.py on its own: the shapes it refuses rather than reading as "nowhere".
+PLACES="$DIR/lib/sleep-worker-places.py"
+printf '{"v":1,"workers":"s-worker"}\n' >"$TMP/bad-workers.json"
+POUT="$(python3 "$PLACES" "$TMP/bad-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2943 sleep-worker-places.py refuses workers that are not a list of session ids" 1 "$PRC"
+check "#2943 and says so" "in a shape this reader does not know" "$POUT"
+printf '{"v":1,"sessionId":"s-bad","cwd":"/x","edits":"not a list"}\n' >"$TMP/sessions/s-bad.json"
+printf '{"v":1,"workers":["s-bad"]}\n' >"$TMP/bad-edits.json"
+POUT="$(python3 "$PLACES" "$TMP/bad-edits.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2943 sleep-worker-places.py refuses a worker whose edits are not a list" 1 "$PRC"
+rm -f "$TMP/sessions/s-bad.json"
+POUT="$(python3 "$PLACES" "$TMP/no-such-record.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2943 sleep-worker-places.py refuses a sleep record it cannot read" 1 "$PRC"
+printf '{"v":1,"workers":[]}\n' >"$TMP/no-workers.json"
+POUT="$(python3 "$PLACES" "$TMP/no-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2943 and answers a record with no workers with no places at all" "0 []" "$PRC [$POUT]"
+
+# Sleep mode over (the record past its end): the worker's worktree goes like any other.
+sleep_record "$((NOW_MS - 1000))" '["s-worker"]'
+run --remove "$SREPO"
+check "#2943 once sleep mode has ended the worker's worktree is removed" "removed agent-sleeper [fix/803-sleeper]" "$OUT"
+check_eq "#2943 and the open pull request's is still kept" no "$(sgone agent-openpr)"
+rm -f "$CLAUDE_SLEEP_RECORD"
 
 kill "$BUSY" 2>/dev/null
 echo

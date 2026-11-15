@@ -180,26 +180,42 @@ K3P="$TMPROOT/kept-3c-pass"
 run3c "$M1" "$K3P"
 [ "$code" -eq 0 ] && [ ! -e "$K3P" ] && check "#1788 a passing run keeps nothing" ok \
   || check "#1788 a passing run keeps nothing" "exit=$code; $(ls -R "$K3P" 2>&1)"
-# Old copies are pruned to the newest 20, oldest first by the time in their names, and a file the
-# record did not write is never touched.
+# Old copies are kept by age PER MOD under a size cap, never the newest 20 overall (#2959, as #2895
+# did for suites, L202): one noisy mod's failures evicted every other mod's only saved one. Here a
+# noisy mod has 22 old copies, a quiet mod one older still, and an oversized copy is the oldest of
+# all. The noisy mod keeps its newest 3, the quiet mod its only copy, the size cap takes the
+# oversized one, and a file the record did not write is never touched.
 K3R="$TMPROOT/kept-3c-prune"; mkdir -p "$K3R"
 for i in 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do
-  printf 'old\n' > "$K3R/202001${i}T000000Z-seeded-$i.log"
+  printf 'old\n' > "$K3R/202001${i}T000000Z-noisy-plugin-test.s$i.log"
 done
+printf 'only\n' > "$K3R/20200105T000000Z-quiet-plugin-test.s05.log"
+head -c 21000000 /dev/zero > "$K3R/20190101T000000Z-huge-plugin-test.s01.log"
 printf 'mine\n' > "$K3R/notes.txt"
 M3R="$TMPROOT/m3r"; mkmod "$M3R" redtest-prune; printf 'x\n' > "$M3R/redtest-prune/hooks/a.test.ts"
 run3c "$M3R" "$K3R"
 p="$(kept_path redtest-prune)"
-nlog="$(find "$K3R" -name '*.log' -type f | wc -l | tr -d ' ')"
-[ "$nlog" = 20 ] && check "#1788 pruning keeps 20 copies" ok || check "#1788 pruning keeps 20 copies" "$nlog: $(ls "$K3R")"
-{ [ -n "$p" ] && [ -f "$p" ]; } && check "#1788 and the newest, this run's, is one of them" ok \
-  || check "#1788 and the newest, this run's, is one of them" "named '$p': $(ls "$K3R")"
-[ -f "$K3R/20200131T000000Z-seeded-31.log" ] && [ -f "$K3R/20200113T000000Z-seeded-13.log" ] \
-  && check "#1788 and the newest seeded copies stay" ok || check "#1788 and the newest seeded copies stay" "$(ls "$K3R")"
-[ ! -e "$K3R/20200110T000000Z-seeded-10.log" ] && [ ! -e "$K3R/20200112T000000Z-seeded-12.log" ] \
-  && check "#1788 while the three oldest are removed" ok || check "#1788 while the three oldest are removed" "$(ls "$K3R")"
+{ [ -n "$p" ] && [ -f "$p" ]; } && check "#1788 this run's copy is kept" ok \
+  || check "#1788 this run's copy is kept" "named '$p': $(ls "$K3R")"
+[ -f "$K3R/20200105T000000Z-quiet-plugin-test.s05.log" ] \
+  && check "#2959 a quiet mod's only saved failure outlives a noisy mod's many" ok \
+  || check "#2959 a quiet mod's only saved failure outlives a noisy mod's many" "$(ls "$K3R")"
+nnoisy="$(find "$K3R" -name '*-noisy-plugin-test.*.log' -type f | wc -l | tr -d ' ')"
+[ "$nnoisy" = 3 ] && [ -f "$K3R/20200131T000000Z-noisy-plugin-test.s31.log" ] && [ -f "$K3R/20200129T000000Z-noisy-plugin-test.s29.log" ] \
+  && check "#2959 a noisy mod's old copies are pruned to its own newest 3" ok \
+  || check "#2959 a noisy mod's old copies are pruned to its own newest 3" "$nnoisy: $(ls "$K3R")"
+[ ! -e "$K3R/20190101T000000Z-huge-plugin-test.s01.log" ] \
+  && check "#2959 the folder is held under its size cap, oldest first" ok \
+  || check "#2959 the folder is held under its size cap, oldest first" "$(ls "$K3R")"
 [ -f "$K3R/notes.txt" ] && check "#1788 and a file the record did not write is left alone" ok \
   || check "#1788 and a file the record did not write is left alone" "$(ls "$K3R")"
+# check-mods.sh and the runner keep by the same three numbers, each written in its own file, so a
+# change to one alone is caught here (the lessons review of 1029c9f).
+policy_of(){ grep -E '^KEPT_OUTPUT_(MAX_DAYS|PER_LABEL|MAX_KB)=' "$1" | sort; }
+mods_policy="$(policy_of "$CHECK")"; runner_policy="$(policy_of "$ROOT/payload/hooks/run-all-tests.sh")"
+[ "$(printf '%s\n' "$mods_policy" | wc -l | tr -d ' ')" = 3 ] && [ "$mods_policy" = "$runner_policy" ] \
+  && check "#2959 check-mods.sh keeps by the runner's three numbers" ok \
+  || check "#2959 check-mods.sh keeps by the runner's three numbers" "check-mods: $mods_policy; runner: $runner_policy"
 # A folder that cannot be written is said on the line, never a silent loss, and the mod still fails
 # with its reason.
 run3c "$M3R" "/dev/null/kept"

@@ -1,8 +1,10 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchesPushedInto, branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
-import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { branchesPushedInto, branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, liveRuns, mergeRunOf, mergeRunsIn, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { readCommands } from './read.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
 // Each command with its gh reading, by mod-kit's own reader (its byte for byte copy), as the mod reads it (#961).
@@ -600,5 +602,30 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(whoseFiles(['b/c.ts'], '/private/tmp/r', ['/tmp/r/b/'])).toEqual({ own: ['b/c.ts'], others: [] })
     // Only those three links: /private elsewhere is a folder of its own.
     expect(whoseFiles(['a.ts'], '/private/stuff', ['/stuff/a.ts'])).toEqual({ own: [], others: ['a.ts'] })
+  })
+})
+
+// GitHub repository names are not case sensitive, so `--repo O/R` merges the same PR as `--repo o/r`.
+// A run kept its repository as typed while the session's own was compared lower cased, so a
+// capitalised one never counted as this session's (#2958).
+describe('mergeRunsIn: a merge run names its repository in lower case', () => {
+  const runs = (line: string) => mergeRunsIn(readCommands(line))
+  test('a capitalised --repo is read in lower case', () => {
+    expect(runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo Owner/Repo --squash')).toEqual([{ number: 12, repo: 'owner/repo' }])
+    expect(runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo=OWNER/REPO')).toEqual([{ number: 12, repo: 'owner/repo' }])
+    expect(runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash')).toEqual([{ number: 12, repo: undefined }])
+  })
+  // mod-kit's reader lower cases a repository today; the run's lower case is mergeRunOf's own
+  // promise, so it holds whatever reading it is handed, never as a side effect of mod-kit's (L281).
+  test('mergeRunOf lower cases a repository however the reading it is handed spells it', () => {
+    const reading = (named: string | null | undefined) => ({ ...(mergeHelperArgs({ words: ['merge-when-ready.sh', '12'] }) as ModKitGh), named })
+    expect(mergeRunOf(reading('Owner/Repo'))).toEqual({ number: 12, repo: 'owner/repo' })
+    expect(mergeRunOf(reading(undefined))).toEqual({ number: 12, repo: undefined })
+    expect(mergeRunOf(reading(null))).toBeUndefined()
+  })
+  test('a listed run and a process spelling one repository differently agree, and another repository still does not', () => {
+    const listed = runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo O/R --squash')
+    expect(liveRuns(listed, runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r --squash'))).toEqual([{ number: 12, repo: 'o/r' }])
+    expect(liveRuns(listed, runs('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo O/OTHER --squash'))).toEqual([])
   })
 })

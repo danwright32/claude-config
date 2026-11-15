@@ -74,6 +74,16 @@ RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
 # -K also matches curl's -k, which only sends that call to python3.
 RUNS+='|\|&?[[:space:]]*(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_.-]|$)'
 RUNS+='|(^|[^A-Za-z0-9_])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
+# curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
+# call goes to python3 while one of the places curl reads one from holds a file, and so does a call
+# that sets a variable placing them or names a curlrc (a write that leaves one naming an endpoint).
+for curl_dir in "${CURL_HOME:-}" "${XDG_CONFIG_HOME:-}" "${HOME:-}" "${HOME:+$HOME/.config}"; do
+  if [ -n "$curl_dir" ] && { [ -e "$curl_dir/.curlrc" ] || [ -e "$curl_dir/curlrc" ]; }; then
+    RUNS+='|(^|[^A-Za-z0-9_])curl(ie)?([^A-Za-z0-9_.-]|$)'
+    break
+  fi
+done
+RUNS+='|(^|[^A-Za-z0-9_])(CURL_HOME|XDG_CONFIG_HOME|HOME)=|curlrc'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }

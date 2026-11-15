@@ -61,8 +61,8 @@ BEGIN = "<!-- verification-screenshots:begin -->"
 END = "<!-- verification-screenshots:end -->"
 FENCE = "```verification-screenshots"
 UPLOAD_TRIES = 3
-FOLDER_RE = re.compile(r"^pr-[1-9][0-9]{0,9}/[0-9a-f]{40}$")
-ARTIFACT_RE = re.compile(r"^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]{8,}$")
+FOLDER_RE = re.compile(r"^pr-[1-9][0-9]{0,9}/[0-9a-f]{40}\Z")
+ARTIFACT_RE = re.compile(r"^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]{8,}\Z")
 
 # Whether a picture committed to a branch shows inline in a PRIVATE repository's PR body, measured in
 # claude-config#2699: on 2026-11-10 creating the private test repository was refused by Claude Code's
