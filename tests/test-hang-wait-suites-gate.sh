@@ -110,7 +110,10 @@ judged="$(grep -c . "$W/real.out")"
 [ "$judged" -eq "$n" ] && check "every one listed was judged ($judged)" ok || check "every one listed was judged" "$judged of $n"
 while IFS=$'\t' read -r rc path words; do
   [ "$rc" = 0 ] && continue
-  if placed_nowhere "$words"; then
+  # Only exit 2 is a refusal; any other code is the gate failing to judge, never a note (L11).
+  if [ "$rc" != 2 ]; then
+    check "$path was judged by the gate" "the gate exited $rc: ${words:0:600}"
+  elif placed_nowhere "$words"; then
     check "$path is not refused for a module or path placed nowhere past lib/hang-wait.sh" \
       "the gate said: ${words:0:600}. Write the wait's condition out in single quotes (hang_wait '[ -e \"\$f\" ]'), or spell the path from BASH_SOURCE where it is handed over (lib/hang-wait.sh's header)"
   else
