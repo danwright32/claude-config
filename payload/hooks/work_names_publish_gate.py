@@ -252,7 +252,7 @@ def judge_public(what, to, command, bodies, unseen=(), place=None):
             continue
         hit = find(value, matcher, odd)
         if hit:
-            return "%s posts %s and its text expands %s, whose value names %s." % (what, to, shown, _shown(hit))
+            return "%s posts %s and its text %s." % (what, to, _expanded(shown, hit))
     unseen = list(unseen) + unread
     for shown, text in bodies:
         if callable(text):
@@ -366,13 +366,13 @@ def _positionals(args, valued):
     return out
 
 
-def _git(where, *args):
+def _git(where, *args, reading="what would be pushed"):
     import subprocess
     try:
         return subprocess.run(["git", "-C", where or os.getcwd()] + list(args), capture_output=True,
                               text=True, errors="replace", timeout=20)
     except (OSError, subprocess.SubprocessError) as e:
-        raise CannotTell("git could not be run to read what would be pushed (%s)" % type(e).__name__)
+        raise CannotTell("git could not be run to read %s (%s)" % (reading, type(e).__name__))
 
 
 def pushed_text(where, history):
@@ -426,8 +426,7 @@ def judge_repo_create(what, args, where, command, place=None):
                     "command." % (what, shown, var, why))
         hit = find(value, matcher, odd)
         if hit:
-            return "%s makes %s, a public repository, and its text expands %s, whose value names %s." % (
-                what, shown, var, _shown(hit))
+            return "%s makes %s, a public repository, and its text %s." % (what, shown, _expanded(var, hit))
     if not _given(args, ("--push",)):
         return None
     source = os.path.expanduser((scan.flag_values(args, "--source", "-s") or ["."])[-1])
@@ -1308,6 +1307,141 @@ def expansions(text):
 # (pwd, basename ., anything run there), pwd, dirs and the tilde forms. READS_DIR, less the plain $.
 READS_BACK = re.compile(r"\$_\b|\$\{_\}|\$\(|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 
+# A program a substitution runs (claude-config#2997). Its spelling names nothing, so a title of
+# "$(git rev-parse --show-toplevel)" or "$(git remote get-url origin)", run from a work checkout,
+# posted the checkout's path or repository and passed. Each program is judged by what it can print of
+# where it runs (place_text): the directory's path and, in a git checkout, its git directories and
+# remotes. Only a few are shown to print none of that: echo and printf print their own words, judged
+# as written with their expansions judged on their own, date prints the time, and cat with nothing but
+# a heredoc to read prints the body, read as text itself. A word the shell fills with file names (an
+# unquoted glob) makes echo or printf one whose output is not shown.
+PRINTS_OWN_WORDS = frozenset({"echo", "printf", "date"})
+QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+GLOB = re.compile(r"[*?\[]")
+# What takes a program somewhere this check cannot follow: a cd, pushd or popd in its substitution,
+# git's -C, --git-dir or --work-tree, env's -C or --chdir, and git's directory set in the environment.
+CHANGES_DIR = frozenset({"cd", "pushd", "popd"})
+MOVES = re.compile(r"(?:^|\s)(?:-C|--chdir|--git-dir|--work-tree)(?=[\s=]|$)"
+                   r"|\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)=")
+
+
+class Ran(str):
+    """How a program a substitution runs is shown in a refusal; judged by where it runs, not its value."""
+
+
+def _prints_no_place(text):
+    """Whether the one command text is shown to print nothing of where it runs (PRINTS_OWN_WORDS)."""
+    words = scan._sw.command_words(text)
+    if not words:
+        return True
+    if words[0] in PRINTS_OWN_WORDS:
+        return not GLOB.search(QUOTED.sub("", text))
+    rest = text.lstrip()
+    if words[0] != "cat" or not rest.startswith("cat"):
+        return False
+    i, n = 3, len(rest)
+    while i < n:
+        if rest[i] in " \t\n":
+            i += 1
+            continue
+        op = scan._sw.heredoc_opener(rest, i) if rest.startswith("<<", i) else None
+        if not op:
+            return False
+        i = op[3]
+    return True
+
+
+def _group_runs(texts, depth):
+    """(the commands among texts not shown to print nothing of where they run, whether one of them
+    can be taken elsewhere) for the commands of one substitution. A string a shell, eval or env -S
+    runs is read as commands of the same substitution; one that cannot be read is taken as moving."""
+    runs, moved = [], False
+    for text in texts:
+        words = scan._sw.command_words(text)
+        if (words and words[0] in CHANGES_DIR) or MOVES.search(text):
+            moved = True
+        wrap = scan._sw.wrapped_words(words) if words else None
+        if wrap and wrap[1] is not None:
+            try:
+                if depth >= scan._sw.MAX_DEPTH:
+                    raise scan._sw.Unreadable("wrapped too deep")
+                inner = [t for _d, t in scan._sw.commands(wrap[1])]
+            except scan._sw.Unreadable:
+                runs.append(text)
+                moved = True
+                continue
+            more, went = _group_runs(inner, depth + 1)
+            runs += more
+            moved = moved or went
+        elif not _prints_no_place(text):
+            runs.append(text)
+    return runs, moved
+
+
+def substitution_runs(text):
+    """[(command, moved)] for each command a substitution in text runs that is not shown to print
+    nothing of where it runs (_prints_no_place), moved when something in its substitution can take it
+    elsewhere (CHANGES_DIR, MOVES). The commands of an unquoted heredoc body's substitutions count
+    (claude-config#2053), and so do those of a string a sh -c, bash -c or eval there runs. A
+    substitution that is a cd's directory is left out: its output is where the command runs, which
+    is judged as that, not posted. Raises scan._sw.Unreadable."""
+    parts, heredocs, spans = [], [], []
+    scan._sw.commands(text, heredocs=heredocs, parts=parts, spans=spans)
+    regions = []
+    for part in parts:
+        if scan._sw.command_words(text[part["start"]:part["end"]])[:1] == ["cd"]:
+            continue
+        regions += [(s, e) for s, e, _q in part.get("inner") or ()]
+    regions += [(s, e) for (quoted, _b, _body), (_o, s, e) in zip(heredocs, spans) if not quoted]
+    out = []
+    for lo, hi in sorted(set(regions)):
+        if any((a, b) != (lo, hi) and a <= lo and hi <= b for a, b in regions):
+            continue
+        group = [text[p["start"]:p["end"]] for p in parts if lo <= p["start"] and p["end"] <= hi]
+        runs, moved = _group_runs(group, 0)
+        # The program a cd takes elsewhere is named before the cd that takes it.
+        runs.sort(key=lambda run: scan._sw.command_words(run)[:1] in (["cd"], ["pushd"], ["popd"]))
+        out += [(run, moved) for run in runs]
+    return out
+
+
+_PLACES = {}
+
+
+def place_text(where):
+    """What a program run in where can print of it, for the name check: the directory's path, as
+    given and with its links resolved, and in a git checkout its top level, git directories, the
+    superproject's top level and every remote's URL as git remote -v gives them, rewrites applied.
+    Raises CannotTell when git cannot read the checkout."""
+    if where not in _PLACES:
+        reading = "the checkout a substitution runs in"
+        found = [where, os.path.realpath(where)]
+        dirs = _git(where, "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir",
+                    reading=reading)
+        if dirs.returncode != 0:
+            if "not a git repository" not in dirs.stderr:
+                raise CannotTell("git could not read the checkout a substitution runs in (%s)"
+                                 % (dirs.stderr or "").strip()[:200])
+        else:
+            remotes = _git(where, "remote", "-v", reading=reading)
+            if remotes.returncode != 0:
+                raise CannotTell("git could not list the remotes of the checkout a substitution runs in "
+                                 "(%s)" % (remotes.stderr or "").strip()[:200])
+            found += [dirs.stdout, remotes.stdout]
+            for flag in ("--show-toplevel", "--show-superproject-working-tree"):
+                top = _git(where, "rev-parse", flag, reading=reading)
+                found.append(top.stdout if top.returncode == 0 else "")
+        _PLACES[where] = "\n".join(found)
+    return _PLACES[where]
+
+
+def _expanded(shown, hit):
+    """How the text a name was found in reached the posted text, for a refusal."""
+    if isinstance(shown, Ran):
+        return ("has %s, which runs where the command does, and the path or git checkout there names %s"
+                % (shown, _shown(hit)))
+    return "expands %s, whose value names %s" % (shown, _shown(hit))
+
 
 def variables_posted(text, place):
     """The variables text expands, judged where the command runs: [(shown, value, None)] for a value
@@ -1345,6 +1479,29 @@ def variables_posted(text, place):
         else:
             out.append((shown, None, "is not set in this command, nor in the environment every Bash call "
                                      "starts from"))
+    if "$(" not in judged and "`" not in judged:
+        return out
+    # Each program a substitution runs, by where it runs (#2997).
+    try:
+        runs = substitution_runs(judged)
+    except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
+        return out + [(Ran("its command substitutions"), None, "could not be read (%s: %s)"
+                       % (type(e).__name__, e))]
+    for command, moved in runs:
+        shown = Ran("a substitution running %s" % " ".join(command.split())[:120])
+        if shown in seen:
+            continue
+        seen.add(shown)
+        if moved:
+            out.append((shown, None, "runs it where a cd or a directory option in that substitution "
+                                     "takes it, which this check does not follow"))
+        elif not place.cwd:
+            out.append((shown, None, "runs it in a directory this check cannot follow the command to"))
+        else:
+            try:
+                out.append((shown, place_text(place.cwd), None))
+            except CannotTell as e:
+                out.append((shown, None, "runs where the command does, and %s" % e))
     return out
 
 

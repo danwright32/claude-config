@@ -606,5 +606,79 @@ check "#2981 (control) a quoted heredoc body is text: $out" passed
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/private-notes --title \"~+ \$(pwd)\" --body x"
 check "#2981 (control) a private repository is not asked about its directory: $out" passed
 
+# ---------------------------------------------------------------- programs a substitution runs (claude-config#2997)
+# A substitution running git, or any program this check cannot show prints no directory or remote,
+# was judged by its spelling, so "$(git rev-parse --show-toplevel)" or "$(git remote get-url origin)"
+# run from a work checkout posted the checkout's path or repository and passed. Each is judged by where
+# it runs: the directory's path and, in a git checkout, its git directories and remotes. A program run
+# after a cd or with git -C, where this check cannot follow it, is refused wherever the command runs.
+# Commands in a sh -c or bash -c string and in an unquoted heredoc body are read the same way.
+REMOTECO="$WORK/apps/plain-notes"; mkdir -p "$REMOTECO"
+git -C "$REMOTECO" init -q
+git -C "$REMOTECO" remote add origin https://github.com/Acme-Corp/acme-widgets.git
+CLEANGIT="$WORK/apps/garden-notes"; mkdir -p "$CLEANGIT"
+git -C "$CLEANGIT" init -q
+git -C "$CLEANGIT" remote add origin https://github.com/danwright-test/public-notes.git
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-prefix)\" --body x"
+check "#2997 a substitution running git from a work checkout is refused: $out" refused
+check "#2997 and says the name where it runs holds: $out" has "$out" "acme-widgets"
+check "#2997 naming the program it runs: $out" has "$out" "git rev-parse --show-prefix"
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"at \`git remote -v\`\""
+check "#2997 and a backquoted one: $out" refused
+RUN_DIR="$REMOTECO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 from a checkout whose path is clean and whose remote is a work repository, the remote lookup: $out" refused
+check "#2997 says the name the remote holds, its owner first: $out" has "$out" "acme-corp"
+RUN_DIR="$REMOTECO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(git config --get remote.origin.url)\""
+check "#2997 and the remote read from git config: $out" refused
+RUN_DIR="$REMOTECO" run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$(git rev-parse --show-toplevel)\""
+check "#2997 and a gh api write posting the top level lookup: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
+check "#2997 cat of a file is a program whose output this check does not read: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../*)\""
+check "#2997 and echo of a glob, which the shell fills with file names: $out" refused
+# sh -c and bash -c strings, and unquoted heredoc bodies, are read too (the review of #2981).
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git rev-parse --show-prefix')\" --body x"
+check "#2997 git run by sh -c from a work checkout is refused: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(bash -c 'basename \"\$(pwd)\"')\" --body x"
+check "#2997 and pwd run by bash -c: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'cd ..; pwd')\" --body x"
+check "#2997 a sh -c string that changes directory is refused wherever it runs: $out" refused
+check "#2997 saying it cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && git remote -v)\" --body x"
+check "#2997 and git run after a cd in the substitution: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$(git -C .. remote -v)\" --body x"
+check "#2997 and git -C: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen at \$(git remote get-url origin)
+EOF
+)\""
+check "#2997 git in a substitution in an unquoted heredoc body: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$(p\\wd)
+EOF
+)\""
+check "#2997 and pwd written with a backslash there: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$(sh -c 'cd ..; pwd')
+EOF
+)\""
+check "#2997 and a sh -c string changing directory there, wherever it runs: $out" refused
+# Controls: programs shown to print no directory, a checkout naming nothing, and a cd's directory.
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(date +%F) \$(echo hi) \$(printf '%s' ok)\" --body x"
+check "#2997 (control) date, echo and printf from a work checkout pass: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+a body written here
+EOF
+)\""
+check "#2997 (control) and cat of an unquoted heredoc: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body \"\$(git remote get-url origin)\""
+check "#2997 (control) git from a checkout whose path and remote name nothing passes: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git log -1 --format=%s')\" --body x"
+check "#2997 (control) and so does git run by sh -c there: $out" passed
+RUN_DIR="$WORKCO" run "cd \"\$(git rev-parse --show-toplevel)\" && gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#2997 (control) a substitution naming only where a cd goes is not posted: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/private-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 (control) a private repository is not asked about its programs: $out" passed
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
