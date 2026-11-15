@@ -14,7 +14,9 @@ import type { IsItLiveThread } from '../types/index.d.ts'
 // slack_send_message_draft in that same step. #2630, Dan, 2026-11-10: "Anytime you give me a message
 // for someone, you should also just save it as a slack draft in the relevant thread." So there is no
 // picker before the draft (there was one, Save as a draft or Skip this time, until then): a draft is
-// already Dan's to send, change or delete. #2849, Dan, 2026-11-12: given more than one thread, a
+// already Dan's to send, change or delete. Nor is a skip recorded anywhere else (Dan decided
+// on #2896, 2026-11-14, to drop the skip rule), so an answer to any question settles nothing: only a saved
+// draft does, besides the session saying its merges are unrelated and Slack saying a thread is gone. #2849, Dan, 2026-11-12: given more than one thread, a
 // merge owes its reply in the one pasted most recently before its work began ("follow the most
 // recent link"), so a draft in an earlier thread does not settle it (assignLandings). Pure: drafts.ts
 // reads the prompt, the tool calls and the turn end (register.ts's Stop hook calls its draftHold),

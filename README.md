@@ -4060,6 +4060,23 @@ dry run, an older version included, and a dry run of another project's folder ar
 What it cannot see: a change on the database between the dry run and the push, or a `supabase link`
 to another project in the same directory between the dry run and the Apply.
 
+A test project needs no Apply (#2643). In a work repository every owner step on its test Supabase
+project is a SQL file its scripts write, and setting up one flow version on 2026-11-10 asked four
+times. Now a `supabase db query --linked -f <file>` write alone in its command (a `cd` aside, and only
+the flags an Apply allows) is answered "allow", with no reason and no notice, when the project in
+`supabase/.temp/project-ref` is listed in `.claude/supabase-test-projects` in the same directory: one
+ref per line, blank lines and lines starting with `#` ignored (Dan, 2026-11-14: a per project file,
+and a run passes silently). It fails closed: a list missing, unreadable, not text, or holding any
+other line marks nothing, and the run is asked about as before, the question saying why it is not a
+test project. An inline write, a push, `--db-url`, `--local` and a project not on the list are asked
+about as before. The list is trusted only as git has committed it: its bytes must be what `git show
+HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
+included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
+itself asked about, which is why the hook's registration now takes those three tools. Still open: a
+session that edits the list with a shell command and then commits it, in one call or several, is
+trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
+edit and commit.
+
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
 prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
