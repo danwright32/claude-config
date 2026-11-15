@@ -136,7 +136,9 @@ def make(sh_special, sh_param):
             are the ones the walk of the text's variables found (its own, and those of the files it
             sources), each with the positions of the arguments it evaluates."""
             evals = self.shell["known"].get("evals") if self.shell.get("known") else None
-            if not evals:
+            # Asked of every command: one that holds none of the names calls none of them, and is
+            # passed over before its openers are cut (#2918).
+            if not evals or not any(f in text for f in evals):
                 return None
             lits = self.sh_eval_call(self.sh_strip_openers(text), evals)
             for lit in lits or ():

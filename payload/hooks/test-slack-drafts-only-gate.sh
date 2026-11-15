@@ -4099,6 +4099,167 @@ PY
 cuts="$(python3 -B "$T/cuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds, its patterns, cd_target and shell_split do only the work a verdict needs, and answer as before (#2918)" "$cuts"
 
+# Since #2912 every command of a text is asked whether it calls a function that evaluates its
+# argument (sh_eval_text_reason), and the claude-sync suite's check() is one, so every one of its
+# 34,000 commands was cut of its openers and searched once per such function, with a pattern built
+# afresh for each: a fifth of what #2912 added to judging that suite (measured 2026-11-15, #2918).
+# A command that does not hold one of the names cannot call it, so it is now passed over first, and
+# the rest searched with one pattern per set of names. Checked for what it skips, and against the
+# reading it replaced over every line of claude-sync and its suite.
+cat > "$T/evalcuts.py" <<'PY'
+import importlib.util, os, re, sys
+gate_path, extra = sys.argv[1], sys.argv[2:]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+sw = gate.load_reader()
+j = gate.Judge(sw)
+wrong = []
+evals = {"check": {2}, "ev": {1}, "hang_wait": {1, 2}, "a.b": {1}}
+
+def before(head, evals):
+    """sh_eval_call as #2912 wrote it."""
+    if not evals or not any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", head) for f in evals):
+        return None
+    toks = j.sh_tokens(j.sw.command_rest(j.sh_strip_openers(head))[0])
+    raws, k = [], 0
+    while k < len(toks):
+        kind, raw = toks[k]
+        if kind == "op":
+            k += 2 if gate.SH_REDIRECT.fullmatch(raw) else 1
+            continue
+        raws.append(raw)
+        k += 1
+    if raws and raws[0] not in evals and raws[0] != "trap" and \
+            not any(re.sub(r"""['"]""", "", w) in evals for w in raws):
+        return None
+    if not raws or raws[0] not in evals:
+        return False
+    rest = " ".join(raws[1:])
+    if any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", rest) for f in evals):
+        return False
+    lits = []
+    for n in sorted(evals[raws[0]]):
+        if n < len(raws):
+            lit = j.sh_literal_word(raws[n])
+            if lit is None:
+                return False
+            lits.append(lit)
+    return lits
+
+# A command naming none of the functions is searched by no pattern and cut of no openers.
+# Both routes to a search are counted: re.search (a pattern built per call) and the pattern for the
+# set of names (sh_eval_mention), so taking out the test that comes before either is seen.
+searched, stripped = [], []
+real_search, real_strip, real_mention = gate.re.search, j.sh_strip_openers, gate.sh_eval_mention
+gate.re.search = lambda *a, **k: searched.append(a[0]) or real_search(*a, **k)
+gate.sh_eval_mention = lambda names: searched.append(names) or real_mention(names)
+j.sh_strip_openers = lambda t: stripped.append(t) or real_strip(t)
+j.shell = dict(j.shell, known={"evals": evals})
+for head in ("echo hi there", "if git status --short; then", "  ok \"it ran\""):
+    if j.sh_eval_call(head, evals) is not None or j.sh_eval_text_reason(head, {}, 0) is not None:
+        wrong.append("%r, which names no evaluating function, was read as calling one" % head)
+# A command that does name one is still searched, so the counting above is seen to count.
+before_call, before_strip = len(searched), len(stripped)
+j.sh_eval_call("check 'n' 'true'", evals)
+if len(searched) == before_call or len(stripped) == before_strip:
+    wrong.append("a command calling check was not searched and cut, so the counts above measure nothing")
+del searched[before_call:], stripped[before_strip:]
+gate.re.search, j.sh_strip_openers, gate.sh_eval_mention = real_search, real_strip, real_mention
+if searched or stripped:
+    wrong.append("a command naming no evaluating function was searched %d times and cut of its openers %d times, not 0"
+                 % (len(searched), len(stripped)))
+heads = ["check 'it runs' '[ -f x ]'", "check \"it runs\" \"[ -f \\\"\\$X\\\" ]\"", "ev 'bash post.sh'", "ev \"$CMD\"",
+         "trap 'ev x' EXIT", "echo 'check this'", "printf '%s' \"ev\" > f", "x=check", "if check a 'b'; then",
+         "a.b 'echo hi'", "a.bc 'echo'", "-check 'x' 'y'", "check.x 1 2", "hang_wait 'sleep 1' 'true'",
+         "check 'n' 'ev y'", "check 'n' 'echo' > out", "{ check 'n' 'true'; }", "! check 'n' 'false'", ""]
+for path in extra:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            heads += f.read().split("\n")
+    except OSError:
+        pass
+differ = []
+for head in heads:
+    for ev in (evals, {"check": {2}}, {}):
+        try:
+            want = ("ok", before(head, ev))
+        except Exception as e:
+            want = ("raised", type(e).__name__)
+        try:
+            got = ("ok", j.sh_eval_call(head, ev))
+        except Exception as e:
+            got = ("raised", type(e).__name__)
+        if got != want:
+            differ.append((head, sorted(ev), got, want))
+if differ:
+    wrong.append("sh_eval_call answered differently for %d of %d commands, first %r" % (len(differ), 3 * len(heads), differ[0]))
+if len(heads) < 1000 and extra:
+    wrong.append("only %d commands were compared" % len(heads))
+
+# sh_word_end goes past the characters that only carry a word on in one step, not one at a time, and
+# ends every word where it did: checked against the reading it replaced from every offset of every line.
+def word_end_before(s, i):
+    dq, n = False, len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" and not dq:
+            jq = s.find("'", i + 1)
+            if jq < 0:
+                return n
+            i = jq + 1
+            continue
+        if c == '"':
+            dq = not dq
+        elif s.startswith("$(", i):
+            jq = gate.Judge.sh_close(s, i + 2)
+            if jq is None:
+                return n
+            i = jq
+        elif s.startswith("${", i):
+            jq = gate.Judge.sh_brace_close(s, i + 2)
+            if jq is None:
+                jq = s.find("}", i)
+            if jq < 0:
+                return n
+            i = jq
+        elif not dq and (c.isspace() or c in ";&|<>()"):
+            return i
+        i += 1
+    return n
+
+taken = [0]
+class Counted(str):
+    def __getitem__(self, k):
+        taken[0] += 1
+        return str.__getitem__(self, k)
+for word in ("x" * 5000, '"%s"' % ("y z " * 1250), "a=%s$(date)%s" % ("b" * 2500, "c" * 2500)):
+    taken[0] = 0
+    got = j.sh_word_end(Counted(word + " next"), 0)
+    if got != len(word):
+        wrong.append("sh_word_end ended %r... at %d, not %d" % (word[:20], got, len(word)))
+    if taken[0] > 50:
+        wrong.append("sh_word_end took %d characters of a %d character word one at a time" % (taken[0], len(word)))
+ends = 0
+crafted = ["a b c", "x\x1cy z", "\"a b\" c", "'q r' s", "${x:-it's} y", "a\\ b c", "\"$(echo \")\") x"]
+for head in heads + crafted:
+    # Every offset of a crafted text; where a word starts, as sh_tokens asks, in the others.
+    for i in (range(len(head)) if head in crafted else
+              [k for k in range(len(head)) if k == 0 or head[k - 1].isspace()]):
+        ends += 1
+        if j.sh_word_end(head, i) != word_end_before(head, i):
+            wrong.append("sh_word_end(%r, %d) gave %r, before %r" % (head[:60], i, j.sh_word_end(head, i), word_end_before(head, i)))
+            break
+if ends < 100000 and extra:
+    wrong.append("sh_word_end was compared at only %d places" % ends)
+print("; ".join(wrong) or "ok")
+PY
+evalcuts="$(python3 -B "$T/evalcuts.py" "$DIR/slack_drafts_only_gate.py" ${CS:+"$CS"} ${REPO:+"$REPO/tests/test-claude-sync.sh"} 2>&1)"
+check "a command naming no function that evaluates its argument is read no further, a word's plain characters are passed in one step, and each answers as before (#2918)" "$evalcuts"
+
 echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"
 
 # Three ways a file reached a program unread (measured through this wrapper on main at a2490ad,
