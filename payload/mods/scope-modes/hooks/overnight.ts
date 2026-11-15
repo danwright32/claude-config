@@ -348,7 +348,8 @@ export const runsGit = runsFrom('git', runsGitFrom)
 // git running is read on its own, and the code passes only when every one is a read. A call's
 // arguments are taken from the code in one of two shapes. As an element of a list of arguments
 // (`['git', '-C', wt, 'show', ref]`, `execFileSync('git', [...])`), each later element is one
-// argument: a quoted string is one written out, and anything else is known only when the code runs.
+// argument: a quoted string is one written out, and anything else is known only when the code runs,
+// which only the folder -C names may be, since after the subcommand it could be --output.
 // As a command line in a string or a script (`'git log -5'`), its words run up to the string's end or
 // a command boundary, and the string must not be built while the code runs (builtAround), since a
 // placeholder there could carry a second command. The arguments are then handed, each written out or
@@ -375,6 +376,8 @@ const gitArgsRead = async (args: readonly Arg[], read: OvernightCall['read']): P
     if (before[i] === '-C' && i + 1 < before.length) i++
     else if (!GIT_QUIET.has(before[i] as string)) return false
   }
+  // An argument known only when the code runs could be --output, so the call is not read as a read.
+  if (after.includes(UNREAD_ARG)) return false
   // --output writes a file; git takes any unambiguous prefix of four characters or more (--outp).
   return !after.some(a => {
     const flag = a.split('=')[0] ?? ''
@@ -428,9 +431,18 @@ const gitCallReads = async (text: string, at: number, read: OvernightCall['read'
   }
   if (after !== ' ' && after !== '\t') return false
   if (builtAround(text, at)) return false
-  const stop = text.slice(end).search(/[\n;|&)'"`]/)
-  const line = stop < 0 ? text.slice(end) : text.slice(end, end + stop)
-  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>]/.test(v), v })), read)
+  // A string git starts ends at its own closing quote; git anywhere else runs to a command boundary,
+  // and a quote in a word there leaves the word unread. A word a shell would expand (a variable, a
+  // substitution, a glob, a leading ~) or quote is unread too, so after the subcommand it refuses.
+  let body = text.slice(end)
+  if (QUOTES.includes(before)) {
+    const close = body.indexOf(before)
+    if (close < 0) return false
+    body = body.slice(0, close)
+  }
+  const stop = body.search(/[\n;|&)]/)
+  const line = stop < 0 ? body : body.slice(0, stop)
+  return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>[\]]/.test(v) && !v.startsWith('~'), v })), read)
 }
 /** Whether every git call runsGit finds in the code is a local read (#2939); false when it finds none. */
 export const gitReadsOnly = async (text: string, read: OvernightCall['read']): Promise<boolean> => {

@@ -766,8 +766,9 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     for (const c of [
       // The refused shape, in the form the issue describes.
       `cmp /notes/a.json /notes/b.json; python3 -I -c 'import json, subprocess; a = json.load(open("/notes/a.json")); b = json.loads(subprocess.run(["git", "-C", "${wt}", "show", "HEAD:payload/x.json"], capture_output=True, text=True, check=True).stdout); print(sorted(k for k in a if a[k] != b.get(k)))'`,
-      `python3 -c "import subprocess; p = 'payload/x.json'; print(subprocess.check_output(['git', '-C', '${wt}', '--no-pager', 'show', 'HEAD:' + p]))"`,
-      `python3 -c "import subprocess; ref = 'HEAD'; print(subprocess.check_output(['git', 'cat-file', '-p', ref]))"`,
+      // The folder -C names may be known only when the code runs; it picks the repository read.
+      `python3 -c "import subprocess; wt = '${wt}'; print(subprocess.check_output(['git', '-C', wt, '--no-pager', 'show', 'HEAD:payload/x.json']))"`,
+      `python3 -c "import subprocess; print(subprocess.check_output(['git', 'cat-file', '-p', 'HEAD']))"`,
       `python3 -c "import subprocess; print(subprocess.check_output('git log --oneline -5', shell=True))"`,
       `python3 -c "import subprocess; a = subprocess.check_output(['git', 'diff', 'main', '--stat']); b = subprocess.check_output(['git', 'rev-parse', 'HEAD'])"`,
       `node -e "const wt = '${wt}'; console.log(require('child_process').execFileSync('git', ['-C', wt, 'diff', 'origin/main', '--stat']).toString())"`,
@@ -787,6 +788,13 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
       `python3 -c "import subprocess; ref = 'HEAD'; subprocess.run(f'git show {ref}', shell=True)"`,
       `python3 -c "import subprocess; wt = '/x'; subprocess.run('git -C ' + wt + ' show HEAD:x', shell=True)"`,
       `python3 -c "import subprocess; subprocess.run(['git'] + ['show'])"`,
+      // An argument after the subcommand known only when the code runs could be --output, so the
+      // call cannot be read as a read: a shell variable, a variable, a join, a placeholder, a glob.
+      ["python3 - <<'PY'", 'import subprocess', `subprocess.run('git log "$X"', shell=True)`, 'PY'].join('\n'),
+      `python3 -c "import subprocess; ref = 'HEAD'; subprocess.run(['git', 'log', ref])"`,
+      `python3 -c "import subprocess; p = 'x.json'; subprocess.run(['git', 'show', 'HEAD:' + p])"`,
+      `python3 -c "import subprocess; p = 'x.json'; subprocess.run(['git', 'show', f'HEAD:{p}'])"`,
+      `python3 -c "import subprocess; subprocess.run('git log -- *.json', shell=True)"`,
       // Options that run a program, change the config, or write a file.
       `python3 -c "import subprocess; subprocess.run(['git', '-c', 'alias.show=!rm -rf x', 'show'])"`,
       `python3 -c "import subprocess; subprocess.run(['git', '--exec-path=/tmp/x', 'show'])"`,
