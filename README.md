@@ -6789,7 +6789,9 @@ saying why), a program whose text names the files it writes (since #2847 also a 
 script file the command runs, its own code read as inline code is, a name its code writes where the
 folder cannot be followed held as could not check; since #2855 also a shell script's own commands
 and the scripts it runs, a script named through a variable the command sets, a script the command
-writes first from a heredoc, read as that text, and the local modules a script imports), and a
+writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
+a name such a script's program only adds onto a folder in its own variable, `ch + "/app/index.html"`,
+is that folder's and not judged, so a suite writing pages under its own mktemp folder runs), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -7030,7 +7032,8 @@ finding the words changed; the yes or no wrapper
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
-for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
+for, is judged as before; since #2991 so does taking away any look changing file git has never had
+in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent, the logic around it, and a tool's or its input
 schema's description pass, a property the schema names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code
 alone passes even where the reading follows a message less far after it than before (a verdict
@@ -7115,7 +7118,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855
+#1954, #2261, #2830, #2845, #2847, #2855, #2991
 
 </td></tr>
 <tr><td>

@@ -262,6 +262,8 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 // - Since #1933: a shell command taking away a mod hook file git has never tracked (untracked, by
 //   git's own index) passes, as a scratch copy a session made there by mistake holds no words of the
 //   mod as it ships. A tracked one's removal is judged as before, and so is one git cannot answer for.
+//   Since #2991 the same holds for every look changing file: on 2026-11-14 rm -rf and mv of an
+//   untracked copy of the mods folder a builder made in its worktree were held for the copy's .tsx.
 // - Since #1951: a pattern a script file is handed with every pattern character quoted or escaped
 //   (mod-kit's `quoted`: the search term '*push*'), which the shell matched against no file, is
 //   judged as the one file its characters name, so a quoted glob handed as data runs. A glob the
@@ -667,9 +669,16 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
       }
+      // #2991: only a name spelled from the top of the disk or home as the program writes it. One that
+      // only looks absolute because the program adds it onto a folder in its own variable (`ch +
+      // "/app/index.html"`, `f"{root}/app/page.tsx"`) is that folder's, which the guard cannot read:
+      // guessAt places it in the script's folder, where a test suite's mktemp folder is not, so
+      // test-score-adapters.sh was held for the pages it writes only under its own temp folder. A
+      // name after the shell's braces (`${APP}/globals.css`, filled in before the program runs) is
+      // judged as before.
       for (const m of mentionedLookFiles(text).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
-        if (t?.path) targets.push({ ...t, inScript: s.word })
+        if (t?.path && (/^(\/|~\/)/.test(t.word) || shellBraces(text, m) !== undefined)) targets.push({ ...t, inScript: s.word })
       }
     }
   }
@@ -1468,9 +1477,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // inside its project, so a folder named tests above the checkout lets nothing through.
     if (modTs ? isTestPath(relTo(t.path, tree)) || !isModHookTs(relTo(t.path, tree)) : lookKindIn(t.path, tree) === null) continue
     // #1933: taking away a mod hook file git has never tracked (a scratch copy made there by mistake)
-    // takes no words of the mod as it ships away, and passes. What the same command writes there is a
-    // target of its own, judged as ever.
-    if (t.removes && (modTs || isModHook(relTo(t.path, tree))) && (await neverTracked($, t.path, tree))) continue
+    // takes no words of the mod as it ships away, and passes. Since #2991 the same holds for every look
+    // changing file: one git has never had in its index (never committed, never staged), such as a
+    // throwaway copy of the mods folder a builder made in its worktree to check one mod, is no screen
+    // of the product, so taking it away (rm, or the source mv moves) passes. What the same command
+    // writes, the destination of that mv included, is a target of its own, judged as ever.
+    if (t.removes && (await neverTracked($, t.path, tree))) continue
     // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
     // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
     // the product, and the design it holds was settled on the issue it came from. Any other text there,
