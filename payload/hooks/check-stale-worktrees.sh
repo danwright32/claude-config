@@ -48,6 +48,29 @@
 #      process whose start does not match the lock, an older lock whose pid is running, one whose
 #      agent cannot be read, and any lock that is not a Claude agent's are left exactly as they
 #      are. The same reading decides tools/shipped-worktrees.sh, so the two cleanups agree.
+#   6. Its branch has no OPEN pull request (claude-config#2943). Rule 1 counts a branch pushed to
+#      the remote as held elsewhere, which is true of its commits and says nothing of whether the
+#      session is done with the folder: on the night of 2026-11-13 a session's worktree in a work
+#      repository, its pull request open, idle seven hours while the session slept, was removed under
+#      rule 1, and on 2026-11-14 the same rule removed one here while its PR (#2929) was open. An
+#      open PR is work still under way, so its worktree is kept until the PR closes or merges. The
+#      open list is one more call (lib/merged-prs.sh open_prs), and one that fails, or comes back as
+#      long as its limit, keeps every worktree (exit 2), never reads as "none open".
+#   7. While the Mac is asleep (lib/sleep.sh), no session sleep mode has working overnight has
+#      worked in it: its session registry record's folder or one of its edits is not inside the
+#      worktree (lib/sleep-worker-places.py). A worker idles between steps and overnight, so recency
+#      cannot see it. A worker whose places cannot be read, or a sleep record that cannot be, keeps
+#      every worktree (exit 2). So does a worker whose record holds a place that cannot be used (not
+#      an absolute path, or holding a tab or newline), which would otherwise read as "nowhere".
+#   8. Its branch was not pushed in the last day with no pull request yet (claude-config#2988). At
+#      08:33 ET on 2026-11-14 rule 1 removed two worktrees here, pushed and idle past six hours,
+#      whose PRs were opened 17 and 13 minutes later: a builder hands back a pushed branch and the
+#      main session opens its PR later, often hours later in a queue. When no merged PR holds its
+#      HEAD, and its remote copy moved in the last STALE_WT_PUSHED_HOURS (pushed_at below), it is
+#      kept unless a PR of it was closed unmerged. The closed list is one more call, made only when such a
+#      branch is found; one that fails keeps that worktree, saying so.
+#   Rules 6, 7 and 8 are the sweep's: --just-merged (below) asks none, its caller having just merged
+#   the branch's own pull request, and the session it was run from never being the one it removes.
 # Its BRANCH is never deleted, so every commit can be had back with `git worktree add`. What goes
 # with the folder is only what git ignores (installed packages, a local settings file).
 #
@@ -79,8 +102,10 @@
 # it bounds how long one run holds the lock that keeps the next one waiting. One removal measured
 # at 0.13 to 0.18 seconds on 2026-10-14, so the default leaves room for hundreds.
 #
-# ONE network call, not one per worktree: the merged PRs come back in a single list. A repo where
-# git lists no worktree but the main checkout costs nothing at all.
+# At most THREE network calls, never one per worktree: the merged PRs come back in a single list, the
+# open ones in another (rule 6, the sweep only; --just-merged makes the first alone), and the ones
+# closed unmerged in a third, made only when a branch pushed in the last day is found (rule 8). A
+# repo where git lists no worktree but the main checkout costs nothing at all.
 #
 # Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [--just-merged <worktree>] [repo-dir]
 #
@@ -90,7 +115,8 @@
 #          with what was done about it (removed, finished, or the command and the reason it was
 #          kept), so the caller has something to say.
 # Exit 2 = it could not tell, so nothing is claimed and nothing removed: not a git repo, no gh, or
-#          the merged PR list could not be read, or --just-merged named no agent worktree git lists.
+#          the merged or open PR list could not be read, the sleep record or a worker's places could
+#          not be, or --just-merged named no agent worktree git lists.
 #          Refusing rather than reporting a clean tree,
 #          because reading nothing and finding nothing wrong are otherwise one answer (L98).
 #
@@ -98,8 +124,12 @@
 #   STALE_WT_GH              the gh to run, for a fixture that must not reach the network (L2)
 #   STALE_WT_LIMIT           how many of the newest merged PRs to ask for (default 400); a worktree
 #                            whose PR is older than these is kept, the harmless direction
+#   STALE_WT_OPEN_LIMIT      how many open PRs to ask for (default 1000); a list this long is refused
+#   CLAUDE_SLEEP_RECORD      the sleep record (lib/sleep.sh; default ~/.claude/state/sleep/current.json)
+#   CLAUDE_SESSION_REGISTRY_DIR  the session registry (default ~/.claude/state/sessions)
 #   STALE_WT_BUDGET_SECS     no removal starts later than this from the start (default 300)
 #   STALE_WT_RECENT_MINUTES  a change this recent keeps a worktree (default 360)
+#   STALE_WT_PUSHED_HOURS    a branch pushed this recently with no PR yet keeps its worktree (default 24)
 #   STALE_WT_LSOF            the lsof to run, for a fixture that must see it fail (default lsof)
 #   AGENT_LOCK_PS            the ps that says whether a lock's agent is running (lib/agent-lock.sh)
 #   AGENT_LOCK_BOOT_EPOCH    when this machine booted, in epoch seconds (lib/agent-lock.sh)
@@ -119,8 +149,10 @@ done
 REPO="${1:-$PWD}"
 GH="${STALE_WT_GH:-gh}"
 LIMIT="${STALE_WT_LIMIT:-400}"
+OPEN_LIMIT="${STALE_WT_OPEN_LIMIT:-1000}"
 BUDGET="${STALE_WT_BUDGET_SECS:-300}"
 RECENT="${STALE_WT_RECENT_MINUTES:-360}"
+PUSHED_HOURS="${STALE_WT_PUSHED_HOURS:-24}"
 LSOF="${STALE_WT_LSOF:-lsof}"
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -136,6 +168,10 @@ _HD="$(cd "${_HD:-/}" && pwd)"
 }
 . "$_HD/lib/default-branch.sh" || {
   echo "check-stale-worktrees: lib/default-branch.sh is missing, so whether a detached worktree's HEAD is on the default branch cannot be read." >&2
+  exit 2
+}
+. "$_HD/lib/sleep.sh" || {
+  echo "check-stale-worktrees: lib/sleep.sh is missing, so whether a session working overnight is using a worktree cannot be read." >&2
   exit 2
 }
 
@@ -236,6 +272,79 @@ if [ "${#paths[@]}" -gt 0 ]; then
 fi
 # An EMPTY list is a legitimate answer, from a repo that has merged nothing, and is left as one.
 
+# Rules 6 and 7, the sweep's alone (#2943). Each answer that cannot be had keeps every worktree, on
+# stderr, which the background runner keeps in its record (lib/stale-worktree-run.py, .last).
+open=""; sleepers=""
+if [ -z "$ONLY" ] && [ "${#paths[@]}" -gt 0 ]; then
+  open="$(cd "$top" && open_prs "$GH" "$OPEN_LIMIT")"; orc=$?
+  case "$orc" in
+    0) ;;
+    3) echo "check-stale-worktrees: the open pull request list came back with as many as were asked for ($OPEN_LIMIT), so an open one may be missing from it; ${#paths[@]} worktree(s) left unjudged rather than removed. STALE_WT_OPEN_LIMIT raises it." >&2
+       exit 2 ;;
+    *) echo "check-stale-worktrees: could not read the open pull requests, so whether any of these branches is still under review cannot be told; ${#paths[@]} worktree(s) left unjudged rather than removed." >&2
+       exit 2 ;;
+  esac
+  record="${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}"
+  case "$(sleep_state "$record")" in
+    asleep)
+      command -v python3 >/dev/null 2>&1 || {
+        echo "check-stale-worktrees: the Mac is asleep, and python3, which reads where its overnight sessions have worked, is not installed, so ${#paths[@]} worktree(s) are left unjudged rather than removed." >&2
+        exit 2
+      }
+      sleepers="$(python3 "$_HD/lib/sleep-worker-places.py" "$record" "${CLAUDE_SESSION_REGISTRY_DIR:-$HOME/.claude/state/sessions}" 2>&1)" || {
+        echo "check-stale-worktrees: the Mac is asleep, and where its overnight sessions have worked could not be read ($(printf '%s' "$sleepers" | tr '\n' ' ')), so ${#paths[@]} worktree(s) are left unjudged rather than removed." >&2
+        exit 2
+      } ;;
+    unreadable)
+      echo "check-stale-worktrees: the sleep record could not be read ($(sleep_why "$record" | tr '\n' ' ')), so whether a session working overnight is using any of these cannot be told; ${#paths[@]} worktree(s) left unjudged rather than removed." >&2
+      exit 2 ;;
+  esac
+fi
+# The overnight session that has worked inside a worktree, or nothing: a place counts when it is the
+# folder itself or anything under it, by the path git lists or the real one.
+sleeper_in(){   # $1 = the path git lists, $2 = its real path
+  [ -n "$sleepers" ] || return 1
+  # A real path that could not be read is the listed one again, never empty: an empty one would
+  # make every absolute place match. Read from a here string, not a pipe, so the awk that stops at
+  # the first match cannot cut a writer off under pipefail.
+  local r="${2:-$1}"
+  awk -F '\t' -v p="$1" -v r="$r" '
+    $2 == p || index($2, p "/") == 1 || $2 == r || index($2, r "/") == 1 { print $1; exit }' <<<"$sleepers"
+}
+# The open pull request of a branch, by number, or nothing.
+open_pr_of(){
+  [ -n "$open" ] && [ -n "$1" ] || return 0
+  awk -F '\t' -v b="$1" '$1 == b { print $2; exit }' <<<"$open"
+}
+# Rule 8 (#2988): when a branch's remote copy last moved, as "<epoch seconds><TAB>push", or
+# "<epoch seconds><TAB>commit" when no record of the move is kept, or nothing when no remote has a copy.
+# The record is the remote branch's reflog, which a push writes ("update by push") and so does a
+# fetch that moves it; a fetch of an old branch seen here for the first time reads as recent, which
+# keeps a worktree a day at most, the harmless direction. Without a reflog the remote copy's last
+# commit dates it, which cannot be later than the push. The latest across every remote counts.
+pushed_at(){   # $1 = branch
+  local r ref t src best="" bsrc=""
+  for r in $(git -C "$top" remote 2>/dev/null); do
+    ref="refs/remotes/$r/$1"
+    git -C "$top" rev-parse --verify --quiet "$ref" >/dev/null 2>&1 || continue
+    t="$(git -C "$top" reflog show --date=unix -n 1 --format=%gd "$ref" 2>/dev/null | sed -n 's/.*@{\([0-9][0-9]*\)}$/\1/p')"
+    src=push
+    [ -n "$t" ] || { t="$(git -C "$top" log -1 --format=%ct "$ref" 2>/dev/null)"; src=commit; }
+    case "$t" in ""|*[!0-9]*) continue ;; esac
+    if [ -z "$best" ] || [ "$t" -gt "$best" ]; then best="$t"; bsrc="$src"; fi
+  done
+  [ -n "$best" ] && printf '%s\t%s\n' "$best" "$bsrc"
+  return 0
+}
+# The pull requests closed without merging, read once and only when a worktree first needs them:
+# most runs have no branch pushed in the last day, and those ask GitHub nothing more (#2988).
+# closed_state is unread, read or failed.
+closed=""; closed_state=unread
+closed_pr_of(){
+  [ -n "$closed" ] && [ -n "$1" ] || return 0
+  awk -F '\t' -v b="$1" '$1 == b { print $2; exit }' <<<"$closed"
+}
+
 # The working directories of every running process, read once. Without lsof or /proc nothing can
 # be seen, and that is said and treated as in use, never as idle (L11).
 # Read in report mode too, so a worktree is only ever called stale when --remove would take it.
@@ -329,7 +438,20 @@ done
 for i in "${!paths[@]}"; do
   p="${paths[$i]}"; b="${branches[$i]}"; h="${heads[$i]}"; name="$(label "$p")"; bl="${b:-no branch}"
   case "$settled" in *" $p "*) continue ;; esac
-  # Whether its work landed is asked FIRST, because it costs only local git and the one list already
+  # Rules 6 and 7 first: each is a string match against a list already read (#2943).
+  if [ -n "$sleepers" ]; then
+    who="$(sleeper_in "$p" "$(cd "$p" 2>/dev/null && pwd -P)")"
+    if [ -n "$who" ]; then
+      echo "  keeping $name [$bl]: session $who, working overnight in sleep mode, has worked in it, so it is left until sleep mode ends"
+      continue
+    fi
+  fi
+  opr="$(open_pr_of "$b")"
+  if [ -n "$opr" ]; then
+    echo "  keeping $name [$b]: its branch has an open pull request, #$opr, so the work in it is still under way"
+    continue
+  fi
+  # Whether its work landed is asked next, before anything that walks the folder, because it costs only local git and the one list already
   # read, and a worktree whose work has not landed is kept whatever else is true of it. Every check
   # after this walks the folder, so only a worktree that could be removed pays for one (#1247).
   # stale_why and gone_why are what the STALE and removed lines say qualified it.
@@ -380,6 +502,31 @@ for i in "${!paths[@]}"; do
         ""|*[!0-9]*) echo "  keeping $name [$b]: $why, and git could not say whether its commits are on any other branch"; continue ;;
         *) echo "  keeping $name [$b]: $why, and $n commit(s) on it are on no other branch, local or remote"; continue ;;
       esac
+      # Rule 8 (#2988): pushed in the last day with no pull request yet. A builder hands back a
+      # pushed branch and the main session opens its PR later, often hours later in a queue, so the
+      # pushed copy that qualified it under rule 1 says nothing of whether anybody is done with it.
+      # A branch whose merged PR holds HEAD is not here. One whose PR merged but which has commits
+      # since (newer, or merged at a commit not here) holds pushed work no PR has covered yet, and is
+      # kept the same way. One with a PR closed unmerged follows rule 1.
+      IFS=$'\t' read -r pat psrc <<<"$(pushed_at "$b")"
+      if [ -n "$pat" ] && [ $(( $(date +%s) - pat )) -lt $(( PUSHED_HOURS * 3600 )) ]; then
+        page=$(( ($(date +%s) - pat) / 3600 )); [ "$page" -ge 0 ] || page=0
+        if [ "$psrc" = push ]; then pushed="its branch was pushed $page hour(s) ago"
+        else pushed="its branch's remote copy holds a commit made $page hour(s) ago"; fi
+        if [ "$verdict" = "unmerged" ]; then nopr="has no pull request yet"
+        else nopr="holds commits no merged pull request held"; fi
+        if [ "$closed_state" = unread ]; then
+          if closed="$(cd "$top" && closed_prs "$GH" "$LIMIT")"; then closed_state=read; else closed_state=failed; closed=""; fi
+        fi
+        if [ "$closed_state" = failed ]; then
+          echo "  keeping $name [$b]: $pushed, and whether a pull request of it was closed unmerged could not be read, so it is kept as one whose pull request may still be opened"
+          continue
+        fi
+        if [ -z "$(closed_pr_of "$b")" ]; then
+          echo "  keeping $name [$b]: $pushed and $nopr, so one may still be opened for it; it is kept until that is $PUSHED_HOURS hours old"
+          continue
+        fi
+      fi
       stale_why="every commit on it is also on another branch, local or remote, and nothing is uncommitted"
       gone_why="every commit on it is also on another branch, local or remote"
     fi

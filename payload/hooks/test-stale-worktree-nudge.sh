@@ -354,10 +354,14 @@ cat >"$TMP/bin/gh" <<'STUB'
 : >"$GH_GATE.reached"
 t0=$SECONDS; while [ ! -e "$GH_GATE" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
 : >"$GH_GATE.left"
+# The open pull requests (#2943): none, so the landed worktree is judged by its merged PR alone.
+case " $* " in *" --state open "*) exit 0 ;; esac
 cat "$GH_MERGED"
 STUB
 chmod +x "$TMP/bin/gh"
 export GH_GATE="$TMP/gate-gh" GH_MERGED="$TMP/merged.tsv"
+# The real check asks whether the Mac is asleep (#2943); never this Mac's own record.
+export CLAUDE_SLEEP_RECORD="$TMP/no-sleep/current.json"
 printf 'fix/415-landed\t%s\t415\n' "$(G -C "$WT/agent-landed" rev-parse HEAD)" >"$GH_MERGED"
 E2E_STATE="$TMP/e2e-state"
 # Judged by order, not the clock, as in the first section (claude-config#2429).

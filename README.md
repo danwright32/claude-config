@@ -3554,7 +3554,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
-Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
+(made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
+missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
+runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
@@ -5498,8 +5502,18 @@ else, nothing in it is uncommitted, nothing changed in the last six hours, and n
 working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
 every commit on its branch is also on another branch, local or remote (which covers work shipped in
 a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
-the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
-under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+the default branch. The sweep also keeps a worktree whose branch has an open pull request, and,
+while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
+session registry folder or a file it edited is inside it), because a pushed branch counts as kept
+elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
+the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
+a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
+unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
+removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
+alone, and asks none of these questions. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -7862,7 +7876,11 @@ SHA-256 of its repository and word (#2246), since a held command's word can pass
 character key limit; an answer kept under the earlier key form is still read for its week (#2256
 removes that read).
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
+session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
+to an absolute path: the mod then writes, reads and rotates its log and error file in that folder,
+and the weekly line's runner reads the same one (#2906). A relative path is refused, and nothing is
+written anywhere. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
 later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
 renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that

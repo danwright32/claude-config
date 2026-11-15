@@ -2,13 +2,13 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, SCAN_MS, shellLogWording, stringsOf, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, FILES_JQ, HEADER, SCAN_MS, WORDING_PATH, shellLogWording, stringsOf, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { readsAsSend } from './send-wording.ts'
-import { pipeline } from './mod-kit/hooks/commands.ts'
+import { git as gitArgs, pipeline } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 
@@ -33,8 +33,10 @@ const modKit: { name: string; register: Register } = {
       }
       // Only the members the guard calls are stood in; any other it ever reached would be undefined
       // and throw, which every test here would show as a refusal it did not expect.
-      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper' | 'branch' | 'repo' | 'linkRepo'> = {
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'git' | 'mergeHelper' | 'branch' | 'repo' | 'linkRepo'> = {
         screen: async () => null,
+        // The git reader is mod-kit's own, copied (#2971).
+        git: async (input: { words: string[] }) => ask('git', input),
         // The gh and command readers are byte for byte copies of mod-kit's own (#2628).
         pipeline: async (input: { command: string; cwd?: string }) => ask('pipeline', input),
         gh: async (input: { words: string[] }) => ask('gh', input),
@@ -67,7 +69,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 const withKit = { plugins: [secDefault, modKit] }
 // Scope modes, standing in (#2628): whether sleep mode is on, and the notes it would take for the
 // night's report. Absent from withKit, as a Mac without scope modes is awake.
-const night: { asleep: boolean; notes: Record<string, unknown>[]; fails: boolean } = { asleep: false, notes: [], fails: false }
+// `ends`: when each sleep ended, as scope modes reads them (#2993); `endsFail`: that read throws.
+const night: { asleep: boolean; notes: Record<string, unknown>[]; fails: boolean; ends: number[]; endsFail: boolean } = { asleep: false, notes: [], fails: false, ends: [], endsFail: false }
 const sleepKit: { name: string; register: Register } = {
   name: 'scope-modes',
   register: on => {
@@ -82,6 +85,7 @@ const sleepKit: { name: string; register: Register } = {
       const scopeModes = {
         isAsleep: async () => ask('isAsleep'),
         sleepNote: async (note: Record<string, unknown>) => ask('sleepNote', note),
+        sleepEnds: async () => ask('sleepEnds'),
       }
       return { ...built, scopeModes }
     })
@@ -92,6 +96,8 @@ const nightFresh = (asleep: boolean) => {
   night.asleep = asleep
   night.notes = []
   night.fails = false
+  night.ends = []
+  night.endsFail = false
 }
 
 const HOME = `${'/Users'}/dan`
@@ -126,7 +132,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // its path from the top (absent: not there upstream), and whether git show fails another way.
   // #2833: originFails, git remote get-url exits nonzero; urls, the pull request each selector names
   // as gh pr view gives it (absent: danwright32/app's), and viewFails, gh pr view alone failing.
-  const night2 = { session: 's1', diffs: {} as Record<string, string>, urls: {} as Record<string, string>, viewFails: false, originFails: false, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
+  // #2973: cut, the selectors whose diff gh cuts short (exit 0, as a 7.6 MB diff came back); prFiles,
+  // GitHub's list of each pull request's files by number, a file with no patch where GitHub gives
+  // none; changed, the count gh pr view gives where it differs from that list's.
+  const night2 = { session: 's1', diffs: {} as Record<string, string>, urls: {} as Record<string, string>, viewFails: false, originFails: false, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[], cut: {} as Record<string, true>, prFiles: {} as Record<string, { filename: string; patch?: string }[]>, changed: {} as Record<string, number> }
   const ghs: string[][] = []
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
@@ -178,6 +187,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (cmd === '__scope') {
       if (night.fails) return { value: { exitCode: 1, stdout: '', stderr: 'the sleep record could not be read', isStdoutTruncated: false, isStderrTruncated: false } } as never
       if (method === 'isAsleep') return ok(JSON.stringify(night.asleep))
+      if (method === 'sleepEnds') {
+        if (night.endsFail) return { value: { exitCode: 1, stdout: '', stderr: 'the ended sleep records could not be listed', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(JSON.stringify(night.ends))
+      }
       if (!night.asleep) return ok(JSON.stringify({ isNoted: false }))
       night.notes.push(JSON.parse(String(raw)))
       return ok(JSON.stringify({ isNoted: true }))
@@ -192,9 +205,26 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         if (night2.viewFails) return { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return ok(`${night2.urls[sel] ?? `https://github.com/danwright32/app/pull/${sel || '12'}`}\n`)
       }
+      // #2973: a pull request's address and how many files it changes, as gh pr view --json gives them,
+      // and GitHub's list of its files through gh api, each line as gh's jq makes it from FILES_JQ: the
+      // name, and the patch for a name WORDING_PATH matches (checked against real gh on a real pull
+      // request, evidence in the PR), false for any other.
+      if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url,changedFiles')) {
+        const r = argv[argv.indexOf('-R') + 1]
+        const url = night2.urls[sel] ?? `https://github.com/${argv.includes('-R') ? r : 'danwright32/app'}/pull/${sel || '12'}`
+        const n = /\/pull\/(\d+)/.exec(url)?.[1] ?? ''
+        return ok(`${night2.changed[n] ?? night2.prFiles[n]?.length ?? 0} ${url}\n`)
+      }
+      if (argv[1] === 'api') {
+        const n = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/files\?per_page=100$/.exec(argv[2] ?? '')?.[1]
+        if (n === undefined || !argv.includes('--paginate') || argv[argv.indexOf('--jq') + 1] !== FILES_JQ) throw new Error(`unexpected gh command: ${argv.join(' ')}`)
+        const re = new RegExp(WORDING_PATH, 'i')
+        return ok((night2.prFiles[n] ?? []).map(f => `${JSON.stringify([f.filename, re.test(f.filename) ? (f.patch ?? null) : false])}\n`).join(''))
+      }
       if (argv[1] !== 'pr' || argv[2] !== 'diff') throw new Error(`unexpected gh command: ${argv.join(' ')}`)
       const d = night2.diffs[sel]
       if (d === undefined) return { value: { exitCode: 1, stdout: '', stderr: `no pull requests found for ${sel || 'the current branch'}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (night2.cut[sel]) return { value: { exitCode: 0, stdout: d.slice(0, 40), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
       return ok(d)
     }
     // git, standing in over the files above: one repository at /w/app, searched as git grep does.
@@ -279,6 +309,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       return ok(JSON.stringify(pipeline(input.command).map(c => ({ ...c, folder: input.cwd ?? null }))))
     }
     // undefined (no gh, no helper) travels as null and is read back as none.
+    if (cmd === '__modkit' && method === 'git') return ok(JSON.stringify(gitArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
     if (cmd === '__modkit' && method === 'gh') return ok(JSON.stringify(ghArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
     if (cmd === '__modkit' && method === 'mergeHelper') return ok(JSON.stringify(mergeHelperArgs(JSON.parse(String(raw))) ?? null))
     if (cmd === '__modkit' && method === 'repo') {
@@ -1873,9 +1904,13 @@ test('a choice is put to Dan in the session that made it or in its own repositor
   expect(away).not.toContain('AskUserQuestion')
   w.ctl.cwd = REPO
   expect(refusalOf(await call($, MERGE))).toContain(`Put it to him: call AskUserQuestion with one question and metadata {"source": "slack-alert-guard:chosen:${id}"}`)
-  // Expired, it is said only in its own repository, and saying nothing in B does not use up A's telling.
+  // Expired, it is said as expired only in its own repository. Unapproved for days by then, it is
+  // put to Dan once in B as well (#2993), and that does not use up A's telling.
   await w.clock.advance(3 * 24 * 60 * 60_000)
   w.ctl.cwd = SITE
+  const inB = await promptLines($)
+  expect(inB).not.toContain('expired unanswered')
+  expect(inB).toContain(`chosen:${id}`)
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   w.ctl.cwd = REPO
   const expired = await promptLines($)
@@ -1893,6 +1928,112 @@ test('a choice whose repository cannot be read is put to Dan in any session, as 
   w.night.session = 's2'
   w.ctl.cwd = SITE
   expect(await promptLines($)).toContain(`chosen:${id}`)
+})
+
+// #2993: a choice the morning question never reached (its session still open but not written in,
+// or Dan working in another project) is put to him by any awake session on the Mac once it is still
+// unapproved two hours after sleep ended, once in each session; once he approves or changes it, never.
+const HOUR = 60 * 60_000
+const count = (s: string, part: string) => s.split(part).length - 1
+const reasked = async ($: Caller, w: W, endsFail = false) => {
+  const id = await chooseReword($, w)
+  // Asleep for the rest of the night, then awake: sleep ended now, and a night before ended long ago.
+  await w.clock.advance(6 * HOUR)
+  night.asleep = false
+  night.ends = [T0 - 30 * HOUR, await w.readClock()]
+  night.endsFail = endsFail
+  return id
+}
+
+test('a choice still unapproved two hours after sleep ended is put to Dan by any awake session on the Mac, once in each, naming its project, file and wording (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  // The session that made it is still open, and Dan writes in another project's session.
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  await w.clock.advance(HOUR)
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  await w.clock.advance(HOUR + 60_000)
+  const lines = await promptLines($)
+  expect(count(lines, `"source": "slack-alert-guard:chosen:${id}"`)).toBe(1)
+  for (const part of ['danwright32/app', ALERT, SHOWN]) expect(lines).toContain(part)
+  expect(readsAsSend(lines)).toBe(false)
+  // Once in each session.
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  // The session that made it asks as before, never twice in one message.
+  w.night.session = 's1'
+  w.ctl.cwd = REPO
+  expect(count(await promptLines($), `chosen:${id}`)).toBe(1)
+  // Asked in another session, the picker names the project, the file and the wording, and never reads as sending.
+  w.night.session = 's3'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  await morning($, w, id, CHANGE)
+  const q = w.asked.at(-1)?.questions[0]
+  for (const part of ['danwright32/app', ALERT, SHOWN]) expect(q?.question).toContain(part)
+  expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  for (const o of q?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
+  // Changed, it is not asked again in a new session, and it still holds the merge.
+  w.night.session = 's4'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.ctl.cwd = REPO
+  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+})
+
+test('a Change wording answer that cannot be kept is said, and other sessions go on asking (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  await w.clock.advance(2 * HOUR + 60_000)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  w.ctl.storeSetFails = true
+  const r = await morning($, w, id, CHANGE)
+  expect(said(r)).toContain('what it should say')
+  expect(said(r)).toMatch(/His answer could not be kept \(.+\), so other sessions may put it to him again\./)
+  expect(Object.values(w.store).some(v => (v as { rejected?: number }).rejected !== undefined)).toBe(false)
+  w.ctl.storeSetFails = false
+  w.night.session = 's3'
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  // Kept, nothing more is said about it.
+  w.night.session = 's4'
+  expect(said(await morning($, w, id, CHANGE))).not.toContain('could not be kept')
+  w.night.session = 's5'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+})
+
+test('a choice approved in another session is never put to Dan again (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await reasked($, w)
+  await w.clock.advance(2 * HOUR + 60_000)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  await morning($, w, id, APPROVE)
+  w.night.session = 's3'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.night.session = 's1'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+})
+
+test('when sleep mode cannot say when it ended, the choice is put to Dan two hours after it was made, never left unasked (#2993)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  // Awake an hour: no end can be read, so the wait counts from the choice, made seven hours ago.
+  const id = await reasked($, w, true)
+  await w.clock.advance(HOUR)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  const lines = await promptLines($)
+  expect(lines).toContain(`chosen:${id}`)
+  expect(lines).not.toContain('sleep mode ended')
+  // Never while asleep: no question reaches Dan then.
+  night.asleep = true
+  w.night.session = 's3'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
 })
 
 test('taking away unapproved wording that is not on origin passes in any mode; wording origin holds is still held (#2628)', withNight, async ($, on) => {
@@ -2202,7 +2343,10 @@ test('a git apply of a 2,000 line patch across seven files is checked and passed
   const patch = designPatch()
   expect(patch.split('\n').length).toBeGreaterThanOrEqual(2000)
   expect(patch.match(/^diff --git /gm)?.length).toBe(7)
-  const w = world($, on, { files: { [DESIGN_PATCH]: patch } })
+  // The four files the patch edits are there, as git apply needs them to be; since #2971 the guard
+  // reads each one the patch changes.
+  const edited = Object.fromEntries(['build.ts', 'settled.json', 'checks.ts', 'sealed.html'].map(n => [`/w/app/docs/design/${n}`, 'first\nold\nlast\n']))
+  const w = world($, on, { files: { [DESIGN_PATCH]: patch, ...edited } })
   const apply = { tool: 'Bash', command: `git apply ${DESIGN_PATCH}` }
   expect(refusalOf(await call($, apply))).toBe('')
   expect(refusalOf(await call($, { ...apply, agentId: 'agent-a1' }))).toBe('')
@@ -2294,4 +2438,170 @@ test("a subagent's new sentence in a copy builder a sender imports passes by #28
   expect(why).toContain('Backup alert: ${sentenceFor(kind)}')
   expect(why).toContain('Stop and report')
   expect(w.ran.length).toBe(1)
+})
+
+// #2973: on 2026-11-14 a subagent's throwaway shell write adding one member to an event union, in a
+// work repository's file of database types, was held as Slack wording: its column and event names
+// (slack_channel_id, 'slack_channel_linked') read as the Slack setting marker in a file that makes no
+// request. The same file with a send in it is still held.
+const DB_TYPES_FILE = '/w/app/src/lib/db/types.ts'
+const DB_TYPES_TEXT = [
+  'export type Database = {',
+  '  public: {',
+  '    Tables: {',
+  '      teams: { Row: { id: string; slack_channel_id: string | null; slack_webhook_url: string | null } }',
+  '    }',
+  '  }',
+  '}',
+  "export type EventKind = 'shift_created' | 'slack_channel_linked'",
+  '',
+].join('\n')
+test('a shell write adding a member to an event union in a file of database types passes; the same file once it posts is held (#2973)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [DB_TYPES_FILE]: DB_TYPES_TEXT } })
+  const union = { tool: 'Bash', command: `sed -i '' "s/'slack_channel_linked'$/'slack_channel_linked' | 'shift_swapped'/" ${DB_TYPES_FILE}` }
+  expect(refusalOf(await call($, union))).toBe('')
+  expect(w.ran.length).toBe(1)
+  w.files[DB_TYPES_FILE] = `${DB_TYPES_TEXT}export const tell = (t: { slack_webhook_url: string }) => fetch(t.slack_webhook_url, { method: 'POST', body: JSON.stringify({ text: 'Team linked' }) })\n`
+  expect(refusalOf(await call($, union))).toContain(`shell command writes to ${DB_TYPES_FILE}, which posts to Slack`)
+  expect(w.ran.length).toBe(1)
+})
+
+// #2973: a merge in a work repository was refused twice because gh cut its 7.6 MB diff short (exit 0;
+// two components, a stylesheet and settled design files with pictures embedded), while five choices
+// made overnight in a different project waited on Dan. Only a choice that holds the pull request's
+// repository may hold it, and a diff cut short is read again file by file.
+const SITE_FILES = [{ filename: 'components/card.tsx', patch: '@@ -1 +1 @@\n-export const Card = 1\n+export const Card = 2' }, { filename: 'app/globals.css', patch: '@@ -1 +1 @@\n-a{}\n+b{}' }, { filename: 'docs/design/settled.html' }]
+test('a merge whose diff gh cuts short passes where no choice waiting holds its repository, and is read file by file where one does (#2973)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  // Repository B: the choice was made in A, so B's merge passes without its diff, by -R or by folder.
+  w.night.diffs['7'] = DIFF_CHANGED
+  w.night.cut['7'] = true
+  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  w.night.urls['7'] = 'https://github.com/danwright32/site/pull/7'
+  w.ctl.cwd = SITE
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
+  // gh failing outright in B passes too, where its repository can be said.
+  w.night.ghFails = true
+  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  w.night.ghFails = false
+  w.ctl.cwd = REPO
+  // Repository A, cut short: GitHub's list of its files is read, the pictures never sent, and the
+  // file carrying the chosen wording holds it.
+  w.night.cut['12'] = true
+  const hunk = DIFF.slice(DIFF.indexOf('@@'))
+  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: hunk }]
+  const before = w.ghs.length
+  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+  expect(w.ghs.slice(before).map(g => g.slice(0, 3).join(' '))).toEqual(['gh pr diff', 'gh pr view', 'gh pr view', 'gh api repos/danwright32/app/pulls/12/files?per_page=100'])
+  // Read so, a pull request not carrying it passes.
+  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: DIFF_CHANGED.slice(DIFF_CHANGED.indexOf('@@')) }]
+  expect(refusalOf(await call($, MERGE))).toBe('')
+  // A file that could carry it with no patch from GitHub, or a list short of the files changed, is
+  // could not check, naming the choice waiting, the session that made it and how it is approved.
+  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts' }]
+  const blind = refusalOf(await call($, MERGE))
+  expect(blind).toContain('could not check')
+  expect(blind).toContain('GitHub gives no diff for lib/alert.ts')
+  expect(blind).toContain(`${ALERT}: "${SHOWN}", chosen by session s1`)
+  expect(blind).toContain('"source": "slack-alert-guard:chosen:')
+  w.night.prFiles['12'] = [...SITE_FILES]
+  w.night.changed['12'] = 3001
+  expect(refusalOf(await call($, MERGE))).toContain('GitHub listed 3 of the 3001 files it changes')
+})
+
+test('a merge read file by file shares one deadline with the diff, so a slow gh is a timeout inside the hook, never a hook killed mid read (#2973, L842)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.cut['12'] = true
+  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: DIFF.slice(DIFF.indexOf('@@')) }]
+  // Each gh call answers in 3 s: the diff, the repository and the file count use 9 s, so the list
+  // of files is never asked for. Each with SCAN_MS of its own, the read would end at 12 s, past the
+  // 10 s Claude Code gives a hook.
+  w.ctl.ghTakes = 3000
+  const start = await w.readClock()
+  const why = refusalOf(await call($, MERGE))
+  expect(why).toContain('timeout, not a refusal')
+  expect(why).toContain("GitHub did not list the pull request's files within 7 seconds")
+  expect((await w.readClock()) - start).toBeLessThan(10_000)
+  expect(w.ghs.some(g => g[1] === 'api')).toBe(false)
+})
+
+test('a merge held as could not check names each waiting choice, and a session that did not make one is told where it is approved (#2973)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.ghFails = true
+  const mine = refusalOf(await call($, MERGE))
+  expect(mine).toContain('could not check')
+  expect(mine).toContain(`${ALERT}: "${SHOWN}", chosen by session s1 (this session puts it to Dan`)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  const theirs = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))
+  expect(theirs).toContain('chosen by session s1 (it is put to Dan in that session, or once it ends in a session working in danwright32/app)')
+  expect(theirs).not.toContain('"source"')
+})
+
+// #2971: git apply, git am and patch write files no word of theirs names, so a patch rewording an
+// alert went through with nothing held. A patch is judged as the Edit it makes.
+const DATE_PATCH = ['diff --git a/lib/date.ts b/lib/date.ts', '--- a/lib/date.ts', '+++ b/lib/date.ts', '@@ -1 +1 @@', '-export const x = 1', "+export const x = 'Deploy failed on production'", ''].join('\n')
+const NEW_SENDER_PATCH = [
+  'diff --git a/lib/pager.ts b/lib/pager.ts',
+  'new file mode 100644',
+  '--- /dev/null',
+  '+++ b/lib/pager.ts',
+  '@@ -0,0 +1 @@',
+  "+export const page = () => fetch(process.env.SLACK_WEBHOOK_URL as string, { method: 'POST', body: JSON.stringify({ text: 'Disk is full on the primary' }) })",
+  '',
+].join('\n')
+test('a patch rewording an alert in a file that posts to Slack is held however it is applied, and Dan approving the wording lets it through (#2971)', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/app/fix.patch': DIFF } })
+  for (const command of ['git apply /w/app/fix.patch', 'git apply fix.patch', 'git -C /w/app am fix.patch', 'patch -p1 < fix.patch', 'cat fix.patch | git apply', `git apply <<'EOF'\n${DIFF}EOF`, `patch -p1 <<'EOF'\n${DIFF}EOF`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain('failed on production')
+  }
+  expect(w.ran).toEqual([])
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'git apply fix.patch' }))
+  expect(refusalOf(await ask($, w, why, APPROVE))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply fix.patch' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a patch to a file that sends nothing passes; a patch making a sender is held; one the guard cannot read is held as could not check (#2971)', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/app/date.patch': DATE_PATCH, '/w/app/new.patch': NEW_SENDER_PATCH, '/w/app/fix.patch': DIFF } })
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply date.patch' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply --check fix.patch' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git apply new.patch' }))).toContain('Disk is full on the primary')
+  for (const [command, said] of [
+    ['git apply missing.patch', 'missing.patch is not a file the guard can read'],
+    ['curl -s https://example.com/fix.patch | git apply', 'standard input cannot be read'],
+    [`git apply <<EOF\n${DIFF}EOF`, 'the shell fills in'],
+    ["git apply <<'EOF'\nnot a diff\nEOF", 'could not be read as a diff'],
+    ['git apply -p0 fix.patch', '/w/app/b/lib/alert.ts, a file the patch changes, is not there to read'],
+  ] as const) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain('could not check')
+    expect(`${command}: ${why}`).toContain(said)
+  }
+  expect(w.ran.length).toBe(2)
+})
+
+test('a patch applied in reverse is judged by what it leaves, and patch -d places a file it is named inside its folder (#2971 lessons review)', withKit, async ($, on) => {
+  const reworded = ALERT_TEXT.replace('Deploy ${id} failed', REWORDED)
+  const w = world($, on, { files: { [ALERT]: reworded, '/w/app/fix.patch': DIFF } })
+  // The reworded wording is approved, so read forward the patch adds nothing new; in reverse it puts
+  // the old wording back, which is new to this file and unapproved.
+  w.store[wordingKey(REWORDED)] = { at: T0, file: ALERT, text: [REWORDED], rendered: SHOWN }
+  for (const command of ['git apply -R fix.patch', 'git apply --reverse fix.patch', 'patch -R -p1 < fix.patch']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain('"Deploy ${id} failed"')
+  }
+  expect(w.ran).toEqual([])
+  // patch -d lib alert.ts: the file named is lib/alert.ts, read and judged there.
+  w.files[ALERT] = ALERT_TEXT
+  delete w.store[wordingKey(REWORDED)]
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'patch -d lib alert.ts fix.patch' }))).toContain('failed on production')
 })

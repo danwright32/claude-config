@@ -4020,6 +4020,14 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   GitHub remote or a branch git cannot read. The mod's own failures go to `errors.jsonl` beside it,
   by a separate write (L561), and the first each session is one dim line naming the file and saying
   nothing was held. The log is rotated, never cut (#2143): see "The read and the rotation" below.
+- **The folder for one run (#2906).** `CLAUDE_AREA_CHECK_DIR`, when it names an absolute path, is
+  the folder in place of `~/.claude-area-check` for every write, read and rotation, and every
+  sentence naming the log or the error file names it there; the weekly line's runner already read
+  the same variable, so a live test session's records never reach the real log the weekly line
+  counts (L528). Empty is unset, as the shell's `${VAR:-default}` reads it. A relative path is
+  refused rather than resolved against the engine's folder or replaced by the real one (L322): the
+  write fails, says why, and says the error could not be kept. `areaFolder` in `prline.ts` decides
+  it, and `tests/pr-line.test.ts` measures where the writes land with it set and unset.
 - **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
   repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
   reports holds per session; `tests/replay-fixture/` is this repository's own month, measured that

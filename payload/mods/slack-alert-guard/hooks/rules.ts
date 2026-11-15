@@ -99,6 +99,15 @@ export const inScope = (path: string, text: string): boolean => {
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
 }
 
+/**
+ * The paths inScope reads as code whatever their text (a code extension, or a name with none, which
+ * may hold a script), as a pattern, case ignored: the files of a pull request whose diff can carry
+ * wording, picked out where the guard cannot run code of its own (gh's jq, #2973).
+ */
+export const WORDING_PATH = `(\\.(${[...CODE].join('|')})|(^|/)\\.?[^/.]+)$`
+/** gh's jq over GitHub's list of a pull request's files: one JSON line each, its name and its patch where WORDING_PATH matches it (null when GitHub gives none), false where it does not. */
+export const FILES_JQ = `.[] | [.filename, (if (.filename | test(${JSON.stringify(WORDING_PATH)}; "i")) then .patch else false end)] | @json`
+
 // Prose files are read by people, never run, so they post nothing. Only these are ruled out as
 // senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
 // may still send, so it is read as a sender is.
@@ -204,9 +213,18 @@ const makesRequest = (lang: RequestLanguage, code: string): boolean =>
 // 3.1 ms now; 500 of those would be 1.6 s of SCAN_MS).
 const onlyMatches = (lang: RequestLanguage | undefined, code: string): boolean => {
   if (lang === undefined) return false
-  for (const m of EVERY.slice(0, NAMES.length)) for (const x of code.matchAll(m)) if (!matchedAt(code, x.index ?? 0, (x.index ?? 0) + x[0].length)) return false
+  for (const [i, m] of EVERY.slice(0, NAMES.length).entries())
+    for (const x of code.matchAll(m)) if (!matchedAt(code, x.index ?? 0, (x.index ?? 0) + x[0].length) && !(i === SETTING && !isSettingSpelling(x[0]))) return false
   return !HELPERS.some(m => m.test(code)) && !makesRequest(lang, code)
 }
+// The Slack setting marker's place in NAMES, and whether a match of it is spelled as an environment
+// setting is, in capitals. Spelled any other way (a table's column or an event's name in lower case,
+// as the tests spell them) it is a name the file uses for its own data, and a send only where the
+// file makes a request itself (#2973: a file of database types was held as Slack wording for its
+// column names). Such a file is read on as a file that only matches is. Neither spelling is written
+// out here, so this file's own source never reads as a sender.
+const SETTING = NAMES.length - 1
+const isSettingSpelling = (s: string): boolean => s === s.toUpperCase()
 
 /**
  * Where a file's code names a Slack send (#2662): every marker in it, or none when the file only
@@ -894,6 +912,94 @@ const hash = (text: string): string => {
 export const wordingKey = (text: string): string => `wording:${hash(text)}`
 /** Where his approval of taking text away from one file is kept: by the file and the text removed. */
 export const removalKey = (file: string, removed: string[]): string => `removal:${hash(JSON.stringify([file, [...removed].sort()]))}`
+/**
+ * One file a patch changes (#2971): its name on each side as the patch writes it (null for
+ * /dev/null, a file made or removed), and each hunk's lines before and after, context included, so
+ * a hunk is judged as an Edit replacing the one with the other.
+ */
+export type PatchFile = { from: string | null; to: string | null; hunks: { before: string; after: string }[] }
+const patchName = (raw: string): string | null => {
+  const name = (raw.split('\t')[0] ?? '').trim().replace(/^"(.*)"$/, '$1')
+  return name === '/dev/null' ? null : name
+}
+/**
+ * The files a patch changes (#2971), read from its `---` and `+++` lines and its hunks, as git apply,
+ * git am and patch read a unified diff (a mail's text before its diff is skipped). Undefined for text
+ * it cannot read: no file changed, a hunk whose lines do not add up to its header, or a binary patch.
+ */
+export const patchFiles = (text: string): PatchFile[] | undefined => {
+  const lines = text.split('\n')
+  const out: PatchFile[] = []
+  let file: PatchFile | undefined
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string
+    if (/^GIT binary patch$/.test(line)) return undefined
+    if (line.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')) {
+      file = { from: patchName(line.slice(4)), to: patchName((lines[i + 1] as string).slice(4)), hunks: [] }
+      out.push(file)
+      i++
+      continue
+    }
+    const h = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line)
+    if (!h || !file) continue
+    let [olds, news] = [Number(h[1] ?? 1), Number(h[2] ?? 1)]
+    const before: string[] = []
+    const after: string[] = []
+    while (olds > 0 || news > 0) {
+      const l = lines[++i]
+      if (l === undefined) return undefined
+      if (l.startsWith('\\')) continue
+      const [mark, body] = [l[0] ?? ' ', l.slice(1)]
+      if (mark === ' ' || l === '') {
+        before.push(body)
+        after.push(body)
+        olds--
+        news--
+      } else if (mark === '-') {
+        before.push(body)
+        olds--
+      } else if (mark === '+') {
+        after.push(body)
+        news--
+      } else return undefined
+      if (olds < 0 || news < 0) return undefined
+    }
+    file.hunks.push({ before: before.join('\n'), after: after.join('\n') })
+  }
+  return out.length ? out : undefined
+}
+
+/**
+ * How a patch command places the files its patch names (#2971): the leading folders it strips from
+ * each name (`-p`; undefined where the command gives none, so the caller tries git's a/ and b/), the
+ * folder it applies in below where it runs (`patch -d`, `git apply --directory`, which git reads
+ * from the top of the checkout), for patch a file named to take every hunk, and whether it applies
+ * the patch in reverse (`-R`, `--reverse`), when each hunk's after is what the file held and its
+ * before is what it is left holding. `words` are the patch program's own words after its name: git
+ * apply's after `apply`, patch's after `patch`.
+ */
+export const patchPlacing = (words: readonly string[], git: boolean): { strip?: number; into: string; target?: string; reverse?: true } => {
+  let strip: number | undefined
+  let reverse = false
+  let into = ''
+  const ops: string[] = []
+  const VALUED = git ? new Set(['-p', '-C', '--directory', '--exclude', '--include']) : new Set(['-i', '-p', '-d', '-o', '-r', '-B', '-D', '-F', '-V', '-z', '--input', '--directory', '--output'])
+  for (let i = 0; i < words.length; i++) {
+    const a = words[i] as string
+    const p = /^(?:-p|--strip=)(\d+)$/.exec(a)
+    if (p) strip = Number(p[1])
+    else if (a === '-R' || a === '--reverse') reverse = true
+    else if (a === '-p' && /^\d+$/.test(words[i + 1] ?? '')) strip = Number(words[++i])
+    else if (/^--directory=/.test(a)) into = a.slice('--directory='.length)
+    else if ((a === '--directory' || (!git && a === '-d')) && words[i + 1] !== undefined) into = words[++i] as string
+    else if (VALUED.has(a)) i++
+    // A redirect and the word it takes (`< fix.diff`, `<<'EOF'`), which feed it and name no file to patch.
+    else if (/^(?:\d*(?:<<-?|<<<|<|>>|>|>\|)|&>>?)$/.test(a)) i++
+    else if (!a.startsWith('-') && !/^(?:\d*[<>]|&>)/.test(a)) ops.push(a)
+  }
+  return { ...(strip === undefined ? {} : { strip }), into: into.replace(/\/+$/, ''), ...(!git && ops[0] !== undefined ? { target: ops[0] } : {}), ...(reverse ? { reverse: true as const } : {}) }
+}
+
 /**
  * Where his approval of one shell call is kept: by its whole command and the files it writes, as
  * absolute paths, never the folder it runs from (#2371, Dan's item 4). The same command run again

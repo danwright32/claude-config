@@ -31,7 +31,8 @@
 # Environment:
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
-#   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
+#   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print (default 40); each place
+#                             it cuts a message adds one line saying how many were not shown
 #   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). With it
 #                             on, the failed suite's FAIL line says FLAKY, recheck timed out,
 #                             recheck could not run because another run holds the suite lock,
@@ -696,6 +697,75 @@ progress_line(){   # progress_line <done> <of> <suite name> <exit status> <secon
 # about what a score is (L263).
 suite_result_line(){   # suite_result_line <a suite's output> -> the exact line, or nothing
   printf '%s\n' "$1" | grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' | tail -1
+}
+
+# What a failing suite said about its failures: each FAIL (or `not ok`) line and every line after it
+# up to the next result line, at most <max> of the suite's own lines, plus one line saying so at each
+# place a message was cut (claude-config#253, #2928).
+#
+# A message runs until the next FAIL, a passed check (a line starting `ok` or `PASS`), the suite's
+# own `passed: <n>` total (273 suites print one, counted on 2026-11-14), an agreed SUITE- line, or
+# the end. #253 carried only lines indented further than the FAIL, which is what the suites write by
+# hand, but most suites' helpers (about 270, counted for #2928 on 2026-11-14) print the value they
+# are handed as is (`echo "FAIL: $1 ($2)"`), and a value of several lines (a scan's findings, a
+# hook's output) put every line after its first at the margin, where #253 ended the message: the
+# report said a scan found something and never what. The source cannot say which values have
+# several lines, so the rule is here, once, for every suite; #2916's scan (test-fail-margin.sh)
+# still asks suites to indent what the source spells out, which needs no inference. A line that
+# came at the margin is set under its FAIL line, so it reads as part of it. Blank lines inside a
+# message are kept, trailing ones are not.
+#
+# The cap is shared out so that no message can push a FAIL line out of view: every FAIL line is
+# printed, then each message gets an equal share of what is left (a short one keeps all of its
+# lines), and a message that was cut says how many of its lines were not shown, where it was cut.
+suite_fail_detail(){   # suite_fail_detail <a suite's output> <max lines> -> the lines, or nothing
+  printf '%s\n' "$1" | awk -v max="$2" '
+    function add(s) { nc[n]++; cont[n, nc[n]] = s }
+    /^ *(FAIL|not ok)/ {
+      n++; head[n] = $0; match($0, /^ */); ind[n] = RLENGTH; nc[n] = 0; blanks = 0; carry = 1; next
+    }
+    !carry { next }
+    /^ *(ok|PASS)([^A-Za-z0-9_]|$)/ || /^ *passed[:=] *[0-9]/ || /^SUITE-/ { carry = 0; next }
+    /^[[:space:]]*$/ { blanks++; next }
+    {
+      while (blanks > 0) { add(""); blanks-- }
+      match($0, /^ */)
+      if (RLENGTH > ind[n]) add($0); else add(sprintf("%" (ind[n] + 2) "s", "") $0)
+    }
+    END {
+      if (n == 0) exit
+      if (max < 1) max = 1
+      total = 0; most = 0
+      for (i = 1; i <= n; i++) { total += 1 + nc[i]; if (nc[i] > most) most = nc[i] }
+      heads = (n < max) ? n : max
+      left = max - heads
+      # The largest per message share the lines left over can pay for, then one more line each, in
+      # order, for whatever that leaves.
+      share = most
+      if (total > max) {
+        share = 0
+        while (share < most) {
+          used = 0
+          for (i = 1; i <= n; i++) used += (nc[i] < share + 1) ? nc[i] : share + 1
+          if (used > left) break
+          share++
+        }
+      }
+      used = 0
+      for (i = 1; i <= heads; i++) { keep[i] = (nc[i] < share) ? nc[i] : share; used += keep[i] }
+      for (i = 1; i <= heads && used < left; i++) if (keep[i] < nc[i]) { keep[i]++; used++ }
+      for (i = 1; i <= heads; i++) {
+        print head[i]
+        for (j = 1; j <= keep[i]; j++) print cont[i, j]
+        if (keep[i] < nc[i]) printf "%" (ind[i] + 2) "s...and %d more line(s) of this message not shown\n", "", nc[i] - keep[i]
+      }
+      if (n > heads) {
+        rest = 0
+        for (i = heads + 1; i <= n; i++) rest += 1 + nc[i]
+        printf "...and %d more failure(s), %d line(s) in all, not shown\n", n - heads, rest
+      }
+    }
+  ' || true
 }
 
 # Every line where the shell said a command did not exist (claude-config#1044). A case that calls a
@@ -2184,26 +2254,13 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       # meant checking out the failing commit and running the suite by hand to read a message the
       # runner had already been handed (L148).
       #
-      # A continuation is a line INDENTED further than the FAIL it follows. That is what the suites
-      # here actually write, and it is what stops the rule swallowing the whole of a chatty suite's
-      # output: a line back at the margin ends the message.
-      detail="$(printf '%s\n' "$out" | awk '
-        /^ *(FAIL|not ok)/ { match($0, /^ */); ind = RLENGTH; print; carry = 1; next }
-        carry {
-          if ($0 ~ /^[[:space:]]*$/) { carry = 0; next }
-          match($0, /^ */)
-          if (RLENGTH > ind) { print; next }
-          carry = 0
-        }
-      ' || true)"
+      # A message runs from its FAIL line to the next result line, and its lines that came at the
+      # margin are set under it (claude-config#2928); suite_fail_detail says why and how it is capped.
+      detail="$(suite_fail_detail "$out" "$FAIL_DETAIL_MAX")"
       # Where the missing command is the only reason, its lines above are the detail, and the tail
       # of the output would only print them a second time.
       [ -n "$detail" ] || [ -n "$cnf_lines" ] || [ -n "$stray_lines" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
-      shown="$(printf '%s\n' "$detail" | grep -c . || true)"
-      [ -z "$detail" ] || printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
-      if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
-        printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
-      fi
+      [ -z "$detail" ] || printf '%s\n' "$detail" | sed 's/^/          /'
     else
       printf '  ok    %-38s %-26s %s\n' "$name" "$summary" "$dur"
     fi
