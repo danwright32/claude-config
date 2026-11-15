@@ -613,8 +613,11 @@ const envSplit = (words: readonly string[], at: number): { value: string; next: 
 // text; and a command xargs runs is marked, since xargs gives it operands from its own input. So is
 // one rtk's proxy runs (#2983), with `unread` saying why one it split from a word cannot be read;
 // `expands` says whether the word at a place in the text holds a $ or backtick the shell expands.
+// A caller that knows no places (a find -exec's words) takes every $ and backtick as one the shell
+// expands, so a word it cannot place is unread, never read as written (lessons review of 7677fc0).
 type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string }
-const begins = (words: string[], starts: number[], expands: (word: string, start: number) => boolean = () => false): Begun => {
+const MAY_EXPAND = (word: string): boolean => /[$`]/.test(word)
+const begins = (words: string[], starts: number[], expands: (word: string, start: number) => boolean = MAY_EXPAND): Begun => {
   let w = words
   let s = starts
   let xargs = false

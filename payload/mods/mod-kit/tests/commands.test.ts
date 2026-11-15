@@ -163,6 +163,9 @@ describe('commands', () => {
     const unread = 'split by rtk proxy from one word the shell expands, so what it runs cannot be read'
     expect(pipeline(`rtk proxy "$CMD"`)[0]).toMatchObject({ words: ['$CMD'], proxied: true, unread })
     expect(pipeline('rtk proxy "git $(cat sub) --force"')).toContainEqual(expect.objectContaining({ words: ['git', '$(cat', 'sub)', '--force'], unread }))
+    // A find -exec's words carry no place in the text, so a $ there is taken as one the shell expands
+    // (lessons review of 7677fc0: the default read every such word as written).
+    expect(pipeline(`find . -exec rtk proxy "$CMD" ';'`)).toContainEqual(expect.objectContaining({ words: ['$CMD'], proxied: true, unread }))
     // Two words or more are handed on as they stand, so an expansion there is the command's own.
     expect(pipeline('rtk proxy git "$SUB"')[0]?.unread).toBeUndefined()
   })
