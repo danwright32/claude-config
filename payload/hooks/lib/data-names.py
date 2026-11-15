@@ -16,12 +16,16 @@ Anything else (a call handed it, a value assigned, returned or kept in an object
 f-string building a URL) cannot be classified, and refuses as before.
 
 A list or a comparison can still feed a send (`fetch("https://" + HOSTS[0])`, or
-`if (url.includes(HOST)) fetch(url)`), so a name held only as data clears nothing by itself: it is
-let through only where nothing in the program that holds it can send a request or run code, judged
-by the gate's own reading of what a script can do (acts_body, with writing a file not counted, as for
-handed code): the script, every module it reaches, and every other piece of code run in the same
-process (a loader, a test runner), any of which could reach the list. A package the gate does not
-read counts as able to, as everywhere else in the gate.
+`if (url.includes(HOST)) fetch(url)`), and so can what a program prints or writes, so a name held
+only as data clears nothing by itself. It is let through only where nothing in the program that holds
+it can send a request, run code or write a file, by the gate's own reading of what a script can do
+(acts_body, writing counted); in JavaScript, where no member is reached by a computed name (other
+than a number or one string written out) and nothing names the global object that way (JS_SINK); and
+where what the program prints reaches only the terminal or a filter (output_stays). The program is the
+script, every module it reaches, and every other piece of code run in the same process (a loader, a
+test runner, a module NODE_OPTIONS preloads, which is refused outright since that code is judged
+apart from it). A package the gate does not read counts as able to send, as everywhere else in the
+gate.
 
 The directory after cd. A suite run by a relative path that moves with `cd "$(dirname "$0")/.."` and
 then sources `"$(dirname "${BASH_SOURCE[0]}")/lib/..."` was refused as a path the gate could not work
@@ -199,8 +203,8 @@ def make(marker, js_scan, py_marker, js_sink):
                 acts = ("prints into a pipe, a substitution or a file, which can hand what it prints to "
                         "another command")
             if acts:
-                return (f"{where}, which posts to Slack (it names {name}, held there only as data, compared or "
-                        f"listed, but {start} {acts}, so it can send it)")
+                return (f"{where.rstrip(',')}, which posts to Slack (it names {name}, held there only as data, "
+                        f"compared or listed, but {start.rstrip(',')} {acts}, so it can send it)")
             self.held_names().append(held)
             return None
 
@@ -256,8 +260,9 @@ def make(marker, js_scan, py_marker, js_sink):
                       for label, origin, root, text, kind in sources()]
             for label, acts in found:
                 if acts:
-                    return (f"{where}, which posts to Slack (it names {name}, held there only as data, compared "
-                            f"or listed, but {label}, run in the same program, {acts}, so it can send it)")
+                    return (f"{where.rstrip(',')}, which posts to Slack (it names {name}, held there only as data, "
+                            f"compared or listed, but {label.rstrip(',')}, run in the same program, {acts}, so it "
+                            "can send it)")
             return None
 
         def settled_dir(self, d):
