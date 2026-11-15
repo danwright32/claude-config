@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Suites whose failure message goes on at the left margin, where a full run never shows it (claude-config#2916).
+"""Suites whose failure message goes on at the left margin under its FAIL line (claude-config#2916).
 
-The runner (hooks/run-all-tests.sh) prints a failing suite's FAIL line and, under it, only the
-lines indented further than that FAIL line; a line back at the margin, or a blank one, ends the
-message (claude-config#253). That rule is what stops it swallowing a chatty suite's whole output.
-So a suite that writes what it found at the margin under its FAIL loses exactly that from a full
-run's report: the run says the suite failed, and never says what it found. #2854 found this in
+Until #2928 the runner (hooks/run-all-tests.sh) printed a failing suite's FAIL line and, under it,
+only the lines indented further than that FAIL line (claude-config#253), so a suite that wrote what
+it found at the margin lost exactly that from a full run's report. #2854 found this in
 test-lib-bytecode-importers.sh, whose report stopped at "these do not:", and #2916 found the same
-shape in 22 more suites, 57 messages in all, on 2026-11-13. This finds the next one (L613).
+shape in 22 more suites, 57 messages in all, on 2026-11-13. Since #2928 the runner also keeps
+margin lines up to the next result line, which it infers; a line indented further than its FAIL is
+part of the message without inference. Kept by Dan's decision on 2026-11-14 (PR #2985), this finds
+the next margin message (L613).
 
 WHAT IT LOOKS FOR, in a suite file (a test-*.sh): a FAIL message written over more than one line of
 the source, inside one double quoted string, whose next line would print
   - at the margin (no space before it, or a tab, which the runner does not count as one),
-  - blank, which ends the message as the margin does, or
+  - blank, which a full run keeps only when more of the message follows it, or
   - as a value expanded on a line of its own (`  $found`, `${hits}`, `$(cat "$f")`), which indents
     the value's FIRST line only: the rest of a list of findings lands at the margin all the same.
 A FAIL message is a double quoted string whose text starts with FAIL, or an argument of a function
@@ -483,9 +484,9 @@ def judge(text):
             if indents(content):
                 continue
             if content == '':
-                found.append((ln, 'a blank line inside a FAIL message ends what a full run shows of it'))
+                found.append((ln, 'a blank line inside a FAIL message, which a full run keeps only when more of the message follows'))
             elif spaces <= indent and not indented_lead(content, listed):
-                found.append((ln, 'a FAIL message goes on at the margin here, and a full run shows nothing from this line on'))
+                found.append((ln, 'a FAIL message goes on at the margin here, so a full run has to infer this line is part of it'))
             elif re.fullmatch(r'(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[^}]*\}|\0[^\0]*\0)\}?', content):
                 found.append((ln, 'a value expanded on a line of its own is indented on its first line only, and the rest of it lands at the margin'))
     return sorted(set(found))
