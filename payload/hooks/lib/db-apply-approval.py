@@ -394,8 +394,9 @@ def on_test_project(workdir, flags):
 
 # A shell command naming the list passes only when it is one of these, reading it (#2989), with no
 # redirection writing anywhere but /dev/null. Each takes no option that writes the file it names.
-LIST_READERS = {"cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "less", "more", "ls", "stat",
-                "file", "diff", "cmp", "md5", "shasum", "sha256sum", "test", "["}
+# A pager (less, more) is left out: its own commands can run a shell.
+LIST_READERS = {"cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "ls", "stat", "file", "diff",
+                "cmp", "md5", "shasum", "sha256sum", "test", "["}
 # And the git subcommands that only read, apart from a --output option.
 GIT_LIST_READS = {"diff", "show", "log", "status", "blame", "ls-files", "cat-file", "grep"}
 # The git subcommands that may come before a commit in its own command, when the checkout holds a
@@ -419,9 +420,17 @@ def _words_of(text, sw, strip, found=None):
     return sw.command_words(strip(sw.command_rest(text)[0], found))
 
 
-def _reads_list_only(text, sw, strip):
-    """Whether one simple command, which names the list, only reads it: a reader from LIST_READERS
-    or a reading git subcommand, every redirection an input, a descriptor copy or /dev/null."""
+# Git options that write a file or run a command: --output writes its file, git grep -O runs one on
+# the files it matched, --ext-diff runs the configured diff program, and -c in front sets any
+# config, a pager or an external diff among them. -O in git diff only reads an order file, and is
+# refused with the rest rather than told apart.
+GIT_ACTING = ("--output", "-O", "--open-files-in-pager", "--ext-diff")
+
+
+def _only_reads(text, sw, strip, subs, also=()):
+    """Whether one simple command reads and writes nothing: a reader from LIST_READERS, a word in
+    also, or git with a subcommand in subs and none of GIT_ACTING, every redirection an input, a
+    descriptor copy or /dev/null."""
     found = []
     words = _words_of(text, sw, strip, found)
     for op, target in found:
@@ -432,10 +441,16 @@ def _reads_list_only(text, sw, strip):
         return False
     if not words:
         return False
-    if os.path.basename(words[0]) in LIST_READERS:
+    if os.path.basename(words[0]) in LIST_READERS or words[0] in also:
         return True
     g = sw.git_read(words)
-    return bool(g) and g[0] in GIT_LIST_READS and not any(w.startswith("--output") for w in words)
+    return (bool(g) and g[0] in subs and "-c" not in g[1]
+            and not any(w.startswith(GIT_ACTING) for w in words))
+
+
+def _reads_list_only(text, sw, strip):
+    """Whether one simple command, which names the list, only reads it (_only_reads)."""
+    return _only_reads(text, sw, strip, GIT_LIST_READS)
 
 
 def _git(folder, args, deadline):
@@ -539,7 +554,7 @@ def list_shell_change(command, cwd, sw, strip):
         words = _words_of(text, sw, strip)
         g = sw.git_read(words) if words else None
         if not g or g[0] != "commit":
-            before.append((text, words, g))
+            before.append((text, why))
             continue
         front, assigns = g[1], sw.command_rest(text)[1]
         if any(w.startswith(("--git-dir", "--work-tree")) for w in front) or re.search(r"\bGIT_(DIR|WORK_TREE)=", assigns):
@@ -555,17 +570,18 @@ def list_shell_change(command, cwd, sw, strip):
             return ("the command `" + _shown(text) + "` commits, and whether it adds a project to a "
                     + TEST_LIST + " could not be told: " + why)
         if added:
-            shown = ", ".join("the line " + l + " added to " + p for p, l in added[:3]) + (", and more" if len(added) > 3 else "")
-            return ("the command `" + _shown(text) + "` would commit " + shown + ", and a project on a committed "
-                    + TEST_LIST + " has its supabase db query -f runs pass without asking")
+            shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120) for p, l in added[:3])
+            return ("the command `" + _shown(text) + "` would commit " + shown + (", and more" if len(added) > 3 else "")
+                    + ", and a project on a committed " + TEST_LIST + " has its supabase db query -f runs pass "
+                    "without asking")
         if lists:
-            for t, w, gb in before:
-                base = os.path.basename(w[0]) if w else ""
-                if base == "cd" or base in LIST_READERS or (gb and gb[0] in GIT_BEFORE_COMMIT):
+            for t, unread in before:
+                # cd, a reader, or a git add, rm or read, writing nothing by a redirection or option.
+                if not unread and _only_reads(t, sw, strip, GIT_BEFORE_COMMIT, ("cd",)):
                     continue
-                return ("the command commits in a checkout holding " + ", ".join(lists[:3]) + " after `"
-                        + _shown(t) + "`, which could write the list before the commit stages it")
-        before.append((text, words, g))
+                return ("the command commits in a checkout holding " + ", ".join(_shown(p, 120) for p in lists[:3])
+                        + " after `" + _shown(t) + "`, which could write the list before the commit stages it")
+        before.append((text, why))
     if named and name in rest.lower():
         return ("the command names " + TEST_LIST + ", the list of the test Supabase projects of a "
                 "checkout, where this hook cannot tell whether it writes it (a heredoc, or a string it "

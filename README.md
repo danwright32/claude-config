@@ -4079,8 +4079,10 @@ where the hook cannot read the command (a heredoc body, a string), and a `git co
 a line other than a blank or a comment to any list in its checkout, from the index or the working
 tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
 other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
-about, since that command could write the list by a glob or a variable first. That is why `commit`
-is one of the hook's screen words. What it still cannot see: a list written under a name built at
+about, since that command could write the list by a glob or a variable first. So a Bash call holding
+the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
+commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
+then. What it still cannot see: a list written under a name built at
 run time in an earlier call and then committed by something other than `git commit` (an alias,
 `commit-tree`, a merge, a cherry-pick, a pull).
 

@@ -1159,6 +1159,11 @@ shell_list "a first commit of a list holding a ref is asked about" ask 'git comm
 # before the commit stages it, so in a checkout holding a list that is asked about; elsewhere not.
 shell_list "a commit after another command in a checkout holding a list is asked about" ask 'npm run fmt && git commit -am x'
 shell_list "a commit after a read and an add there passes" none 'git status --short && git add -A && git commit -m x'
+shell_list "a commit after a reader redirected into a glob is asked about" ask 'cat /tmp/refs > .claude/supabase-test-* && git commit -am x'
+shell_list "a commit after a git read writing --output is asked about" ask 'git show HEAD:refs --output=.claude/supabase-test-* && git commit -am x'
+shell_list "a git grep running a command on the list is asked about" ask "git grep -O'sh -c x' ref .claude/supabase-test-projects"
+shell_list "a git read with config set in front is asked about" ask 'git -c diff.external=./w diff .claude/supabase-test-projects'
+shell_list "a pager on the list is asked about" ask 'less .claude/supabase-test-projects'
 NOLIST="$APPLY/nolist"; mkdir -p "$NOLIST"; git -C "$NOLIST" init -q
 shell_list "a commit after another command in a checkout with no list passes" none 'npm run fmt && git commit -am x' "$NOLIST"
 # git failing is asked about, saying so, and the library missing is asked about, naming it.
@@ -1179,6 +1184,23 @@ esac
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'ls -la' "$TESTP" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" ok || check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" "$(decision "$r")"
 rm -rf "$WORK/part"
+# A commit is no database call: python3 failing asks about it as a commit, and python3 missing passes
+# it, since without python3 no list is trusted. An Edit holding the word is never read as one.
+PYFAIL="$APPLY/pyfail"; mkdir -p "$PYFAIL"
+printf '#!/bin/sh\nexit 1\n' > "$PYFAIL/python3"; chmod +x "$PYFAIL/python3"
+CP="$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")"
+EP="$(file_payload Edit "$TESTP/notes.txt")"; EP="${EP/liveprojectref000009/commit the notes}"
+r="$(PATH="$PYFAIL:$PATH" run "$HOOK" "$EMPTY_HOME" "$CP")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*"before this commit"*2989*) check "with python3 failing, a commit is asked about as a commit (#2989)" ok ;;
+  *) check "with python3 failing, a commit is asked about as a commit (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+r="$(PATH="$PYFAIL:$PATH" run "$HOOK" "$EMPTY_HOME" "$EP")"
+[ "$(decision "$r")" = "none rc=0" ] && check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" ok || check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" "$(decision "$r") $(field "$r" reason)"
+if ! npp_reaches_python3 "$NOPY"; then
+  r="$(run_nopy "$CP")"
+  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a commit passes, since no list is trusted then (#2989)" ok || check "with no python3, a commit passes, since no list is trusted then (#2989)" "$(decision "$r") $(field "$r" reason)"
+fi
 
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
 # drift into a shape the hooks never let through (L562).

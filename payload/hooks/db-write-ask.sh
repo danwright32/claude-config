@@ -75,8 +75,9 @@
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
-# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as do the
-# name of the test project list and, since #2989, the word commit, or names a Salesforce write tool.
+# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
+# name of the test project list, or names a Salesforce write tool, or, since #2989, is a Bash call
+# holding the word commit (commit_call, which is no database call).
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let
@@ -96,16 +97,21 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
 # The screen: a payload holding none of these words, in any case, names no database call.
-DB_SCREEN_WORDS="sql quer commit statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
+DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
 db_call=0
 sf_call=0
+# A Bash call naming a commit is read for one adding a project to a test project list (#2989). It is
+# no database call, so when python3 fails it is asked about as a commit, and when python3 is missing
+# it passes: without python3 no list is trusted, so a commit adding to one lets nothing through.
+commit_call=0
 shopt -s nocasematch
 for w in $DB_SCREEN_WORDS; do
   case "$payload" in *"$w"*) db_call=1; break ;; esac
 done
 case "$payload" in *sobjectrecord*) sf_call=1 ;; esac
 shopt -u nocasematch
-[ "$db_call$sf_call" != 00 ] || exit 0
+case "$payload" in *'"Bash"'*commit*|*commit*'"Bash"'*) commit_call=1 ;; esac
+[ "$db_call$sf_call$commit_call" != 000 ] || exit 0
 
 # Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
 # (#1906). Without the library it still asks, keeping only characters that need no escaping.
@@ -469,4 +475,5 @@ fi
 # python3 itself failed, or printed something that is not a verdict: fail closed for anything the
 # screen let through as a database call, by the raw text, since nothing parsed it.
 [ "$db_call" = 1 ] && hook_ask_json "db-write-ask.sh asks before this database call because its classifier (python3) failed, so the statement could not be classified as read only (claude-config#2521)"
+[ "$db_call$commit_call" = 01 ] && hook_ask_json "db-write-ask.sh asks before this commit because its classifier (python3) failed, so whether it adds a project to a test project list could not be told (claude-config#2989)"
 exit 0
