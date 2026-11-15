@@ -84,7 +84,7 @@ import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
-import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, readSleepEnds, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -341,7 +341,7 @@ type Moved = { to: string; text: string | null } | { gone: true } | { error: str
 const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<Moved> => {
   const p = await sleepPaths($)
   await run($, ['mkdir', '-p', p.ended])
-  const to = `${p.ended}/${await $.clock.now()}-${label}-${await $.session.id()}.json`
+  const to = `${p.ended}/${endedNameOf(await $.clock.now(), label, await $.session.id())}`
   const mv = await run($, ['mv', p.current, to])
   if (mv.exitCode !== 0) return /No such file/i.test(mv.stderr) ? { gone: true } : { error: mv.stderr.trim() || `mv exited ${mv.exitCode}` }
   const text = await $.fs.read(to).catch(() => null)
@@ -5081,6 +5081,13 @@ export const register: Register = on => {
         const r = await built.process.run(noteArgv(seen.home, `${sleepDir(seen.home)}/current.json`, line), { timeoutMs: BOOT_MS })
         if (r.exitCode !== 0) throw new Error(noteFailure(r))
         return { isNoted: true }
+      },
+      // When each sleep ended (#2993), for the Slack alert guard's question two hours after.
+      sleepEnds: async () => {
+        const seen = await nounReading()
+        const home = seen?.home ?? (await built.env.get('HOME'))
+        if (!home) throw new Error('HOME is not set')
+        return readSleepEnds({ exists: p => built.fs.exists(p), list: d => built.fs.list(d) }, `${sleepDir(home)}/ended`, seen?.reading ?? { state: 'none' })
       },
     }
     return { ...built, scopeModes }
