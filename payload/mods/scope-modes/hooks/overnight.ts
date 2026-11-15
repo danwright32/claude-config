@@ -349,7 +349,8 @@ export const runsGit = runsFrom('git', runsGitFrom)
 // arguments are taken from the code in one of two shapes. As an element of a list of arguments
 // (`['git', '-C', wt, 'show', ref]`, `execFileSync('git', [...])`), each later element is one
 // argument: a quoted string is one written out, and anything else is known only when the code runs,
-// which only the folder -C names may be, since after the subcommand it could be --output.
+// which only the folder -C names may be, since after the subcommand it could be --output. The list
+// must also be the whole argument the process call is handed (handedWhole), or nothing is read.
 // As a command line in a string or a script (`'git log -5'`), its words run up to the string's end or
 // a command boundary, and the string must not be built while the code runs (builtAround), since a
 // placeholder there could carry a second command. The arguments are then handed, each written out or
@@ -384,8 +385,11 @@ const gitArgsRead = async (args: readonly Arg[], read: OvernightCall['read']): P
     return flag.length >= 4 && '--output'.startsWith(flag)
   })
 }
-// The elements of a list of arguments from `from` to its closing bracket, or undefined when it never closes.
-const listArgs = (text: string, from: number): Arg[] | undefined => {
+// The elements of a list of arguments from `from` to its closing bracket, with where that bracket is
+// and whether the list opened its own `[` after `from` (`execFileSync('git', [...])`), or undefined
+// when it never closes.
+type ListRead = { args: Arg[]; close: number; own: boolean }
+const listArgs = (text: string, from: number): ListRead | undefined => {
   const out: Arg[] = []
   let i = from
   let opened = false
@@ -393,7 +397,7 @@ const listArgs = (text: string, from: number): Arg[] | undefined => {
     const ch = text[i] as string
     if (/[\s,]/.test(ch)) { i++; continue }
     if (ch === '[' && !opened && out.length === 0) { opened = true; i++; continue }
-    if (ch === ']' || ch === ')') return out
+    if (ch === ']' || ch === ')') return { args: out, close: i, own: opened }
     // One element: up to a comma or closing bracket outside any bracket or string of its own.
     const start = i
     let depth = 0
@@ -418,6 +422,112 @@ const listArgs = (text: string, from: number): Arg[] | undefined => {
   }
   return undefined
 }
+// The lessons review of #3009: a list read only up to its closing bracket says nothing about what the
+// code does with it after, and `['git', 'log'] + extra`, `.concat(extra)`, `cmd += [...]`,
+// `cmd.append(...)` or a list handed to a function of the code's own can each add --output. So the
+// list passes only when it is the whole argument a process call is handed: the first positional
+// argument of a call named in PROCESS_CALLS (or its `args=` keyword), or a variable assigned the list
+// once and named nowhere else but as that whole argument; or, in `execFileSync('git', [...])`, the
+// list after git in the call itself. After its closing bracket comes only the call's own closing or a
+// separator. Anything else cannot be read, so the code stays refused.
+const PROCESS_CALLS: ReadonlySet<string> = new Set(['run', 'call', 'check_call', 'check_output', 'Popen', 'create_subprocess_exec', 'execv', 'execvp', 'execvpe', 'execl', 'execlp', 'execle', 'execlpe', 'posix_spawn', 'posix_spawnp', 'execFileSync', 'execFile', 'spawnSync', 'spawn', 'system', 'exec', 'capture2', 'capture2e', 'capture3', 'popen3'])
+const reEscape = (s: string) => s.replace(/[$]/g, '\\$')
+// The index and character of the first one at or before `i` that is not white space ('' at the start).
+const backTo = (text: string, i: number): [number, string] => {
+  while (i >= 0 && /\s/.test(text[i] ?? '')) i--
+  return [i, text[i] ?? '']
+}
+const forwardTo = (text: string, i: number): [number, string] => {
+  while (i < text.length && /\s/.test(text[i] ?? '')) i++
+  return [i, text[i] ?? '']
+}
+// Whether the `(` at `paren` opens a call to a process: its name is one of PROCESS_CALLS and the code
+// does not define or rebind that name itself, where it could do anything with the list first.
+const processCall = (text: string, paren: number): boolean => {
+  const n = /(?:^|[^\w$])([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0, paren))?.[1]
+  if (n === undefined || !PROCESS_CALLS.has(n)) return false
+  const e = reEscape(n)
+  return !new RegExp(`\\b(?:def|function|class|const|let|var|as)\\s+${e}(?![\\w$])|(?<![\\w$.])${e}\\s*=(?!=)`).test(text)
+}
+// The bracket the list git is in opens at: back from git's opening quote over white space, commas
+// and written out strings only; -1 when anything else comes first (a variable, a spread, a join).
+const listOpen = (text: string, quote: number): number => {
+  let i = quote - 1
+  while (i >= 0) {
+    const ch = text[i] ?? ''
+    if (/[\s,]/.test(ch)) { i--; continue }
+    if (QUOTES.includes(ch)) {
+      const o = text.lastIndexOf(ch, i - 1)
+      if (o < 0) return -1
+      i = o - 1
+      continue
+    }
+    return ch === '[' || ch === '(' ? i : -1
+  }
+  return -1
+}
+// Whether what follows the argument ending at `close` is the call's own closing or the next argument.
+const argumentEnds = (text: string, close: number): boolean => {
+  const next = forwardTo(text, close + 1)[1]
+  return next === ')' || next === ','
+}
+// Whether the expression from `start` to `close` (a list literal, or a variable's name) is the whole
+// first argument of a process call, or its whole `args=` keyword argument.
+const wholeArgument = (text: string, start: number, close: number): boolean => {
+  if (!argumentEnds(text, close)) return false
+  const [p, prev] = backTo(text, start - 1)
+  if (prev === '(') return processCall(text, p)
+  if (prev !== '=' || /[=!<>+\-*/%&|^:~]/.test(text[p - 1] ?? '')) return false
+  const k = backTo(text, p - 1)[0]
+  if (!/(?<![\w$.])args$/.test(text.slice(0, k + 1))) return false
+  const [, sep] = backTo(text, k - 4)
+  if (sep !== '(' && sep !== ',') return false
+  // The keyword's call: the innermost bracket left open before it, which must be a process call's.
+  let depth = 0
+  for (let i = k - 4; i >= 0; i--) {
+    const ch = text[i] ?? ''
+    if (')]}'.includes(ch)) depth++
+    else if ('([{'.includes(ch)) {
+      if (depth > 0) { depth--; continue }
+      return ch === '(' && processCall(text, i)
+    }
+  }
+  return false
+}
+// Whether the list git is in, from `open` to `close`, is assigned to a variable the code names once
+// more, and that once as the whole argument of a process call: nothing else can have changed it.
+const heldWhole = (text: string, open: number, close: number): boolean => {
+  const [p, prev] = backTo(text, open - 1)
+  if (prev !== '=' || /[=!<>+\-*/%&|^:~]/.test(text[p - 1] ?? '')) return false
+  const assigned = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0, p))
+  const name = assigned?.[1]
+  if (assigned === null || name === undefined) return false
+  // The assignment ends its statement: a `;`, the end, or a new line that starts another statement
+  // (not one continuing the expression, such as `.concat(` on the next line).
+  let i = close + 1
+  let line = false
+  while (i < text.length && /\s/.test(text[i] ?? '')) { if (text[i] === '\n') line = true; i++ }
+  const next = text[i] ?? ''
+  if (!(next === '' || next === ';' || (line && /[A-Za-z_$#}]/.test(next)))) return false
+  // The name twice in the whole code: the assignment, then the one use after the list.
+  const named = [...text.matchAll(new RegExp(`(?<![\\w$.])${reEscape(name)}(?![\\w$])`, 'g'))].map(m => m.index)
+  const use = named[1]
+  if (named.length !== 2 || named[0] !== assigned.index || use === undefined || use <= close) return false
+  return wholeArgument(text, use, use + name.length - 1)
+}
+// Whether the list of git's arguments, git's quote at `quote`, is the whole of what the code hands the
+// process call (see PROCESS_CALLS).
+const handedWhole = (text: string, quote: number, list: ListRead): boolean => {
+  const open = listOpen(text, quote)
+  if (open < 0) return false
+  if (list.own) return text[open] === '(' && processCall(text, open) && text[list.close] === ']' && argumentEnds(text, list.close)
+  if (text[list.close] !== (text[open] === '[' ? ']' : ')')) return false
+  // `system('git', 'log')`: the call's own brackets hold the arguments, so its closing is theirs.
+  if (text[open] === '(' && processCall(text, open)) return true
+  // A `(` straight after a name is some other call's (`print(`, a function of the code's own).
+  if (text[open] === '(' && /[\w$)\]]$/.test(text.slice(0, open).trimEnd())) return false
+  return wholeArgument(text, open, list.close) || heldWhole(text, open, list.close)
+}
 const gitSites = sitesFrom('git', runsGitFrom)
 const gitCallReads = async (text: string, at: number, read: OvernightCall['read']): Promise<boolean> => {
   const end = at + 'git'.length
@@ -426,8 +536,8 @@ const gitCallReads = async (text: string, at: number, read: OvernightCall['read'
   const before = text[word - 1] ?? ''
   const after = text[end] ?? ''
   if (QUOTES.includes(before) && after === before) {
-    const args = listArgs(text, end + 1)
-    return args !== undefined && (await gitArgsRead(args, read))
+    const list = listArgs(text, end + 1)
+    return list !== undefined && handedWhole(text, word - 1, list) && (await gitArgsRead(list.args, read))
   }
   if (after !== ' ' && after !== '\t') return false
   if (builtAround(text, at)) return false

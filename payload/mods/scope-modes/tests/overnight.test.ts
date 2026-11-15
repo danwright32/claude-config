@@ -773,8 +773,44 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
       `python3 -c "import subprocess; a = subprocess.check_output(['git', 'diff', 'main', '--stat']); b = subprocess.check_output(['git', 'rev-parse', 'HEAD'])"`,
       `node -e "const wt = '${wt}'; console.log(require('child_process').execFileSync('git', ['-C', wt, 'diff', 'origin/main', '--stat']).toString())"`,
       `python3 -c "import subprocess; subprocess.run(['/usr/bin/env', 'git', 'ls-files', '-z'])"`,
+      // The list as the whole argument by keyword, or held in a variable assigned once and handed
+      // whole to the call with nothing else touching it.
+      `python3 -c "import subprocess; subprocess.run(args=['git', 'log', '-5'], check=True)"`,
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log', '-5']", 'print(subprocess.run(cmd, check=True))', 'PY'].join('\n'),
+      `node -e "const args = ['log', '-5']; console.log(require('child_process').execFileSync('git', ['diff', '--stat']).toString())"`,
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
+  // The lessons review of PR #3009 at 47802f0: the list was read only up to its closing bracket, so
+  // anything joined onto it after that bracket, or done to a variable holding it, passed as a read
+  // though it can add --output. The list must be the whole argument the call is handed.
+  test('a list of git arguments with anything joined on or done to it after it closes is refused (#2939)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    const cases = [
+      `python3 -c "import subprocess; subprocess.run(['git', 'log'] + ['--output=/tmp/x'])"`,
+      `python3 -c "import subprocess; extra = ['--output=/tmp/x']; subprocess.run(args=['git', 'log'] + extra)"`,
+      `python3 -c "import subprocess; subprocess.run(('git', 'log') + ('--output=/tmp/x',))"`,
+      `python3 -c "import subprocess; subprocess.run([*['git', 'log'], '--output=/tmp/x'])"`,
+      `node -e "const extra = ['--output=/tmp/x']; require('child_process').execFileSync('git', ['log'].concat(extra))"`,
+      `node -e "const [c, ...a] = ['git', 'log'].concat(['--output=/tmp/x']); require('child_process').execFileSync(c, a)"`,
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd += ['--output=/tmp/x']", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.append('--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.extend(['--output=/tmp/x'])", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd.insert(2, '--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", "cmd[2:] = ['--output=/tmp/x']", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", 'subprocess.run(cmd + extra)', 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', "cmd = ['git', 'log']", 'subprocess.run(cmd)', "cmd.append('--output=/tmp/x')", 'subprocess.run(cmd)', 'PY'].join('\n'),
+      `node -e "const cmd = ['log']; cmd.push('--output=/tmp/x'); require('child_process').execFileSync('git', cmd)"`,
+      `node -e "const cmd = ['git', 'log']; cmd.push('--output=/tmp/x'); require('child_process').execFileSync(cmd[0], cmd.slice(1))"`,
+      `python3 -c "import subprocess; cmd = ['git', 'log']; c2 = cmd; c2.append('--output=/tmp/x'); subprocess.run(cmd)"`,
+      // Handed whole, but to a function of the code's own, which can add to it before running it.
+      ["python3 - <<'PY'", 'import subprocess', 'def go(c):', "    c.append('--output=/tmp/x')", '    subprocess.run(c)', "go(['git', 'log'])", 'PY'].join('\n'),
+      ["python3 - <<'PY'", 'import subprocess', 'def run(c):', "    c.append('--output=/tmp/x')", '    subprocess.run(c)', "run(['git', 'log'])", 'PY'].join('\n'),
+    ]
+    // Every spelling is judged before comparing, so a failure names each one that passed.
+    const got: { c: string; r: string | undefined }[] = []
+    for (const c of cases) got.push({ c, r: await bash(c) })
+    expect(got).toEqual(cases.map(c => ({ c, r: runs })))
   })
   test('code with any git call that is not a plain local read, or whose subcommand is only known when it runs, is still refused (#2939)', async () => {
     const runs = 'run code that runs gh, git or a database client, which cannot be judged'
