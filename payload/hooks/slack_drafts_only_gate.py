@@ -1420,6 +1420,9 @@ CodeLoaders = load_lib("code_loaders", "code-loaders.py").make(SHELL_BANG, CURL_
 # (claude-config#2913).
 _data_names = load_lib("data_names", "data-names.py")
 DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
+# Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
+# for one command in a function, and a function that evaluates its argument (claude-config#2912).
+ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 
@@ -1494,7 +1497,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
+class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -3401,9 +3404,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
           - any other compound command (if, a loop, a case, a { } group) is stepped over: every name
             bound inside it is unknown from where it starts, and what it sources or calls is followed
             as below;
+          - a for loop over words written out, its name bound by nothing in it, has each path it
+            sources worked out once for each word, and each file read (lib/sh-walk-shapes.py, #2912);
           - a function definition runs nothing, so it is stepped over; a call to a function of s
-            leaves every name its body binds unknown, and ends the walk where the body sources a
-            file, binds a name through a variable, or calls a function of s that does;
+            leaves every name its body binds unknown (NAME=value in front of one of its commands
+            binds nothing, #2912), and ends the walk where the body sources a file, binds a name
+            through a variable, or calls a function of s that does. A function of s that evaluates
+            its own argument is read as a sourced file's is (sh_evaluator, #2912);
+          - the walk's end at an eval of text it cannot read is recorded ("unread"): past it a file
+            run by a path built from a variable is refused, as a sourced one is (#2912);
           - a pipeline's commands and a backgrounded one run in shells of their own, as a subshell's
             do, and set nothing here (unless the script turns on lastpipe);
           - a sourced file whose path is worked out leaves every name it binds (it, or a file it
@@ -3467,51 +3476,83 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
             env[n], since[n] = (None if n in tainted else v), at
 
         own, reached, evals = {}, {}, {}
+        # A function of s that evaluates one of its own arguments (sh_evaluator) is read as one a
+        # sourced file defines is: each call evaluates what it is handed, followed where that is
+        # written out and refused where it is not, and its own eval binds nothing (#2912). Its for
+        # loops over words written out are read once for each word (lib/sh-walk-shapes.py).
+        self_evals = set()
+        for blk in blocks or ():
+            for k in range(blk["open"], blk["close"] + 1) if blk["kind"] == "func" else ():
+                if len(items[k][1]["scope"]) == 1 and re.match(r"eval\s", self.sh_strip_openers(items[k][0][1])):
+                    ev = self.sh_evaluator(s, items, struct, k)
+                    if ev and ev[0] in fbody:
+                        evals.setdefault(ev[0], set()).add(ev[1])
+                        self_evals.add(k)
+        loops = self.sh_for_loops(s, items, blocks)
+        allnames |= {lp[2] for lp in loops}  # so what a call or a sourced file binds is asked of them too
+        unread = []  # (where, the command, the function) of a call the walk ends at, refused (#2912)
+        # A loop whose name something in its body may set has values the walk cannot trust (spoiled),
+        # and one a sourced path was worked out from (used): setting a used one ends the walk.
+        spoiled, used = set(), set()
+
+        def spoil(names, at):
+            """Mark the loops around offset at whose name is among names spoiled: "dead" where a path
+            was already worked out from one of them, else None."""
+            hit = [lp for lp in loops if lp[4] <= at < lp[5] and lp[2] in names]
+            spoiled.update(lp[0] for lp in hit)
+            return "dead" if any(lp[0] in used for lp in hit) else None
 
         # What the body of the function of s named name does by itself: (the names it can bind,
         # whether it sources a file or binds a name through a variable, the functions of s it
-        # calls). Worked out once for each function.
+        # calls, whether it evaluates text the gate cannot read). Worked out once for each function.
         def body_of(name):
             if name not in own:
-                bound, more, callees = set(), False, []
+                bound, more, callees, unreadable = set(), False, [], False
                 for o, c in fbody.get(name, ()):
                     body = s[items[o][1]["start"]:items[c][1]["end"]]
-                    bound |= self.sh_binds_any(allnames, body)
+                    # NAME=value in front of one of its commands sets NAME for that command alone (#2912).
+                    sets = self.sh_one_command_sets(
+                        [head_of(k) for k in range(o, c + 1) if len(items[k][1]["scope"]) == 1], funcs)
+                    bound |= {n for n in self.sh_binds_any(allnames, body) if self.sh_binds(n, body, sets.get(n, 0))}
                     for k in range(o, c + 1):
-                        if len(items[k][1]["scope"]) > 1:
+                        if len(items[k][1]["scope"]) > 1 or k in self_evals:
                             continue
                         h = head_of(k)
                         words = self.words_of(self.rest_of(h)[0])
-                        if self.sh_source_target(h) is not None or self.sh_indirect(h) or \
-                                self.sh_eval_unsafe(h, evals, items[k][0][0]):
+                        unsafe = self.sh_eval_unsafe(h, evals, items[k][0][0])
+                        if self.sh_source_target(h) is not None or self.sh_indirect(h) or unsafe:
                             more = True
+                            # An eval of anything not written out, or a call handing an evaluating
+                            # function what the gate cannot read.
+                            unreadable = unreadable or unsafe or self.sh_evals_unread(h)
                         elif words and words[0] in fbody:
                             callees.append(words[0])
                         for lit in self.sh_eval_call(h, evals) or ():
                             callees += [w[0] for w in (self.sw.command_words(self.sw.command_rest(x)[0])
                                                        for x in self.sh_lit_heads(lit, items[k][0][0]) or ())
                                         if w and w[0] in fbody]
-                own[name] = (bound, more, callees)
+                own[name] = (bound, more, callees, unreadable)
             return own[name]
 
         def calls(name):
             """(the names a call to the function of s named name can bind, whether it can do more than
-            that: source a file, bind a name through a variable, or call a function of s that does)."""
+            that: source a file, bind a name through a variable, or call a function of s that does,
+            and whether that more is evaluating text the gate cannot read)."""
             # A call takes in every function it reaches, each once. Followed again down every path
             # of calls to it, a chain of functions that each call the next twice cost two to the
             # power of its length, and the merge helper's own functions were walked 2,430 times for
             # one judgement (claude-config#2576). What is reached is the same either way.
             if name not in reached:
-                bound, more, todo, seen = set(), False, [name], set()
+                bound, more, unreadable, todo, seen = set(), False, False, [name], set()
                 while todo:
                     f = todo.pop()
                     if f in seen:
                         continue
                     seen.add(f)
-                    b, m, callees = body_of(f)
-                    bound, more = bound | b, more or m
+                    b, m, callees, u = body_of(f)
+                    bound, more, unreadable = bound | b, more or m, unreadable or u
                     todo += callees
-                reached[name] = (bound, more)
+                reached[name] = (bound, more, unreadable)
             return reached[name]
 
         def effects(d, head, p, run, when=None):
@@ -3520,37 +3561,56 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
             when is where what it changes is changed from (the end of the command, or the start of
             the compound holding it, which can run it more than once)."""
             w = p["end"] if when is None else when
+            # The names of the for loops around it whose values the walk tries in turn (#2912): a
+            # command that may set one spoils that loop (spoil), as a path built from it next is not
+            # the word.
+            own_names = {lp[2] for lp in loops if lp[4] <= p["start"] < lp[5]}
             a = self.sh_assignment(head)
             if a:
+                if a[0] in own_names and spoil({a[0]}, p["start"]):
+                    return "dead"
                 spans.setdefault(a[0], []).append((p["start"], p["end"]))
                 setv(a[0], self.sh_word(a[1], where(d, p["start"]), look, script, True)[0] if run else None, w)
                 return None
             rest, _ = self.rest_of(head)
             words = self.words_of(rest)
             if self.sh_indirect(head):
+                if self.sh_evals_unread(head):
+                    unread.append((p["start"], head, "eval"))  # see below (#2912)
                 return "dead"
             # A call to a function a sourced file defined to evaluate its argument here (hang_wait):
             # what it evaluates is followed as though written in its place (claude-config#2538).
             if self.sh_eval_unsafe(head, evals, d):
+                # Past it a file run by a path built from a variable is refused, as a sourced one is,
+                # rather than passed unread behind the #2683 switch (sh_past_unread, #2912).
+                unread.append((p["start"], head, words[0] if words else "eval"))
                 return "dead"
             for lit in self.sh_eval_call(head, evals) or ():
                 for h in self.sh_lit_heads(lit, d):
                     a = self.sh_assignment(h)
-                    res = setv(a[0], None, w) if a else effects(d, h, p, None, w)
+                    res = (spoil({a[0]}, p["start"]) or setv(a[0], None, w)) if a else effects(d, h, p, None, w)
                     if res:
                         return res
             wd = where(d, p["start"])
             v, bad = self.sh_source_word(head, wd, look, script)
-            if bad:
+            # Inside a for loop over words written out, the path is worked out once for each (#2912).
+            usable = [lp for lp in loops if lp[0] not in spoiled]
+            each = self.sh_source_each(head, wd, look, script, usable, p["start"]) if bad else None
+            if bad and each is None:
                 return "dead"
-            if v is not None:
-                path = self.resolve(v, d)
-                if not self.is_file(path):
-                    return "dead"
+            if each is not None:
+                used.update(lp[0] for lp in usable if lp[4] <= p["start"] < lp[5])
+            if v is not None or each is not None:
                 had = {f: set(ns) for f, ns in evals.items()}
-                for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, v, depth + 1, set(), evals):
-                    tainted.add(n)
-                    setv(n, None, w)
+                for word in [v] if each is None else each:
+                    path = self.resolve(word, d)
+                    if not self.is_file(path):
+                        return "dead"
+                    for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, word, depth + 1, set(), evals):
+                        if n in own_names and spoil({n}, p["start"]):
+                            return "dead"
+                        tainted.add(n)
+                        setv(n, None, w)
                 if evals != had:
                     own.clear()  # what a function of s does depends on what it can call
                     reached.clear()
@@ -3558,9 +3618,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
             named = [x for x in words if x in fbody] if words[:1] == ["trap"] else \
                 words[:1] if words and words[0] in fbody else []
             for f in named:
-                b, more = calls(f)
+                b, more, unreadable = calls(f)
                 if more:
+                    if unreadable:
+                        unread.append((p["start"], head, f))
                     return "stop"
+                if b & own_names and spoil(b, p["start"]):
+                    return "dead"
                 for n in b:
                     setv(n, None, w)
             judged = rest if words and words[0] not in SH_SPECIAL and words[0] not in funcs else head
@@ -3688,19 +3752,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
         # NAME=value in front of a command (not a special builtin, nor a function of s, which runs
         # with it set) sets it for that command alone, so it is no second assignment:
         # `LIBDIR="$DIR/lib" python3 ...` beside `export LIBDIR=...`.
-        temp = {}
-        for (d, t), p in items:
-            rest_t, assigns = self.rest_of(t)
-            words = self.words_of(rest_t)
-            if words and words[0] not in SH_SPECIAL and words[0] not in funcs:
-                for a in assigns.split("\n"):
-                    n = a.split("=", 1)[0]
-                    if a.strip() and re.fullmatch(r"[A-Za-z_]\w*", n):
-                        temp[n] = temp.get(n, 0) + 1
+        temp = self.sh_one_command_sets([head_of(k) or items[k][0][1] for k in range(len(items))], funcs)
         final = {n: (since[n], v) for n, v in env.items() if v is not None}
         # What the walk did not follow: function bodies, and everything past top. A subshell's
         # commands set nothing here.
-        unfollowed = [k for k in range(len(items)) if k not in handled and len(items[k][1]["scope"]) == 1]
+        # The eval of a function of s that evaluates its argument is judged at each call instead (#2912).
+        unfollowed = [k for k in range(len(items))
+                      if k not in handled and k not in self_evals and len(items[k][1]["scope"]) == 1]
         cand = set()
         if whole and not any(self.sh_indirect(head_of(k)) or
                              self.sh_eval_unsafe(head_of(k), evals, items[k][0][0]) for k in unfollowed):
@@ -3775,7 +3833,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
         # bind none of the names that last; dropping one can change those paths, so this goes round
         # until it settles.
         while True:
-            known = {"regions": {}, "top": top, "lost": lost, "bodies": bodies}
+            # The for loops the walk followed, whose values a sourced path is worked out from, the
+            # call it ended at for evaluating what the gate cannot read, and the functions of s and
+            # of the files it sources that evaluate an argument, for the gate's judging (#2912).
+            known = {"regions": {}, "top": top, "lost": lost, "bodies": bodies,
+                     "each": [lp for lp in loops if lp[5] <= top and lp[0] not in spoiled
+                              and not any(a <= lp[4] < b for a, b in bodies)],
+                     "unread": unread[0] if unread else None, "evals": evals}
             for n, r in regions.items():
                 for a, b, v in r:
                     known["regions"].setdefault(n, []).extend((x, y, v) for x, y in carve(a, b))
@@ -4495,7 +4559,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
         expanded in it, or a plain word), else None."""
         m = re.fullmatch(r"'([^']*)'", raw) or re.fullmatch(r'"([^"$`\\]*)"', raw) or \
             re.fullmatch(r"([^'\"$`\\\s*?\[{~]+)", raw)
-        return m.group(1) if m else None
+        if m:
+            return m.group(1)
+        # In double quotes with every $, ` and " escaped, nothing is expanded either: \$ \` \" \\ stand
+        # for the character, a backslash newline for nothing, and any other backslash for itself
+        # (`check "x" "[ \"\${n:-0}\" -gt 30 ]"`, #2912).
+        m = re.fullmatch(r'"((?:[^"$`\\]|\\.)*)"', raw, re.S)
+        if not m:
+            return None
+        return re.sub(r"\\(.)", lambda e: "" if e.group(1) == "\n" else
+                      e.group(1) if e.group(1) in "$`\"\\" else "\\" + e.group(1), m.group(1), flags=re.S)
 
     def sh_eval_call(self, head, evals):
         """For a command mentioning a function of evals (name: the positions of the arguments it
@@ -4584,8 +4657,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
         of its own arguments (sh_evaluator) binds nothing by being defined: it is added to evals, and
         a call to it binds what the condition it is handed binds, so the caller judges each call
         (sh_eval_call). This file's own calls to one are judged here (claude-config#2538)."""
-        if not names:
-            return set()
+        if not names and evals is None:
+            return set()  # with evals, still read for the functions it defines that evaluate (#2912)
         real = os.path.realpath(path)
         if real in seen:
             return set()
@@ -5125,6 +5198,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
                 self.shell["piped"] = fed
                 self.shell["after_pipe"] = after_pipe
                 self.shell["outer"] = not wdepth
+                # A call of a function that evaluates its argument in this shell: what it evaluates,
+                # written out, is judged as a command line (#2912).
+                reason = self.sh_eval_text_reason(text, d, depth) if not wdepth else None
+                if reason:
+                    return reason
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason
@@ -5360,7 +5438,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
             here = os.path.abspath(d or os.getcwd())
             if name == "perl":
                 # A name perl's <> runs as a command, written out or from a glob (#2912).
-                reason = self.perl_pipe_names(words, {inline[1]} if inline else set(), d, depth)
+                reason = self.perl_pipe_names(words, {inline[1]} if inline else set(), d, depth, text)
                 if reason:
                     return reason
             if lang == "py":
@@ -5450,8 +5528,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
             # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
             # that still cannot be worked out is refused unread (claude-config#2538, on since
             # 2026-11-13, once the scripts it newly refused were read or rewritten).
-            v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
-            if bad:
+            # Inside a for loop over words written out, each value's file is read (#2912).
+            choices = self.sh_source_choices(text, d)
+            if choices[0][1]:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
                 # One built from what cannot be worked out is unread, and refused whatever the switch says
@@ -5459,7 +5538,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
                 if raw and not re.search(r"[$`]", raw):
                     return self.script(words[1], d, depth, True, sourced=True)
                 return self.unworked_path(text, 1, d, "sources")
-            return self.script(v, d, depth, True, sourced=True) if v is not None else None
+            for v, _ in choices:
+                reason = self.script(v, d, depth, True, sourced=True) if v is not None else None
+                if reason:
+                    return reason
+            return None
         if launcher:
             reason = self.package_run(words, d, depth, launcher)
             if reason is not False:
@@ -5571,7 +5654,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames):
         # A file sourced by such a path is refused whatever the switch says (Dan, 2026-11-13: "Do all
         # of it, switch on", claude-config#2538): it runs in this shell, where nothing else reads it.
         # A file run by one stays behind the switch.
-        if not unworked_paths_refused() and verb != "sources":
+        # And a file run past where the walk of the script's variables ended at an eval of text the
+        # gate cannot read, which is what made the path unknown (#2912).
+        if not unworked_paths_refused() and verb != "sources" and not self.sh_past_unread():
             return None
         words = self.raw_words(text)
         if slot == "operand":

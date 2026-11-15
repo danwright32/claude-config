@@ -15,7 +15,9 @@ Before these, four routes ran a file the gate never read:
   * A name perl's <> opens as a command (#2912): perl opens each name it is handed with the two
     argument open, which runs a name starting or ending in | as a command. Such a name was judged
     only where a file naming an endpoint was also handed to the code, and never where a glob the
-    shell expands named it. Each is now judged as a command line (perl_pipe_names).
+    shell expands named it. Each is now judged as a command line (perl_pipe_names), and where perl
+    opens what it is handed, a name built by a substitution, backquotes, a brace expansion or a
+    variable the gate cannot work out is refused, as what it becomes cannot be seen.
   * A file with a NUL in its first line run by zsh or dash (#2977): bash, sh and ksh refuse to run
     it, so #2892 only searched it for an endpoint, but zsh and dash run it. It is now read as the
     shell running it reads it (nul_reading).
@@ -46,6 +48,13 @@ PHP_CODE_OPTIONS = ("-r", "-B", "-R", "-E")
 PHP_BANG = re.compile(r"^#!.*\bphp\b")
 # What a name given to perl's <> must look like for the two argument open to run it as a command.
 PERL_PIPE = re.compile(r"^\s*\||\|\s*$")
+# perl code that reads the names it is handed through <>'s two argument open: <> (never <<>>, whose
+# three argument open runs nothing), <ARGV>, readline(ARGV), eof() and the like; $ARGV and @ARGV are
+# only the name and the list (#2912).
+PERL_READS_HANDED = re.compile(r"(?<!<)<\s*(?:ARGV\s*)?>(?!>)|(?<![$@\w])ARGV\b|\beof\s*\(\s*\)")
+# A brace expansion bash makes of an unquoted word, {a,b} or {1..3}, which hands perl names the gate
+# does not see written (#2912).
+PERL_BRACE = re.compile(r"\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}")
 # A variable's own value, which a command adding to it keeps (NODE_OPTIONS="$NODE_OPTIONS ...").
 NODE_SELF = re.compile(r"\$\{NODE_OPTIONS\}|\$NODE_OPTIONS(?!\w)")
 # One assignment of NODE_OPTIONS among a command's leading assignments.
@@ -236,11 +245,57 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth):
                     names.append(os.path.join(os.path.dirname(word), os.path.basename(made)))
             return names or [word]
 
-        def perl_pipe_names(self, words, skip, d, depth):
+        def perl_opens_handed(self, words, skip):
+            """Whether perl opens the names it is handed with <>'s two argument open: a switch -n, -p
+            or -i (alone or in a cluster, before any letter that takes the rest of it), code that
+            reads <>, <ARGV>, readline(ARGV) or eof() (never <<>>, whose open runs nothing), or code
+            the gate is not given here (a script file, or its input), which may do either."""
+            if not skip:
+                return True
+            for w in words[1:]:
+                if w in skip:
+                    break  # the code: what follows is handed to it
+                if not w.startswith("-") or w.startswith("--"):
+                    continue
+                for ch in w[1:]:
+                    if ch in "npi":
+                        return True
+                    if ch in "eEMmIxdDF0C":
+                        break  # takes the rest of the word as its value
+            return any(PERL_READS_HANDED.search(code) for code in skip)
+
+        def perl_pipe_names(self, words, skip, d, depth, text=None):
             """The reason a name perl is handed, which its <> opens as a command (a name starting or
             ending in |, two argument open), runs a command that posts, or None. Each word but the
             switches and the code (skip), and each name a glob in one expands to, is looked at, and
-            the command such a name holds is judged as a command line."""
+            the command such a name holds is judged as a command line. Where perl opens what it is
+            handed (perl_opens_handed), a word the gate cannot work out, built from a substitution,
+            backquotes, a variable it does not know or a brace expansion, is refused, as the name it
+            becomes cannot be seen (#2912, the lessons review of #3010 at 73967ea: `perl -ne print
+            "$(printf 'bash post.sh|')"` passed). text is the command as written."""
+            raws = self.raw_words(text) if text is not None else None
+            if raws is not None and self.perl_opens_handed(words, skip):
+                if len(raws) != len(words):
+                    built = [r for r in raws[1:] if re.search(r"[$`{]", r)]
+                    if built:
+                        return self.unfollow(f"perl opens the names it is handed with <>, which runs one starting "
+                                             f"or ending in | as a command, and is handed {built[0]}, whose name the "
+                                             "gate cannot line up with what it reads")
+                else:
+                    for w, r in zip(words[1:], raws[1:]):
+                        if w in skip or w.startswith("-"):
+                            continue
+                        why = None
+                        if re.search(r"[$`]", r):
+                            v, splits = self.sh_word(r, self.sh_cwd(d), self.sh_source_var, self.shell["script"], False)
+                            if v is None or splits:
+                                why = "built from what the gate cannot work out"
+                        if why is None and PERL_BRACE.search(re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", "", r)):
+                            why = "a brace expansion"
+                        if why:
+                            return self.unfollow(f"perl opens the names it is handed with <>, which runs one starting or "
+                                                 f"ending in | as a command, and is handed {r}, {why}, so the name it "
+                                                 "opens cannot be seen")
             for w in words[1:]:
                 if w in skip or w.startswith("-"):
                     continue
