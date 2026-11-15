@@ -633,7 +633,18 @@ check "#2997 and the remote read from git config: $out" refused
 RUN_DIR="$REMOTECO" run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$(git rev-parse --show-toplevel)\""
 check "#2997 and a gh api write posting the top level lookup: $out" refused
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
-check "#2997 cat of a file is a program whose output this check does not read: $out" refused
+check "#2997 cat of a file from a work checkout is judged by where it runs: $out" refused
+# cat's output is the file's text, which is read and judged wherever it runs (the lessons review of
+# 028d7e6): here from a directory whose path names nothing.
+printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
+printf 'Nothing to see.\n' > "$CO/clean-2997.md"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat named-2997.md)\""
+check "#2997 cat of a file naming a work repository is refused from a clean directory: $out" refused
+check "#2997 and says the name the file holds: $out" has "$out" "zephyr"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat missing-2997.md)\""
+check "#2997 and a file that cannot be read is refused as cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+check "#2997 (control) cat of a clean file from a clean directory passes: $out" passed
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../*)\""
 check "#2997 and echo of a glob, which the shell fills with file names: $out" refused
 # sh -c and bash -c strings, and unquoted heredoc bodies, are read too (the review of #2981).

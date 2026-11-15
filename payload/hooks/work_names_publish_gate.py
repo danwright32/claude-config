@@ -734,7 +734,7 @@ def _shown(hit):
     return "a work organisation or repository" if _WITHHOLD else "`%s`" % hit
 
 
-def _read(word, cwd):
+def _read(word, cwd, read_by="a gh api call sends"):
     path = os.path.expanduser(word)
     if not os.path.isabs(path):
         path = os.path.join(cwd or os.getcwd(), path)
@@ -742,7 +742,7 @@ def _read(word, cwd):
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     except OSError as e:
-        raise CannotTell("%s, the file a gh api call sends, cannot be read (%s)" % (word, e.strerror or e))
+        raise CannotTell("%s, the file %s, cannot be read (%s)" % (word, read_by, e.strerror or e))
 
 
 def api_writes(command, cwd):
@@ -1435,11 +1435,29 @@ def place_text(where):
     return _PLACES[where]
 
 
+def cat_files(command, where):
+    """The text of the files a cat in a substitution prints, judged as well as where it runs (the
+    lessons review of 028d7e6), or "" for any other program. Raises CannotTell for a file it cannot
+    read, standard input, a redirection, or a name the shell changes as it runs (an expansion, a glob,
+    a tilde), which this check cannot find."""
+    words = scan._sw.command_words(command)
+    if words[:1] != ["cat"]:
+        return ""
+    texts = []
+    for word in words[1:]:
+        if word.startswith("-") and word != "-":
+            continue
+        if word == "-" or re.search(r"[$`*?\[~<>]", word):
+            raise CannotTell("cat reads %s, which this check cannot find before the command runs" % word)
+        texts.append(_read(word, where, "a substitution prints"))
+    return "\n".join(texts)
+
+
 def _expanded(shown, hit):
     """How the text a name was found in reached the posted text, for a refusal."""
     if isinstance(shown, Ran):
-        return ("has %s, which runs where the command does, and the path or git checkout there names %s"
-                % (shown, _shown(hit)))
+        return ("has %s, which runs where the command does, and what it can print there (that "
+                "directory's path and git checkout, or the files it reads) names %s" % (shown, _shown(hit)))
     return "expands %s, whose value names %s" % (shown, _shown(hit))
 
 
@@ -1449,7 +1467,12 @@ def variables_posted(text, place):
     (posted_text), so its variables are left out. Neither is a cd's directory, unless something in
     the rest of the command can read it back (READS_BACK), when the cd's own variables are judged too:
     `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f).
-    ~+, ~- and a pwd substitution are judged as $PWD and $OLDPWD are, by the directory (#2981)."""
+    ~+, ~- and a pwd substitution are judged as $PWD and $OLDPWD are, by the directory (#2981).
+
+    Each program a substitution runs that is not shown to print nothing of where it runs comes after
+    them, shown as a Ran (#2997): (shown, what it can print there, None), the directory's path and git
+    checkout (place_text) and the files a cat reads (cat_files), or (shown, None, why not) where that
+    cannot be told, one a cd or directory option takes elsewhere among them."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
@@ -1499,7 +1522,7 @@ def variables_posted(text, place):
             out.append((shown, None, "runs it in a directory this check cannot follow the command to"))
         else:
             try:
-                out.append((shown, place_text(place.cwd), None))
+                out.append((shown, place_text(place.cwd) + "\n" + cat_files(command, place.cwd), None))
             except CannotTell as e:
                 out.append((shown, None, "runs where the command does, and %s" % e))
     return out
