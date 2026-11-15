@@ -3593,7 +3593,8 @@ there on 2026-11-15: "Decided by Dan, 2026-11-15: pass an import the same test f
 or jest.mock of that path), with a test; a real unmocked import stays refused", a loosening he signed
 off), in `lib/js-mocks.py`. The rule is written the narrow way round: a mock counts only in a file
 plain enough that nothing in it can reach the original module. The file must be handed to vitest or
-jest as installed (the package by a launcher, or a script under `node_modules`; never run by node,
+jest as installed (the package by a launcher, or the runner's own script under `node_modules`:
+`.bin/vitest`, `.bin/jest`, or inside `vitest/`, `jest/` or `jest-cli/`; never run by node,
 tsx or bun itself, where a mock replaces nothing), be a test file by the runners' default naming
 (`.test` or `.spec` before the extension, or under `__tests__`), and call `vi.mock` or `jest.mock` as
 a top level statement of its own with the module's path written out, resolving to the same file, and
