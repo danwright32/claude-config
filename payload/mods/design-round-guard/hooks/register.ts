@@ -1141,7 +1141,11 @@ const hooksBeyond = async ($: EngineInterface, dir: string): Promise<ModFile[] |
     return true
   }
   try {
-    for (const e of await $.fs.list(dir)) if (e.kind === 'dir' && !(await walk(e.name, 1))) return null
+    for (const e of await $.fs.list(dir)) {
+      if (e.kind === 'dir' && !(await walk(e.name, 1))) return null
+      // A plain JavaScript file beside the hook files, which drawingChange's own list leaves out (lessons review).
+      if (e.kind === 'file' && /\.(js|mjs|cjs)$/i.test(e.name)) out.push({ name: e.name, text: String(await $.fs.read(`${dir}/${e.name}`)) })
+    }
   } catch {
     return null
   }

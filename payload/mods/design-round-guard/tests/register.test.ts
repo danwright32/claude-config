@@ -4588,6 +4588,10 @@ test('#3017: beside a sibling no reader can follow, a mod registering a band, a 
     // Added by the edit itself.
     expect({ line, added: await held({ tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: DRG_LOG, new_string: line }) }).toEqual({ line, added: true })
   }
+  // A pane opened from a plain JavaScript file beside it (lessons review).
+  w.files[`${DRG}/hooks/open.mjs`] = "export const open = ($) => $.ui.open({ id: 'panel' })\n"
+  expect(await held(DRG_LOGIC)).toBe(true)
+  delete w.files[`${DRG}/hooks/open.mjs`]
   // A panel drawn through JSX beside it.
   w.files[`${DRG}/hooks/panel.tsx`] = 'export const Panel = () => <Box />\n'
   expect(await held(DRG_LOGIC)).toBe(true)
