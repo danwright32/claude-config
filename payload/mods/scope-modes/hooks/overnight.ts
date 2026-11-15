@@ -1,5 +1,5 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, operations, type Cmd } from './nobuild.ts'
+import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, inScratch, operations, type Cmd } from './nobuild.ts'
 import { browserRefusal, type Browser } from './browser.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
@@ -14,7 +14,9 @@ import { browserRefusal, type Browser } from './browser.ts'
 //   and labels on this checkout's repository (Dan, 2026-11-09, #2581); any other GitHub write (a comment, which
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
-//   whose repository cannot be resolved is refused (L75);
+//   whose repository cannot be resolved is refused (L75); whatever `rtk proxy` runs is judged as
+//   the same command written plainly, and a line running gh that way may write files only into
+//   the session notes folder or the scratchpad (#2937, recorded on its PR);
 // - LESSONS.md written by any route in command position, a script file handed it as its argument
 //   included (#1592);
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
@@ -326,7 +328,8 @@ const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[
   return next !== undefined && (next.startsWith('-') || subcommands.has(next))
 }
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
-export const runsGit = runsFrom('git', callsWith(GIT_SUBCOMMANDS))
+const runsGitFrom = callsWith(GIT_SUBCOMMANDS)
+export const runsGit = runsFrom('git', runsGitFrom)
 // gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
 // the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
@@ -579,6 +582,72 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
   return to === here ? { repo: here } : { why: `write to ${to} from a checkout of ${here}` }
 }
 
+// ---- rtk proxy (#2937) ----
+
+// rtk's proxy runs the words after its own options as they stand, unfiltered (rtk 0.31.0 `rtk proxy
+// --help`: -v, -u, --skip-env and -h, none taking a value). mod-kit's reader passes over rtk but not
+// its proxy, so `rtk proxy gh issue view 5` reached this judge as a command named proxy, and its gh
+// as a word of another command, refused as a write to a repository that could not be resolved: on
+// the night of 13 to 14 November 2026 that refused a builder's reads of its own issue. Its git was
+// judged by nothing at all (`rtk proxy git push --force` went ahead). So whatever rtk's proxy runs
+// is judged exactly as the same command written plainly.
+//
+// Everything here is asked of mod-kit's own reader, never worked out from the words or the line's
+// text by this judge (three lessons reviews, of 7cb8876, 1346447 and c6efef7: a text match took a
+// program named proxy for rtk's beside `echo rtk proxy`, and words quoted back as text lost which of
+// them were quoted, so `--body '> x'` read as a redirection). The line is read twice more:
+// - with every word rtk renamed to a program no reader passes over, so a command that comes back
+//   named so, with proxy after rtk's own options, is one rtk's proxy runs, and a program of its own
+//   named proxy is no proxy;
+// - with `rtk` and its options kept and `proxy` left out after them, so the reader reads what proxy
+//   runs past rtk exactly as it reads `rtk gh ...`: quotes, heredocs, redirections and all.
+// The command at the same place in the second reading then stands for the proxy command.
+//
+// What cannot be read that way fails closed (lessons review of 9c3b530: a proxy left unswapped ran
+// its git unjudged). A command rtk's proxy runs that the second reading could not take proxy out of
+// (`rtk 'proxy' ...`), and a line naming rtk whose readings do not line up command for command, are
+// refused whole. A command named proxy that is not swapped (a program of its own, or rtk spelled so
+// the first reading cannot find it) is judged as before, where a gh among its words is refused as
+// unresolved, and so is a git among them, below.
+const RTK_WORD = /(^|[\s;&|(`'"/])rtk(?=[\s;&|)`'"]|$)/g
+const NAMES_RTK = new RegExp(RTK_WORD.source)
+const RTK_RENAMED = 'rtk-read-as-a-program'
+const RTK_THEN_PROXY = /(^|[\s;&|(`'"/])rtk((?:[ \t]+-[A-Za-z-]+)*)[ \t]+proxy(?=[ \t])/g
+const PROXY_UNREAD = 'run a command through rtk proxy that could not be read as written plainly'
+// Each command rtk's proxy runs, by its place in call.commands, read as written without the proxy;
+// `unread` when one cannot be.
+const rtkProxied = async (call: OvernightCall): Promise<{ swaps: ReadonlyMap<number, Cmd> } | { unread: true }> => {
+  const swaps = new Map<number, Cmd>()
+  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return { swaps }
+  const renamed = await call.read(call.raw.replace(RTK_WORD, `$1${RTK_RENAMED}`))
+  const unproxied = await call.read(call.raw.replace(RTK_THEN_PROXY, '$1rtk$2'))
+  if (renamed.length !== call.commands.length || unproxied.length !== call.commands.length)
+    return NAMES_RTK.test(call.raw) ? { unread: true } : { swaps }
+  for (const [i, r] of renamed.entries()) {
+    if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') continue
+    let k = 1
+    while (k < r.words.length && (r.words[k] as string).startsWith('-')) k++
+    if (r.words[k] !== 'proxy') continue
+    const plain = unproxied[i]
+    if (!plain || name(plain.words[0]) === 'proxy') return { unread: true }
+    swaps.set(i, plain)
+  }
+  return { swaps }
+}
+// Where the files a line writes may be, when a gh in it runs through rtk proxy (Dan's standing rule
+// for this repository, recorded on the PR for #2937's open question): the null device, the session
+// notes folder and the scratchpad, never any other path. Taken from mod-kit's write reader, which
+// does not say which command of the line writes a file, so it holds for every file the line writes;
+// one whose path the reader cannot give (a variable) cannot be placed, and is refused.
+const proxiedOutputRefusal = (writes: ModKitWrites, home: string): string | undefined => {
+  for (const f of writes.files) {
+    const p = f.path
+    if (p !== undefined && (['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty'].includes(p) || inScratch(p) || (!p.split('/').includes('..') && p.startsWith(`${home}/.claude/state/session-notes/`)))) continue
+    return `write the output of gh run through rtk proxy to ${p ?? f.word}, outside the session notes folder and the scratchpad`
+  }
+  return undefined
+}
+
 // ---- MCP tools ----
 
 // Chrome is judged by browser.ts before this list is read (#2064), so the list holds only the tools
@@ -675,10 +744,17 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
-  for (const c of call.commands) {
+  const byProxy = await rtkProxied(call)
+  if ('unread' in byProxy) return PROXY_UNREAD
+  for (const [at, written] of call.commands.entries()) {
+    // What rtk's proxy runs is judged as that command written plainly (#2937).
+    const proxied = byProxy.swaps.get(at)
+    const c = proxied ?? written
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
     const cmd = name(words[0])
+    // A proxy not swapped above runs what follows it, and nothing below judges a git that way.
+    if (cmd === 'proxy' && words.slice(1).some((w, i) => name(w) === 'git' && runsGitFrom(words.slice(i + 2)))) return 'run git through a command named proxy, which could not be judged'
     if (cmd === '(') {
       stack.push(dir)
       continue
@@ -719,6 +795,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (cmd === 'gh') {
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
+      const out = proxied && proxiedOutputRefusal(call.writes, call.home)
+      if (out) return out
       if (v && 'write' in v) {
         const to = await writeTarget(v.write, dir, call, look)
         if ('why' in to) return to.why
