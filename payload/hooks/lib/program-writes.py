@@ -191,8 +191,9 @@ def file_shaped(path):
 def raw_path(raw):
     """A redirection's target or an argument as written, where it names one path the same way wherever
     it is written: double quoted variables ($X, ${X}) and plain path characters, every $ inside
-    double quotes so nothing is split or globbed, with the quotes taken away and ${X} written $X. None
-    for any other word (a substitution, a glob, a ~, a single quote, a default, an unquoted $)."""
+    double quotes so nothing is split or globbed, with the quotes taken away and $X written ${X}, so
+    "${X}y" and "$Xy", two different variables, never give one key (claude-config#2912). None for any
+    other word (a substitution, a glob, a ~, a single quote, a default, an unquoted $)."""
     out, i, dq = [], 0, False
     while i < len(raw):
         c = raw[i]
@@ -204,7 +205,7 @@ def raw_path(raw):
         if m:
             if not dq:
                 return None
-            out.append("$" + (m.group(1) or m.group(2)))
+            out.append("${" + (m.group(1) or m.group(2)) + "}")
             i += m.end()
             continue
         if not re.match(r"[\w./@+,:%-]", c):
@@ -304,7 +305,8 @@ def make(interpreter, shells, awks, senders):
             command binds a name it does not spell out (sh_indirect), none names the module's file,
             and every command runs a program known to write nothing (NON_WRITERS, by a name written
             out) that is not one of the script's own functions and not in RAW_CHANGERS, with no
-            redirection writing a file that may be the module.
+            redirection writing a file that may be the module; and nothing before start was sent to
+            the background, where it runs on past the write (claude-config#2912).
 
             Any other program may write the module whatever it is handed, a folder or a parent of it,
             a word the gate cannot work out, or a path whose variable's value is not known, so it is
@@ -314,8 +316,17 @@ def make(interpreter, shells, awks, senders):
             read inline code for whether it writes a file."""
             s = self.shell["text"]
             between = s[start:end]
-            if any(self.sh_binds(n, between) for n in re.findall(r"\$([A-Za-z_]\w*)", want)):
+            if any(self.sh_binds(n, between) for n in re.findall(r"\$\{([A-Za-z_]\w*)\}", want)):
                 return False
+            # A program started in the background before the write runs on past it, and may rewrite
+            # the module after it (claude-config#2912): a command sent to the background with &, a
+            # { } group or ( ) subshell followed by &, or a coproc, anywhere before the write.
+            for p in self.shell["raw_struct"]["parts"]:
+                if p["start"] >= start:
+                    break
+                if p["how"] == "&" or s[p["start"]:p["end"]].lstrip().startswith("coproc") or \
+                        (p["how"] == ")" and re.match(r"[\s)]*&(?![&>])", s[p["end"]:])):
+                    return False
             module = os.path.basename(want)
             if module in between:
                 return False
