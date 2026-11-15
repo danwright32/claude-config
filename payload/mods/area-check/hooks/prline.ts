@@ -153,8 +153,32 @@ export const linesToPaste = (files: readonly BranchFile[]): string[] => files.ma
 
 // ---- The words ----
 
-export const LOG_SHOWN = '~/.claude-area-check/log.jsonl'
-const THIS_MAC = `It read this Mac's log only (${LOG_SHOWN}), so a file decided on another Mac is not asked for.`
+// ---- The log's folder (#2906) ----
+//
+// ~/.claude-area-check, or for one run the folder CLAUDE_AREA_CHECK_DIR names, so a live test
+// session keeps its records out of this Mac's real log, which the weekly line counts (L528). The
+// weekly line's runner (hooks/feature-issue-review.sh) reads the same variable, so one run stays
+// self consistent. An empty value is unset, as the shell's ${VAR:-default} reads it there. A value
+// that is not an absolute path is refused, never resolved against whatever folder the engine runs
+// in, and never replaced by the real folder (L322): the write then fails, and says why.
+
+export const AREA_DIR_ENV = 'CLAUDE_AREA_CHECK_DIR'
+const HOME_DIR = '.claude-area-check'
+export const DIR_SHOWN = `~/${HOME_DIR}`
+
+/** Where the log is kept (`dir`), and how a sentence names it (`shown`); or why it cannot be. */
+export const areaFolder = (home: string, set: string | undefined): { dir: string; shown: string } | { why: string } => {
+  if (set) {
+    if (!set.startsWith('/')) return { why: `${AREA_DIR_ENV} names ${set}, which is not an absolute path` }
+    const dir = set.replace(/\/+$/, '') || '/'
+    return { dir, shown: dir }
+  }
+  if (!home) return { why: 'HOME is not set' }
+  return { dir: `${home}/${HOME_DIR}`, shown: DIR_SHOWN }
+}
+
+export const LOG_SHOWN = `${DIR_SHOWN}/log.jsonl`
+const thisMac = (log: string) => `It read this Mac's log only (${log}), so a file decided on another Mac is not asked for.`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const shorten = (s: string) => (s.length > 120 ? `${s.slice(0, 117)}...` : s)
 
@@ -165,8 +189,8 @@ export const malformedNote = (malformed: readonly string[]): string =>
     : `${plural(malformed.length, 'line of the log', 'lines of the log')} could not be read and ${malformed.length === 1 ? 'was' : 'were'} skipped, the first: ${shorten(malformed[0] as string)}`
 
 /** The dim line naming the log lines skipped, on a command let through. */
-export const malformedDim = (malformed: readonly string[]): string =>
-  `The area check skipped ${plural(malformed.length, 'line of its log', 'lines of its log')} (${LOG_SHOWN}) it could not read, the first: ${shorten(malformed[0] as string)}`
+export const malformedDim = (malformed: readonly string[], log: string = LOG_SHOWN): string =>
+  `The area check skipped ${plural(malformed.length, 'line of its log', 'lines of its log')} (${log}) it could not read, the first: ${shorten(malformed[0] as string)}`
 
 export type Refusing = {
   /** What is refused, as the command names it: `gh pr create`, `gh pr edit`, `gh pr merge`. */
@@ -175,12 +199,14 @@ export type Refusing = {
   files: readonly BranchFile[]
   loose: boolean
   malformed: readonly string[]
+  /** The log as the refusal names it, ~/.claude-area-check/log.jsonl when not given (#2906). */
+  log?: string
 }
 
 const tail = (r: Refusing) =>
   [
     r.loose ? 'A merge base could not be read, so these decisions were matched by branch alone.' : '',
-    THIS_MAC,
+    thisMac(r.log ?? LOG_SHOWN),
     malformedNote(r.malformed),
   ].filter(Boolean)
 
@@ -218,19 +244,19 @@ export const bodyUnreadableRefusal = (verb: string, file: string, why: string): 
 export const mayActOnPr = (command: string): boolean =>
   /merge-when-ready/.test(command) || (/\bgh\b/.test(command) && /\bpr\b/.test(command) && /\b(?:create|edit|merge)\b/.test(command))
 
-export const ERRORS_SHOWN = '~/.claude-area-check/errors.jsonl'
+export const ERRORS_SHOWN = `${DIR_SHOWN}/errors.jsonl`
 
 /**
  * The check itself failed on a pull request command (#2173): held, as every guard's failure holds
  * its call (#2148), never let through. A merge is the last check, and the one at merge time runs the
  * same code on this Mac only, so it is no backstop for a description that was never checked.
  */
-export const checkFailedRefusal = (why: string): string =>
-  `The area check refused this pull request command: its check failed (${shorten(why)}), so it cannot tell whether the description carries a line for each file decided on this branch. Run the command again; if it fails the same way, the area check itself needs fixing, and the error is kept in ${ERRORS_SHOWN}.`
+export const checkFailedRefusal = (why: string, errors: string = ERRORS_SHOWN): string =>
+  `The area check refused this pull request command: its check failed (${shorten(why)}), so it cannot tell whether the description carries a line for each file decided on this branch. Run the command again; if it fails the same way, the area check itself needs fixing, and the error is kept in ${errors}.`
 
 /** The log could not be read: named, with why and the way back, never read as no decisions. */
-export const logUnreadableRefusal = (verb: string, why: string): string =>
-  `The area check refused this ${verb}: it could not read its log ${LOG_SHOWN} (${why}), so it cannot tell which files were decided on this branch. It reads this Mac's log only. If the log was deleted, a new session writes it again (and reads as no decisions); if it cannot be read, make it readable to you again. Then run the command again.`
+export const logUnreadableRefusal = (verb: string, why: string, log: string = LOG_SHOWN): string =>
+  `The area check refused this ${verb}: it could not read its log ${log} (${why}), so it cannot tell which files were decided on this branch. It reads this Mac's log only. If the log was deleted, a new session writes it again (and reads as no decisions); if it cannot be read, make it readable to you again. Then run the command again.`
 
 // ---- The log's rotation, and the read of one branch's decisions (#2143) ----
 //

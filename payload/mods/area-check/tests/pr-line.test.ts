@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { READ_SCRIPT, ROTATE_BYTES, ROTATE_SCRIPT, SETTLE_MINUTES, mayActOnPr, rotationStamp } from '../hooks/prline.ts'
+import { AREA_DIR_ENV, READ_SCRIPT, ROTATE_BYTES, ROTATE_SCRIPT, SETTLE_MINUTES, areaFolder, mayActOnPr, rotationStamp } from '../hooks/prline.ts'
 import { SWEEP_MS } from '../hooks/rules.ts'
 import { APP, DIR, ERRORS, KIT, LOG, REASON, SLACK, T0, bash, decide, decidedLine, edit, ghLists, refusal, said, world, type R } from './world.ts'
 
@@ -507,4 +507,85 @@ test('after a session start rotates a log over its bound, every decision in it i
   expect(why).toContain('Area check: src/old.ts: proceed, the oldest decision')
   expect(why).toContain(A)
   expect(why).toContain(B)
+})
+
+// ---- The log's folder for one run (#2906) ----
+//
+// CLAUDE_AREA_CHECK_DIR names a folder the log is kept in for one run, so a live test session's
+// loaded, judged and decided records never reach this Mac's real log, which the weekly line counts
+// (L528). Unset, the log is where it always was. Each test measures where the writes LAND (L322).
+
+const AREA = '/w/scratch/area'
+
+test('CLAUDE_AREA_CHECK_DIR set: the loaded record, the rotation, a judged edit and its decision all land in that folder, none in ~/.claude-area-check', KIT, async ($, on) => {
+  const w = world($, on, { areaDir: AREA })
+  await start($, w)
+  await edit($ as never, w, SLACK)
+  expect((await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })).deny).toBe(undefined)
+  expect(w.written()).toEqual([`${AREA}/log.jsonl`])
+  expect(w.records(`${AREA}/log.jsonl`).map(r => r.kind)).toEqual(['loaded', 'judged', 'decided'])
+  expect(w.records(LOG)).toEqual([])
+  const r = rotations(w)
+  expect(r.length).toBe(1)
+  expect(r[0]).toContain(` ${AREA} ${rotationStamp(T0, 's1')} `)
+})
+
+test('CLAUDE_AREA_CHECK_DIR unset: the same session keeps its log in ~/.claude-area-check, as always', KIT, async ($, on) => {
+  const w = world($, on)
+  await start($, w)
+  await edit($ as never, w, SLACK)
+  await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })
+  expect(w.written()).toEqual([LOG])
+  expect(w.records(LOG).map(r => r.kind)).toEqual(['loaded', 'judged', 'decided'])
+  expect(rotations(w)[0]).toContain(` ${DIR} ${rotationStamp(T0, 's1')} `)
+})
+
+test('CLAUDE_AREA_CHECK_DIR set: a pull request command reads the decisions kept there, and its refusal names that log', KIT, async ($, on) => {
+  const w = world($, on, { areaDir: AREA })
+  await edit($ as never, w, SLACK)
+  await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain(`Area check: src/lib/slack.ts: proceed, ${REASON}`)
+  expect(why).toContain(`${AREA}/log.jsonl`)
+  expect(why).not.toContain('~/.claude-area-check')
+  expect(readsOf(w).every(l => l.includes(` ${AREA} `))).toBe(true)
+  expect(reads(w)).toBeGreaterThan(0)
+})
+
+test('CLAUDE_AREA_CHECK_DIR set: a log that cannot be read is refused naming the log in that folder', KIT, async ($, on) => {
+  const w = world($, on, { areaDir: AREA })
+  w.ctl.log = 'missing'
+  const why = refusal(await bash($ as never, w, 'gh pr create --title T --body x'))
+  expect(why).toContain(`${AREA}/log.jsonl`)
+  expect(why).not.toContain('~/.claude-area-check')
+})
+
+test("CLAUDE_AREA_CHECK_DIR set: the check's own failure is kept in that folder's error file, and the line saying so names it", KIT, async ($, on) => {
+  const w = world($, on, { areaDir: AREA })
+  w.ctl.branchThrows = true
+  expect((await edit($ as never, w, SLACK)).result).toBe('done')
+  expect(w.written()).toEqual([`${AREA}/errors.jsonl`])
+  expect(w.records(`${AREA}/errors.jsonl`)[0]).toMatchObject({ kind: 'error', path: SLACK, error: 'git could not be asked' })
+  expect(w.records(ERRORS)).toEqual([])
+  expect(w.logs.filter(l => l.includes('area check'))).toEqual([`The area check could not look at src/lib/slack.ts (git could not be asked), so the edit went ahead unchecked; the error is kept in ${AREA}/errors.jsonl.`])
+})
+
+test('CLAUDE_AREA_CHECK_DIR naming a relative folder writes nothing anywhere, and says why, never falling back to the real log', KIT, async ($, on) => {
+  const w = world($, on, { areaDir: 'scratch/area' })
+  await start($, w)
+  expect(w.written()).toEqual([])
+  expect(rotations(w)).toEqual([])
+  expect(w.logs.some(l => l.includes('CLAUDE_AREA_CHECK_DIR') && l.includes('scratch/area') && l.includes('absolute'))).toBe(true)
+  // The line says the error could not be kept, never that it is kept in a folder nothing wrote to.
+  expect(w.logs.some(l => l.includes('the error is kept'))).toBe(false)
+})
+
+test('the folder is CLAUDE_AREA_CHECK_DIR when it names an absolute path, ~/.claude-area-check when it is unset or empty, and refused otherwise', () => {
+  expect(AREA_DIR_ENV).toBe('CLAUDE_AREA_CHECK_DIR')
+  expect(areaFolder('/h', undefined)).toEqual({ dir: '/h/.claude-area-check', shown: '~/.claude-area-check' })
+  expect(areaFolder('/h', '')).toEqual({ dir: '/h/.claude-area-check', shown: '~/.claude-area-check' })
+  expect(areaFolder('/h', '/w/scratch/area/')).toEqual({ dir: '/w/scratch/area', shown: '/w/scratch/area' })
+  expect(areaFolder('', '/w/scratch/area')).toEqual({ dir: '/w/scratch/area', shown: '/w/scratch/area' })
+  expect(areaFolder('/h', 'scratch/area')).toEqual({ why: 'CLAUDE_AREA_CHECK_DIR names scratch/area, which is not an absolute path' })
+  expect(areaFolder('', undefined)).toEqual({ why: 'HOME is not set' })
 })
