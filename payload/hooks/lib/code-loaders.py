@@ -72,7 +72,7 @@ def make(shell_bang, assign, marker, unknown_dir):
             out, k = [], 1
             while k < len(words):
                 w = words[k]
-                if w in PHP_CODE_OPTIONS and k + 1 < len(words):  # separate
+                if w in PHP_CODE_OPTIONS and k + 1 < len(words):
                     out.append(words[k + 1])
                     k += 2
                     continue
@@ -167,9 +167,10 @@ def make(shell_bang, assign, marker, unknown_dir):
             or a plain assignment, whatever program the command runs."""
             if "NODE_OPTIONS" not in text:
                 return None
-            # Every assignment is read, not only the first: the shell and env keep the last of
-            # `env NODE_OPTIONS=a NODE_OPTIONS=b node`, and a write the gate cannot place in order
-            # costs only a refusal.
+            # Every assignment is read: the shell and env keep the last of `env NODE_OPTIONS=a
+            # NODE_OPTIONS=b node`, which one search reached only through the pattern's greedy repeat
+            # (measured 2026-11-14), so reading each one stops that depending on the pattern's shape,
+            # and an earlier one node never gets costs only a refusal.
             # The assignment pattern ends at one NODE_OPTIONS= of a command's prefix, its assignments
             # before it included, so every NODE_OPTIONS= in what it matched is one of them.
             starts = [k.end() for m in re.finditer(assign % r"NODE_OPTIONS\+?", text, re.M)
@@ -265,9 +266,10 @@ def make(shell_bang, assign, marker, unknown_dir):
             drops each NUL and runs the rest, so the file is read with them dropped. zsh keeps a NUL
             inside its word, and a program's name ends there, so the file is read with them dropped for
             a script it runs that posts, and otherwise refused as one whose commands cannot be worked
-            out; so is a file whose shell cannot be told. bash and ksh sourcing it run the text before
-            its first NUL (measured 2026-11-14: bash ran it, ksh refused it whole), which is read as
-            commands, the whole still searched for an endpoint."""
+            out; so is a file whose shell cannot be told. bash sourcing it runs the text before its
+            first NUL and ksh refuses it whole (measured 2026-11-14); both are read as bash is, the
+            text before the first NUL read as commands and the whole still searched for an endpoint,
+            which for ksh only refuses more."""
             if prog in NUL_REFUSERS and not sourced:
                 return False
             data = self.content(real)
