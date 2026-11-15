@@ -52,6 +52,11 @@ export type SlackAlertChoice = {
   /** When it expired unanswered: still held, said once in each session that may ask it (#2833). */
   expired?: number
   /**
+   * When Dan answered Change wording to it: still held, and never put to him again by a session that
+   * did not make it (#2993); the session that made it asks as before, and a merge refusal still can.
+   */
+  rejected?: number
+  /**
    * Where it holds merges (#2833): the file it was chosen in, then each file in another place its
    * wording was let through while Dan was asleep, with the GitHub repository each is in as owner/name
    * in lower case, null where that could not be read (read again at a merge). Absent on a choice
@@ -64,7 +69,10 @@ export type SlackAlertPlace = { file: string; repo: string | null }
 
 declare module 'claude-code' {
   interface PluginState {
-    /** The calls waiting on Dan's approval, by the refused call's id; dropped at session end. */
-    'slack-alert-guard': { pending: SlackAlertPending[]; told: string[] }
+    /**
+     * The calls waiting on Dan's approval, by the refused call's id; dropped at session end.
+     * `reasked`: the choices put to Dan again two hours after sleep ended (#2993), each once, with the session that asked.
+     */
+    'slack-alert-guard': { pending: SlackAlertPending[]; told: string[]; reasked: { session: string; ids: string[] } }
   }
 }

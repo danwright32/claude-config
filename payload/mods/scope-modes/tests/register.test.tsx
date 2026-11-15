@@ -5088,6 +5088,14 @@ const asker: { name: string; register: Register } = {
           return { result: 'threw', text: `threw: ${String((err as Error)?.message ?? err)}` } as never
         }
       }
+      if (String(e.tool) === 'SleepEnds') {
+        try {
+          const r = await $.scopeModes.sleepEnds()
+          return { result: r, text: JSON.stringify(r) } as never
+        } catch (err) {
+          return { result: 'threw', text: `threw: ${String((err as Error)?.message ?? err)}` } as never
+        }
+      }
       return next(e)
     })
   },
@@ -5117,6 +5125,18 @@ test('a note the noun cannot write throws, so the caller can say so (#841)', { p
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, noteFails: 'sh: notes: Permission denied' })
   await start($ as never, clock)
   expect(await call($ as never, { tool: 'NoteIt', tool_use_id: 'n' } as never)).toBe('threw: sh: notes: Permission denied')
+})
+
+// #2993: another mod reads when each sleep ended through the noun, from the records moved aside
+// and a record past its end (every case of the reading is in sleepends.test.ts); a folder that
+// cannot be listed throws, so the caller can say so.
+test('another mod reads when each sleep ended through the noun (#2993)', { plugins: [deps, isItLive, asker] }, async ($, on) => {
+  const { w, clock } = world(on, { files: { [`${SLEEP}/ended/${T0 - 5000}-woke-s1.json`]: '{}', [CURRENT]: asleepRecord({ until: T0 - 1000 }) } })
+  await start($ as never, clock)
+  const ends = () => call($ as never, { tool: 'SleepEnds', tool_use_id: 'e' } as never)
+  expect(await ends()).toBe(JSON.stringify([T0 - 5000, T0 - 1000]))
+  w.o.listFails = [`${SLEEP}/ended`]
+  expect(await ends()).toBe(`threw: scope-modes: $.fs.list: EACCES: permission denied, scandir '${SLEEP}/ended'`)
 })
 
 // ---- Sleep mode phase 7 (#843): per repository merge and deploy lists that fail closed ----
