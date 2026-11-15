@@ -913,12 +913,6 @@ export const wordingKey = (text: string): string => `wording:${hash(text)}`
 /** Where his approval of taking text away from one file is kept: by the file and the text removed. */
 export const removalKey = (file: string, removed: string[]): string => `removal:${hash(JSON.stringify([file, [...removed].sort()]))}`
 /**
- * Where his approval of one shell call is kept: by its whole command and the files it writes, as
- * absolute paths, never the folder it runs from (#2371, Dan's item 4). The same command run again
- * keeps his answer, by a resumed agent or from another folder; words that write a different file from
- * there are another call.
- */
-/**
  * One file a patch changes (#2971): its name on each side as the patch writes it (null for
  * /dev/null, a file made or removed), and each hunk's lines before and after, context included, so
  * a hunk is judged as an Edit replacing the one with the other.
@@ -979,11 +973,14 @@ export const patchFiles = (text: string): PatchFile[] | undefined => {
  * How a patch command places the files its patch names (#2971): the leading folders it strips from
  * each name (`-p`; undefined where the command gives none, so the caller tries git's a/ and b/), the
  * folder it applies in below where it runs (`patch -d`, `git apply --directory`, which git reads
- * from the top of the checkout), and for patch a file named to take every hunk. `words` are the
- * patch program's own words after its name: git apply's after `apply`, patch's after `patch`.
+ * from the top of the checkout), for patch a file named to take every hunk, and whether it applies
+ * the patch in reverse (`-R`, `--reverse`), when each hunk's after is what the file held and its
+ * before is what it is left holding. `words` are the patch program's own words after its name: git
+ * apply's after `apply`, patch's after `patch`.
  */
-export const patchPlacing = (words: readonly string[], git: boolean): { strip?: number; into: string; target?: string } => {
+export const patchPlacing = (words: readonly string[], git: boolean): { strip?: number; into: string; target?: string; reverse?: true } => {
   let strip: number | undefined
+  let reverse = false
   let into = ''
   const ops: string[] = []
   const VALUED = git ? new Set(['-p', '-C', '--directory', '--exclude', '--include']) : new Set(['-i', '-p', '-d', '-o', '-r', '-B', '-D', '-F', '-V', '-z', '--input', '--directory', '--output'])
@@ -991,6 +988,7 @@ export const patchPlacing = (words: readonly string[], git: boolean): { strip?: 
     const a = words[i] as string
     const p = /^(?:-p|--strip=)(\d+)$/.exec(a)
     if (p) strip = Number(p[1])
+    else if (a === '-R' || a === '--reverse') reverse = true
     else if (a === '-p' && /^\d+$/.test(words[i + 1] ?? '')) strip = Number(words[++i])
     else if (/^--directory=/.test(a)) into = a.slice('--directory='.length)
     else if ((a === '--directory' || (!git && a === '-d')) && words[i + 1] !== undefined) into = words[++i] as string
@@ -999,9 +997,15 @@ export const patchPlacing = (words: readonly string[], git: boolean): { strip?: 
     else if (/^(?:\d*(?:<<-?|<<<|<|>>|>|>\|)|&>>?)$/.test(a)) i++
     else if (!a.startsWith('-') && !/^(?:\d*[<>]|&>)/.test(a)) ops.push(a)
   }
-  return { ...(strip === undefined ? {} : { strip }), into: into.replace(/\/+$/, ''), ...(!git && ops[0] !== undefined ? { target: ops[0] } : {}) }
+  return { ...(strip === undefined ? {} : { strip }), into: into.replace(/\/+$/, ''), ...(!git && ops[0] !== undefined ? { target: ops[0] } : {}), ...(reverse ? { reverse: true as const } : {}) }
 }
 
+/**
+ * Where his approval of one shell call is kept: by its whole command and the files it writes, as
+ * absolute paths, never the folder it runs from (#2371, Dan's item 4). The same command run again
+ * keeps his answer, by a resumed agent or from another folder; words that write a different file from
+ * there are another call.
+ */
 export const shellKey = (command: string, paths: string[]): string => `shell:${hash(JSON.stringify([command, [...new Set(paths)].sort()]))}`
 /**
  * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's

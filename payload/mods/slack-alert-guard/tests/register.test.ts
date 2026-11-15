@@ -2393,6 +2393,24 @@ test('a merge whose diff gh cuts short passes where no choice waiting holds its 
   expect(refusalOf(await call($, MERGE))).toContain('GitHub listed 3 of the 3001 files it changes')
 })
 
+test('a merge read file by file shares one deadline with the diff, so a slow gh is a timeout inside the hook, never a hook killed mid read (#2973, L842)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.cut['12'] = true
+  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: DIFF.slice(DIFF.indexOf('@@')) }]
+  // Each gh call answers in 3 s: the diff, the repository and the file count use 9 s, so the list
+  // of files is never asked for. Each with SCAN_MS of its own, the read would end at 12 s, past the
+  // 10 s Claude Code gives a hook.
+  w.ctl.ghTakes = 3000
+  const start = await w.readClock()
+  const why = refusalOf(await call($, MERGE))
+  expect(why).toContain('timeout, not a refusal')
+  expect(why).toContain("GitHub did not list the pull request's files within 7 seconds")
+  expect((await w.readClock()) - start).toBeLessThan(10_000)
+  expect(w.ghs.some(g => g[1] === 'api')).toBe(false)
+})
+
 test('a merge held as could not check names each waiting choice, and a session that did not make one is told where it is approved (#2973)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
@@ -2451,4 +2469,21 @@ test('a patch to a file that sends nothing passes; a patch making a sender is he
     expect(`${command}: ${why}`).toContain(said)
   }
   expect(w.ran.length).toBe(2)
+})
+
+test('a patch applied in reverse is judged by what it leaves, and patch -d places a file it is named inside its folder (#2971 lessons review)', withKit, async ($, on) => {
+  const reworded = ALERT_TEXT.replace('Deploy ${id} failed', REWORDED)
+  const w = world($, on, { files: { [ALERT]: reworded, '/w/app/fix.patch': DIFF } })
+  // The reworded wording is approved, so read forward the patch adds nothing new; in reverse it puts
+  // the old wording back, which is new to this file and unapproved.
+  w.store[wordingKey(REWORDED)] = { at: T0, file: ALERT, text: [REWORDED], rendered: SHOWN }
+  for (const command of ['git apply -R fix.patch', 'git apply --reverse fix.patch', 'patch -R -p1 < fix.patch']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain('"Deploy ${id} failed"')
+  }
+  expect(w.ran).toEqual([])
+  // patch -d lib alert.ts: the file named is lib/alert.ts, read and judged there.
+  w.files[ALERT] = ALERT_TEXT
+  delete w.store[wordingKey(REWORDED)]
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'patch -d lib alert.ts fix.patch' }))).toContain('failed on production')
 })

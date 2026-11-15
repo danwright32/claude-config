@@ -257,13 +257,17 @@ const chosenKeysOf = async ($: EngineInterface, id: string): Promise<string[]> =
 /**
  * The GitHub repository a file is in (#2833), as owner/name in lower case: the origin of the checkout
  * holding it, read from the nearest folder that exists, so a worktree removed since is read through
- * the checkout it was under, which has the same origin. null when git or the origin cannot say.
+ * the checkout it was under, which has the same origin. null when git or the origin cannot say, or
+ * not by `deadline` (a merge's one deadline, #2973; SCAN_MS from now when none is given).
  */
-const repoOf = async ($: EngineInterface, path: string): Promise<string | null> => {
+const repoOf = async ($: EngineInterface, path: string, deadline?: number): Promise<string | null> => {
   try {
-    const where = await placed($, path, (await $.clock.now()) + SCAN_MS)
+    const end = deadline ?? (await $.clock.now()) + SCAN_MS
+    const where = await placed($, path, end)
     if (!where) return null
-    const r = await $.process.run(['git', '-C', where.top, 'remote', 'get-url', 'origin'], { timeoutMs: SCAN_MS })
+    const ms = Math.floor(end - (await $.clock.now()))
+    if (ms <= 0) return null
+    const r = await $.process.run(['git', '-C', where.top, 'remote', 'get-url', 'origin'], { timeoutMs: ms })
     if (r.exitCode !== 0 || r.isStdoutTruncated) return null
     return (await $.modkit.repo({ root: where.top, remote: r.stdout.trim() })).github?.toLowerCase() ?? null
   } catch (err) {
@@ -276,11 +280,11 @@ const repoOf = async ($: EngineInterface, path: string): Promise<string | null> 
  * The repositories a choice holds merges in (#2833), and the files whose repository could not be
  * read, read again here: a choice made before #2833 is read from its file.
  */
-const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice): Promise<{ repos: string[]; unread: string[] }> => {
+const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice, deadline?: number): Promise<{ repos: string[]; unread: string[] }> => {
   const repos: string[] = []
   const unread: string[] = []
   for (const p of c.places ?? [{ file: c.file, repo: null }]) {
-    const r = p.repo ?? (await repoOf($, p.file))
+    const r = p.repo ?? (await repoOf($, p.file, deadline))
     if (r) repos.push(r)
     else unread.push(p.file)
   }
@@ -294,7 +298,7 @@ const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice): Promise<{ r
  * as before, so it is never left unasked; a session whose own repository cannot be read asks only
  * its own. The session's repository is read only when some choice is not its own.
  */
-const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], self: string): Promise<SlackAlertChoice[]> => {
+const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], self: string, deadline?: number): Promise<SlackAlertChoice[]> => {
   const out: SlackAlertChoice[] = []
   let here: string | null | undefined
   for (const c of all) {
@@ -302,13 +306,13 @@ const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], s
       out.push(c)
       continue
     }
-    const { repos, unread } = await choiceRepos($, c)
+    const { repos, unread } = await choiceRepos($, c, deadline)
     if (unread.length) {
       out.push(c)
       continue
     }
     // A path inside the folder, since repoOf asks git from the folder holding the path it is given.
-    if (here === undefined) here = await repoOf($, `${(await $.session.cwd()).replace(/\/+$/, '')}/.`)
+    if (here === undefined) here = await repoOf($, `${(await $.session.cwd()).replace(/\/+$/, '')}/.`, deadline)
     if (here !== null && repos.includes(here)) out.push(c)
   }
   return out
@@ -349,17 +353,21 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
 const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
   const waiting = await choices($)
   if (!waiting.length) return PASS
+  // One deadline for the whole read (#2973 lessons review, L842): every gh and git call is given
+  // only the time left, so the hook answers inside Claude Code's 10 s, never killed mid read.
+  const deadline = (await $.clock.now()) + SCAN_MS
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
   const self = await $.session.id()
   // The choices named, with who asks Dan about each, by askedHere as the merge refusal's are.
   const named = async (cs: SlackAlertChoice[], prRepo: string | null): Promise<string> => {
-    const mine = new Set((await askedHere($, cs, self)).map(x => x.id))
+    const mine = new Set((await askedHere($, cs, self, deadline)).map(x => x.id))
     const away: Record<string, string> = {}
-    for (const x of cs) if (!mine.has(x.id)) away[x.id] = (await choiceRepos($, x)).repos[0] ?? prRepo ?? ''
+    for (const x of cs) if (!mine.has(x.id)) away[x.id] = (await choiceRepos($, x, deadline)).repos[0] ?? prRepo ?? ''
     return waitingNamed(cs, mine, away)
   }
   const waits = 'while Slack alert wording chosen overnight waits on Dan'
+  const late = (what: string): Verdict => ({ unchecked: `${what} within ${SCAN_MS / 1000} seconds, ${waits}`, late: true })
   const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting, null)}` })
   for (const c of await $.modkit.pipeline({ command, cwd, home })) {
     const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
@@ -368,36 +376,37 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     const folder = c.folder ?? cwd
     const repoArgs = m.repo ? ['-R', m.repo] : []
     // The pull request's repository: the one the command names, else the one gh reads it in, asked
-    // only when it is needed.
+    // only when it is needed; late when gh ran out of the time left.
     let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
-    const repoOfPr = async (): Promise<string | null> => {
+    const repoOfPr = async (): Promise<string | null | { late: true }> => {
       if (prRepo !== undefined) return prRepo
-      const v = await $.process.run(['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], { timeoutMs: SCAN_MS, cwd: folder })
-      const link = v.exitCode === 0 && !v.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.stdout.trim() }) : null
+      const v = await ghWithin($, ['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], folder, deadline)
+      if (v.late) return { late: true }
+      const link = v.r.exitCode === 0 && !v.r.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.r.stdout.trim() }) : null
       if (!link) return null
       prRepo = link.toLowerCase()
       return prRepo
     }
-    const argv = ['gh', 'pr', 'diff', ...m.selector, ...repoArgs]
-    const asked = await $.clock.now()
-    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: folder })
+    const d = await ghWithin($, ['gh', 'pr', 'diff', ...m.selector, ...repoArgs], folder, deadline)
     // A gh that failed once its whole time was spent was killed at its timeout (#2792).
-    if (r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS)
-      return { unchecked: `gh did not give the pull request's diff within ${SCAN_MS / 1000} seconds, ${waits}`, late: true }
+    if (d.late) return late("gh did not give the pull request's diff")
+    const r = d.r
     let diff = r.stdout
     if (r.exitCode !== 0 || r.isStdoutTruncated) {
       const why = `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'})`
       const repo = await repoOfPr()
+      if (repo !== null && typeof repo === 'object') return late('gh did not say which repository the pull request is in')
       if (repo === null) return { unchecked: `${why}, nor say which repository it is in, ${waits}: ${await named(waiting, null)}` }
       // Only a choice holding this repository, or whose own repository cannot be read, holds it.
       const bearing: SlackAlertChoice[] = []
       for (const x of waiting) {
-        const { repos, unread } = await choiceRepos($, x)
+        const { repos, unread } = await choiceRepos($, x, deadline)
         if (unread.length || repos.includes(repo)) bearing.push(x)
       }
       if (!bearing.length) continue
-      const parts = r.exitCode === 0 ? await diffInParts($, m.selector, repoArgs, folder) : { unread: 'it was not read again' }
-      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing, repo)}`, ...('late' in parts && parts.late ? { late: true as const } : {}) }
+      const parts = r.exitCode === 0 ? await diffInParts($, m.selector, repoArgs, folder, deadline) : { unread: 'it was not read again' }
+      if ('late' in parts) return late(parts.late)
+      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing, repo)}` }
       diff = parts.text
     }
     const carrying = carried(diff, waiting)
@@ -405,25 +414,38 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     const held: SlackAlertChoice[] = []
     const unreadFiles: string[] = []
     for (const x of carrying) {
-      const { repos, unread } = await choiceRepos($, x)
+      const { repos, unread } = await choiceRepos($, x, deadline)
       if (unread.length) {
         held.push(x)
         unreadFiles.push(...unread)
         continue
       }
       const repo = await repoOfPr()
+      if (repo !== null && typeof repo === 'object') return late('gh did not say which repository the pull request is in')
       if (repo === null) return unreadable()
       if (repos.includes(repo)) held.push(x)
     }
     if (!held.length) continue
     // A choice this session may not ask about (askedHere, #2833) is said to be asked in its own
     // repository, never put to Dan from here.
-    const mine = new Set((await askedHere($, held, self)).map(x => x.id))
+    const mine = new Set((await askedHere($, held, self, deadline)).map(x => x.id))
     const away: Record<string, string> = {}
-    for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x)).repos[0] ?? ''
+    for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x, deadline)).repos[0] ?? ''
     return { merge: mergeRefusal(held, unreadFiles, away) }
   }
   return PASS
+}
+
+/**
+ * A gh call given only the time left before `deadline` (#2973): late when none is left, or when it
+ * failed once that time was spent, as gh killed at its timeout does (#2792).
+ */
+const ghWithin = async ($: EngineInterface, argv: string[], folder: string, deadline: number): Promise<{ r: Awaited<ReturnType<EngineInterface['process']['run']>>; late: false } | { late: true }> => {
+  const ms = Math.floor(deadline - (await $.clock.now()))
+  if (ms <= 0) return { late: true }
+  const r = await $.process.run(argv, { timeoutMs: ms, cwd: folder })
+  if (r.exitCode !== 0 && (await $.clock.now()) >= deadline) return { late: true }
+  return { r, late: false }
 }
 
 /**
@@ -432,25 +454,20 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
  * patch given only for a file that can carry wording (WORDING_PATH, picked out by gh's own jq, so the
  * pictures are never sent), joined for carried(). Unread, with why, when the list is cut short too,
  * holds fewer files than the pull request changes (GitHub lists at most 3,000), or gives no patch for
- * a file that could carry wording (GitHub leaves one out past its own size limit); late when gh was
- * killed at its timeout (#2792).
+ * a file that could carry wording (GitHub leaves one out past its own size limit); late, saying
+ * what did not answer, when the merge's one deadline ran out (#2792).
  */
-const diffInParts = async ($: EngineInterface, selector: string[], repoArgs: string[], folder: string): Promise<{ text: string } | { unread: string; late?: true }> => {
-  const ran = async (argv: string[]) => {
-    const asked = await $.clock.now()
-    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: folder })
-    return { r, late: r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS }
-  }
+const diffInParts = async ($: EngineInterface, selector: string[], repoArgs: string[], folder: string, deadline: number): Promise<{ text: string } | { unread: string } | { late: string }> => {
   const firstLine = (r: { exitCode: number; stderr: string }, short: string) => `exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || short}`
-  const v = await ran(['gh', 'pr', 'view', ...selector, ...repoArgs, '--json', 'url,changedFiles', '--jq', '"\\(.changedFiles) \\(.url)"'])
-  if (v.late) return { unread: `gh did not say which files it changes within ${SCAN_MS / 1000} seconds`, late: true }
+  const v = await ghWithin($, ['gh', 'pr', 'view', ...selector, ...repoArgs, '--json', 'url,changedFiles', '--jq', '"\\(.changedFiles) \\(.url)"'], folder, deadline)
+  if (v.late) return { late: 'gh did not say which files the pull request changes' }
   const said = v.r.exitCode === 0 && !v.r.isStdoutTruncated ? /^(\d+) (\S+)$/.exec(v.r.stdout.trim()) : null
   const link = said?.[2] ?? ''
   const repo = said ? await $.modkit.linkRepo({ link }) : null
   const number = /\/pull\/(\d+)/.exec(link)?.[1]
   if (!said || !repo || !number) return { unread: `gh could not say which files it changes (${firstLine(v.r, v.r.stdout.trim().slice(0, 80) || 'nothing said')})` }
-  const f = await ran(['gh', 'api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate', '--jq', FILES_JQ])
-  if (f.late) return { unread: `GitHub did not list its files within ${SCAN_MS / 1000} seconds`, late: true }
+  const f = await ghWithin($, ['gh', 'api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate', '--jq', FILES_JQ], folder, deadline)
+  if (f.late) return { late: "GitHub did not list the pull request's files" }
   if (f.r.exitCode !== 0 || f.r.isStdoutTruncated) return { unread: `GitHub's list of its files could not be read either (${firstLine(f.r, 'cut short')})` }
   const files: [string, string | null | false][] = []
   for (const line of f.r.stdout.split('\n')) {
@@ -781,12 +798,15 @@ const judgePatch = async ($: EngineInterface, u: Unnamed, commands: ShellCommand
   for (const text of got.texts) {
     const files = patchFiles(text)
     if (!files) return { unchecked: `a patch ${u.words.join(' ')} applies could not be read as a diff` }
-    for (const f of files) {
+    for (const forward of files) {
+      const gitNamed = (forward.to === null || forward.to.startsWith('b/')) && (forward.from === null || forward.from.startsWith('a/'))
+      // Applied in reverse, each hunk takes its after back to its before (#2971 lessons review).
+      const f = placing.reverse ? { from: forward.to, to: forward.from, hunks: forward.hunks.map(h => ({ before: h.after, after: h.before })) } : forward
       if (f.to === null) continue
-      const gitNamed = f.to.startsWith('b/') && (f.from === null || f.from.startsWith('a/'))
       const strip = placing.strip ?? (isGit || gitNamed ? 1 : 0)
       const rel = placing.target ?? f.to.split('/').slice(strip).join('/')
-      const path = rel.startsWith('/') ? rel : `${placing.target ? folder : base}/${rel}`
+      // patch -d moves into its folder before anything else, a file it is named included.
+      const path = rel.startsWith('/') ? rel : `${base}/${rel}`
       if (!rel || !inScope(path, '#!')) continue
       let v: Verdict
       if (f.from === null && !placing.target) v = await judgeEdit($, 'Write', { file_path: path, content: `${f.hunks.map(h => h.after).join('\n')}\n` })

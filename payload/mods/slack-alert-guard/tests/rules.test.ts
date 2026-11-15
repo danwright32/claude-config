@@ -216,6 +216,8 @@ test('a patch command places its names by its -p, its folder, and for patch a fi
   expect(patchPlacing(['-d', 'app', '--strip=1', '-i', 'fix.patch'], false)).toEqual({ strip: 1, into: 'app' })
   expect(patchPlacing(['lib/alert.ts', 'fix.patch'], false)).toEqual({ into: '', target: 'lib/alert.ts' })
   expect(patchPlacing(['<<', 'EOF'], false)).toEqual({ into: '' })
+  expect(patchPlacing(['-R', 'x.patch'], true)).toEqual({ into: '', reverse: true })
+  expect(patchPlacing(['--reverse', '-p1', '-i', 'x.patch'], false)).toEqual({ strip: 1, into: '', reverse: true })
 })
 
 test('a file that matches a Slack endpoint and then makes a request is still a sender, in each language read for one (#2662)', () => {
