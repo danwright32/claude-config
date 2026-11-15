@@ -5504,8 +5504,9 @@ session registry folder or a file it edited is inside it), because a pushed bran
 elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
 the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
 a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
-branch was pushed in the last day and has no pull request yet, merged or open, since a builder hands
-back a pushed branch and the PR is often opened hours later (#2988); a branch whose PR was closed
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
 unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
 removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
 alone, and asks none of these questions. Anything it cannot read (the folder, git's
