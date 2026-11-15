@@ -13,7 +13,7 @@ the next margin message (L613).
 WHAT IT LOOKS FOR, in a suite file (a test-*.sh): a FAIL message written over more than one line of
 the source, inside one double quoted string, whose next line would print
   - at the margin (no space before it, or a tab, which the runner does not count as one),
-  - blank, which ends the message as the margin does, or
+  - blank, which a full run keeps only when more of the message follows it, or
   - as a value expanded on a line of its own (`  $found`, `${hits}`, `$(cat "$f")`), which indents
     the value's FIRST line only: the rest of a list of findings lands at the margin all the same.
 A FAIL message is a double quoted string whose text starts with FAIL, or an argument of a function
