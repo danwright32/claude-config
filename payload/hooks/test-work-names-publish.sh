@@ -645,6 +645,13 @@ run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ca
 check "#2997 and a file that cannot be read is refused as cannot be told: $out" has "$out" "cannot be told"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
 check "#2997 (control) cat of a clean file from a clean directory passes: $out" passed
+# Only a regular file of a bounded size is read: a device or a pipe can be read for ever (the lessons
+# review of 17059ea), and a file past the bound is refused rather than read in part.
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat /dev/null)\""
+check "#2997 cat of something that is not a regular file is refused as cannot be told: $out" has "$out" "cannot be told"
+head -c 3000000 /dev/zero | tr '\0' 'a' > "$CO/big-2997.md"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat big-2997.md)\""
+check "#2997 and so is a file past the size it reads: $out" has "$out" "cannot be told"
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../*)\""
 check "#2997 and echo of a glob, which the shell fills with file names: $out" refused
 # sh -c and bash -c strings, and unquoted heredoc bodies, are read too (the review of #2981).
@@ -684,7 +691,7 @@ EOF
 check "#2997 (control) and cat of an unquoted heredoc: $out" passed
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body \"\$(git remote get-url origin)\""
 check "#2997 (control) git from a checkout whose path and remote name nothing passes: $out" passed
-RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git log -1 --format=%s')\" --body x"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git rev-parse --show-toplevel')\" --body x"
 check "#2997 (control) and so does git run by sh -c there: $out" passed
 RUN_DIR="$WORKCO" run "cd \"\$(git rev-parse --show-toplevel)\" && gh issue create --repo danwright-test/public-notes --title x --body y"
 check "#2997 (control) a substitution naming only where a cd goes is not posted: $out" passed

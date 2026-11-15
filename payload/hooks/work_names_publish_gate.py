@@ -22,6 +22,13 @@ command that are never posted are left out of that (posted_text): a plain cd, un
 read the directory back, and the path after a gh pr or issue command's --body-file or -F, whose file
 is judged by its text and refused when it cannot be read.
 
+What the shell puts into that text is judged too (variables_posted): a variable by its value (#2961),
+~+, ~- and a pwd substitution by the directory (#2981), and since #2997 every program a command
+substitution runs, in the posted text, in an unquoted heredoc body, or in a sh -c, bash -c or eval
+string there, by what it can print of where it runs: the directory's path and its git checkout's
+directories and remotes (place_text), and for cat the files it reads (cat_files). echo, printf and
+date without a glob, and cat reading only a heredoc, are shown to print none of that and pass.
+
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
 through each signed in account until one can read it), the owners and repositories in this Mac's dev
@@ -40,7 +47,10 @@ CANNOT TELL IS REFUSED (L98, L345): the visibility unreadable under every accoun
 unreadable, empty or of the wrong shape, the registry unreadable, the project list unreadable or
 holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
-cannot be read but names a judged gh command, and the time budget spent. No registry at all is fine.
+cannot be read but names a judged gh command, a variable or directory whose value cannot be known,
+a program a substitution runs that a cd or directory option in it takes elsewhere, or that runs where
+the command cannot be followed or git cannot read the checkout, a file a cat there reads that is
+missing, not a regular file or past CAT_LIMIT, and the time budget spent. No registry at all is fine.
 
 The refusal names the name it matched. It goes only to the session, which already holds the command
 text the name is in; it is never written to a file or a log.
@@ -1435,6 +1445,11 @@ def place_text(where):
     return _PLACES[where]
 
 
+# The most of a file cat_files reads: a device or pipe can be read for ever (the lessons review of
+# 17059ea), and no posted body comes near this. A file past it is refused, never read in part.
+CAT_LIMIT = 1 << 20
+
+
 def cat_files(command, where):
     """The text of the files a cat in a substitution prints, judged as well as where it runs (the
     lessons review of 028d7e6), or "" for any other program. Raises CannotTell for a file it cannot
@@ -1449,6 +1464,11 @@ def cat_files(command, where):
             continue
         if word == "-" or re.search(r"[$`*?\[~<>]", word):
             raise CannotTell("cat reads %s, which this check cannot find before the command runs" % word)
+        path = word if os.path.isabs(word) else os.path.join(where, word)
+        if not os.path.isfile(path):
+            raise CannotTell("cat reads %s, which is not a regular file this check can read" % word)
+        if os.path.getsize(path) > CAT_LIMIT:
+            raise CannotTell("cat reads %s, which is larger than the %d bytes this check reads" % (word, CAT_LIMIT))
         texts.append(_read(word, where, "a substitution prints"))
     return "\n".join(texts)
 
