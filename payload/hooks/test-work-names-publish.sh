@@ -661,6 +661,11 @@ printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat named-2997.md)\""
 check "#2997 cat of a file naming a work repository is refused from a clean directory: $out" refused
 check "#2997 and says the name the file holds: $out" has "$out" "zephyr"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(< named-2997.md)\""
+check "#2997 and so is the same file printed by an input redirection alone: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(<named-2997.md)\""
+check "#2997 and by one written without a space: $out" refused
+check "#2997 as a program whose output this check cannot read: $out" has "$out" "cannot read before the command runs"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat missing-2997.md)\""
 check "#2997 and a file that cannot be read is refused as cannot be told: $out" has "$out" "cannot be told"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat -n)\""
