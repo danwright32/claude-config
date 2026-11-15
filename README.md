@@ -3571,6 +3571,19 @@ refused, since node may still find it (package.json exports, a path alias, a loa
 gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
 real script of ours reaches 11).
 
+An endpoint a program only compares or lists is told from one it sends to (#2913; Dan, 2026-11-14:
+"Teach the gate", with no exemption list), in `lib/data-names.py`. A name counts as data only in a
+string that is a list's element, a comparison's operand, the argument of a test such as `includes`
+or `startswith`, a regex pattern, or a JavaScript comment; any other use refuses as before. It is let
+through only where nothing in the program (the script, every module it reaches, a loader or runner
+in the same process) can send a request, run code or write a file, no JavaScript member is reached by
+a computed name, and what the program prints reaches only the terminal or a filter such as `tail`.
+So a script or a single node test reaching a guard's refusal list passes, and the same list read
+out and sent, printed into `curl`, or written to a file is refused. A vitest or node:test test stays
+refused there, since the runner counts as able to send. A file a package is handed (`npx vitest run
+x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
+`$0` or `BASH_SOURCE` is worked out as bash reads it.
+
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
 repository was refused whole because its config's imports pass 300, though nothing in it posts, and
