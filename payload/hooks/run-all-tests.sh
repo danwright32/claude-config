@@ -710,8 +710,8 @@ suite_result_line(){   # suite_result_line <a suite's output> -> the exact line,
 # are handed as is (`echo "FAIL: $1 ($2)"`), and a value of several lines (a scan's findings, a
 # hook's output) put every line after its first at the margin, where #253 ended the message: the
 # report said a scan found something and never what. The source cannot say which values have
-# several lines, so the rule is here, once, for every suite; it replaced #2916's scan for FAIL
-# messages written at the margin, which could judge only what the source spelled out. A line that
+# several lines, so the rule is here, once, for every suite; #2916's scan (test-fail-margin.sh)
+# still asks suites to indent what the source spells out, which needs no inference. A line that
 # came at the margin is set under its FAIL line, so it reads as part of it. Blank lines inside a
 # message are kept, trailing ones are not.
 #

@@ -2793,7 +2793,7 @@ esac
 # the report said a scan found something and never said what. #2916's scan of the source could not
 # see these, since the extra lines exist only while the suite runs. So the runner keeps every line
 # after a FAIL up to the next result line, and sits the ones that came at the margin under their
-# FAIL; with that, the scan had nothing left to catch and was removed.
+# FAIL. test-fail-margin.sh measures the same thing from its side.
 fd_suite() { # fd_suite <the suite's body, read as is>
   { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$1"; } > "$FD/test-detail.sh"
   chmod +x "$FD/test-detail.sh"
