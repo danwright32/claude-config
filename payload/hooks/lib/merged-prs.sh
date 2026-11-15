@@ -42,6 +42,20 @@ open_prs(){
   return 0
 }
 
+# closed_prs <gh> <limit> [gh args...]: one line per pull request CLOSED WITHOUT MERGING, as
+# "<branch><TAB><number>" (claude-config#2988). ONE call. gh's closed state holds the merged ones
+# too, so they are filtered out here. Returns 1 with nothing printed when gh fails. A closed PR past
+# the limit reads as none, which keeps a recently pushed branch's worktree a day at most, the
+# harmless direction, so there is no refusal at the limit.
+closed_prs(){
+  local gh="$1" limit="$2" out
+  shift 2
+  out="$("$gh" pr list --state closed --limit "$limit" "$@" --json headRefName,number,state \
+    --jq '.[] | select(.state == "CLOSED") | "\(.headRefName)\t\(.number)"' 2>/dev/null)" || return 1
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # pr_landing <git dir> <branch> <head> <merged list>: prints "<verdict><TAB><PR number>", the
 # number empty when there is no PR to name. The verdicts:
 #   landed       a merged PR of this branch holds HEAD (its last commit, or an earlier one)

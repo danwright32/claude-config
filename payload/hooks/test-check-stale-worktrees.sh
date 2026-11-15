@@ -43,8 +43,9 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
 # --- the fake gh -----------------------------------------------------------
-# It answers the two questions the check asks: the merged pull request list, and the open one
-# (#2943), each already in the shape the check's --jq asks for.
+# It answers the three questions the check asks: the merged pull request list, the open one
+# (#2943), and the ones closed without merging (#2988), each already in the shape the check's --jq
+# asks for.
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -54,6 +55,9 @@ case " $* " in
   *" --state open "*)
     if [ -n "${GH_OPEN_FAIL:-}" ]; then echo "gh: simulated failure reading open pull requests" >&2; exit 1; fi
     cat "$GH_OPEN" ;;
+  *" --state closed "*)
+    if [ -n "${GH_CLOSED_FAIL:-}" ]; then echo "gh: simulated failure reading closed pull requests" >&2; exit 1; fi
+    cat "$GH_CLOSED" ;;
   *) cat "$GH_MERGED" ;;
 esac
 STUB
@@ -61,7 +65,8 @@ chmod +x "$TMP/bin/gh"
 export GH_CALLS="$TMP/calls.log"
 export GH_MERGED="$TMP/merged.tsv"
 export GH_OPEN="$TMP/open.tsv"
-: >"$GH_MERGED"; : >"$GH_OPEN"
+export GH_CLOSED="$TMP/closed.tsv"
+: >"$GH_MERGED"; : >"$GH_OPEN"; : >"$GH_CLOSED"
 # The Mac's own sleep record and session registry are never read: a suite run on its own, outside
 # the runner, would otherwise be judged by whatever the Mac is doing tonight (#2943).
 export CLAUDE_SLEEP_RECORD="$TMP/sleep/current.json"
@@ -533,7 +538,8 @@ G -C "$NREPO" branch batch/combined feat/551-send-to    # shipped inside a batch
 G -C "$NREPO" merge -q --no-ff -m "merge batch" batch/combined >/dev/null 2>&1
 : >"$GH_MERGED"; merged batch/combined "$NREPO" batch/combined 560
 nwt build/b-figures "$NAPPS/proj-7"                     # no PR at all, its commits pushed to a remote branch
-G -C "$NAPPS/proj-7" push -q origin build/b-figures >/dev/null 2>&1
+# Pushed long ago: a branch pushed within the last day is kept for the PR that may follow (#2988).
+GIT_COMMITTER_DATE="2026-01-01T00:00:00 +0000" G -C "$NAPPS/proj-7" push -q origin build/b-figures >/dev/null 2>&1
 G -C "$NREPO" worktree add -q --detach "$NAPPS/proj-sql" main >/dev/null 2>&1   # detached, for running SQL from main
 
 # Kept.
@@ -713,10 +719,13 @@ G init -q --bare "$TMP/sorigin.git"; G -C "$SREPO" remote add origin "$TMP/sorig
 G -C "$SREPO" push -q origin main >/dev/null 2>&1
 SWT="$SREPO/.claude/worktrees"; mkdir -p "$SWT"
 SWT_REAL="$(cd "$SREPO" && pwd -P)/.claude/worktrees"
+# Pushed long ago unless PUSHED_AT says when: git dates the push's record of the remote branch by
+# GIT_COMMITTER_DATE, the same record a real push leaves, and a branch pushed within the last day is
+# kept for the pull request that may follow (#2988), which is not what these cases are about.
 sadd(){
   G -C "$SREPO" worktree add -q -b "$1" "$SWT/$2" >/dev/null 2>&1
   G -C "$SWT/$2" commit -q --allow-empty -m "work on $1"
-  G -C "$SWT/$2" push -q origin "$1" >/dev/null 2>&1
+  GIT_COMMITTER_DATE="${PUSHED_AT:-2026-01-01T00:00:00 +0000}" G -C "$SWT/$2" push -q origin "$1" >/dev/null 2>&1
   find "$SWT/$2" -exec touch -t 202601010000 {} + 2>/dev/null
 }
 sgone(){ [ -e "$SWT/$1" ] && echo no || echo yes; }
@@ -730,6 +739,8 @@ check "#2943 a worktree whose branch has an open pull request is kept, naming it
 check_eq "#2943 and is still there" no "$(sgone agent-openpr)"
 check "#2943 control: a pushed worktree with no open pull request is still removed" "removed agent-pushed [fix/801-pushed]: every commit on it is also on another branch" "$OUT"
 check_eq "#2943 control: and is gone" yes "$(sgone agent-pushed)"
+check_eq "#2988 control: no branch pushed in the last day, so the closed pull requests are never asked" \
+  0 "$(grep -c 'pr list --state closed' "$GH_CALLS" || true)"
 
 # The open pull requests cannot be read: nothing is removed, and the log the runner keeps (the
 # check's stderr, in its .last record) says why.
@@ -808,6 +819,31 @@ check_eq "#2943 sleep-worker-places.py refuses a sleep record it cannot read" 1 
 printf '{"v":1,"workers":[]}\n' >"$TMP/no-workers.json"
 POUT="$(python3 "$PLACES" "$TMP/no-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
 check_eq "#2943 and answers a record with no workers with no places at all" "0 []" "$PRC [$POUT]"
+# A place it cannot use (a tab or newline in it, or not an absolute path) is dropped by nothing: a
+# worker whose only places were like that would print no line, which the sweep reads as having
+# worked nowhere, and its worktree would go (#2988). It is refused like a record it cannot read.
+printf '{"v":1,"sessionId":"s-odd","cwd":"%s/agent-sleeper\\tx","edits":[]}\n' "$SWT" >"$TMP/sessions/s-odd.json"
+printf '{"v":1,"workers":["s-odd"]}\n' >"$TMP/odd-workers.json"
+POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2988 sleep-worker-places.py refuses a worker whose folder holds a tab" 1 "$PRC"
+check "#2988 and names the worker and why" "session s-odd's registry record holds a place this reader cannot use" "$POUT"
+printf '{"v":1,"sessionId":"s-odd","cwd":"%s","edits":["%s/agent-sleeper/a.txt","relative/notes.txt"]}\n' "$SREPO" "$SWT" >"$TMP/sessions/s-odd.json"
+POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2988 and one with a usable place beside one that is not an absolute path" 1 "$PRC"
+printf '{"v":1,"sessionId":"s-odd","cwd":"%s","edits":["%s/agent-sleeper/\\n"]}\n' "$SREPO" "$SWT" >"$TMP/sessions/s-odd.json"
+POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2988 and one with a newline closing an edit, a shape this Mac's registry held on 2026-11-14" 1 "$PRC"
+printf '{"v":1,"sessionId":"s-odd","edits":[]}\n' >"$TMP/sessions/s-odd.json"
+POUT="$(python3 "$PLACES" "$TMP/odd-workers.json" "$TMP/sessions" 2>&1)"; PRC=$?
+check_eq "#2988 and one whose record names no folder at all" 1 "$PRC"
+# The sweep, on a night that worker is working: nothing is removed, and it says why.
+printf '{"v":1,"sessionId":"s-odd","cwd":"%s/agent-sleeper\\tx","edits":[]}\n' "$SWT" >"$TMP/sessions/s-odd.json"
+sleep_record "$((NOW_MS + 3600000))" '["s-odd"]'
+run --remove "$SREPO"
+check_eq "#2988 a worker whose only place cannot be used makes the sweep exit 2" 2 "$RC"
+check "#2988 and it says where the overnight sessions worked could not be read" "where its overnight sessions have worked could not be read" "$OUT"
+check_eq "#2988 and removes nothing, the worker's worktree included" no "$(sgone agent-sleeper)"
+rm -f "$TMP/sessions/s-odd.json"
 
 # Sleep mode over (the record past its end): the worker's worktree goes like any other.
 sleep_record "$((NOW_MS - 1000))" '["s-worker"]'
@@ -815,6 +851,50 @@ run --remove "$SREPO"
 check "#2943 once sleep mode has ended the worker's worktree is removed" "removed agent-sleeper [fix/803-sleeper]" "$OUT"
 check_eq "#2943 and the open pull request's is still kept" no "$(sgone agent-openpr)"
 rm -f "$CLAUDE_SLEEP_RECORD"
+
+# --- #2988: a branch pushed in the last day with no pull request yet keeps its worktree ----------
+# What happened here at 08:33 ET on 2026-11-14: the sweep removed fix/2909-work-name-path and
+# worktree-agent-a8e6cf22ad2eff717, pushed and idle past six hours, whose PRs #2941 and #2940 were
+# opened 17 and 13 minutes later. A builder hands back a pushed branch and the main session opens the
+# PR, often hours later in a queue. Each worktree below is pushed now, clean, aged and idle.
+FRESH="$(date +%s) +0000"
+PUSHED_AT="$FRESH" sadd fix/806-fresh agent-fresh
+PUSHED_AT="$FRESH" sadd fix/807-closed agent-closed
+PUSHED_AT="$FRESH" sadd fix/808-merged agent-fmerged
+merged fix/808-merged "$SWT/agent-fmerged" HEAD 808
+printf 'fix/807-closed\t807\n' >"$GH_CLOSED"
+run --remove "$SREPO"
+check "#2988 a worktree whose branch was pushed in the last day with no pull request yet is kept" \
+  "keeping agent-fresh [fix/806-fresh]: its branch was pushed 0 hour(s) ago and has no pull request yet" "$OUT"
+check_eq "#2988 and is still there" no "$(sgone agent-fresh)"
+check "#2988 one pushed as recently whose pull request was closed unmerged follows the rules before it" \
+  "removed agent-closed [fix/807-closed]: every commit on it is also on another branch" "$OUT"
+check_eq "#2988 and is gone" yes "$(sgone agent-closed)"
+check "#2988 one pushed as recently whose pull request merged is removed" "removed agent-fmerged [fix/808-merged]: PR #808 merged" "$OUT"
+check_eq "#2988 the closed pull requests are read once, not once per worktree" \
+  1 "$(grep -c 'pr list --state closed' "$GH_CALLS" || true)"
+# A branch whose remote copy has gone has no push to keep it for: its commits on another local branch
+# are what qualify it, as before.
+PUSHED_AT="$FRESH" sadd fix/809-remote-gone agent-rgone
+G -C "$SREPO" branch keep/809 fix/809-remote-gone
+G -C "$SREPO" push -q origin --delete fix/809-remote-gone >/dev/null 2>&1
+run --remove "$SREPO"
+check "#2988 one whose remote branch is gone follows the rules before it" "removed agent-rgone [fix/809-remote-gone]" "$OUT"
+# The closed pull requests cannot be read: whether this branch's was closed cannot be told, so it is
+# kept, and the line says that is why rather than claiming it has no pull request.
+GH_CLOSED_FAIL=1 run --remove "$SREPO"
+check "#2988 an unreadable closed pull request list keeps the recently pushed one, saying so" \
+  "keeping agent-fresh [fix/806-fresh]: its branch was pushed 0 hour(s) ago, and whether a pull request of it was closed unmerged could not be read" "$OUT"
+check_eq "#2988 and is still there" no "$(sgone agent-fresh)"
+# A remote copy with no record of when it moved (a repository keeping no reflog for it) is dated by its
+# last commit instead, which cannot be later than the push.
+G -C "$SREPO" reflog expire --expire=all refs/remotes/origin/fix/806-fresh
+run --remove "$SREPO"
+check "#2988 with no record of the push, a remote copy whose last commit is recent keeps it" \
+  "keeping agent-fresh [fix/806-fresh]: its branch's remote copy holds a commit made 0 hour(s) ago and has no pull request yet" "$OUT"
+# Past the window, nothing keeps it.
+STALE_WT_PUSHED_HOURS=0 run --remove "$SREPO"
+check "#2988 once the push is older than the window it is removed" "removed agent-fresh [fix/806-fresh]: every commit on it is also on another branch" "$OUT"
 
 kill "$BUSY" 2>/dev/null
 echo
