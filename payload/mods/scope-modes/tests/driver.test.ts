@@ -535,6 +535,9 @@ describe('resting on background work (#2511)', () => {
     expect(busyWords(2, 0)).toBe('2 subagents')
     expect(busyWords(0, 1)).toBe('1 kept job')
     expect(busyWords(1, 3)).toBe('1 subagent and 3 kept jobs')
+    // #2897: a running Monitor is work too, named by its tool.
+    expect(busyWords(0, 0, 1)).toBe('1 Monitor')
+    expect(busyWords(1, 1, 2)).toBe('1 subagent, 1 kept job and 2 Monitors')
   })
   test('the counter keeps what a rest waits on; one from before it reads as none, and a damaged one is unreadable', () => {
     const r = readDriver(JSON.stringify(after({ waitingOn: '1 subagent' })), 'g1', 's1')

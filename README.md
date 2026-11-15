@@ -7394,8 +7394,9 @@ of its own and note each step as `progress`, counted by its own counter on disk,
 breaker (3 blocks or 20 active minutes with no new commit, claim or note; a commit is one on the
 claim's `sleep/N` branch or in its reserved worktree, whoever made it, #1119), the night's cap, the
 weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a Stop while the
-session's own subagent is still working (running, and not judged quiet by the job watcher) or a job
-it kept has not stalled is no idle turn: the session rests, unblocked, until that work's report
+session's own subagent is still working (running, and not judged quiet by the job watcher), a job
+it kept has not stalled, or a Monitor is listed as running in the stop's own `background_tasks`
+(#2897) is no idle turn: the session rests, unblocked, until that work's report
 starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
 afresh from it (#2511, `hooks/busy.ts`); a claim is parked
 after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
@@ -7432,7 +7433,9 @@ with its environment changed; since #1106 that clone's pull is claude-config's d
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
 morning otherwise); git in a throwaway repository under the temp folder (a path there, or one
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
-refused for git only where it would run git, never for the word in prose (#1124). At wake, the
+refused for git only where it would run git, never for the word in prose (#1124), and goes ahead
+when every git call in it is a local read (show, cat-file, log, diff and the like) with its
+subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
 and deploy runs since sleep began, and notes each for the top of the report. It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
