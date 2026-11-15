@@ -3952,7 +3952,7 @@ PY
   check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
 
   cat > "$T/cost.py" <<'PY'
-import importlib.util, json, resource, statistics, subprocess, sys, time
+import importlib.util, json, os, resource, statistics, subprocess, sys, tempfile, time
 hook, reader, cs, ceiling = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 # --line <command line> judges that line instead of claude-sync lessons (#2918).
 line = sys.argv[6] if sys.argv[5] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[5:])
@@ -3968,17 +3968,32 @@ samples = [yard(), yard()]
 payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd": "/", "permission_mode": "auto",
                       "hook_event_name": "PreToolUse", "tool_name": "Bash",
                       "tool_input": {"command": line, "description": "d"}, "tool_use_id": "t"})
-was = resource.getrusage(resource.RUSAGE_CHILDREN)
-p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True)
-now = resource.getrusage(resource.RUSAGE_CHILDREN)
-spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
-samples += [yard(), yard()]
-unit = statistics.median(samples)
-if p.returncode != 0:
-    print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
-ratio = spent / unit
-print("ok" if ratio <= ceiling else "judging it took %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s"
-      % (spent, ratio, unit, ceiling))
+# One judgement is one sample, and one sample cannot be told from noise (L656, L395): on a CI runner
+# one reading of 12.5 crossed a ceiling of 12 that the personal MacBook measures at 10.8 (#2915). So
+# a judgement past the ceiling is measured again, up to three in all, and the least is judged, each
+# against yardstick readings taken around it. A cold measurement (an empty cache to start) is
+# repeated from an empty cache each time, so no sample is answered from the one before.
+cache = os.environ.get("SLACK_GATE_CACHE_DIR", "")
+cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
+ratios = []
+for attempt in range(3):
+    env = dict(os.environ)
+    if cold and attempt:
+        env["SLACK_GATE_CACHE_DIR"] = tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/")))
+    was = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, env=env)
+    now = resource.getrusage(resource.RUSAGE_CHILDREN)
+    spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
+    samples += [yard(), yard()]
+    unit = statistics.median(samples)
+    if p.returncode != 0:
+        print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
+    ratios.append((spent / unit, spent, unit))
+    if ratios[-1][0] <= ceiling:
+        break
+ratio, spent, unit = min(ratios)
+print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s, in each of %d samples (%s)"
+      % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
   cost="$(SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
   check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
@@ -4694,13 +4709,30 @@ for l in open(sys.argv[1]):
 CMD
 run_n "$(cat "$N/pybad.cmd")"
 read_refused "#2869 python3 -c code that does not parse is still refused"
-says "the refusal names the syntax error Python reports" "unexpected character after line continuation character"
+# The wording is the running python3's own: 3.12 and later say "unexpected character after line
+# continuation character", 3.11 and earlier "f-string expression part cannot include a backslash"
+# (measured 2026-11-14 with 3.14.4, 3.11 and 3.9.6), and the gate runs the same python3 (#2915).
+said2869="$(python3 -c '
+import sys
+code = open(sys.argv[1]).read().split("-c \x27", 1)[1].rsplit("\x27 measure.jsonl", 1)[0]
+try:
+    compile(code, "<code>", "exec")
+except SyntaxError as e:
+    print(e.msg)' "$N/pybad.cmd")"
+if [ -n "$said2869" ]; then
+  says "the refusal names the syntax error Python reports" "$said2869"
+else
+  check "the bad code fails to parse on this python3, so the refusal can name its error" "python3 compiled it"
+fi
+# Written so every python3 parses it: a quote nested in an f-string's braces parses only on 3.12 and
+# later (PEP 701), so the earlier `f"{m["w"]}..."` was refused on an older python3 (#2915).
 cat > "$N/pygood.cmd" <<'CMD'
 ./tool 2>/dev/null > measure.jsonl; python3 -I -c '
 import json,sys
 for l in open(sys.argv[1]):
     m=json.loads(l)
-    print(f"{m["w"]}x{m["h"]}")' measure.jsonl
+    w, h = m["w"], m["h"]
+    print(f"{w}x{h}")' measure.jsonl
 CMD
 run_n "$(cat "$N/pygood.cmd")"
 allowed "#2869 the same code written so it parses, handed what a tool on disk printed, passes"

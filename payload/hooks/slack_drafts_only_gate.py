@@ -125,14 +125,17 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 # reads was taken for the script and refused. A code option a family lacks is the dangerous mistake
 # (its script goes unread), so each family lists only its own. A valued option it lacks is not: the
 # value is then taken for the script, and every word naming a file is read anyway (every_file), so
-# every family but Python, whose options are fixed and few, keeps the shared VALUED. Python's table is
+# every family but Python, whose options are fixed and few, keeps the shared VALUED, less -i where
+# that family's -i takes no value (below). Python's table is
 # relied on as complete by empty_slot (claude-config#2786): a script word it places that names no file
 # lets the data files after it go unread as code, so a valued Python option missing here would let
 # the file after its value run unread. Any other family's table is not relied on that way.
-# -i takes no separate value in any family that has it (claude-config#2893): bash -i is interactive,
-# node -i opens the REPL, and perl and ruby take an in place edit's suffix glued (-i.bak) or none.
-# Read as taking one, `perl -i -pe s/a/b/ post.sh` took -pe for its value and s/a/b/ for the script,
-# and `node -i -e CODE` took -e, so the code was never read as code.
+# -i takes no separate value in the shell, node, perl, ruby or php (claude-config#2893, #2978): bash -i
+# is interactive, node -i opens the REPL, perl and ruby take an in place edit's suffix glued (-i.bak)
+# or none, and php -i prints its configuration. Read as taking one, `perl -i -pe s/a/b/ post.sh` took
+# -pe for its value and s/a/b/ for the script, `node -i -e CODE` took -e, and `php -i -r CODE` took
+# -r, so the code was never read as code. deno and osascript keep the shared VALUED whole: what their
+# -i takes is not measured, and a value read where there is none only has the next word read as a file.
 OPTIONS = {
     "shell": ({"-c"}, "c", VALUED - {"-i"}),
     "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
@@ -140,7 +143,7 @@ OPTIONS = {
     "deno": ({"eval"}, "", VALUED),
     "ruby": ({"-e"}, "e", VALUED - {"-i"}),
     "perl": ({"-e", "-E"}, "eE", VALUED - {"-i"}),
-    "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
+    "php": ({"-r", "-B", "-R", "-E"}, "", VALUED - {"-i"}),
     "osascript": ({"-e"}, "", VALUED),
 }
 # The options known to load nothing, by family, for the words after code given inline (every_file,
@@ -169,10 +172,12 @@ LOADS_NOTHING = {
 # match and print when every token in it is one this list knows, and anything else, named in the
 # refusal, is taken to act. Known: the words in PERL_SAFE_WORDS; a variable named directly (`$x`,
 # `@F`, `%h`, `$F[1]`, `$h{$k}`, `$#F`, and the punctuation variables in PERL_PUNCT_VARS), but never
-# one named ARGV except the scalar `$ARGV` read as the current file's name, and never one reached
-# through a block, another variable, an arrow or a second subscript, which is how a name is computed
-# at run time; numbers; strings, with any interpolation in them read the same way; m//, s/// without
-# the e flag, tr/// and split's patterns, with no code block in them; and operators.
+# one named ARGV except the scalar `$ARGV` read as the current file's name, never %SIG, whose
+# handlers are subs named by strings, and never one reached through a block, another variable, an
+# arrow or a second subscript, which is how a name is computed at run time; sort, but never `sort
+# $name LIST`, which calls the sub $name holds (#2912); numbers; strings, with any interpolation in
+# them read the same way; m//, s/// without the e flag, tr/// and split's patterns, with no code block
+# in them; and operators.
 PERL_SAFE_WORDS = frozenset("""
 print say printf sprintf chomp chop chr ord lc uc lcfirst ucfirst length substr index rindex join split
 reverse sort keys values each defined exists delete scalar undef abs int sqrt hex oct rand time localtime
@@ -314,6 +319,8 @@ def _perl_unsafe(code):
                     return c + name + code[j:j + 2]
                 if name.startswith("ARGV") and not (c == "$" and name == "ARGV" and code[peek(j):peek(j) + 1] not in ("[", "{")):
                     return c + name
+                if name == "SIG":
+                    return c + name  # a handler named by a string, a sub called by name (#2912)
             elif c == "$" and nxt == "$":
                 name, j = "$", j + 1
             elif c == "$" and nxt and nxt in PERL_PUNCT_VARS:
@@ -433,6 +440,16 @@ def _perl_unsafe(code):
                 continue
             if word not in PERL_SAFE_WORDS:
                 return word
+            if word == "sort":
+                # `sort $name LIST` calls the sub $name names, a string chosen at run time (#2912):
+                # a scalar straight after sort with a term, not an operator or comma, after it.
+                k = peek(j)
+                if code[k:k + 1] == "(":
+                    k = peek(k + 1)  # sort($name LIST) is the same call
+                v = PERL_NAME.match(code, k + 1) if code[k:k + 1] == "$" else None
+                if v and re.match(r"\s*[$@%(\w'\"]", code[v.end():]) and \
+                        not re.match(r"\s*(?:x|lt|gt|le|ge|eq|ne|cmp|and|or|xor)\b", code[v.end():]):
+                    return f"sort ${v.group(0)}"
             i, term = j, True
             last.append(word)
             continue
@@ -1383,6 +1400,9 @@ def judged_by_name(name):
 
 
 ProgramRuns = _program_runs.make(MARKER, judged_by_name)
+# Code a command loads without naming it: a PHP include, NODE_OPTIONS, a name perl's <> runs, a file
+# with a NUL in its first line run by zsh or dash (claude-config#2912, #2977, #2978).
+CodeLoaders = load_lib("code_loaders", "code-loaders.py").make(SHELL_BANG, CURL_ASSIGN, MARKER, SH_UNKNOWN_DIR, MAX_DEPTH)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 
@@ -1457,7 +1477,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
+class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -1488,6 +1508,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # Whether the next text line() reads is a file on disk (a script, a package.json script)
         # rather than text this call wrote itself (claude-config#2721; note_unreadable).
         self.next_on_disk = False
+        # The shell that reads the next text line() reads, by name (None where it cannot be told), which
+        # a file that text sources is read by (reading_shell, claude-config#2977).
+        self.next_program = None
         # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
@@ -2465,7 +2488,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             there = not d or os.path.isdir(d)
             py = dict(self.py_cmd, cwd=self.py_cmd["cwd"] if there else None)
             key = (real, sourced, word, label, d if there else None, depth, shell_hint, lang,
-                   self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported))
+                   self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported),
+                   self.shell.get("program") if sourced else None)
             if key in self.clean:
                 if sourced:
                     self.exported = self.clean[key]
@@ -2473,7 +2497,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         self.tick(path)
         walking, self.walking = self.walking, path
         try:
-            reason = self.script_body(word, path, real, d, depth, shell_hint, lang, label)
+            reason = self.script_body(word, path, real, d, depth, shell_hint, lang, label, sourced)
         finally:
             self.walking = walking  # once read, back to the commands of the file that ran it
         if key and not reason:
@@ -2481,7 +2505,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         note = self.made_note(path, word) if reason else None
         return f"{reason} ({note})" if note else reason
 
-    def script_body(self, word, path, real, d, depth, shell_hint, lang, label):
+    def script_body(self, word, path, real, d, depth, shell_hint, lang, label, sourced=False):
         """script() for a file that is there and is not /nudge."""
         try:
             body = self.content(real).decode("utf-8", "replace")
@@ -2490,15 +2514,23 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         hit = MARKER.search(body)
         first = body.split("\n", 1)[0]
         is_shell = shell_hint or real.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
+        prog = self.reading_shell(shell_hint, sourced, first) if is_shell else None
+        binary = self.content(real, part="binary") if is_shell and "\0" in body else b""
+        if is_shell and depth < MAX_DEPTH and binary:
+            # Only bash and ksh refuse a file with a NUL in its first line; zsh and dash run it, and
+            # bash runs a file it sources up to its first NUL (nul_reading, claude-config#2977).
+            reason = self.nul_reading(word, real, d, depth, label, prog, sourced)
+            if reason is not False:
+                return reason
         if is_shell and depth < MAX_DEPTH and "\0" in body:
             # A binary file, or what code naming one wrote (/usr/bin/true in a python3 heredoc's
-            # string, read as a file the code may copy in, #2772), is no text a shell reads as
+            # string, read as a file the code may copy in, #2772), is no text bash runs as
             # commands: bash refuses it, and its bytes read as commands put a NUL in a word, which
             # crashed the gate (claude-config#2892). So each binary part is searched for an endpoint,
             # as any file run that is not a script is, and only the rest is read as commands. A NUL
             # left in that rest is past a first line: bash drops it and runs the word without it,
             # zsh keeps it, so the commands cannot be worked out.
-            binary_hit = MARKER.search(self.content(real, part="binary").decode("utf-8", "replace"))
+            binary_hit = MARKER.search(binary.decode("utf-8", "replace"))
             if binary_hit:
                 return f"{label} posts to Slack (it names {binary_hit.group(0)})"
             body = self.content(real, part="text").decode("utf-8", "replace")
@@ -2518,17 +2550,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
                 self.next_on_disk = True
                 self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
+                self.next_program = prog  # what a file it sources is read by (claude-config#2977)
                 inner = self.line(body, d, depth + 1, body)
             except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"{label} runs a command that posts: {inner}" if inner else None
-        kind = self.language(real, first, lang)
+        # A file php runs is PHP whatever it is called, and its includes are followed (#2978).
+        kind = "php" if lang == "php" else self.language(real, first, lang)
         if hit and kind == "py":
             hit = py_marker(body)  # a regular expression's pattern names what it looks for (#2844)
         if hit:
             return f"{label} posts to Slack (it names {hit.group(0)})"
         if kind:
-            return self.imports(label, real, os.path.dirname(real), body, kind)
+            # PHP finds an include from the folder it runs in first (php_includes).
+            root = os.path.abspath(d or os.getcwd()) if kind == "php" else os.path.dirname(real)
+            return self.imports(label, real, root, body, kind)
         return None
 
     @staticmethod
@@ -2609,7 +2645,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         IMPORT_MAX_FILES the one found outside the repository can be named (beyond)."""
         seen = {origin: start} if origin else {}
         repo = None  # the script's repository, looked for on first passing the limit; False for none
-        queue = [(origin, root, body, start)]
+        # A PHP script's own folder is where its includes are looked for after the folder PHP runs in,
+        # root (php_includes); for the rest, root is that folder.
+        queue = [(origin, os.path.dirname(origin) if kind == "php" and origin else root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
         top = True  # the code the command hands Python, before any module it imports
         while queue:
@@ -2624,9 +2662,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
                 yield SINK
                 return
-            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings):
+            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings, cur is not None):
                 via = f"{chain}, which imports {spec}"
                 lead, first = first, None  # only the first import given can be that statement's
+                if targets == "path":
+                    yield self.unfollow(f"{via}, a path PHP works out only when it runs, so the gate cannot see "
+                                        "what that runs (claude-config#2978)"), None, None, None
+                    return
                 if targets is False and lead is not None and spec == lead and self.found_nowhere(spec, root):
                     continue  # Python stops there with ImportError, before anything runs
                 if targets is False:
@@ -2724,13 +2766,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         self.unfollowed.append(why)
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
         or a template's text is left out (claude-config#2484). A type only import statement of a file
         that is there, or of a missing declaration file, is left out too (erased_import,
-        claude-config#2526, #2890)."""
+        claude-config#2526, #2890). A PHP include is read by php_includes, tagged for a file's text
+        (claude-config#2978)."""
+        if kind == "php":
+            yield from self.php_includes(text, cur_dir, root, tagged)
+            return
         if kind == "js":
             code, quoted = js_scan(text)
             for m in IMPORT_SPEC.finditer(code):
@@ -4990,13 +5036,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             # ends the word there. So none of its words can be worked out, and before this the shared
             # reader's words reached os.path and crashed the gate (claude-config#2892). Unfollowed:
             # no finding that it posts. A file bash refuses as binary never gets here (script_body).
-            self.next_script, self.next_cwd_known, self.next_on_disk = None, True, False
+            self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
             return self.unfollow("it holds a NUL byte, which bash drops, zsh keeps inside a word and every "
                                  "program reads as the end of one, so what it runs cannot be worked out "
                                  "(claude-config#2892)")
         saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script, self.next_cwd_known)
         self.shell["on_disk"] = self.next_on_disk
-        self.next_script, self.next_cwd_known, self.next_on_disk = None, True, False
+        self.shell["program"] = self.next_program
+        self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
         try:
             # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
             # only over part of the text. every_command gives s's own commands in commands() order,
@@ -5110,7 +5157,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         sourced = bool(words) and words[0] in ("source", ".")
         saved_exported = self.exported
         try:
-            reason = self.judge(d, text, wrapper, why, depth, whole)
+            # The modules a NODE_OPTIONS it sets has node load, whatever it runs (#2912).
+            reason = self.node_options(text, d, depth) or self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
                 codes = len(self.made_code)
                 self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
@@ -5245,17 +5293,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             operand, inline, stdin = self.operands(words)
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
-            reason = self.every_file(words, d, depth, True)
+            # The shell by name, which decides how a file with a NUL in its first line is read (#2977).
+            reason = self.every_file(words, d, depth, name)
             if reason:
                 return reason
             if operand and operand != "-":
                 # Read above with every other word naming a file; one whose path cannot be worked
                 # out is unread, and refused with the switch on (claude-config#2683).
-                return self.split_here(name, operand, d, text, whole, depth, True, None) or \
+                return self.split_here(name, operand, d, text, whole, depth, name, None) or \
                     self.unworked_path(text, "operand", d, "runs")
             fed, is_body = self.fed(fed_by, whole)
             if is_body and depth < MAX_DEPTH:
                 try:
+                    self.next_program = name
                     inner = self.line(fed, d, depth + 1, fed)
                     return f"{name} runs commands from its input, one of which posts: {inner}" if inner else None
                 except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
@@ -5268,8 +5318,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if hit:
                 return f"{name} runs code naming {hit.group(0)}"
             operand, inline, stdin = self.operands(words)
-            lang = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else None
+            lang = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else "php" if name == "php" else None
             here = os.path.abspath(d or os.getcwd())
+            if name == "perl":
+                # A name perl's <> runs as a command, written out or from a glob (#2912).
+                reason = self.perl_pipe_names(words, {inline[1]} if inline else set(), d, depth)
+                if reason:
+                    return reason
             if lang == "py":
                 # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
                 self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
@@ -5286,6 +5341,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                             return reason
                 # The code imports from the directory it runs in (claude-config#2318).
                 reason = self.imports(label, None, here, code, lang) if lang else None
+                # php runs the code of each of -r, -B, -R and -E it is given (#2978).
+                for more in self.php_codes(words) if lang == "php" and not reason else ():
+                    reason = self.imports(label, None, here, more, lang)
+                    if reason:
+                        break
                 if reason:
                     return reason
                 # The files after it are the code's arguments, never a script the program runs: each is
@@ -5384,7 +5444,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if not (shell or first.startswith("#!")):
                 # Nothing there, or no script: a path it cannot work out is refused with the switch on.
                 return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
-            lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
+            lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else self.php_lang(first)
             return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
         # A program named by a variable alone (`$cmd`, `"$gh" pr view`) is left as it was: it is how a
         # function runs the command it is handed and a suite its stand in, and refusing it too newly
@@ -5834,7 +5894,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if shell_hint or real.endswith(SHELL_EXT) or SHELL_BANG.match(first):
             return self.shell_acts(body, d)
         kind = self.language(real, first, lang)
-        if not kind:
+        if kind not in ("py", "js"):  # PHP's includes are followed, but not read for what it does (#2978)
             return "is a kind of script the gate does not read for what it does with its arguments"
         return self.acts_body(body, real, os.path.dirname(real), kind, runs_only=runs_only)
 
