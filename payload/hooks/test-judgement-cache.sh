@@ -480,6 +480,18 @@ open(key, "wb").write(b"k" * jc.KEY_BYTES)
 expect("an entry signed with another key is a miss", jc.Parses(d, code).get(big, "/w") is None)
 os.unlink(key)
 expect("with no key nothing is used", jc.Parses(d, code).get(big, "/w") is None)
+# A text holding a byte that is not UTF-8 (read in as a lone surrogate) and a lone surrogate of its own is
+# still kept, signed and given back: neither the key, the signature nor the header raises on it.
+odd_text = big + "echo \udcff \ud800\n"
+odd_dir = os.path.join(work, "odd-bytes")
+where = []
+odd_value = (sw.commands(odd_text, "/w", parts=where), where)
+jc.Parses(odd_dir, code).put(odd_text, "/w", odd_value)
+expect("a text holding a lone surrogate is kept and given back",
+       jc.Parses(odd_dir, code).get(odd_text, "/w") == odd_value)
+odd_names = [n for n in os.listdir(odd_dir) if n.endswith(".json")] if os.path.isdir(odd_dir) else []
+expect("and its header is plain ASCII (%r)" % odd_names, len(odd_names) == 1
+       and open(os.path.join(odd_dir, odd_names[0]), "rb").read().split(b"\n", 1)[0].isascii())
 # Inside a judgement the parse cache's own reads and writes are not the judgement's: its recorder
 # stays whole, and records none of them.
 rec = jc.Recorder()
