@@ -251,7 +251,7 @@ allowed "#2912 the control: a plain sort passes"
 # raw_path wrote ${X}y as \$Xy, so two different variables gave one key; and raw_unchanged looked only
 # between the write and the import, so a program started in the background before the write, which
 # can rewrite the module after it, was not seen (#2854).
-check "#2912 raw_path keeps \${X}y and \$Xy apart" "$(python3 - "$DIR" <<'PY' 2>&1
+cat > "$T/raw-path-check.py" <<'PY'
 import importlib.util, sys
 sys.dont_write_bytecode = True  # the gate is carried by the sync: leave no cache beside it (#2919)
 spec = importlib.util.spec_from_file_location("program_writes", sys.argv[1] + "/lib/program-writes.py")
@@ -260,7 +260,7 @@ spec.loader.exec_module(pw)
 a, b, c = pw.raw_path('"${X}y/m.py"'), pw.raw_path('"$Xy/m.py"'), pw.raw_path('"$X/m.py"')
 print("ok" if a != b and a and b and c == pw.raw_path('"${X}/m.py"') else "raw_path gave %r, %r and %r" % (a, b, c))
 PY
-)"
+check "#2912 raw_path keeps \${X}y and \$Xy apart" "$(python3 "$T/raw-path-check.py" "$DIR" 2>&1)"
 BG="$T/bg2912"
 mkdir -p "$BG"
 bg2912() { # bg2912 <name> <line before the write>: a script writing a module, then importing it
@@ -271,8 +271,8 @@ bg2912() { # bg2912 <name> <line before the write>: a script writing a module, t
 }
 bg2912 fore 'ls "$TMPROOT"'
 bg2912 back 'gen_tool "$TMPROOT/fault/lib" &'
-bg2912 group '{ sleep 1; gen_tool "$TMPROOT/fault/lib"; } &'
-bg2912 sub '( sleep 1; gen_tool "$TMPROOT/fault/lib" ) &'
+bg2912 group '{ ls "$TMPROOT"; gen_tool "$TMPROOT/fault/lib"; } &'
+bg2912 sub '( ls "$TMPROOT"; gen_tool "$TMPROOT/fault/lib" ) &'
 run_bg() { run_raw "$(payload Bash "$(bash_input "$1")" "$BG")"; }
 run_bg "bash fore.sh"
 allowed "#2912 the control: a module written after a command that has finished is read as written"
