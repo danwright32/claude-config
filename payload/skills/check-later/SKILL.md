@@ -91,7 +91,8 @@ Take every one in the session, not just the last.
 The session's own words are the claim; the record is the evidence, and where the record is newer
 than the session (a later comment, a later version), the record wins. All read only.
 
-1. Read the issue with every comment (`gh issue view <n> --comments` in the session's repo). Read
+1. Read the issue with every comment (`gh issue view <n> --json title,body,comments` in the session's
+   repo; `--comments` as text prints only the comments, and nothing for an issue with none, #2891). Read
    each issue the item names.
 2. Find the instant the clock started, from what proves it was LIVE: the first successful deploy
    containing the merge (`gh pr view <n> --json mergeCommit`, then
