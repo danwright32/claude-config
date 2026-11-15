@@ -3554,7 +3554,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
-Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
+(made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
+missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
+runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
@@ -3570,6 +3574,36 @@ imports followed, each module read once, so a cycle ends. So repo-digest's `npm 
 refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
 gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
 real script of ours reaches 11).
+
+An endpoint a program only compares or lists is told from one it sends to (#2913; Dan, 2026-11-14:
+"Teach the gate", with no exemption list), in `lib/data-names.py`. A name counts as data only in a
+string that is a list's element, a comparison's operand, the argument of a test such as `includes`
+or `startswith`, a regex pattern, or a JavaScript comment; any other use refuses as before. It is let
+through only where nothing in the program (the script, every module it reaches, a loader or runner
+in the same process) can send a request, run code or write a file, no JavaScript member is reached by
+a computed name, and what the program prints reaches only the terminal or a filter such as `tail`.
+So a script or a single node test reaching a guard's refusal list passes, and the same list read
+out and sent, printed into `curl`, or written to a file is refused. A vitest or node:test test stays
+refused there, since the runner counts as able to send. A file a package is handed (`npx vitest run
+x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
+`$0` or `BASH_SOURCE` is worked out as bash reads it.
+
+A test file's import of a module the same file replaces with a mock is not followed (#2359, recorded
+there on 2026-11-15: "Decided by Dan, 2026-11-15: pass an import the same test file mocks out (vi.mock
+or jest.mock of that path), with a test; a real unmocked import stays refused", a loosening he signed
+off), in `lib/js-mocks.py`. The rule is written the narrow way round: a mock counts only in a file
+plain enough that nothing in it can reach the original module. The file must be handed to vitest or
+jest as installed (the package by a launcher, or the runner's own script under `node_modules`:
+`.bin/vitest`, `.bin/jest`, or inside `vitest/`, `jest/` or `jest-cli/`; never run by node,
+tsx or bun itself, where a mock replaces nothing), be a test file by the runners' default naming
+(`.test` or `.spec` before the extension, or under `__tests__`), and call `vi.mock` or `jest.mock` as
+a top level statement of its own with the module's path written out, resolving to the same file, and
+a factory taking no parameters. It must name none of the runners' ways to the original or to taking a
+mock back (`importActual`, `requireActual`, `importOriginal`, `unmock`, `doMock` and the rest), in
+code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unrenamed import from
+`vitest` or `@jest/globals`; and reach no member by a computed name or run a string as code. Anything
+else leaves the import followed, so a real unmocked import stays refused. Only the file's own
+imports are affected.
 
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
@@ -4084,10 +4118,19 @@ test project. An inline write, a push, `--db-url`, `--local` and a project not o
 about as before. The list is trusted only as git has committed it: its bytes must be what `git show
 HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
 included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
-itself asked about, which is why the hook's registration now takes those three tools. Still open: a
-session that edits the list with a shell command and then commits it, in one call or several, is
-trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
-edit and commit.
+itself asked about, which is why the hook's registration now takes those three tools. Since #2989 a
+shell command that writes the list (any command naming it, in any case, other than a reader such as
+`cat`, `grep` or `git diff` with no redirection into a file) is asked about too, as is one naming it
+where the hook cannot read the command (a heredoc body, a string), and a `git commit` that would add
+a line other than a blank or a comment to any list in its checkout, from the index or the working
+tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
+other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
+about, since that command could write the list by a glob or a variable first. So a Bash call holding
+the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
+commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
+then. What it still cannot see: a list written under a name built at
+run time in an earlier call and then committed by something other than `git commit` (an alias,
+`commit-tree`, a merge, a cherry-pick, a pull).
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -5162,6 +5205,17 @@ handler that releases the sync lock, so no read-only command ever removes anythi
 every mutating run, and a value that is not a whole number is refused.
 
 </td></tr>
+<tr><td><code>SYNC_REVIEW_OPTION_PROBE_EVERY</code></td><td><code>86400</code></td><td>
+
+Seconds between the times `status` asks the installed claude whether it still accepts
+`--append-system-prompt-file`, the option the lessons review hands claude the lessons in
+(claude-config#2982). The question calls no model: claude is handed a file that does not exist,
+and its "file not found" error is the answer that the option is still known. The answer is kept in
+`~/.claude/state/review-option-probe.json` and asked again at once when the claude command changes.
+`status` says nothing while the option is accepted. `0` asks on every `status`, and a value that is
+not a whole number is refused.
+
+</td></tr>
 <tr><td><code>SYNC_SCRATCH_NOTE</code></td><td><code>1</code></td><td>
 
 Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off.
@@ -5498,8 +5552,18 @@ else, nothing in it is uncommitted, nothing changed in the last six hours, and n
 working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
 every commit on its branch is also on another branch, local or remote (which covers work shipped in
 a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
-the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
-under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+the default branch. The sweep also keeps a worktree whose branch has an open pull request, and,
+while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
+session registry folder or a file it edited is inside it), because a pushed branch counts as kept
+elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
+the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
+a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
+unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
+removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
+alone, and asks none of these questions. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -6207,7 +6271,13 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
+each name on both sides with git's quoting undone, each hunk walked by its header's counts, and how
+git apply or patch places the names by -p, folder, a named file and -R) is read only through
+`hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
+and the Slack alert guard each kept their own, and each read wrong a case the other read right);
+the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
+patch by hand. `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
@@ -6902,7 +6972,12 @@ every top level name those use, through the imports between the mod's files; a t
 spacing draws nothing. Any other edit there passed, however it was worded, as did every edit to a
 `.ts` file that draws nothing (since #1841 one changing a message's words is held, below); a shell
 write is judged by the file it leaves (since #1576 one to a file that already draws too); a mod
-whose hook files cannot be listed or read is held. Since #1296 a value reaching what draws through a
+whose hook files cannot be listed or read is held. Since #3017 one only some of whose files cannot
+be read (a merge conflict left in one) is held only where the mod draws at all, read from its own
+code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named in any file of its hooks
+folder or the folders inside it (any `ui.` member but `log`, `toast` and `ask`; mod-kit's band row,
+pane, card or buttons), or a line built. A mod drawing nothing, such as this guard, is judged as
+code there. Since #1296 a value reaching what draws through a
 local or a function's parameter is followed too (a card's sentence handed to a function that draws
 it, a card's words held in a local, what a function a followed value calls returns), compared with
 what it treats as data taken out, so what a call it makes is handed, what a value is only tested
@@ -7038,8 +7113,9 @@ back or shell write alike, a file made or taken away read as one with no text (s
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before; since #2991 so does taking away any look changing file git has never had
-in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent, the logic around it, and a tool's or its input
-schema's description pass, a property the schema names `reason` or `text` being no message. Since
+in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent,
+the logic around it, and a tool's or its input schema's description pass, a property the schema
+names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code
 alone passes even where the reading follows a message less far after it than before (a verdict
 handed through a helper that hands it straight back), and a comment holds no string. Since
@@ -7355,8 +7431,9 @@ of its own and note each step as `progress`, counted by its own counter on disk,
 breaker (3 blocks or 20 active minutes with no new commit, claim or note; a commit is one on the
 claim's `sleep/N` branch or in its reserved worktree, whoever made it, #1119), the night's cap, the
 weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a Stop while the
-session's own subagent is still working (running, and not judged quiet by the job watcher) or a job
-it kept has not stalled is no idle turn: the session rests, unblocked, until that work's report
+session's own subagent is still working (running, and not judged quiet by the job watcher), a job
+it kept has not stalled, or a Monitor is listed as running in the stop's own `background_tasks`
+(#2897) is no idle turn: the session rests, unblocked, until that work's report
 starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
 afresh from it (#2511, `hooks/busy.ts`); a claim is parked
 after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
@@ -7375,10 +7452,12 @@ beneath; a classifier refusal is noted as `failed` and never retried; and in eve
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
-written plainly, and a line running gh that way writing files only into the session notes folder
-or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
-included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
-created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
+written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
+expands, which rtk splits into a command, is refused as unread), and a line running gh that way
+writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
+file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
@@ -7391,7 +7470,9 @@ with its environment changed; since #1106 that clone's pull is claude-config's d
 runs overnight exactly when the night lets claude-config deploy (`mayDeploy`) and waits for the
 morning otherwise); git in a throwaway repository under the temp folder (a path there, or one
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
-refused for git only where it would run git, never for the word in prose (#1124). At wake, the
+refused for git only where it would run git, never for the word in prose (#1124), and goes ahead
+when every git call in it is a local read (show, cat-file, log, diff and the like) with its
+subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
 and deploy runs since sleep began, and notes each for the top of the report. It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
@@ -7866,7 +7947,11 @@ SHA-256 of its repository and word (#2246), since a held command's word can pass
 character key limit; an answer kept under the earlier key form is still read for its week (#2256
 removes that read).
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
+session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
+to an absolute path: the mod then writes, reads and rotates its log and error file in that folder,
+and the weekly line's runner reads the same one (#2906). A relative path is refused, and nothing is
+written anywhere. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
 later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
 renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that

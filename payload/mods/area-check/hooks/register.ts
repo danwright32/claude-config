@@ -5,11 +5,13 @@ import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import type { ModKitCommand, ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import {
+  DIR_SHOWN,
   MARKS,
   READ_SCRIPT,
   ROTATE_BYTES,
   ROTATE_SCRIPT,
   SETTLE_MINUTES,
+  areaFolder,
   bodyUnreadableRefusal,
   bodyUnresolvedRefusal,
   branchNeedle,
@@ -98,7 +100,8 @@ import { currentText } from './mod-kit/inputs.ts'
 // (decision 8). The facts are read on the call's path under one deadline below 75% of a hook's 10
 // second budget (L743); a read past it is UNREAD, and only growth can then hold.
 //
-// The log, one JSON record a line, this Mac only (decision 10): ~/.claude-area-check/log.jsonl. A
+// The log, one JSON record a line, this Mac only (decision 10): ~/.claude-area-check/log.jsonl, or
+// for one run the folder CLAUDE_AREA_CHECK_DIR names (#2906, areaFolder in prline.ts). A
 // `loaded` record per session start, so a week with none reads as the mod never loading rather than
 // as nothing firing (L90); then `judged` per file, or `unjudged` with why. Its own failures go to a
 // separate file, errors.jsonl, by a different write than the one that failed (L561), and the first
@@ -108,7 +111,6 @@ const MOD = 'area-check'
 const judgedRef = { plugin: 'area-check', key: 'judged' } as const
 const errorsRef = { plugin: 'area-check', key: 'errors' } as const
 const heldRef = { plugin: 'area-check', key: 'held' } as const
-const DIR = '.claude-area-check'
 const LOG = 'log.jsonl'
 const ERRORS = 'errors.jsonl'
 const LATE = `not read within ${DEADLINE_MS / 1000} seconds`
@@ -134,12 +136,30 @@ const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 
 const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
 
-// One record appended to a file in ~/.claude-area-check. Appended, never read and written whole, so
+// The log's folder, read on every use, so every write and read of one run agrees (#2906). `so` ends
+// the error when it cannot be had. The engine needs the variable's name written out here, so it is
+// the literal spelling of AREA_DIR_ENV.
+const overrideOf = async ($: EngineInterface) => (await $.env.get('CLAUDE_AREA_CHECK_DIR')) ?? undefined
+const folderOf = async ($: EngineInterface, so: string) => {
+  const f = areaFolder(await homeOf($), await overrideOf($))
+  if ('why' in f) throw new Error(`${f.why}, so ${so}`)
+  return f
+}
+// How a sentence names the folder; never throws. A folder that cannot be had is named as it was set.
+const shownOf = async ($: EngineInterface): Promise<string> => {
+  try {
+    const set = await overrideOf($)
+    const f = areaFolder(await homeOf($), set)
+    return 'why' in f ? (set || DIR_SHOWN) : f.shown
+  } catch {
+    return DIR_SHOWN
+  }
+}
+
+// One record appended to a file in the log's folder. Appended, never read and written whole, so
 // two sessions writing at once cannot lose each other's lines (assume it runs twice).
 const append = async ($: EngineInterface, file: string, record: Record<string, unknown>) => {
-  const home = await homeOf($)
-  if (!home) throw new Error('HOME is not set, so the log has nowhere to go')
-  const dir = `${home}/${DIR}`
+  const { dir } = await folderOf($, 'the log has nowhere to go')
   const r = await $.process.run(['/bin/sh', '-c', 'mkdir -p "$1" && cat >> "$2"', MOD, dir, `${dir}/${file}`], {
     stdin: JSON.stringify(record) + '\n',
     timeoutMs: APPEND_MS,
@@ -376,11 +396,16 @@ const updateHeld = async ($: EngineInterface, change: (list: Held[]) => Held[]) 
 const relTo = (path: string, root: string) => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
 // The error file's record of one failure, which never throws; a debug line where it cannot be kept.
-const keepError = async ($: EngineInterface, path: string, error: string) => {
+// It answers the sentence naming where the error went, for the line that says so.
+const keepError = async ($: EngineInterface, path: string, error: string): Promise<string> => {
+  const where = `${await shownOf($)}/${ERRORS}`
   try {
     await append($, ERRORS, { v: 1, kind: 'error', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), path, error })
+    return `the error is kept in ${where}`
   } catch (again) {
-    $.ui.log(`${MOD}: an error could not be kept in ~/${DIR}/${ERRORS} (${msg(again)}); it was: ${error}`, { to: 'debug' })
+    const why = msg(again)
+    $.ui.log(`${MOD}: an error could not be kept in ${where} (${why}); it was: ${error}`, { to: 'debug' })
+    return `the error could not be kept in ${where} either (${why})`
   }
 }
 
@@ -395,20 +420,20 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
   } catch {
     // The count is a convenience; the error file below is the record.
   }
-  await keepError($, path, error)
+  const where = await keepError($, path, error)
   if (n !== 1) return
   try {
     const rel = relTo(path, await $.session.cwd())
     $.ui.log(
       kept === 'rotation'
-        ? `The area check could not rotate its log (${error}); nothing was lost, and the error is kept in ~/${DIR}/${ERRORS}.`
+        ? `The area check could not rotate its log (${error}); nothing was lost, and ${where}.`
         : kept === 'shell'
-        ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+        ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; ${where}.`
         : kept === 'command'
-        ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
+        ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; ${where}.`
         : kept === 'unchecked'
-          ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; the error is kept in ~/${DIR}/${ERRORS}.`
-          : `The area check could not write its log for ${rel} (${error}); what it decided stands, and the error is kept in ~/${DIR}/${ERRORS}.`,
+          ? `The area check could not look at ${rel} (${error}), so the edit went ahead unchecked; ${where}.`
+          : `The area check could not write its log for ${rel} (${error}); what it decided stands, and ${where}.`,
     )
   } catch {
     // Nothing more can be said.
@@ -1042,11 +1067,10 @@ const prCallsIn = async ($: EngineInterface, command: string, cwd: string, home:
 // One repository's decision lines in this Mac's log and its rotated files, those naming `branch`
 // (none when it is null, for the count alone), with how many name the repository (prline.ts).
 const readLog = async ($: EngineInterface, d: Deadline, repo: string, branch: string | null): Promise<LogRead> => {
-  const home = await homeOf($)
-  if (!home) throw new Error('HOME is not set, so the log cannot be found')
+  const { dir } = await folderOf($, 'the log cannot be found')
   const ms = await left($, d)
   if (ms <= 0) return { why: LATE }
-  const r = await $.process.run(['/bin/sh', '-c', READ_SCRIPT, MOD, `${home}/${DIR}`, repoNeedle(repo), branch === null ? '' : branchNeedle(branch), ...MARKS], { timeoutMs: ms })
+  const r = await $.process.run(['/bin/sh', '-c', READ_SCRIPT, MOD, dir, repoNeedle(repo), branch === null ? '' : branchNeedle(branch), ...MARKS], { timeoutMs: ms })
   if (r.isStdoutTruncated) return { why: 'its decisions were more than could be read whole' }
   if (r.exitCode !== 0) return { why: firstLine(r.stderr) || `its read exited ${r.exitCode}` }
   return readOf(r.stdout)
@@ -1056,10 +1080,9 @@ const readLog = async ($: EngineInterface, d: Deadline, repo: string, branch: st
 // nothing: the log stays where it was and is read as before.
 const ROTATE_MS = 30_000
 const rotate = async ($: EngineInterface) => {
-  const home = await homeOf($)
-  if (!home) throw new Error('HOME is not set, so the log cannot be found')
+  const { dir } = await folderOf($, 'the log cannot be found')
   const stamp = rotationStamp(await $.clock.now(), await $.session.id())
-  const r = await $.process.run(['/bin/sh', '-c', ROTATE_SCRIPT, MOD, `${home}/${DIR}`, stamp, String(ROTATE_BYTES), String(SETTLE_MINUTES), ...MARKS], { timeoutMs: ROTATE_MS })
+  const r = await $.process.run(['/bin/sh', '-c', ROTATE_SCRIPT, MOD, dir, stamp, String(ROTATE_BYTES), String(SETTLE_MINUTES), ...MARKS], { timeoutMs: ROTATE_MS })
   if (r.exitCode !== 0) throw new Error(firstLine(r.stderr) || `the rotation exited ${r.exitCode}`)
 }
 
@@ -1120,7 +1143,7 @@ const bodyOf = async ($: EngineInterface, call: PrCall, folder: string, home: st
   }
 }
 
-const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo: string, branch: string | null) => Promise<LogRead>): Promise<PrVerdict> => {
+const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo: string, branch: string | null) => Promise<LogRead>, logShown: string): Promise<PrVerdict> => {
   const { g } = call
   const hasBody = g.flags.some(f => BODY_TEXT.includes(f.name) || BODY_FILE.includes(f.name))
   if (g.act === 'edit' && !hasBody) return null
@@ -1147,7 +1170,7 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo
   } else if (g.act === 'edit' && selector !== undefined && !fromGitHub) branch = selector
   if (fromGitHub) {
     const count = await log(repo, null)
-    if ('why' in count) return { deny: logUnreadableRefusal(verb, count.why) }
+    if ('why' in count) return { deny: logUnreadableRefusal(verb, count.why, logShown) }
     if (count.count === 0) return null
     if (g.act === 'edit') {
       const v = await prView($, d, selector as string, repo, 'headRefName')
@@ -1162,7 +1185,7 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo
   }
   if (!branch) return null
   const read = await log(repo, branch)
-  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why) }
+  if ('why' in read) return { deny: logUnreadableRefusal(verb, read.why, logShown) }
   const here = inRepo(read.decisions, repo)
   if (here.length === 0) return null
   const mergeBase =
@@ -1171,7 +1194,7 @@ const checkPr = async ($: EngineInterface, d: Deadline, call: PrCall, log: (repo
       : null
   const { files, loose } = onBranch(here, { repo, branch, mergeBase })
   if (files.length === 0) return null
-  const r = { verb, branch, loose, malformed: read.malformed }
+  const r = { verb, branch, loose, malformed: read.malformed, log: logShown }
   if (github) {
     const missing = missingFrom(files, typeof github.body === 'string' ? github.body : '')
     return missing.length ? { deny: missingRefusal({ ...r, files: missing, where: 'github', ...(selector ? { selector } : {}) }) } : null
@@ -1247,6 +1270,7 @@ export const register: Register = on => {
     // Each repository and branch is read once per Bash call, and the lines any read could not read
     // are said once, together.
     const malformed = new Set<string>()
+    const logShown = `${await shownOf($)}/${LOG}`
     try {
       const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
       const reads = new Map<string, Promise<LogRead>>()
@@ -1263,16 +1287,15 @@ export const register: Register = on => {
         return read
       }
       for (const call of await prCallsIn($, command, cwd, await homeOf($))) {
-        const v = await checkPr($, d, call, log)
+        const v = await checkPr($, d, call, log, logShown)
         if (v && 'deny' in v) return { deny: v.deny }
         if (v) $.ui.log(v.dim)
       }
-      if (malformed.size) $.ui.log(malformedDim([...malformed]))
+      if (malformed.size) $.ui.log(malformedDim([...malformed], logShown))
     } catch (err) {
       const why = err instanceof Late ? LATE : msg(err)
       if (mayActOnPr(command)) {
-        await keepError($, cwd, why)
-        return { deny: checkFailedRefusal(why) }
+        return { deny: checkFailedRefusal(why, await keepError($, cwd, why)) }
       }
       await failed($, cwd, new Error(why), 'command')
     }

@@ -127,6 +127,48 @@ describe('commands', () => {
     expect(commands('rtk gh pr merge 7 --squash')).toEqual([['gh', 'pr', 'merge', '7', '--squash']])
     expect(commands('sudo env GH_TOKEN=x rtk git push')).toEqual([['git', 'push']])
   })
+  // #2983: rtk's proxy runs the words after its own options unfiltered, so `rtk proxy git push
+  // --force` reached every mod as a command named proxy (the #2937 builder measured sleep mode
+  // letting it through). Measured on rtk 0.31.0: -v, -u, --skip-env take no value, -h and --help
+  // run nothing, and one word left alone is split by rtk itself, on blanks outside quotes, a quote
+  // running to its match (or the end), no backslash escape, an empty word dropped, no shell.
+  test("rtk's proxy runs the command after its own options, and splits one word into it", () => {
+    expect(commands('rtk proxy gh issue view 5')).toEqual([['gh', 'issue', 'view', '5']])
+    expect(commands('rtk proxy -v --skip-env -u git push --force')).toEqual([['git', 'push', '--force']])
+    expect(commands('rtk -u proxy -vv -- rm -rf x')).toEqual([['rm', '-rf', 'x']])
+    expect(commands(`rtk 'proxy' git push`)).toEqual([['git', 'push']])
+    expect(commands('/opt/homebrew/bin/rtk proxy sudo git push')).toEqual([['git', 'push']])
+    expect(commands(`rtk proxy 'git push --force origin main'`)).toEqual([['git', 'push', '--force', 'origin', 'main']])
+    expect(commands(`rtk proxy 'printf [%s]\\n a\\ b "c\\"d" e'`)).toEqual([['printf', '[%s]\\n', 'a\\', 'b', 'c\\d e']])
+    expect(commands(`rtk proxy 'printf x a"b c"d "" '"'"'e f'"'"`)).toEqual([['printf', 'x', 'ab cd', 'e f']])
+    expect(commands(`rtk proxy 'echo a; git push'`)).toEqual([['echo', 'a;', 'git', 'push']])
+    expect(commands(`rtk proxy 'bash -c "gh pr merge 5"'`)).toEqual([['gh', 'pr', 'merge', '5']])
+  })
+  test('rtk proxy with nothing to run is rtk itself, and a program named proxy is no proxy', () => {
+    expect(commands('rtk proxy')).toEqual([['rtk', 'proxy']])
+    expect(commands('rtk proxy -h git push')).toEqual([['rtk', 'proxy', '-h', 'git', 'push']])
+    expect(commands('rtk proxy --help git push')).toEqual([['rtk', 'proxy', '--help', 'git', 'push']])
+    expect(commands('proxy git push')).toEqual([['proxy', 'git', 'push']])
+    expect(commands('sudo proxy git push')).toEqual([['proxy', 'git', 'push']])
+    expect(commands('rtk gh proxy x')).toEqual([['gh', 'proxy', 'x']])
+  })
+  test("a command rtk's proxy runs is marked, and one it splits from a word the shell expands is unread", () => {
+    expect(pipeline('rtk proxy gh issue view 5')[0]?.proxied).toBe(true)
+    expect(pipeline(`rtk proxy 'gh issue view 5' > out.txt`)[0]).toMatchObject({ words: ['gh', 'issue', 'view', '5', '>', 'out.txt'], proxied: true })
+    expect(pipeline('rtk gh issue view 5')[0]?.proxied).toBeUndefined()
+    expect(pipeline('proxy gh issue view 5')[0]?.proxied).toBeUndefined()
+    expect(pipeline(`rtk proxy bash -c 'gh pr view 5'`)[0]).toMatchObject({ words: ['gh', 'pr', 'view', '5'], proxied: true })
+    expect(pipeline(`rtk proxy '$HOME/x a'`)[0]).toMatchObject({ words: ['$HOME/x', 'a'], proxied: true })
+    expect(pipeline(`rtk proxy '$HOME/x a'`)[0]?.unread).toBeUndefined()
+    const unread = 'split by rtk proxy from one word the shell expands, so what it runs cannot be read'
+    expect(pipeline(`rtk proxy "$CMD"`)[0]).toMatchObject({ words: ['$CMD'], proxied: true, unread })
+    expect(pipeline('rtk proxy "git $(cat sub) --force"')).toContainEqual(expect.objectContaining({ words: ['git', '$(cat', 'sub)', '--force'], unread }))
+    // A find -exec's words carry no place in the text, so a $ there is taken as one the shell expands
+    // (lessons review of 7677fc0: the default read every such word as written).
+    expect(pipeline(`find . -exec rtk proxy "$CMD" ';'`)).toContainEqual(expect.objectContaining({ words: ['$CMD'], proxied: true, unread }))
+    // Two words or more are handed on as they stand, so an expansion there is the command's own.
+    expect(pipeline('rtk proxy git "$SUB"')[0]?.unread).toBeUndefined()
+  })
   test('xargs runs the command after its own options, and a shell it runs is read as its commands', () => {
     expect(commands(`ls | xargs sh -c 'rm a'`)).toEqual([['ls'], ['rm', 'a']])
     expect(commands('find . | xargs -0 -I {} -P 4 cp {} /tmp')).toEqual([['find', '.'], ['cp', '{}', '/tmp']])

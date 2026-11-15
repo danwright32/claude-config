@@ -6082,8 +6082,52 @@ report_settings_extras(){
       echo "  statusLine in $CLAUDE_HOME/settings.json runs ${st#*$'\t'}, not this Mac's status bar ($(status_line_command)), so the status bar mod's line does not show here. The sync never overwrites it: delete the statusLine entry and the next pull writes the status bar's." ;;
   esac
   report_shared_effort_model
+  report_review_option
   report_pinned_compiler
   report_pinned_compiler_installs
+  return 0
+}
+
+# THE OPTION THE LESSONS REVIEW NEEDS (claude-config#2982). Since #2975 the review runner hands
+# claude the lessons with --append-system-prompt-file, which Claude Code 2.1.325 accepts but does not
+# list in --help, so an update could drop it with no notice, and then no review starts anywhere. The
+# question is asked by the runner itself (ai-review-run.py --probe-lessons-option), so it is always
+# about the option the reviews pass, and it calls no model: claude is handed a file that does not
+# exist, and the missing file error is the answer that the option is still known. Asked at most once
+# per SYNC_REVIEW_OPTION_PROBE_EVERY seconds (a day) for the same claude command, and at once after
+# an update, with the answer kept in this Mac's state folder. Quiet while the option is accepted, and
+# when no claude command is found, which the shared effort check above already names.
+report_review_option(){
+  local bin runner line verdict version checked option detail who when rc=0
+  bin="$(sync_claude_bin)"
+  { [ -n "$bin" ] && [ -x "$bin" ]; } || return 0
+  runner="$SYNC_SELF_PAYLOAD/hooks/lib/ai-review-run.py"
+  [ -f "$runner" ] || runner="$CLAUDE_HOME/hooks/lib/ai-review-run.py"
+  if [ ! -f "$runner" ]; then
+    echo "--- the lessons review ---"
+    echo "  Could not check whether Claude Code accepts the option the lessons review needs: hooks/lib/ai-review-run.py is in neither $SYNC_SELF_PAYLOAD nor $CLAUDE_HOME."
+    return 0
+  fi
+  line="$(python3 "$runner" --probe-lessons-option --claude "$bin" --cache "$CLAUDE_HOME/state/review-option-probe.json" \
+    --every "$SYNC_REVIEW_OPTION_PROBE_EVERY" --timeout "$SYNC_CLAUDE_CHECK_TIMEOUT" 2>/dev/null)" || rc=$?
+  # The unit separator, never a tab: read folds runs of a whitespace IFS into one, so an empty
+  # version would shift every later field (lessons review of #2982).
+  IFS=$'\037' read -r verdict version checked option detail <<< "$line" || true
+  if [ -n "$version" ]; then who="Claude Code $version"; else who="Claude Code (its version could not be read)"; fi
+  when=""
+  case "$checked" in ''|*[!0-9]*) ;; *) when=" (checked $(age_in_words "$(( $(date +%s) - checked ))"))" ;; esac
+  case "$verdict" in
+    accepted) return 0 ;;
+    refused)
+      echo "--- the lessons review ---"
+      echo "  $who at $bin no longer accepts $option$when, so no lessons review can start on this Mac: every push review and every merge's review fails at its start until hooks/lib/ai-review-run.py hands claude the lessons another way (claude-config#2982)." ;;
+    unmeasured)
+      echo "--- the lessons review ---"
+      echo "  Could not check whether $who accepts $option, the option the lessons review hands claude the lessons in: $detail$when." ;;
+    *)
+      echo "--- the lessons review ---"
+      echo "  Could not check whether Claude Code accepts the option the lessons review needs: the check itself (python3 $runner --probe-lessons-option) exited $rc and gave no answer." ;;
+  esac
   return 0
 }
 
@@ -14369,6 +14413,16 @@ SYNC_SCRATCH_LEGACY_EVERY="${SYNC_SCRATCH_LEGACY_EVERY:-86400}"
 case "$SYNC_SCRATCH_LEGACY_EVERY" in
   ''|*[!0-9]*)
     echo "claude-sync: SYNC_SCRATCH_LEGACY_EVERY='$SYNC_SCRATCH_LEGACY_EVERY' is not a whole number of seconds. Refusing to run rather than sweeping the old scratch location on a schedule nobody can read. Set it to 0 to read that location on every call." >&2
+    exit 2 ;;
+esac
+
+# How often `status` asks the installed claude whether it still accepts the option the lessons
+# review needs (claude-config#2982). 0 asks on every status. Checked like the intervals around it,
+# since an unreadable value would either ask every time or never, and both read as the check working.
+SYNC_REVIEW_OPTION_PROBE_EVERY="${SYNC_REVIEW_OPTION_PROBE_EVERY:-86400}"
+case "$SYNC_REVIEW_OPTION_PROBE_EVERY" in
+  ''|*[!0-9]*)
+    echo "claude-sync: SYNC_REVIEW_OPTION_PROBE_EVERY='$SYNC_REVIEW_OPTION_PROBE_EVERY' is not a whole number of seconds. Refusing to run rather than asking claude about the review's option on a schedule nobody can read. Set it to 0 to ask on every status." >&2
     exit 2 ;;
 esac
 

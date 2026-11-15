@@ -26,6 +26,36 @@ merged_prs(){
   return 0
 }
 
+# open_prs <gh> <limit> [gh args...]: one line per OPEN pull request, as "<branch><TAB><number>"
+# (claude-config#2943). ONE call. Returns 1 with nothing printed when gh fails, and 3 when the list
+# came back as long as the limit asked for, since an open PR past the limit would read as none and
+# the caller keeps a worktree only for an open PR it can see (L24). Missing an older MERGED PR keeps
+# a worktree, the harmless direction, which is why merged_prs has no such refusal.
+open_prs(){
+  local gh="$1" limit="$2" out n
+  shift 2
+  out="$("$gh" pr list --state open --limit "$limit" "$@" --json headRefName,number \
+    --jq '.[] | "\(.headRefName)\t\(.number)"' 2>/dev/null)" || return 1
+  n="$(printf '%s' "$out" | grep -c . || true)"
+  [ "${n:-0}" -lt "$limit" ] || return 3
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
+# closed_prs <gh> <limit> [gh args...]: one line per pull request CLOSED WITHOUT MERGING, as
+# "<branch><TAB><number>" (claude-config#2988). ONE call. gh's closed state holds the merged ones
+# too, so they are filtered out here. Returns 1 with nothing printed when gh fails. A closed PR past
+# the limit reads as none, which keeps a recently pushed branch's worktree a day at most, the
+# harmless direction, so there is no refusal at the limit.
+closed_prs(){
+  local gh="$1" limit="$2" out
+  shift 2
+  out="$("$gh" pr list --state closed --limit "$limit" "$@" --json headRefName,number,state \
+    --jq '.[] | select(.state == "CLOSED") | "\(.headRefName)\t\(.number)"' 2>/dev/null)" || return 1
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return 0
+}
+
 # pr_landing <git dir> <branch> <head> <merged list>: prints "<verdict><TAB><PR number>", the
 # number empty when there is no PR to name. The verdicts:
 #   landed       a merged PR of this branch holds HEAD (its last commit, or an earlier one)

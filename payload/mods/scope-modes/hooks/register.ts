@@ -84,7 +84,8 @@ import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
-import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { patchedPaths } from './mod-kit/patch.ts'
+import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, readSleepEnds, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -135,7 +136,6 @@ import {
   newBranchOf,
   newWork,
   outstanding,
-  patchedPaths,
   pgrepWords,
   porcelainFiles,
   prLinks,
@@ -341,7 +341,7 @@ type Moved = { to: string; text: string | null } | { gone: true } | { error: str
 const moveAside = async ($: EngineInterface, label: 'woke' | 'limit'): Promise<Moved> => {
   const p = await sleepPaths($)
   await run($, ['mkdir', '-p', p.ended])
-  const to = `${p.ended}/${await $.clock.now()}-${label}-${await $.session.id()}.json`
+  const to = `${p.ended}/${endedNameOf(await $.clock.now(), label, await $.session.id())}`
   const mv = await run($, ['mv', p.current, to])
   if (mv.exitCode !== 0) return /No such file/i.test(mv.stderr) ? { gone: true } : { error: mv.stderr.trim() || `mv exited ${mv.exitCode}` }
   const text = await $.fs.read(to).catch(() => null)
@@ -3303,7 +3303,9 @@ const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
 const parkedHere = new Map<string, string>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
-const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-driven'> =>
+// backgroundTasks is Claude Code's list of the session's work in flight sent with the stop, from which
+// a running Monitor is work (#2897).
+const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ block: string } | null | 'not-driven'> =>
   oneAtATime(async () => {
     const en = await enrolledNow($)
     if (!en) return 'not-driven' as const
@@ -3331,7 +3333,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal), skew: skewMet,
-      busy: await busyNow($),
+      busy: await busyNow($, backgroundTasks),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     // A rest is for the skew met so far: one met after it, in the turn it starts, is met anew (#1281).
@@ -4724,7 +4726,7 @@ const patchedFiles = async ($: EngineInterface, writes: ModKitWrites): Promise<s
     const root = await gitCheckout($, g.dir)
     if (!root) continue
     const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
-    for (const t of texts) for (const p of patchedPaths(g.args, t)) out.push(`${root}/${p}`)
+    for (const t of texts) for (const p of patchedPaths(g.args, true, t)) out.push(`${root}/${p}`)
   }
   return out
 }
@@ -5081,6 +5083,13 @@ export const register: Register = on => {
         const r = await built.process.run(noteArgv(seen.home, `${sleepDir(seen.home)}/current.json`, line), { timeoutMs: BOOT_MS })
         if (r.exitCode !== 0) throw new Error(noteFailure(r))
         return { isNoted: true }
+      },
+      // When each sleep ended (#2993), for the Slack alert guard's question two hours after.
+      sleepEnds: async () => {
+        const seen = await nounReading()
+        const home = seen?.home ?? (await built.env.get('HOME'))
+        if (!home) throw new Error('HOME is not set')
+        return readSleepEnds({ exists: p => built.fs.exists(p), list: d => built.fs.list(d) }, `${sleepDir(home)}/ended`, seen?.reading ?? { state: 'none' })
       },
     }
     return { ...built, scopeModes }
@@ -5805,7 +5814,7 @@ export const register: Register = on => {
     // breaker), and the night's limits held only while a goal happened to be met. The settings Stop
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     hear(e)
-    const driven = await driveStop($)
+    const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
     if (driven !== 'not-driven') return driven ?? {}
     // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
     // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
