@@ -64,7 +64,8 @@ type Found = { text: string; children: unknown[] }
 const shown = async (ui: { findAll: (q: { type: string }) => Promise<Found[]> }) =>
   (await ui.findAll({ type: 'Text' })).filter(t => t.children.every(c => typeof c === 'string')).map(t => t.text)
 
-// Claude Code beneath the kit: what it draws in the band when no mod draws there.
+// Claude Code beside the kit: a row drawn in the band by someone other than mod-kit. Since Claude
+// Code 2.1.323 it is a row of its own in the stacked band, never what mod-kit's hook passes to (#2903).
 const engineBand = (on: On) => {
   mock.env(on, { TERM_PROGRAM: 'iTerm.app' })
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
@@ -78,6 +79,20 @@ test('with no rows the band is left to Claude Code', withPublisher, async ($, on
   engineBand(on)
   const ui = await $.ui.mount(band())
   expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  await ui.unmount()
+})
+
+// #2903: since Claude Code 2.1.323 the band asks every plugin that hooks AbovePrompt for a row of its
+// own and stacks them (AbovePromptList), so a row drawn beside mod-kit's no longer waits on mod-kit
+// passing. Dan, 2026-11-14: mod-kit leaves such a row out while it draws, so the mods' band looks
+// as before; with nothing of its own to draw it leaves the band as it found it.
+test("another row beside mod-kit's is left out while mod-kit draws, and is back once mod-kit draws nothing (#2903)", withPublisher, async ($, on) => {
+  engineBand(on)
+  await show($, row('steps', 'Steps for you'))
+  const ui = await $.ui.mount(band())
+  expect(await shown(ui)).toEqual(['Steps for you'])
+  await clear($, 'publisher', 'steps')
+  expect(await shown(ui)).toEqual(['engine band'])
   await ui.unmount()
 })
 
