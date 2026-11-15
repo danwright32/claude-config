@@ -469,6 +469,14 @@ test('#2991: a python program binds a variable to one of its arguments only by a
   expect(inScriptTemp(program, '/app/index.html', program, ['python3', '-', '$CH'], 'CH="$(pwd)"\n')).toBe(false)
   const both = `${program}open("/app/index.html")\n`
   expect(inScriptTemp(both, '/app/index.html', both, ['python3', '-', '$CH'], script)).toBe(false)
+  const climbs = 'import sys\nch = sys.argv[1]\nopen(ch + "/../../w/slate/app/index.html", "w")\n'
+  expect(inScriptTemp(climbs, '/../../w/slate/app/index.html', climbs, ['python3', '-', '$CH'], script)).toBe(false)
+  const attribute = 'import sys\nch = sys.argv[1]\nopen(self.ch + "/app/index.html", "w")\n'
+  expect(inScriptTemp(attribute, '/app/index.html', attribute, ['python3', '-', '$CH'], script)).toBe(false)
+  const fstring = 'import sys\nch = sys.argv[1]\nopen(f"{ch}/app/index.html", "w")\n'
+  expect(inScriptTemp(fstring, '/app/index.html', fstring, ['python3', '-', '$CH'], script)).toBe(true)
+  const plainBraces = 'import sys\nch = sys.argv[1]\nopen("{ch}/app/index.html", "w")\n'
+  expect(inScriptTemp(plainBraces, '/app/index.html', plainBraces, ['python3', '-', '$CH'], script)).toBe(false)
   const braces = 'open("${CH}/app/index.html", "w")\n'
   expect(inScriptTemp(braces, '/app/index.html', braces, ['python3', '-', '$CH'], script)).toBe(false)
 })

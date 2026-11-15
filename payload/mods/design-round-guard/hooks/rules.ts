@@ -869,12 +869,15 @@ export const argvIndex = (program: string, v: string): number | undefined => {
  * `text` is the program as the names were found in it (its code), `program` its whole text.
  */
 export const inScriptTemp = (text: string, name: string, program: string, words: readonly string[], script: string): boolean => {
-  if (!name.startsWith('/')) return false
+  // A name climbing out of the folder (`ch + "/../../w/slate/app/index.html"`) may land anywhere.
+  if (!name.startsWith('/') || /(?:^|\/)\.\.(?:\/|$)/.test(name)) return false
   const vars = new Set<string>()
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
     const head = text.slice(Math.max(0, i - 64), i)
-    const v = /([A-Za-z_]\w*)\s*\+\s*[rRbBuUfF]{0,2}['"]$/.exec(head)?.[1] ?? (SHELL_BRACE.test(head) ? undefined : /\{([A-Za-z_]\w*)\}$/.exec(head)?.[1])
+    // The variable alone, never an attribute (`self.ch`) or another name ending in it; and braces
+    // only inside an f-string, since a plain string's `{ch}` is no variable at all.
+    const v = /(?<![\w.])([A-Za-z_]\w*)\s*\+\s*[rRbBuUfF]{0,2}['"]$/.exec(head)?.[1] ?? /(?<!\w)(?:[fF][rR]?|[rR][fF])['"][^'"\n{}]*\{([A-Za-z_]\w*)\}$/.exec(head)?.[1]
     if (v === undefined) return false
     vars.add(v)
   }
