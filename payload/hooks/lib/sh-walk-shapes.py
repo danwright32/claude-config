@@ -29,7 +29,6 @@ it does lib/code-loaders.py's, so the methods use the Judge's own readers (rest_
 raw_words, sh_tokens, sh_literal_word, sh_strip_openers, sh_binds, sh_source_word,
 sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell, unfollow).
 """
-import itertools
 import re
 
 # The most paths one source command is worked out to, across the values of the loops around it: past
@@ -104,9 +103,13 @@ def make(sh_special, sh_param):
                 total *= len(around[n])
             if total > MAX_CHOICES:
                 return None
+            # Every pick of one value per name, built by hand: an import of itertools would be one more
+            # module the judgement cache must classify (test-judgement-cache.sh).
+            picks = [{}]
+            for n in names:
+                picks = [{**p, n: v} for p in picks for v in around[n]]
             out = []
-            for combo in itertools.product(*(around[n] for n in names)):
-                pick = dict(zip(names, combo))
+            for pick in picks:
                 v, bad = self.sh_source_word(text, wd, lambda n, pick=pick: pick[n] if n in pick else var(n), script)
                 if bad or v is None:
                     return None
