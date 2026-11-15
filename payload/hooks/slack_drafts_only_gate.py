@@ -1395,8 +1395,16 @@ def remember_readings(mod):
             return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
         key = (s, cwd)
         if key not in memo:
-            where = []
-            memo[key] = (plain(s, cwd, parts=where), where)
+            # A large text's parse is kept between runs too, keyed on its contents, wherever the
+            # judgement cache is on (PARSES, lib/judgement-cache.py's Parses, claude-config#2918).
+            kept = PARSES[0]
+            got = kept.get(s, cwd) if kept is not None else None
+            if got is None:
+                where = []
+                got = (plain(s, cwd, parts=where), where)
+                if kept is not None:
+                    kept.put(s, cwd, got)
+            memo[key] = got
         cmds, where = memo[key]
         if parts is not None:
             parts.extend(dict(p) for p in where)
@@ -1437,6 +1445,12 @@ def remember_readings(mod):
         return got
 
     mod.commands, mod.command_rest, mod.cd_target, mod.first_word = commands, command_rest, cd_target, first_word
+
+
+# The kept parses of large texts (lib/judgement-cache.py's Parses), set by main() only where the
+# judgement cache is on for this call, so a gate imported by another program (a suite's shim) never
+# uses them, its reader being possibly not the one the key names.
+PARSES = [None]
 
 
 def load_reader():
@@ -6933,6 +6947,7 @@ def main():
         print("allow")
         return
     if kept:
+        PARSES[0] = _cache.Parses(kept.dirpath, CODE["shell-words.py"])
         recorder = kept.record([globals(), vars(sw)] + [vars(m) for m in LIBS if m is not _cache])
     judge = Judge(sw)
     try:
