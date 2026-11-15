@@ -3591,16 +3591,18 @@ x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, a
 A test file's import of a module the same file replaces with a mock is not followed (#2359, recorded
 there on 2026-11-15: "Decided by Dan, 2026-11-15: pass an import the same test file mocks out (vi.mock
 or jest.mock of that path), with a test; a real unmocked import stays refused", a loosening he signed
-off), in `lib/js-mocks.py`. The file must be handed to vitest or
-jest (never run by node, tsx or bun itself, where a mock replaces nothing), be a test file by the
-runners' default naming (`.test` or `.spec` before the extension, or under `__tests__`), and call
-`vi.mock` or `jest.mock` as code at its top level with the module's path written out, resolving to
-the same file, and a factory taking no parameters. A mock inside a block (babel-jest lifts it only to
-the top of that block) or inside an expression (`() => vi.mock(...)`, an `if`, an `&&`), a mock with
-no factory, a factory handed the original, the original
-fetched by `importActual` or `requireActual`, a mock taken back (`unmock`, `doUnmock`, `dontMock`), a
-`doMock`, a mock of another path and a path the gate cannot read each leave the import followed, so a
-real unmocked import stays refused. Only the file's own imports are affected.
+off), in `lib/js-mocks.py`. The rule is written the narrow way round: a mock counts only in a file
+plain enough that nothing in it can reach the original module. The file must be handed to vitest or
+jest as installed (the package by a launcher, or a script under `node_modules`; never run by node,
+tsx or bun itself, where a mock replaces nothing), be a test file by the runners' default naming
+(`.test` or `.spec` before the extension, or under `__tests__`), and call `vi.mock` or `jest.mock` as
+a top level statement of its own with the module's path written out, resolving to the same file, and
+a factory taking no parameters. It must name none of the runners' ways to the original or to taking a
+mock back (`importActual`, `requireActual`, `importOriginal`, `unmock`, `doMock` and the rest), in
+code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unrenamed import from
+`vitest` or `@jest/globals`; and reach no member by a computed name or run a string as code. Anything
+else leaves the import followed, so a real unmocked import stays refused. Only the file's own
+imports are affected.
 
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work

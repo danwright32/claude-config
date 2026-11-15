@@ -2871,7 +2871,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             code, quoted = js_scan(text)
             # A module a test file handed to vitest or jest replaces with a mock and a factory is never
             # loaded (lib/js-mocks.py, claude-config#2359, a loosening Dan signed off on 2026-11-15).
-            mocked = _js_mocks.replaced(path, code, quoted, lambda s: self.resolve_import(s, cur_dir)) \
+            mocked = _js_mocks.replaced(
+                path, code, quoted, lambda s: self.resolve_import(s, cur_dir),
+                lambda: JS_SINK.search(text) or JS_DYNAMIC.search(code) or _data_names.js_computed(text, js_scan)) \
                 if getattr(self, "mock_runner", False) else set()
             for m in IMPORT_SPEC.finditer(code):
                 if not strings and quoted[m.start()] == 1:

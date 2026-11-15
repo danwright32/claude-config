@@ -800,6 +800,14 @@ done
 printf '%s\n' "const { fork } = require('node:child_process')" 'for (const f of process.argv.slice(2)) fork(f)' > "$MK/my-vitest-runner.js"
 run_mk "node my-vitest-runner.js a.test.ts"
 read_refused "#2359 a script handed the file that only has the runner's name inside its own is not the runner"
+# A script of the repository's own that takes the runner's name is not the runner as installed.
+mkdir -p "$MK/vitest"
+cp "$MK/my-vitest-runner.js" "$MK/jest.js"
+cp "$MK/my-vitest-runner.js" "$MK/vitest/run.js"
+for runs in "node jest.js a.test.ts" "node vitest/run.js a.test.ts"; do
+  run_mk "$runs"
+  read_refused "#2359 a script outside node_modules named after the runner is not the runner: $runs"
+done
 for line in 'vi.mock("./posts.ts");' \
   'jest.mock("./posts.ts");' \
   'vi.mock("./posts.ts", { spy: true });' \
@@ -829,7 +837,15 @@ for line in 'vi.mock("./posts.ts");' \
   'const setup = () => vi.mock("./posts.ts", () => ({}));' \
   'if (process.env.MOCK) vi.mock("./posts.ts", () => ({}));' \
   'process.env.MOCK && vi.mock("./posts.ts", () => ({}));' \
-  'void vi.mock("./posts.ts", () => ({}));'; do
+  'void vi.mock("./posts.ts", () => ({}));' \
+  'vi.mock("./posts.ts", () => ({}));  const real = await vi["importActual"]("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  const { importActual } = vi;' \
+  'vi.mock("./posts.ts", () => ({}));  const k = "import" + "Actual";  const real = await vi[k]("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  const v = vi;' \
+  'vi.mock("./posts.ts", () => ({}));  const fns = Object.values(vi);' \
+  'vi.mock("./posts.ts", () => ({}));  const g = globalThis["vi"];' \
+  'import { vi as v } from "vitest";  vi.mock("./posts.ts", () => ({}));' \
+  'vi.mock("./posts.ts", () => ({}));  const m = vi.mock;'; do
   mk_case a.test.ts 'import { send } from "./posts.ts";' "$line"
   read_refused "#2359 a test file importing a module that posts stays refused beside: $line"
 done
