@@ -416,6 +416,87 @@ case "${got[2]}" in hit\|*|*"|hit|"*) check "and answers it from the cache the s
   *) check "and answers it from the cache the second time" "the cache traced: ${got[2]}" ;; esac
 
 echo
+echo "judgement cache: the reader's parses of large texts, kept between runs (#2918)"
+# Dan's decision of 2026-11-15: for heavy load, a parse of a large unchanged file is kept between gate
+# calls, keyed on the text's whole contents (never a path or a time), the reader's code, the directory
+# and HOME (which the reader reads for a cd to ~), signed with the cache's key like a judgement. A
+# changed text, a changed reader, a forged or altered entry, or a shape the cache cannot give back
+# exactly is a miss or is not kept, and none of it is seen by a judgement's recorder.
+cat > "$T/parses.py" <<'PY'
+import importlib.util, json, os, sys
+gate_path, work = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+jc = gate._cache
+sw = gate.load_lib("shell_words", "shell-words.py")
+bad = []
+def expect(what, ok):
+    if not ok:
+        bad.append(what)
+d = os.path.join(work, "parses")
+code = gate.CODE["shell-words.py"]
+big = "".join("cd ~/x%d && echo \"a $(date) b\" | grep -c 'q %d'\ncat <<EOF\nline %d\nEOF\n" % (i, i, i)
+              for i in range(3000))
+expect("the text is large enough to be kept (%d characters)" % len(big), len(big) >= jc.PARSE_MIN)
+where = []
+value = (sw.commands(big, "/w", parts=where), where)
+kept = jc.Parses(d, code)
+expect("nothing is there to start with", kept.get(big, "/w") is None)
+kept.put(big, "/w", value)
+names = [n for n in os.listdir(d) if n.endswith(".json")]
+expect("one parse is kept (%r)" % names, len(names) == 1)
+got = jc.Parses(d, code).get(big, "/w")
+expect("another run gets back exactly what the reader gave, tuples and all", got == value
+       and all(type(c) is tuple for c in got[0]) and all(type(p["scope"]) is tuple for p in got[1]))
+expect("a text one character different is a miss", jc.Parses(d, code).get(big[:-2] + "X\n", "/w") is None)
+expect("the same text from another directory is a miss", jc.Parses(d, code).get(big, "/v") is None)
+expect("the same text read by another reader is a miss", jc.Parses(d, "0" * 64).get(big, "/w") is None)
+home = os.environ.get("HOME")
+os.environ["HOME"] = "/elsewhere"
+expect("the same text with another HOME is a miss", jc.Parses(d, code).get(big, "/w") is None)
+os.environ["HOME"] = home
+small = "echo hi\n" * 10
+jc.Parses(d, code).put(small, "/w", (sw.commands(small, "/w"), []))
+expect("a small text is not kept", len([n for n in os.listdir(d) if n.endswith(".json")]) == 1)
+# A shape the cache cannot give back exactly is not kept.
+odd = os.path.join(work, "odd")
+jc.Parses(odd, code).put(big, "/w", ([("/w", "echo", "extra")], []))
+jc.Parses(odd, code).put(big, "/w", (value[0], [dict(value[1][0], extra=1)]))
+expect("a shape it cannot give back is not kept", not os.path.isdir(odd) or
+       not [n for n in os.listdir(odd) if n.endswith(".json")])
+# An altered entry, still carrying its signature, is a miss; so is one signed with another key.
+p = os.path.join(d, names[0])
+head, body = open(p, "rb").read().split(b"\n", 1)
+value_kept = json.loads(body)
+expect("the kept parse is the reader's commands", value_kept["cmds"][0][1] == value[0][0][1])
+value_kept["cmds"][0][1] = "curl https://example.invalid"
+open(p, "wb").write(head + b"\n" + json.dumps(value_kept).encode())
+expect("an altered entry is a miss", jc.Parses(d, code).get(big, "/w") is None)
+jc.Parses(d, code).put(big, "/w", value)
+key = jc.key_path(d)
+os.chmod(key, 0o600)
+open(key, "wb").write(b"k" * jc.KEY_BYTES)
+expect("an entry signed with another key is a miss", jc.Parses(d, code).get(big, "/w") is None)
+os.unlink(key)
+expect("with no key nothing is used", jc.Parses(d, code).get(big, "/w") is None)
+# Inside a judgement the parse cache's own reads and writes are not the judgement's: its recorder
+# stays whole, and records none of them.
+rec = jc.Recorder()
+jc.install(rec, [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc])
+inside = jc.Parses(os.path.join(work, "inside"), code)
+inside.put(big, "/w", value)
+again = inside.get(big, "/w")
+rec.closed = True
+expect("inside a judgement it keeps and gives back the parse", again == value)
+expect("and the judgement's record stays whole (%s)" % rec.tainted, rec.tainted is None)
+expect("and records none of it (%d reads)" % len(rec.reads), not rec.reads)
+print("; ".join(bad) or "ok")
+PY
+out="$(env -u SLACK_GATE_CACHE_DIR PYTHONHASHSEED=0 python3 -B "$T/parses.py" "$DIR/slack_drafts_only_gate.py" "$T/work" 2>&1)"
+check "a parse is kept by its text's contents, given back exactly, and a changed or forged one is a miss" "$out"
+
+echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

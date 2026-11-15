@@ -3561,6 +3561,18 @@ runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order
 cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
+Beside the judgements, the same folder keeps the shell reader's parse of any text of 64 KB or more
+(`parse-<key>.json`, #2918, Dan's decision of 2026-11-15), so a different call reading the same file,
+or the same call after some other file changed, is spared reading it: for the claude-sync suite that
+is its 1.8 MB and claude-sync's 1 MB, about a fifth of the judgement. A parse is keyed on the text's
+whole contents, the reader's code, the directory and HOME, never a path or a time, so a changed file
+is read afresh; it is signed with the same key, and given back exactly or not at all.
+
+The suite's cost checks (`test-slack-drafts-only-gate.sh`) hold the gate's processor time in units of
+a fixed workload that shares nothing with the gate (0.095 s each on the personal MacBook), the least
+of several samples taken in the same run, and print each measurement, so a CI runner's can be read
+back from its log.
+
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 

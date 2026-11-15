@@ -5249,6 +5249,20 @@ traced "an entry with a recorded read taken out is not used" "miss: the entry is
 # A change to anything the key covers is a different entry: an environment variable the gate reads.
 CDPATH="$JC" jc_run "bash $JC/run.sh"
 traced "a call judged with a different value of a variable the gate reads finds no entry" "miss: no entry"
+# Kept parses (#2918, Dan's decision of 2026-11-15): the reader's parse of a large file is kept by
+# the file's contents, so another call reading the same file is spared reading it, and a file changed
+# by one line is read afresh. The cache's own checks are in test-judgement-cache.sh.
+for i in $(seq 1 4000); do printf 'echo "line %d" | tr a b\n' "$i"; done > "$JC/big.sh"
+jc_run "bash $JC/big.sh"
+allowed "a large script that does not post is allowed"
+traced "its parse is kept" "parse stored"
+jc_run "bash $JC/big.sh --again"
+allowed "another call running the same script is allowed"
+traced "and is spared reading it, its parse kept" "parse hit"
+printf "$POSTS\n" >> "$JC/big.sh"
+jc_run "bash $JC/big.sh --again"
+refused "once the large script posts, the same command is refused"
+traced "its changed text does not find the kept parse" "parse miss: no entry"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.

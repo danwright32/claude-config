@@ -438,7 +438,25 @@ def install(recorder, namespaces):
             if name == "open" or name in ns:
                 ns[name] = proxy
     sys.addaudithook(recorder.audit)
+    _RECORDERS.append(recorder)
     return proxies
+
+
+# Every recorder install() put in place, so the kept parses' own disk work (Parses) is never taken
+# for the judgement's.
+_RECORDERS = []
+
+
+class _Quiet:
+    """While inside, the audit hook of every recorder in place ignores what this module does itself."""
+
+    def __enter__(self):
+        for r in _RECORDERS:
+            r.inside += 1
+
+    def __exit__(self, *exc):
+        for r in _RECORDERS:
+            r.inside -= 1
 
 
 # The cache itself.
@@ -706,18 +724,7 @@ def store(dirpath, k, recorder):
         trace(f"not stored: the entry would be {len(data)} bytes")
         return
     try:
-        _os.makedirs(dirpath, mode=0o700, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=dirpath, prefix=".tmp-", suffix=".part")
-        try:
-            with _os.fdopen(fd, "wb") as f:
-                f.write(data)
-            _os.replace(tmp, _os.path.join(dirpath, k + ".json"))
-        except BaseException:
-            try:
-                _os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        _write(dirpath, k + ".json", data)
     except OSError as e:
         trace(f"not stored: {type(e).__name__} writing it")
         return
@@ -757,3 +764,177 @@ def evict(dirpath, max_entries=None, max_total=None):
                 _os.unlink(p)
             except OSError:
                 pass
+
+
+# THE READER'S PARSES OF LARGE TEXTS, KEPT BETWEEN RUNS (claude-config#2918, Dan's decision of
+# 2026-11-15). A kept judgement answers only the very call it judged with nothing changed; a parse is
+# kept for any call that reads the same text. Judging `bash tests/test-claude-sync.sh` reads two texts
+# of 64 KB or more, the suite (1.8 MB) and claude-sync (1 MB), and reading them is 0.7 s of the four
+# seconds; every other text it reads is smaller, 1,658 of them in 0.05 s (measured 2026-11-15).
+#
+# KEYED (Parses.key) on the text's whole contents (its hash), never a path or a time; the reader's
+# code, as the bytes the gate ran it from; the directory it is read from; HOME, which the reader
+# reads for a cd to ~; and the Python. A text with any one of these different is a miss.
+# SIGNED with the judgements' key (signing_key): the entry's body, as the bytes written, under an HMAC
+# with its key in a header line, so checking it costs no second serialisation. Anything wrong with an
+# entry is a miss and the text is read afresh. GIVEN BACK EXACTLY: a parse is kept only in the shape
+# _parse_encode knows (commands as (directory, text) pairs, parts with exactly PART_KEYS), every
+# value checked as it is written, so what comes back equals what the reader gave, tuples as tuples.
+# NOT THE JUDGEMENT'S: the disk work here is done under _Quiet, so a judgement's recorder neither
+# records it nor is marked not whole by it. That is sound because the parse is a function of its key
+# alone, and the text itself was read, and recorded, by the judgement.
+# Kept in the judgements' folder, named parse-<key>.json, and bounded and evicted with them.
+PARSE_FORMAT = 1
+PARSE_MIN = 64 * 1024  # characters: a smaller text is read in a few milliseconds, less than keeping it
+MAX_PARSE = 16 * 1024 * 1024  # bytes of one kept parse; the claude-sync suite's is about 4 MB
+PART_KEYS = ("start", "end", "scope", "inner", "openers", "how")
+_SCALARS = (str, int, bool, type(None))
+
+
+def _scalars(t):
+    if type(t) is not tuple or not all(type(x) in _SCALARS for x in t):
+        raise ValueError("not a tuple of plain values")
+    return list(t)
+
+
+def _parse_encode(value):
+    """(commands, parts) as JSON can carry them, or ValueError for any shape this cannot give back
+    exactly."""
+    cmds, parts = value
+    if type(cmds) is not list or type(parts) is not list:
+        raise ValueError("not lists")
+    out_cmds = []
+    for c in cmds:
+        if len(c) != 2:
+            raise ValueError("a command is not a (directory, text) pair")
+        out_cmds.append(_scalars(c))
+    out_parts = []
+    for p in parts:
+        if type(p) is not dict or tuple(p) != PART_KEYS:
+            raise ValueError("a part does not hold exactly %s" % ", ".join(PART_KEYS))
+        if not all(type(p[k]) in _SCALARS for k in ("start", "end", "how")):
+            raise ValueError("a part's start, end or how is not a plain value")
+        if type(p["inner"]) is not list or type(p["openers"]) is not list:
+            raise ValueError("a part's inner or openers is not a list")
+        out_parts.append([p["start"], p["end"], _scalars(p["scope"]), [_scalars(x) for x in p["inner"]],
+                          [_scalars(x) for x in p["openers"]], p["how"]])
+    return {"cmds": out_cmds, "parts": out_parts}
+
+
+def _parse_decode(enc):
+    cmds = [tuple(c) for c in enc["cmds"]]
+    parts = [{"start": a, "end": b, "scope": tuple(sc), "inner": [tuple(x) for x in inner],
+              "openers": [tuple(x) for x in openers], "how": how}
+             for a, b, sc, inner, openers, how in enc["parts"]]
+    return cmds, parts
+
+
+def _write(dirpath, name, data):
+    """Write data to dirpath/name whole: under a temporary name, then renamed into place."""
+    _os.makedirs(dirpath, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dirpath, prefix=".tmp-", suffix=".part")
+    try:
+        with _os.fdopen(fd, "wb") as f:
+            f.write(data)
+        _os.replace(tmp, _os.path.join(dirpath, name))
+    except BaseException:
+        try:
+            _os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+class Parses:
+    """The reader's parses of large texts, kept in dirpath between runs. code is the hash of the
+    reader's bytes as the gate ran them."""
+
+    def __init__(self, dirpath, code):
+        self.dirpath, self.code = dirpath, code
+
+    def key(self, s, cwd):
+        home = _os.environ.get("HOME")
+        if not isinstance(s, str) or not isinstance(cwd, str) or not home:
+            return None  # with no HOME the reader would ask the password database, which is not keyed
+        parts = {"format": PARSE_FORMAT, "kind": "parse", "reader": self.code, "cwd": cwd, "home": home,
+                 "python": [sys.version, sys.executable], "length": len(s),
+                 "text": _sha(s.encode("utf-8", errors="surrogatepass"))}
+        return "parse-" + _sha(json.dumps(parts, sort_keys=True).encode("utf-8", errors="surrogatepass"))
+
+    def get(self, s, cwd):
+        """The kept parse of s read from cwd, or None. Any doubt is None: the text is read afresh."""
+        if len(s) < PARSE_MIN:
+            return None
+        with _Quiet():
+            try:
+                return self._get(s, cwd)
+            except Exception as e:
+                trace(f"parse miss: the lookup raised {type(e).__name__}")
+                return None
+
+    def _get(self, s, cwd):
+        if not order_fixed():
+            trace("parse miss: " + ORDER_RANDOM)
+            return None
+        k = self.key(s, cwd)
+        if k is None:
+            trace("parse miss: no key for this text")
+            return None
+        secret = signing_key(self.dirpath, False)
+        if secret is None:
+            trace("parse miss: no signing key")
+            return None
+        path = _os.path.join(self.dirpath, k + ".json")
+        try:
+            with builtins.open(path, mode="rb") as f:
+                raw = f.read(MAX_PARSE + 1024)
+        except FileNotFoundError:
+            trace("parse miss: no entry")
+            return None
+        head, _, body = raw.partition(b"\n")
+        header = json.loads(head)
+        if not (isinstance(header, dict) and header.get("format") == PARSE_FORMAT and header.get("key") == k
+                and isinstance(header.get("sig"), str) and len(body) <= MAX_PARSE
+                and hmac.compare_digest(header["sig"], hmac.new(secret, k.encode() + b"\n" + body,
+                                                                hashlib.sha256).hexdigest())):
+            trace("parse miss: the entry is not a whole parse for this key")
+            return None
+        value = _parse_decode(json.loads(body))
+        try:
+            _os.utime(path)  # most recently used, for evict()
+        except OSError:
+            pass
+        trace("parse hit")
+        return value
+
+    def put(self, s, cwd, value):
+        """Keep the parse of s read from cwd. A fault here only means nothing is kept."""
+        if len(s) < PARSE_MIN:
+            return
+        with _Quiet():
+            try:
+                self._put(s, cwd, value)
+            except Exception as e:
+                trace(f"parse not stored: {type(e).__name__}: {str(e)[:80]}")
+
+    def _put(self, s, cwd, value):
+        if not order_fixed():
+            trace("parse not stored: " + ORDER_RANDOM)
+            return
+        k = self.key(s, cwd)
+        if k is None:
+            trace("parse not stored: no key for this text")
+            return
+        body = json.dumps(_parse_encode(value), separators=(",", ":")).encode("utf-8", errors="surrogatepass")
+        if len(body) > MAX_PARSE:
+            trace(f"parse not stored: it would be {len(body)} bytes")
+            return
+        secret = signing_key(self.dirpath, True)
+        if secret is None:
+            trace("parse not stored: no signing key")
+            return
+        sig = hmac.new(secret, k.encode() + b"\n" + body, hashlib.sha256).hexdigest()
+        head = json.dumps({"format": PARSE_FORMAT, "key": k, "sig": sig}).encode()
+        _write(self.dirpath, k + ".json", head + b"\n" + body)
+        trace("parse stored")
+        evict(self.dirpath)
