@@ -3,12 +3,13 @@
 # send-gate: scans hooks/ skills/ mods/
 # No suite writes what it found at the margin under its FAIL line (claude-config#2916).
 #
-# The runner prints a failing suite's FAIL line and only the lines indented further than it; a line
-# back at the margin, or a blank one, ends the message (claude-config#253). So a finding written at
-# the margin is dropped from a full run's report, and the run says the suite failed without saying
-# what it found. #2854 found this in test-lib-bytecode-importers.sh and #2916 in 22 more suites
-# on 2026-11-13, each now indenting what its FAIL helper prints after the first line. This fails
-# the next one on the day it lands (L613), with no list of suites excused from it.
+# Until #2928 the runner printed a failing suite's FAIL line and only the lines indented further
+# than it (claude-config#253), so a finding written at the margin was dropped from a full run's
+# report. #2854 found this in test-lib-bytecode-importers.sh and #2916 in 22 more suites on
+# 2026-11-13, each now indenting what its FAIL helper prints after the first line. Since #2928 the
+# runner also keeps margin lines up to the next result line, which it has to infer; a message
+# indented by hand needs no inference. Kept by Dan's decision on 2026-11-14 (PR #2985), so this
+# still fails the next margin message on the day it lands (L613), with no list of suites excused.
 # lib/fail-margin.py says what it reads and what it cannot.
 set -uo pipefail
 
@@ -43,10 +44,13 @@ esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
 # ---------------------------------------------------------------------------
-# The premise, measured on the runner itself rather than taken from its comment (L721): a suite
-# whose FAIL message goes on at the margin loses that part from a full run's report, and one whose
-# message is indented line by line keeps all of it. The same suite is then handed to the scan, which
-# must name the first message and not the second, so the scan and the runner are seen to agree.
+# The runner, measured rather than taken from its comment (L721). Until #2928 a full run dropped a
+# FAIL message's lines at the margin, which is what this scan was written against. Since #2928 the
+# runner keeps them up to the next result line and sets them under their FAIL, at the same column
+# as a message indented by hand. Both halves are measured here: if the runner stops showing the
+# margin lines, or shows them anywhere but under their FAIL, the two no longer agree and this says
+# so. The same suite is then handed to the scan, which must still name the margin message and not
+# the indented one: indenting by hand is the shape #253's rule reads without inferring anything.
 # ---------------------------------------------------------------------------
 mkdir -p "$TMPROOT/runner"
 cat > "$TMPROOT/runner/test-planted.sh" <<'PLANTED'
@@ -71,18 +75,26 @@ case "$shown" in
   *) check "the runner was handed the planted suite's failure" "$shown_as" ;;
 esac
 case "$shown" in
-  *margin-one.sh*|*margin-two.sh*) check "a full run drops a finding written at the margin under its FAIL" "it showed one, so the rule this scan enforces no longer matches the runner: $shown_as" ;;
-  *) check "a full run drops a finding written at the margin under its FAIL" ok ;;
+  *margin-one.sh*margin-two.sh*) check "a full run shows every line of a finding written at the margin under its FAIL (#2928)" ok ;;
+  *) check "a full run shows every line of a finding written at the margin under its FAIL (#2928)" "it did not, so the runner has gone back to dropping them: $shown_as" ;;
 esac
 case "$shown" in
   *kept-one.sh*kept-two.sh*) check "and shows every line of one indented under it" ok ;;
   *) check "and shows every line of one indented under it" "$shown_as" ;;
 esac
+# The column each line starts at in the report, or nothing when it is not there.
+shown_col() { printf '%s\n' "$shown" | grep -F "$1" | sed -n '1s/[^ ].*//p' | awk '{ print length($0) }'; }
+fail_at="$(shown_col 'FAIL: a list written at the margin')"
+margin_at="$(shown_col 'margin-two.sh')"
+kept_at="$(shown_col 'kept-two.sh')"
+[ -n "$fail_at" ] && [ -n "$margin_at" ] && [ "$margin_at" -gt "$fail_at" ] && [ "$margin_at" = "${kept_at:-}" ] \
+  && check "and sets the margin finding under its FAIL, at the column of one indented by hand (#2928)" ok \
+  || check "and sets the margin finding under its FAIL, at the column of one indented by hand (#2928)" "FAIL at column ${fail_at:-none}, margin finding at ${margin_at:-none}, indented finding at ${kept_at:-none}: $shown_as"
 planted="$(printf 'test-planted.sh\n' | python3 "$SCAN" --root "$TMPROOT/runner")"; planted_rc=$?
 planted_lines="$(printf '%s\n' "$planted" | awk -F: 'NF { printf "%s ", $2 }')"
 [ "$planted_rc" = 1 ] && [ "$planted_lines" = "8 " ] \
-  && check "the scan names the message the runner dropped, and not the one it showed" ok \
-  || check "the scan names the message the runner dropped, and not the one it showed" "exit $planted_rc, lines '$planted_lines' where 8 was wanted:
+  && check "the scan names the message written at the margin, and not the one indented by hand" ok \
+  || check "the scan names the message written at the margin, and not the one indented by hand" "exit $planted_rc, lines '$planted_lines' where 8 was wanted:
 $planted"
 
 # ---------------------------------------------------------------------------
@@ -181,7 +193,7 @@ suites_n="$(printf '%s\n' "$FILES" | grep -c -E '(^|/)test-[^/]*\.sh$')"
 found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$ROOT" 2>&1)"; found_rc=$?
 [ "$found_rc" = 0 ] && [ -z "$found" ] \
   && check "no suite writes what it found at the margin under its FAIL line" ok \
-  || check "no suite writes what it found at the margin under its FAIL line" "exit $found_rc; a full run drops what these print from that line on:
+  || check "no suite writes what it found at the margin under its FAIL line" "exit $found_rc; these go on at the margin from that line on, which a full run has to infer is part of the message:
 $found
 Indent each line after the first: pipe the FAIL helper's echo through sed '2,\$s/^/  /', or put a
 list in the message as \$(printf '%s\n' \"\$found\" | sed 's/^/  /')."

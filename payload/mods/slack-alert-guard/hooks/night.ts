@@ -159,3 +159,21 @@ export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly
   const elsewhere = there.map(r => ` The wording chosen in ${r} is put to Dan in a session working in ${r}, never in this one: leave the pull request open until he approves it there.`).join('')
   return `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it.${ask}${elsewhere}${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
 }
+
+/**
+ * The choices a merge the guard could not read is held over, each named with the session that made
+ * it and where it is approved (#2973: a merge was held twice "while Slack alert wording chosen
+ * overnight waits on Dan", and nothing said which wording, from where, or how to clear it). `mine`
+ * holds the ids this session may put to Dan (register.ts askedHere); `away` gives the repository each
+ * other one is put to him in.
+ */
+export const waitingNamed = (waiting: readonly SlackAlertChoice[], mine: ReadonlySet<string>, away: Readonly<Record<string, string>>): string =>
+  waiting
+    .map(c => {
+      const by = c.session === null ? 'by a session that has since ended' : `by session ${c.session}`
+      const how = mine.has(c.id)
+        ? `this session puts it to Dan: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`
+        : `it is put to Dan in that session, or once it ends in a session working in ${away[c.id] || 'its repository'}`
+      return `${c.file}: "${c.rendered}", chosen ${by} (${how})`
+    })
+    .join('; ')
