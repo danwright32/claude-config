@@ -28,7 +28,11 @@ substitution runs, in the posted text, in an unquoted heredoc body, or in a sh -
 string there, by what it prints (prints): echo, printf, date, basename and dirname their own words,
 cat the files it reads (cat_files), pwd and the git lookups of the checkout where they run (the
 directory's path and its git checkout's directories, remotes and branch, place_text). Any other
-program, whose output cannot be read before the command runs, is refused wherever it runs.
+program, whose output cannot be read before the command runs, is refused wherever it runs. A name
+counts as one of those programs only as the shell finds it (trusted_names): the bare word, in a
+command that defines no function or alias of it and changes neither PATH, git's environment nor
+anything else that decides which program it runs; ./git, a quoted cat or a git function is another
+program.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -1357,6 +1361,54 @@ MOVES = re.compile(r"(?:^|\s)(?:-C|--chdir|--git-dir|--work-tree)(?=[\s=]|$)"
                    r"|\bGIT_(?:DIR|WORK_TREE|COMMON_DIR)=")
 # What a program prints, as prints() names it.
 OWN, FILES, PLACE, UNREAD = "own words", "files", "place", "unread"
+# Which program a name runs (the lessons review of a45f8c1, the four rounds taken together). Every
+# round found a spelling where the program and the name the check trusted came apart: a content
+# reader under another name, cat behind command or a path, and a path ending in git, which the shared
+# reader rightly reads as git for the gates that must see a push and which here let any script pass.
+# So one rule for every name trusted above: it counts only as the shell will find it, written as the
+# bare word (no path, no quote or backslash), in a command that leaves alone whatever decides which
+# program the word runs (trusted_names). Anything else prints what this check cannot read.
+TRUSTED = PRINTS_OWN_WORDS | frozenset({"pwd", "cat", "git"})
+# What makes a name run something else: a function of it (`name () {`, zsh's `a b () {`, and the
+# function keyword, which RESERVED does not pass over), an alias, a table zsh keeps of them, a change
+# to where names are looked up or to what the shell or git reads as it starts, a builtin that edits
+# the lookup, and a file sourced, which can do any of these.
+DEFINES = re.compile(r"[\s({!]*((?:[^\s()<>;&|$`'\"=\\]+[ \t]+)*[^\s()<>;&|$`'\"=\\]+)[ \t]*\([ \t]*\)")
+REBINDS = frozenset({"alias", "function", "hash", "enable", "disable", "autoload", "source", ".",
+                     "unhash", "zmodload"})
+LOOKUP_VARS = frozenset({"PATH", "path", "BASH_ENV", "ENV", "HOME", "XDG_CONFIG_HOME", "functions",
+                         "aliases", "galiases", "commands", "builtins"})
+ASSIGNED = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
+
+
+def trusted_names(command, depth=0):
+    """The names of TRUSTED that still run the program they name anywhere in command: all of them,
+    less each one a function or alias in it defines, and none once it changes how names are found or
+    how the shell or git starts (LOOKUP_VARS, any GIT_ variable, REBINDS). A string an eval, sh -c or
+    env -S there runs is read the same way, and one that cannot be read leaves none. Raises
+    scan._sw.Unreadable."""
+    out = set(TRUSTED)
+    for _d, text in scan._sw.commands(command):
+        words = scan._sw.command_words(text)
+        fn = DEFINES.match(text)
+        if fn:
+            out -= set(fn.group(1).split())
+        if not words:
+            continue
+        if words[0] in REBINDS:
+            if words[0] not in ("alias", "function"):
+                return set()
+            out -= {w.split("=", 1)[0] for w in words[1:]} | {w.rstrip("(){") for w in words[1:]}
+        for w in words:
+            m = ASSIGNED.match(w)
+            if m and (m.group(1) in LOOKUP_VARS or m.group(1).startswith("GIT_")):
+                return set()
+        wrap = scan._sw.wrapped_words(words)
+        if wrap:
+            if wrap[1] is None or depth >= scan._sw.MAX_DEPTH:
+                return set()
+            out &= trusted_names(wrap[1], depth + 1)
+    return out
 
 
 class Ran(str):
@@ -1390,19 +1442,23 @@ def _git_place(read):
     return False
 
 
-def prints(text):
-    """What the one command text prints (OWN, FILES, PLACE or UNREAD), as the comment above says."""
+def prints(text, trusted):
+    """What the one command text prints (OWN, FILES, PLACE or UNREAD), as the comment above says.
+    trusted: the names that still run what they name in the whole command (trusted_names)."""
     words = scan._sw.command_words(text)
     if not words:
         return OWN
     if GLOB.search(QUOTED.sub("", text)):
         return UNREAD
-    if words[0] in PRINTS_OWN_WORDS:
-        return OWN
-    if words[0] == "pwd" or _git_place(scan._sw.git_read(words)):
-        return PLACE
     rest = text.lstrip()
-    if words[0] != "cat" or not rest.startswith("cat"):
+    name = words[0]
+    if name not in trusted or not rest.startswith(name) or rest[len(name):len(name) + 1].strip():
+        return UNREAD
+    if name in PRINTS_OWN_WORDS:
+        return OWN
+    if name == "pwd" or _git_place(scan._sw.git_read(words)):
+        return PLACE
+    if name != "cat":
         return UNREAD
     i, n = 3, len(rest)
     while i < n:
@@ -1416,7 +1472,7 @@ def prints(text):
     return OWN
 
 
-def _group_runs(texts, depth):
+def _group_runs(texts, depth, trusted):
     """([(command, what it prints)] for the commands among texts that print more than their own words,
     whether one of them can be taken elsewhere) for the commands of one substitution. A string a
     shell, eval or env -S runs is read as commands of the same substitution; one that cannot be read
@@ -1436,23 +1492,26 @@ def _group_runs(texts, depth):
                 runs.append((text, UNREAD))
                 moved = True
                 continue
-            more, went = _group_runs(inner, depth + 1)
+            more, went = _group_runs(inner, depth + 1, trusted)
             runs += more
             moved = moved or went
             continue
-        printed = prints(text)
+        printed = prints(text, trusted)
         if printed != OWN:
             runs.append((text, printed))
     return runs, moved
 
 
-def substitution_runs(text):
+def substitution_runs(text, command):
     """[(command, what it prints, moved)] for each command a substitution in text runs that prints
     more than its own words (prints), moved when something in its substitution can take it elsewhere
     (CHANGES_DIR, MOVES). The commands of an unquoted heredoc body's substitutions count
     (claude-config#2053), and so do those of a string a sh -c, bash -c or eval there runs. A
     substitution that is a cd's directory is left out: its output is where the command runs, which
-    is judged as that, not posted. Raises scan._sw.Unreadable."""
+    is judged as that, not posted. A program is taken for what its name says only where the whole
+    command, given as command, leaves that name running it (trusted_names). Raises
+    scan._sw.Unreadable."""
+    trusted = trusted_names(command)
     parts, heredocs, spans = [], [], []
     scan._sw.commands(text, heredocs=heredocs, parts=parts, spans=spans)
     regions = []
@@ -1466,7 +1525,7 @@ def substitution_runs(text):
         if any((a, b) != (lo, hi) and a <= lo and hi <= b for a, b in regions):
             continue
         group = [text[p["start"]:p["end"]] for p in parts if lo <= p["start"] and p["end"] <= hi]
-        runs, moved = _group_runs(group, 0)
+        runs, moved = _group_runs(group, 0, trusted)
         # The program a cd takes elsewhere is named before the cd that takes it.
         runs.sort(key=lambda run: scan._sw.command_words(run[0])[:1] in (["cd"], ["pushd"], ["popd"]))
         out += [(run, printed, moved) for run, printed in runs]
@@ -1591,7 +1650,7 @@ def variables_posted(text, place):
         return out
     # Each program a substitution runs, by where it runs (#2997).
     try:
-        runs = substitution_runs(judged)
+        runs = substitution_runs(judged, text)
     except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
         return out + [(Ran("its command substitutions"), None, "could not be read (%s: %s)"
                        % (type(e).__name__, e))]

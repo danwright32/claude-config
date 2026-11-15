@@ -655,6 +655,48 @@ git -C "$BRANCHCO" symbolic-ref HEAD refs/heads/fix-acme-widgets
 RUN_DIR="$BRANCHCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(git branch --show-current)\" --body x"
 check "#2997 the branch lookup from a checkout whose branch names a work repository is refused: $out" refused
 check "#2997 and says the name: $out" has "$out" "acme-widgets"
+# A program is trusted for what it prints only by the name the shell finds it under (the lessons
+# review of a45f8c1, the four rounds taken together): the bare word, which nothing in the command
+# makes run something else. A path ending in git, a function or alias of the name, a changed PATH or
+# hash, git's environment, a sourced file, or a quoted name is a program whose output this check
+# cannot read, refused even from a checkout that names nothing.
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(./git rev-parse --show-toplevel)\" --body x"
+check "#2997 a program at ./git is not git: $out" refused
+check "#2997 refused as a program whose output this check cannot read: $out" has "$out" "cannot read before the command runs"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(/tmp/x/git remote get-url origin)\" --body x"
+check "#2997 nor one at any other path ending in git: $out" refused
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$('git' remote -v)\" --body x"
+check "#2997 nor a quoted git, which an alias would not reach: $out" refused
+RUN_DIR="$CLEANGIT" run "git() { cat named.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#2997 nor git once the command defines a function of that name: $out" refused
+RUN_DIR="$CLEANGIT" run "function git {
+  cat named.md
+}
+gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor one defined with the function keyword over several lines: $out" refused
+RUN_DIR="$CLEANGIT" run "functions[git]='cat named.md'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor one set in zsh's function table: $out" refused
+RUN_DIR="$CLEANGIT" run "alias git='cat named.md'
+gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor git behind an alias the command defines: $out" refused
+RUN_DIR="$CLEANGIT" run "export PATH=/tmp/x:\$PATH; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor git after the command changes PATH: $out" refused
+RUN_DIR="$CLEANGIT" run "hash -p /tmp/x/git git; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor after it points the shell's hash at another program: $out" refused
+RUN_DIR="$CLEANGIT" run "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.x.insteadOf GIT_CONFIG_VALUE_0=y; gh issue create --repo danwright-test/public-notes --title \"\$(git remote get-url origin)\" --body x"
+check "#2997 nor after it sets git's configuration in the environment: $out" refused
+RUN_DIR="$CLEANGIT" run ". ./helpers.sh; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor after it sources a file, which can define anything: $out" refused
+RUN_DIR="$CLEANGIT" run "eval 'git() { cat named.md; }'; gh issue create --repo danwright-test/public-notes --title \"\$(git remote -v)\" --body x"
+check "#2997 nor after a function defined in an eval string: $out" refused
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(sh -c 'git() { cat named.md; }; git remote -v')\" --body x"
+check "#2997 nor inside a sh -c string the substitution runs: $out" refused
+run "cat() { head -1 \"\$@\"; }; gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
+check "#2997 and cat is held to the same rule: $out" refused
+run "pwd() { cat named-2997.md; }; gh issue create --repo danwright-test/public-notes --title \"\$(pwd)\" --body x"
+check "#2997 and so is pwd: $out" refused
+RUN_DIR="$CLEANGIT" run "f() { :; }; GH_TOKEN=x gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#2997 (control) a function of another name and an assignment that changes no lookup leave git as git: $out" passed
 # cat's output is the file's text, which is read and judged wherever it runs (the lessons review of
 # 028d7e6): here from a directory whose path names nothing.
 printf 'Seen first in the zephyr checkout.\n' > "$CO/named-2997.md"
