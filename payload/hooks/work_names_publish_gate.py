@@ -59,8 +59,8 @@ unreadable, empty or of the wrong shape, the registry unreadable, the project li
 holding no work MacBook project, a body file the command writes from
 something it does not show, a body file a gh api call names that cannot be read, a command that
 cannot be read but names a judged gh command, a variable or directory whose value cannot be known,
-a program a substitution runs whose output this check cannot read, one a cd or directory option in
-it takes elsewhere, one run where the command cannot be followed or git cannot read the checkout, a
+a program a substitution runs whose output this check cannot read (run from a work checkout or from
+where the command cannot be placed, #3016), one a cd or directory option in it takes elsewhere, one run where the command cannot be followed or git cannot read the checkout, a
 cat there reading standard input, a redirection, a name the shell changes as it runs (an expansion,
 a glob, a tilde) or a file that is missing, not a regular file or past CAT_LIMIT, and the time budget
 spent. No registry at all is fine.

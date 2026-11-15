@@ -615,9 +615,10 @@ check "#2981 (control) a private repository is not asked about its directory: $o
 # run from a work checkout posted the checkout's path or repository and passed. Each program is judged
 # by what it can print: pwd and the git lookups of the checkout by where they run (the directory's
 # path, and in a git checkout its git directories, remotes and branch), cat by the files it reads, and
-# any program whose output this check cannot read is refused wherever the command runs (the lessons
-# review of e4c7d07), as is one a cd or git -C takes where this check cannot follow it. Commands in a
-# sh -c or bash -c string and in an unquoted heredoc body are read the same way.
+# any program whose output this check cannot read is refused from a work checkout or from where the
+# command cannot be placed (the lessons review of e4c7d07, narrowed by #3016), while one a cd or git -C
+# takes where this check cannot follow it is refused wherever the command runs. Commands in a sh -c or
+# bash -c string and in an unquoted heredoc body are read the same way.
 REMOTECO="$WORK/apps/plain-notes"; mkdir -p "$REMOTECO"
 git -C "$REMOTECO" init -q
 git -C "$REMOTECO" remote add origin https://github.com/Acme-Corp/acme-widgets.git
