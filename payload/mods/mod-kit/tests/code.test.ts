@@ -239,6 +239,95 @@ describe('pythonText (#1171)', () => {
   })
 })
 
+// #2925: node's vm was found only as `vm.runIn...`, `vm.compileFunction` or `vm.Script`, so a
+// program reaching it through require('node:vm'), a name of its own or a destructured function was
+// judged as only reading, though it runs text it builds.
+describe("codeVerdict reads node's vm however it is reached (#2925)", () => {
+  test('vm or node:vm, required or imported, under any name or destructured, builds code at run time', () => {
+    for (const code of [
+      'vm.runInThisContext(process.argv[2])',
+      "require('node:vm').runInThisContext(process.argv[2])",
+      'require("vm").runInNewContext(x, {})',
+      "(await import('node:vm')).runInThisContext(x)",
+      "const v = require('vm'); v.runInThisContext(x)",
+      "const v = require('node:vm')\nv.compileFunction(x)()",
+      "const { runInThisContext } = require('vm'); runInThisContext(x)",
+      "const { runInNewContext: run } = require('node:vm'); run(x, {})",
+      "const { Script } = require('vm'); new Script(x).runInThisContext()",
+      "import machine from 'node:vm'; machine.compileFunction(x)()",
+      "import * as v from 'vm'; v.runInContext(x, c)",
+      "import { compileFunction as cf } from 'node:vm'; cf(x)()",
+    ])
+      expect([code, codeVerdict('node', code)]).toEqual([code, { does: 'unreadable', seen: 'vm' }])
+  })
+  // The same reading reaches fs: a member of require('fs') or import('fs') taken where it is loaded,
+  // with no name bound to it, was not read as fs's, so this removal was judged as only reading.
+  test("fs's members taken straight from the module it loaded are fs's", () => {
+    expect(codeVerdict('node', "require('fs').rm('a', { recursive: true }, () => {})")).toEqual({ does: 'write files', seen: 'fs.rm' })
+    expect(codeVerdict('node', "(await import('node:fs/promises')).rm('a')")).toEqual({ does: 'write files', seen: 'fs.rm' })
+  })
+  test('vm used only to read, and a method of that name on another module, build nothing', () => {
+    for (const code of [
+      "const { isContext } = require('vm'); console.log(isContext(o))",
+      "const v = require('node:vm'); console.log(typeof v)",
+      "const runner = require('./runner'); runner.runInThisContext(x)",
+      "console.log(require('fs').readFileSync('a', 'utf8'))",
+    ])
+      expect([code, codeVerdict('node', code)]).toEqual([code, undefined])
+  })
+})
+
+// #2974: mod-kit's awk reader, raised by the lessons review of PR #2972 at e3edeee.
+describe("mod-kit's awk reader (#2974)", () => {
+  // A line continued by a backslash runs on, and so does what came last: the backslash itself set it
+  // to expect an operand, so a / after a continued name was read as a regex, which paired with a
+  // string's / and left the string's -> read as a redirect.
+  test('a line continued by a backslash keeps what came last, so a / after a continued name divides', () => {
+    expect(codeVerdict('awk', '{ n = n \\\n / 2; print "a/b -> c" }')).toBeUndefined()
+    expect(codeVerdict('awk', '{ n = n \\\r\n / 2; print "a/b -> c" }')).toBeUndefined()
+    // A redirect after the division is still one. awk reads a continued line and the next as one, so
+    // a print continued onto the line holding its redirect prints to a file, as one written on one
+    // line does: the print rule reads to the end of a line, and was ended by the continued newline.
+    expect(codeVerdict('awk', '{ n = n \\\n / 2; print n > "out" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print \\\n /"/ > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print $1 \\\n | "sort" }')).toEqual({ does: 'run a process', seen: 'a pipe' })
+    // Lessons review at 4207042: where the program is read as written (a / after ++, a string or a
+    // regex never closed), its continued lines are still one line with the next.
+    expect(codeVerdict('awk', '{ x++ / 2; print \\\n > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print "unclosed \\\n > x }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print /unclosed \\\n | "sort" }')).toEqual({ does: 'run a process', seen: 'a pipe' })
+    // Lessons review at 7c17b96: a regex literal is kept as written, and a continued line inside one
+    // is joined there too.
+    expect(codeVerdict('awk', '{ print /a\\\nb/ > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    // A comment is never continued, in awk or here, so the line after one ending in a backslash is
+    // read for itself.
+    expect(codeVerdict('awk', '# a note \\\n/"/ { print > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    // A newline with no backslash still ends the statement, so a regex starting the next line is one.
+    expect(codeVerdict('awk', 'NR == 2\n/"/ { print > "out.txt" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+  })
+  // Each name was checked for print, printf or return by handing a regular expression the whole
+  // output built so far, so a long inline program took time growing with its length squared: about
+  // 1.5 s for 92,000 characters, against 0.1 s for 23,000 (four times the text, about fifteen times as
+  // long). Judged by growth between two sizes, the median of seven rounds, as #2948's test is.
+  test('reads four times the program in under six times as long', () => {
+    const timed = (n: number) => {
+      const program = `{ ${'total = total + value; '.repeat(n)}print "a -> b" }`
+      const start = performance.now()
+      expect(codeVerdict('awk', program)).toBeUndefined()
+      return performance.now() - start
+    }
+    timed(100)
+    const ratios: number[] = []
+    for (let round = 0; round < 7; round++) {
+      const small = timed(1000)
+      const large = timed(4000)
+      ratios.push(large / Math.max(small, 0.05))
+    }
+    const middle = [...ratios].sort((a, b) => a - b)[3] ?? Infinity
+    expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+  })
+})
+
 // The member ask before saving calls, asked from another plugin as a mod asks it.
 const asker: { name: string; register: Register } = {
   name: 'asker',
