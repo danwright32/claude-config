@@ -768,6 +768,125 @@ export const freshTemp = (word: string, values: readonly string[], command: stri
 }
 
 /**
+ * Whether the shell variable `name` only ever holds a temporary folder the script made itself
+ * (#2991): every assignment `script` gives it is `"$(mktemp -d)"` (bare, or in double quotes), or a
+ * name inside such a variable (`"$T/chain"`, read by leadingVariable, so with no other expansion and
+ * no `..`), and there is at least one. False where anything else may set it: an assignment of any
+ * other value, an append or an element, a builtin or loop naming it (`read CH`, `for CH in`, `local
+ * CH`), a default expansion assigning it (`${CH:=x}`), or where mktemp itself may be another program
+ * or make its folder elsewhere (TMPDIR, PATH or zsh's path set, a function, alias or hash, `$'...'`).
+ * `script` is every script text the command was read for, so a script it reads in (`source x.sh`,
+ * read by scriptsRunIn) is held to the same; one it sources by a name the guard cannot follow is not seen.
+ */
+export const madeTemp = (name: string, script: string, seen: ReadonlySet<string> = new Set()): boolean => {
+  if (seen.has(name) || !/^[A-Za-z_]\w*$/.test(name) || script.includes("$'")) return false
+  const plain = script.replace(/["'\\]/g, '')
+  if (/TMPDIR|\bPATH\+?=|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\bmktemp\s*\(\s*\)|\bfunction\s+mktemp\b|\balias\b|\bhash\b/.test(plain)) return false
+  if (new RegExp(`\\$\\{${name}:?=`).test(script)) return false
+  for (const part of script.split(/[;&|\n]/)) {
+    const words = part.trim().split(/\s+/)
+    let i = 0
+    while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i] as string)) i++
+    if ((SETS_NAMED.test(words[i] ?? '') || words[i] === 'for' || words[i] === 'select') && words.slice(i + 1).includes(name)) return false
+  }
+  let any = false
+  for (const a of script.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
+    if (a[1] || a[2]) return false
+    const rest = script.slice((a.index ?? 0) + a[0].length)
+    const value = /^"([^"]*)"(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^(\$\(mktemp -d\))(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^([^\s;&|()'"`\\]+)(?=$|[\s;&|)])/.exec(rest)?.[1]
+    if (value === undefined) return false
+    if (value === '$(mktemp -d)') {
+      any = true
+      continue
+    }
+    const lead = leadingVariable(value)
+    if (lead === undefined || !madeTemp(lead.slice(1), script, new Set([...seen, name]))) return false
+    any = true
+  }
+  return any
+}
+
+/**
+ * Where a python program's `sys.argv[1]` is among the words mod-kit gives its command (#2991):
+ * `python3 - a b` (a program on standard input) and `python3 -c <code> a b`, options before either
+ * allowed. Undefined for any other interpreter or shape, a script file included.
+ */
+export const argvStart = (words: readonly string[]): number | undefined => {
+  if (!/^python(?:\d+(?:\.\d+)?)?$/.test((words[0] ?? '').split('/').pop() ?? '')) return undefined
+  for (let j = 1; j < words.length; j++) {
+    const w = words[j] as string
+    if (w === '-') return j
+    if (w === '-c') return j + 1
+    if (!/^-[A-Za-z]+$/.test(w) || /[cmWX]/.test(w)) return undefined
+  }
+  return undefined
+}
+
+/**
+ * The one `sys.argv[N]` (N of 1 or more) a python program binds variable `v` to (#2991), read from
+ * its whole text: every binding of `v` must be a plain assignment line `v = sys.argv[N]` or a tuple
+ * one (`ch, heading = sys.argv[1], sys.argv[2]`), all to the same N. Undefined where `v` is bound any
+ * other way (another value, an augmented or walrus assignment, a keyword argument, or after for, as,
+ * def, lambda, global, nonlocal, del, import, class or except on its line), where sys.argv itself is
+ * changed, and where `v` is never bound.
+ */
+export const argvIndex = (program: string, v: string): number | undefined => {
+  if (!/^[A-Za-z_]\w*$/.test(v)) return undefined
+  if (/\bsys\s*\.\s*argv\s*(?:\[[^\]]*\]\s*)?(?:[-+*/%&|^@:]?=(?!=)|\.\s*[A-Za-z_])/.test(program)) return undefined
+  let n: number | undefined
+  for (const m of program.matchAll(new RegExp(`(?<![\\w.])${v}(?!\\w)`, 'g'))) {
+    const i = m.index ?? 0
+    const start = program.lastIndexOf('\n', i - 1) + 1
+    const stop = program.indexOf('\n', i)
+    const line = program.slice(start, stop < 0 ? program.length : stop)
+    if (/\b(?:for|as|def|lambda|global|nonlocal|del|import|class|except)\b/.test(program.slice(start, i))) return undefined
+    const bound = /^\s*(?:,\s*[A-Za-z_]\w*\s*)*([-+*/%&|^@:]?)=(?!=)/.exec(program.slice(i + v.length, stop < 0 ? program.length : stop))
+    if (!bound) continue
+    if (bound[1]) return undefined
+    const whole = /^\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*=(?!=)\s*(.*?)\s*$/.exec(line)
+    if (!whole) return undefined
+    const names = (whole[1] as string).split(',').map(s => s.trim())
+    const values = (whole[2] as string).split(',').map(s => s.trim())
+    if (names.length !== values.length) return undefined
+    const at = /^sys\.argv\[(\d+)\]$/.exec(values[names.indexOf(v)] ?? '')?.[1]
+    if (at === undefined || Number(at) < 1 || (n !== undefined && n !== Number(at))) return undefined
+    n = Number(at)
+  }
+  return n
+}
+
+/**
+ * Whether every place a python program's text spells a name that looks absolute adds it onto a
+ * variable the program takes from its arguments, each handed a temporary folder the script made
+ * itself (#2991): `open(ch + "/app/index.html", "w")` or `f"{ch}/app/index.html"`, `ch` bound only to
+ * `sys.argv[N]` (argvIndex), the program's command handing `$X` or `$X/<plain name>` there (`words`,
+ * as mod-kit reads it, argvStart), and X madeTemp in `script`. Such a write lands in no file of the
+ * product. False wherever a step cannot be shown, so the write is judged as before: a variable from
+ * anywhere else (`ch = "."`, `ch = os.getcwd()`, `$(pwd)`), a shell's braces, another interpreter.
+ * `text` is the program as the names were found in it (its code), `program` its whole text.
+ */
+export const inScriptTemp = (text: string, name: string, program: string, words: readonly string[], script: string): boolean => {
+  if (!name.startsWith('/')) return false
+  const vars = new Set<string>()
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
+    const head = text.slice(Math.max(0, i - 64), i)
+    const v = /([A-Za-z_]\w*)\s*\+\s*[rRbBuUfF]{0,2}['"]$/.exec(head)?.[1] ?? (SHELL_BRACE.test(head) ? undefined : /\{([A-Za-z_]\w*)\}$/.exec(head)?.[1])
+    if (v === undefined) return false
+    vars.add(v)
+  }
+  const at = argvStart(words)
+  if (!vars.size || at === undefined) return false
+  for (const v of vars) {
+    const n = argvIndex(program, v)
+    const word = n === undefined ? undefined : words[at + n]
+    const lead = word === undefined ? undefined : leadingVariable(word)
+    if (lead === undefined || !madeTemp(lead.slice(1), script)) return false
+  }
+  return true
+}
+
+/**
  * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
  * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
  * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,

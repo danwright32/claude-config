@@ -35,6 +35,7 @@ import {
   targetUnread,
   addedOntoFolder,
   shellBraces,
+  inScriptTemp,
   afterVariable,
   editedText,
   editWouldNotApply,
@@ -634,7 +635,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // writes are not all named and whose text names the plugin store may write the guard's record,
   // refused as a command naming the store is.
   let scriptStore = false
-  for (const s of await scriptsRun($, command, at)) {
+  const runs = await scriptsRun($, command, at)
+  // Every script text read for this command, for #2991's madeTemp: a variable another script it reads
+  // in may set is held to every assignment in any of them.
+  const scriptsText = runs.map(r => ('unread' in r ? '' : r.text)).join('\n')
+  for (const s of runs) {
     if ('unread' in s) {
       targets.push({ word: s.word, unread: s.unread, inScript: s.word })
       continue
@@ -669,16 +674,15 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
       }
-      // #2991: only a name spelled from the top of the disk or home as the program writes it. One that
-      // only looks absolute because the program adds it onto a folder in its own variable (`ch +
-      // "/app/index.html"`, `f"{root}/app/page.tsx"`) is that folder's, which the guard cannot read:
-      // guessAt places it in the script's folder, where a test suite's mktemp folder is not, so
-      // test-score-adapters.sh was held for the pages it writes only under its own temp folder. A
-      // name after the shell's braces (`${APP}/globals.css`, filled in before the program runs) is
-      // judged as before.
+      // #2991: a name the program only adds onto a folder in its own variable (`ch +
+      // "/app/index.html"`, read here as `/app/index.html`) passes only where that variable is shown to
+      // hold a temporary folder the script made itself (rules.ts inScriptTemp: bound to sys.argv[N],
+      // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder), as
+      // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, a value the guard
+      // cannot read) it is judged where guessAt places it, as before.
       for (const m of mentionedLookFiles(text).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
-        if (t?.path && (/^(\/|~\/)/.test(t.word) || shellBraces(text, m) !== undefined)) targets.push({ ...t, inScript: s.word })
+        if (t?.path && !inScriptTemp(text, m, u.program ?? text, u.words, scriptsText)) targets.push({ ...t, inScript: s.word })
       }
     }
   }

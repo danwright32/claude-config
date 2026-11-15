@@ -6790,8 +6790,9 @@ script file the command runs, its own code read as inline code is, a name its co
 folder cannot be followed held as could not check; since #2855 also a shell script's own commands
 and the scripts it runs, a script named through a variable the command sets, a script the command
 writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
-a name such a script's program only adds onto a folder in its own variable, `ch + "/app/index.html"`,
-is that folder's and not judged, so a suite writing pages under its own mktemp folder runs), and a
+a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
+passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
+`mktemp -d`, so a suite writing pages under its own temp folder runs), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree

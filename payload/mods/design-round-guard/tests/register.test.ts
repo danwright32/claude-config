@@ -4458,6 +4458,21 @@ test('#2991: a suite whose programs write only under a folder in a variable runs
     const why = refusalOf(await call($, { tool: 'Bash', command: runs[0] }))
     expect({ held: why.includes(SKIP_QUESTION), named: why.includes('app/index.html') }).toEqual({ held: true, named: true })
   }
+  // A name added onto a variable passes only where that variable holds a folder the script made with
+  // mktemp -d: one holding the folder the script runs in, the checkout itself, or a value set anywhere
+  // else, is judged where it lands, as before.
+  for (const text of [
+    SUITE_2991.replace('CH="$T/chain"', 'CH="$(pwd)"'),
+    SUITE_2991.replace('CH="$T/chain"', 'CH=.'),
+    SUITE_2991.replace('CH="$T/chain"', 'CH="$T/chain"\n  CH=/w/slate'),
+    SUITE_2991.replace('T="$(mktemp -d)"', 'T="$(pwd)"'),
+    SUITE_2991.replace('ch, heading = sys.argv[1], sys.argv[2]', 'ch, heading = ".", sys.argv[2]'),
+    SUITE_2991.replace('ch, heading = sys.argv[1], sys.argv[2]', 'ch, heading = sys.argv[1], sys.argv[2]\nch = os.getcwd()'),
+  ]) {
+    w.files[SUITE_2991_AT] = text
+    const why = refusalOf(await call($, { tool: 'Bash', command: runs[0] }))
+    expect({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: why.includes(SKIP_QUESTION), named: why.includes('app/index.html') }).toEqual({ changed: text.split('\n').find((l, i) => l !== SUITE_2991.split('\n')[i]), held: true, named: true })
+  }
   // And a program whose name follows the shell's braces, which the shell fills in before it runs.
   w.files[SUITE_2991_AT] = `${SUITE_2991}python3 - <<PY\nopen("\${APP}/index.html", "w").write("x")\nPY\n`
   expect(refusalOf(await call($, { tool: 'Bash', command: runs[0] }))).toContain(SKIP_QUESTION)
