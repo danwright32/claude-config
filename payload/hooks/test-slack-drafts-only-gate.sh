@@ -3844,10 +3844,12 @@ echo "slack drafts only: a claude-sync line is judged in about the time it took 
 # Held two ways. The work itself, counted, which no load can move (L290): one reading of claude-sync
 # into commands and one of each command's words in a run, and the same answers from sh_binds as the
 # patterns it had. And the time, as processor time against a yardstick taken in the same run (L656):
-# the reader's one reading of claude-sync, the median of four, two before and two after. On
-# 2026-11-11 that reading took 0.3 seconds, so one lesson line came to about 6 readings with the fix
-# and 27 on main, and three lesson lines to 11 with the fix, while main ran out of its 11 seconds.
-# The ceilings sit at about twice the fix.
+# on 2026-11-11 the reader's one reading of claude-sync (0.3 seconds), so one lesson line came to
+# about 6 readings with the fix and 27 on main, and three lesson lines to 11 with the fix, while main
+# ran out of its 11 seconds; since 2026-11-15 a fixed workload sharing nothing with the gate (cost.py,
+# #2918), the least of at least seven samples. The ceilings, 12 and 22 readings, became 36 and 66
+# units: the same seconds on the personal MacBook, where one unit took 0.095 s and the two lines 19.6
+# and 27.7 units on 2026-11-15. Each run's measurements are printed at the end of this part.
 # The checkout's own claude-sync, found by the one shared test (lib/checkout-root.sh, #1663); installed
 # in ~/.claude there is no checkout, and the clone the sync runs from is read instead.
 CS=""
@@ -3956,31 +3958,53 @@ PY
   check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
 
   cat > "$T/cost.py" <<'PY'
-import importlib.util, json, os, resource, statistics, subprocess, sys, tempfile, time
-hook, reader, cs, ceiling = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+import json, os, re, resource, subprocess, sys, tempfile, time
+hook, cs, ceiling = sys.argv[1], sys.argv[2], float(sys.argv[3])
 # --line <command line> judges that line instead of claude-sync lessons (#2918).
-line = sys.argv[6] if sys.argv[5] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[5:])
-spec = importlib.util.spec_from_file_location("shell_words", reader)
-sw = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sw)
-text = open(cs).read()
+line = sys.argv[5] if sys.argv[4] == "--line" else " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[4:])
+# The yardstick is a fixed workload sharing no code and no input with the gate (#2918, Dan's decision
+# of 2026-11-15): it cuts a made up shell-like text into tokens with a pattern, counts them in a dict
+# through a small function, and walks each line's quotes with str.find, the kinds of work the gate
+# does, so a slower machine or Python slows both alike. It was the gate's own reader reading
+# claude-sync, which a cut to that reader shrank along with the gate (a 6% cut read as 5% dearer),
+# and which grew whenever claude-sync did. One unit took 0.095 s of processor time on the personal
+# MacBook on 2026-11-15.
+WORDS = ("alpha", "beta", "gamma", "delta", "eps", "zeta", "theta", "iota", "kappa", "lambda", "mu")
+LINES = []
+for i in range(2400):
+    a, b, c, d = (WORDS[(i * k) % len(WORDS)] for k in (1, 3, 5, 7))
+    LINES.append("%s_%d \"%s ${%s}\" | %s=%d; %s '%s' # %s %d" % (a, i % 97, b, c, d, i, a, c, b, i * 7))
+TOKEN = re.compile(r"\"[^\"]*\"|'[^']*'|\$\{?\w+\}?|[A-Za-z_]\w*=|\w+|[|;&#]")
+def keep(tok, seen):
+    k = tok[:3]
+    seen[k] = seen.get(k, 0) + 1
+    return len(tok)
 def yard():
     t = time.process_time()
-    sw.commands(text, "/")
+    seen, total = {}, 0
+    for _ in range(10):
+        for text in LINES:
+            for m in TOKEN.finditer(text):
+                total += keep(m.group(0), seen)
+            q = text.find('"')
+            while q >= 0:
+                q = text.find('"', q + 1)
+            total += len(text.split()) + (text.rfind("#") > 0)
     return time.process_time() - t
-samples = [yard(), yard()]
+# Several samples, and the least is the unit (L656): load only ever adds to a sample.
+samples = [yard() for _ in range(5)]
 payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd": "/", "permission_mode": "auto",
                       "hook_event_name": "PreToolUse", "tool_name": "Bash",
                       "tool_input": {"command": line, "description": "d"}, "tool_use_id": "t"})
 # One judgement is one sample, and one sample cannot be told from noise (L656, L395): on a CI runner
 # one reading of 12.5 crossed a ceiling of 12 that the personal MacBook measures at 10.8 (#2915). So
 # a judgement past the ceiling is measured again, up to three in all, and the least is judged, each
-# against yardstick readings taken around it. A cold measurement (an empty cache to start) is
+# against yardstick samples taken around it. A cold measurement (an empty cache to start) is
 # repeated from an empty cache each time, so no sample is answered from the one before.
 cache = os.environ.get("SLACK_GATE_CACHE_DIR", "")
 cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
 ratios = []
-for attempt in range(3):
+for attempt in range(int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3"))):
     env = dict(os.environ)
     if cold and attempt:
         env["SLACK_GATE_CACHE_DIR"] = tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/")))
@@ -3989,42 +4013,85 @@ for attempt in range(3):
     now = resource.getrusage(resource.RUSAGE_CHILDREN)
     spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
     samples += [yard(), yard()]
-    unit = statistics.median(samples)
+    unit = min(samples)
     if p.returncode != 0:
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
     if ratios[-1][0] <= ceiling:
         break
 ratio, spent, unit = min(ratios)
-print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s, in each of %d samples (%s)"
+# Every measurement is recorded where the suite prints it, passing or not, so the ceiling's premise
+# can be measured again from any run's log, a CI runner's included (L316).
+log = os.environ.get("SLACK_GATE_COST_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s)\n"
+                % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
+                   ", ".join("%.1f" % r[0] for r in ratios)))
+print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
-  cost="$(SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
-  check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
-  cost="$(SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
-  check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
+  export SLACK_GATE_COST_LOG="$T/cost.log"
+  cost="$(SLACK_GATE_COST_LABEL=one-lesson SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 36 L174 2>&1)"
+  check "one claude-sync lesson is judged within 36 units of the yardstick (#2784)" "$cost"
+  cost="$(SLACK_GATE_COST_LABEL=three-lessons SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 66 L174 L290 L656 2>&1)"
+  check "three claude-sync lessons in one line are judged within 66 units of the yardstick (#2784)" "$cost"
+  # The yardstick must not move with the gate (#2918, Dan's decision of 2026-11-15). Measured by the
+  # gate's own reader, a cut to that reader shrank the yardstick with it and read as no change, and a
+  # reader made slower slowed both alike and read as no change either. So a copy of the gate whose
+  # reader burns three times its own processor time again must read as at least a quarter dearer than
+  # the gate itself judging the same line, measured just above.
+  slow="$T/slow-gate"
+  mkdir -p "$slow" && cp "$HOOK" "$DIR/slack_drafts_only_gate.py" "$slow/" && cp -R "$DIR/lib" "$slow/lib"
+  cat >> "$slow/lib/shell-words.py" <<'PY'
+_plain_commands = commands
+def commands(*a, **k):
+    import time
+    t = time.process_time()
+    got = _plain_commands(*a, **k)
+    end = time.process_time() + 3 * (time.process_time() - t)
+    while time.process_time() < end:
+        pass
+    return got
+PY
+  base="$(sed -n 's/^one-lesson .*: \([0-9.]*\) (.*/\1/p' "$T/cost.log" | head -1)"
+  if [ -n "$base" ]; then
+    over="$(awk -v b="$base" 'BEGIN { printf "%.1f", b * 1.25 }')"
+    cost="$(SLACK_GATE_COST_LABEL=slow-reader SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$slow/slack-drafts-only-gate.sh" "$CS" "$over" L174 2>&1)"
+    case "$cost" in
+      "judging it took"*) cost=ok ;;
+      *) cost="$cost; the yardstick moved with the gate: $(grep '^slow-reader' "$T/cost.log")" ;;
+    esac
+    check "a gate whose reader is four times as slow is measured as dearer, past $over against $base (#2918)" "$cost"
+  else
+    check "the one lesson cost check recorded its measurement in the cost log (#2918)" "$(cat "$T/cost.log" 2>&1)"
+  fi
 fi
 
 # Since #2911 the gate reads every file the claude-sync suite sources, and judging
 # `bash tests/test-claude-sync.sh` took 7.5 s of the 11 s budget at a load of 14, and ran out of it on
 # a slow CI runner (PR #2917, 2026-11-13). Profiled, the time was work repeated per name, per local
-# and per command over the same text, now done once (#2918). Held in readings of claude-sync, as
-# above, so no load moves it: at about 0.31 s a reading the 11 s budget is about 35 readings, and the
-# ceiling of 19 is about half of it, which leaves a runner at least half again as slow per reading
-# inside the budget. Measured on 2026-11-13: about 22 readings before #2918 (21.5 to 24 under load),
-# about 15 after.
+# and per command over the same text, now done once (#2918). Held in units of the fixed yardstick, as
+# above, so no load moves it: at 0.095 s a unit on the personal MacBook the 11 s budget is about 116
+# units, and the ceiling of 57 is about half of it, which leaves a runner twice as slow per unit inside
+# the budget. Measured on 2026-11-13 in readings of claude-sync: about 22 before #2918 (21.5 to 24
+# under load), about 15 after; on 2026-11-15 in units: 44.8 to 45.7 at a load of 11.
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
-  cost="$(SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 19 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  check "bash tests/test-claude-sync.sh is judged within 19 readings of claude-sync, about half the budget (#2918)" "$cost"
+  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 57 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  check "bash tests/test-claude-sync.sh is judged within 57 units of the yardstick, about half the budget (#2918)" "$cost"
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
-  cost="$(SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 2 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  check "judged a second time, bash tests/test-claude-sync.sh takes at most 2 readings of claude-sync, from the cache (#2918)" "$cost"
+  cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  check "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
 else
   # L411: installed in ~/.claude there is no checkout, so no suite to judge.
   echo "SUITE-PART-UNMEASURED #2918: no claude-config checkout with tests/test-claude-sync.sh beside this suite, so the time to judge it was not measured"
 fi
+if [ -f "$T/cost.log" ]; then
+  sed 's/^/cost measured (#2918): /' "$T/cost.log"
+fi
+unset SLACK_GATE_COST_LOG
 
 # The second round of #2918 cut work no verdict needs, each checked here for what it skips and for
 # answering as before: sh_binds stops counting assignments once the count settles it; its patterns
