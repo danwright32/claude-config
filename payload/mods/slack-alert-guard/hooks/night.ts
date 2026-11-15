@@ -111,24 +111,28 @@ export const morningReaches = (c: SlackAlertChoice, session: string): boolean =>
 export const REASK_MS = 2 * 60 * 60_000
 
 /**
- * When the sleep a choice was made in ended: the first end at or after the choice. Where no end can
- * be read, or none came after it, the choice's own time (L648): Dan is awake whenever this is read,
- * so asking early costs one question, while waiting on an end nobody can read leaves it unasked.
+ * When the sleep a choice was made in ended: the first end at or after the choice, or null where no
+ * end can be read or none came after it.
  */
-export const sleepEndOf = (c: Pick<SlackAlertChoice, 'at'>, ends: readonly number[] | null): number =>
-  (ends ?? []).filter(t => t >= c.at).sort((a, b) => a - b)[0] ?? c.at
+export const sleepEndOf = (c: Pick<SlackAlertChoice, 'at'>, ends: readonly number[] | null): number | null =>
+  (ends ?? []).filter(t => t >= c.at).sort((a, b) => a - b)[0] ?? null
 
 /**
  * The choices to put to Dan again in this session (#2993): still unapproved more than REASK_MS after
  * the sleep they were chosen in ended, never one he answered Change wording to, one already put to
- * him again in this session (`done`), or one this session's morning lines reach (`morning`).
+ * him again in this session (`done`), or one this session's morning lines reach (`morning`). With no
+ * sleep end read, the wait counts from the choice itself (L648): Dan is awake whenever this is read,
+ * so asking early costs one question, while waiting on an end nobody can read leaves it unasked.
  */
 export const reaskDue = (all: readonly SlackAlertChoice[], now: number, ends: readonly number[] | null, done: readonly string[], morning: ReadonlySet<string>): SlackAlertChoice[] =>
-  all.filter(c => c.rejected === undefined && !done.includes(c.id) && !morning.has(c.id) && now - sleepEndOf(c, ends) > REASK_MS)
+  all.filter(c => c.rejected === undefined && !done.includes(c.id) && !morning.has(c.id) && now - (sleepEndOf(c, ends) ?? c.at) > REASK_MS)
 
-/** What a session is told for each choice it puts to Dan again (#2993), naming its project when known, its file and its wording. */
-export const reaskLine = (c: SlackAlertChoice, repo: string | null): string =>
-  `Slack alert wording chosen overnight${repo ? ` in ${repo}` : ''} for ${c.file} is still not approved, more than two hours after sleep mode ended: "${c.rendered}". Put it to Dan now, once in this session: ${asking(c)}. Until he approves it, no pull request carrying it can merge.`
+/**
+ * What a session is told for each choice it puts to Dan again (#2993), naming its project when known,
+ * its file and its wording. `ended`: whether the sleep end was read, so the line claims only what was (L11).
+ */
+export const reaskLine = (c: SlackAlertChoice, repo: string | null, ended: boolean): string =>
+  `Slack alert wording chosen overnight${repo ? ` in ${repo}` : ''} for ${c.file} is still not approved, more than two hours after ${ended ? 'sleep mode ended' : 'it was chosen'}: "${c.rendered}". Put it to Dan now, once in this session: ${asking(c)}. Until he approves it, no pull request carrying it can merge.`
 
 /** The pull request a gh command merges, as `gh pr diff` takes it, or why it cannot be read. */
 export type MergeOf = { selector: string[]; repo: string | null | undefined } | { unreadable: true } | undefined

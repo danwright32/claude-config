@@ -62,7 +62,7 @@ import { type Reading, type Traced, consoleArgs, docstrings, jsSpans, pySpans, r
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { type InputFs, inputTexts } from './mod-kit/inputs.ts'
-import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, waitingNamed } from './night.ts'
+import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf, waitingNamed } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -246,7 +246,7 @@ const isAsleep = async ($: EngineInterface): Promise<boolean> => {
 
 // When each sleep on this Mac ended (#2993), or null when scope modes cannot say (not loaded, a
 // version without the noun, or the ended records unreadable): each choice then waits from when it
-// was made (night.ts sleepEndOf), so it is asked early rather than never.
+// was made (night.ts reaskDue), so it is asked early rather than never.
 const sleepEnds = async ($: EngineInterface): Promise<number[] | null> => {
   try {
     const ends: unknown = await ($ as unknown as { scopeModes: SleepModes }).scopeModes.sleepEnds()
@@ -1183,8 +1183,9 @@ export const register: Register = on => {
       const kept = (await $.state.get(reaskedRef)).value
       const done = kept?.session === self ? kept.ids : []
       const reached = new Set(mine.filter(c => morningReaches(c, self)).map(c => c.id))
-      const due = reaskDue(all, now, await sleepEnds($), done, reached)
-      for (const c of due) lines.push(reaskLine(c, c.places?.[0]?.repo ?? (await repoOf($, c.file))))
+      const ends = await sleepEnds($)
+      const due = reaskDue(all, now, ends, done, reached)
+      for (const c of due) lines.push(reaskLine(c, c.places?.[0]?.repo ?? (await repoOf($, c.file)), sleepEndOf(c, ends) !== null))
       if (due.length) await $.state.set(reaskedRef, { session: self, ids: [...done, ...due.map(c => c.id)] })
       return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
     } catch (err) {

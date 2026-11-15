@@ -99,8 +99,9 @@ test('a choice is asked again two hours after the sleep it was chosen in ended, 
   const c = choice({ at })
   // The first end after the choice decides, never an earlier night's or a later one's.
   expect(sleepEndOf(c, [HOUR, at + 6 * HOUR, at + 30 * HOUR])).toBe(at + 6 * HOUR)
-  // No end readable, or none after it: the choice's own time, so it is asked early rather than never.
-  for (const ends of [null, [], [HOUR]]) expect(sleepEndOf(c, ends)).toBe(at)
+  // No end readable, or none after it: none, and the wait counts from the choice, so it is asked early rather than never.
+  for (const ends of [null, [], [HOUR]]) expect(sleepEndOf(c, ends)).toBeNull()
+  expect(reaskDue([c], at + REASK_MS + 1, null, [], new Set()).map(x => x.id)).toEqual(['t1'])
   const ends = [at + 6 * HOUR]
   const due = (cs: SlackAlertChoice[], now: number, done: string[] = [], morning = new Set<string>()) => reaskDue(cs, now, ends, done, morning).map(x => x.id)
   expect(due([c], at + 6 * HOUR + REASK_MS)).toEqual([])
@@ -110,9 +111,13 @@ test('a choice is asked again two hours after the sleep it was chosen in ended, 
   expect(due([choice({ at, rejected: at + 7 * HOUR })], at + 9 * HOUR)).toEqual([])
   // An expired one is still unapproved, so it is asked too.
   expect(due([choice({ at, expired: at + 8 * HOUR })], at + 9 * HOUR)).toEqual(['t1'])
-  const line = reaskLine(c, 'danwright32/app')
-  for (const part of ['danwright32/app', c.file, c.rendered, 'slack-alert-guard:chosen:t1']) expect(line).toContain(part)
-  expect(reaskLine(c, null)).not.toContain(' in null')
+  const line = reaskLine(c, 'danwright32/app', true)
+  for (const part of ['danwright32/app', c.file, c.rendered, 'slack-alert-guard:chosen:t1', 'after sleep mode ended']) expect(line).toContain(part)
+  expect(reaskLine(c, null, true)).not.toContain(' in null')
+  // When no sleep end could be read, the line claims only what was measured: the time since it was chosen.
+  const unread = reaskLine(c, null, false)
+  expect(unread).not.toContain('sleep mode ended')
+  expect(unread).toContain('after it was chosen')
 })
 
 test('the morning lines reach a session\'s own choices, an ended session\'s, and every expired one, and nothing else', () => {

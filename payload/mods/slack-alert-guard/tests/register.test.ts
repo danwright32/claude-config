@@ -2005,7 +2005,9 @@ test('when sleep mode cannot say when it ended, the choice is put to Dan two hou
   await w.clock.advance(HOUR)
   w.night.session = 's2'
   w.ctl.cwd = SITE
-  expect(await promptLines($)).toContain(`chosen:${id}`)
+  const lines = await promptLines($)
+  expect(lines).toContain(`chosen:${id}`)
+  expect(lines).not.toContain('sleep mode ended')
   // Never while asleep: no question reaches Dan then.
   night.asleep = true
   w.night.session = 's3'

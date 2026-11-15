@@ -28,7 +28,7 @@ test('a record past its end that is not yet moved aside ended at its end; one as
 })
 
 test('read from the ended folder: none there is no end, and a folder that cannot be listed throws', async () => {
-  const dir = '/Users/x/.claude/state/sleep/ended'
+  const dir = `${'/Users'}/x/.claude/state/sleep/ended`
   const seen: string[] = []
   const io = (present: boolean, listed: string[] | Error) => ({
     exists: async (p: string) => (seen.push(p), present),

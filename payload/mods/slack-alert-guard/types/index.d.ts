@@ -69,8 +69,10 @@ export type SlackAlertPlace = { file: string; repo: string | null }
 
 declare module 'claude-code' {
   interface PluginState {
-    /** The calls waiting on Dan's approval, by the refused call's id; dropped at session end. */
-    /** `reasked`: the choices put to Dan again two hours after sleep ended (#2993), each once, with the session that asked. */
+    /**
+     * The calls waiting on Dan's approval, by the refused call's id; dropped at session end.
+     * `reasked`: the choices put to Dan again two hours after sleep ended (#2993), each once, with the session that asked.
+     */
     'slack-alert-guard': { pending: SlackAlertPending[]; told: string[]; reasked: { session: string; ids: string[] } }
   }
 }
