@@ -5506,9 +5506,14 @@ the default branch. The sweep also keeps a worktree whose branch has an open pul
 while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
 session registry folder or a file it edited is inside it), because a pushed branch counts as kept
 elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
-the sleep record or a worker's places cannot be read, it removes nothing that run. The `--just-merged`
+the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
+a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
+unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
 removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
-alone, and asks neither question. Anything it cannot read (the folder, git's
+alone, and asks none of these questions. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -7867,7 +7872,11 @@ SHA-256 of its repository and word (#2246), since a held command's word can pass
 character key limit; an answer kept under the earlier key form is still read for its week (#2256
 removes that read).
 Every judgement, decision and answer is one JSON line in
-`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. Past 4 MiB the
+`~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
+session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
+to an absolute path: the mod then writes, reads and rotates its log and error file in that folder,
+and the weekly line's runner reads the same one (#2906). A relative path is refused, and nothing is
+written anywhere. Past 4 MiB the
 log is renamed at a session start into `rotated/<stamp>.rotating` and a new one begun; ten minutes
 later a session start copies its decision lines to `rotated/<stamp>.decisions.jsonl` and only then
 renames it to the archive `rotated/<stamp>.jsonl`. Nothing is ever deleted, and a rotation that

@@ -69,6 +69,9 @@ RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
+# NODE_OPTIONS set for any program, which loads the modules it names in every node that program
+# starts (claude-config#2912).
+RUNS+='|NODE_OPTIONS'
 # A shell a pipe feeds its code (`cat post.sh | sh`, ending the command, so no space follows it), and
 # curl handed a config file, which is the request it describes (claude-config#2887). Under nocasematch
 # -K also matches curl's -k, which only sends that call to python3.
