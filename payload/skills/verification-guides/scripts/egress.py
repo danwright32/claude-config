@@ -74,7 +74,7 @@ CANARY = ("import os, socket\n"
 # "Sandbox: node(123) allow network-outbound remote:*:443\n<tag>", or the same line prefixed with
 # "N duplicate reports for " when the kernel collapsed repeats of it.
 REPORT = re.compile(r"^(?:(\d+) duplicate reports? for )?Sandbox: (.*)\((\d+)\) allow network-outbound"
-                    r" remote:\S*?:(\d+)\n(\S+)\s*$", re.S)
+                    r" remote:\S*?:(\d+)\n(\S+)\s*\Z", re.S)
 
 
 class Unavailable(Exception):

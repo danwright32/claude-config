@@ -580,13 +580,13 @@ export const settledByBranchChoice = (r: Reading): boolean => !!r.branchLeft && 
 /** A merge-when-ready run: the PR it merges, and the repository it names in lower case, undefined for none. */
 export type MergeRun = { number: number; repo: string | undefined }
 
-/** The run mod-kit's reading of the helper's words gives: one PR number, its repository readable. */
+/** The run mod-kit's reading of the helper's words gives: one PR number, its repository readable, lower cased here whatever the reading spells (#2958). */
 export const mergeRunOf = (h: ModKitGh | undefined, moved = false): MergeRun | undefined => {
   if (!h || h.unreadable || h.named === null) return undefined
   const numbers = h.positionals.filter(p => /^\d+$/.test(p))
   if (numbers.length !== 1) return undefined
   if (h.named === undefined && moved) return undefined
-  return { number: Number(numbers[0]), repo: h.named }
+  return { number: Number(numbers[0]), repo: h.named?.toLowerCase() }
 }
 
 const MOVES_FOLDER = new Set(['cd', 'pushd'])
