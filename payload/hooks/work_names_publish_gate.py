@@ -1517,6 +1517,8 @@ def cat_files(command, where):
         if os.path.getsize(path) > CAT_LIMIT:
             raise CannotTell("cat reads %s, which is larger than the %d bytes this check reads" % (word, CAT_LIMIT))
         texts.append(_read(word, where, "a substitution prints"))
+    if not texts:
+        raise CannotTell("cat names no file, so it reads standard input, which this check cannot see")
     return "\n".join(texts)
 
 

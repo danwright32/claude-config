@@ -663,6 +663,8 @@ check "#2997 cat of a file naming a work repository is refused from a clean dire
 check "#2997 and says the name the file holds: $out" has "$out" "zephyr"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat missing-2997.md)\""
 check "#2997 and a file that cannot be read is refused as cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat -n)\""
+check "#2997 and so is cat given only options, which reads standard input: $out" has "$out" "cannot be told"
 run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean-2997.md)\""
 check "#2997 (control) cat of a clean file from a clean directory passes: $out" passed
 # Only a regular file of a bounded size is read: a device or a pipe can be read for ever (the lessons
