@@ -67,20 +67,20 @@ GUIDE_SECTIONS = ("Roles", "Reach", "State setup", "Checks", "Known traps")
 CHECKS_MIN, CHECKS_MAX = 3, 6
 NOTE_MAX = 300
 
-AREA_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-RECEIPT_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{7}-[0-9a-f]{6}$")
-AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
-CHECK_ID_RE = re.compile(r"^C[1-9][0-9]?$")
-DONE_ID_RE = re.compile(r"^D[1-9][0-9]?$")
-SHOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(png|jpg|jpeg)$")
-NONCE_RE = re.compile(r"^vg-[0-9a-f]{16}$")
+AREA_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\Z")
+SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
+RECEIPT_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{7}-[0-9a-f]{6}\Z")
+AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}\Z")
+CHECK_ID_RE = re.compile(r"^C[1-9][0-9]?\Z")
+DONE_ID_RE = re.compile(r"^D[1-9][0-9]?\Z")
+SHOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(png|jpg|jpeg)\Z")
+NONCE_RE = re.compile(r"^vg-[0-9a-f]{16}\Z")
 # A native screen's test, as xcodebuild's -only-testing names one (Target, Target/Class, or
 # Target/Suite/function() in Swift Testing) and swift test's --filter accepts: segments of
 # identifier characters joined by single slashes, the last optionally ending in (). Nothing a
 # shell would read as anything but text (claude-config#2696).
 NATIVE_TEST_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_][A-Za-z0-9_.]{0,99}){0,2}(\(\))?\Z")
-LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$")
+LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?\Z")
 
 COMMANDS_REQUIRED = ("stop", "drive")
 COMMANDS_OPTIONAL = ("stamp", "native_shot")
@@ -92,8 +92,8 @@ TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "s
 # The hosts a served app may always reach: this machine. areas.json's egress.allow adds to them,
 # and a run's egress verdict is clean only when nothing outside the combined list was reached.
 EGRESS_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
-EGRESS_HOST = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-                         r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+EGRESS_HOST = re.compile(r"^(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                         r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\Z")
 EGRESS_VERDICTS = ("clean", "not-clean", "unmeasured")
 MODES = ("warn", "block")
 RESULTS = ("pass", "fail")
@@ -185,7 +185,7 @@ def glob_to_regex(glob):
         for ch in part:
             seg += "[^/]*" if ch == "*" else "[^/]" if ch == "?" else re.escape(ch)
         out.append(seg if last else seg + "/")
-    return re.compile("^" + "".join(out) + "$")
+    return re.compile("^" + "".join(out) + r"\Z")
 
 
 def glob_matches(glob, path):
@@ -531,7 +531,7 @@ def bucket(areas, paths):
 # guides
 
 
-CHECK_LINE = re.compile(r"^\s*[-*]\s+\[(C[0-9]+)\]\s+(\S.*?)\s*$")
+CHECK_LINE = re.compile(r"^\s*[-*]\s+\[(C[0-9]+)\]\s+(\S.*?)\s*\Z")
 
 
 def _sections(text):
@@ -939,7 +939,7 @@ def load_drives(receipt_id, home=None):
 
 TALLY_SCHEMA = "verification-tally/1"
 TALLY_ASK_EVERY = 5   # chosen, not measured: enough merges to see whether block would refuse them all
-SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
 def tally_dir(home=None):

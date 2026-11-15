@@ -466,6 +466,29 @@ const CHANGERS: Record<string, { does: ModKitChange['does']; valued: ReadonlySet
   chgrp: { does: 'mode', valued: new Set() },
 }
 const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
+// The tests and options of find that only narrow which entries an action reaches, or change nothing
+// about which (#2924's sighting, 2026-11-13): each taking a value, and each taking none.
+const FIND_NARROWS_VALUED = new Set(['-type', '-xtype', '-maxdepth', '-mindepth', '-mtime', '-mmin', '-atime', '-amin', '-ctime', '-cmin', '-newer', '-size', '-user', '-group', '-uid', '-gid', '-perm', '-links', '-inum'])
+const FIND_NARROWS = new Set(['-a', '-and', '-empty', '-depth', '-xdev', '-mount', '-print', '-print0'])
+/**
+ * The -name and -iname patterns a find -delete is limited to: the entries it takes away are those
+ * whose name matches every one. Read from the expression before that -delete; undefined where it
+ * holds no such pattern, or anything that may widen it (-o, !, -not, a bracket, -path, -regex,
+ * another action) or a pattern a variable or a command's output fills in.
+ */
+const findNames = (expr: readonly string[]): string[] | undefined => {
+  const names: string[] = []
+  for (let i = 0; i < expr.length; i++) {
+    const a = expr[i] as string
+    if (a === '-name' || a === '-iname') {
+      const p = expr[++i]
+      if (p === undefined || /[$`]/.test(p)) return undefined
+      names.push(p)
+    } else if (FIND_NARROWS_VALUED.has(a)) i++
+    else if (!FIND_NARROWS.has(a)) return undefined
+  }
+  return names.length ? names : undefined
+}
 
 // A command run as a script file by its own name (#1586): one whose name ends in a script language's
 // extension (make-settled.py, /Users/<name>/bin/gen.sh), or one named by a path from the folder it is in
@@ -731,19 +754,22 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const folder = path ? undefined : patternFolder(w, dir, home)
     stdout.push({ word, ...(path ? { path } : {}), ...(folder ? { folder } : {}) })
   }
-  const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
+  // `names`: the -name patterns a find -delete is limited to (findNames), kept only on a tree.
+  const changed = (word: string, does: ModKitChange['does'], tree?: boolean, names?: string[]) => {
     tree = tree || foundRoots.includes(word)
     const path = pathOf(word, dir)
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
-    // A path changed the same way twice is kept once, a tree on either keeping the tree.
+    // A path changed the same way twice is kept once, a tree on either keeping the tree. It stays
+    // limited to names only where both were limited to the same ones.
     const had = changes.find(x => x.does === does && (path ? x.path === path : !x.path && x.word === written))
     if (had) {
       if (tree) had.tree = true
+      if (had.names && (!names || names.join('\n') !== had.names.join('\n'))) delete had.names
       return
     }
     const folder = path ? undefined : patternFolder(word, dir, home)
-    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}) })
+    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}), ...(tree && names ? { names } : {}) })
   }
   const abs = (p: string) => pathOf(p, dir)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
@@ -1066,7 +1092,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const roots = firstExpr < 0 ? rest : rest.slice(0, firstExpr)
       for (let i = 0; i < rest.length; i++) {
         const a = rest[i] as string
-        if (a === '-delete') for (const r of roots.length ? roots : ['.']) changed(r, 'remove', true)
+        if (a === '-delete') {
+          const names = findNames(rest.slice(firstExpr < 0 ? rest.length : firstExpr, i))
+          for (const r of roots.length ? roots : ['.']) changed(r, 'remove', true, names)
+        }
         else if (FIND_FILE_ACTIONS.has(a) && rest[i + 1] !== undefined) named(rest[++i] as string)
         else if (['-exec', '-execdir', '-ok', '-okdir'].includes(a)) {
           const end = rest.findIndex((w, j) => j > i && (w === ';' || w === '+'))

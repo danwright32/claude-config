@@ -444,5 +444,88 @@ check "#2909 not that the text names a work repository: $out" lacks "$out" 'name
 run "gh issue create --repo danwright-test/private-notes --title x --body-file $NOTES/nowhere.md"
 check "#2909 (control) a private repository is not asked about its body file: $out" passed
 
+# ---------------------------------------------------------------- a variable in posted text (claude-config#2961)
+# A variable was judged by its spelling, so a title built from $CLAUDE_PROJECT_DIR, or any variable
+# holding a work checkout's path, passed while the shell posted the path. A variable the shell expands
+# in what is posted is judged by its value where that is known (the environment every Bash call
+# starts from, or an assignment earlier in the command), and refused as unreadable where it is not.
+export WN_TEST_DIR="$WORKCO" WN_TEST_CLEAN="nothing to see" WN_TEST_NOTES="$NOTES"
+unset WN_TEST_NOT_SET
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_DIR\" --body x"
+check "#2961 a title expanding a variable whose value names a work repository is refused: $out" refused
+check "#2961 and says the name: $out" has "$out" "acme-widgets"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"see \${WN_TEST_DIR}/notes\""
+check "#2961 and so is a body writing it in braces: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_NOT_SET\" --body x"
+check "#2961 a variable set nowhere this check can read is refused: $out" refused
+check "#2961 saying its value cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title \"from \${WN_TEST_CLEAN:-x}\" --body x"
+check "#2961 an expansion past a plain name is refused as unreadable: $out" refused
+run "T=\$(date); gh issue create --repo danwright-test/public-notes --title \"\$T\" --body x"
+check "#2961 a variable this command sets from a substitution is refused: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$WN_TEST_DIR
+EOF
+)\""
+check "#2961 a variable in an unquoted heredoc body is expanded, so judged: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_CLEAN\" --body x"
+check "#2961 (control) a variable whose value names nothing passes: $out" passed
+run "T='clean words'; gh issue create --repo danwright-test/public-notes --title \"\$T\" --body x"
+check "#2961 (control) and so does one this command sets to clean text: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title 'from \$WN_TEST_DIR' --body x"
+check "#2961 (control) a single quoted dollar is text, not a variable: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title \"cost \\\$WN_TEST_NOT_SET\" --body x"
+check "#2961 (control) and so is an escaped one: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<'EOF'
+Use \$WN_TEST_NOT_SET and \$WN_TEST_DIR here.
+EOF
+)\""
+check "#2961 (control) a quoted heredoc body is text, however many dollars it holds: $out" passed
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/body.md"
+check "#2961 (control) a cd's directory is where the command runs, not posted: $out" passed
+# Unless something reads the directory back, when the cd's own variable is posted after all (the
+# lessons review of 1029c9f).
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title \"\$(basename \$(pwd))\" --body x"
+check "#2961 a cd into a variable's folder, read back by pwd, is judged by the variable's value: $out" refused
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title \"\$_\" --body x"
+check "#2961 and so is one read back by \$_: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body-file \"\$WN_TEST_NOTES/body.md\""
+check "#2961 (control) nor is the path of a body file: $out" passed
+run "gh issue create --repo danwright-test/private-notes --title \"from \$WN_TEST_NOT_SET \$WN_TEST_DIR\" --body x"
+check "#2961 (control) a private repository is not asked about its variables: $out" passed
+# $_ is the last word of the command before, which can be a body file's path, never posted itself
+# and so never judged (the lessons review of 6bb51da).
+run "gh issue create --repo danwright-test/public-notes --title x --body-file \"$NOTES/body.md\" && gh issue comment 5 --repo danwright-test/public-notes --body \"\$_\""
+check "#2961 \$_ after a body file's path is refused as unreadable: $out" refused
+run "gh issue comment 5 --repo danwright-test/public-notes --body \"\${_}\""
+check "#2961 and so is \${_}: $out" refused
+# A new public repository's name, description and homepage are judged the same way.
+run "gh repo create danwright-test/fresh --public --description \"from \$WN_TEST_DIR\""
+check "#2961 a public repository described from a variable naming a work repository is refused: $out" refused
+run "gh repo create danwright-test/fresh --public --homepage \"\$WN_TEST_NOT_SET\""
+check "#2961 and one with a homepage from a variable set nowhere: $out" refused
+run "gh repo create danwright-test/fresh --public --description \"\$WN_TEST_CLEAN\""
+check "#2961 (control) a public repository described from a clean variable passes: $out" passed
+run "gh repo create danwright-test/fresh --private --description \"from \$WN_TEST_DIR\""
+check "#2961 (control) a private one is not asked about its variables: $out" passed
+# A sync posts no text of its own; a variable naming either repository leaves it unreadable, refused.
+run "gh repo sync \"\$WN_TEST_NOT_SET\" --source danwright-test/private-notes"
+check "#2961 a sync to a repository named by a variable is refused: $out" refused
+export WN_TEST_SRC="danwright-test/private-notes"
+run "gh repo sync danwright-test/public-notes --source \"\$WN_TEST_SRC\""
+check "#2961 and so is one from a source named by a variable: $out" refused
+unset WN_TEST_SRC
+# A gh api write is judged where it runs too, with what the command set before it (the lessons
+# review of af806e6: it was judged from the environment alone, so a clean assignment was refused).
+run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 (control) a gh api write posting a variable this command set to clean text passes: $out" passed
+run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$WN_TEST_DIR\""
+check "#2961 a gh api write posting a variable whose value names a work repository is refused: $out" refused
+run "T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 and one set from a substitution is refused: $out" refused
+run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\"; T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 two api writes in the same words are each judged where they run (the lessons review of ce9f5b1): $out" refused
+unset WN_TEST_DIR WN_TEST_CLEAN WN_TEST_NOTES
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
