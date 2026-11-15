@@ -358,6 +358,10 @@ def carry_exceptions(spec, base, exceptions, decisions, frames):
     whose fixed height, if any, holds it; a decision exception fits only a new decision of the same id
     saying the same thing. Everything else is left behind, and said so.
     """
+    for x in exceptions:
+        if isinstance(x, dict) and "carriedFromDesign" in x:
+            fail('exception %s gives "carriedFromDesign", which make-settled.py writes from "frozenFrom"; '
+                 'leave it out and name the source exception in "carriedFrom"' % x.get("id"))
     carried = [x for x in exceptions if isinstance(x, dict) and "carriedFrom" in x]
     if "frozenFrom" not in spec:
         if carried:
