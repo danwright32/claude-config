@@ -135,10 +135,11 @@ write_projects "$GOOD_PROJECTS"
 # check sets them, so these fixtures judge only the names their own block lists.
 PROJ_HASHES=""
 run(){   # $1 = the command; output in out, exit code in rc, the decision in decision
-  local payload
-  payload="$(jq -nc --arg c "$1" --arg d "$CO" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
+  # RUN_DIR, when set, is the directory the session runs the command from (the checkout otherwise).
+  local payload dir="${RUN_DIR:-$CO}"
+  payload="$(jq -nc --arg c "$1" --arg d "$dir" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
   : > "$CALLS"
-  out="$(cd "$CO" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
+  out="$(cd "$dir" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
     FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
     HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
@@ -526,6 +527,68 @@ check "#2961 and one set from a substitution is refused: $out" refused
 run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\"; T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
 check "#2961 two api writes in the same words are each judged where they run (the lessons review of ce9f5b1): $out" refused
 unset WN_TEST_DIR WN_TEST_CLEAN WN_TEST_NOTES
+
+# ---------------------------------------------------------------- the directory read back with no cd (claude-config#2981)
+# ~+, ~- and a pwd substitution were judged by their spelling when no cd came before them, so a title
+# of ~+ or "$(pwd)", run from a work checkout, passed while the shell posted the checkout's path. Each
+# is judged by the directory it reads (where the command runs, or the one before it for ~-), and
+# refused where that cannot be known.
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title ~+ --body x"
+check "#2981 a title of ~+ run from a work checkout is refused: $out" refused
+check "#2981 and says the name its directory holds: $out" has "$out" "acme-widgets"
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$(pwd)\" --body x"
+check "#2981 and so is a title of \$(pwd): $out" refused
+check "#2981 saying what it expands: $out" has "$out" '$(pwd)'
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\`pwd\`\" --body x"
+check "#2981 and a backquoted pwd: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"\$( pwd -L )\" --body x"
+check "#2981 and pwd -L, spaced: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"seen in \$(basename \$(pwd))\""
+check "#2981 and a pwd substitution inside another: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"a=\$(echo ~+)\""
+check "#2981 and ~+ inside a substitution, where it is unquoted: $out" refused
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$(pwd)
+EOF
+)\""
+check "#2981 and a pwd substitution in an unquoted heredoc body: $out" refused
+RUN_DIR="$WORKCO" run "cd /tmp && gh issue create --repo danwright-test/public-notes --title ~- --body x"
+check "#2981 ~- after a cd out of a work checkout is judged by the directory it left: $out" refused
+check "#2981 and says the name: $out" has "$out" "acme-widgets"
+RUN_DIR="$WORKCO" run "gh repo create danwright-test/fresh --public --description \"from \$(pwd)\""
+check "#2981 a public repository described from \$(pwd) is refused: $out" refused
+RUN_DIR="$WORKCO" run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$(pwd)\""
+check "#2981 and a gh api write posting it: $out" refused
+# Where the directory cannot be known, refused.
+run "gh issue create --repo danwright-test/public-notes --title ~- --body x"
+check "#2981 ~- with no cd before it, whose directory this check cannot know, is refused: $out" refused
+check "#2981 saying it cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title \"\$(pwd | tr a-z A-Z)\" --body x"
+check "#2981 a substitution that runs pwd and changes its output is refused: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"\$(cd .. && pwd)\" --body x"
+check "#2981 and so is one that runs pwd somewhere else: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title ~1 --body x"
+check "#2981 and a directory stack entry: $out" refused
+# Controls: a clean directory, and text the shell does not expand.
+run "gh issue create --repo danwright-test/public-notes --title \"\$(pwd) \`pwd\`\" --body x"
+check "#2981 (control) pwd from a directory that names nothing passes: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title ~+ --body x"
+check "#2981 (control) and so does ~+: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title '~+ \$(pwd) ~-' --body x"
+check "#2981 (control) single quoted, from a work checkout, they are text: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title \"~+ and ~-\" --body x"
+check "#2981 (control) and a tilde inside double quotes is not expanded: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x~+ --body x"
+check "#2981 (control) nor is one inside a word: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"run pwd to see it\""
+check "#2981 (control) the word pwd in text is not a substitution: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<'EOF'
+seen in \$(pwd) and \`pwd\`
+EOF
+)\""
+check "#2981 (control) a quoted heredoc body is text: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/private-notes --title \"~+ \$(pwd)\" --body x"
+check "#2981 (control) a private repository is not asked about its directory: $out" passed
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
