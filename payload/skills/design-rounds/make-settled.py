@@ -67,7 +67,20 @@ The spec, with paths resolved against the spec's own folder:
          "provenBy": "scripts/test-x.ts"}   for elsewhere
       ],
       "exceptions": [{"id": "X1", "decision": "D7" | "frame": "f3", "region": [x, y, w, h],
-                      "words": "Dan's own words", "date": "YYYY-MM-DD", "source": "where he said them"}],
+                      "words": "Dan's own words", "date": "YYYY-MM-DD", "source": "where he said them"},
+                     {"id": "X2", "frame": "f1", "region": [x, y, w, h], "carriedFrom": "X4"}],
+                                         the second, with "frozenFrom" only: one of the source's
+                                         exceptions carried across, its words, date and source filled in
+                                         from it
+      "frozenFrom": "../../docs/design/admin.html",   optional: the settled design this one's page was
+                                         frozen from (its chrome, header included, taken from it). Every
+                                         exception of that file still covering what these frames show (a
+                                         frame exception, on each frame of its frame's width that holds its
+                                         region; a decision exception, on the same decision) must be
+                                         carried or named in "notCarried", or nothing is written, and the
+                                         refusal lists each with the entries that carry it (claude-config#2942)
+      "notCarried": ["X3"],              with "frozenFrom" only: the source's exceptions Dan chose not to
+                                         carry, or to carry onto some frames only
       "idioms": ["what is an idiom of the medium rather than a decision"]   optional
     }
 
@@ -82,8 +95,15 @@ builder or its screenShown throws, a decision with no owner (check-decision-map.
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, an intro that is not text, a requirements list that is empty or not in the shape above (a
 number not written as text, a requirement with no sentence, two sharing a number), a decision naming a
-requirement the list does not hold (check-decision-map.py's UNLISTED), and an exception without Dan's
-words, a date and where he said them. Exit 2 with the reason.
+requirement the list does not hold (check-decision-map.py's UNLISTED), an exception without Dan's
+words, a date and where he said them, and, for a design frozen from a settled one, a "frozenFrom" that is
+not text, not there or not a settled design, a source exception still covering this design that is
+neither carried nor in "notCarried", a carried exception whose words, date, source or region are not the
+source's, that names a frame for a decision exception or a decision for a frame one, or that goes onto a
+frame of another width or a decision of that id saying something else, a "notCarried" that is not a list
+of ids, a "carriedFrom" or "notCarried" naming an exception the source does not hold, or given with no
+"frozenFrom", and an exception giving "carriedFromDesign" itself, which only this tool writes. Exit 2 with
+the reason.
 """
 import html
 import json
@@ -259,6 +279,7 @@ def main(argv):
     exceptions = spec.get("exceptions", [])
     if not isinstance(exceptions, list):
         fail('"exceptions" must be a list')
+    exceptions, carry_notes = carry_exceptions(spec, base, exceptions, decisions, frames)
     problems = design_score.check_exceptions(exceptions, decisions, [{"id": f["id"], "width": f["width"], **(
         {"height": f["height"]} if f.get("height") else {})} for f in frames])
     if problems:
@@ -308,6 +329,8 @@ def main(argv):
             fail("; ".join(problems))
     os.replace(tmp, out_path)
     print("SETTLED %s frames=%d decisions=%d exceptions=%d" % (out_path, len(frames), len(decisions), len(exceptions)))
+    for note in carry_notes:
+        print("make-settled: " + note, file=sys.stderr)
     if requirements is None:
         named = []
         for d in decisions:
@@ -318,6 +341,163 @@ def main(argv):
             print('make-settled: the decisions name Requirement %s, and the spec gives no "requirements", so the '
                   "page shows those numbers without their sentences" % ", ".join(named), file=sys.stderr)
     return 0
+
+
+RECORD = ("words", "date", "source")
+
+
+def carry_exceptions(spec, base, exceptions, decisions, frames):
+    """A design frozen from a settled one (claude-config#2942): the spec's exceptions with every one carried
+    from the source filled in from it, and the notes to say once it is written.
+
+    In a work repository on 2026-11-13 a settled design froze its admin page from an earlier settled design
+    whose header account button Dan had excepted on every frame. It was sealed with no exceptions, its
+    frames scored 99.9% with every differing pixel in that same region, and the question went to Dan again
+    after the build was scored. So a spec naming its source in "frozenFrom" is refused, writing nothing,
+    until every source exception still covering what the new frames show is either carried (onto every new
+    frame it fits, in the source's own words, date and place) or named in "notCarried": the question is
+    asked once, at sealing time, and never answered by this tool on Dan's behalf. A region means the same
+    place only in a frame of the same width, so a frame exception fits each new frame of its frame's width
+    whose fixed height, if any, holds it; a decision exception fits only a new decision of the same id
+    saying the same thing. Everything else is left behind, and said so.
+    """
+    for x in exceptions:
+        if isinstance(x, dict) and "carriedFromDesign" in x:
+            fail('exception %s gives "carriedFromDesign", which make-settled.py writes from "frozenFrom"; '
+                 'leave it out and name the source exception in "carriedFrom"' % x.get("id"))
+    carried = [x for x in exceptions if isinstance(x, dict) and "carriedFrom" in x]
+    if "frozenFrom" not in spec:
+        if carried:
+            fail('exception %s is carried from another design ("carriedFrom"), and the spec names no "frozenFrom", '
+                 "the settled design it was frozen from" % carried[0].get("id"))
+        if "notCarried" in spec:
+            fail('the spec names exceptions it did not carry ("notCarried"), and no "frozenFrom" they were in')
+        return exceptions, []
+    source_name = spec["frozenFrom"]
+    if not isinstance(source_name, str) or not source_name.strip():
+        fail('"frozenFrom" must name the settled design file this design was frozen from')
+    path = os.path.join(base, source_name)
+    if not os.path.isfile(path):
+        fail('the settled design this one was frozen from ("frozenFrom") is not there: %s' % path)
+    try:
+        _raw, s_decisions, s_frames, s_exceptions, _kind = design_score.read_design(path)
+    except design_score.Unreadable as err:
+        fail('"frozenFrom" names %s, which is not a settled design: %s' % (source_name, err))
+    label = os.path.basename(source_name)
+    by_id = {x.get("id"): x for x in s_exceptions if isinstance(x, dict)}
+    s_frame = {f["id"]: f for f in s_frames}
+    s_said = {d.get("id"): d.get("decision") for d in s_decisions if isinstance(d, dict)}
+    declined = spec.get("notCarried", [])
+    if not isinstance(declined, list) or not all(isinstance(v, str) for v in declined):
+        fail('"notCarried" must list the ids of %s\'s exceptions Dan chose not to carry, as text' % label)
+    for v in declined:
+        if v not in by_id:
+            fail('"notCarried" names %s, and %s holds no exception %s' % (v, label, v))
+    new_frame = {f["id"]: f for f in frames}
+    said = {d["id"]: d.get("decision") for d in decisions}
+
+    out = []
+    for x in exceptions:
+        if not (isinstance(x, dict) and "carriedFrom" in x):
+            out.append(x)
+            continue
+        xid, cid = x.get("id"), x["carriedFrom"]
+        src = by_id.get(cid) if isinstance(cid, str) else None
+        if src is None:
+            fail("exception %s is carried from %s, and %s holds no exception %s" % (xid, cid, label, cid))
+        for field in RECORD:
+            if field in x and x[field] != src.get(field):
+                fail("exception %s is carried from %s %s, and a carried exception keeps Dan's words, date and where he "
+                     "said them as %s records them; its %s is not the one recorded there, so leave it out or write it as the source does"
+                     % (xid, label, cid, label, field))
+        if "decision" in src:
+            if x.get("decision") != src["decision"] or "frame" in x:
+                fail("exception %s carries %s %s, which excepts decision %s, so it names that decision and no frame"
+                     % (xid, label, cid, src["decision"]))
+            if src["decision"] in said and said[src["decision"]] != s_said.get(src["decision"]):
+                fail('exception %s carries %s %s onto decision %s, which says "%s" here and "%s" there: Dan excepted '
+                     "the decision he saw, and this one is another for him to approve"
+                     % (xid, label, cid, src["decision"], said[src["decision"]], s_said.get(src["decision"])))
+        else:
+            if "frame" not in x or "decision" in x:
+                fail("exception %s carries %s %s, which excepts a frame, so it names one of this design's frames"
+                     % (xid, label, cid))
+            if x.get("region") != src.get("region"):
+                fail("exception %s carries %s %s with the region %s, and %s covers %s: a carried exception covers "
+                     "the region Dan excepted, and any other is a new exception for him to approve"
+                     % (xid, label, cid, json.dumps(x.get("region")), cid, json.dumps(src.get("region", "its whole frame"))))
+            sw = s_frame.get(src["frame"], {}).get("width")
+            # A frame named as anything but text is refused below, by check_exceptions, in its own words.
+            own = new_frame.get(x["frame"]) if isinstance(x["frame"], str) else None
+            if own is not None and own["width"] != sw:
+                fail("exception %s carries %s %s, said of a frame %s wide, onto frame %s, which is %d wide: a region "
+                     "is the same place only in a frame of the same width" % (xid, label, cid, sw, x["frame"], own["width"]))
+        out.append(dict(x, **{field: src[field] for field in RECORD if field in src}, carriedFromDesign=label))
+
+    # Dan's one answer recorded on several frames ("on every frame") is several source exceptions with the
+    # same region, words, date and place, on frames of one width: one question, carried or declined together.
+    def same(s):
+        return (s.get("decision"), s_frame.get(s.get("frame"), {}).get("width"), json.dumps(s.get("region")),
+                s.get("words"), s.get("date"), s.get("source"))
+    declined_as = {same(by_id[v]) for v in declined}
+    alike = {}
+    for s in s_exceptions:
+        alike.setdefault(same(s), []).append(s.get("id"))
+    unanswered, behind, asked = [], [], set()
+    for s in s_exceptions:
+        sid = s.get("id")
+        if "decision" in s:
+            if said.get(s["decision"]) is None or said.get(s["decision"]) != s_said.get(s["decision"]):
+                behind.append("%s (decision %s): this design holds no decision %s saying the same"
+                              % (sid, s["decision"], s["decision"]))
+                continue
+            fits = [None]
+        else:
+            sf = s_frame.get(s["frame"], {})
+            sw = sf.get("width")
+            region = s.get("region")
+            fits = [f["id"] for f in frames if f["width"] == sw and not (
+                f.get("height") and region and region[1] + region[3] > f["height"])]
+            if not fits:
+                behind.append("%s (frame %s, %s wide): this design has no frame %s wide %s"
+                              % (sid, s["frame"], sw, sw, "that holds its region" if any(
+                                  f["width"] == sw for f in frames) else "for its region to mean the same place"))
+                continue
+        if same(s) in declined_as or same(s) in asked:
+            continue
+        # Answered on a frame only by a carry of this same answer: another exception over the same region in
+        # other words is another thing Dan said, and is asked about on its own.
+        open_ = [f for f in fits if not any(
+            same(by_id[x["carriedFrom"]]) == same(s) and (f is None or x.get("frame") == f)
+            for x in out if isinstance(x, dict) and "carriedFromDesign" in x)]
+        if open_:
+            asked.add(same(s))
+            unanswered.append((s, open_))
+    notes = ["left behind from %s, covering nothing this design shows: %s" % (label, "; ".join(behind))] if behind else []
+    if declined:
+        notes.append("not carried from %s, on Dan's choice: %s" % (label, ", ".join(declined)))
+    if unanswered:
+        lines = []
+        for s, open_ in unanswered:
+            where = "decision %s" % s["decision"] if "decision" in s else "frame %s, region %s" % (
+                s["frame"], json.dumps(s.get("region", "the whole frame")))
+            if open_ == [None]:
+                ready = [{"id": "%s-carried" % s.get("id"), "decision": s["decision"], "carriedFrom": s.get("id")}]
+                onto = "this design's decision %s" % s["decision"]
+            else:
+                ready = [dict({"id": "%s-%s" % (s.get("id"), f), "frame": f}, **(
+                    {"region": s["region"]} if "region" in s else {}), carriedFrom=s.get("id")) for f in open_]
+                onto = "this design's frames %s" % ", ".join(open_)
+            also = [v for v in alike[same(s)] if v != s.get("id")]
+            lines.append('  %s, %s, %s: "%s" (%s)\n    still covers %s; to carry it, add to "exceptions":\n%s'
+                         % (s.get("id") + ((" (with %s, the same answer on other frames)" % ", ".join(also)) if also else ""), where, s.get("date"), s.get("words"), s.get("source"), onto,
+                            "".join("      %s\n" % json.dumps(r) for r in ready)))
+        fail("this design was frozen from %s, and %d of the exceptions Dan approved there still cover what this "
+             "design shows. Ask him once, now, before the build is scored, whether each carries across; carry it "
+             "onto every frame it fits, or list its id in \"notCarried\" (or both, for a partial carry):\n%s%s"
+             % (label, len(unanswered), "".join(lines),
+                ("  Left behind, covering nothing this design shows: %s\n" % "; ".join(behind)) if behind else ""))
+    return out, notes
 
 
 # Added only to a page that lists its requirements: each entry is the target of the decisions that cite
@@ -414,9 +594,12 @@ def render_page(spec, chrome, decisions, exceptions, frames, frames_block, templ
         items.append('<li id="%s"><strong>%s</strong> %s%s <span class="dr-how">%s %s</span></li>'
                      % (e(d["id"]), e(d["id"]), closed(e(d.get("decision", ""))), why, owner, closed(how)))
     if exceptions:
-        exc = "".join('<li><strong>%s</strong>, %s, %s: "%s" (%s)</li>' % (
+        exc = "".join('<li><strong>%s</strong>, %s, %s: "%s" (%s)%s</li>' % (
             e(x["id"]), e("decision %s" % x["decision"] if "decision" in x else "frame %s" % x["frame"]),
-            e(x["date"]), e(x["words"]), e(x["source"])) for x in exceptions)
+            e(x["date"]), e(x["words"]), e(x["source"]),
+            # Said where it was said, and where it came from (claude-config#2942).
+            e(", carried from %s %s" % (x["carriedFromDesign"], x["carriedFrom"])) if "carriedFromDesign" in x else "")
+            for x in exceptions)
         exc = "<ol>%s</ol>" % exc
     else:
         exc = "<p>None. A deliberate difference from this design is a new design round, or an exception Dan approves in his own words, recorded here.</p>"

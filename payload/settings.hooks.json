@@ -189,6 +189,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-gh-view-comments.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-rtk-init.sh",
             "timeout": 10,
             "onFailure": "block"
@@ -355,7 +361,7 @@
         ]
       },
       {
-        "matcher": "Bash|mcp__claude_ai_Supabase__.*|mcp__claude_ai_SFDC_USE__.*|mcp__.*",
+        "matcher": "Bash|Edit|Write|MultiEdit|mcp__claude_ai_Supabase__.*|mcp__claude_ai_SFDC_USE__.*|mcp__.*",
         "hooks": [
           {
             "type": "command",

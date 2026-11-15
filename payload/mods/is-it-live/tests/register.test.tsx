@@ -130,6 +130,12 @@ const modKit: { name: string; register: Register } = {
         </Box>
       )
     })
+    // As mod-kit does since Claude Code 2.1.323 (#2903): while it draws a row, every other row is
+    // left out of the stacked band.
+    on('ui.render', { component: 'AbovePromptList' } as never, (async (_$: unknown, e: { props: { rows: readonly { plugin: string }[] } }, next: (e: unknown) => Promise<unknown>) => {
+      const ours = e.props.rows.filter(r => r.plugin === 'mod-kit')
+      return next(ours.length === 0 || ours.length === e.props.rows.length ? e : { ...e, props: { ...e.props, rows: ours } })
+    }) as never)
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = ((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: Row[] }).value ?? []
       if (!rows.length) return next(e)
@@ -1777,6 +1783,31 @@ test('a draft the session saves after the hold lets the turn end, and the next m
   await mergeAndCard($, 413)
   expect((await turnEnd($)).block).toContain(SOURCE)
   expect(w.slackCalls).toEqual([DRAFT])
+})
+
+// #2896, Dan, 2026-11-14: no skip. Since #2630 a draft is saved as it is shown, so there is no skip
+// left to record, and nothing but a saved draft settles the hold for a thread (or the session saying
+// its merges are unrelated, or Slack saying the thread is gone). Dan answering the old picker, Skip
+// this time on its own metadata, is a question like any other and leaves the next turn end held.
+test('an answer of Skip this time to a picker leaves the draft hold standing; only a saved draft settles it (#2896)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  // The dialog, answered as Claude Code answers one whose answers came filled in.
+  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: 'answered', text: 'answered' }) as never)
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held.toLowerCase()).not.toContain('skip')
+  const q = 'Save this reply as a Slack draft?'
+  await slack($, 'AskUserQuestion', {
+    questions: [{ question: q, header: 'Reply', multiSelect: false, options: [{ label: 'Save as a draft', description: 'Save it' }, { label: 'Skip this time', description: 'No reply' }] }],
+    answers: { [q]: 'Skip this time' },
+    metadata: { source: `is-it-live:${CH}:${TS}` },
+  })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  expect((await draft($)).isError).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
 })
 
 // #2630: on 2026-11-10 the card showed the message for the person who asked in a thread, and the
