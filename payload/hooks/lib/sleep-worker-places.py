@@ -11,7 +11,8 @@ worktree idle for hours, and the sweep's six hour rule then read it as abandoned
 A worker's places are its session registry record's `cwd` and its `edits` (the files the collision
 guard noted it editing, its agents' edits among them). The record is looked for in the registry
 and then in its archive beside it, where a record goes an hour after its session ended. A worker
-found in neither, or a record or sleep record that cannot be read, is an error: where it worked
+found in neither, a record or sleep record that cannot be read, or a record holding a place that is
+not an absolute path, holds a tab or newline, or is missing (#2988), is an error: where it worked
 cannot be told, and the caller keeps every worktree rather than read that as "nowhere" (L98).
 
   python3 sleep-worker-places.py <sleep record> <session registry folder>
@@ -71,11 +72,18 @@ def main(argv):
         if not isinstance(edits, list):
             fail("session %s's registry record lists its edits in a shape this reader does not know" % sid)
         for place in [r.get("cwd")] + edits:
-            if isinstance(place, str) and place.startswith("/") and "\n" not in place and "\t" not in place:
-                # As recorded, and resolved: git lists a worktree by its real path, and a record can
-                # hold the same place through a symlink (/var for /private/var on macOS).
-                for p in dict.fromkeys([place.rstrip("/") or "/", os.path.realpath(place)]):
-                    print("%s\t%s" % (sid, p))
+            # A place that is not an absolute path, or holds a tab or newline (which would break the
+            # line it is printed on), cannot be matched against a worktree. Dropping it would leave a
+            # worker whose only places are like that printing nothing, which reads as having worked
+            # nowhere, so it is refused like a record that cannot be read (#2988, L98). On 2026-11-14
+            # one edit of 1956 in this Mac's registry ended in a newline.
+            if not (isinstance(place, str) and place.startswith("/") and "\n" not in place and "\t" not in place):
+                fail("session %s's registry record holds a place this reader cannot use (%s), so where "
+                     "it worked cannot be read" % (sid, json.dumps(place)[:200]))
+            # As recorded, and resolved: git lists a worktree by its real path, and a record can
+            # hold the same place through a symlink (/var for /private/var on macOS).
+            for p in dict.fromkeys([place.rstrip("/") or "/", os.path.realpath(place)]):
+                print("%s\t%s" % (sid, p))
     return 0
 
 

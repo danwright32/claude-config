@@ -1113,6 +1113,72 @@ def _param_at(text, i):
     return None
 
 
+# The directory read back with no cd before it (claude-config#2981). ~+, ~- and a pwd substitution
+# were judged by their spelling, so a title of ~+ or "$(pwd)" run from a work checkout posted its path.
+# Each is an expansion of the directory, named as variables_posted judges it: PWD where the command
+# runs, OLDPWD the one before, PHYSICAL the first with its symbolic links resolved (pwd -P).
+PHYSICAL = "PWD -P"
+# A substitution that is pwd alone, the directory it prints known: $(pwd), `pwd`, with -L or -P.
+PWD_SUBST = re.compile(r"\$\(\s*pwd(?:\s+-([LP]))?\s*\)|`\s*pwd(?:\s+-([LP]))?\s*`")
+# pwd or dirs as a word anywhere else in a substitution, whose output this check cannot work out:
+# $(pwd | tr a-z A-Z), $(cd .. && pwd), and pwd run by another word, $(command pwd), $(env pwd),
+# $(builtin pwd) (the lessons review of 913e483). Any such word, not one starting a command, since
+# what runs it cannot be listed; $(echo pwd) is refused with them. Each word is read with its quoting
+# removed, so \pwd, 'pwd' and p\wd, which the shell runs as pwd, are seen too (the lessons review of
+# 5d2a327).
+DIR_WORDS = frozenset({"pwd", "dirs"})
+WORD_BEFORE = " \t\n;&|(`{"
+WORD_END = " \t\n;&|()<>`"
+# The same in an unquoted heredoc body, read a line at a time from the substitution's opening, so
+# quotes there are text: a pwd or dirs word, or a directory tilde prefix, on the rest of that line.
+DIR_IN_SUBST = re.compile(r"(?:\$\(|`)[^\n]*?(?<=[\s;&|(`{=])(?:['\"\\]?(?:pwd|dirs)(?![\w.-])"
+                          r"|~(?:[+-][0-9]*|[0-9]+)(?=$|[\s/;&|()<>`]))")
+# A tilde prefix the shell expands to a directory, measured in bash 3.2 and zsh 5.9 (2026-11-14): at
+# the start of a word, unquoted, and ended by the word's end or a slash. ~+ and ~- are the directory
+# and the one before; with a number they are directory stack entries, which this check does not follow.
+TILDE_DIR = re.compile(r"~([+-]?)([0-9]*)(?=$|[\s/;&|()<>`])")
+TILDE_BEFORE = " \t\n;&|()<>`="
+
+
+def _plain_word(text, i):
+    """The word starting at text[i] with its quotes and backslashes removed, or None when it holds an
+    expansion (a $), whose value is judged on its own."""
+    out, n = [], len(text)
+    while i < n and text[i] not in WORD_END:
+        c = text[i]
+        if c == "$":
+            return None
+        if c == "\\":
+            out.append(text[i + 1:i + 2])
+            i += 2
+            continue
+        if c not in "'\"":
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _dir_subst_at(text, i):
+    """A pwd substitution starting at text[i] (a $ or a backquote), as (name, shown, end), else None."""
+    m = PWD_SUBST.match(text, i)
+    if not m:
+        return None
+    return (PHYSICAL if "P" in (m.group(1), m.group(2)) else "PWD"), m.group(0), m.end()
+
+
+def _tilde_at(text, i):
+    """The directory tilde prefix at text[i], unquoted, as (name, shown, end), else None: name None for
+    a directory stack entry. A ~ alone (the home directory) or ~user is no directory this reads."""
+    if i and text[i - 1] not in TILDE_BEFORE:
+        return None
+    m = TILDE_DIR.match(text, i)
+    if not m or not (m.group(1) or m.group(2)):
+        return None
+    if m.group(2):
+        return None, m.group(0), m.end()
+    return ("PWD" if m.group(1) == "+" else "OLDPWD"), m.group(0), m.end()
+
+
 def _heredoc_bodies(text, i, pending, out):
     """Read the bodies of the heredocs a line opened, starting at text[i], adding the expansions of each
     unquoted one to out. Returns where the text goes on."""
@@ -1130,6 +1196,13 @@ def _heredoc_bodies(text, i, pending, out):
                 if line[k] == "\\":
                     k += 2
                     continue
+                got = _dir_subst_at(line, k) if line[k] in "$`" else None
+                if got:
+                    out.append(got[:2])
+                    k = got[2]
+                    continue
+                if (line.startswith("$(", k) or line[k] == "`") and DIR_IN_SUBST.match(line, k):
+                    out.append((None, "a substitution reading the directory"))
                 got = _param_at(line, k) if line[k] == "$" else None
                 if got:
                     out.append(got[:2])
@@ -1140,7 +1213,9 @@ def _heredoc_bodies(text, i, pending, out):
 
 
 def expansions(text):
-    """Every parameter expansion the shell makes in text, in order, as (name, shown) (_param_at).
+    """Every parameter expansion the shell makes in text, in order, as (name, shown) (_param_at), and
+    every read of the directory: ~+ and ~- (_tilde_at), a pwd substitution (_dir_subst_at), and as
+    (None, shown) pwd or dirs run any other way inside a substitution (claude-config#2981).
 
     Quotes are followed as the shell follows them, a $( or backquote opening a context of its own, so
     the body of `--body "$(cat <<'EOF' ... EOF)"` is read as the quoted heredoc it is."""
@@ -1150,13 +1225,28 @@ def expansions(text):
     while i < n:
         frame = frames[-1]
         c = text[i]
+        if len(frames) > 1 and not frame[0] and text[i - 1] in WORD_BEFORE and c not in WORD_BEFORE:
+            word = _plain_word(text, i)
+            if word in DIR_WORDS:
+                out.append((None, "a substitution running %s" % word))
         if c == "\\":
             i += 2
+            continue
+        got = _dir_subst_at(text, i) if c == "$" or (c == "`" and frame[2] != "`") else None
+        if got:
+            out.append(got[:2])
+            i = got[2]
             continue
         if c == "$" and text.startswith("$(", i):
             frames.append([False, 0, ")"])
             i += 2
             continue
+        if c == "~" and not frame[0]:
+            got = _tilde_at(text, i)
+            if got:
+                out.append(got[:2])
+                i = got[2]
+                continue
         if c == "`":
             if frame[2] == "`":
                 frames.pop()
@@ -1224,7 +1314,8 @@ def variables_posted(text, place):
     this check can read, [(shown, None, why not)] for one it cannot. A body file's path is not posted
     (posted_text), so its variables are left out. Neither is a cd's directory, unless something in
     the rest of the command can read it back (READS_BACK), when the cd's own variables are judged too:
-    `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f)."""
+    `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f).
+    ~+, ~- and a pwd substitution are judged as $PWD and $OLDPWD are, by the directory (#2981)."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
@@ -1238,8 +1329,9 @@ def variables_posted(text, place):
             out.append((shown, None, "is a form of expansion this check does not work out"))
         elif name == "_":
             out.append((shown, None, "is the last word of the command before it, which this check does not follow"))
-        elif name in ("PWD", "OLDPWD"):
-            where = place.cwd if name == "PWD" else place.previous
+        elif name in ("PWD", "OLDPWD", PHYSICAL):
+            where = place.previous if name == "OLDPWD" else place.cwd
+            where = os.path.realpath(where) if where and name == PHYSICAL else where
             out.append((shown, where, None) if where else
                        (shown, None, "is a directory this check cannot follow the command to"))
         elif name in place.vars:
