@@ -14,7 +14,9 @@ import { APPROVE, CHANGE, SOURCE, fixedParts } from './rules.ts'
 //   3. in the morning the session that chose it (once that one ended, a session working in the
 //      repository it was made in, #2833) puts it to him in the guard's own picker, and only
 //      his Approve wording there records an approval; Change wording, a dialog closed by itself, or
-//      no answer leaves it held and asked again;
+//      no answer leaves it held and asked again; one still unapproved two hours after sleep ended is
+//      put to him once by every other awake session on the Mac, whatever its project, until he
+//      approves it or answers Change wording (#2993);
 //   4. one unanswered for CHOICE_MS expires, said once in each session that may ask it (a session in
 //      the repository it was made in, #2833), and stays held: expiry
 //      stops nothing being asked for, it never lets anything merge.
@@ -51,8 +53,8 @@ export const asleepRefusal = (blocked: string, id: string): string =>
  * The morning question: the message chosen overnight, put to Dan to keep or change. Approving sends
  * nothing. The file named is the one that posts it, the only kind the guard holds (#2837).
  */
-export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'rendered'>): string =>
-  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.file}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
+export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'rendered'>, repo: string | null = null): string =>
+  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.file}${repo ? ` in ${repo}` : ''}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
 
 export const MORNING_OPTIONS = [
   { label: APPROVE, description: 'Keep the wording chosen overnight. Only the pull request carrying it may merge.' },
@@ -88,11 +90,45 @@ export const morningLines = (choices: readonly SlackAlertChoice[], session: stri
       )
       continue
     }
-    if (c.session !== null && c.session !== session) continue
+    if (!morningReaches(c, session)) continue
     lines.push(`Slack alert wording was chosen overnight for ${c.file} and waits on Dan: before anything else, put it to him: ${asking(c)}. Until he approves it, no pull request carrying it can merge.`)
   }
   return lines
 }
+
+/**
+ * Whether the morning lines reach a choice in this session, given it is one the session may ask
+ * (askedHere): its own or an ended session's at every message, and an expired one once.
+ */
+export const morningReaches = (c: SlackAlertChoice, session: string): boolean => c.expired !== undefined || c.session === null || c.session === session
+
+/**
+ * How long a choice may wait unapproved after the sleep it was chosen in ended before any awake
+ * session on the Mac puts it to Dan (#2993): the morning question reaches him only from the session
+ * that made it, or one in its repository once that ended, so an open session he is not writing in,
+ * or work in another project, left it unasked for hours while every merge carrying it was refused.
+ */
+export const REASK_MS = 2 * 60 * 60_000
+
+/**
+ * When the sleep a choice was made in ended: the first end at or after the choice. Where no end can
+ * be read, or none came after it, the choice's own time (L648): Dan is awake whenever this is read,
+ * so asking early costs one question, while waiting on an end nobody can read leaves it unasked.
+ */
+export const sleepEndOf = (c: Pick<SlackAlertChoice, 'at'>, ends: readonly number[] | null): number =>
+  (ends ?? []).filter(t => t >= c.at).sort((a, b) => a - b)[0] ?? c.at
+
+/**
+ * The choices to put to Dan again in this session (#2993): still unapproved more than REASK_MS after
+ * the sleep they were chosen in ended, never one he answered Change wording to, one already put to
+ * him again in this session (`done`), or one this session's morning lines reach (`morning`).
+ */
+export const reaskDue = (all: readonly SlackAlertChoice[], now: number, ends: readonly number[] | null, done: readonly string[], morning: ReadonlySet<string>): SlackAlertChoice[] =>
+  all.filter(c => c.rejected === undefined && !done.includes(c.id) && !morning.has(c.id) && now - sleepEndOf(c, ends) > REASK_MS)
+
+/** What a session is told for each choice it puts to Dan again (#2993), naming its project when known, its file and its wording. */
+export const reaskLine = (c: SlackAlertChoice, repo: string | null): string =>
+  `Slack alert wording chosen overnight${repo ? ` in ${repo}` : ''} for ${c.file} is still not approved, more than two hours after sleep mode ended: "${c.rendered}". Put it to Dan now, once in this session: ${asking(c)}. Until he approves it, no pull request carrying it can merge.`
 
 /** The pull request a gh command merges, as `gh pr diff` takes it, or why it cannot be read. */
 export type MergeOf = { selector: string[]; repo: string | null | undefined } | { unreadable: true } | undefined

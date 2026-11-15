@@ -1,9 +1,11 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { SlackAlertChoice } from '../types/index.d.ts'
-import { CHOICE_MS, carried, choicesOf, isOverdue, mergeOf, morningLines, morningQuestion } from '../hooks/night.ts'
+import { CHOICE_MS, REASK_MS, carried, choicesOf, isOverdue, mergeOf, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf } from '../hooks/night.ts'
 
 // Wording chosen in sleep mode (#2628): the pure rules, apart from the session.
+
+const HOUR = 60 * 60_000
 
 const choice = (over: Partial<SlackAlertChoice> = {}): SlackAlertChoice => ({
   id: 't1',
@@ -86,4 +88,36 @@ test('the morning question names the file that posts the chosen wording, and the
   expect(q).toContain('defined in /w/app/lib/alert.ts. Approve it?')
   expect(q).toContain(choice().rendered)
   expect(q).not.toContain('not yet wired')
+  // #2993: with its project, when that is known.
+  expect(morningQuestion(choice(), 'danwright32/app')).toContain('defined in /w/app/lib/alert.ts in danwright32/app. Approve it?')
+})
+
+// #2993: put to Dan again by any session once still unapproved two hours after the sleep it was
+// chosen in ended, once per session, never once he has approved or changed it.
+test('a choice is asked again two hours after the sleep it was chosen in ended, once in each session, unless changed or asked here already', () => {
+  const at = 10 * HOUR
+  const c = choice({ at })
+  // The first end after the choice decides, never an earlier night's or a later one's.
+  expect(sleepEndOf(c, [HOUR, at + 6 * HOUR, at + 30 * HOUR])).toBe(at + 6 * HOUR)
+  // No end readable, or none after it: the choice's own time, so it is asked early rather than never.
+  for (const ends of [null, [], [HOUR]]) expect(sleepEndOf(c, ends)).toBe(at)
+  const ends = [at + 6 * HOUR]
+  const due = (cs: SlackAlertChoice[], now: number, done: string[] = [], morning = new Set<string>()) => reaskDue(cs, now, ends, done, morning).map(x => x.id)
+  expect(due([c], at + 6 * HOUR + REASK_MS)).toEqual([])
+  expect(due([c], at + 6 * HOUR + REASK_MS + 1)).toEqual(['t1'])
+  expect(due([c], at + 9 * HOUR, ['t1'])).toEqual([])
+  expect(due([c], at + 9 * HOUR, [], new Set(['t1']))).toEqual([])
+  expect(due([choice({ at, rejected: at + 7 * HOUR })], at + 9 * HOUR)).toEqual([])
+  // An expired one is still unapproved, so it is asked too.
+  expect(due([choice({ at, expired: at + 8 * HOUR })], at + 9 * HOUR)).toEqual(['t1'])
+  const line = reaskLine(c, 'danwright32/app')
+  for (const part of ['danwright32/app', c.file, c.rendered, 'slack-alert-guard:chosen:t1']) expect(line).toContain(part)
+  expect(reaskLine(c, null)).not.toContain(' in null')
+})
+
+test('the morning lines reach a session\'s own choices, an ended session\'s, and every expired one, and nothing else', () => {
+  expect(morningReaches(choice(), 's1')).toBe(true)
+  expect(morningReaches(choice({ session: null }), 's1')).toBe(true)
+  expect(morningReaches(choice({ session: 's2', expired: 1 }), 's1')).toBe(true)
+  expect(morningReaches(choice({ session: 's2' }), 's1')).toBe(false)
 })
