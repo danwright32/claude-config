@@ -21,6 +21,14 @@
 #
 # Sourced, never executed. The clock is bash's own SECONDS, so a wait forks nothing per look but
 # its condition and its sleep.
+#
+# WRITE THE CONDITION OUT, in single quotes: hang_wait '[ -e "$f" ]', never hang_wait "[ -e '$f' ]"
+# or hang_wait "$cond". Both waits evaluate it in the suite's own shell, so to the Slack drafts gate
+# a condition built from a value can set any name, and past it the gate is sure of no variable: a
+# module or file the suite reaches later through "$DIR" or "$ROOT" is placed nowhere, and the gate
+# refuses the suite when a session runs it (claude-config#2668, #2679). Where a condition cannot be
+# written out, spell the later path from BASH_SOURCE where it is handed over. The repository's
+# tests/test-hang-wait-suites-gate.sh judges every script sourcing this file through the gate.
 
 HANG_S="${SUITE_HANG_SECONDS:-300}"
 case "$HANG_S" in ''|*[!0-9]*) HANG_S=300 ;; esac
