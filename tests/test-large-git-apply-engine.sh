@@ -99,13 +99,22 @@ run_session() {
   return 0
 }
 
-# The engine's line for each tool hook dispatch through the hooks worker: "<mods> tool.check settled
-# in 208.4ms (worker hop, ...)". Prints "<event> <ms>" per line.
+# The engine's line for each tool hook dispatch through the hooks worker, as Claude Code 2.1.325
+# wrote it on 2026-11-14: "<mods> tool.check settled in 208.4ms (worker hop, ...)". Prints
+# "<event> <ms>" per line.
 settled() { sed -n -E 's/.* (tool\.(check|call)) settled in ([0-9.]+)ms \(worker hop.*/\1 \3/p' "$WORK/$1.log"; }
 missed() { grep -c 'no answer to a heartbeat within' "$WORK/$1.log"; }
 answered() { grep -c '"type":"tool_result"' "$WORK/$1.jsonl"; }
 
 echo "Measuring Claude Code $VERSION: headless sessions applying a large patch, a stand in model and a ${HANG_S}s deadline each."
+
+# The patch maker resets and cleans the checkout it makes, so it refuses a folder already there, and
+# leaves what is in it alone.
+mkdir -p "$WORK/kept"
+printf 'work in progress\n' > "$WORK/kept/notes.txt"
+if python3 "$DIR/large-apply-patch.py" "$WORK/kept" >/dev/null 2>&1; then check "the patch maker refuses a folder already there, and leaves it as it was" "it ran in $WORK/kept"
+elif [ "$(cat "$WORK/kept/notes.txt")" = "work in progress" ] && [ ! -e "$WORK/kept/.git" ]; then check "the patch maker refuses a folder already there, and leaves it as it was" ok
+else check "the patch maker refuses a folder already there, and leaves it as it was" "it refused, but changed $WORK/kept"; fi
 
 every=""
 for d in "$WORK/mods"/*/; do
@@ -134,7 +143,7 @@ if run_session whole whole "$WORK/mods/mod-kit:$WORK/probe"; then
   if [ "$(missed whole)" -ge 1 ]; then check "whole (control): a hook reading 7 s in one stretch misses the heartbeat, and this suite sees it" ok
   else check "whole (control): a hook reading 7 s in one stretch misses the heartbeat, and this suite sees it" "no missed heartbeat in the log, so this suite cannot see one"; fi
   if grep -q 'heartbeat verdict names large-apply-probe' "$WORK/whole.log"; then check "whole (control): the engine names the hook that did not answer" ok
-  else check "whole (control): the engine names the hook that did not answer" "the engine said: $(grep -o 'heartbeat verdict names .*' "$WORK/whole.log" | head -1)"; fi
+  else check "whole (control): the engine names the hook that did not answer" "the engine said: $(grep -m 1 -o 'heartbeat verdict names .*' "$WORK/whole.log")"; fi
 fi
 
 if run_session pieces pieces "$WORK/mods/mod-kit:$WORK/probe"; then

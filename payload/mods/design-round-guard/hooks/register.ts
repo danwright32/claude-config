@@ -378,6 +378,14 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // ever: a copy can be pushed, and what is written into one can reach the product.
 const throwaway = (path: string | undefined, at: Where): boolean => path !== undefined && (inScratchpad(path, at.session, at.temps) || inSessionNotes(path, at.home))
 
+// #2948: the pause a long reading takes between pieces (rules.ts namesInPieces, pacer): a call to the
+// engine's clock, which crosses to the engine and back, so the hooks worker answers its heartbeat
+// meanwhile. Measured 2026-11-15 on Claude Code 2.1.325: 7 s of reading paced by it missed no
+// heartbeat, and the same 7 s in one stretch lost the worker (tests/test-large-git-apply-engine.sh).
+const pauseTurn = ($: EngineInterface) => async (): Promise<void> => {
+  await $.clock.now()
+}
+
 // A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
 // (#1191): where the command names the session's scratchpad, a relative name that `text` (where it
@@ -397,14 +405,6 @@ const throwaway = (path: string | undefined, at: Where): boolean => path !== und
 // The shell's `${APP}/booker.css` (read as `/booker.css`) is its `$APP/booker.css`, judged by where
 // the command sets APP (rules.ts shellBraces, lessons review of #1194), never as a joined name; one
 // spelled after two variables is read as a name in `folder`, as a variable the command does not set is.
-// #2948: the pause a long reading takes between pieces (rules.ts namesInPieces, pacer): a call to the
-// engine's clock, which crosses to the engine and back, so the hooks worker answers its heartbeat
-// meanwhile. Measured 2026-11-15 on Claude Code 2.1.325: 7 s of reading paced by it missed no
-// heartbeat, and the same 7 s in one stretch lost the worker (tests/test-large-git-apply-engine.sh).
-const pauseTurn = ($: EngineInterface) => async (): Promise<void> => {
-  await $.clock.now()
-}
-
 const guessAt = async ($: EngineInterface, found: string, folder: string | undefined, at: Where, scratch: boolean, read: string, shell: string): Promise<Target | undefined> => {
   const braces = shellBraces(read, found)
   const unbrace = (s: string) => (braces === undefined ? s : s.replace(/\$\{([A-Za-z_]\w*)\}/g, '$$$1'))

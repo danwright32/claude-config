@@ -3,7 +3,7 @@
 
     large-apply-patch.py REPO
 
-REPO becomes a git checkout holding four files under docs/design, and REPO/design.patch a patch git
+REPO, which must not exist yet, becomes a git checkout holding four files under docs/design, and REPO/design.patch a patch git
 made of seven changes there, shaped as the one held five times on 2026-11-13 and 14: three new 720
 line captured pages and an edit to each of the four. A captured page is what the design rounds
 skill's capture-chrome.js writes: one stylesheet rule a line, every font and image inlined as base64
@@ -17,6 +17,10 @@ import subprocess
 import sys
 
 repo = sys.argv[1]
+# It runs git reset --hard and git clean in REPO, so it only ever makes a new one: a folder already
+# there, a checkout with someone's work in it included, is refused before anything is written.
+if os.path.lexists(repo):
+    sys.exit(f'large-apply-patch.py: refusing {repo}: it is already there, and this makes a new checkout of its own')
 design = os.path.join(repo, 'docs', 'design')
 os.makedirs(design, exist_ok=True)
 git = ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false']
