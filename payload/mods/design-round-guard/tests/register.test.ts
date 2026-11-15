@@ -4517,3 +4517,114 @@ test('#2991: taking away an untracked copy of the mods folder in a worktree runs
   expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${ONEMOD}/mod-kit/hooks/card.tsx` }))).toContain('card.tsx')
   expect(w.ran.length).toBe(passes.length)
 })
+
+// #2924: on 2026-11-13, in a repository with no screens, `bash milestone-candidates.sh <repo> --like
+// "Design round guard holds a command that only mentions page.html"` was held as a write of a file
+// named by that sentence: every argument a script is handed was judged as a write of it (#1586). A
+// shell script whose own commands, as mod-kit reads them, write only names its own text spells or
+// temporary files it made, take nothing that runs later from outside (eval, a command a variable
+// names, a trap body unread, a file sourced unread), and run no other script, cannot write what it
+// is handed, so its arguments are not judged as writes. The fixture copies the real script's lines
+// that write or read in (its folder idiom, the sourced catch-all.sh, both mktemp files and the trap
+// that removes them, and a python program handed the title), with its scoring left out.
+const MC_DIR = `${HOME}/.claude/skills/milestone`
+const MC = `${MC_DIR}/milestone-candidates.sh`
+const MC_TEXT = [
+  'set -uo pipefail',
+  'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+  'if [[ ! -f "$HERE/catch-all.sh" ]]; then',
+  '  echo "Cannot resolve the holding pen\'s name: $HERE/catch-all.sh is missing. Refusing to guess it." >&2',
+  '  exit 6',
+  'fi',
+  'source "$HERE/catch-all.sh"',
+  'repo="${1:-}"',
+  'shift',
+  'like=""',
+  'closed_since=""',
+  'while [[ $# -gt 0 ]]; do',
+  '  case "$1" in',
+  '    --like) like="${2:-}"; shift 2 ;;',
+  '    --closed-since) closed_since="${2:-}"; shift 2 ;;',
+  '    *) echo "Unknown option: $1" >&2; exit 2 ;;',
+  '  esac',
+  'done',
+  'gh_err="$(mktemp)"',
+  "trap 'rm -f \"$gh_err\"' EXIT",
+  'issues_raw="$(gh issue list --repo "$repo" --state open --json number,title 2>"$gh_err")"',
+  'closed_file=""',
+  'if [[ -n "$closed_since" ]]; then',
+  '  closed_file="$(mktemp)"',
+  "  trap 'rm -f \"$gh_err\" \"$closed_file\"' EXIT",
+  '  gh issue list --repo "$repo" --state closed --json number,title >"$closed_file" 2>"$gh_err"',
+  'fi',
+  "siblings_out=\"$(printf '%s' \"$issues_raw\" | python3 -c '",
+  'import json, sys',
+  'like, catch_all = sys.argv[1], sys.argv[2]',
+  'closed_path = sys.argv[3] if len(sys.argv) > 3 else ""',
+  'if closed_path:',
+  '    with open(closed_path, errors="replace") as fh:',
+  '        print(len(json.loads(fh.read() or "[]")))',
+  'print(like, catch_all)',
+  "' \"$like\" \"$CATCH_ALL\" \"$closed_file\" 2>\"$gh_err\")\"",
+  'printf \'%s\\n\' "$siblings_out"',
+  '',
+].join('\n')
+const CATCH_ALL_TEXT = 'CATCH_ALL="Ungrouped"\nis_catch_all() {\n  local norm_want\n  norm_want="$(printf \'%s\' "$1" | tr \'A-Z\' \'a-z\')"\n  [[ "$norm_want" == "ungrouped" ]]\n}\n'
+const MC_FILES = { [MC]: MC_TEXT, [`${MC_DIR}/catch-all.sh`]: CATCH_ALL_TEXT }
+const MC_RUN = (like: string, script = MC) => `bash ${script} "danwright32/claude-config" --like "${like}"`
+
+test('#2924: a sentence naming a page handed to a shell script that cannot write what it is handed runs', withKit, async ($, on) => {
+  const w = world($, on, { files: MC_FILES })
+  const commands = [
+    MC_RUN('Design round guard holds a command that only mentions page.html'),
+    `${MC_RUN('Design round guard holds a shell command that only mentions a page file name')} | grep -v "^OPEN-MILESTONE" | tail -20`,
+    `bash ~/.claude/skills/milestone/milestone-candidates.sh "danwright32/claude-config" --like "Fix the header in app/page.tsx" --closed-since 2026-11-01`,
+    `cd ${MC_DIR} && bash milestone-candidates.sh danwright32/claude-config --like app/page.tsx`,
+  ]
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+test('#2924 control: a script that may write what it is handed, or that the guard cannot read whole, is still held as writing its argument', withKit, async ($, on) => {
+  const at = (n: string) => `${MC_DIR}/${n}.sh`
+  // Each one line added to the real shape, or one part of it taken away, and what it does.
+  const variants: Record<string, string> = {
+    // The argument written, copied onto, emptied, taken away or moved onto, as a plain write is.
+    copies: `${MC_TEXT}cp "$HERE/t.html" "$like"\n`,
+    redirects: `${MC_TEXT}printf '<main/>' > "$like"\n`,
+    removes: `${MC_TEXT}rm -f "$like"\n`,
+    moves: `${MC_TEXT}mv "$gh_err" "$like"\n`,
+    // Through a variable that also holds a temporary file, a function, or a folder the argument names.
+    reused: `${MC_TEXT}gh_err="$like"\nprintf x > "$gh_err"\n`,
+    function: `${MC_TEXT}keep() { cat > "$1"; }\nkeep "$like" < "$gh_err"\n`,
+    cds: `${MC_TEXT}cd "$like" && printf x > index.html\n`,
+    // What runs later from text: eval, a command a variable names, a trap body naming it.
+    evals: `${MC_TEXT}eval "$like"\n`,
+    named: `${MC_TEXT}"$@"\n`,
+    traps: `${MC_TEXT}trap 'rm -f "$like"' EXIT\n`,
+    trapVar: `${MC_TEXT}cleanup="rm -f $like"\ntrap "$cleanup" EXIT\n`,
+    // A program whose writes are not all named, and another script handed it.
+    program: `${MC_TEXT}python3 -c 'import sys; open(sys.argv[1], "w").write("x")' "$like"\n`,
+    runs: `${MC_TEXT}bash "$HERE/other.sh" "$like"\n`,
+    xargs: `${MC_TEXT}printf '%s' "$like" | xargs -I{} cp "$gh_err" {}\n`,
+    // A file sourced that is not there, or that itself writes the argument.
+    unsourced: MC_TEXT.replace('source "$HERE/catch-all.sh"', 'source "$HERE/missing.sh"'),
+    sourcedWrites: MC_TEXT.replace('source "$HERE/catch-all.sh"', 'source "$HERE/writes.sh"'),
+    // The folder idiom after a cd, which may then name another folder.
+    cdFirst: `cd /tmp\n${MC_TEXT}`,
+  }
+  const files: Record<string, string> = { ...MC_FILES, [at('writes')]: `${CATCH_ALL_TEXT}printf x > "$2"\n` }
+  for (const [n, text] of Object.entries(variants)) files[at(n)] = text
+  const w = world($, on, { files })
+  for (const n of Object.keys(variants)) {
+    const command = MC_RUN('Fix the header in app/page.tsx', at(n))
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ n, held: why.includes(SKIP_QUESTION) && why.includes('app/page.tsx') }).toEqual({ n, held: true })
+  }
+  // A python script, whose writes are not read this way, and a shell script that is not there.
+  for (const command of ['python3 /w/slate/scripts/check.py --title "Fix app/page.tsx"', 'bash /w/slate/scripts/absent.sh --like "Fix app/page.tsx"']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+})

@@ -777,8 +777,11 @@ export const freshTemp = (word: string, values: readonly string[], command: stri
  * or make its folder elsewhere (TMPDIR, PATH or zsh's path set, a function, alias or hash, `$'...'`).
  * `script` is every script text the command was read for, so a script it reads in (`source x.sh`,
  * read by scriptsRunIn) is held to the same; one it sources by a name the guard cannot follow is not seen.
+ * With `files` (#2924), for a variable a write goes to itself rather than one a name is joined onto,
+ * a temporary file (`"$(mktemp)"`) counts too, and so does an empty value (`closed_file=""`), which
+ * names no file at all, so a write to it fails rather than landing anywhere.
  */
-export const madeTemp = (name: string, script: string, seen: ReadonlySet<string> = new Set()): boolean => {
+export const madeTemp = (name: string, script: string, seen: ReadonlySet<string> = new Set(), files = false): boolean => {
   if (seen.has(name) || !/^[A-Za-z_]\w*$/.test(name) || script.includes("$'")) return false
   const plain = script.replace(/["'\\]/g, '')
   if (/TMPDIR|\bPATH\+?=|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\bmktemp\s*\(\s*\)|\bfunction\s+mktemp\b|\balias\b|\bhash\b/.test(plain)) return false
@@ -793,12 +796,13 @@ export const madeTemp = (name: string, script: string, seen: ReadonlySet<string>
   for (const a of script.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
     if (a[1] || a[2]) return false
     const rest = script.slice((a.index ?? 0) + a[0].length)
-    const value = /^"([^"]*)"(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^(\$\(mktemp -d\))(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^([^\s;&|()'"`\\]+)(?=$|[\s;&|)])/.exec(rest)?.[1]
+    const value = /^"([^"]*)"(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^(\$\(mktemp(?: -d)?\))(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^([^\s;&|()'"`\\]+)(?=$|[\s;&|)])/.exec(rest)?.[1]
     if (value === undefined) return false
-    if (value === '$(mktemp -d)') {
+    if (value === '$(mktemp -d)' || (files && value === '$(mktemp)')) {
       any = true
       continue
     }
+    if (files && value === '') continue
     const lead = leadingVariable(value)
     if (lead === undefined || !madeTemp(lead.slice(1), script, new Set([...seen, name]))) return false
     any = true
@@ -1714,8 +1718,11 @@ export const scriptOf = (c: RunCommand): { word: string; shell?: true } | undefi
  * one value it can hold. Undefined for anything else: a variable the command sets nowhere (one only
  * the environment holds) or sets more than one way, a command's output, a pattern, and a relative
  * name where the folder it runs in is not known.
+ * Since #2924, where `command` is the text of a script file at `self`, a variable that script sets
+ * once to its own folder by the usual idiom (ownFolderVar: `HERE="$(cd "$(dirname
+ * "${BASH_SOURCE[0]}")" && pwd)"`) is that file's folder, so a file it sources beside itself is read.
  */
-export const scriptPath = (word: string, command: string, folder: string | undefined, home: string): string | undefined => {
+export const scriptPath = (word: string, command: string, folder: string | undefined, home: string, self?: string): string | undefined => {
   let w = word
   const own = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(\/.*)?$/.exec(word)
   if (own) {
@@ -1728,7 +1735,7 @@ export const scriptPath = (word: string, command: string, folder: string | undef
     } else {
       if (!rest) return undefined
       const plain = command.replace(new RegExp(`\\$\\{${v}\\}`, 'g'), `$${v}`)
-      const set = shellVarPath(plain, plain, `${v}${rest}`)
+      const set = shellVarPath(plain, plain, `${v}${rest}`) ?? (self !== undefined && ownFolderVar(v, command) ? `${self.slice(0, self.lastIndexOf('/')) || '/'}${rest}` : undefined)
       if (set === undefined) return undefined
       w = set
     }
@@ -1877,14 +1884,15 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
         }
       }
   }
-  const visit = async (line: string, at: string, depth: number, via: string | undefined) => {
+  // `self`: the file `line` is the text of, for a variable naming its own folder (#2924).
+  const visit = async (line: string, at: string, depth: number, via: string | undefined, self: string | undefined) => {
     // The text each file an earlier command in the line wrote from a heredoc now holds.
     const written = new Map<string, string>()
     let files: readonly { word: string; path?: string }[] | undefined
     for (const c of await io.pipeline(line, at)) {
       const run = scriptOf(c)
       const folder = c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder
-      const path = run ? scriptPath(run.word, line, folder, home) : undefined
+      const path = run ? scriptPath(run.word, line, folder, home, self) : undefined
       if (run && path !== undefined && !seen.has(path)) {
         seen.add(path)
         const word = via ? `${run.word}, which ${via} runs,` : run.word
@@ -1895,7 +1903,7 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
         else if (text !== null && lang) {
           out.push({ word, path, lang, folder, text })
           if (lang === 'shell') {
-            if (depth < SHELL_DEPTH) await visit(text, folder ?? UNPLACED, depth + 1, word)
+            if (depth < SHELL_DEPTH) await visit(text, folder ?? UNPLACED, depth + 1, word, path)
           } else await imports(lang, { path, text, word, folder })
         }
       }
@@ -1905,8 +1913,126 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
       }
     }
   }
-  await visit(command, cwd, 1, undefined)
+  await visit(command, cwd, 1, undefined, undefined)
   return out
+}
+
+/** The usual idiom a script finds its own folder by (#2924), as one value in double quotes. */
+const OWN_FOLDER = /^"\$\(cd (?:-P )?"\$\(dirname "\$(?:\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE)"\)"(?: (?:>|&>) ?\/dev\/null(?: 2>&1)?)? && pwd(?: -P)?\)"$/
+
+/**
+ * Whether a script's text sets variable `v` to the script's own folder (#2924): one line that is
+ * `v="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` alone (BASH_SOURCE, never `$0`, which in a
+ * sourced file names the script that sourced it), and nothing else setting it: no other assignment,
+ * no builtin or loop naming it, no `${v:=x}`, and no cd, pushd or popd anywhere before that line,
+ * which would move the folder a relative name of the script is read from.
+ */
+export const ownFolderVar = (v: string, text: string): boolean => {
+  if (!/^[A-Za-z_]\w*$/.test(v)) return false
+  const sets = [...text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${v}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))]
+  const a = sets[0]
+  if (sets.length !== 1 || !a || a[1] || a[2]) return false
+  if (new RegExp(`\\$\\{${v}:?=`).test(text)) return false
+  if (new RegExp(`(?:^|[\\s;&|(])(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let|for|select)\\b[^\\n;]*\\b${v}\\b`).test(text)) return false
+  const name = (a.index ?? 0) + a[0].length - v.length - 1
+  const line = text.lastIndexOf('\n', name - 1) + 1
+  if (text.slice(line, name).trim() !== '') return false
+  const end = text.indexOf('\n', name)
+  const value = text.slice((a.index ?? 0) + a[0].length, end < 0 ? text.length : end).trim()
+  if (!OWN_FOLDER.test(value)) return false
+  return !/(?:^|[\s;&|(`])(?:cd|pushd|popd)(?=[\s;&|)]|$)/.test(text.slice(0, line))
+}
+
+/**
+ * The text each `trap` in a script's commands runs later (#2924): its first word, as mod-kit's
+ * pipeline gives it with its quotes taken off, read with the script's own text, since mod-kit's write
+ * reader reads none of it. A trap resetting (`-`) or ignoring (`''`) a signal runs nothing.
+ */
+export const trapBodies = (commands: readonly RunCommand[]): string[] =>
+  commands.filter(c => c.words[0] === 'trap' && c.words.length >= 3 && c.words[1] !== '-' && c.words[1] !== '').map(c => c.words[1] as string)
+
+/**
+ * Commands that run text or another command handed to them later (#2924), whose effect mod-kit's
+ * write reader does not read: eval, exec, alias, and the runners that take a command as words
+ * (xargs, env, builtin, nohup, sudo, doas, time, nice, timeout, parallel, watch, caffeinate, stdbuf,
+ * unbuffer). `command` is one of them unless it only looks a name up (-v, -V).
+ */
+const RUNS_LATER = /^(?:eval|exec|alias|xargs|env|builtin|nohup|sudo|doas|time|nice|timeout|parallel|watch|caffeinate|stdbuf|unbuffer)$/
+
+/** What mod-kit's write reader gives of a script's text, as argumentUnreached reads it (#2924). */
+export type ScriptReading = {
+  files: readonly { word: string; path?: string }[]
+  changes: readonly { word: string; path?: string; does: string }[]
+  unnamed: readonly { targets?: readonly string[]; onlyLoads?: true }[]
+  byGit?: readonly { word: string; path?: string }[]
+  runs?: readonly unknown[]
+}
+
+const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPLACED && !p.startsWith(`${UNPLACED}/`)
+
+/**
+ * Why a shell script may write a file it is handed as an argument (#2924), or undefined where it
+ * cannot: `reading` is mod-kit's write reader over its text with its trap bodies (trapBodies), and
+ * `commands` its pipeline over the same. It cannot where every file its commands write, empty, stamp
+ * or take away, and every file git changes, is one its own text names by a path the reader places, or
+ * a temporary file or folder it made (`temp`, madeTemp); every program in it names every file it
+ * writes, or only loads a module; it runs no other script and hands none its words; and nothing in
+ * it runs text or a command a value decides (a command named by an expansion, eval, exec, alias and
+ * the runners RUNS_LATER names), and each file it sources is one the guard read and found the same
+ * (`sourced`). An argument reaches a command only through `$1`, `$@` or a variable holding it, which
+ * the reader can never place, so each such route shows here as a name it could not place.
+ * What this trusts is what the guard trusts of a command typed whole: mod-kit's reader of what a
+ * command writes, so a program it does not know as a writer is read as writing none.
+ */
+export const argumentUnreached = (reading: ScriptReading, commands: readonly RunCommand[], temp: (word: string) => boolean, sourced: (c: RunCommand) => boolean): string | undefined => {
+  for (const c of commands) {
+    const first = c.words[0] ?? ''
+    if (/[$`]/.test(first) || /^[<>]\(/.test(first)) return `it runs a command named by ${first}`
+    if (RUNS_LATER.test(first) || (first === 'command' && !/^-[vV]$/.test(c.words[1] ?? ''))) return `it runs ${first}`
+    const run = scriptOf(c)
+    if (run && !((first === 'source' || first === '.') && sourced(c))) return first === 'source' || first === '.' ? `it sources ${run.word}, which could not be read whole` : `it runs ${run.word}`
+  }
+  for (const f of [...reading.files, ...reading.changes.filter(c => c.does !== 'folder' && c.does !== 'mode'), ...(reading.byGit ?? [])])
+    if (!placed(f.path) && !temp(f.word)) return `it writes ${f.word}`
+  for (const u of reading.unnamed) if (!u.onlyLoads && !(u.targets && u.targets.every(placed))) return 'it runs a program whose writes are not all named'
+  if (reading.runs?.length) return 'it hands another script its words'
+  return undefined
+}
+
+/**
+ * The shell script files a command runs that cannot write a file they are handed (#2924), by path:
+ * each read (scriptsRunIn) and found so by argumentUnreached, every file it sources read and found
+ * the same. `readingOf` gives a read script's reading and commands; `scriptsText` is the command and
+ * every script text read for it, which a temporary file's variable is held to (madeTemp). A python
+ * or node script is never among them: what a package it imports does with sys.argv is not read.
+ */
+export const closedScripts = (runs: readonly ScriptRun[], readingOf: (s: ScriptRun) => { read: ScriptReading; commands?: readonly RunCommand[] } | undefined, scriptsText: string, home: string): Set<string> => {
+  const temp = (word: string): boolean => {
+    const alone = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/.exec(word)
+    if (alone) return madeTemp((alone[1] ?? alone[2]) as string, scriptsText, new Set(), true)
+    const lead = leadingVariable(word)
+    return lead !== undefined && madeTemp(lead.slice(1), scriptsText)
+  }
+  const memo = new Map<string, boolean>()
+  const isClosed = (path: string): boolean => {
+    const known = memo.get(path)
+    if (known !== undefined) return known
+    // A file sourcing itself, or two sourcing each other, is read as not closed.
+    memo.set(path, false)
+    const s = runs.find(r => !('unread' in r) && r.path === path)
+    if (!s || 'unread' in s || s.lang !== 'shell') return false
+    const r = readingOf(s)
+    if (!r?.commands) return false
+    const folderOf = (c: RunCommand) => (c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder)
+    const sourced = (c: RunCommand) => {
+      const p = scriptPath(c.words[1] ?? '', s.text, folderOf(c), home, s.path)
+      return p !== undefined && isClosed(p)
+    }
+    const ok = argumentUnreached(r.read, r.commands, temp, sourced) === undefined
+    memo.set(path, ok)
+    return ok
+  }
+  return new Set(runs.flatMap(r => ('unread' in r ? [] : [r.path])).filter(isClosed))
 }
 
 /**
