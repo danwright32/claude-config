@@ -149,6 +149,9 @@ read_refused "#2978 an include after a heredoc whose text holds a quote is follo
 # The heredoc ends at its closing label, and the code then goes on as before: a ?> after it ends the
 # code, so the page text past it is not read as an include. A nowdoc's text is never code.
 printf '%s\n' '<?php echo <<<EOT' 'hi' 'EOT;' '?>' '<p>include the header here, then require login</p>' > "$P8/herepage.php"
+printf '%s\n' '<?php echo <<<EOT' "don't" 'EOT;' 'include "quiet.php";' > "$P8/herequiet.php"
+run_p8 "php herequiet.php"
+allowed "#2978 the control: a quiet include after a heredoc whose text holds a quote passes"
 run_p8 "php herepage.php"
 allowed "#2978 page text after a heredoc and a ?> is not read as code"
 printf '%s\n' "<?php echo <<<'EOT'" 'include $f;' 'EOT;' 'include "quiet.php";' > "$P8/nowdoc.php"
@@ -273,7 +276,8 @@ printf 'x\n' > "$PB/bash post.sh|"
 run_pg "perl -ne print *" "$PB"
 read_refused "#2912 a glob is still expanded where the folder perl runs in holds a ["
 # A name that holds the very command naming it ("perl -ne print *|", which * matches) is read only as
-# deep as the gate reads any nesting, then refused as not checked; it had no bound and ran past 120s.
+# deep as the gate reads any nesting, then refused as not checked; with no bound it ran past 120
+# seconds (measured 2026-11-14, then killed).
 PL="$T/pl2912"
 mkdir -p "$PL"
 printf 'x\n' > "$PL/perl -ne print *|"
