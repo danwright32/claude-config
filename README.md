@@ -7048,8 +7048,9 @@ back or shell write alike, a file made or taken away read as one with no text (s
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before; since #2991 so does taking away any look changing file git has never had
-in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent, the logic around it, and a tool's or its input
-schema's description pass, a property the schema names `reason` or `text` being no message. Since
+in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent,
+the logic around it, and a tool's or its input schema's description pass, a property the schema
+names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code
 alone passes even where the reading follows a message less far after it than before (a verdict
 handed through a helper that hands it straight back), and a comment holds no string. Since
