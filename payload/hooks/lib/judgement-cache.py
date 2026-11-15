@@ -895,7 +895,7 @@ class Parses:
         header = json.loads(head)
         if not (isinstance(header, dict) and header.get("format") == PARSE_FORMAT and header.get("key") == k
                 and isinstance(header.get("sig"), str) and len(body) <= MAX_PARSE
-                and hmac.compare_digest(header["sig"], hmac.new(secret, k.encode() + b"\n" + body,
+                and hmac.compare_digest(header["sig"], hmac.new(secret, k.encode("utf-8", errors="surrogatepass") + b"\n" + body,
                                                                 hashlib.sha256).hexdigest())):
             trace("parse miss: the entry is not a whole parse for this key")
             return None
@@ -933,8 +933,8 @@ class Parses:
         if secret is None:
             trace("parse not stored: no signing key")
             return
-        sig = hmac.new(secret, k.encode() + b"\n" + body, hashlib.sha256).hexdigest()
-        head = json.dumps({"format": PARSE_FORMAT, "key": k, "sig": sig}).encode()
+        sig = hmac.new(secret, k.encode("utf-8", errors="surrogatepass") + b"\n" + body, hashlib.sha256).hexdigest()
+        head = json.dumps({"format": PARSE_FORMAT, "key": k, "sig": sig}).encode("utf-8", errors="surrogatepass")
         _write(self.dirpath, k + ".json", head + b"\n" + body)
         trace("parse stored")
         evict(self.dirpath)
