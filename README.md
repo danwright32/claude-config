@@ -2449,7 +2449,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2756,6 +2756,18 @@ notes folder root (#2490), not a push
 
 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it answers a
 command that never mentions a watch before loading anything
+
+</td></tr>
+<tr><td>
+
+`check-gh-view-comments.sh` (#2891)
+
+</td><td>
+
+2026-11-14: 0.029 to 0.033 seconds on `ls -la`, which names no comments flag and leaves before
+anything loads; 0.081 to 0.086 seconds on a command naming both `-c` and `view`, which it reads, and
+on `gh issue view 5 --comments`, refused. Five readings of each at load average 17 to 18, each
+reading including the start of the python3 that timed it
 
 </td></tr>
 <tr><td>
@@ -3542,7 +3554,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
-Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
+(made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
+missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
+runs the gate with `PYTHONHASHSEED=0`, so it iterates its sets in the same order every run, and the
+cache keeps and uses nothing from a run where that order is random. Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
 run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
@@ -5495,8 +5511,18 @@ else, nothing in it is uncommitted, nothing changed in the last six hours, and n
 working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
 every commit on its branch is also on another branch, local or remote (which covers work shipped in
 a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
-the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
-under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+the default branch. The sweep also keeps a worktree whose branch has an open pull request, and,
+while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
+session registry folder or a file it edited is inside it), because a pushed branch counts as kept
+elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
+the sleep record or a worker's places cannot be read (a place that is not an absolute path, or holds
+a tab or newline, counts as unreadable), it removes nothing that run. It also keeps a worktree whose
+branch was pushed in the last day with commits no merged pull request held (no PR yet, or new work
+after one merged), since a builder hands back a pushed branch and the PR is often opened hours later
+(#2988); a branch whose PR was closed
+unmerged, or whose remote copy is gone, is judged as before. The `--just-merged`
+removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
+alone, and asks none of these questions. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
@@ -7363,7 +7389,9 @@ permission prompts are approved, never a question or the plan approval and never
 beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
-write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
+write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
+written plainly, and a line running gh that way writing files only into the session notes folder
+or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
 included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
 created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
