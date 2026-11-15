@@ -2449,7 +2449,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-two PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2756,6 +2756,18 @@ notes folder root (#2490), not a push
 
 2026-10-28: 0.009 to 0.020 seconds. Earlier: 0.03 seconds, five readings on 2026-10-12; it answers a
 command that never mentions a watch before loading anything
+
+</td></tr>
+<tr><td>
+
+`check-gh-view-comments.sh` (#2891)
+
+</td><td>
+
+2026-11-14: 0.029 to 0.033 seconds on `ls -la`, which names no comments flag and leaves before
+anything loads; 0.081 to 0.086 seconds on a command naming both `-c` and `view`, which it reads, and
+on `gh issue view 5 --comments`, refused. Five readings of each at load average 17 to 18, each
+reading including the start of the python3 that timed it
 
 </td></tr>
 <tr><td>
@@ -7354,7 +7366,9 @@ permission prompts are approved, never a question or the plan approval and never
 beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
-write whose repository cannot be resolved, LESSONS.md (a script file handed it as its argument
+write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
+written plainly, and a line running gh that way writing files only into the session notes folder
+or the scratchpad (#2937), LESSONS.md (a script file handed it as its argument
 included, #1592), write tools under claude.ai and PostHog, any Chrome call outside a tab the session
 created (recorded from its tabs_create_mcp result) or on a page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the

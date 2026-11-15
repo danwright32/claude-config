@@ -172,6 +172,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate simplify-before-push.sh       "git push origin feature"      "allow0 #1912"
   declare_gate check-public-assets.sh        "git push origin feature"      "allow0 #1912"
   declare_gate check-gh-watch-interval.sh    "gh run watch 5"               "allow0 #1912"
+  declare_gate check-gh-view-comments.sh     "gh issue view 5 --comments"   "allow0 #1912"
 } > "$WORK/table"
 
 payload_for(){ # payload_for <command> <cwd>
@@ -675,6 +676,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged amend-force-push-gate.sh     Bash "$(bash_call 'git commit --amend -m wip')" "$AGENT" refuse
   judged temp-worktree-gate.sh        Bash "$(bash_call 'git worktree add /tmp/wt-2528 -b fix/2528')" '{}' refuse
   judged check-gh-watch-interval.sh   Bash "$(bash_call 'gh run watch 5')" '{}' "notice #1912"
+  judged check-gh-view-comments.sh    Bash "$(bash_call 'gh issue view 5 --comments')" '{}' "notice #1912"
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
   # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).
   judged check-zsh-builtins.sh        Bash "$(bash_call "zsh -c 'log show --last 1m'")" '{}' refuse
