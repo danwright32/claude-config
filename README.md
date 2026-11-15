@@ -3588,6 +3588,15 @@ refused there, since the runner counts as able to send. A file a package is hand
 x.test.ts`) is read with its imports followed, as through `node_modules/.bin`, and a cd built from
 `$0` or `BASH_SOURCE` is worked out as bash reads it.
 
+A test file's import of a module the same file replaces with a mock is not followed (#2359; Dan,
+2026-11-15, a loosening he signed off), in `lib/js-mocks.py`. The file must be a test file by the
+runners' default naming (`.test` or `.spec` before the extension, or under `__tests__`), and must call
+`vi.mock` or `jest.mock` as code with the module's path written out, resolving to the same file, and
+a factory taking no parameters. A mock with no factory, a factory handed the original, the original
+fetched by `importActual` or `requireActual`, a mock taken back (`unmock`, `doUnmock`, `dontMock`), a
+`doMock`, a mock of another path and a path the gate cannot read each leave the import followed, so a
+real unmocked import stays refused. Only the file's own imports are affected.
+
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
 repository was refused whole because its config's imports pass 300, though nothing in it posts, and

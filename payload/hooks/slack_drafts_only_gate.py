@@ -1474,6 +1474,8 @@ DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 # Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
 # for one command in a function, and a function that evaluates its argument (claude-config#2912).
 ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM)
+# The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
+_js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 
@@ -2748,7 +2750,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
                 yield SINK
                 return
-            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings, cur is not None):
+            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings, cur is not None,
+                                                             path=cur):
                 via = f"{chain}, which imports {spec}"
                 lead, first = first, None  # only the first import given can be that statement's
                 if targets == "path":
@@ -2852,19 +2855,23 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.unfollowed.append(why)
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
         or a template's text is left out (claude-config#2484). A type only import statement of a file
         that is there, or of a missing declaration file, is left out too (erased_import,
         claude-config#2526, #2890). A PHP include is read by php_includes, tagged for a file's text
-        (claude-config#2978)."""
+        (claude-config#2978). An import written as code in a test file, path, of a module that file
+        replaces with a mock and a factory is left out (lib/js-mocks.py, claude-config#2359)."""
         if kind == "php":
             yield from self.php_includes(text, cur_dir, root, tagged)
             return
         if kind == "js":
             code, quoted = js_scan(text)
+            # A module a test file replaces with a mock and a factory is never loaded (lib/js-mocks.py,
+            # claude-config#2359, a loosening Dan signed off on 2026-11-15).
+            mocked = _js_mocks.replaced(path, code, quoted, lambda s: self.resolve_import(s, cur_dir))
             for m in IMPORT_SPEC.finditer(code):
                 if not strings and quoted[m.start()] == 1:
                     continue
@@ -2874,6 +2881,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 target = self.resolve_import(spec, cur_dir)
                 if target is not None and self.erased_import(code, m, target):
                     continue  # a type only import loads nothing (#2526, #2890)
+                if target and target in mocked and not quoted[m.start()]:
+                    continue  # the runner hands it the mock's object, never loading the file (#2359)
                 if target is not None:
                     yield spec, ([target] if target else False)
             return

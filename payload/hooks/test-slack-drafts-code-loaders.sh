@@ -7,7 +7,8 @@
 # one sent to, a test file read the same way by npx vitest and the node_modules path, and a cd built
 # from $0 or BASH_SOURCE worked out. And lib/sh-walk-shapes.py (#2912): a for loop over words written
 # out sourcing a path built from its name, NAME=value for one command in a function, and a function
-# that evaluates its argument. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# that evaluates its argument. And lib/js-mocks.py (#2359): a test file's import of a module the same
+# file replaces with vi.mock or jest.mock and a factory is not followed. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -735,6 +736,81 @@ run_pg "perl -e 'print 1' \"\$(printf a.txt)\""
 allowed "#2912 the control: perl that never opens what it is handed passes a substitution"
 run_pg "f=a.txt; perl -ne print \"\$f\""
 allowed "#2912 the control: a variable worked out to a plain file passes"
+
+echo "slack drafts only: a test file's import of a module the same file mocks out is not followed (claude-config#2359)"
+
+# A test runner never loads a module a test file replaces with vi.mock or jest.mock and a factory:
+# the import gets the factory's object. In the probe of 2026-11-06, 7 test files in two personal
+# repositories that imported a posting helper only to mock it were refused when run directly. Dan
+# decided on 2026-11-15 to let that import through, and only that: a real unmocked import, a mock
+# without a factory (automock loads the module), a factory handed the original, the original fetched
+# by importActual or requireActual, a mock taken back, a mock of another path, a mock the gate cannot
+# read and a file that is not a test file each stay refused.
+MK="$T/g2359"
+mkdir -p "$MK/__tests__"
+printf '%s\n' "export function send() { fetch('https://slack.com/api/chat.postMessage'); }" > "$MK/posts.ts"
+printf '%s\n' "export function send() { fetch('https://slack.com/api/chat.postMessage'); }" > "$MK/posts2.ts"
+printf '%s\n' 'export const other = 1;' > "$MK/other.ts"
+mk_case() { # mk_case <file name> <lines...>: judge node running a file in $MK holding them
+  local name="$1"
+  shift
+  printf '%s\n' "$@" 'console.log(1);' > "$MK/$name"
+  run_bash "node $MK/$name"
+}
+mk_case a.test.ts 'import { send } from "./posts.ts";'
+read_refused "#2359 the control: a test file's unmocked import of a module that posts is refused"
+mk_case a.test.ts 'import { vi } from "vitest";' 'import { send } from "./posts.ts";' 'vi.mock("./posts.ts", () => ({ send: vi.fn() }));'
+allowed "#2359 a vi.mock with a factory, written after the import it replaces"
+mk_case a.spec.ts 'jest.mock("./posts", function () { return { send: jest.fn() }; });' 'import { send } from "./posts.ts";'
+allowed "#2359 a jest.mock with a function factory, written before, naming the same file another way"
+mk_case a.test.ts 'import { vi } from "vitest";' 'import { send } from "./posts.ts";' 'vi.mock("./posts.ts", async () => ({ send: vi.fn() }));'
+allowed "#2359 an async factory"
+mk_case a.test.js 'jest.mock("./posts.ts", () => ({ send: jest.fn() }));' 'const { send } = require("./posts.ts");'
+allowed "#2359 a require of a module jest.mock replaces"
+mk_case a.test.ts 'import { send } from "./posts.ts";' 'describe("x", () => {' '  vi.mock("./posts.ts", () => ({ send: vi.fn() }));' '});'
+allowed "#2359 a mock written inside a block, which the runner hoists"
+mk_case __tests__/a.ts 'import { send } from "../posts.ts";' 'vi.mock("../posts.ts", () => ({ send: vi.fn() }));'
+allowed "#2359 a file in a __tests__ folder"
+mk_case a.ts 'import { send } from "./posts.ts";' 'vi.mock("./posts.ts", () => ({ send: vi.fn() }));'
+read_refused "#2359 a file that is not a test file is unchanged: its mocked import is still followed"
+for line in 'vi.mock("./posts.ts");' \
+  'jest.mock("./posts.ts");' \
+  'vi.mock("./posts.ts", { spy: true });' \
+  'vi.mock("./posts.ts", async (importOriginal) => ({ ...(await importOriginal()) }));' \
+  'vi.mock("./posts.ts", factory);' \
+  'vi.doMock("./posts.ts", () => ({}));' \
+  'jest.doMock("./posts.ts", () => ({}));' \
+  'vi.mock("./other.ts", () => ({}));' \
+  'vi.mock(`./${name}.ts`, () => ({}));' \
+  'vi.mock(path, () => ({}));' \
+  'vi.mock(import("./posts.ts"), () => ({}));' \
+  '// vi.mock("./posts.ts", () => ({}));' \
+  'const s = '"'"'vi.mock("./posts.ts", () => ({}))'"'"';' \
+  'vi.mock("./posts.ts", () => ({}));  vi.mock("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  const real = await vi.importActual("./posts.ts");' \
+  'jest.mock("./posts.ts", () => ({}));  const real = jest.requireActual("./posts");' \
+  'vi.mock("./posts.ts", () => ({}));  const real = await vi.importActual(p);' \
+  'vi.mock("./posts.ts", () => ({}));  vi.unmock("./posts.ts");' \
+  'jest.mock("./posts.ts", () => ({}));  jest.unmock("./posts.ts");' \
+  'jest.mock("./posts.ts", () => ({}));  jest.dontMock("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  vi.doUnmock("./posts.ts");' \
+  'vi.mock("./posts.ts", () => ({}));  const m = await vi.importMock("./posts.ts");' \
+  'jest.mock("./posts.ts", () => ({}));  const m = jest.createMockFromModule("./posts.ts");'; do
+  mk_case a.test.ts 'import { send } from "./posts.ts";' "$line"
+  read_refused "#2359 a test file importing a module that posts stays refused beside: $line"
+done
+mk_case a.test.ts 'import { send } from "./posts.ts";' 'import { send as s2 } from "./posts2.ts";' 'vi.mock("./posts.ts", () => ({}));'
+read_refused "#2359 a second module that posts, not mocked, is still followed"
+says "#2359 the refusal names the unmocked module" "posts2.ts"
+# Through the test runner's launcher, as the refusals of 2026-11-06 were met.
+printf '%s\n' 'import { it, vi } from "vitest";' 'import { post } from "./poster";' 'vi.mock("./poster", () => ({ post: vi.fn() }));' \
+  'it("posts", () => post("hi"));' > "$D9/src/mocks-poster.test.ts"
+for runs in "npx vitest run src/mocks-poster.test.ts" "./node_modules/.bin/vitest run src/mocks-poster.test.ts"; do
+  run_d9 "$runs"
+  allowed "#2359 a test file mocking the poster it imports passes: $runs"
+done
+run_d9 "npx vitest run src/poster.test.ts"
+read_refused "#2359 the same test without the mock is still refused (the control)"
 
 echo
 
