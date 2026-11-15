@@ -4099,6 +4099,99 @@ PY
 cuts="$(python3 -B "$T/cuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds, its patterns, cd_target and shell_split do only the work a verdict needs, and answer as before (#2918)" "$cuts"
 
+# Since #2912 every command of a text is asked whether it calls a function that evaluates its
+# argument (sh_eval_text_reason), and the claude-sync suite's check() is one, so every one of its
+# 34,000 commands was cut of its openers and searched once per such function, with a pattern built
+# afresh for each: a fifth of what #2912 added to judging that suite (measured 2026-11-15, #2918).
+# A command that does not hold one of the names cannot call it, so it is now passed over first, and
+# the rest searched with one pattern per set of names. Checked for what it skips, and against the
+# reading it replaced over every line of claude-sync and its suite.
+cat > "$T/evalcuts.py" <<'PY'
+import importlib.util, os, re, sys
+gate_path, extra = sys.argv[1], sys.argv[2:]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+sw = gate.load_reader()
+j = gate.Judge(sw)
+wrong = []
+evals = {"check": {2}, "ev": {1}, "hang_wait": {1, 2}, "a.b": {1}}
+
+def before(head, evals):
+    """sh_eval_call as #2912 wrote it."""
+    if not evals or not any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", head) for f in evals):
+        return None
+    toks = j.sh_tokens(j.sw.command_rest(j.sh_strip_openers(head))[0])
+    raws, k = [], 0
+    while k < len(toks):
+        kind, raw = toks[k]
+        if kind == "op":
+            k += 2 if gate.SH_REDIRECT.fullmatch(raw) else 1
+            continue
+        raws.append(raw)
+        k += 1
+    if raws and raws[0] not in evals and raws[0] != "trap" and \
+            not any(re.sub(r"""['"]""", "", w) in evals for w in raws):
+        return None
+    if not raws or raws[0] not in evals:
+        return False
+    rest = " ".join(raws[1:])
+    if any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", rest) for f in evals):
+        return False
+    lits = []
+    for n in sorted(evals[raws[0]]):
+        if n < len(raws):
+            lit = j.sh_literal_word(raws[n])
+            if lit is None:
+                return False
+            lits.append(lit)
+    return lits
+
+# A command naming none of the functions is searched by no pattern and cut of no openers.
+searched, stripped = [], []
+real_search, real_strip = gate.re.search, j.sh_strip_openers
+gate.re.search = lambda *a, **k: searched.append(a[0]) or real_search(*a, **k)
+j.sh_strip_openers = lambda t: stripped.append(t) or real_strip(t)
+j.shell = dict(j.shell, known={"evals": evals})
+for head in ("echo hi there", "if git status --short; then", "  ok \"it ran\""):
+    if j.sh_eval_call(head, evals) is not None or j.sh_eval_text_reason(head, {}, 0) is not None:
+        wrong.append("%r, which names no evaluating function, was read as calling one" % head)
+gate.re.search, j.sh_strip_openers = real_search, real_strip
+if searched or stripped:
+    wrong.append("a command naming no evaluating function was searched %d times and cut of its openers %d times, not 0"
+                 % (len(searched), len(stripped)))
+heads = ["check 'it runs' '[ -f x ]'", "check \"it runs\" \"[ -f \\\"\\$X\\\" ]\"", "ev 'bash post.sh'", "ev \"$CMD\"",
+         "trap 'ev x' EXIT", "echo 'check this'", "printf '%s' \"ev\" > f", "x=check", "if check a 'b'; then",
+         "a.b 'echo hi'", "a.bc 'echo'", "-check 'x' 'y'", "check.x 1 2", "hang_wait 'sleep 1' 'true'",
+         "check 'n' 'ev y'", "check 'n' 'echo' > out", "{ check 'n' 'true'; }", "! check 'n' 'false'", ""]
+for path in extra:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            heads += f.read().split("\n")
+    except OSError:
+        pass
+differ = []
+for head in heads:
+    for ev in (evals, {"check": {2}}, {}):
+        try:
+            want = ("ok", before(head, ev))
+        except Exception as e:
+            want = ("raised", type(e).__name__)
+        try:
+            got = ("ok", j.sh_eval_call(head, ev))
+        except Exception as e:
+            got = ("raised", type(e).__name__)
+        if got != want:
+            differ.append((head, sorted(ev), got, want))
+if differ:
+    wrong.append("sh_eval_call answered differently for %d of %d commands, first %r" % (len(differ), 3 * len(heads), differ[0]))
+if len(heads) < 1000 and extra:
+    wrong.append("only %d commands were compared" % len(heads))
+print("; ".join(wrong) or "ok")
+PY
+evalcuts="$(python3 -B "$T/evalcuts.py" "$DIR/slack_drafts_only_gate.py" ${CS:+"$CS"} ${REPO:+"$REPO/tests/test-claude-sync.sh"} 2>&1)"
+check "a command naming no function that evaluates its argument is read no further, and sh_eval_call answers as before (#2918)" "$evalcuts"
+
 echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"
 
 # Three ways a file reached a program unread (measured through this wrapper on main at a2490ad,

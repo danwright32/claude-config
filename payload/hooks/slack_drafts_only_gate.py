@@ -1280,6 +1280,14 @@ def sh_bind_pattern(kind, name):
     return re.compile(SH_BINDERS.format(n))
 
 
+@functools.lru_cache(maxsize=None)
+def sh_eval_mention(names):
+    """Where a command mentions any of names (the functions of a text that evaluate an argument) as a
+    word of its own, for Judge.sh_eval_call: one pattern for the set, compiled once, matching where
+    any one name's own pattern would, as the alternation is tried in full at each place (#2918)."""
+    return re.compile(r"(?<![\w.:-])(?:" + "|".join(re.escape(f) for f in names) + r")(?![\w.:-])")
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -4565,7 +4573,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         a variable, the name in a trap, or a word of its own handed to another command), as what it
         then evaluates cannot be read. None where it mentions none of them, or names one only inside
         a longer string another command is handed (a message, text printf writes to a file)."""
-        if not evals or not any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", head) for f in evals):
+        # Every command of a text is asked this (sh_eval_text_reason), and a command can mention a
+        # name only where it holds it, so one without any is passed over before any search, and the
+        # rest searched by one pattern for the whole set of names (#2918).
+        if not evals or not any(f in head for f in evals):
+            return None
+        mention = sh_eval_mention(tuple(sorted(evals)))
+        if not mention.search(head):
             return None
         toks = self.sh_tokens(self.sw.command_rest(self.sh_strip_openers(head))[0])
         raws, k = [], 0
@@ -4584,7 +4598,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not raws or raws[0] not in evals:
             return False
         rest = " ".join(raws[1:])
-        if any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", rest) for f in evals):
+        if mention.search(rest):
             return False
         lits = []
         for n in sorted(evals[raws[0]]):
