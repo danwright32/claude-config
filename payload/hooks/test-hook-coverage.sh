@@ -365,6 +365,75 @@ missing_rc=$?
   && check "#413 a settings file that cannot be read is neither clean nor faulty" ok \
   || check "#413 a settings file that cannot be read is neither clean nor faulty" "exit $missing_rc"
 
+# UNMATCHABLE IF (claude-config#3035). rtk-rewrite.sh was registered with
+# `if: "Bash(git *)|Bash(npm *)|..."`, and Claude Code 2.1.325 matches no command against an `if`
+# holding a `|`: a headless run with a debug file logged "Skipping hook due to if condition ... not
+# matching" for `git status` against that list, against a two rule list either way round, and
+# against `Bash(git *|npm *)`, while `Bash(git *)`, `Bash(git:*)` and `Bash(git status)` each ran.
+# So rtk rewrote nothing and every suite stayed green, because each runs the hook directly (L3).
+# What Claude Code matches cannot be asked offline, so this holds the settings to the shape that was
+# measured to run: one permission rule per `if`, and a hook that must cover several commands
+# registered once per rule.
+CONDS="$TMPROOT/conditions"; mkdir -p "$CONDS/hooks"
+printf '#!/usr/bin/env bash\n# rw.sh: a fixture with no header, so only its conditions are judged.\n' > "$CONDS/hooks/rw.sh"
+cat > "$CONDS/piped.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/rw.sh", "if": "Bash(git *)|Bash(npm *)"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Bash(git *|npm *)"}
+  ]}
+]}}
+JSON
+cat > "$CONDS/split.json" <<'JSON'
+{"hooks": {"PreToolUse": [
+  {"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/rw.sh", "if": "Bash(git *)"},
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/rw.sh", "if": "Bash(npm:*)"}
+  ]},
+  {"matcher": "Edit", "hooks": [
+    {"type": "command", "command": "__CLAUDE_HOME__/hooks/quiet.sh", "if": "Edit(*.md)"}
+  ]}
+]}}
+JSON
+piped="$(registration_faults "$CONDS/piped.json" "$CONDS/hooks" 2>&1)"
+piped_rc=$?
+case "$piped" in
+  *"UNMATCHABLE IF PreToolUse rw.sh if='Bash(git *)|Bash(npm *)'"*)
+    check "#3035 an if listing several rules joined by | is reported" ok ;;
+  *) check "#3035 an if listing several rules joined by | is reported" "it answered: [$piped]" ;;
+esac
+case "$piped" in
+  *"UNMATCHABLE IF PreToolUse quiet.sh if='Bash(git *|npm *)'"*)
+    check "#3035 an if with a | inside one rule is reported" ok ;;
+  *) check "#3035 an if with a | inside one rule is reported" "it answered: [$piped]" ;;
+esac
+[ "$piped_rc" -eq 1 ] \
+  && check "#3035 an unmatchable if is a fault, exit 1" ok \
+  || check "#3035 an unmatchable if is a fault, exit 1" "exit $piped_rc"
+split="$(registration_faults "$CONDS/split.json" "$CONDS/hooks" 2>&1)"
+split_rc=$?
+[ -z "$split" ] && [ "$split_rc" -eq 0 ] \
+  && check "#3035 one rule per if, the shape measured to run, reports nothing" ok \
+  || check "#3035 one rule per if, the shape measured to run, reports nothing" "it answered: [$split], exit $split_rc"
+
+# The question the fault exists for, asked directly: would a registered entry of this hook run for
+# this command? Seen to fail on the piped shape, which is what shipped (L1).
+runs_for(){ # runs_for <settings file> <hook basename> <command> -> 0 runs, 1 does not, 2 not judged
+  python3 "$DIR/lib/hook-registration.py" --runs-for "$1" "$2" "$3"
+}
+runs_case(){ # runs_case <name> <want rc> <settings> <hook> <command>
+  local got
+  runs_for "$3" "$4" "$5" >/dev/null 2>&1
+  got=$?
+  [ "$got" -eq "$2" ] && check "$1" ok || check "$1" "exit $got, wanted $2"
+}
+runs_case "#3035 the piped shape runs for no command, as Claude Code 2.1.325 measured" 1 "$CONDS/piped.json" rw.sh "git status"
+runs_case "#3035 one rule per if runs for a command its rule names" 0 "$CONDS/split.json" rw.sh "git status"
+runs_case "#3035 the prefix form with a colon runs for a command it names" 0 "$CONDS/split.json" rw.sh "npm test"
+runs_case "#3035 one rule per if does not run for a command no rule names" 1 "$CONDS/split.json" rw.sh "echo git status"
+runs_case "#3035 a rule for another tool does not run for a Bash command" 1 "$CONDS/split.json" quiet.sh "git status"
+runs_case "#3035 a settings file that cannot be read is not judged" 2 "$CONDS/missing.json" rw.sh "git status"
+
 # The real settings: the payload copy inside the checkout, the installed copy once deployed.
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")"
@@ -381,6 +450,11 @@ else
     check "every hook is registered once per event and matcher, for exactly the tools its header declares" "$(basename "$SETTINGS") says:
 $(printf '%s\n' "$real_faults" | sed 's/^/    /')"
   fi
+  # rtk saves tokens only on commands its rewrite hook is run for (claude-config#3035), and the
+  # commands below are the ones its registration has always named.
+  for rtk_sample in "git status" "git commit -m x" "npm test" "ls -la" "cat a.txt" "grep -n x a.txt" "find . -name x"; do
+    runs_case "#3035 rtk-rewrite.sh is run for: $rtk_sample" 0 "$SETTINGS" rtk-rewrite.sh "$rtk_sample"
+  done
 fi
 
 # ---------------------------------------------------------------------------

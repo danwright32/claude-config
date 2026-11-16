@@ -23,11 +23,26 @@ The faults:
                gate folded into the Bash group next to its own (the 2026-09-17 shape) is a fault even
                though the Edit group is still there.
   BAD MATCHER  a matcher that is not a valid pattern, reported rather than scored either way (L11).
+  UNMATCHABLE IF  an entry whose `if` holds a `|`. Claude Code 2.1.325 matches no command against
+               such a condition, whether the `|` joins several rules or sits inside one, and logs
+               "Skipping hook due to if condition ... not matching" every time (measured with a
+               headless debug run, claude-config#3035). rtk-rewrite.sh shipped that way and so
+               rewrote nothing, with every suite green. A hook meant for several commands is
+               registered once per rule instead, which DUPLICATE allows because its key holds the if.
+
+    hook-registration.py --runs-for <settings file> <hook basename> <command>
+
+asks the question the last fault exists for: would a PreToolUse entry of that hook run for this Bash
+command? Exit 0 yes, 1 no, 2 the settings could not be read. What Claude Code itself matches cannot
+be asked offline, so the answer models only the shapes measured on 2.1.325: no `if` runs for every
+command, an `if` holding a `|` for none, `Bash(<glob>)` where the glob's `*` matches anything, and the
+`Bash(<prefix>:*)` form for the prefix alone or followed by a space.
 
 A hook with no such header line is not judged at all: the header is the hook's own statement of where
 it belongs, and without one there is nothing to compare the settings against. Only the hooks
 directory itself is read, not lib/, because nothing in lib/ is registered.
 """
+import fnmatch
 import glob
 import json
 import os
@@ -104,6 +119,11 @@ def faults_for(settings, hooks_dir):
     for (event, matcher, cmd, cond), n in sorted(seen.items()):
         if n > 1:
             faults.append(f"DUPLICATE {event} matcher={matcher!r} {cmd}{' if=' + cond if cond else ''} is registered {n} times")
+        if "|" in cond:
+            faults.append(
+                f"UNMATCHABLE IF {event} {' '.join(sorted(names(cmd)))} if={cond!r}: Claude Code matches no "
+                f"command against an if holding a |, so this never runs (claude-config#3035); register "
+                f"it once per rule")
 
     def matches(matcher, tool):
         if matcher in ("", "*"):
@@ -151,7 +171,47 @@ def faults_for(settings, hooks_dir):
     return faults
 
 
+def if_runs_for(cond, tool, command):
+    """Would an entry with this `if` run for this tool call? Only the shapes measured on Claude Code
+    2.1.325 (claude-config#3035), and anything else is answered no, so an unfamiliar shape fails the
+    check rather than passing it."""
+    if not cond:
+        return True
+    if "|" in cond:
+        return False
+    m = re.fullmatch(r"([A-Za-z0-9_]+)\((.*)\)", cond, re.S)
+    if not m or m.group(1) != tool:
+        return False
+    pattern = m.group(2)
+    if pattern.endswith(":*"):
+        prefix = pattern[:-2]
+        return command == prefix or command.startswith(prefix + " ")
+    return fnmatch.fnmatchcase(command, pattern)
+
+
+def runs_for(settings, hook, command):
+    """0 when a PreToolUse entry registering `hook` would run for this Bash command, 1 when none would."""
+    events = json.load(open(settings, errors="replace")).get("hooks", {})
+    for g in events.get("PreToolUse", []):
+        matcher = g.get("matcher", "")
+        try:
+            if matcher not in ("", "*") and re.fullmatch(matcher, "Bash") is None:
+                continue
+        except re.error:
+            continue
+        for h in g.get("hooks", []):
+            if hook in names(h.get("command", "")) and if_runs_for(h.get("if", ""), "Bash", command):
+                return 0
+    return 1
+
+
 def main(argv):
+    if len(argv) == 5 and argv[1] == "--runs-for":
+        try:
+            return runs_for(argv[2], argv[3], argv[4])
+        except (OSError, ValueError, AttributeError, TypeError) as e:
+            print(f"could not read {argv[2]}: {e}", file=sys.stderr)
+            return 2
     if len(argv) != 3:
         print("usage: hook-registration.py <settings file> <hooks dir>", file=sys.stderr)
         return 2
