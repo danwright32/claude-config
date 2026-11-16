@@ -165,7 +165,7 @@ code_is() {   # $1 path  $2 line  $3 expected  $4 what
 code_is src/a.ts "  } catch { return 'pass' }  // was 'fail'" "  } catch { return 'S' }  " "a non empty string keeps a placeholder, the comment goes"
 code_is src/a.ts "  } catch { return '' }" "  } catch { return '' }" "an empty string stays empty"
 code_is tools/x.py 'except OSError:  # "retry"' 'except OSError:  ' "a Python comment goes"
-code_is payload/hooks/x.sh 'echo "retry $n in ${dir} via $(retry_cmd "a b")" # later' 'echo "$n${dir}$(retry_cmd "a b")S" ' "shell keeps every expansion inside double quotes"
+code_is payload/hooks/x.sh 'echo "retry $n in ${dir} via $(retry_cmd "a b")" # later' 'echo "$n${dir}$(retry_cmd "S")S" ' "shell keeps every expansion inside double quotes, a string inside a substitution read as at the top level"
 code_is payload/hooks/x.sh "awk '{ print \$1 }' f" "awk '{ print \$1 }' f" "shell keeps single quoted programs as code"
 code_is README.md "catch (e) { retry() }" "" "prose carries no code"
 
@@ -180,6 +180,25 @@ code_is payload/hooks/x.sh 'timeout 9 sh -c "sleep 5 || exit 1"' 'timeout 9 sh -
 code_is payload/hooks/x.sh "trap 'rm -rf \"\$W\"' EXIT" "trap 'rm -rf \"\$W\"' EXIT" "a trap's program stays code"
 code_is payload/hooks/x.sh "printf '%s\\n' \"\$x\" | /usr/bin/python3 -c 'import time; time.sleep(2)'" "printf 'S' \"\$x\" | /usr/bin/python3 -c 'import time; time.sleep(2)'" "each command of a pipeline is judged on its own, an interpreter by its path too"
 code_is payload/hooks/x.sh "echo 'a\\' sleep 5" "echo 'S' sleep 5" "a backslash does not escape inside shell single quotes"
+# claude-config#3071. Two shell strings the reader misread, so a fixture inside them read as code: the
+# lessons advisory raised L5, L7 and L9 on every push touching the line below, a fixture its own
+# suite hands to the gate. A command substitution inside double quotes was copied whole, so the
+# strings inside it stayed code; it is now read as a command of its own, exactly as at the top
+# level. And an ANSI C string, $'...', escapes its quote with a backslash, where a plain single
+# quoted string does not, so its first \' ended it and the rest of the fixture read as code.
+code_is payload/hooks/test-x.sh "R=\$(make_repo x \"\$(printf '# note\\nrm -rf /var/data/customers\\n')\" scripts/clean.sh)" "R=\$(make_repo x \"\$(printf 'S')\" scripts/clean.sh)" "a fixture handed to printf inside a quoted substitution is data"
+code_is payload/hooks/x.sh "out=\"\$(bash -c 'sleep 5') done\"" "out=\"\$(bash -c 'sleep 5')S\"" "a program handed to bash inside a quoted substitution stays code"
+code_is payload/hooks/x.sh 'n="$((a + (b * 2))) items"' 'n="$((a + (b * 2)))S"' "an arithmetic expansion inside double quotes is still kept whole"
+# Read with read, never $(cat <<...): the bash the Mac ships rewrites a dollar quote inside a
+# heredoc held in a command substitution, so the line would not reach the reader as written.
+IFS= read -r ANSI_FIXTURE <<'LINE'
+fix=$'trap \'rm -rf "$W"\' EXIT\nsleep 5' ; next
+LINE
+IFS= read -r ANSI_PROGRAM <<'LINE'
+bash -c $'sleep 5\n\'x\''
+LINE
+code_is payload/hooks/test-x.sh "$ANSI_FIXTURE" "fix=\$'S' ; next" "an ANSI C string escapes its quote with a backslash"
+code_is payload/hooks/x.sh "$ANSI_PROGRAM" "$ANSI_PROGRAM" "an ANSI C program handed to bash stays code"
 # A line can CLOSE a single quoted program opened above the hunk. Its quote then reads as an opening
 # that never closes, and what follows it is the code that runs the program (measured: claude-config
 # #1516 test-check-add-scope.sh lost `RC=$?` that way). An unclosed single quote keeps its text as code.
