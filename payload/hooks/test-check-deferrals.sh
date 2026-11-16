@@ -225,6 +225,38 @@ want_finding "a quote run into the words either side is not a mention" "$out" "d
 out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
 want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
 
+# A phrase written as the END of a proper name is a name, not a deferral (claude-config#3019): a
+# table of booking counts named calendar event types ending in Follow Up and was refused three
+# times. A name is the phrase in Title Case, every word a capital and then lower case letters, run
+# straight on (spaces only) from another capitalised word of two letters or more, on a line that
+# is not a markdown heading. Every way around that is still a finding.
+out="$(detect_file docs/counts.md $'| Event type | Bookings |\n| --- | --- |\n| Customer Follow Up | 12 |\n| Partner Follow Up | 3 |\n')"
+want_clean "a Title Case name ending in Follow Up, in a table cell, is a name" "$out"
+out="$(detect_file docs/counts.md $'| Customer Follow-Up | 12 |\n')"
+want_clean "the hyphenated spelling of the same name is a name" "$out"
+out="$(detect_file a.ts $'// counts bookings of the Customer Follow Up event type\n')"
+want_clean "the name inside a code comment is a name" "$out"
+out="$(detect_file docs/counts.md $'| Customer Follow Up | 12 |\n| | we will follow up on the stragglers |\n')"
+want_finding "the lower case phrase putting work off is still a finding, beside the name" "$out" "docs/counts.md:2: follow up:"
+out="$(detect_file docs/counts.md $'Follow Up with the vendor about the cap.\n')"
+want_finding "the phrase capitalised at the start of a sentence is not a name" "$out" "docs/counts.md:1: Follow Up:"
+out="$(detect_file docs/counts.md $'Done. Follow Up with the vendor.\n')"
+want_finding "a capitalised word before a full stop does not make a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'A Follow Up is needed on the cap.\n')"
+want_finding "a one letter word before the phrase does not make a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'Customer follow up is owed on the cap.\n')"
+want_finding "a lower case phrase after a capitalised word is not a name" "$out" "follow up"
+out="$(detect_file docs/counts.md $'Customer Follow up is owed on the cap.\n')"
+want_finding "a phrase only partly capitalised is not a name" "$out" "Follow up"
+out="$(detect_file docs/counts.md $'RELEASE FOLLOW UP on the cap.\n')"
+want_finding "a phrase in capitals is not Title Case, so it is not a name" "$out" "FOLLOW UP"
+out="$(detect_file docs/counts.md $'## Release Follow Up\n')"
+want_finding "a Title Case markdown heading is Title Case by style, so it is not a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'| Customer Follow Up | TODO wire the reminder |\n')"
+want_finding "a real deferral on the same line as a name is still a finding" "$out" "TODO"
+out="$(detect_file docs/counts.md $'Customer Follow Up counts are low, for now.\n')"
+want_finding "a later phrase on the line is still judged after a name is skipped" "$out" "for now"
+
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
 want_finding "matching is case insensitive" "$out" "todo"
