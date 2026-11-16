@@ -348,6 +348,20 @@ describe("the tabs the session's own action opened, from each tool result", () =
     ] as [string, Record<string, unknown>][])
       expect({ short, input, r: then(SEEN, short, input, lists)?.opened }).toEqual({ short, input, r: ['12'] })
   })
+  // #3107: the batch clicks in tab 7 and closes it, and the click opened tab 12. The record of
+  // created tabs is taken as tabsAfter leaves it after that same result, as register.ts pairs them.
+  // The result's first line is a guess (no such batch was run in Chrome); only its list is read.
+  test('a batch that clicks in its own tab and then closes it still records the tab its click opened, and that tab can be closed (#3107)', () => {
+    const input = { actions: [{ name: 'computer', input: click }, { name: 'tabs_close_mcp', input: { tabId: 7 } }] }
+    const blocks = [`Closed tab 7\n${context(3, [MAIL, DOCS])}`]
+    const after = tabsAfter(OWN, `${C}browser_batch`, input, blocks)
+    const g = then(SEEN, 'browser_batch', input, blocks, after)
+    expect(g).toEqual({ seen: ['3', '7', '12'], opened: ['12'], watching: true })
+    expect(refuse('tabs_close_mcp', { tabId: 12 }, { tabs: after, listed: [], opened: g?.opened ?? [] })).toBeUndefined()
+    // The same batch with no click in it opened nothing: tab 12 only turned up.
+    const closeOnly = { actions: [{ name: 'tabs_close_mcp', input: { tabId: 7 } }] }
+    expect(then(SEEN, 'browser_batch', closeOnly, blocks, tabsAfter(OWN, `${C}browser_batch`, closeOnly, blocks))?.opened).toEqual([])
+  })
   test('a tab that opens a moment after the click is opened when the next result lists it, and only that one', () => {
     const clicked = then(SEEN, 'computer', click, [`Clicked\n${context(7, [MAIL, APP])}`])
     expect(clicked).toEqual({ seen: ['3', '7'], opened: [], watching: true })
