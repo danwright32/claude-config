@@ -17,7 +17,8 @@
 #     file, to add a new file, or to plant an ignored one is caught.
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git, lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that sets no value and runs nothing but a change of folder before it, with its texts
+#     command that sets no value and runs the script once, with nothing but a change of folder
+#     before it and readers its output is piped into after it, with its texts
 #     as the checkout left the default branch with them.
 #     Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 #     with the run is still judged.

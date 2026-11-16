@@ -9,7 +9,8 @@ import { APP, HOME, KIT, NAMED_TEXTS, bash, refusal, world } from './world.ts'
 // handed and write no file git tracks there. Its own text cannot be read to say so (values named by
 // variables, the claude command from the environment, libraries that keep logs and install the
 // compiler), so it was held on every run. Only that script, at that path, in that repository, handed
-// one folder, in a command that sets no value and runs nothing but a change of folder before it,
+// one folder, in a command that sets no value and runs the script once, with nothing but a change of
+// folder before it and readers its output is piped into after it,
 // with the text its checkout left the default branch with; everything else is judged as before. tests/test-area-check-check-mods-read-only.sh runs the real script and the real reader.
 
 const REPO = 'danwright32/claude-config'
