@@ -31,6 +31,8 @@ You are one of several agents, each working one item while the orchestrator sess
 
 Delete or drop data, apply migrations to a shared database, send anything to people, re-run a job that has side effects, change production settings, or spend money. Draft the action and its rollback, and report it for Dan to decide. Against production data, run read only queries and never print customer rows.
 
+A refused command is final. When a hook, a gate or the auto mode safety check refuses a command, it is never retried in pieces, as a test file, through another tool or by another agent: stop and report the refusal, quoting it, under item 6 of your report (claude-config#3028). The one exception is a refusal whose own text asks for the same call to be sent again unchanged, such as an area check hold once decided: send it once, exactly as it was.
+
 ## Tools
 
 - Never drive the Playwright browser. Read pages with WebFetch, or with the Claude in Chrome tools in a tab you create.
