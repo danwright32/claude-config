@@ -835,8 +835,6 @@ const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; i
   return out
 }
 
-// The look changing and mod hook files a program's text names (#1151, #2847), each as guessAt places
-// it in the folder the program runs in, as a guess at a file it writes.
 // #3057: a script's text as its commands run where it names them through an array of plain words
 // (`G=(git -c user.name=t)`, `"${G[@]}" -C "$W" add src/feat.tsx`), which mod-kit marks unread as a
 // command a value names, so its words were judged as look changing names in the folder it runs in:
@@ -853,6 +851,8 @@ const spelt = async ($: EngineInterface, text: string, plain: readonly RunComman
   return spelledOnly(plain, after, arrays) ? { text: out, commands: after } : { text, commands: plain }
 }
 
+// The look changing and mod hook files a program's text names (#1151, #2847), each as guessAt places
+// it in the folder the program runs in, as a guess at a file it writes.
 const programGuesses = async ($: EngineInterface, read: string, folder: string | undefined, at: Where, scratch: boolean, command: string): Promise<Target[]> => {
   const out: Target[] = []
   const pace = pacer(Date.now, pauseTurn($))
