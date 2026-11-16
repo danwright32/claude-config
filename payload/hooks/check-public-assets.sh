@@ -15,8 +15,9 @@
 #
 #   - Fires in every repo, on every push, and works out the repo's shape itself: `public/`,
 #     `static/` or `assets/` at the root. No opt in file, nothing to remember to run.
-#   - Compares the pushed tree (HEAD) with its merge-base, not a stored baseline, so a push fails
-#     only on what IT did: adding an unreferenced asset, removing the last reference to one, or
+#   - Compares the pushed tree (HEAD) with its merge-base (or, when the branch merges the default
+#     branch in, the tree of that merge-base with the default branch merged into it, #3054), not a
+#     stored baseline, so a push fails only on what IT did: adding an unreferenced asset, removing the last reference to one, or
 #     adding or changing an image over the cap. A repo's existing dead assets are counted in the
 #     summary and left alone.
 #   - Cap: 250 KB (decimal), measured on Slate main 2026-09-18. The two rasters under `public/`

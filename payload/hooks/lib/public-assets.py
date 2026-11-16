@@ -15,7 +15,8 @@ repo root, whichever exist):
    asset's path relative to its directory (`brand/x.svg`, which is how Next serves `public/brand/x.svg`
    at `/brand/x.svg`) or its bare basename (`x.svg`), as a whole token: the character before it may not
    be part of a filename and the character after it may not continue one. The verdict is a comparison
-   with the merge-base tree, not a stored baseline: an asset that is unreferenced at HEAD FAILS only
+   with the base tree, not a stored baseline (the merge-base, or the tree git merge-tree gives
+   for it with the default branch merged in, claude-config#3054): an asset that is unreferenced at HEAD FAILS only
    when this push introduced that state, either by adding the asset or by removing the last reference
    to it. An asset that was already unreferenced at the base is counted and left alone, so a repo's
    existing dead assets never block a push (Slate deletes its own in slate#2561).
