@@ -94,6 +94,14 @@ For a migration on path 1, or a change file on path 3, the picker is one questio
 
 The sha256 is the first word `shasum -a 256 <file>` prints, and the project ref is the text of `supabase/.temp/project-ref` in the project directory. Never fill in `answers` yourself. `hooks/db-write-ask.sh` lets the push (path 1) or the `supabase db query --linked --yes -f <file>` run (path 3) through on that answer, in this session, while the file is unchanged and the run goes to that project; a push also needs `pending` to be exactly that one migration, the migration to be the newest file in `supabase/migrations`, and a successful dry run of that project directory before the picker with nothing in the folder changed since it ran (`hooks/lib/db-apply-approval.py`). A missing, empty or longer list, or one naming another file, is asked about, and the question names the other migrations. Run it as a command of its own, with only a `cd` to the project directory before it. Anything else is asked about, saying why. A path 3 run on a project the checkout lists as test, in `.claude/supabase-test-projects` beside its `supabase` folder (one ref per line), needs no picker: the hook lets it through silently (#2643). The list counts only as git has committed it, so a ref added and not yet committed is asked about, and an Edit or Write of the list is asked about too, as is a shell command that writes it and a `git commit` that would add a line to it (#2989).
 
+A line of that list counts only once Dan himself has approved it (#3023), whatever commit, merge or pull carried it there. Ask him from the main session, never from a subagent, with a picker of one question whose options are labelled exactly `Trust` and `Cancel`, naming the project and the list in the question, and carrying this metadata:
+
+```json
+{"source": "db-test-project", "list": "<absolute path of the .claude/supabase-test-projects file>", "project_ref": "<the ref on the line>"}
+```
+
+One picker approves one line. Never fill in `answers` yourself. His answer covers the rest of the session, and the hook keeps it on this Mac's record (`~/.claude/state/supabase-test-projects/approved`) the next time the main session commits the line or runs a file on that project, so later sessions and every worktree of the clone do not ask again. A yes to the hook's own question about a commit approves nothing. A line that was on a list before #3023 needs the picker once.
+
 ## 4. Row counts, always
 
 Every data-modifying statement reports how many rows it affected (RETURNING, `GET DIAGNOSTICS`, or the client's row count). On path 3, which prints no count for a write, that is the `do` block's checked count plus the read-back. "Done" without a count is not done. Read-only verification queries after a change are encouraged and need no confirmation.
