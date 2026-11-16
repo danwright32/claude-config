@@ -4204,6 +4204,11 @@ line he approved passes.
 - A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
   session's transcript (both captured the same day), so it passes on Dan's picker in that session,
   and the record is written by a call of the main session.
+- A record that cannot be written trusts nothing (#3058). Before, the failure was swallowed: his
+  picker let the main session's call through, nothing was kept, and the next session asked him to
+  approve the same line again with no reason given. Now that call is asked about, the question
+  naming the record and the error, and saying that once the record can be written the same picker
+  counts with no new one asked.
 - What changes for a list that already exists: its lines are approved by nobody yet, so each write
   on its project is asked about, the question saying how Dan approves the line. One picker a line
   is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a

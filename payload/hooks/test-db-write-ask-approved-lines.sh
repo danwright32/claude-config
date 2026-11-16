@@ -414,19 +414,51 @@ else
   esac
 fi
 chmod 600 "$RECORD/approved"
-# The record cannot be written: Dan's picker still covers this session's write, and nothing is kept.
-HOME_B="$WORK/home-nowrite"; mkdir -p "$HOME_B/.claude/state/supabase-test-projects"; chmod 500 "$HOME_B/.claude/state/supabase-test-projects"
+# The record cannot be written (claude-config#3058). Before, the failure was swallowed: his picker
+# let the call through, nothing was kept, and the next session asked him to approve the same line
+# again with no reason given. Now a commit and a write are asked about, naming the record and the
+# error and never saying he approved the line in no picker, and nothing is kept. The control: the
+# same fixture, the record made writable, passes on the picker already given, and a later session
+# keeps it.
+REC_B="$WORK/home-nowrite/.claude/state/supabase-test-projects"
+HOME_B="$WORK/home-nowrite"; mkdir -p "$REC_B"; chmod 500 "$REC_B"
 R="$WORK/nowrite"; new_repo "$R" nowriteref00000001
-stage_line "$R" nowriteref00000001; G "$R" commit -q -m list
+stage_line "$R" nowriteref00000001
 trust "$R" nowriteref00000001
-if : 2>/dev/null > "$HOME_B/.claude/state/supabase-test-projects/probe"; then
-  check "with a record that cannot be written, Dan's picker still lets the session's write pass" "UNMEASURED: this user can write into a folder with no write permission (root?), so the case cannot be made"
+if : 2>/dev/null > "$REC_B/probe"; then
+  check "with a record that cannot be written, a commit and a write on Dan's picker are asked about, saying why" "UNMEASURED: this user can write into a folder with no write permission (root?), so the case cannot be made"
 else
+  r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R")"
+  case "$r" in
+    "ask rc=0|"*"in no picker"*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it claims he approved the line in no picker: ${r:0:500}" ;;
+    "ask rc=0|"*nowriteref00000001*"approved in a picker"*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" ok ;;
+    *) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "${r:0:900}" ;;
+  esac
+  G "$R" commit -q -m list
   r="$(HOME_USED="$HOME_B" write "$R")"
-  case "$r" in "allow rc=0||") check "with a record that cannot be written, Dan's picker still lets the session's write pass" ok ;; *) check "with a record that cannot be written, Dan's picker still lets the session's write pass" "${r:0:400}" ;; esac
+  case "$r" in
+    "ask rc=0|"*"in no picker"*) check "a write on a line Dan approved, whose record cannot be written, is asked about, saying why" "it claims he approved the line in no picker: ${r:0:500}" ;;
+    "ask rc=0|"*nowriteref00000001*"approved that line in a picker"*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "a write on a line Dan approved, whose record cannot be written, is asked about, saying why" ok ;;
+    *) check "a write on a line Dan approved, whose record cannot be written, is asked about, saying why" "${r:0:900}" ;;
+  esac
+  [ -e "$REC_B/approved" ] && check "and nothing was put on the record" "$REC_B/approved exists" || check "and nothing was put on the record" ok
   HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" unasked "and a later session's write is asked about" "$R" nowriteref00000001
+  # A commit adding one line with a picker and one without says each reason, neither for both.
+  R2="$WORK/nowritemix"; new_repo "$R2" nowritemixref00001
+  stage_line "$R2" nowritemixref00001; stage_line "$R2" nowritemixref00002
+  trust "$R2" nowritemixref00001
+  r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R2")"
+  case "$r" in
+    "ask rc=0|"*nowritemixref0000*nowritemixref0000*"in no picker, or which Dan approved in a picker"*"could not be written"*3058*) check "a commit adding a line with a picker and one without, whose record cannot be written, says both reasons" ok ;;
+    *) check "a commit adding a line with a picker and one without, whose record cannot be written, says both reasons" "${r:0:900}" ;;
+  esac
+  chmod 700 "$REC_B"
+  r="$(HOME_USED="$HOME_B" write "$R")"
+  case "$r" in "allow rc=0||") check "once the record can be written, the same picker covers the write with no new one" ok ;; *) check "once the record can be written, the same picker covers the write with no new one" "${r:0:400}" ;; esac
+  r="$(HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" write "$R")"
+  case "$r" in "allow rc=0||") check "and a later session keeps it by the record" ok ;; *) check "and a later session keeps it by the record" "${r:0:400}" ;; esac
 fi
-chmod 700 "$HOME_B/.claude/state/supabase-test-projects"
+chmod 700 "$REC_B"
 # This session's transcript cannot be read: nobody looked for Dan's picker, so the question says
 # the transcript could not be read and never that he approved the line in no picker (L11). The
 # control is the same write with a transcript that reads and holds no picker.
@@ -599,15 +631,15 @@ else
 fi
 
 # --- a record key that is not ASCII is refused, never written and never raised on -----------------
-# Every key is a hex digest; anything else is refused before the record is opened, and the failure
-# is kept quiet like any other failure to write it.
+# Every key is a hex digest; anything else is refused before the record is opened, and the refusal
+# is returned as why, like any other failure to write it (claude-config#3058), never kept quiet.
 keyed="$(env -u CLAUDE_HOME HOME="$WORK/keyhome" python3 -B - "$DIR/lib" <<'PY'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
 ap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ap)
 try:
-    ap._put_on_record(["abcé", "\ud800"])
+    why = ap._put_on_record(["abcé", "\ud800"])
 except Exception as e:
     print("raised " + type(e).__name__)
     sys.exit()
@@ -615,11 +647,17 @@ rec = os.path.join(ap._record_dir(), "approved")
 if os.path.exists(rec):
     print("wrote " + repr(open(rec, "rb").read()))
     sys.exit()
-ap._put_on_record(["0123abcd"])
+if not (isinstance(why, str) and "UnicodeEncodeError" in why and rec in why):
+    print("the refusal was not said, naming the record and the error: " + repr(why))
+    sys.exit()
+why = ap._put_on_record(["0123abcd"])
+if why is not None:
+    print("a hex key written was said to fail: " + repr(why))
+    sys.exit()
 print("ok" if open(rec, "rb").read() == b"0123abcd\n" else "a hex key was not written")
 PY
 )"
-check "a record key that is not ASCII is refused unwritten and not raised on, while a hex key is written" "$keyed"
+check "a record key that is not ASCII is refused unwritten, said and not raised on, while a hex key is written" "$keyed"
 
 # --- the settings never run the hook after a tool call --------------------------------------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
