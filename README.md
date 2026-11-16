@@ -8141,11 +8141,12 @@ sources has changed since the checkout left the default branch (`git diff --quie
 Anything else is judged as before: a script of that name in another repository or elsewhere in the
 checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
 shell, the file its output is redirected into, and the script chained with any other command, in a
-loop or in a function, which is judged with that command as before. Each such run is one `named-reader` line in
-the log, `passed` or `judged` with why. `tests/test-area-check-check-mods-read-only.sh` is the
-proof: it runs the real script from a throwaway checkout and is red when a run changes a file git
-tracks there or adds one git does not ignore (the pinned compiler's links under the ignored
-`tools/typescript/node_modules` are all it adds), and red when the script sources a file the list
+loop or in a function, which is judged with that command as before. Each such run is one
+`named-reader` line in the log, `passed` or `judged` with why.
+`tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
+ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
+adds), and red when the script sources a file the list
 in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
 not proved there, as it is not judged when `claude plugin test` is typed directly.
 A script in another language (node, python, ruby) whose only part
