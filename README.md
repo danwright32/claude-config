@@ -6934,7 +6934,9 @@ a look changing file an inline script, or a patch that cannot be read whole or c
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
 marks unread (`eval "printf ... > app/site.css"`, `$TOOL --write app/site.css`, an alias set to such
 a command), placed in the folder it runs in and held as could not check where that cannot be
-followed; a write whose destination cannot be followed is held when the command names a look
+followed, and since #3036 one named in the words of such a command inside a shell script the call
+runs, judged the same way; a write whose destination cannot be followed is held when the command
+names a look
 changing file anywhere (a glob such as `app/*.tsx` included), and runs when it names none. Kept per
 project (the main working tree, so every worktree shares it, read with mod-kit's `$.modkit.branch`
 and named by `$.modkit.repo`) under the issue the branch names, each one when it names several, else
