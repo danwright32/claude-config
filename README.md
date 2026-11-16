@@ -8131,6 +8131,26 @@ tracks there or adds one git does not ignore (the pinned compiler's links under 
 `tools/typescript/node_modules` are all it adds), and red when the script sources a file the list
 in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
 not proved there, as it is not judged when `claude plugin test` is typed directly.
+A second script is let through the same way (#3082, signed off by Dan, 2026-11-16, for this script
+only): `bash tools/check-mod-shared-parts.sh <mods folder>`, under the same conditions, with texts
+of its own: the script and `tools/lib/ts_source.py`, the python program it runs. The script's own
+commands read as writing nothing, the `cp` lines it prints included, which were first taken for
+the write. What kept the hold is that program, run through a variable
+(`python3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"`): it really writes, each mod's hooks with
+the comments taken out, into a folder the script makes under `TMPDIR` and removes as it ends, at a
+path python builds from its arguments, which no reader places. A command that sets a value is
+judged for this script too, since `TMPDIR` set to the folder puts those copies inside it.
+`tests/test-area-check-shared-parts-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout over mod-kit and the area check and is red when a run changes any path there or
+adds one, an ignored one included, when a copy of the script or of the program changed to write
+into the folder is not caught, and when the script sources a file or runs a program the list in
+`named.ts` lacks. Not proved there: a file left beside the program under the name of a python
+module it imports (`tools/lib/re.py`), which git is not asked about while untracked. Each script is
+let through for itself alone, so the two chained in one command are both judged. What the two
+suites share (the guarded temporary folder, the listings of a checkout, the reader of the list and
+the rule's checks on mod-kit's real reader) is in `tests/area-check-named-reader.sh`,
+`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. A third name is a third
+exemption, which is Dan's to sign off.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
