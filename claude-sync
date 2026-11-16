@@ -14314,7 +14314,7 @@ report_process_family(){
   # the library there is no table either, and sync_process_list has already said so, so there is
   # nothing here to lay out.
   [ -n "${SUITE_PILE_AWK_ETIME:-}" ] || return 0
-  out="$(printf '%s\n' "$table" | awk -v pat="$pattern" "$SUITE_PILE_AWK_ETIME"'
+  out="$(awk -v pat="$pattern" "$SUITE_PILE_AWK_ETIME"'
     {
       p=$1; pp=$2; et=$3; cmd=""
       for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
@@ -14334,7 +14334,7 @@ report_process_family(){
         printf "  pid %s, running %s%s\n", p, etime_units(age[p]), (d > 0 ? ", nested " d " deep inside another" : "")
       }
       printf "SUMMARY %d %d %d\n", n, roots, maxd
-    }' )"
+    }' <<< "$table")"
   summary="$(printf '%s' "$out" | grep '^SUMMARY ' || true)"
   n="$(printf '%s' "$summary" | awk '{print $2}')"; roots="$(printf '%s' "$summary" | awk '{print $3}')"
   maxd="$(printf '%s' "$summary" | awk '{print $4}')"

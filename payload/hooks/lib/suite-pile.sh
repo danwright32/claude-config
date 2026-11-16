@@ -66,7 +66,7 @@ function etime_units(et,   s) {
 }
 '
 etime_in_units(){   # $1 = an elapsed time as ps writes it  ->  the same age with its units
-  printf '%s\n' "$1" | awk "$SUITE_PILE_AWK_ETIME"'{ print etime_units($1) }'
+  awk "$SUITE_PILE_AWK_ETIME"'{ print etime_units($1) }' <<< "$1"
 }
 
 # The process table as pid, ppid, etime, command, behind one seam: SYNC_PS_FIXTURE holds the same
