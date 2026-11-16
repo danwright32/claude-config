@@ -64,29 +64,35 @@ SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)
 # narrower list let through unjudged.
 # A { opens a group only with a space after it, so the payload's own opening {" is not a command start
 # (measured: with a bare { every call went to python3, 0.05 s each).
+# A name counts where no letter, digit or _ stands in front of it, and also right after an escaped
+# newline, return or tab of the payload's JSON (\\[nrt]): the n of `\nbash post` read as a letter in
+# front of bash, so a command on a later line skipped the gate whole (claude-config#3020).
 START='("command"[[:space:]]*:[[:space:]]*"|[;&|(`]|\{[[:space:]]|\\n)[[:space:]]*'
-RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|tsx|ts-node|osascript|uv|source|pytest|py\.test)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_])(bash|sh|zsh|dash|ksh)[[:space:]]|\./'
+RUNS='(^|[^A-Za-z0-9_]|\\[nrt])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|tsx|ts-node|osascript|uv|source|pytest|py\.test)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)[[:space:]]|\./'
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
 # NODE_OPTIONS set for any program, which loads the modules it names in every node that program
 # starts (claude-config#2912).
 RUNS+='|NODE_OPTIONS'
+# eval, which runs text it is handed: `eval "$(cat cmd.txt)"` names no script, shell or interpreter,
+# so it went unjudged whatever the file held (claude-config#3020).
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])eval([^A-Za-z0-9_.]|$)'
 # A shell a pipe feeds its code (`cat post.sh | sh`, ending the command, so no space follows it), and
 # curl handed a config file, which is the request it describes (claude-config#2887). Under nocasematch
 # -K also matches curl's -k, which only sends that call to python3.
 RUNS+='|\|&?[[:space:]]*(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_.-]|$)'
-RUNS+='|(^|[^A-Za-z0-9_])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
 # call goes to python3 while one of the places curl reads one from holds a file, and so does a call
 # that sets a variable placing them or names a curlrc (a write that leaves one naming an endpoint).
 for curl_dir in "${CURL_HOME:-}" "${XDG_CONFIG_HOME:-}" "${HOME:-}" "${HOME:+$HOME/.config}"; do
   if [ -n "$curl_dir" ] && { [ -e "$curl_dir/.curlrc" ] || [ -e "$curl_dir/curlrc" ]; }; then
-    RUNS+='|(^|[^A-Za-z0-9_])curl(ie)?([^A-Za-z0-9_.-]|$)'
+    RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?([^A-Za-z0-9_.-]|$)'
     break
   fi
 done
-RUNS+='|(^|[^A-Za-z0-9_])(CURL_HOME|XDG_CONFIG_HOME|HOME)=|curlrc'
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(CURL_HOME|XDG_CONFIG_HOME|HOME)=|curlrc'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }

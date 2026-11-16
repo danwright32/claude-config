@@ -27,7 +27,7 @@ shapes were refused that way however quiet the files they named:
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/code-loaders.py's, so the methods use the Judge's own readers (rest_of, words_of,
 raw_words, sh_tokens, sh_literal_word, sh_strip_openers, sh_binds, sh_source_word,
-sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell, unfollow).
+sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell, unfollow, sw).
 
 Since claude-config#3020 it also reads text handed to eval, to a shell's -c or to a function that
 evaluates its argument through a variable or a substitution (handed_text_reason, with the comment
@@ -46,10 +46,10 @@ FILE_TEXT = re.compile(r'("?)(?:\$\(\s*(?:cat\s+|<\s*)([^()`]+?)\s*\)|`\s*(?:cat
 LONE_NAME = re.compile(r'"?\$\{?([A-Za-z_]\w*|[0-9])\}?"?')
 
 
-def make(sh_special, sh_param, runs_refused=lambda: False, unknown_dir=None):
+def make(sh_special, sh_param, unknown_dir=None):
     """The base class for the gate's Judge (module docstring). sh_special is its SH_SPECIAL, the
-    builtins an assignment in front of lasts past, and sh_param its SH_PARAM; runs_refused says
-    whether its #2683 switch is on, and unknown_dir is its SH_UNKNOWN_DIR."""
+    builtins an assignment in front of lasts past, sh_param its SH_PARAM, and unknown_dir its
+    SH_UNKNOWN_DIR."""
 
     class ShWalkShapes:
         def sh_one_command_sets(self, heads, funcs):
@@ -183,10 +183,15 @@ def make(sh_special, sh_param, runs_refused=lambda: False, unknown_dir=None):
         #     any path is, and what an earlier command made F from counted (pieces_of);
         #   * and otherwise text the gate cannot read: a program's output, a variable set nowhere,
         #     a file whose path cannot be worked out. In the command itself that is refused, as input
-        #     a shell reads that cannot be read is (fed_reason). Inside a script on disk it stays
-        #     behind the #2683 switch, as a file run by a path the gate cannot work out does: 9 of
-        #     this repository's scripts evaluate a variable their caller sets (lib/issue-spool.sh's
-        #     test seam among them), and refusing them is the measurement Dan asked for first.
+        #     a shell reads that cannot be read is (fed_reason). Inside a script on disk, and in any
+        #     string such a script evaluates, it is left as it was, whatever the #2683 switch says:
+        #     the gate suite pins that for the string an eval runs (2026-11-12), and refusing it there
+        #     would refuse 19 more of this repository's 563 tracked shell scripts (measured
+        #     2026-11-15 by judging `bash <file>` for each with that refusal behind the switch, 201
+        #     refused to 220, lib/issue-spool.sh's test seam and tools/prove-it-fails.sh among them).
+        #     As shipped, none is newly refused (5 before and after, the same five).
+        # Text written out, in single quotes too, is not handed text: its commands are read where they
+        # are. A redirection on the command is the shell's and no word of the text.
         # A positional parameter is what a function or a script was handed: judged at each call of a
         # function the walk found to evaluate it (sh_eval_text_reason), and for a script on disk
         # where the script is handed something (the gate's acts reading).
@@ -224,10 +229,22 @@ def make(sh_special, sh_param, runs_refused=lambda: False, unknown_dir=None):
             """The reason the text name (eval, a shell's -c, a function that evaluates its argument)
             is handed posts, or cannot be read, or None (the comment above). raws are the words of
             the text as written."""
-            raws = raws[1:] if raws[:1] == ["--"] else raws
-            if not any(re.search(r"[$`]", r) for r in raws):
-                return None  # written out: its commands are read where they are
+            plain, k = [], 0
+            while k < len(raws):
+                # A redirection is the shell's, never a word of the text (as the Judge's operands reads it).
+                m = self.sw.REDIRECT_WORD.match(raws[k])
+                if m:
+                    k += 1 if m.group(1) else 2
+                    continue
+                plain.append(raws[k])
+                k += 1
+            raws = plain[1:] if plain[:1] == ["--"] else plain
+            if all(self.sh_literal_word(r) is not None for r in raws):
+                # Written out, in single quotes too, where a $ is the text's own: its commands are
+                # read where they are, with the positional parameters the shell is given.
+                return None
             values = [self.sh_value(r, d) for r in raws]
+            in_script = self.sh_in_script()
             pieces = None
             if all(v is not None for v in values):
                 pieces = [("text", " ".join(values) + "\n", "")]
@@ -235,19 +252,36 @@ def make(sh_special, sh_param, runs_refused=lambda: False, unknown_dir=None):
                 lone = LONE_NAME.fullmatch(raws[0])
                 if lone and lone.group(1).isdigit():
                     evals = self.sh_ctx_known().get("evals") or {}
-                    if self.shell.get("on_disk") or any(int(lone.group(1)) in ns for ns in evals.values()):
+                    if in_script or any(int(lone.group(1)) in ns for ns in evals.values()):
                         return None  # what it was handed, judged where it is handed (the comment above)
                 pieces = self.text_of_file((self.sh_set_from(lone.group(1)) or "") if lone else raws[0], d)
-            shown = " ".join(raws)[:120]
-            unread = (f"{name} is handed {shown}, text the gate cannot read before the command runs%s, so "
-                      "whether it posts cannot be checked. Write the commands out, or put them in a script "
-                      "and run that")
-            if pieces is None:
-                if self.shell.get("on_disk") and not runs_refused():
+            if in_script:
+                # A script's own: what can be read is, and the rest is left as it was (the comment above).
+                pieces = [p for p in pieces or () if p[0] != "unknown"]
+                if not pieces:
                     return None
-                return self.unfollow(unread % "")
+            shown = " ".join(raws)[:120]
+
+            def unread(came):
+                return (f"{name} is handed {shown}, text the gate cannot read before the command runs{came}, so "
+                        "whether it posts cannot be checked. Write the commands out, or put them in a script "
+                        "and run that")
+
+            if pieces is None:
+                return self.unfollow(unread(""))
             return self.pieces_reason(name, pieces, d, depth, True, None, "runs the text it is handed",
                                       "runs commands from the text it is handed", unread)
+
+        def sh_in_script(self):
+            """Whether the text being read is a script on disk, or text one evaluates: a string its
+            eval, its shell's -c or a function of it runs, however many deep, by the texts that run
+            this one (the Judge's line keeps each as the parent of the text it runs)."""
+            sh = self.shell
+            while sh:
+                if sh.get("on_disk"):
+                    return True
+                sh = sh.get("parent")
+            return False
 
 
     return ShWalkShapes

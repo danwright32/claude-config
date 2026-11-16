@@ -1495,8 +1495,7 @@ _data_names = load_lib("data_names", "data-names.py")
 DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 # Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
 # for one command in a function, and a function that evaluates its argument (claude-config#2912).
-ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, unworked_paths_refused,
-                                                                    SH_UNKNOWN_DIR)
+ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, SH_UNKNOWN_DIR)
 # The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
 _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The cache of the calls this gate allowed (claude-config#2918).
@@ -2110,12 +2109,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pieces = self.stdin_of(d, text, whole, redirs)
         return [("unknown", None, "")] if pieces is None else pieces
 
-    def fed_reason(self, name, pieces, read_file, read_text):
+    def fed_reason(self, name, pieces, read_file, read_text, unread=None):
         """The reason what a program reads on its input posts, or None (claude-config#2887): each piece
         read as the same text handed by name is, a file by read_file(path, its word) and text by
         read_text(text). Code a program was given to write it names what it names, as script() reads
         it. A piece whose text cannot be worked out, what any program the gate does not read prints
-        (a download, say) or a file it may have written, is refused: the gate cannot see what it holds."""
+        (a download, say) or a file it may have written, is refused: the gate cannot see what it holds.
+        unread(where it came from) words that refusal for text read another way than on the input."""
         for kind, value, label in pieces:
             if kind == "file":
                 reason = read_file(value, label or value)
@@ -2129,6 +2129,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # note_unreadable leaves alone; what such a script does with a file it is handed is
                 # judged where it is handed one (sh_stdin_acts).
                 continue
+            elif unread:
+                reason = self.unfollow(unread(f", which comes from {label}" if label else ""))
             else:
                 came = f", which comes from {label}," if label else ""
                 reason = self.unfollow(f"{name} reads its input{came} and what that holds cannot be read, so "
@@ -2144,12 +2146,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         each ran the file's text unread. A file is read as the script it is when handed by name, and
         text as the commands or code it is (a heredoc's, as before, where the command is)."""
         pieces = self.fed_pieces(d, text, whole)
-        if pieces is False:
-            return None
+        return None if pieces is False else self.pieces_reason(name, pieces, d, depth, shell_hint, lang)
 
+    def pieces_reason(self, name, pieces, d, depth, shell_hint, lang, file_how="runs what it reads on its input",
+                      text_how="runs commands from its input", unread=None):
+        """The reason pieces of code name runs post, or None: input_code's reading, which text handed
+        to eval or a shell's -c shares (handed_text_reason, claude-config#3020) with its own wording
+        (file_how, text_how, and unread for a piece that cannot be read, as fed_reason takes it)."""
         def read_file(path, word):
             reason = self.script(path, d, depth, shell_hint, lang, f"the script {word}")
-            return f"{name} runs what it reads on its input: {reason}" if reason else None
+            return f"{name} {file_how}: {reason}" if reason else None
 
         def read_text(body):
             hit = MARKER.search(body)
@@ -2158,13 +2164,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     inner = self.line(body, d, depth + 1, body)
                 except self.sw.Unreadable:
                     inner = f"it names {hit.group(0)}" if hit else None
-                return f"{name} runs commands from its input, one of which posts: {inner}" if inner else None
+                return f"{name} {text_how}, one of which posts: {inner}" if inner else None
             if hit:
-                return f"{name} runs a script from its input that names {hit.group(0)}"
+                return f"{name} runs a script from its input that names {hit.group(0)}" if unread is None else \
+                    f"{name} {text_how}, which names {hit.group(0)}"
             here = os.path.abspath(d or os.getcwd())
             return self.imports(f"the script {name} reads from its input", None, here, body, lang) if lang else None
 
-        return self.fed_reason(name, pieces, read_file, read_text)
+        return self.fed_reason(name, pieces, read_file, read_text, unread)
 
     def split_here(self, name, operand, d, text, whole, depth, shell_hint, lang):
         """input_code for a here string the shared reader split into words (`sh <<< $(cat post.sh)`
@@ -4640,13 +4647,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return re.sub(r"\\(.)", lambda e: "" if e.group(1) == "\n" else
                       e.group(1) if e.group(1) in "$`\"\\" else "\\" + e.group(1), m.group(1), flags=re.S)
 
-    def sh_eval_call(self, head, evals):
+    def sh_eval_call(self, head, evals, raw=False):
         """For a command mentioning a function of evals (name: the positions of the arguments it
         evaluates in the caller's shell): the texts it evaluates, where it is a plain call whose
         evaluated arguments are written out; False where it is anything else (an argument built from
         a variable, the name in a trap, or a word of its own handed to another command), as what it
         then evaluates cannot be read. None where it mentions none of them, or names one only inside
-        a longer string another command is handed (a message, text printf writes to a file)."""
+        a longer string another command is handed (a message, text printf writes to a file). With
+        raw, a plain call's evaluated arguments as written, written out or not (claude-config#3020)."""
         # Every command of a text is asked this (sh_eval_text_reason), and a command can mention a
         # name only where it holds it, so one without any is passed over before any search, and the
         # rest searched by one pattern for the whole set of names (#2918).
@@ -4658,11 +4666,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         toks = self.sh_tokens(self.sw.command_rest(self.sh_strip_openers(head))[0])
         raws, k = [], 0
         while k < len(toks):
-            kind, raw = toks[k]
+            kind, tok = toks[k]
             if kind == "op":
-                k += 2 if SH_REDIRECT.fullmatch(raw) else 1
+                k += 2 if SH_REDIRECT.fullmatch(tok) else 1
                 continue
-            raws.append(raw)
+            raws.append(tok)
             k += 1
         if raws and raws[0] not in evals and raws[0] != "trap" and \
                 not any(re.sub(r"""['"]""", "", w) in evals for w in raws):
@@ -4674,14 +4682,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rest = " ".join(raws[1:])
         if mention.search(rest):
             return False
-        lits = []
-        for n in sorted(evals[raws[0]]):
-            if n < len(raws):
-                lit = self.sh_literal_word(raws[n])
-                if lit is None:
-                    return False
-                lits.append(lit)
-        return lits
+        handed = [raws[n] for n in sorted(evals[raws[0]]) if n < len(raws)]
+        if raw:
+            return handed
+        lits = [self.sh_literal_word(w) for w in handed]
+        return False if any(lit is None for lit in lits) else lits
 
     def sh_lit_heads(self, lit, cwd):
         """The commands a written out condition runs, each with its openers taken off, or None where
@@ -5486,10 +5491,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return f"{name} sends a request whose address comes from a variable, and the command names {hit.group(0)}"
             # A config file curl is handed is the request it describes (claude-config#2887).
             return self.curl_config(name, words, d, text, whole) if name in ("curl", "curlie") else None
+        if name == "eval" and why == sw.WHY_VARIABLE:
+            # Text handed through a variable or a substitution, read where the gate can read it
+            # (handed_text_reason in lib/sh-walk-shapes.py, claude-config#3020).
+            reason = self.handed_text_reason("eval", self.raw_words(text)[1:], d, depth)
+            if reason:
+                return reason
         if name in SHELLS:
             if wrapper.endswith(" -c") and not why:
                 return None  # its string's commands are the records after this one
             operand, inline, stdin = self.operands(words)
+            if wrapper.endswith(" -c") and why == sw.WHY_VARIABLE:
+                code = self.operands(self.raw_words(text) or words)[1]  # the code word as written (#3020)
+                reason = self.handed_text_reason(f"{name} -c", [code[1]], d, depth) if code else None
+                if reason:
+                    return reason
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
             # The shell by name, which decides how a file with a NUL in its first line is read (#2977).

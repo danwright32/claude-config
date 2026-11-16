@@ -227,7 +227,7 @@ cp "$N7/hooks/runs-srczero.sh" "$N7/q/hooks/runs-srczero.sh"
 run_n7 "dash hooks/zero.sh"
 refused "#3020 \$0 of a file with a NUL in its first line is the word that ran it, so the file it sources after a cd built from it is the one read"
 says "#3020 and that file posts" "REFUSED: this command posts to Slack"
-says "#3020 naming the file beside the script" "hooks/b.sh"
+says "#3020 naming the sourced file as the script wrote it, as for a script with no NUL" "the script ./b.sh runs a command that posts"
 run_n7 "cd $N7/q && dash hooks/zero.sh"
 allowed "#3020 the same script beside a quiet file passes, whatever the folder it ran from holds"
 run_n7 "bash hooks/runs-srczero.sh"
@@ -934,8 +934,8 @@ echo "slack drafts only: text handed to eval or a shell's -c is read where the g
 # gate can read it: a value worked out, and the text of one file (cat or <, straight or through a
 # variable set once from it), by the reader #2887 uses for a here string. Text it cannot read, a
 # program's output or a variable set nowhere, is refused in the command itself, as input a shell
-# reads is; inside a script on disk it stays behind the #2683 switch, as a file run by a path the
-# gate cannot work out does.
+# reads is; inside a script on disk it is left as before, whatever the #2683 switch says, as the
+# gate suite pins for the string an eval runs (2026-11-12).
 E3="$T/e3020"
 mkdir -p "$E3"
 printf '%s\n' "$POST" > "$E3/cmd.txt"
@@ -966,8 +966,8 @@ for c in "eval \"\$(date)\"" "eval \"\$UNSET_3020\"" "X=\"\$(date)\"; eval \"\$X
   read_refused "#3020 text the gate cannot read is refused in the command itself: $c"
   says "#3020 as a check it could not make: $c" "REFUSED: the gate could not check whether this command posts to Slack"
 done
-# Inside a script on disk: the text of a file is read there too, and text the gate cannot read
-# stays behind the #2683 switch, so a script evaluating a variable its caller sets runs as before.
+# Inside a script on disk: the text of a file is read there too, and text the gate cannot read is
+# left as it was, so a script evaluating a variable its caller sets runs as before.
 printf '%s\n' 'X="$(cat cmd.txt)"' "eval \"\$X\"" > "$E3/file-posts.sh"
 printf '%s\n' 'X="$(cat quiet.txt)"' "eval \"\$X\"" > "$E3/file-quiet.sh"
 printf '%s\n' "[ -n \"\${PAUSE_3020:-}\" ] && eval \"\${PAUSE_3020}\"" "eval \"\$(date +%s >/dev/null)\"" 'echo done' > "$E3/unread.sh"
@@ -977,10 +977,60 @@ says "#3020 as the post it is" "REFUSED: this command posts to Slack"
 run_e3 "bash file-quiet.sh"
 allowed "#3020 and one evaluating the text of a quiet file passes"
 run_e3 "bash unread.sh"
-allowed "#3020 a script on disk evaluating text the gate cannot read passes as before, with the #2683 switch off"
+allowed "#3020 a script on disk evaluating text the gate cannot read passes as before"
 SLACK_GATE_UNWORKED_PATHS=refuse run_e3 "bash unread.sh"
-read_refused "#3020 and is refused with the switch on"
-says "#3020 as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
+allowed "#3020 and with the #2683 switch on too, which the gate suite pins for the string an eval runs"
+# The same for the text of a file whose path cannot be worked out, and for text a script on disk
+# evaluates through a string written out (a wait handed 'eval \"\$c\"'): it is the script's, not the
+# command's, however many strings deep it is evaluated.
+printf '%s\n' "eval \"\$(cat \"\$UNSET_3020/cmd.txt\")\"" 'echo done' > "$E3/unread-file.sh"
+printf '%s\n' "ev() { eval \"\$1\"; }" "ev 'eval \"\$c\"'" "ev 'eval \"\$(date)\"'" "ev 'bash -c \"\$c\"'" 'echo done' > "$E3/unread-deep.sh"
+for s in unread-file unread-deep; do
+  run_e3 "bash $s.sh"
+  allowed "#3020 a script on disk evaluating text the gate cannot read passes as before: $s"
+  SLACK_GATE_UNWORKED_PATHS=refuse run_e3 "bash $s.sh"
+  allowed "#3020 and with the #2683 switch on too: $s"
+done
+run_e3 "ev() { eval \"\$1\"; }; ev 'eval \"\$UNSET_3020\"'"
+read_refused "#3020 the same string evaluated in the command itself is refused, as text the gate cannot read"
+# Code written out in single quotes is not text handed through a variable, whatever its own commands
+# start with: it is read where it is, with the positional parameters the shell is given, as before.
+# Measured 2026-11-15 by judging every tracked script: test-gh-reader.sh and test-push-scope.sh, which
+# run `bash -c '. "$1/lib/push-scope.sh"; ... "$@" ...' _ "$DIR"`, were newly refused without this.
+printf '%s\n' 'echo quiet' > "$E3/quiet.sh"
+printf '%s\n' "DIR=\"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"" 'asks() {' \
+  "  bash -c '. \"\$1/quiet.sh\"; shift; if \"\$@\" x; then echo yes; fi' _ \"\$DIR\" \"\$@\"" '}' 'asks true' > "$E3/lit.sh"
+run_e3 "bash lit.sh"
+allowed "#3020 the control: a script whose shell is handed code written out, one command of it a variable, passes as before"
+run_e3 "bash -c 'echo hi; \"\$@\"' _ true"
+allowed "#3020 the control: and the same in the command itself"
+run_e3 "eval 'echo hi; \"\$@\"'"
+allowed "#3020 the control: and handed to eval"
+# A redirection on the eval is the shell's, never a word of the text it is handed.
+run_e3 "eval \"\$(cat quiet.txt)\" 2>/dev/null"
+allowed "#3020 the control: a quiet file's text evaluated with its errors sent away passes"
+run_e3 "eval \"\$(cat cmd.txt)\" 2>/dev/null"
+refused "#3020 and a file that posts, evaluated the same way, is read and refused"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+# A command on a later line reaches the wrapper as \n and the word in the payload's JSON, where the
+# n of the escape read as a letter in front of the word: the call skipped the gate whole, whatever
+# the eval, or a shell running a file with no extension, went on to run (measured 2026-11-15 on
+# origin/main: `true`, a newline, `bash post` passed, and the same on one line with ; was refused).
+printf '%s\n' "$POST" > "$E3/post"
+printf '%s\n' 'echo quiet' > "$E3/quiet"
+run_e3 "$(printf 'true\neval "$(cat quiet.txt)"')"
+allowed "#3020 the control: a quiet file's text evaluated on a later line passes"
+run_e3 "$(printf 'true\neval "$(cat cmd.txt)"')"
+refused "#3020 an eval on a later line is judged"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+run_e3 "$(printf 'X=$(cat cmd.txt)\n\teval $X')"
+refused "#3020 and after a tab, through a variable set on the line before"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+run_e3 "$(printf 'true\nbash quiet')"
+allowed "#3020 the control: a shell running a quiet file with no extension on a later line passes"
+run_e3 "$(printf 'true\nbash post')"
+refused "#3020 a shell running a file with no extension that posts, on a later line, is judged"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
 
 echo
 

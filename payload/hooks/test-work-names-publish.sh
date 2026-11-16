@@ -929,6 +929,15 @@ RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh api user --jq .login) gh issue create --re
 check "#3020 and a token variable set from any other gh command: $out" refused_unread
 RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob; cat named.md) gh issue create --repo danwright-test/public-notes --title x --body y"
 check "#3020 and from more than the one command: $out" refused_unread
+# Which command the substitution runs is read by the shared gh reader, so each of these, one word
+# away from the token command, is still a program whose output is posted.
+for sub in "gh auth status" "gh auth token extra" "gh auth token -u" "gh auth token --jq .x" "gh -R o/x auth token" \
+  "gh auth -u bob token" "git auth token" "gh token auth" "env gh auth token"; do
+  RUN_DIR="$WORKCO" run "GH_TOKEN=\$($sub) gh issue create --repo danwright-test/public-notes --title x --body y"
+  check "#3020 and from $sub: $out" refused_unread
+done
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token --user=bob --secure-storage -h github.com) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 the control: every option the token command takes, in either form, passes: $out" passed
 RUN_DIR="$WORKCO" run "GH_TOKEN=\$(./gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
 check "#3020 and from a program at ./gh, which is not gh: $out" refused_unread
 RUN_DIR="$WORKCO" run "gh() { cat named.md; }; GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"

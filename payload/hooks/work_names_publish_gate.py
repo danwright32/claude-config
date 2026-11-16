@@ -1062,9 +1062,34 @@ READS_DIR = re.compile(r"\$|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 # of what is judged as posted, the account it names included (token_spans). The variable read back
 # into posted text is still refused, as set from something only running the command can tell.
 TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
-TOKEN_SET = re.compile(r"(?<![^\s;&|(){}])(?:%s)=(\"?)(\$\(\s*gh\s+auth\s+token"
-                       r"(?:\s+(?:(?:-u|--user|-h|--hostname)(?:\s+|=)[A-Za-z0-9][A-Za-z0-9._-]*|--secure-storage))*"
-                       r"\s*\))\1(?![^\s;&|)])" % "|".join(TOKEN_VARS))
+# The assignment by its shape alone: one $( ) holding plain words, with no quote, expansion, operator,
+# path or substitution inside. Which command those words are is read by the shared reader
+# (prints_token), never matched here (lib/word-position-scan.py).
+TOKEN_SET = re.compile(r"(?<![^\s;&|(){}])(?:%s)=(\"?)(\$\(([A-Za-z0-9 \t._=-]*)\))\1(?![^\s;&|)])"
+                       % "|".join(TOKEN_VARS))
+TOKEN_VALUED = ("-u", "--user", "-h", "--hostname")
+TOKEN_VALUE = r"[A-Za-z0-9][A-Za-z0-9._-]*"
+
+
+def prints_token(inner):
+    """Whether the words of a substitution are gh printing the token of an account: its auth token
+    action as the shared reader finds it (tool_read in lib/shell-words.py), with nothing written in
+    front of the action, and after it only an account or a host (-u, --user, -h, --hostname, each
+    with a plain value) and --secure-storage."""
+    found = scan._sw.tool_read(scan._sw.command_words(inner))
+    # Only gh has an action, so auth then token is gh's (git's action is always empty).
+    if not found or (found[1], found[2]) != ("auth", "token") or found[3]:
+        return False
+    after, k = list(found[4]), 0
+    while k < len(after):
+        w = after[k]
+        if w in TOKEN_VALUED and k + 1 < len(after) and re.fullmatch(TOKEN_VALUE, after[k + 1]):
+            k += 2
+        elif w == "--secure-storage" or re.fullmatch(r"(?:%s)=%s" % ("|".join(TOKEN_VALUED), TOKEN_VALUE), w):
+            k += 1
+        else:
+            return False
+    return True
 
 
 def token_spans(command, parts):
@@ -1089,11 +1114,12 @@ def token_spans(command, parts):
         head = len(text) - len(rest)  # where the command's own name starts, past its assignments
         sets = False
         if rest.strip():
-            words = scan._sw.command_words(TOKEN_SET.sub(" ", rest))
+            words = scan._sw.command_words(
+                TOKEN_SET.sub(lambda m: " " if prints_token(m.group(3)) else m.group(0), rest))
             sets = bool(words) and words[0] in SETS_VARS and _sets_vars(words)
         inner = {(s - start, e - start): q for s, e, q in part.get("inner") or ()}
         for m in TOKEN_SET.finditer(text):
-            if inner.get((m.start(2), m.end(2))) is not bool(m.group(1)):
+            if inner.get((m.start(2), m.end(2))) is not bool(m.group(1)) or not prints_token(m.group(3)):
                 continue
             if m.end() <= head or (sets and m.start() >= head):
                 spans.append((start + m.start(), start + m.end()))
