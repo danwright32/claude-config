@@ -1,7 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { SlackAlertChoice } from '../types/index.d.ts'
-import { CHOICE_MS, REASK_MS, carried, choicesOf, isOverdue, mergeOf, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf } from '../hooks/night.ts'
+import { CHOICE_MS, REASK_MS, RELEASE, carried, choicesOf, etTime, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf, waitingNamed } from '../hooks/night.ts'
 
 // Wording chosen in sleep mode (#2628): the pure rules, apart from the session.
 
@@ -125,4 +125,58 @@ test('the morning lines reach a session\'s own choices, an ended session\'s, and
   expect(morningReaches(choice({ session: null }), 's1')).toBe(true)
   expect(morningReaches(choice({ session: 's2', expired: 1 }), 's1')).toBe(true)
   expect(morningReaches(choice({ session: 's2' }), 's1')).toBe(false)
+})
+
+// #3030: a session in another repository had two merges held for days "while Slack alert wording
+// chosen overnight waits on Dan", and could not tell which wording, chosen where, by whom, when, or
+// what releases it. Dan said he had answered it, and the guard held the same merges afterwards.
+test('a moment is said in ET whatever zone the Mac is in, standard and daylight time alike (#3030)', () => {
+  expect(etTime(Date.UTC(2026, 10, 4, 15, 0))).toBe('Nov 4, 2026 at 10:00 AM ET')
+  expect(etTime(Date.UTC(2026, 6, 1, 13, 5))).toBe('Jul 1, 2026 at 9:05 AM ET')
+  expect(etTime(Date.UTC(2026, 10, 5, 5, 30))).toBe('Nov 5, 2026 at 12:30 AM ET')
+  expect(etTime(Date.UTC(2026, 10, 5, 17, 45))).toBe('Nov 5, 2026 at 12:45 PM ET')
+})
+
+test('each waiting choice is named with the session and repository that chose it, when, and the one answer that releases it (#3030)', () => {
+  const at = Date.UTC(2026, 10, 14, 7, 12)
+  const a = choice({ at, chosenBy: 's1' })
+  const b = choice({ id: 't2', at: at + HOUR, file: '/w/site/lib/pager.ts', rendered: 'Disk is full on the primary', session: null, chosenBy: 's9' })
+  const text = waitingNamed([a, b], new Set(['t1']), { t1: 'danwright32/app', t2: 'danwright32/site' })
+  expect(text).toContain(
+    '/w/app/lib/alert.ts: "Deploy 4182 failed on production", chosen by session s1, in danwright32/app, on Nov 14, 2026 at 2:12 AM ET (this session puts it to Dan: call AskUserQuestion with one question and metadata {"source": "slack-alert-guard:chosen:t1"})',
+  )
+  expect(text).toContain(
+    '/w/site/lib/pager.ts: "Disk is full on the primary", chosen by session s9, which has since ended, in danwright32/site, on Nov 14, 2026 at 3:12 AM ET (it is put to Dan in that session, or once it ends in a session working in danwright32/site)',
+  )
+  // What releases it is said once, and is only what the guard reads: no route to withdraw one exists.
+  expect(text.endsWith(RELEASE)).toBe(true)
+  expect(text.split(RELEASE).length).toBe(2)
+  expect(RELEASE).toContain("Dan's Approve wording")
+  expect(RELEASE).toContain('nothing withdraws')
+  expect(RELEASE).toContain('Change wording keeps it held')
+})
+
+test('what a choice does not record is said as not recorded, never filled in (#3030, L11)', () => {
+  // Made before the maker was kept, and its session since ended: no session id is named.
+  const old = choice({ session: null })
+  const text = waitingNamed([old], new Set(['t1']), { t1: null })
+  expect(text).toContain('chosen by a session that has since ended, whose id the choice does not record, in a repository that could not be read, on Dec 31, 1969 at 7:00 PM ET')
+  expect(text).not.toContain('session null')
+  // Made before the maker was kept, its session still open: that session is the one that made it.
+  expect(waitingNamed([choice()], new Set(['t1']), { t1: 'danwright32/app' })).toContain('chosen by session s1, in danwright32/app')
+  // Dan's own answers are named with when he gave them.
+  const told = waitingNamed([choice({ chosenBy: 's1', rejected: Date.UTC(2026, 10, 14, 14, 55), expired: Date.UTC(2026, 10, 17, 9, 0) })], new Set(['t1']), { t1: 'danwright32/app' })
+  expect(told).toContain('Dan answered Change wording to it on Nov 14, 2026 at 9:55 AM ET, which keeps it held')
+  expect(told).toContain('it expired unanswered on Nov 17, 2026 at 4:00 AM ET, still held')
+})
+
+test('a merge carrying chosen wording names each choice the same way, and what releases it (#3030)', () => {
+  const at = Date.UTC(2026, 10, 14, 7, 12)
+  const a = choice({ at, chosenBy: 's1' })
+  const b = choice({ id: 't2', at, file: '/w/app/lib/pager.ts', rendered: 'Disk is full on the primary', chosenBy: 's1' })
+  const why = mergeRefusal([a, b], [], {}, { t1: 'danwright32/app', t2: null })
+  expect(why).toContain('/w/app/lib/alert.ts: "Deploy 4182 failed on production", chosen by session s1, in danwright32/app, on Nov 14, 2026 at 2:12 AM ET')
+  expect(why).toContain('/w/app/lib/pager.ts: "Disk is full on the primary", chosen by session s1, in a repository that could not be read, on Nov 14, 2026 at 2:12 AM ET')
+  expect(why).toContain('"source": "slack-alert-guard:chosen:t2"')
+  expect(why).toContain(RELEASE)
 })

@@ -192,28 +192,67 @@ export const carried = (diff: string, choices: readonly SlackAlertChoice[]): Sla
  * choice id, the repository a choice is asked about in when the merging session neither made it nor
  * works there (#2833): that session is never told to ask Dan, only that the question is put there.
  */
-export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = [], away: Readonly<Record<string, string>> = {}): string => {
+export const mergeRefusal = (
+  held: readonly SlackAlertChoice[],
+  unread: readonly string[] = [],
+  away: Readonly<Record<string, string>> = {},
+  chosenIn: Readonly<Record<string, string | null>> = {},
+): string => {
   const here = held.filter(c => away[c.id] === undefined)
   const there = [...new Set(held.flatMap(c => away[c.id] ?? []))]
   const ask = here.length ? ` ${here.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.` : ''
   const elsewhere = there.map(r => ` The wording chosen in ${r} is put to Dan in a session working in ${r}, never in this one: leave the pull request open until he approves it there.`).join('')
-  return `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it.${ask}${elsewhere}${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
+  return `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}", ${originOf(c, chosenIn[c.id] ?? null)}`).join('; ')}). Nothing carrying it may merge until he approves it.${ask}${elsewhere}${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')} ${RELEASE}`
+}
+
+// ET, America/New_York whatever zone the Mac is set to (Dan, 2026-10-03: "all times in et please").
+const ET = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+
+/** A moment as Dan reads it (#3030): "Nov 14, 2026 at 9:55 AM ET". */
+export const etTime = (ms: number): string => {
+  const p: Record<string, string> = {}
+  for (const x of ET.formatToParts(ms)) p[x.type] = x.value
+  return `${p.month} ${p.day}, ${p.year} at ${p.hour}:${p.minute} ${(p.dayPeriod ?? '').toUpperCase()} ET`
 }
 
 /**
- * The choices a merge the guard could not read is held over, each named with the session that made
- * it and where it is approved (#2973: a merge was held twice "while Slack alert wording chosen
- * overnight waits on Dan", and nothing said which wording, from where, or how to clear it). `mine`
- * holds the ids this session may put to Dan (register.ts askedHere); `away` gives the repository each
- * other one is put to him in.
+ * What releases a choice (#3030), said only as the guard reads it: Dan's Approve wording in the
+ * morning picker is the one answer that records an approval. No route withdraws a choice, and his
+ * Change wording records that he answered while leaving it held, so the refusal says both rather
+ * than leaving a session to guess why a merge is still held after he answered.
  */
-export const waitingNamed = (waiting: readonly SlackAlertChoice[], mine: ReadonlySet<string>, away: Readonly<Record<string, string>>): string =>
-  waiting
+export const RELEASE = `Only Dan's ${APPROVE} in the guard's picker releases a choice: nothing withdraws one, and his ${CHANGE} keeps it held.`
+
+/**
+ * Who chose a choice, where and when (#3030), and Dan's answers to it so far, each with its time.
+ * `repo` is the repository it was chosen in, as recorded or read again, null when neither could say.
+ * A choice made before its maker was kept names no session once that session ended (L11).
+ */
+const originOf = (c: SlackAlertChoice, repo: string | null): string => {
+  const maker = c.chosenBy ?? c.session
+  const by =
+    maker === null ? 'a session that has since ended, whose id the choice does not record' : c.session === null ? `session ${maker}, which has since ended` : `session ${maker}`
+  const answered = [
+    ...(c.rejected !== undefined ? [`Dan answered ${CHANGE} to it on ${etTime(c.rejected)}, which keeps it held`] : []),
+    ...(c.expired !== undefined ? [`it expired unanswered on ${etTime(c.expired)}, still held`] : []),
+  ]
+  return `chosen by ${by}, in ${repo ?? 'a repository that could not be read'}, on ${etTime(c.at)}${answered.map(a => `, and ${a}`).join('')}`
+}
+
+/**
+ * The choices a merge the guard could not read is held over, each named with the session and
+ * repository that chose it, when, and where it is approved (#2973: a merge was held twice "while
+ * Slack alert wording chosen overnight waits on Dan", and nothing said which wording, from where, or
+ * how to clear it; #3030: nor when, nor what releases it). `mine` holds the ids this session may put
+ * to Dan (register.ts askedHere); `chosenIn` gives the repository each was chosen in, which is also
+ * where each other one is put to him.
+ */
+export const waitingNamed = (waiting: readonly SlackAlertChoice[], mine: ReadonlySet<string>, chosenIn: Readonly<Record<string, string | null>>): string =>
+  `${waiting
     .map(c => {
-      const by = c.session === null ? 'by a session that has since ended' : `by session ${c.session}`
       const how = mine.has(c.id)
         ? `this session puts it to Dan: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`
-        : `it is put to Dan in that session, or once it ends in a session working in ${away[c.id] || 'its repository'}`
-      return `${c.file}: "${c.rendered}", chosen ${by} (${how})`
+        : `it is put to Dan in that session, or once it ends in a session working in ${chosenIn[c.id] || 'its repository'}`
+      return `${c.file}: "${c.rendered}", ${originOf(c, chosenIn[c.id] ?? null)} (${how})`
     })
-    .join('; ')
+    .join('; ')}. ${RELEASE}`

@@ -136,48 +136,20 @@ LOOP_INPUT
 }
 
 # ---- leaving out what a merge of the default branch brought in (claude-config#2028) ----
-# A branch that merges a busy main and then pushes carries, from its last pushed tip, every change
-# main gained since. Those already went through the gates on their own branches, and judging them
-# again buried the branch's own change: on 2026-11-01 four Pivot pull requests (#607, #644, #619,
-# #621) were refused for size alone and each needed a one time override.
-#
-# So the committed range is diffed not against PC_MB but against what merging the newest default
-# branch commit HEAD holds (PC_MERGED) into PC_MB gives, a tree git merge-tree writes without
-# touching the index or the working tree (it does add objects to the repository, which gc collects).
-# What is left is exactly what the branch did beyond that merge: its own commits, and anything the
-# merge commit holds that is in neither parent, a conflict resolution or an edit slipped in. A
-# conflicted file is written with its conflict markers, so however it was resolved, even by taking
-# one side whole, it differs and is judged: the conservative side of a choice somebody made.
-#
-# Nothing is set apart, and the range is judged whole as before, when the range merges nothing,
-# when the merged default branch commit was already in PC_MB, or when the base IS the default branch
-# (no upstream), whose merge base already starts past what was merged. The fallbacks (L93): with no
-# default branch known, or a merge git cannot work out (merge-tree missing before git 2.38, or
-# failing), the range is judged whole, never not at all. What that gets wrong is the issue's own
-# defect, main's changes judged as the branch's and the push refused for size, so PC_MERGE_UNSPLIT
-# says why, for the refusal to carry. Only the default branch is set apart: a merge of any other
-# branch brings commits the gate never judged on main, and they stay in.
+# The rule, its reasons and its fallbacks live with the shared answer, ps_merged_apart in
+# lib/push-scope.sh, which the style and deferral gates read too (claude-config#3015): this only
+# turns that answer into PC_FROM, PC_MERGED and PC_MERGE_UNSPLIT. On 2026-11-01 four Pivot pull
+# requests (#607, #644, #619, #621) were refused for size alone, each for main's changes.
 pc__set_apart_merged() {
-  local head def m out rc tree
-  head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 0
-  [ -n "$head" ] && [ "$PC_MB" != "$head" ] || return 0
-  [ -n "$(git rev-list --merges -n 1 "$PC_MB..HEAD" 2>/dev/null)" ] || return 0
-  def="$(ps__default_ref)" || def=""
-  if [ -z "$def" ]; then
-    PC_MERGE_UNSPLIT="this checkout knows no default branch for origin (no origin/HEAD, origin/main or origin/master), so main's commits could not be told from the branch's; git fetch origin, then git remote set-head origin --auto, gives it one"
-    return 0
-  fi
-  m="$(git merge-base "$def" HEAD 2>/dev/null)"
-  [ -n "$m" ] || return 0
-  git merge-base --is-ancestor "$m" "$PC_MB" 2>/dev/null && return 0
-  out="$(git merge-tree --write-tree --no-messages "$PC_MB" "$m" 2>/dev/null)"; rc=$?
-  tree="${out%%$'\n'*}"
-  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } && [ -n "$tree" ] \
-     && git rev-parse --verify --quiet "$tree^{tree}" >/dev/null 2>&1; then
-    PC_FROM="$tree"; PC_MERGED="$m"
-    return 0
-  fi
-  PC_MERGE_UNSPLIT="git merge-tree could not work out the merge of $def into the last pushed commit (exit $rc; it needs git 2.38 or later)"
+  local ans rest
+  ans="$(ps_merged_apart "$PC_MB")"
+  case "$ans" in
+    "apart "*)
+      rest="${ans#apart }"
+      PC_FROM="${rest%% *}"; PC_MERGED="${rest#* }" ;;
+    "whole "*)
+      PC_MERGE_UNSPLIT="${ans#whole }" ;;
+  esac
   return 0
 }
 

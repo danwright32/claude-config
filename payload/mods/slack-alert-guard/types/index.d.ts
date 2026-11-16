@@ -49,6 +49,11 @@ export type SlackAlertChoice = {
    * a repository it holds asks (#2833), or any session when that repository cannot be read.
    */
   session: string | null
+  /**
+   * The session that made it (#3030), kept when `session` is cleared at its end, so a refusal can
+   * still say who chose it. Absent on a choice made before #3030, which a refusal says it does not record.
+   */
+  chosenBy?: string
   /** When it expired unanswered: still held, said once in each session that may ask it (#2833). */
   expired?: number
   /**

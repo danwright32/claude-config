@@ -3227,6 +3227,16 @@ resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `o
 git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
 none of it, and a refusal says main's changes were in it and why.
 
+The style, deferral and grep quiet invert gates (`check-style-guide.sh`, `check-deferrals.sh`,
+`check-grep-quiet-invert.sh`) set a merge of main
+apart the same way (#3015), through the one answer every gate reads, `ps_merged_apart` in
+`lib/push-scope.sh`. On 2026-11-14 four branches in a work project were refused by both in one day
+for two lines a guide on main holds byte for byte, which each branch only brought in by merging
+main. A line the branch writes, a conflict resolution's included, is still judged; a line already
+on main is not this push's, and is not reported anywhere else either. The duplication and public
+assets gates still read the whole range from the upstream. Each suite builds its case with
+`lib/merged-main-fixture.sh`.
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
