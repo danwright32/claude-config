@@ -493,7 +493,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       if (subbed && wordSubs.length) subbed.set(start, wordSubs)
       if (literal && globQuoted && !globBare && !expands) literal.add(start)
       if (unexpanded && dollarText && !dollarLive && !wordSums.length) unexpanded.add(start)
-      // Worked only where every `$[...]` in it is, and nothing else in it is expanded.
+      // Worked only where every `$[...]` or `$((...))` in it is, and nothing else in it is expanded.
       if (worked && wordSums.length && !dollarLive && wordSums.every(s => s.text !== undefined)) {
         let text = word
         for (const s of [...wordSums].reverse()) text = text.slice(0, s.pos) + s.text + text.slice(s.pos + s.len)

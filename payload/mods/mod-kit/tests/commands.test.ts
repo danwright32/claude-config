@@ -941,7 +941,7 @@ describe('pipeline: old arithmetic, $[...] (#3070)', () => {
   test('a word the reader does not work out, or holding any other expansion, is given none', () => {
     // A name, a number bash reads as octal and zsh as ten, a division, a bracket inside, a
     // substitution, another expansion beside it, one never closed, an empty one, two signs, a sum
-    // past what a shell counts to, one in single quotes or escaped, and the newer spelling.
+    // past what a shell counts to, and one in single quotes or escaped.
     for (const word of ['"$[N + 1]"', '"$[010 + 1]"', '"$[7 / 2]"', '"$[1 + [2]]"', '"$[ $(echo 4) + 1 ]"', '"$N$[1]"', '"$[1]$(x)"', '"$[1"', '"$[]"', '"$[1 - -2]"', '"$[9223372036854775807 + 1]"', `'$[1]'`, '"\\$[1]"'])
       expect({ word, worked: worked(`python3 s.py ${word}`) }).toEqual({ word, worked: undefined })
   })
