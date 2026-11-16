@@ -137,6 +137,21 @@ case "$out_g" in
     check "and its exemption is printed with the reason for it" "out=$out_g" ;;
 esac
 
+# The no-ai-tells skill was skipped because it "had to name" the characters. Since #3060 its own
+# suite refuses a dash in it, so the skip only hid what that suite would catch (claude-config#3071).
+# The sweep reads the folder now, and a dash there is reported like one anywhere else.
+mkdir -p "$P/skills/no-ai-tells"
+printf 'Replace %s with a comma.\n' "$EM" > "$P/skills/no-ai-tells/SKILL.md"
+out_t="$(bash "$SWEEP" "$P" 2>&1)"; rc_t=$?
+[ "$rc_t" -eq 1 ] \
+  && check "a dash in the no-ai-tells skill fails the sweep" ok \
+  || check "a dash in the no-ai-tells skill fails the sweep" "exit=$rc_t out=$out_t"
+case "$out_t" in
+  *"skills/no-ai-tells/SKILL.md ("*) check "and the skill file is named among the findings" ok ;;
+  *) check "and the skill file is named among the findings" "out=$out_t" ;;
+esac
+rm -f "$P/skills/no-ai-tells/SKILL.md"
+
 echo
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
