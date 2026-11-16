@@ -1287,9 +1287,11 @@ def sh_command_at(text, start, at):
 # (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
 # but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
 # 973,000, and sh_locals asks once per local (claude-config#2784).
-# Each is compiled only when sh_binds first reaches it for that name: most names are settled by the
-# first, and compiling all three for each of the claude-sync suite's 1,000 names was a twentieth of
-# judging it (claude-config#2918).
+# Each is compiled for a name only when a text could need it (claude-config#2918): the assign form only
+# for a name that is not one run of word characters, since sh_assign_starts finds the rest with
+# str.find; the arithmetic form only for a text holding "(("; the binders only for a line holding the
+# name and one of SH_BINDER_WORDS. Compiling all three for each of the claude-sync suite's 1,000 names
+# was a twentieth of judging it.
 @functools.lru_cache(maxsize=None)
 def sh_bind_pattern(kind, name):
     n = re.escape(name)

@@ -4039,8 +4039,12 @@ PY
   # The yardstick must not move with the gate (#2918, Dan's decision of 2026-11-15). Measured by the
   # gate's own reader, a cut to that reader shrank the yardstick with it and read as no change, and a
   # reader made slower slowed both alike and read as no change either. So a copy of the gate whose
-  # reader burns three times its own processor time again must read as at least a quarter dearer than
-  # the gate itself judging the same line, measured just above.
+  # reader burns ten times its own processor time again must read as at least a quarter dearer than
+  # the gate itself judging the same line, measured just above. Ten, not three: with three the slowed
+  # copy read 23.9 against a limit of 23.5 once the real reader got faster, a margin load could erase;
+  # with ten it read 36.2 to 41.8 against 21.9 to 24.1 (the gate 17.1 to 19.3), and its 3.4 to 4.2 s of
+  # processor time stays well inside the gate's 11 s budget, which sixteen times again (5.4 s) once
+  # ran past at a load of 35 (#3037, 2026-11-15).
   slow="$T/slow-gate"
   mkdir -p "$slow" && cp "$HOOK" "$DIR/slack_drafts_only_gate.py" "$slow/" && cp -R "$DIR/lib" "$slow/lib"
   cat >> "$slow/lib/shell-words.py" <<'PY'
@@ -4049,7 +4053,7 @@ def commands(*a, **k):
     import time
     t = time.process_time()
     got = _plain_commands(*a, **k)
-    end = time.process_time() + 3 * (time.process_time() - t)
+    end = time.process_time() + 10 * (time.process_time() - t)
     while time.process_time() < end:
         pass
     return got
@@ -4063,7 +4067,7 @@ PY
       "judging it took"*) cost=ok ;;
       ok) cost="the slowed gate read as no dearer, so the yardstick moved with the gate: $(grep '^slow-reader' "$T/cost.log")" ;;
     esac
-    check "a gate whose reader is four times as slow is measured as dearer, past $over against $base (#2918)" "$cost"
+    check "a gate whose reader is eleven times as slow is measured as dearer, past $over against $base (#2918)" "$cost"
   else
     check "the one lesson cost check recorded its measurement in the cost log (#2918)" "$(cat "$T/cost.log" 2>&1)"
   fi
