@@ -154,9 +154,12 @@ const REFUSED: [string, Partial<NamedFacts>, string][] = [
   ['handed something that is no folder', { isFolder: async () => false }, 'src/ is no folder on the disk'],
   ['in a command whose commands cannot be read', { commands: async () => Promise.reject(new Error('the pipeline could not be read')) }, 'it could not be checked (the pipeline could not be read)'],
   ['in a command the run cannot be found in', { commands: async () => [{ words: ['bash', 'other.sh', 'src/'] }] }, 'the run cannot be found among the commands, so what else runs with it cannot be read'],
-  ['after a command that is no change of folder', { commands: async () => [{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'export TMPDIR runs in the same command, and what that leaves in the environment cannot be read'],
+  ['after a command that is no change of folder', { commands: async () => [{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
   // Written after it, a command still runs before it the second time round a loop, or once a function is called.
-  ['before a command that is no reader of its output', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }] }, 'export TMPDIR runs in the same command, and what that leaves in the environment cannot be read'],
+  ['before a command that is no reader of its output', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }] }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
+  // The reason is written to the area check's log, so it names only the program, never its arguments,
+  // which can carry a credential.
+  ['beside a command whose arguments carry a credential', { commands: async () => [{ words: ['curl', '-H', 'Authorization: Bearer not-a-real-token', 'x'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'curl runs in the same command, and what that leaves in the environment cannot be read'],
   ['run twice in the command', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'the script is run more than once in the command, and what runs between cannot be read'],
   ['whose checkout cannot be asked about', { checkout: async () => Promise.reject(new Error('git could not be asked')) }, 'it could not be checked (git could not be asked)'],
   ['whose folder cannot be looked at', { isFolder: async () => Promise.reject(new Error('EACCES')) }, 'it could not be checked (EACCES)'],

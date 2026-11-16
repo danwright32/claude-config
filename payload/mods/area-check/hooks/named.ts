@@ -75,7 +75,8 @@ const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<strin
   if (mine.length === 0) return 'the run cannot be found among the commands, so what else runs with it cannot be read'
   if (mine.length > 1) return 'the script is run more than once in the command, and what runs between cannot be read'
   const other = run.find((c, i) => i !== mine[0] && !(i < (mine[0] as number) ? c.words[0] === 'cd' : c.pipedFrom !== undefined))
-  if (other) return `${other.words.join(' ')} runs in the same command, and what that leaves in the environment cannot be read`
+  // Only the program is named: this reason goes into the area check's log, and an argument can carry a credential.
+  if (other) return `${other.words[0] ?? 'another command'} runs in the same command, and what that leaves in the environment cannot be read`
   const at = await facts.checkout(r.path as string)
   if ('unread' in at) return `its checkout cannot be read (${at.unread})`
   if (r.path !== `${at.root}/${CHECK_MODS.script}`) return `it is not ${CHECK_MODS.script} at the root of its checkout`
