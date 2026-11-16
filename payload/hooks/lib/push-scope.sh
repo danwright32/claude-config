@@ -22,6 +22,8 @@
 #   ps_base_ref: the ref a push is judged against
 #   ps_merge_base / ps_pending_base / ps_pushed_base: where the range starts, one
 #                      per situation a push hook meets (the contract is above them)
+#   ps_merged_apart: what that range is diffed from once a merge of the default branch is set
+#                      apart, so a branch answers only for its own lines (claude-config#3015)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -1486,6 +1488,57 @@ ps_pushed_base() {
     if [ -n "$cand" ] && [ "$cand" != "$head" ]; then printf '%s' "$cand"; return 0; fi
   fi
   ps_merge_base "$(ps_base_ref)"
+}
+
+# ---- leaving out what a merge of the default branch brought in (claude-config#2028, #3015) ----
+# A branch that merges a busy main and then pushes carries, from its last pushed tip, every change
+# main gained since. Those already went through the gates on their own branches, and judging them
+# again blamed the branch for lines it never wrote: on 2026-11-01 four Pivot pull requests were
+# refused for size alone (#2028), and on 2026-11-14 four branches in one day were refused by the
+# style and deferral gates for two lines a guide on main holds byte for byte (#3015).
+#
+# So the committed range is diffed not against where it starts but against what merging the newest
+# default branch commit HEAD holds into that start gives, a tree git merge-tree writes without
+# touching the index or the working tree (it does add objects to the repository, which gc collects).
+# What is left is exactly what the branch did beyond that merge: its own commits, and anything the
+# merge commit holds that is in neither parent, a conflict resolution or an edit slipped in. A
+# conflicted file is written with its conflict markers, so however it was resolved, even by taking
+# one side whole, it differs and is judged: the conservative side of a choice somebody made.
+#
+# Nothing is set apart, and the range is judged whole as before, when the range merges nothing,
+# when the merged default branch commit was already in the start, or when the base IS the default
+# branch (no upstream), whose merge base already starts past what was merged. The fallbacks (L93):
+# with no default branch known, or a merge git cannot work out (merge-tree missing before git 2.38,
+# or failing), the range is judged whole, never not at all. What that gets wrong is the defect
+# itself, main's changes judged as the branch's, so the answer says why, for a refusal to carry.
+# Only the default branch is set apart: a merge of any other branch brings commits the gates never
+# judged on main, and they stay in.
+#
+# Prints one line, and nothing when there is nothing to set apart:
+#   apart <tree> <commit>   diff the range from <tree>; <commit> is the default branch commit merged
+#   whole <reason>          the range merges main but is judged whole, for <reason>
+ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answer)
+  local start="${1:-}" head def m out rc tree
+  [ -n "$start" ] || return 0
+  head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)" || return 0
+  [ -n "$head" ] && [ "$start" != "$head" ] || return 0
+  [ -n "$(git rev-list --merges -n 1 "$start..HEAD" 2>/dev/null)" ] || return 0
+  def="$(ps__default_ref)" || def=""
+  if [ -z "$def" ]; then
+    printf 'whole %s\n' "this checkout knows no default branch for origin (no origin/HEAD, origin/main or origin/master), so main's commits could not be told from the branch's; git fetch origin, then git remote set-head origin --auto, gives it one"
+    return 0
+  fi
+  m="$(git merge-base "$def" HEAD 2>/dev/null)"
+  [ -n "$m" ] || return 0
+  git merge-base --is-ancestor "$m" "$start" 2>/dev/null && return 0
+  out="$(git merge-tree --write-tree --no-messages "$start" "$m" 2>/dev/null)"; rc=$?
+  tree="${out%%$'\n'*}"
+  if { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ]; } && [ -n "$tree" ] \
+     && git rev-parse --verify --quiet "$tree^{tree}" >/dev/null 2>&1; then
+    printf 'apart %s %s\n' "$tree" "$m"
+    return 0
+  fi
+  printf 'whole %s\n' "git merge-tree could not work out the merge of $def into the last pushed commit (exit $rc; it needs git 2.38 or later)"
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then

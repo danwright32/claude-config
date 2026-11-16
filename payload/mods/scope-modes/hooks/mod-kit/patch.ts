@@ -113,7 +113,9 @@ export const readPatch = (text: string): PatchReading => {
     const after: string[] = []
     // Why this hunk cannot be read. The hunk is left out and the reading goes on from the line that
     // broke it (#3021: it stopped there, so every file after it went unnamed), which is read again
-    // as what it may be, the next file's first line. Only the first reason is kept.
+    // as what it may be, the next file's first line. So is the line that runs a hunk past its
+    // header's counts (#3036): taken as the hunk's own, a `---` line there named no next file, and
+    // that file's hunks were read as this file's. Only the first reason is kept.
     let broke: string | undefined
     while (!broke && (olds > 0 || news > 0)) {
       const l = lines[++i]
@@ -138,7 +140,10 @@ export const readPatch = (text: string): PatchReading => {
         broke = `a hunk holds a line starting ${JSON.stringify(mark)}`
         i--
       }
-      if (olds < 0 || news < 0) broke = 'a hunk holds more lines than its header says'
+      if (olds < 0 || news < 0) {
+        broke = 'a hunk holds more lines than its header says'
+        i--
+      }
     }
     if (broke) unreadable ??= broke
     else file.hunks.push({ before: before.join('\n'), after: after.join('\n') })

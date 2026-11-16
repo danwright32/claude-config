@@ -1098,7 +1098,9 @@ effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
 A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
-at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+at most, is a mention and is not judged (#2133). A phrase in Title Case run straight on from another
+capitalised word, outside a markdown heading, ends a proper name (a calendar event type, say) and is
+not judged either (#3019). `deferral-edit-check.sh` says the same thing at the
 moment the text is written.
 
 </td><td>
@@ -3225,6 +3227,16 @@ resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `o
 git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
 none of it, and a refusal says main's changes were in it and why.
 
+The style, deferral and grep quiet invert gates (`check-style-guide.sh`, `check-deferrals.sh`,
+`check-grep-quiet-invert.sh`) set a merge of main
+apart the same way (#3015), through the one answer every gate reads, `ps_merged_apart` in
+`lib/push-scope.sh`. On 2026-11-14 four branches in a work project were refused by both in one day
+for two lines a guide on main holds byte for byte, which each branch only brought in by merging
+main. A line the branch writes, a conflict resolution's included, is still judged; a line already
+on main is not this push's, and is not reported anywhere else either. The duplication and public
+assets gates still read the whole range from the upstream. Each suite builds its case with
+`lib/merged-main-fixture.sh`.
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
@@ -4163,11 +4175,54 @@ a line other than a blank or a comment to any list in its checkout, from the ind
 tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
 other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
 about, since that command could write the list by a glob or a variable first. So a Bash call holding
-the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
-commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
-then. What it still cannot see: a list written under a name built at
-run time in an earlier call and then committed by something other than `git commit` (an alias,
-`commit-tree`, a merge, a cherry-pick, a pull).
+the words `git` and `commit` passes the hook's screen; with python3 failing or missing such a commit
+is asked about as a commit (missing passed it until #3023).
+
+A line counts only when Dan himself approved it (#3023). Asking about `git commit` left every other
+way a line reaches HEAD unasked: a git alias for commit, `git commit-tree`, a merge, a cherry pick, a
+rebase, a pull. So the list is judged where it is used: a write passes only for a project whose line
+is in HEAD and that Dan approved, whatever carried the line to HEAD. His approval is a picker,
+read from the session's transcript as his Apply is: one question he answered `Trust` (not one that
+timed out, failed or came with its answer filled in), carrying the metadata `{"source":
+"db-test-project", "list": "<absolute path of the list>", "project_ref": "<the ref>"}`. The hook
+keeps it on this Mac's record, `~/.claude/state/supabase-test-projects/approved` (one hash per line,
+of the clone, the list's path and the ref; the state folder is never synced), when the main session
+commits the line or runs a file on that project, so later sessions and every worktree of the clone
+do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
+MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
+(#2989), the question naming up to eight of them and how he approves one; a commit whose every added
+line he approved passes.
+- Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
+  after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
+  to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
+  permission rule allowing the commit, and from a subagent, so neither the classifier nor a rule
+  answers it. But sleep mode approves Claude Code's permission prompts for an overnight worker
+  (#834), so a prompt can be answered with Dan asleep, and it never answers a picker. That build
+  also paired the call after a commit with its question by the command's text, and the payload
+  after a call carries the command as the rtk hook rewrote it (`rtk git commit ...`, captured the
+  same day), so no rewritten commit would have been recorded. Nothing runs after a call now.
+- A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
+  session's transcript (both captured the same day), so it passes on Dan's picker in that session,
+  and the record is written by a call of the main session.
+- What changes for a list that already exists: its lines are approved by nobody yet, so each write
+  on its project is asked about, the question saying how Dan approves the line. One picker a line
+  is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
+  second clone of the repository, and for the other Mac (Dan accepted this on 2026-11-15, as the
+  main session relayed).
+- What the record cannot see: a line approved once stays approved for that list in that clone, so one
+  taken out and put back by a route nobody asked about is trusted again. And a program that writes
+  a picker into the session's transcript is not seen, as for the Apply.
+- What a commit costs, measured on the personal MacBook on 2026-11-15 with `git commit -m x` in this
+  repository, 60 runs each of the hook from main and from #3023 taken turn about at a load average of
+  19 to 24: median 95.6 ms before and 74.3 after, least 86.2 and 64.3 (two earlier runs of 60 a side
+  on earlier builds gave 129.6 and 108.2 at a load average of 15 to 18, and 91.9 and 69.9 at 19 to
+  26). Cut: python3 starts without the site module (5.2 ms), hashlib, datetime and socket load only
+  where used (3.9 ms), the database call library loads for a commit only when its command holds a
+  redirection (7.0 ms), and a commit with nothing before it in its command but a `cd` or a read no
+  longer has git walk the untracked files it cannot commit (14.3 ms against 6.7). Left alone, the
+  largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
+  writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
+  about that the hook then runs. Nothing was added: the hook is not started after a call.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -4179,7 +4234,7 @@ database with no statement, and any other host's tool of that kind (a Neon branc
 it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
 code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
 server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
-names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`, `test-db-write-ask-git-fails.sh` and, for the record of approved lines, `test-db-write-ask-approved-lines.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
@@ -6219,7 +6274,12 @@ live both ask; only a command that runs it counts, as the program or the script 
 `cat` or `grep`, which Dan approved on 2026-10-16 as a narrowing of the overnight merge ban; one
 that may run it but cannot be read for certain, a variable or substitution as the program or script,
 a shell fed what cannot be read, xargs, `eval` of a variable, or inline code running a process that
-names it, is `unreadable` with a repository that cannot be told, so overnight it is refused), of the
+names it, is `unreadable` with a repository that cannot be told, so overnight it is refused; and
+since #3036 a merge the command's own words do not run, which `gh` reads as no gh command: the `gh
+pr merge` in `eval`'s text, read as `gh` reads it, as the helper there already was, and one behind
+`ssh`, another machine's, or in an alias being set, run later with words nobody has typed yet, so
+`alias g=gh` counts, each `unreadable` with a repository that cannot be told; `builtin` before
+`eval`, `alias`, `source` or `.` is looked past), of the
 git checkout a path sits in (`$.modkit.workingTree({ path })`, found by its `.git` entry on the
 disk), of where that checkout stands (`$.modkit.branch({ path })`, #978: its main working tree,
 branch, default branch, whether it is on it, and the issues the branch names, each part of it
@@ -6323,7 +6383,8 @@ words); the scan fails a mod undoing YAML's `''` by hand, matching a single quot
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
 each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
 taken whole, each hunk walked by its header's counts, one that does not add up left out with its
-reason kept while the files after it are still named, #3021, and how
+reason kept while the files after it are still named, #3021, the line that ran it past its counts
+read again as the next file's first line, #3036, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
@@ -6934,7 +6995,9 @@ a look changing file an inline script, or a patch that cannot be read whole or c
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
 marks unread (`eval "printf ... > app/site.css"`, `$TOOL --write app/site.css`, an alias set to such
 a command), placed in the folder it runs in and held as could not check where that cannot be
-followed; a write whose destination cannot be followed is held when the command names a look
+followed, and since #3036 one named in the words of such a command inside a shell script the call
+runs, judged the same way; a write whose destination cannot be followed is held when the command
+names a look
 changing file anywhere (a glob such as `app/*.tsx` included), and runs when it names none. Kept per
 project (the main working tree, so every worktree shares it, read with mod-kit's `$.modkit.branch`
 and named by `$.modkit.repo`) under the issue the branch names, each one when it names several, else

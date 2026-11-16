@@ -171,8 +171,24 @@ EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
 # No merge base (one commit, nothing upstream) means no COMMITTED range to read; the pending
 # reading below still runs, because a first commit made by the same command is exactly what
 # such a repository pushes. The skip for having read nothing at all is decided after both.
+#
+# A line is this push's only when the branch itself adds it (claude-config#3015). After a branch
+# pushed once merges main in, the range from its upstream holds every line main gained since, and
+# this gate refused branches for lines already on main that they never wrote and must not edit. So
+# what that merge brought in is set apart by the shared answer the other push gates read
+# (ps_merged_apart); a line the conflict resolution adds is still the branch's and still judged.
+# When it cannot be set apart the whole range is judged as before, and the refusal says why.
+from="$mb"
+merge_unsplit=""
+if [ -n "$mb" ]; then
+  apart="$(ps_merged_apart "$mb")"
+  case "$apart" in
+    "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+    "whole "*) merge_unsplit="${apart#whole }" ;;
+  esac
+fi
 committed_diff=""
-[ -n "$mb" ] && committed_diff="$(git diff "${CTX[@]}" "$mb" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
+[ -n "$from" ] && committed_diff="$(git diff "${CTX[@]}" "$from" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
 
 # The PENDING content, when this command commits before it pushes. What the commit would ACTUALLY
 # carry: the index, plus what the `git add` in this chain names, plus every tracked change when
@@ -255,6 +271,12 @@ fi
     echo ""
     echo "In the commits being pushed:"
     printf '%s\n' "$committed_findings" | awk 'NR <= 25'
+    if [ -n "$merge_unsplit" ]; then
+      echo ""
+      echo "These commits merge the default branch in, and what that merge brought could not be set"
+      echo "apart, so a line above may already be on the default branch rather than this branch's"
+      echo "own: $merge_unsplit."
+    fi
   fi
   if [ -n "$pending_findings" ]; then
     echo ""

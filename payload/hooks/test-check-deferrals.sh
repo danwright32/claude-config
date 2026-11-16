@@ -225,6 +225,38 @@ want_finding "a quote run into the words either side is not a mention" "$out" "d
 out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
 want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
 
+# A phrase written as the END of a proper name is a name, not a deferral (claude-config#3019): a
+# table of booking counts named calendar event types ending in Follow Up and was refused three
+# times. A name is the phrase in Title Case, every word a capital and then lower case letters, run
+# straight on (spaces only) from another capitalised word of two letters or more, on a line that
+# is not a markdown heading. Every way around that is still a finding.
+out="$(detect_file docs/counts.md $'| Event type | Bookings |\n| --- | --- |\n| Customer Follow Up | 12 |\n| Partner Follow Up | 3 |\n')"
+want_clean "a Title Case name ending in Follow Up, in a table cell, is a name" "$out"
+out="$(detect_file docs/counts.md $'| Customer Follow-Up | 12 |\n')"
+want_clean "the hyphenated spelling of the same name is a name" "$out"
+out="$(detect_file a.ts $'// counts bookings of the Customer Follow Up event type\n')"
+want_clean "the name inside a code comment is a name" "$out"
+out="$(detect_file docs/counts.md $'| Customer Follow Up | 12 |\n| | we will follow up on the stragglers |\n')"
+want_finding "the lower case phrase putting work off is still a finding, beside the name" "$out" "docs/counts.md:2: follow up:"
+out="$(detect_file docs/counts.md $'Follow Up with the vendor about the cap.\n')"
+want_finding "the phrase capitalised at the start of a sentence is not a name" "$out" "docs/counts.md:1: Follow Up:"
+out="$(detect_file docs/counts.md $'Done. Follow Up with the vendor.\n')"
+want_finding "a capitalised word before a full stop does not make a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'A Follow Up is needed on the cap.\n')"
+want_finding "a one letter word before the phrase does not make a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'Customer follow up is owed on the cap.\n')"
+want_finding "a lower case phrase after a capitalised word is not a name" "$out" "follow up"
+out="$(detect_file docs/counts.md $'Customer Follow up is owed on the cap.\n')"
+want_finding "a phrase only partly capitalised is not a name" "$out" "Follow up"
+out="$(detect_file docs/counts.md $'RELEASE FOLLOW UP on the cap.\n')"
+want_finding "a phrase in capitals is not Title Case, so it is not a name" "$out" "FOLLOW UP"
+out="$(detect_file docs/counts.md $'## Release Follow Up\n')"
+want_finding "a Title Case markdown heading is Title Case by style, so it is not a name" "$out" "Follow Up"
+out="$(detect_file docs/counts.md $'| Customer Follow Up | TODO wire the reminder |\n')"
+want_finding "a real deferral on the same line as a name is still a finding" "$out" "TODO"
+out="$(detect_file docs/counts.md $'Customer Follow Up counts are low, for now.\n')"
+want_finding "a later phrase on the line is still judged after a name is skipped" "$out" "for now"
+
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
 want_finding "matching is case insensitive" "$out" "todo"
@@ -654,6 +686,60 @@ want_says "DEFERRAL WITHOUT AN ISSUE" "edit hook: and for the finding rather tha
 # it), asserted so a rename of the event or tools cannot leave the settings pointing at nothing.
 grep -q '^# Claude Code PreToolUse(Bash) hook' "$PUSH_HOOK" && check "push hook declares itself a PreToolUse(Bash) hook" ok || check "push hook declares itself a PreToolUse(Bash) hook" "header line missing"
 grep -q '^# Claude Code PostToolUse(Edit|Write|MultiEdit) hook' "$EDIT_HOOK" && check "edit hook declares itself a PostToolUse(Edit|Write|MultiEdit) hook" ok || check "edit hook declares itself a PostToolUse(Edit|Write|MultiEdit) hook" "header line missing"
+
+# ---------------------------------------------------------------------------------------------
+# A merge of main does not make the branch answer for main's lines (claude-config#3015).
+# ---------------------------------------------------------------------------------------------
+# A branch pushed once, then main gains a deferral with no issue (in a guide that must hold an old
+# script byte for byte, say), and the branch merges main in. From the upstream, the range held
+# everything main gained since, so the gate refused the branch for a line it never wrote and must
+# not edit. What a merge of the default branch brought in is set apart, by the one helper the
+# other push gates use; a line the conflict resolution adds is still the branch's.
+#   $1 = name, $2 = clean | conflict, $3 = what the conflict resolution adds of its own
+# The repository is built by lib/merged-main-fixture.sh, shared with every gate's suite.
+MAIN_DEFERRAL=$'# Old script\n# good enough for now, the lock comes with the outbox\n'
+. "$DIR/lib/merged-main-fixture.sh"
+mk_merged_main() {
+  mmf_repo "$WORK/$1" "$2" guide/old.md "$MAIN_DEFERRAL" src/shared.ts "${3:-}${3:+
+}"
+}
+W="$(mk_merged_main m1 clean)"
+if mmf_built "$W" guide/old.md; then check "#3015 fixture builds" ok
+else check "#3015 fixture builds" "the branch must track origin/feat and hold main's guide through one merge"; fi
+run_push "$W" "git push"
+want_rc 0 "#3015 a deferral already on main, arriving only through a merge of main, is not this push's"
+run_push "$W" "git commit -q --allow-empty -m more && git push"
+want_rc 0 "#3015 the same holds when the command commits before it pushes"
+
+W="$(mk_merged_main m2 conflict "// the retry is good enough for now")"
+if mmf_built "$W" guide/old.md && grep -q "as the branch has it" "$W/src/shared.ts" 2>/dev/null; then check "#3015 conflict fixture builds" ok
+else check "#3015 conflict fixture builds" "the conflict was not resolved into one merge commit"; fi
+run_push "$W" "git push"
+want_rc 2 "#3015 a deferral the conflict resolution adds is still the branch's, and refused"
+want_says "src/shared.ts:2: for now:" "#3015 the refusal names the line the resolution added"
+case "$MSG" in *guide/old.md*) check "#3015 main's line is not named beside it" "said: ${MSG:0:300}" ;; *) check "#3015 main's line is not named beside it" ok ;; esac
+
+W="$(mk_merged_main m3 conflict "// plain resolution text")"
+run_push "$W" "git push"
+want_rc 0 "#3015 control: a conflict resolved with no deferral is allowed"
+
+# When the merge cannot be set apart (no default branch known), the whole range is judged as it
+# was before, never not at all, and the refusal says part of it came in through the merge (L93).
+W="$(mk_merged_main m4 clean)"
+git -C "$W" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_push "$W" "git push"
+want_rc 2 "#3015 with no default branch known the merge is not set apart, so main's line is judged as before"
+want_says "guide/old.md:2: for now:" "#3015 the whole range was read"
+want_says "could not be told from the branch's" "#3015 the refusal says part of what it judged came in through the merge"
+
+# A first push of the branch (no upstream) is unchanged: judged from where it leaves main.
+W="$(mk_merged_main m5 clean)"
+git -C "$W" branch -q --unset-upstream >/dev/null 2>&1
+run_push "$W" "git push -u origin feat"
+want_rc 0 "#3015 a first push that merged main is not judged on main's line, as before"
+commit_file "$W" src/feat.ts $'export const feat = 1;\n// good enough for now\n'
+run_push "$W" "git push -u origin feat"
+want_rc 2 "#3015 and a first push still reads the branch's own line"
 
 echo
 echo "passed: $pass, failed: $fail"

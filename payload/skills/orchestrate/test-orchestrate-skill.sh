@@ -113,6 +113,20 @@ check "#2490 no brief part still names the scratchpad as the working folder" "$(
 check "#2490 agents write working files in the notes folder" "$(has "$RULES" 'never in the scratchpad under `/private/tmp`')"
 check "#2490 agents never put a worktree in the temp folder" "$(has "$RULES" 'Never put a worktree under `/tmp`')"
 
+# claude-config#3028: on 2026-11-14 a gate refused an independent reviewer's comparison, and the
+# reviewer reran it in pieces and then as a temporary test file, which the auto mode check refused
+# as going round a guard. The rules every dispatched agent reads say once that a refusal is final.
+# They reach a reviewer through the first part of every brief, so that pointer is held here too.
+check "#3028 agent rules say a refused command is final" "$(has "$RULES" 'A refused command is final.')"
+check "#3028 agent rules name every other way a refusal is never retried" "$(has "$RULES" 'never retried in pieces, as a test file, through another tool or by another agent')"
+check "#3028 agent rules say to stop and report the refusal" "$(has "$RULES" 'stop and report the refusal')"
+# On 2026-11-16 two builders decided area check holds on commands their briefs did not cover, and
+# the auto mode safety check refused what followed, so the exception for a resent hold is bounded.
+check "#3028 only a hold the brief lets the agent decide is resent" "$(has "$RULES" 'a hold your brief lets you decide')"
+check "#3028 a hold the brief does not cover is reported, not decided" "$(has "$RULES" 'is not yours to decide: stop and report it like any other refusal')"
+check "#3028 every brief, a reviewer's included, starts with the agent rules" "$(has "$SKILL" '1. `Read ~/.claude/skills/orchestrate/agent-rules.md before anything else and follow it.`')"
+check "#3028 the brief parts apply to a reviewer's brief too" "$(has "$SKILL" 'Every brief has exactly these parts')"
+
 # claude-config#2563: the merge command written in the skill and in the global rules must carry
 # every argument the helper's usage marks required, say it runs from inside a checkout, and say how
 # the merge method is chosen. Required is read from the helper's own usage line: a token outside [].
