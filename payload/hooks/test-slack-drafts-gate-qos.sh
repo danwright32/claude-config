@@ -70,8 +70,9 @@ c = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
 c.pthread_threadid_np.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64)]
 c.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
 t = ctypes.c_uint64(); c.pthread_threadid_np(None, ctypes.byref(t))
-b = (ctypes.c_int32 * 40)()  # struct proc_threadinfo: two uint64 times, then pth_priority is int 8
-print(b[8] if c.proc_pidinfo(os.getpid(), 15, t.value, b, ctypes.sizeof(b)) > 0 else "unread")'
+b = (ctypes.c_int32 * 40)()  # struct proc_threadinfo: two uint64 times (ints 0 to 3), then cpu_usage,
+# policy, run_state, flags, sleep_time, curpri, and pth_priority, the base priority, is int 10
+print(b[10] if c.proc_pidinfo(os.getpid(), 15, t.value, b, ctypes.sizeof(b)) > 0 else "unread")'
 }
 # judge <runner words...>: one plain script run judged through the wrapper, traced; sets RC, OUT, ERR
 # and QOS_LINE, the trace's qos line.
@@ -84,15 +85,25 @@ judge() {
 
 echo "slack drafts gate: the judgement runs at a raised scheduling priority (claude-config#2918)"
 
+printf '%s\n' 'echo hi' > "$T/run.sh"
+
 if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
-  # A reading this suite cannot take is said to be untaken, never passed (L411).
-  echo "UNMEASURED: the gate's scheduling priority is read only on macOS, with taskpolicy"
-  check "the gate's scheduling priority was measured" "UNMEASURED on $(uname -s)"
+  # Off macOS there is nothing to raise: the gate still judges, and says so in its trace. The level
+  # itself is untaken here, said so in the one shape the runner counts, never passed (L411).
+  judge env
+  allowed "off macOS a plain script run is still judged and allowed"
+  case "$QOS_LINE" in
+    "qos: not raised: not macOS") check "and the gate traces that it did not raise its priority" ok ;;
+    *) check "and the gate traces that it did not raise its priority" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+  esac
+  echo "SUITE-PART-UNMEASURED the gate's scheduling priority is read only on macOS with taskpolicy, and this is $(uname -s)"
+  echo
+  echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
-  exit 1
+  [ "$fail" -eq 0 ]
+  exit
 fi
 
-printf '%s\n' 'echo hi' > "$T/run.sh"
 start="$(qos_prio)"
 case "$start" in ''|*[!0-9]*) check "the suite reads the level a python3 it starts runs at" "read: $start" ;; esac
 

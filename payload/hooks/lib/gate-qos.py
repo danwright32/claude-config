@@ -65,9 +65,10 @@ def _base_priority(libc):
 
 def raise_qos():
     """Raise the calling thread to user initiated. Returns (held, line): whether the kernel now runs it
-    above the legacy level, and a line saying the level it really runs at and, if not raised, why."""
+    above the legacy level (None off macOS, where there are no such cores to keep), and a line saying
+    the level it really runs at and, if not raised, why."""
     if sys.platform != "darwin":
-        return False, "qos: not raised: not macOS"
+        return None, "qos: not raised: not macOS"
     try:
         libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
         task = ctypes.c_uint.in_dll(libc, "mach_task_self_").value

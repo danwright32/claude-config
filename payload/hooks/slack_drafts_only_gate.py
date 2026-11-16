@@ -1798,7 +1798,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                  else f"its budget of {self.budget} step{'' if self.budget == 1 else 's'}")
         # Run at a level it could not raise, a busy Mac had it on its slower cores (claude-config#2918).
         held, line = QOS[0]
-        slow = "" if held else (f" It could not raise its scheduling priority ({line.removeprefix('qos: not raised: ')}), "
+        slow = "" if held is not False else (f" It could not raise its scheduling priority ({line.removeprefix('qos: not raised: ')}), "
                                 f"so a busy Mac may have run it on its slower cores.")
         return (f"BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after "
                 f"{spent}, inside the time limit Claude Code gives it, while {doing}.{slow} Whether this "
