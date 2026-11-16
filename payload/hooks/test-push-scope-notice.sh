@@ -97,9 +97,9 @@ echo "push scope notice: every push a judged gate stands down on is refused here
 # refuses the same push, once, for every gate. Asked of the real gates, so a gate that starts asking its own question, or this
 # hook that stops refusing one of these shapes, fails here rather than letting a push out unjudged
 # by both (L450). The gates' records go to a throwaway, and none of them reaches a judge.
-gate() { # gate <hook> <command> -> exit code; stderr in $W/gate.err
+gate() { # gate <hook> <command> [cwd, the session repository unless given] -> exit code; stderr in $W/gate.err
   python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
-    "$2" "$W/session" | PUSH_GATE_LEDGER_DIR="$W/ledger" bash "$DIR/$1" >/dev/null 2>"$W/gate.err"
+    "$2" "${3:-$W/session}" | PUSH_GATE_LEDGER_DIR="$W/ledger" bash "$DIR/$1" >/dev/null 2>"$W/gate.err"
 }
 for shape in "cd $W/target && git push; cd $W/other && git push" \
              "cd $W/no-such-dir && git push" \
@@ -129,8 +129,7 @@ PW="$(mmf_repo "$W/pending" pending guide/old.md "$MAIN_LINE"$'\n' src/shared.ts
 mmf_pending "$PW" guide/old.md && check "#3062 the fixture leaves a merge of main in progress, main's file staged" ok \
   || check "#3062 the fixture leaves a merge of main in progress, main's file staged" "it does not, so every case below would pass for the wrong reason"
 combined="git commit --no-edit && git push"
-python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
-  "$combined" "$PW" | bash "$DIR/check-style-guide.sh" >/dev/null 2>"$W/gate.err"; grc=$?
+gate check-style-guide.sh "$combined" "$PW"; grc=$?
 gerr="$(cat "$W/gate.err")"
 case "$grc:$gerr" in
   2:*guide/old.md*) check "#3062 the fault: the style gate reads main's line as this commit's own in the combined form" ok ;;
@@ -147,6 +146,22 @@ out="$(run "git add src/shared.ts && git commit --no-edit && git push" "$PW")"; 
 [ "$rc" -eq 2 ] && check "#3062 an add before the commit changes nothing" ok || check "#3062 an add before the commit changes nothing" "exit $rc"
 out="$(run "cd $PW && git commit -m merged && git push origin HEAD" "$W/session")"; rc=$?
 [ "$rc" -eq 2 ] && check "#3062 nor does a cd into the repository" ok || check "#3062 nor does a cd into the repository" "exit $rc"
+# git merge --continue concludes the same merge and makes the same commit, so it is the same command
+# (claude-config#3081). It used to be read as no commit at all: this hook let it through and no gate
+# folded the pending merge commit in, so the whole commit, a conflict resolution included, went out
+# with no gate having read it.
+for c in "git merge --continue && git push" "GIT_EDITOR=true git merge --continue && git push" \
+         "git -c core.editor=true merge --continue; git push"; do
+  out="$(run "$c" "$PW")"; rc=$?
+  err="$(cat "$W/err")"
+  [ "$rc" -eq 2 ] && check "#3081 concluding a merge of main and pushing in one command is refused: $c" ok \
+    || check "#3081 concluding a merge of main and pushing in one command is refused: $c" "exit $rc [${err:0:200}]"
+done
+says "#3081 and names the branch whose merge is in progress" "$err" "origin/main"
+says "#3081 and names git merge --continue among what to run on its own first" "$err" "git merge --continue"
+says "#3081 and still says how to push so the gates can tell the lines apart" "$err" "as a command of its own, then push"
+out="$(run "cd $PW && git merge --continue && git push origin HEAD" "$W/session")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3081 and so it is behind a cd into the repository" ok || check "#3081 and so it is behind a cd into the repository" "exit $rc"
 pending_allowed() { # pending_allowed <description> <command> <cwd>
   local out rc
   out="$(run "$2" "$3")"; rc=$?
@@ -156,6 +171,8 @@ pending_allowed() { # pending_allowed <description> <command> <cwd>
 # A push alone does not carry the pending merge, only what is already committed.
 pending_allowed "#3062 a push alone while the merge is in progress is let through" "git push" "$PW"
 pending_allowed "#3062 a commit with no push is not this hook's" "git commit --no-edit" "$PW"
+pending_allowed "#3081 nor is concluding the merge with no push" "git merge --continue" "$PW"
+pending_allowed "#3081 abandoning the merge and pushing is let through" "git merge --abort && git push" "$PW"
 # Once the merge is committed, the push is the one ps_merged_apart sets apart, so it goes.
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
 pending_allowed "#3062 once the merge is committed, a push is let through" "git push" "$PW"
@@ -171,7 +188,31 @@ git -C "$PW" -c user.name=t -c user.email=t@t.t merge -q --no-commit --no-ff sid
 git -C "$PW" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
   && pending_allowed "#3062 a pending merge of another branch, committed and pushed in one command, is let through" "$combined" "$PW" \
   || check "#3062 a pending merge of another branch, committed and pushed in one command, is let through" "the side merge was not left in progress"
+# The same merge concluded by git merge --continue is let through here too, and the gates must read
+# the commit it is about to make (claude-config#3081). A line staged by hand for the merge commit, as
+# a conflict resolution is, is the push's own. Asked of the real style gate: first with the commit
+# form, the control showing the line is one it refuses, then with git merge --continue, where it used
+# to say nothing because it saw no commit in the command.
+continued="git merge --continue && git push"
+pending_allowed "#3081 a pending merge of another branch, concluded by git merge --continue and pushed, is let through" "$continued" "$PW"
+printf '%s\n' "$MAIN_LINE" > "$PW/notes/resolution.md"
+git -C "$PW" add notes/resolution.md >/dev/null 2>&1
+gate check-style-guide.sh "$combined" "$PW"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*notes/resolution.md*) check "#3081 control: the style gate refuses a line staged for the merge commit, in the commit form" ok ;;
+  *) check "#3081 control: the style gate refuses a line staged for the merge commit, in the commit form" "exit $grc [${gerr:0:200}], so the case below proves nothing" ;;
+esac
+gate check-style-guide.sh "$continued" "$PW"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*notes/resolution.md*) check "#3081 the style gate reads the commit git merge --continue is about to make" ok ;;
+  *) check "#3081 the style gate reads the commit git merge --continue is about to make" "exit $grc [${gerr:0:200}]: the line staged for the merge commit went out unread" ;;
+esac
 git -C "$PW" merge --abort >/dev/null 2>&1
+rm -f "$PW/notes/resolution.md"
+[ -z "$(git -C "$PW" status --porcelain 2>/dev/null)" ] && check "#3081 the side merge is put away clean before the next case" ok \
+  || check "#3081 the side merge is put away clean before the next case" "left [$(git -C "$PW" status --porcelain 2>/dev/null | head -c 200)]"
 # A merge of main left in progress with no conflict at all is the same case: the commit is what is
 # missing, not a conflict.
 git -C "$PW" checkout -q main >/dev/null 2>&1
