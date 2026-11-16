@@ -139,7 +139,9 @@ recorded_size() {  # $1 = payload relative path
   case "$1" in
     # Re-measured 2026-11-09 (#2546), from 32375: 50 changes to the file since 2026-09-19, each a
     # rule Dan added, and no line over 60 characters appears twice, so none of it is duplication.
-    CLAUDE.md)                                printf '48716' ;;
+    # Lowered 2026-11-16 (#2575), from 48716: Dan's trim took out rules a hook already enforces and
+    # words in its refusal, rules said twice, and dated stories, 53834 bytes down to 43809.
+    CLAUDE.md)                                printf '43809' ;;
     RTK.md)                                   printf '966' ;;
     LESSONS-INDEX-proof-over-green.md)        printf '27713' ;;
     LESSONS-INDEX-ux-completeness.md)         printf '13605' ;;
