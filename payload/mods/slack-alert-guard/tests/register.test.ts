@@ -2,16 +2,14 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, FILES_JQ, HEADER, SCAN_MS, WORDING_PATH, shellLogWording, stringsOf, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, SCAN_MS, shellLogWording, stringsOf, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { readsAsSend } from './send-wording.ts'
-import { RELEASE } from '../hooks/night.ts'
 import { git as gitArgs, pipeline } from './mod-kit/hooks/commands.ts'
-import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
-import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
+import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 
 // The Slack alert guard (claude-config#2242) in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -34,18 +32,15 @@ const modKit: { name: string; register: Register } = {
       }
       // Only the members the guard calls are stood in; any other it ever reached would be undefined
       // and throw, which every test here would show as a refusal it did not expect.
-      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'git' | 'mergeHelper' | 'branch' | 'repo' | 'linkRepo'> = {
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'git' | 'branch' | 'repo'> = {
         screen: async () => null,
         // The git reader is mod-kit's own, copied (#2971).
         git: async (input: { words: string[] }) => ask('git', input),
-        // The gh and command readers are byte for byte copies of mod-kit's own (#2628).
+        // The command reader is a byte for byte copy of mod-kit's own (#2628).
         pipeline: async (input: { command: string; cwd?: string }) => ask('pipeline', input),
-        gh: async (input: { words: string[] }) => ask('gh', input),
-        mergeHelper: async c => ask('mergeHelper', c),
         branch: async (input: { path: string }) => ask('branch', input),
-        // The repository readers are mod-kit's own, copied (#2833).
+        // The repository reader is mod-kit's own, copied (#2833).
         repo: async (input: { root?: string | null; remote: string | null }) => ask('repo', input),
-        linkRepo: async (input: { link: string }) => ask('linkRepo', input),
         writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
         pythonText: async (input: { code: string }) => ask('pythonText', input),
         blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -123,20 +118,14 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // cwd: the folder the session is in.
-  // gitTakes, ghTakes: the test clock time each git or gh command takes before it answers (#2792), so
-  // a git killed at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS
-  // or more, and a gh the same with ghFails.
+  // gitTakes: the test clock time each git command takes before it answers (#2792), so a git killed
+  // at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS or more.
   // beneathFails: what the hooks beneath the guard fail with, once it has passed a call on (#2948).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app', beneathFails: '' }
-  // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
-  // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
-  // its path from the top (absent: not there upstream), and whether git show fails another way.
-  // #2833: originFails, git remote get-url exits nonzero; urls, the pull request each selector names
-  // as gh pr view gives it (absent: danwright32/app's), and viewFails, gh pr view alone failing.
-  // #2973: cut, the selectors whose diff gh cuts short (exit 0, as a 7.6 MB diff came back); prFiles,
-  // GitHub's list of each pull request's files by number, a file with no patch where GitHub gives
-  // none; changed, the count gh pr view gives where it differs from that list's.
-  const night2 = { session: 's1', diffs: {} as Record<string, string>, urls: {} as Record<string, string>, viewFails: false, originFails: false, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[], cut: {} as Record<string, true>, prFiles: {} as Record<string, { filename: string; patch?: string }[]>, changed: {} as Record<string, number> }
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, cwd: '/w/app', beneathFails: '' }
+  // #2628: the session's id; each file as origin's default branch holds it, by its path from the top
+  // (absent: not there upstream), and whether git show fails another way.
+  // #2833: originFails, git remote get-url exits nonzero.
+  const night2 = { session: 's1', originFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
   const ghs: string[][] = []
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
@@ -196,37 +185,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       night.notes.push(JSON.parse(String(raw)))
       return ok(JSON.stringify({ isNoted: true }))
     }
+    // The guard never runs gh (#3030: no merge is read for wording chosen overnight), so any gh it
+    // ran is recorded and refused, never answered.
     if (cmd === 'gh') {
       const argv = e.argv.map(String)
       ghs.push(argv)
-      if (ctl.ghTakes) await clock.advance(ctl.ghTakes)
-      if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
-      const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
-      if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url')) {
-        if (night2.viewFails) return { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
-        return ok(`${night2.urls[sel] ?? `https://github.com/danwright32/app/pull/${sel || '12'}`}\n`)
-      }
-      // #2973: a pull request's address and how many files it changes, as gh pr view --json gives them,
-      // and GitHub's list of its files through gh api, each line as gh's jq makes it from FILES_JQ: the
-      // name, and the patch for a name WORDING_PATH matches (checked against real gh on a real pull
-      // request, evidence in the PR), false for any other.
-      if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url,changedFiles')) {
-        const r = argv[argv.indexOf('-R') + 1]
-        const url = night2.urls[sel] ?? `https://github.com/${argv.includes('-R') ? r : 'danwright32/app'}/pull/${sel || '12'}`
-        const n = /\/pull\/(\d+)/.exec(url)?.[1] ?? ''
-        return ok(`${night2.changed[n] ?? night2.prFiles[n]?.length ?? 0} ${url}\n`)
-      }
-      if (argv[1] === 'api') {
-        const n = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/files\?per_page=100$/.exec(argv[2] ?? '')?.[1]
-        if (n === undefined || !argv.includes('--paginate') || argv[argv.indexOf('--jq') + 1] !== FILES_JQ) throw new Error(`unexpected gh command: ${argv.join(' ')}`)
-        const re = new RegExp(WORDING_PATH, 'i')
-        return ok((night2.prFiles[n] ?? []).map(f => `${JSON.stringify([f.filename, re.test(f.filename) ? (f.patch ?? null) : false])}\n`).join(''))
-      }
-      if (argv[1] !== 'pr' || argv[2] !== 'diff') throw new Error(`unexpected gh command: ${argv.join(' ')}`)
-      const d = night2.diffs[sel]
-      if (d === undefined) return { value: { exitCode: 1, stdout: '', stderr: `no pull requests found for ${sel || 'the current branch'}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
-      if (night2.cut[sel]) return { value: { exitCode: 0, stdout: d.slice(0, 40), stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
-      return ok(d)
+      throw new Error(`unexpected gh command: ${argv.join(' ')}`)
     }
     // git, standing in over the files above: one repository at /w/app, searched as git grep does.
     if (cmd === 'git') {
@@ -309,15 +273,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const input = JSON.parse(String(raw)) as { command: string; cwd?: string }
       return ok(JSON.stringify(pipeline(input.command).map(c => ({ ...c, folder: input.cwd ?? null }))))
     }
-    // undefined (no gh, no helper) travels as null and is read back as none.
+    // undefined (no git command) travels as null and is read back as none.
     if (cmd === '__modkit' && method === 'git') return ok(JSON.stringify(gitArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
-    if (cmd === '__modkit' && method === 'gh') return ok(JSON.stringify(ghArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
-    if (cmd === '__modkit' && method === 'mergeHelper') return ok(JSON.stringify(mergeHelperArgs(JSON.parse(String(raw))) ?? null))
     if (cmd === '__modkit' && method === 'repo') {
       const input = JSON.parse(String(raw)) as { root?: string | null; remote: string | null }
       return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }))
     }
-    if (cmd === '__modkit' && method === 'linkRepo') return ok(JSON.stringify(linkRepo((JSON.parse(String(raw)) as { link: string }).link)))
     if (cmd === '__modkit' && method === 'branch') return ok(JSON.stringify({ root: REPO, main: REPO, branch: '2628-sleep', defaultBranch: night2.defaultBranch, isDefault: false, issues: [2628] }))
     if (cmd === '__modkit' && method === 'typedAnswer') {
       const input = JSON.parse(String(raw)) as TypedAnswer
@@ -1582,12 +1543,12 @@ test('an edit to a script the Slack drafts gate names passes: a gate that only m
 })
 
 // #2628: in sleep mode the session chooses held wording and keeps working; Dan is asked in the
-// morning, and nothing carrying the wording merges until he approves it. Dan, 2026-11-09: "You
+// morning, and the choice holds no merge meanwhile (#3030). Dan, 2026-11-09: "You
 // should just choose the alert in sleep mode and put it to me in the morning to see if I want
 // something else."
 const CHOOSE = 'mcp__slack-alert-guard__choose'
 const REWORDED = 'Deploy ${id} failed on production'
-// The pull request carrying the reworded alert, as gh pr diff prints it.
+// The reworded alert as a diff, as git prints it.
 const DIFF = [
   'diff --git a/lib/alert.ts b/lib/alert.ts',
   '--- a/lib/alert.ts',
@@ -1597,8 +1558,6 @@ const DIFF = [
   `+${ALERT_TEXT.trimEnd().replace('Deploy ${id} failed', REWORDED)}`,
   '',
 ].join('\n')
-// The same pull request once the wording is changed again in the morning.
-const DIFF_CHANGED = DIFF.replace(REWORDED, 'Deploy ${id} did not finish')
 const said = (r: Result) => `${String((r as { result?: unknown }).result ?? '')}\n${r.text ?? ''}\n${contextOf(r)}`
 const choose = ($: Caller, id: string, rendered: unknown = SHOWN, extra: Record<string, unknown> = {}) => call($, { tool: CHOOSE, call: id, rendered, ...extra })
 const chosenIn = (w: W) => Object.keys(w.store).filter(k => k.startsWith('chosen:'))
@@ -1615,13 +1574,12 @@ const morning = async ($: Caller, w: W, id: string, answer: string | undefined, 
 }
 const MERGE = { tool: 'Bash', command: 'gh pr merge 12 --squash' }
 // Asleep, the held reword chosen and the edit sent again: the call's id.
-const chooseReword = async ($: Caller, w: W, extra: Record<string, unknown> = {}) => {
+const chooseReword = async ($: Caller, _w: W, extra: Record<string, unknown> = {}) => {
   const why = refusalOf(await call($, { ...REWORD, ...extra }))
   const id = /"call": "(t\d+)"/.exec(why)?.[1]
   if (!id) throw new Error(`no choose instruction in: ${why}`)
   expect(refusalOf(await choose($, id, SHOWN, extra))).toBe('')
   expect(refusalOf(await call($, { ...REWORD, ...extra }))).toBe('')
-  w.night.diffs['12'] = DIFF
   return id
 }
 
@@ -1670,11 +1628,7 @@ test('in the morning the choice is put to Dan with the message filled in, and on
   nightFresh(true)
   const w = world($, on)
   const id = await chooseReword($, w)
-  // Nothing carrying the chosen wording merges, asleep or not, and nothing is asked while asleep.
-  const held = refusalOf(await call($, MERGE))
-  expect(held).toContain('chosen overnight')
-  expect(held).toContain(SHOWN)
-  expect(w.ghs[0]?.slice(0, 4)).toEqual(['gh', 'pr', 'diff', '12'])
+  // Nothing is asked while asleep.
   expect(await promptLines($)).not.toContain('chosen:')
   night.asleep = false
   // Awake, a choice lets nothing through: the same wording is asked about as before.
@@ -1693,12 +1647,11 @@ test('in the morning the choice is put to Dan with the message filled in, and on
   expect(said(r)).toContain('approved')
   expect(w.store[wordingKey(REWORDED)]).toMatchObject({ file: ALERT, rendered: SHOWN })
   expect(chosenIn(w)).toEqual([])
-  expect(refusalOf(await call($, MERGE))).toBe('')
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   expect(refusalOf(await morning($, w, id, APPROVE))).toContain('answered already')
 })
 
-test("Dan's Change wording, a dialog closed by itself, or no answer records nothing and leaves the choice held (#2628)", withNight, async ($, on) => {
+test("Dan's Change wording, a dialog closed by itself, or no answer records nothing and leaves the choice waiting (#2628)", withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
   const id = await chooseReword($, w)
@@ -1708,12 +1661,8 @@ test("Dan's Change wording, a dialog closed by itself, or no answer records noth
     expect(said(r)).toContain(words)
     expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
     expect(chosenIn(w).length).toBe(1)
-    expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
     expect(await promptLines($)).toContain(`chosen:${id}`)
   }
-  // Changed in the morning, the pull request no longer carries the chosen wording, so it may merge.
-  w.night.diffs['12'] = DIFF_CHANGED
-  expect(refusalOf(await call($, MERGE))).toBe('')
 })
 
 test('outside sleep mode nothing changes: no choosing, no records, and no merge is read (#2628)', withNight, async ($, on) => {
@@ -1730,146 +1679,80 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
   expect(refusalOf(await choose($, id))).toContain('awake')
   expect(chosenIn(w)).toEqual([])
   expect(night.notes).toEqual([])
-  w.night.diffs['12'] = DIFF
   expect(refusalOf(await call($, MERGE))).toBe('')
   expect(w.ghs).toEqual([])
   expect(await promptLines($)).toBe('')
 })
 
-test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {
+// #3030: Dan, 2026-11-16: "I'd actually prefer it didn't hold merges anywhere. It's more of a nice to
+// have but it shouldn't hold up progress." Wording chosen overnight still waits on him, is still put
+// to him in the morning, and is still never approval, but no merge waits on it, in any repository.
+test('a merge is never held while wording chosen overnight waits on Dan, in any repository, and he is still asked in the morning (#3030)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
-  await chooseReword($, w)
-  expect(refusalOf(await call($, { tool: 'Bash', command: '~/.claude/hooks/lib/merge-when-ready.sh 12 --repo danwright32/app' }))).toContain('chosen overnight')
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh api -X PUT repos/danwright32/app/pulls/12/merge' }))).toContain('chosen overnight')
-  w.night.ghFails = true
-  expect(refusalOf(await call($, MERGE))).toContain('could not check')
-  w.night.ghFails = false
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 -R "$REPO"' }))).toContain('could not check')
-  // A command that merges nothing is never read for a diff.
-  const before = w.ghs.length
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
-  expect(w.ghs.length).toBe(before)
-})
-
-test('a merge whose diff gh did not give within its time is told as a timeout, not a refusal; gh failing at once is still could not check (#2792)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  await chooseReword($, w)
-  w.night.ghFails = true
-  w.ctl.ghTakes = SCAN_MS
-  const late = refusalOf(await call($, MERGE))
-  expect(late).toContain('timeout, not a refusal')
-  expect(late).toContain('again in about a minute')
-  expect(late).not.toContain('could not check')
-  w.ctl.ghTakes = 0
-  expect(refusalOf(await call($, MERGE))).toContain('could not check')
-})
-
-// #2833: a choice holds merges in the repository it was made in, never in another. After sleep mode
-// on 2026-11-12 a merge in one repository was refused over four choices made in another
-// repository's worktree, none of whose files or wording its pull request carried.
-const SITE_MERGE = { tool: 'Bash', command: 'gh pr merge 7 --squash -R danwright32/site' }
-const placesIn = (w: W) => chosenIn(w).map(k => ((w.store[k] as { places?: { repo: string | null }[] }).places ?? []).map(p => p.repo))
-
-test('a choice made overnight in one repository holds a merge there, never one in another (#2833)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  await chooseReword($, w)
-  expect(placesIn(w)).toEqual(chosenIn(w).map(() => ['danwright32/app']))
-  // Repository B's pull request even carries the same words, and is still not the one carrying the choice.
-  w.night.diffs['7'] = DIFF
-  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
-  // -R spelled with gh's host or as a whole address names the same repository.
-  for (const r of ['github.com/danwright32/site', 'https://github.com/DanWright32/site.git'])
-    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toBe('')
-  for (const r of ['github.com/danwright32/app', 'https://github.com/DanWright32/app.git'])
-    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toContain('chosen overnight')
-  // Merged from its folder rather than with -R, gh says which repository the pull request is in.
-  w.night.urls['7'] = 'https://github.com/danwright32/site/pull/7'
-  w.ctl.cwd = SITE
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
-  expect(w.ghs.some(g => g.slice(0, 4).join(' ') === 'gh pr view 7')).toBe(true)
-  // In repository A the pull request carrying it is refused, by folder or by -R.
-  w.ctl.cwd = REPO
-  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))).toContain('chosen overnight')
-  // One in A that no longer carries it passes, as before.
-  w.night.diffs['12'] = DIFF_CHANGED
+  const id = await chooseReword($, w)
+  const merges = [
+    MERGE.command,
+    'gh pr merge 12 --squash -R danwright32/app',
+    'gh pr merge 7 --squash -R danwright32/site',
+    'gh api -X PUT repos/danwright32/app/pulls/12/merge',
+    '~/.claude/hooks/lib/merge-when-ready.sh 12 --repo danwright32/app',
+    'eval "gh pr merge 12 --squash"',
+  ]
+  // Asleep and awake alike, every way to merge goes through, and no pull request is read for it.
+  for (const command of merges) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  night.asleep = false
+  for (const command of merges) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ghs).toEqual([])
+  // The choice still waits, unapproved, and is still put to Dan, without claiming a merge waits on it.
+  expect(chosenIn(w).length).toBe(1)
+  expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
+  const lines = await promptLines($)
+  expect(lines).toContain(`slack-alert-guard:chosen:${id}`)
+  expect(lines).not.toContain('merge')
+  // His Change wording leaves it waiting and unapproved, and still holds no merge.
+  expect(said(await morning($, w, id, CHANGE))).not.toContain('merge')
+  expect(chosenIn(w).length).toBe(1)
+  expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
   expect(refusalOf(await call($, MERGE))).toBe('')
 })
 
-test('wording a choice lets through asleep in another repository holds merges there too (#2833)', withNight, async ($, on) => {
+// #2833: a choice is put to Dan from the repositories it was made in or let wording through in.
+const placesIn = (w: W) => chosenIn(w).map(k => ((w.store[k] as { places?: { repo: string | null }[] }).places ?? []).map(p => p.repo))
+
+test('a choice records the repository it was made in, and each it lets wording through in while Dan is asleep (#2833)', withNight, async ($, on) => {
   nightFresh(true)
   const SITE_ALERT = `${SITE}/lib/alert.ts`
   const w = world($, on, { files: { [SITE_ALERT]: ALERT_TEXT } })
   await chooseReword($, w)
+  expect(placesIn(w)).toEqual(chosenIn(w).map(() => ['danwright32/app']))
   // The same wording put in repository B while Dan is asleep goes through on the choice, which now
-  // names B as well, so B's pull request carrying it is held.
+  // names B as well, so a session working in B puts it to him too.
   expect(refusalOf(await call($, { ...REWORD, file_path: SITE_ALERT }))).toBe('')
   expect(placesIn(w)).toEqual(chosenIn(w).map(() => ['danwright32/app', 'danwright32/site']))
-  w.night.diffs['7'] = DIFF
-  expect(refusalOf(await call($, SITE_MERGE))).toContain('chosen overnight')
 })
 
-test('a choice whose repository cannot be read, or a pull request whose repository cannot be, still holds the merge (#2833)', withNight, async ($, on) => {
+test('a choice whose repository cannot be read records none (#2833)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
-  // The choice's origin cannot be read when it is made, nor at the merge: it holds any pull request
-  // carrying its wording, as before #2833, and says which repository could not be read.
   w.night.originFails = true
   await chooseReword($, w)
   expect(placesIn(w)).toEqual(chosenIn(w).map(() => [null]))
-  w.night.diffs['7'] = DIFF
-  const why = refusalOf(await call($, SITE_MERGE))
-  expect(why).toContain('chosen overnight')
-  expect(why).toContain(` As the repository ${ALERT} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`)
-  // Readable at the merge, it is read then.
-  w.night.originFails = false
-  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
-  // A choice recorded before #2833 names no repository, so it is read from its file at the merge.
-  for (const k of chosenIn(w)) {
-    const { places: _p, ...before2833 } = w.store[k] as { places?: unknown }
-    w.store[k] = before2833
-  }
-  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
-  w.night.originFails = true
-  expect(refusalOf(await call($, SITE_MERGE))).toContain('chosen overnight')
-  w.night.originFails = false
-  // gh cannot say which repository the pull request is in: held as could not check.
-  w.night.viewFails = true
-  const unread = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))
-  expect(unread).toContain('could not check')
-  expect(unread).toContain('pull request cannot be read')
-  // A pull request carrying no chosen wording needs no repository, as before.
-  w.night.diffs['7'] = DIFF_CHANGED
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
 })
 
-// #3021: while wording chosen overnight waits on Dan, each command of a Bash call is read for a
-// merge. One mod-kit marks `unread` (eval, a command a value names, ssh) may run a merge its words
-// do not show, so it passed as no merge: `eval "gh pr merge 12 --squash"`, the same through ssh and
-// through an alias each ran (mod-kit's merge reader held only an eval or a program that is a
-// variable). It is held as could not check, naming why and each choice.
-test('a command whose effect cannot be read is held while a choice waits, since it may merge; with none waiting nothing is read (#3021)', withNight, async ($, on) => {
+// #3021 held a command whose effect cannot be read while wording chosen overnight waited, since it
+// might merge. With no merge held (#3030) it runs as any other command does.
+test('a command whose effect cannot be read is never held over wording chosen overnight (#3021, #3030)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'eval "$MERGE_STEP"' }))).toBe('')
-  const id = await chooseReword($, w)
+  await chooseReword($, w)
   const ran = w.ran.length
   const unread = ['eval "gh pr merge 12 --squash"', 'ssh build gh pr merge 12 --squash', `alias m='gh pr merge 12 --squash'; m`, '"$GH" pr merge 12 --squash', 'ls lib && eval "$MERGE_STEP"']
-  for (const command of unread) {
-    const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect({ command, held: why.includes('could not check'), says: why.includes('so whether it merges a pull request cannot be told until the commands it runs are written out in its place, while Slack alert wording chosen overnight waits on Dan'), names: why.includes(id) }).toEqual({ command, held: true, says: true, names: true })
-  }
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'eval "$MERGE_STEP"' }))).toContain('eval $MERGE_STEP is a command run as text by eval, so what it runs cannot be read, so whether it merges')
-  expect(w.ran.length).toBe(ran)
-  // A command that can be read and merges nothing passes, as before.
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'ls lib' }))).toBe('')
-  expect(w.ran.length).toBe(ran + 1)
+  for (const command of unread) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(ran + unread.length)
 })
 
-test('a choice unanswered for three days expires, said once, and stays held; it is never approval (#2628)', withNight, async ($, on) => {
+test('a choice unanswered for three days expires, said once, and stays unapproved; it is never approval (#2628)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
   const id = await chooseReword($, w)
@@ -1881,14 +1764,12 @@ test('a choice unanswered for three days expires, said once, and stays held; it 
   expect(w.store[`chosen:${wordingKey(REWORDED)}`]).toMatchObject({ expired: expect.any(Number) })
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
-  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
   // Asleep again, an expired choice lets nothing through: it is held to be chosen again.
   night.asleep = true
   expect(refusalOf(await call($, REWORD))).toContain(CHOOSE)
   night.asleep = false
   await morning($, w, id, APPROVE)
   expect(w.store[wordingKey(REWORDED)]).toBeDefined()
-  expect(refusalOf(await call($, MERGE))).toBe('')
 })
 
 test('a choice whose session ended is put to Dan by the next session he writes in (#2628)', withNight, async ($, on) => {
@@ -1918,16 +1799,6 @@ test('a choice is put to Dan in the session that made it or in its own repositor
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   w.ctl.cwd = `${REPO}/lib`
   expect(await promptLines($)).toContain(`chosen:${id}`)
-  // A's pull request merged from a session in B is still held, and B is told it is asked in A,
-  // never to ask Dan itself; merged from A, the refusal says to ask, as before.
-  w.ctl.cwd = SITE
-  const away = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))
-  expect(away).toContain('chosen overnight')
-  expect(away).toContain(' The wording chosen in danwright32/app is put to Dan in a session working in danwright32/app, never in this one: leave the pull request open until he approves it there.')
-  expect(away).not.toContain(`chosen:${id}`)
-  expect(away).not.toContain('AskUserQuestion')
-  w.ctl.cwd = REPO
-  expect(refusalOf(await call($, MERGE))).toContain(`Put it to him: call AskUserQuestion with one question and metadata {"source": "slack-alert-guard:chosen:${id}"}`)
   // Expired, it is said as expired only in its own repository. Unapproved for days by then, it is
   // put to Dan once in B as well (#2993), and that does not use up A's telling.
   await w.clock.advance(3 * 24 * 60 * 60_000)
@@ -1999,11 +1870,11 @@ test('a choice still unapproved two hours after sleep ended is put to Dan by any
   for (const part of ['danwright32/app', ALERT, SHOWN]) expect(q?.question).toContain(part)
   expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
   for (const o of q?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
-  // Changed, it is not asked again in a new session, and it still holds the merge.
+  // Changed, it is not asked again in a new session, and it is still not approved.
   w.night.session = 's4'
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
-  w.ctl.cwd = REPO
-  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+  expect(chosenIn(w).length).toBe(1)
+  expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
 })
 
 test('a Change wording answer that cannot be kept is said, and other sessions go on asking (#2993)', withNight, async ($, on) => {
@@ -2502,119 +2373,6 @@ test('a shell write adding a member to an event union in a file of database type
   w.files[DB_TYPES_FILE] = `${DB_TYPES_TEXT}export const tell = (t: { slack_webhook_url: string }) => fetch(t.slack_webhook_url, { method: 'POST', body: JSON.stringify({ text: 'Team linked' }) })\n`
   expect(refusalOf(await call($, union))).toContain(`shell command writes to ${DB_TYPES_FILE}, which posts to Slack`)
   expect(w.ran.length).toBe(1)
-})
-
-// #2973: a merge in a work repository was refused twice because gh cut its 7.6 MB diff short (exit 0;
-// two components, a stylesheet and settled design files with pictures embedded), while five choices
-// made overnight in a different project waited on Dan. Only a choice that holds the pull request's
-// repository may hold it, and a diff cut short is read again file by file.
-const SITE_FILES = [{ filename: 'components/card.tsx', patch: '@@ -1 +1 @@\n-export const Card = 1\n+export const Card = 2' }, { filename: 'app/globals.css', patch: '@@ -1 +1 @@\n-a{}\n+b{}' }, { filename: 'docs/design/settled.html' }]
-test('a merge whose diff gh cuts short passes where no choice waiting holds its repository, and is read file by file where one does (#2973)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  await chooseReword($, w)
-  // Repository B: the choice was made in A, so B's merge passes without its diff, by -R or by folder.
-  w.night.diffs['7'] = DIFF_CHANGED
-  w.night.cut['7'] = true
-  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
-  w.night.urls['7'] = 'https://github.com/danwright32/site/pull/7'
-  w.ctl.cwd = SITE
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
-  // gh failing outright in B passes too, where its repository can be said.
-  w.night.ghFails = true
-  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
-  w.night.ghFails = false
-  w.ctl.cwd = REPO
-  // Repository A, cut short: GitHub's list of its files is read, the pictures never sent, and the
-  // file carrying the chosen wording holds it.
-  w.night.cut['12'] = true
-  const hunk = DIFF.slice(DIFF.indexOf('@@'))
-  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: hunk }]
-  const before = w.ghs.length
-  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
-  expect(w.ghs.slice(before).map(g => g.slice(0, 3).join(' '))).toEqual(['gh pr diff', 'gh pr view', 'gh pr view', 'gh api repos/danwright32/app/pulls/12/files?per_page=100'])
-  // Read so, a pull request not carrying it passes.
-  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: DIFF_CHANGED.slice(DIFF_CHANGED.indexOf('@@')) }]
-  expect(refusalOf(await call($, MERGE))).toBe('')
-  // A file that could carry it with no patch from GitHub, or a list short of the files changed, is
-  // could not check, naming the choice waiting, the session that made it and how it is approved.
-  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts' }]
-  const blind = refusalOf(await call($, MERGE))
-  expect(blind).toContain('could not check')
-  expect(blind).toContain('GitHub gives no diff for lib/alert.ts')
-  expect(blind).toContain(`${ALERT}: "${SHOWN}", chosen by session s1`)
-  expect(blind).toContain('"source": "slack-alert-guard:chosen:')
-  w.night.prFiles['12'] = [...SITE_FILES]
-  w.night.changed['12'] = 3001
-  expect(refusalOf(await call($, MERGE))).toContain('GitHub listed 3 of the 3001 files it changes')
-})
-
-test('a merge read file by file shares one deadline with the diff, so a slow gh is a timeout inside the hook, never a hook killed mid read (#2973, L842)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  await chooseReword($, w)
-  w.night.cut['12'] = true
-  w.night.prFiles['12'] = [...SITE_FILES, { filename: 'lib/alert.ts', patch: DIFF.slice(DIFF.indexOf('@@')) }]
-  // Each gh call answers in 3 s: the diff, the repository and the file count use 9 s, so the list
-  // of files is never asked for. Each with SCAN_MS of its own, the read would end at 12 s, past the
-  // 10 s Claude Code gives a hook.
-  w.ctl.ghTakes = 3000
-  const start = await w.readClock()
-  const why = refusalOf(await call($, MERGE))
-  expect(why).toContain('timeout, not a refusal')
-  expect(why).toContain("GitHub did not list the pull request's files within 7 seconds")
-  expect((await w.readClock()) - start).toBeLessThan(10_000)
-  expect(w.ghs.some(g => g[1] === 'api')).toBe(false)
-})
-
-test('a merge held as could not check names each waiting choice, and a session that did not make one is told where it is approved (#2973)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  await chooseReword($, w)
-  w.night.ghFails = true
-  const mine = refusalOf(await call($, MERGE))
-  expect(mine).toContain('could not check')
-  expect(mine).toContain(`${ALERT}: "${SHOWN}", chosen by session s1, in danwright32/app, on `)
-  expect(mine).toContain('ET (this session puts it to Dan')
-  w.night.session = 's2'
-  w.ctl.cwd = SITE
-  const theirs = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))
-  expect(theirs).toContain('chosen by session s1, in danwright32/app, on ')
-  expect(theirs).toContain('(it is put to Dan in that session, or once it ends in a session working in danwright32/app)')
-  expect(theirs).not.toContain('"source"')
-})
-
-// #3030: two merges in another repository were held for days over wording chosen overnight, and
-// the refusal did not say where it was chosen, when, or what releases it; Dan said he had answered
-// it, and the same merges were held afterwards.
-test('a merge held over waiting wording names where, by whom and when it was chosen, Dan\'s answers so far, and what releases it (#3030)', withNight, async ($, on) => {
-  nightFresh(true)
-  const w = world($, on)
-  const id = await chooseReword($, w)
-  // The session that chose it is kept apart from the one that asks, so its end does not lose it.
-  for (const k of chosenIn(w)) expect(w.store[k]).toMatchObject({ session: 's1', chosenBy: 's1' })
-  w.night.ghFails = true
-  const first = refusalOf(await call($, MERGE))
-  expect(first).toMatch(/chosen by session s1, in danwright32\/app, on Nov 4, 2026 at 10:\d\d AM ET \(this session puts it to Dan/)
-  expect(first).toContain(RELEASE)
-  // Its session ended: still named, and said to have ended.
-  await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
-  w.night.session = 's2'
-  for (const k of chosenIn(w)) expect(w.store[k]).toMatchObject({ session: null, chosenBy: 's1' })
-  expect(refusalOf(await call($, MERGE))).toContain('chosen by session s1, which has since ended, in danwright32/app, on Nov 4, 2026')
-  // Dan answers Change wording: the merge is still held, and the refusal says he answered and when.
-  night.asleep = false
-  await morning($, w, id, CHANGE)
-  const after = refusalOf(await call($, MERGE))
-  expect(after).toMatch(/Dan answered Change wording to it on Nov 4, 2026 at \d+:\d\d (AM|PM) ET, which keeps it held/)
-  // A choice recorded before its maker was kept says so, never naming a session.
-  for (const k of chosenIn(w)) {
-    const { chosenBy: _b, ...before3030 } = w.store[k] as { chosenBy?: unknown }
-    w.store[k] = before3030
-  }
-  const old = refusalOf(await call($, MERGE))
-  expect(old).toContain('chosen by a session that has since ended, whose id the choice does not record, in danwright32/app')
-  expect(old).not.toContain('session s1')
 })
 
 // #2971: git apply, git am and patch write files no word of theirs names, so a patch rewording an
