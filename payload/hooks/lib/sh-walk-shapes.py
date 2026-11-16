@@ -27,18 +27,29 @@ shapes were refused that way however quiet the files they named:
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/code-loaders.py's, so the methods use the Judge's own readers (rest_of, words_of,
 raw_words, sh_tokens, sh_literal_word, sh_strip_openers, sh_binds, sh_source_word,
-sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell, unfollow).
+sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell, unfollow, sw).
+
+Since claude-config#3020 it also reads text handed to eval, to a shell's -c or to a function that
+evaluates its argument through a variable or a substitution (handed_text_reason, with the comment
+above it), using the Judge's sh_value, sh_word_end, pieces_of and pieces_reason as well.
 """
+import os
 import re
 
 # The most paths one source command is worked out to, across the values of the loops around it: past
 # it the path is taken as unknown, and refused, rather than read once for each.
 MAX_CHOICES = 64
+# A word that is one substitution printing one file's text (text_of_file): $(cat F) or $(< F), or
+# either in backquotes, the whole of the word, in double quotes or not. F is read as one shell word.
+FILE_TEXT = re.compile(r'("?)(?:\$\(\s*(?:cat\s+|<\s*)([^()`]+?)\s*\)|`\s*(?:cat\s+|<\s*)([^()`]+?)\s*`)\1')
+# A word that is one variable or positional parameter and nothing else, in double quotes or not.
+LONE_NAME = re.compile(r'"?\$\{?([A-Za-z_]\w*|[0-9])\}?"?')
 
 
-def make(sh_special, sh_param):
+def make(sh_special, sh_param, unknown_dir=None):
     """The base class for the gate's Judge (module docstring). sh_special is its SH_SPECIAL, the
-    builtins an assignment in front of lasts past, and sh_param its SH_PARAM."""
+    builtins an assignment in front of lasts past, sh_param its SH_PARAM, and unknown_dir its
+    SH_UNKNOWN_DIR."""
 
     class ShWalkShapes:
         def sh_one_command_sets(self, heads, funcs):
@@ -140,7 +151,16 @@ def make(sh_special, sh_param):
             # passed over before its openers are cut (#2918).
             if not evals or not any(f in text for f in evals):
                 return None
-            lits = self.sh_eval_call(self.sh_strip_openers(text), evals)
+            head = self.sh_strip_openers(text)
+            lits = self.sh_eval_call(head, evals)
+            if lits is False:
+                # A plain call with an argument that is not written out: read where the gate can read
+                # it, and refused where it cannot (handed_text_reason, claude-config#3020).
+                for raw in self.sh_eval_call(head, evals, raw=True) or ():
+                    reason = self.handed_text_reason("a function that evaluates its argument", [raw], d, depth)
+                    if reason:
+                        return reason
+                return None
             for lit in lits or ():
                 try:
                     inner = self.line(lit, d, depth + 1, lit)
@@ -149,6 +169,119 @@ def make(sh_special, sh_param):
                 if inner:
                     return f"{text.strip()[:120]} evaluates {lit!r} in this shell, and that posts: {inner}"
             return None
+
+        # ---- Text handed to eval, a shell's -c or an evaluating function (claude-config#3020) --------
+        # `X="$(cat cmd.txt)"; eval "$X"` ran a file's text with the file never read, and so did
+        # `eval "$(cat cmd.txt)"`, `bash -c "$(cat cmd.txt)"` and a call of a function that evaluates
+        # its argument, where the same text fed to a shell's input (`bash <<< "$(cat cmd.txt)"`,
+        # claude-config#2887) was read. One reading now serves all of them (text_of_file, which the
+        # here string reading uses too). Text handed through a variable or a substitution is:
+        #   * judged as a command line where every word of it has a value the gate works out
+        #     (`X='bash post.sh'; eval "$X"` passed);
+        #   * read as the file it is where it is one file's text: $(cat F), $(< F) or the same in
+        #     backquotes, straight or through a variable the text sets once from it, F worked out as
+        #     any path is, and what an earlier command made F from counted (pieces_of);
+        #   * and otherwise text the gate cannot read: a program's output, a variable set nowhere,
+        #     a file whose path cannot be worked out. In the command itself that is refused, as input
+        #     a shell reads that cannot be read is (fed_reason). Inside a script on disk, and in any
+        #     string such a script evaluates, it is left as it was, whatever the #2683 switch says:
+        #     the gate suite pins that for the string an eval runs (2026-11-12), and refusing it there
+        #     would refuse 19 more of this repository's 563 tracked shell scripts (measured
+        #     2026-11-15 by judging `bash <file>` for each with that refusal behind the switch, 201
+        #     refused to 220, lib/issue-spool.sh's test seam and tools/prove-it-fails.sh among them).
+        #     As shipped, none is newly refused (5 before and after, the same five).
+        # Text written out, in single quotes too, is not handed text: its commands are read where they
+        # are. A redirection on the command is the shell's and no word of the text.
+        # A positional parameter is what a function or a script was handed: judged at each call of a
+        # function the walk found to evaluate it (sh_eval_text_reason), and for a script on disk
+        # where the script is handed something (the gate's acts reading).
+
+        def text_of_file(self, raw, d):
+            """For a raw word that is one substitution printing one file's text ($(cat F), $(< F), or
+            either in backquotes, in double quotes or not): what the file holds, as pieces (pieces_of),
+            or an unreadable piece where F cannot be worked out. None for any other word."""
+            m = FILE_TEXT.fullmatch(raw or "")
+            if not m:
+                return None
+            toks = self.sh_tokens((m.group(2) if m.group(2) is not None else m.group(3)).strip())
+            if len(toks) != 1 or toks[0][0] != "word":
+                return None
+            path = self.sh_value(toks[0][1], d)
+            if path is None or (not os.path.isabs(path) and self.sh_cwd(d) == unknown_dir):
+                return [("unknown", None, f"the file {toks[0][1]}, whose path the gate cannot work out")]
+            return self.pieces_of(path, d)
+
+        def sh_set_from(self, name):
+            """The value the text being read gives NAME, as written, where it sets it exactly once
+            before the command being judged, by a plain NAME=value, and binds it no other way before
+            then; else None."""
+            at, text = self.shell.get("at"), self.shell.get("text") or ""
+            if at is None:
+                return None
+            before = text[:at]
+            found = list(re.finditer(r"(?:^|(?<=[\s;&|({]))" + re.escape(name) + r"=", before))
+            if len(found) != 1 or self.sh_binds(name, before, 1):
+                return None
+            start = found[0].end()
+            return before[start:self.sh_word_end(before, start)]
+
+        def handed_text_reason(self, name, raws, d, depth):
+            """The reason the text name (eval, a shell's -c, a function that evaluates its argument)
+            is handed posts, or cannot be read, or None (the comment above). raws are the words of
+            the text as written."""
+            plain, k = [], 0
+            while k < len(raws):
+                # A redirection is the shell's, never a word of the text (as the Judge's operands reads it).
+                m = self.sw.REDIRECT_WORD.match(raws[k])
+                if m:
+                    k += 1 if m.group(1) else 2
+                    continue
+                plain.append(raws[k])
+                k += 1
+            raws = plain[1:] if plain[:1] == ["--"] else plain
+            if all(self.sh_literal_word(r) is not None for r in raws):
+                # Written out, in single quotes too, where a $ is the text's own: its commands are
+                # read where they are, with the positional parameters the shell is given.
+                return None
+            values = [self.sh_value(r, d) for r in raws]
+            in_script = self.sh_in_script()
+            pieces = None
+            if all(v is not None for v in values):
+                pieces = [("text", " ".join(values) + "\n", "")]
+            elif len(raws) == 1:
+                lone = LONE_NAME.fullmatch(raws[0])
+                if lone and lone.group(1).isdigit():
+                    evals = self.sh_ctx_known().get("evals") or {}
+                    if in_script or any(int(lone.group(1)) in ns for ns in evals.values()):
+                        return None  # what it was handed, judged where it is handed (the comment above)
+                pieces = self.text_of_file((self.sh_set_from(lone.group(1)) or "") if lone else raws[0], d)
+            if in_script:
+                # A script's own: what can be read is, and the rest is left as it was (the comment above).
+                pieces = [p for p in pieces or () if p[0] != "unknown"]
+                if not pieces:
+                    return None
+            shown = " ".join(raws)[:120]
+
+            def unread(came):
+                return (f"{name} is handed {shown}, text the gate cannot read before the command runs{came}, so "
+                        "whether it posts cannot be checked. Write the commands out, or put them in a script "
+                        "and run that")
+
+            if pieces is None:
+                return self.unfollow(unread(""))
+            return self.pieces_reason(name, pieces, d, depth, True, None, "runs the text it is handed",
+                                      "runs commands from the text it is handed", unread)
+
+        def sh_in_script(self):
+            """Whether the text being read is a script on disk, or text one evaluates: a string its
+            eval, its shell's -c or a function of it runs, however many deep, by the texts that run
+            this one (the Judge's line keeps each as the parent of the text it runs)."""
+            sh = self.shell
+            while sh:
+                if sh.get("on_disk"):
+                    return True
+                sh = sh.get("parent")
+            return False
 
 
     return ShWalkShapes
