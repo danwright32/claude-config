@@ -1098,7 +1098,9 @@ effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
 A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
-at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+at most, is a mention and is not judged (#2133). A phrase in Title Case run straight on from another
+capitalised word, outside a markdown heading, ends a proper name (a calendar event type, say) and is
+not judged either (#3019). `deferral-edit-check.sh` says the same thing at the
 moment the text is written.
 
 </td><td>
@@ -3224,6 +3226,16 @@ slipped into a merge, is still judged; a file that conflicted is always judged, 
 resolved. When no default branch is known (no `origin/HEAD`, `origin/main` or `origin/master`) or
 git cannot work out the merge (it needs 2.38 or later), the whole push is judged as before, never
 none of it, and a refusal says main's changes were in it and why.
+
+The style, deferral and grep quiet invert gates (`check-style-guide.sh`, `check-deferrals.sh`,
+`check-grep-quiet-invert.sh`) set a merge of main
+apart the same way (#3015), through the one answer every gate reads, `ps_merged_apart` in
+`lib/push-scope.sh`. On 2026-11-14 four branches in a work project were refused by both in one day
+for two lines a guide on main holds byte for byte, which each branch only brought in by merging
+main. A line the branch writes, a conflict resolution's included, is still judged; a line already
+on main is not this push's, and is not reported anywhere else either. The duplication and public
+assets gates still read the whole range from the upstream. Each suite builds its case with
+`lib/merged-main-fixture.sh`.
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
@@ -6262,7 +6274,12 @@ live both ask; only a command that runs it counts, as the program or the script 
 `cat` or `grep`, which Dan approved on 2026-10-16 as a narrowing of the overnight merge ban; one
 that may run it but cannot be read for certain, a variable or substitution as the program or script,
 a shell fed what cannot be read, xargs, `eval` of a variable, or inline code running a process that
-names it, is `unreadable` with a repository that cannot be told, so overnight it is refused), of the
+names it, is `unreadable` with a repository that cannot be told, so overnight it is refused; and
+since #3036 a merge the command's own words do not run, which `gh` reads as no gh command: the `gh
+pr merge` in `eval`'s text, read as `gh` reads it, as the helper there already was, and one behind
+`ssh`, another machine's, or in an alias being set, run later with words nobody has typed yet, so
+`alias g=gh` counts, each `unreadable` with a repository that cannot be told; `builtin` before
+`eval`, `alias`, `source` or `.` is looked past), of the
 git checkout a path sits in (`$.modkit.workingTree({ path })`, found by its `.git` entry on the
 disk), of where that checkout stands (`$.modkit.branch({ path })`, #978: its main working tree,
 branch, default branch, whether it is on it, and the issues the branch names, each part of it
@@ -6366,12 +6383,19 @@ words); the scan fails a mod undoing YAML's `''` by hand, matching a single quot
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
 each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
 taken whole, each hunk walked by its header's counts, one that does not add up left out with its
-reason kept while the files after it are still named, #3021, and how
+reason kept while the files after it are still named, #3021, the line that ran it past its counts
+read again as the next file's first line, #3036, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
 the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
-patch by hand. `hooks/quoted.ts` holds `pythonText` too
+patch by hand. What a shell script's own variables hold (a temporary file or folder it made with
+bare `mktemp`, by `madeTemp`, `freshTemp` and `tempWord`; its own folder by the `BASH_SOURCE`
+idiom, by `ownFolderVar`, `ownFolderPath` and `withoutOwnFolder`) is read only through
+`hooks/scriptvars.ts`, kept by each mod that asks at `hooks/mod-kit/scriptvars.ts` (#3022: the
+design round guard wrote it, and the area check, which could place no write into such a folder,
+held every checker copying into one); the scan fails a mod matching a bare `mktemp` substitution
+with a pattern, or naming `BASH_SOURCE`, by hand. `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
@@ -6971,7 +6995,9 @@ a look changing file an inline script, or a patch that cannot be read whole or c
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
 marks unread (`eval "printf ... > app/site.css"`, `$TOOL --write app/site.css`, an alias set to such
 a command), placed in the folder it runs in and held as could not check where that cannot be
-followed; a write whose destination cannot be followed is held when the command names a look
+followed, and since #3036 one named in the words of such a command inside a shell script the call
+runs, judged the same way; a write whose destination cannot be followed is held when the command
+names a look
 changing file anywhere (a glob such as `app/*.tsx` included), and runs when it names none. Kept per
 project (the main working tree, so every worktree shares it, read with mod-kit's `$.modkit.branch`
 and named by `$.modkit.repo`) under the issue the branch names, each one when it names several, else
@@ -8021,16 +8047,32 @@ write in the script's own text can be placed (#2407, #2565): a full path, a path
 folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
 and `"$1"/gen/*.ts` as everything under `<folder>/gen`). Each placed write is then judged where it
 lands, so a script handed `src/` that writes `"$1/gen.ts"` is held only if `src/gen.ts` would be.
-A name relative to wherever the script runs, one built from any other value (a folder made with
-`mktemp` among them), a pattern matched in the folder itself (`"$1"/*.ts`), and a name built on
+Since #3022 (Dan, 2026-11-15) the script's own variables are read with mod-kit's
+`hooks/scriptvars.ts`, the reader the design round guard kept until then: a plain name in a folder
+the script made itself with bare `mktemp -d` (`"$scratch/copy"`), or a file it made with bare
+`mktemp`, lands in no file of the checkout, so it is placed nowhere and judged nowhere; a file
+sourced through the variable holding the script's own folder (`source "$HERE/lib.sh"`, HERE set
+by the `BASH_SOURCE` idiom) is read as part of the script, its writes placed with the script's;
+and that idiom's `cd`, which runs in a shell of its own, does not count as the script changing
+folder. A name relative to wherever the script runs, one built from any other value (a folder
+`mktemp` made from a template, with any flag but `-d`, or where the script names `TMPDIR`; a name
+holding a command's output, `"$scratch/$(basename "$d")"`), a pattern matched in the folder itself
+(`"$1"/*.ts`), a file sourced any other way or not there, and a name built on
 `$1` in a script that defines a function, gives `set` new values or changes folder keep the whole
-folder held. So
-`bash tools/check-mods.sh payload/mods`, which copies into a folder it makes with `mktemp`, is still
-held (Dan chose to keep that hold on #2527). A script whose text
-runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
-it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
+folder held. A script whose text
+runs what cannot be read as commands keeps the hold too (#2619), by the mark mod-kit's reader puts
+on each such command (#3021; the area check read them its own way until #3022): text run through
+`eval`, an alias
+it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), `ssh`, a
+trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. A script in another language (node, python, ruby) whose only part
+arithmetic names no command. So
+`bash tools/check-mods.sh payload/mods` is still held, though no longer for copying into a folder
+of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test
+"$d"`, `"$tsc"`), makes its folder from a template under `TMPDIR`, names each copy through another
+variable, runs inline perl whose writes its words do not name, and sources one file by a command's
+output, each of which keeps the hold on its own (measured 2026-11-16).
+A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
 importing a local module by a fixed name reads, so the folder it is handed is read, not written

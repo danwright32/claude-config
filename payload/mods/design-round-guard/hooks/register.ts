@@ -89,10 +89,8 @@ import {
   nameFromOutput,
   nameFromVariable,
   removalFilledIn,
-  leadingVariable,
   findNamesReachNoLook,
   outputTrusted,
-  freshTemp,
   relTo,
   shapeKind,
   shellVarPath,
@@ -136,6 +134,7 @@ import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
+import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
@@ -739,6 +738,19 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
           continue
         }
         targets.push({ path: f.path, word: f.word, inScript: s.word, ...('does' in f && f.does === 'remove' ? { removes: true as const } : {}) })
+      }
+    // #3036: a command in the script that mod-kit marks `unread` runs what its words do not say, so
+    // the reading above gives no write for it: `bash fix.sh`, fix.sh holding the eval #3021 holds
+    // typed whole, ran unasked. Judged as that one is, by the look and mod hook files its words
+    // name, each placed in the folder its command runs in (a variable the script sets followed
+    // through the script's own text), and held as could not check where that folder is not known.
+    // Such a script's writes are not all named, so its text naming the plugin store counts too.
+    if (s.lang === 'shell')
+      for (const u of read.unread ?? []) {
+        scriptStore ||= mentionsStore(s.text)
+        const folder = u.folder === undefined || u.folder === UNPLACED || u.folder.startsWith(`${UNPLACED}/`) ? undefined : u.folder
+        for (const t of await programGuesses($, u.words.join('\n'), folder, at, named, s.text))
+          targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
       }
     for (const u of read.unnamed) {
       if (u.targets) {
@@ -1661,7 +1673,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // is a spec wherever $D is, so what its heredoc's data names is data (#1151).
       const unknownName = /[$`]/.test(t.word.split('/').pop() ?? '')
       // A variable alone that only ever holds bare `mktemp` or `mktemp -d` output names a new file
-      // outside every screen path (rules.ts freshTemp; Dan, 2026-11-04, #2171).
+      // outside every screen path (mod-kit's scriptvars.ts freshTemp; Dan, 2026-11-04, #2171).
       if (!t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {

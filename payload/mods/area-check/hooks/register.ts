@@ -72,8 +72,7 @@ import {
   placedCost,
   SCRIPT_RUN_FROM,
   type ScriptPlaced,
-  trapTexts,
-  unreadPart,
+  runsInTurn,
   questionKey,
   legacyQuestionKey,
   restructureQuestion,
@@ -88,6 +87,7 @@ import {
   type ShellTarget,
 } from './rules.ts'
 import { currentText } from './mod-kit/inputs.ts'
+import { withoutOwnFolder } from './mod-kit/scriptvars.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
@@ -703,39 +703,82 @@ type Reach = { reaches: string } | { placed: ScriptPlaced[] }
 // every file in the folder, which is then judged as before (fail closed).
 const scriptWritesIn = async ($: EngineInterface, run: ShellRun, folder: string): Promise<Reach> => {
   if (!run.path) return { reaches: `${run.what} is named by no path that can be read` }
-  const cur = await currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, run.path)
+  const cur = await currentText(diskOf($), run.path)
   if (!('text' in cur)) return { reaches: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
-  return programReach($, run, cur.text, { home: await homeOf($), folder, moves: null }, 0)
+  return programReach($, run, cur.text, { home: await homeOf($), folder })
 }
 
-// How many traps deep a script's text is read (a trap whose text sets a trap, and so on); one set
+// The disk as mod-kit's currentText reads a file a command names: never a device or a fifo.
+const diskOf = ($: EngineInterface): Parameters<typeof currentText>[0] => ({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) })
+
+// How many files deep a script's sourced files are read (one sourcing another, and so on); one sourced
 // deeper than that is not read, so the script is held.
-const TRAPS_DEEP = 3
+const SOURCED_DEEP = 3
+
+// One text read for a script: its own, or that of a file it sources, with mod-kit's reading of it.
+type ScriptPart = { run: ShellRun; text: string; read: { command: string; cwd: string; home: string }; commands: Awaited<ReturnType<EngineInterface['modkit']['pipeline']>> }
+
+// Why a name built on what the script is handed may mean another value where it is built (argsMove),
+// asked of every text read for the script, or null. A text holding the idiom a script finds its own
+// folder by is asked again with each whole idiom taken out (#3022, mod-kit's withoutOwnFolder): the
+// idiom's cd runs in a shell of its own and moves nothing, while every other cd is still read.
+const movesIn = async ($: EngineInterface, parts: readonly ScriptPart[]): Promise<string | null> => {
+  for (const p of parts) {
+    const moves = argsMove(p.commands, p.text)
+    if (!moves) continue
+    const bare = withoutOwnFolder(p.text)
+    const prog = bare === p.text ? undefined : scriptProgram(p.run, bare)
+    if (!prog || 'unread' in prog) return moves
+    const still = argsMove(await $.modkit.pipeline({ ...p.read, command: prog.command }), bare)
+    if (still) return still
+  }
+  return null
+}
 
 // Where a script's text writes: the text fed to its interpreter and read by mod-kit's one reader,
-// then the text of each trap it sets read the same way (#2619), since the reader gives a trap's text
-// as a word, never as the commands it runs, and a write in one was read as no write. A name built on
-// what the script is handed is placed only where nothing in the script, or the script whose trap this
-// is (`moves`), gives what it is handed another meaning (argsMove).
-const programReach = async ($: EngineInterface, run: ShellRun, text: string, at: { home: string; folder: string; moves: string | null }, depth: number): Promise<Reach> => {
-  const prog = scriptProgram(run, text)
-  if ('unread' in prog) return { reaches: prog.unread }
-  const read = { command: prog.command, cwd: SCRIPT_RUN_FROM, home: at.home }
-  const commands = await $.modkit.pipeline(read)
-  const unread = unreadPart(commands, prog.delimiter, text)
-  if (unread) return { reaches: unread }
-  const own = scriptReach(await $.modkit.writes(read), at.folder, at.home)
-  if ('reaches' in own) return own
-  const moves = at.moves ?? argsMove(commands, text)
-  const handed = own.placed.find(p => p.handed)
-  if (handed && moves) return { reaches: `it writes ${handed.word}, and ${moves}` }
-  const placed = [...own.placed]
-  // A trap's text has no #! line, so it is fed to the interpreter the script's own text was.
-  const sameInterpreter: ShellRun = { what: `a ${prog.name} script file`, path: run.path }
-  for (const trap of trapTexts(commands)) {
-    const inTrap = depth < TRAPS_DEEP ? await programReach($, sameInterpreter, trap, { ...at, moves }, depth + 1) : { reaches: 'it is set by more traps than are read' }
-    if ('reaches' in inTrap) return { reaches: `its trap runs ${trap}: ${inTrap.reaches}` }
-    placed.push(...inTrap.placed)
+// which reads a trap's text as the commands it runs (#2619, #3021), and then the text of each file
+// it sources beside itself, read the same way as part of it (#3022, runsInTurn), since a sourced file
+// runs in the script's own shell. Every text is read before any write is placed, so a variable is a
+// temporary folder only where no text read sets it any other way (scriptReach). A name built on what
+// the script is handed is placed only where nothing in any of them gives what it is handed another
+// meaning (movesIn). Anything that cannot be read is why the script may reach the whole folder.
+const programReach = async ($: EngineInterface, run: ShellRun, text: string, at: { home: string; folder: string }): Promise<Reach> => {
+  const parts: ScriptPart[] = []
+  const seen = new Set<string>(run.path ? [run.path] : [])
+  const gather = async (r: ShellRun, t: string, depth: number): Promise<string | null> => {
+    const prog = scriptProgram(r, t)
+    if ('unread' in prog) return prog.unread
+    const read = { command: prog.command, cwd: SCRIPT_RUN_FROM, home: at.home }
+    const commands = await $.modkit.pipeline(read)
+    const turn = runsInTurn(commands, prog.delimiter, t, r.path)
+    if ('unread' in turn) return turn.unread
+    parts.push({ run: r, text: t, read, commands })
+    for (const lib of turn.sourced) {
+      if (seen.has(lib)) continue
+      seen.add(lib)
+      if (depth >= SOURCED_DEEP) return `it sources ${lib}, through more files than are read`
+      const cur = await currentText(diskOf($), lib)
+      if (!('text' in cur)) return `it sources ${lib}, which ${'unreadable' in cur ? `cannot be read: ${cur.unreadable}` : 'is not there'}`
+      // A sourced file's #! line is a comment, so it is fed to the interpreter the script's own text was.
+      const why = await gather({ what: `a ${prog.name} script file`, path: lib }, cur.text, depth + 1)
+      if (why) return `it sources ${lib}: ${why}`
+    }
+    return null
+  }
+  const why = await gather(run, text, 0)
+  if (why) return { reaches: why }
+  const all = parts.map(p => p.text).join('\n')
+  const placed: ScriptPlaced[] = []
+  let moves: string | null | undefined
+  for (const p of parts) {
+    const own = scriptReach(await $.modkit.writes(p.read), at.folder, at.home, all)
+    if ('reaches' in own) return own
+    const handed = own.placed.find(x => x.handed)
+    if (handed) {
+      if (moves === undefined) moves = await movesIn($, parts)
+      if (moves) return { reaches: `it writes ${handed.word}, and ${moves}` }
+    }
+    placed.push(...own.placed)
   }
   return { placed }
 }

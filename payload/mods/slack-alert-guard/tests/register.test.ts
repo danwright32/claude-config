@@ -8,6 +8,7 @@ import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { readsAsSend } from './send-wording.ts'
+import { RELEASE } from '../hooks/night.ts'
 import { git as gitArgs, pipeline } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
@@ -2573,12 +2574,47 @@ test('a merge held as could not check names each waiting choice, and a session t
   w.night.ghFails = true
   const mine = refusalOf(await call($, MERGE))
   expect(mine).toContain('could not check')
-  expect(mine).toContain(`${ALERT}: "${SHOWN}", chosen by session s1 (this session puts it to Dan`)
+  expect(mine).toContain(`${ALERT}: "${SHOWN}", chosen by session s1, in danwright32/app, on `)
+  expect(mine).toContain('ET (this session puts it to Dan')
   w.night.session = 's2'
   w.ctl.cwd = SITE
   const theirs = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))
-  expect(theirs).toContain('chosen by session s1 (it is put to Dan in that session, or once it ends in a session working in danwright32/app)')
+  expect(theirs).toContain('chosen by session s1, in danwright32/app, on ')
+  expect(theirs).toContain('(it is put to Dan in that session, or once it ends in a session working in danwright32/app)')
   expect(theirs).not.toContain('"source"')
+})
+
+// #3030: two merges in another repository were held for days over wording chosen overnight, and
+// the refusal did not say where it was chosen, when, or what releases it; Dan said he had answered
+// it, and the same merges were held afterwards.
+test('a merge held over waiting wording names where, by whom and when it was chosen, Dan\'s answers so far, and what releases it (#3030)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  // The session that chose it is kept apart from the one that asks, so its end does not lose it.
+  for (const k of chosenIn(w)) expect(w.store[k]).toMatchObject({ session: 's1', chosenBy: 's1' })
+  w.night.ghFails = true
+  const first = refusalOf(await call($, MERGE))
+  expect(first).toMatch(/chosen by session s1, in danwright32\/app, on Nov 4, 2026 at 10:\d\d AM ET \(this session puts it to Dan/)
+  expect(first).toContain(RELEASE)
+  // Its session ended: still named, and said to have ended.
+  await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
+  w.night.session = 's2'
+  for (const k of chosenIn(w)) expect(w.store[k]).toMatchObject({ session: null, chosenBy: 's1' })
+  expect(refusalOf(await call($, MERGE))).toContain('chosen by session s1, which has since ended, in danwright32/app, on Nov 4, 2026')
+  // Dan answers Change wording: the merge is still held, and the refusal says he answered and when.
+  night.asleep = false
+  await morning($, w, id, CHANGE)
+  const after = refusalOf(await call($, MERGE))
+  expect(after).toMatch(/Dan answered Change wording to it on Nov 4, 2026 at \d+:\d\d (AM|PM) ET, which keeps it held/)
+  // A choice recorded before its maker was kept says so, never naming a session.
+  for (const k of chosenIn(w)) {
+    const { chosenBy: _b, ...before3030 } = w.store[k] as { chosenBy?: unknown }
+    w.store[k] = before3030
+  }
+  const old = refusalOf(await call($, MERGE))
+  expect(old).toContain('chosen by a session that has since ended, whose id the choice does not record, in danwright32/app')
+  expect(old).not.toContain('session s1')
 })
 
 // #2971: git apply, git am and patch write files no word of theirs names, so a patch rewording an

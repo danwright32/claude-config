@@ -142,8 +142,24 @@ new_file_block() {  # $1 = path, one the scanner has already said is not exclude
 
 # The COMMITTED content this push would carry. This is the whole reading for a push
 # run on its own, which is the ordinary case and the one the gate exists for.
+#
+# A line is this push's only when the branch itself adds it (claude-config#3015). After a branch
+# pushed once merges main in, the range from its upstream holds every line main gained since, and
+# this gate refused branches for lines already on main that they never wrote and must not edit. So
+# what that merge brought in is set apart by the shared answer the other push gates read
+# (ps_merged_apart); a line the conflict resolution adds is still the branch's and still judged.
+# When it cannot be set apart the whole range is judged as before, and the refusal says why.
+from="$mb"
+merge_unsplit=""
+if [ -n "$mb" ]; then
+  apart="$(ps_merged_apart "$mb")"
+  case "$apart" in
+    "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+    "whole "*) merge_unsplit="${apart#whole }" ;;
+  esac
+fi
 committed_diff=""
-[ -n "$mb" ] && committed_diff="$(git diff "$mb" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
+[ -n "$from" ] && committed_diff="$(git diff "$from" HEAD -- . "${EXCLUDES[@]}" 2>/dev/null)"
 
 # The PENDING content, when this command commits before it pushes.
 #
@@ -224,6 +240,12 @@ pending_findings="$(scan "$pending_diff")" || scanner_refusal "the style scanner
     echo ""
     echo "In the commits being pushed:"
     printf '%s\n' "$committed_findings"
+    if [ -n "$merge_unsplit" ]; then
+      echo ""
+      echo "These commits merge the default branch in, and what that merge brought could not be"
+      echo "set apart, so a line above may already be on the default branch rather than this"
+      echo "branch's own: $merge_unsplit."
+    fi
   fi
 
   if [ -n "$pending_findings" ]; then

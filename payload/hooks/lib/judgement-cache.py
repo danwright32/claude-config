@@ -16,8 +16,9 @@ gate and its libraries make goes through one place, the stand ins install() puts
 namespace under the names os, glob, importlib, ast and open, so a new direct call such as os.path.isfile
 is recorded without anybody remembering to (L621). Each question is recorded with its answer: the
 bytes of each file read (as a hash), each file test (isfile, isdir, exists, lexists, islink), each
-realpath, size, access test, directory listing and walk, each glob, each import lookup, and each
-environment variable read by a name only known at run time. Before a kept judgement is used,
+realpath, size, access test, directory listing and walk, each glob, each import lookup, each
+environment variable read by a name only known at run time, and the home of each ~user expanded (from
+the password database, which the key does not hold). Before a kept judgement is used,
 lookup() asks every one of them again and uses it only if every answer is the same.
 
 FAIL CLOSED. A judgement is kept only when it is an allow and the recording is whole: anything the
@@ -56,6 +57,7 @@ import importlib.util as _util
 import io
 import json
 import os as _os
+import re
 import secrets
 import stat as _stat
 import sys
@@ -144,6 +146,9 @@ OPS = {
     "find_spec": (_util.find_spec, _spec_form),
     "pathfinder": (lambda name, dirs: _machinery.PathFinder.find_spec(name, list(dirs)), _spec_form),
     "read": (_read_hash, None), "env": (_os.environ.get, None),
+    # A user's home by name, as ~name gives it (os.path.expanduser): read from the password database,
+    # which no key holds, so a judgement that reads one is kept only while it is the same.
+    "home": (lambda name: _os.path.expanduser("~" + name), None),
 }
 
 
@@ -387,7 +392,7 @@ class _Environ:
 
 
 PATH_PURE = ("join", "dirname", "basename", "normpath", "isabs", "splitext", "split", "commonpath",
-             "commonprefix", "normcase", "abspath", "relpath", "expanduser", "splitdrive", "splitroot", "sep",
+             "commonprefix", "normcase", "abspath", "relpath", "splitdrive", "splitroot", "sep",
              "pathsep", "curdir", "pardir", "extsep", "altsep", "devnull", "defpath")
 PATH_ASKED = ("isfile", "isdir", "exists", "lexists", "islink", "realpath", "getsize")
 OS_PURE = ("sep", "pathsep", "curdir", "pardir", "extsep", "altsep", "linesep", "devnull", "name", "fspath",
@@ -396,8 +401,26 @@ OS_PURE = ("sep", "pathsep", "curdir", "pardir", "extsep", "altsep", "linesep", 
 
 def stand_ins(recorder):
     """{name: the stand in} for every name install() replaces."""
-    path = _StandIn(_os.path, recorder, "os.path", PATH_PURE,
-                    {n: recorder.path_asked(n, "os.path." + n) for n in PATH_ASKED})
+    def expanduser(p):
+        # ~ and ~/ are HOME's, which the key holds. ~name is the password database's, which it does
+        # not: the home is asked as a recorded question, so a kept judgement that read one is a miss
+        # once that user's home has moved (claude-config#2918, the lessons review of PR #3029). The
+        # rest is posixpath.expanduser's own arithmetic on that home.
+        if not isinstance(p, str):
+            recorder.taint(f"os.path.expanduser({p!r})")
+            return _os.path.expanduser(p)
+        if not p.startswith("~") or p == "~" or p.startswith("~/"):
+            return _os.path.expanduser(p)
+        cut = p.find("/", 1)
+        cut = len(p) if cut < 0 else cut
+        home = recorder.asked("home", p[1:cut])
+        if home == p[:cut]:
+            return p  # no such user
+        return (home.rstrip("/") + p[cut:]) or "/"
+
+    asked = {n: recorder.path_asked(n, "os.path." + n) for n in PATH_ASKED}
+    asked["expanduser"] = expanduser
+    path = _StandIn(_os.path, recorder, "os.path", PATH_PURE, asked)
     environ = _Environ(recorder)
 
     def access(p, mode, **kw):
@@ -774,7 +797,9 @@ def evict(dirpath, max_entries=None, max_total=None):
 #
 # KEYED (Parses.key) on the text's whole contents (its hash), never a path or a time; the reader's
 # code, as the bytes the gate ran it from; the directory it is read from; HOME, which the reader
-# reads for a cd to ~; and the Python. A text with any one of these different is a miss.
+# reads for a cd to ~; the home of every user a ~someuser in the text names (Parses.tilde_homes),
+# which it reads from the password database; and the Python. A text with any one of these different
+# is a miss.
 # SIGNED with the judgements' key (signing_key): the entry's body, as the bytes written, under an HMAC
 # with its key in a header line, so checking it costs no second serialisation. Anything wrong with an
 # entry is a miss and the text is read afresh. GIVEN BACK EXACTLY: a parse is kept only in the shape
@@ -782,7 +807,9 @@ def evict(dirpath, max_entries=None, max_total=None):
 # value checked as it is written, so what comes back equals what the reader gave, tuples as tuples.
 # NOT THE JUDGEMENT'S: the disk work here is done under _Quiet, so a judgement's recorder neither
 # records it nor is marked not whole by it. That is sound because the parse is a function of its key
-# alone, and the text itself was read, and recorded, by the judgement.
+# alone, the text itself was read, and recorded, by the judgement, and on a hit the gate asks the home
+# of every ~user the text could name through the judgement's own os (remember_readings in the gate),
+# so the judgement records those too, as it would had the reader run.
 # Kept in the judgements' folder, named parse-<key>.json, and bounded and evicted with them.
 PARSE_FORMAT = 1
 PARSE_MIN = 64 * 1024  # characters: a smaller text is read in a few milliseconds, less than keeping it
@@ -829,6 +856,33 @@ def _parse_decode(enc):
     return cmds, parts
 
 
+# A cd to ~someuser is read by the reader (os.path.expanduser) from the password database, not HOME,
+# so a parse depends on where every user it names has their home (the lessons review of PR #3029).
+# The names it can ask are found in the text as written: whatever follows a ~ up to a slash or white
+# space, with the quotes and backslashes the reader would take out removed, and every leading part of
+# that, since a word can end at any character the shell treats as the end of one (`cd ~bob;`). That
+# asks more names than the reader would, each a lookup of a fraction of a millisecond: the claude-sync
+# suite and claude-sync between them name 20, about 4 ms in all (the median of seven runs,
+# 2026-11-16; the first took 16). A name holding white space is not looked
+# for; no macOS account's short name can hold one. A text naming more than MAX_TILDE_NAMES is not kept.
+MAX_TILDE_NAMES = 256
+MAX_TILDE_NAME = 255  # characters of one name; a longer run after a ~ is looked up to this length
+_TILDE_RUN = re.compile(r"~([^/\s]+)")
+_TILDE_QUOTING = str.maketrans("", "", "'\"\\")
+
+
+def tilde_names(s):
+    """Every user name a ~ in s could make the reader look up, or None when there are more than
+    MAX_TILDE_NAMES."""
+    names = set()
+    for m in _TILDE_RUN.finditer(s):
+        run = m.group(1)[:MAX_TILDE_NAME].translate(_TILDE_QUOTING)
+        names.update(run[:i] for i in range(1, len(run) + 1))
+        if len(names) > MAX_TILDE_NAMES:
+            return None
+    return names
+
+
 def _write(dirpath, name, data):
     """Write data to dirpath/name whole: under a temporary name, then renamed into place."""
     _os.makedirs(dirpath, mode=0o700, exist_ok=True)
@@ -851,13 +905,28 @@ class Parses:
 
     def __init__(self, dirpath, code):
         self.dirpath, self.code = dirpath, code
+        self._homes = {}  # user name -> where the reader would take ~name, asked once per run
+
+    def tilde_homes(self, s):
+        """{name: home} for every user a ~ in s names who has a home, as the reader would resolve it,
+        or None when s names too many to look up. A lookup that raises (a directory service not
+        answering) raises out of here, so the caller keeps or uses nothing."""
+        names = tilde_names(s)
+        if names is None:
+            return None
+        for name in names - self._homes.keys():
+            self._homes[name] = _os.path.expanduser("~" + name)
+        return {n: self._homes[n] for n in sorted(names) if self._homes[n] != "~" + n}
 
     def key(self, s, cwd):
         home = _os.environ.get("HOME")
         if not isinstance(s, str) or not isinstance(cwd, str) or not home:
             return None  # with no HOME the reader would ask the password database, which is not keyed
+        users = self.tilde_homes(s)
+        if users is None:
+            return None
         parts = {"format": PARSE_FORMAT, "kind": "parse", "reader": self.code, "cwd": cwd, "home": home,
-                 "python": [sys.version, sys.executable], "length": len(s),
+                 "users": users, "python": [sys.version, sys.executable], "length": len(s),
                  "text": _sha(s.encode("utf-8", errors="surrogatepass"))}
         return "parse-" + _sha(json.dumps(parts, sort_keys=True).encode("utf-8", errors="surrogatepass"))
 

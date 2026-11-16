@@ -87,8 +87,21 @@ if ps_commit_in_chain "$cmd"; then
 else
   mb="$(ps_merge_base "$base")"
 fi
+# A line is this push's only when the branch itself adds it (claude-config#3015): what a merge of
+# the default branch brought in is set apart by the shared answer every push gate reads, and a line
+# the conflict resolution adds is still judged. When it cannot be set apart the whole range is read
+# as before, and the refusal says why.
+from="$mb"
+merge_unsplit=""
+if [ -n "$mb" ]; then
+  apart="$(ps_merged_apart "$mb")"
+  case "$apart" in
+    "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+    "whole "*) merge_unsplit="${apart#whole }" ;;
+  esac
+fi
 diff=""
-[ -n "$mb" ] && diff="$(git diff "$mb" HEAD 2>/dev/null)"
+[ -n "$from" ] && diff="$(git diff "$from" HEAD 2>/dev/null)"
 diff="${diff}
 $(git diff HEAD 2>/dev/null)"
 [ -n "$diff" ] || exit 0
@@ -152,6 +165,12 @@ if len(out) > 25:
   echo ""
   echo "Offending lines:"
   printf '%s\n' "$findings"
+  if [ -n "$merge_unsplit" ]; then
+    echo ""
+    echo "These commits merge the default branch in, and what that merge brought could not be"
+    echo "set apart, so a line above may already be on the default branch rather than this"
+    echo "branch's own: $merge_unsplit."
+  fi
   echo ""
   echo "Fix it one of two ways:"
   echo "  1. filter and count:  n=\$(... | grep -cE 'pat'); [ \"\$n\" -gt 0 ]"

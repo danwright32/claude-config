@@ -308,6 +308,20 @@ const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice, deadline?: n
 }
 
 /**
+ * The repository each choice was chosen in (#3030), by id: as recorded when it was made, read again
+ * from its file where that could not be read then or a choice made before #2833 records none, and
+ * null where neither can say, which a refusal says rather than naming one.
+ */
+const chosenIn = async ($: EngineInterface, cs: readonly SlackAlertChoice[], deadline?: number): Promise<Record<string, string | null>> => {
+  const out: Record<string, string | null> = {}
+  for (const c of cs) {
+    const first = c.places?.[0] ?? { file: c.file, repo: null }
+    out[c.id] = first.repo ?? (await repoOf($, first.file, deadline))
+  }
+  return out
+}
+
+/**
  * The choices this session may put to Dan (#2833): its own, and any other only where this session
  * works in a repository the choice was made in, so another project's wording is never asked about
  * beside work it has nothing to do with. A choice whose repository cannot be read is asked anywhere,
@@ -376,16 +390,15 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
   const self = await $.session.id()
-  // The choices named, with who asks Dan about each, by askedHere as the merge refusal's are.
-  const named = async (cs: SlackAlertChoice[], prRepo: string | null): Promise<string> => {
+  // The choices named, with who asks Dan about each, by askedHere as the merge refusal's are, and
+  // the repository each was chosen in (#3030).
+  const named = async (cs: SlackAlertChoice[]): Promise<string> => {
     const mine = new Set((await askedHere($, cs, self, deadline)).map(x => x.id))
-    const away: Record<string, string> = {}
-    for (const x of cs) if (!mine.has(x.id)) away[x.id] = (await choiceRepos($, x, deadline)).repos[0] ?? prRepo ?? ''
-    return waitingNamed(cs, mine, away)
+    return waitingNamed(cs, mine, await chosenIn($, cs, deadline))
   }
   const waits = 'while Slack alert wording chosen overnight waits on Dan'
   const late = (what: string): Verdict => ({ unchecked: `${what} within ${SCAN_MS / 1000} seconds, ${waits}`, late: true })
-  const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting, null)}` })
+  const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting)}` })
   for (const c of await $.modkit.pipeline({ command, cwd, home })) {
     // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
     // whose text the shell expands, a word rtk's proxy splits) may run a merge its words do not
@@ -393,7 +406,7 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     // saying what gets it read (L111), since the same call sent again is held the same.
     if (c.unread)
       return {
-        unchecked: `${c.words.join(' ')} is a command ${c.unread}, so whether it merges a pull request cannot be told until the commands it runs are written out in its place, ${waits}: ${await named(waiting, null)}`,
+        unchecked: `${c.words.join(' ')} is a command ${c.unread}, so whether it merges a pull request cannot be told until the commands it runs are written out in its place, ${waits}: ${await named(waiting)}`,
       }
     const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
     if (m === undefined) continue
@@ -421,7 +434,7 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
       const why = `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'})`
       const repo = await repoOfPr()
       if (repo !== null && typeof repo === 'object') return late('gh did not say which repository the pull request is in')
-      if (repo === null) return { unchecked: `${why}, nor say which repository it is in, ${waits}: ${await named(waiting, null)}` }
+      if (repo === null) return { unchecked: `${why}, nor say which repository it is in, ${waits}: ${await named(waiting)}` }
       // Only a choice holding this repository, or whose own repository cannot be read, holds it.
       const bearing: SlackAlertChoice[] = []
       for (const x of waiting) {
@@ -431,7 +444,7 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
       if (!bearing.length) continue
       const parts = r.exitCode === 0 ? await diffInParts($, m.selector, repoArgs, folder, deadline) : { unread: 'it was not read again' }
       if ('late' in parts) return late(parts.late)
-      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing, repo)}` }
+      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing)}` }
       diff = parts.text
     }
     const carrying = carried(diff, waiting)
@@ -456,7 +469,7 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     const mine = new Set((await askedHere($, held, self, deadline)).map(x => x.id))
     const away: Record<string, string> = {}
     for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x, deadline)).repos[0] ?? ''
-    return { merge: mergeRefusal(held, unreadFiles, away) }
+    return { merge: mergeRefusal(held, unreadFiles, away, await chosenIn($, held, deadline)) }
   }
   return PASS
 }
@@ -1147,6 +1160,7 @@ export const register: Register = on => {
       keys: waiting.keys,
       rendered,
       session: await $.session.id(),
+      chosenBy: await $.session.id(),
       places: [{ file: waiting.file, repo: await repoOf($, waiting.file) }],
     }
     for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
