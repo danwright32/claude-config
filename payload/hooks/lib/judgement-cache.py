@@ -16,8 +16,9 @@ gate and its libraries make goes through one place, the stand ins install() puts
 namespace under the names os, glob, importlib, ast and open, so a new direct call such as os.path.isfile
 is recorded without anybody remembering to (L621). Each question is recorded with its answer: the
 bytes of each file read (as a hash), each file test (isfile, isdir, exists, lexists, islink), each
-realpath, size, access test, directory listing and walk, each glob, each import lookup, and each
-environment variable read by a name only known at run time. Before a kept judgement is used,
+realpath, size, access test, directory listing and walk, each glob, each import lookup, each
+environment variable read by a name only known at run time, and the home of each ~user expanded (from
+the password database, which the key does not hold). Before a kept judgement is used,
 lookup() asks every one of them again and uses it only if every answer is the same.
 
 FAIL CLOSED. A judgement is kept only when it is an allow and the recording is whole: anything the
@@ -806,7 +807,9 @@ def evict(dirpath, max_entries=None, max_total=None):
 # value checked as it is written, so what comes back equals what the reader gave, tuples as tuples.
 # NOT THE JUDGEMENT'S: the disk work here is done under _Quiet, so a judgement's recorder neither
 # records it nor is marked not whole by it. That is sound because the parse is a function of its key
-# alone, and the text itself was read, and recorded, by the judgement.
+# alone, the text itself was read, and recorded, by the judgement, and on a hit the gate asks the home
+# of every ~user the text could name through the judgement's own os (remember_readings in the gate),
+# so the judgement records those too, as it would had the reader run.
 # Kept in the judgements' folder, named parse-<key>.json, and bounded and evicted with them.
 PARSE_FORMAT = 1
 PARSE_MIN = 64 * 1024  # characters: a smaller text is read in a few milliseconds, less than keeping it
