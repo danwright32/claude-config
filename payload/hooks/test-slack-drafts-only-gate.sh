@@ -4130,8 +4130,10 @@ gate.Judge.sh_binds("SETTLED", "SETTLED=1\n", 0)
 settled = len(seen)
 gate.Judge.sh_binds("LATER", "read -r LATER\n", 0)
 gate.re.compile = real_compile
-if settled != 1 or len(seen) != 4:
-    wrong.append("compiled %d patterns for a name its assignment settles (want 1) and %d in all (want 4)" % (settled, len(seen)))
+# An assignment is found with no pattern of the name's own (sh_assign_starts), and a text holding no ((
+# compiles no arithmetic pattern, so only LATER's binders pattern is compiled (#2918, a third round).
+if settled != 0 or len(seen) != 1:
+    wrong.append("compiled %d patterns for a name its assignment settles (want 0) and %d in all (want 1)" % (settled, len(seen)))
 # cd_target: the gate's reader splits nothing that cannot spell cd, and finds every spelling.
 sw = gate.load_reader()
 split = []
@@ -4166,6 +4168,44 @@ print("; ".join(wrong) or "ok")
 PY
 cuts="$(python3 -B "$T/cuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds, its patterns, cd_target and shell_split do only the work a verdict needs, and answer as before (#2918)" "$cuts"
+
+# A cold judgement of the claude-sync suite compiled 2,300 patterns for sh_binds, one per name and
+# form, 0.15 s (measured 2026-11-15, #2918, a third round). An assignment is now found by str.find,
+# and the arithmetic and binder forms are compiled only for a text holding (( or a binder's own word.
+# Checked for compiling nothing where none is needed, and for finding the assignments the pattern
+# finds, in order, over random texts.
+cat > "$T/bindcuts.py" <<'PY'
+import importlib.util, random, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+wrong = []
+before = gate.sh_bind_pattern.cache_info().misses
+answers = [gate.Judge.sh_binds("ROOT", 'ROOT=/x\ncd "$ROOT" && ls\n'),
+           gate.Judge.sh_binds("ROOT", 'ROOT=/x\nROOT[1]=y\necho "$ROOT"\n', 1),
+           gate.Judge.sh_binds("ROOT", 'echo "$ROOT"\nMYROOT=1\n'),
+           gate.Judge.sh_binds("ROOT", "# ROOT=1\nx=ROOT\n")]
+if answers != [True, True, False, False]:
+    wrong.append("answers %r, not [True, True, False, False]" % answers)
+made = gate.sh_bind_pattern.cache_info().misses - before
+if made:
+    wrong.append("%d patterns compiled for texts holding no (( and no binder's word" % made)
+rnd = random.Random(2918)
+chars = list("abX_1 =+[]\n#'\"$;(){}\\.") + ["ab", "X", "a.b", "read ", "((", "${"]
+for i in range(20000):
+    t = "".join(rnd.choice(chars) for _ in range(rnd.randint(0, 30)))
+    for name in ("X", "ab", "a.b"):
+        want = [m.start() for m in gate.sh_bind_pattern("assign", name).finditer(t)]
+        got = list(gate.sh_assign_starts(name, t))
+        if want != got:
+            wrong.append("sh_assign_starts(%r, %r) gave %r, the pattern %r" % (name, t, got, want))
+            break
+    if len(wrong) > 2:
+        break
+print("; ".join(wrong) or "ok")
+PY
+bindcuts="$(python3 -B "$T/bindcuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+check "sh_binds compiles a pattern only for a form the text can hold, and finds assignments as the pattern does (#2918)" "$bindcuts"
 
 # Since #2912 every command of a text is asked whether it calls a function that evaluates its
 # argument (sh_eval_text_reason), and the claude-sync suite's check() is one, so every one of its

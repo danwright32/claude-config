@@ -601,7 +601,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
         # this loop reads first, as it did stepping one character at a time (claude-config#2918). Every
         # other frame goes straight to the next character it reads as more than text (FRAME_STOPS).
         stops = FRAME_STOPS[k]
-        if stops is not None and not stops[0](c):
+        if not stops[0](c):
             m = stops[1](s, i + 1)
             j = m.start() if m else n
             stop_at = bodies[-1]["end"] if bodies else n
