@@ -233,7 +233,7 @@ const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[
     const threads = await recordedThreads($)
     const ask = threads.some(t => t.mid)
     const landings: Landing[] = []
-    let refused: unknown
+    const refused: { pr: string; err: unknown }[] = []
     for (const m of merged) {
       const pr = m.repo ? `${m.repo}#${m.pr}` : `#${m.pr}`
       if (!ask || !m.repo) {
@@ -245,12 +245,16 @@ const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[
         const links = threads.filter(t => linksThread(read.texts, t)).map(threadKey)
         landings.push({ pr, links, ...(read.opened === undefined ? {} : { opened: read.opened }) })
       } catch (err) {
-        refused = err
+        refused.push({ pr, err })
         landings.push({ pr })
       }
     }
     await markLanded($, landings)
-    if (refused !== undefined) throw refused
+    // #2596: a refused read is said in words of its own, naming the pull request, since the landing
+    // is kept and only the question of which thread it is for went unanswered.
+    for (const r of refused) {
+      $.ui.toast(`Is it live could not tell whether ${r.pr} is for a Slack thread pasted in this session, so no reply there is asked for it: ${msg(r.err)}`)
+    }
   } catch (err) {
     $.ui.toast(`Is it live could not note a merge for the Slack thread's draft reply: ${msg(err)}`)
   }
