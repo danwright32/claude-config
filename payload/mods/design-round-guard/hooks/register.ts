@@ -756,9 +756,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // #2991: a name the program only adds onto a folder in its own variable (`ch +
       // "/app/index.html"`, read here as `/app/index.html`) passes only where that variable is shown to
       // hold a temporary folder the script made itself (rules.ts inScriptTemp: bound to sys.argv[N],
-      // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder), as
-      // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, a value the guard
-      // cannot read) it is judged where guessAt places it, as before.
+      // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder, and since
+      // #3022 the variable or its f-string starting the path, rules.ts startsPath), as
+      // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, `root + ch + ...`,
+      // a value the guard cannot read) it is judged where guessAt places it, as before.
       for (const m of (await namesInPieces(text, mentionedLookFiles, pauseTurn($))).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t?.path && !inScriptTemp(text, m, u.program ?? text, u.words, scriptsText)) targets.push({ ...t, inScript: s.word })
