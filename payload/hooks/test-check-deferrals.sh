@@ -664,36 +664,15 @@ grep -q '^# Claude Code PostToolUse(Edit|Write|MultiEdit) hook' "$EDIT_HOOK" && 
 # not edit. What a merge of the default branch brought in is set apart, by the one helper the
 # other push gates use; a line the conflict resolution adds is still the branch's.
 #   $1 = name, $2 = clean | conflict, $3 = what the conflict resolution adds of its own
+# The repository is built by lib/merged-main-fixture.sh, shared with every gate's suite.
 MAIN_DEFERRAL=$'# Old script\n# good enough for now, the lock comes with the outbox\n'
+. "$DIR/lib/merged-main-fixture.sh"
 mk_merged_main() {
-  local W; W="$(mk_repo "$1")"
-  (
-    cd "$W" || exit 1
-    mkdir -p src && printf '%s\n' "shared line" > src/shared.ts
-    "${G[@]}" add src/shared.ts && "${G[@]}" commit -qm shared && "${G[@]}" push -q origin main
-    "${G[@]}" checkout -qb feat
-    printf '%s\n' "export const feat = 1;" > src/feat.ts
-    "${G[@]}" add src/feat.ts && "${G[@]}" commit -qm feat && "${G[@]}" push -qu origin feat
-    if [ "$2" = conflict ]; then
-      printf '%s\n' "shared line, as the branch has it" > src/shared.ts
-      "${G[@]}" add src/shared.ts && "${G[@]}" commit -qm "feat edits shared"
-    fi
-    "${G[@]}" checkout -q main
-    mkdir -p guide && printf '%s' "$MAIN_DEFERRAL" > guide/old.md && "${G[@]}" add guide/old.md
-    if [ "$2" = conflict ]; then printf '%s\n' "shared line, as main has it" > src/shared.ts; "${G[@]}" add src/shared.ts; fi
-    "${G[@]}" commit -qm "main gains a guide" && "${G[@]}" push -q origin main
-    "${G[@]}" checkout -q feat
-    "${G[@]}" merge -q --no-edit origin/main
-    if [ "$2" = conflict ]; then
-      printf '%s\n' "shared line, as the branch has it" "$3" > src/shared.ts
-      "${G[@]}" add src/shared.ts && "${G[@]}" commit -q --no-edit
-    fi
-  ) >/dev/null 2>&1
-  printf '%s' "$W"
+  mmf_repo "$WORK/$1" "$2" guide/old.md "$MAIN_DEFERRAL" src/shared.ts "${3:-}${3:+
+}"
 }
 W="$(mk_merged_main m1 clean)"
-if [ -f "$W/guide/old.md" ] && [ "$(git -C "$W" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ] \
-   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then check "#3015 fixture builds" ok
+if mmf_built "$W" guide/old.md; then check "#3015 fixture builds" ok
 else check "#3015 fixture builds" "the branch must track origin/feat and hold main's guide through one merge"; fi
 run_push "$W" "git push"
 want_rc 0 "#3015 a deferral already on main, arriving only through a merge of main, is not this push's"
@@ -701,8 +680,7 @@ run_push "$W" "git commit -q --allow-empty -m more && git push"
 want_rc 0 "#3015 the same holds when the command commits before it pushes"
 
 W="$(mk_merged_main m2 conflict "// the retry is good enough for now")"
-if grep -q "as the branch has it" "$W/src/shared.ts" 2>/dev/null \
-   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then check "#3015 conflict fixture builds" ok
+if mmf_built "$W" guide/old.md && grep -q "as the branch has it" "$W/src/shared.ts" 2>/dev/null; then check "#3015 conflict fixture builds" ok
 else check "#3015 conflict fixture builds" "the conflict was not resolved into one merge commit"; fi
 run_push "$W" "git push"
 want_rc 2 "#3015 a deferral the conflict resolution adds is still the branch's, and refused"

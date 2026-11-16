@@ -203,6 +203,68 @@ nopy_want 0 "the visible override still clears the missing detector refusal"
 got="$(hook_rc "$C/work" "git push")"
 if [ "$got" = "0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the control still allows the same clean push with python3 present (exit $got)"; fi
 
+# --- a merge of main does not make the branch answer for main's lines (claude-config#3015) ------
+# A branch pushed once merges main in after main gained the construct this guard bans. From the
+# upstream, the range held everything main gained since, so the branch was refused for a line it
+# never wrote. What the merge brought in is set apart by the shared answer every push gate reads
+# (ps_merged_apart); a line the conflict resolution adds is still the branch's.
+. "$DIR/lib/merged-main-fixture.sh"
+hook_run() {  # hook_run <cwd> <command> -> sets HOOK_RC and HOOK_MSG
+  local p
+  p="$(HK_CMD="$2" HK_CWD="$1" python3 -c 'import json,os,sys
+sys.stdout.write(json.dumps({"tool_name":"Bash","tool_input":{"command":os.environ["HK_CMD"]},"cwd":os.environ["HK_CWD"]}))')"
+  HOOK_MSG="$(printf '%s' "$p" | bash "$HOOK" 2>&1 >/dev/null)"; HOOK_RC=$?
+}
+want_hook() {  # want_hook <expected rc> <description>
+  if [ "$HOOK_RC" = "$1" ]; then pass=$((pass+1));
+  else fail=$((fail+1)); echo "FAIL: $2 (expected exit $1, got $HOOK_RC): ${HOOK_MSG:0:300}"; fi
+}
+hook_says() {  # hook_says <needle> <description>
+  case "$HOOK_MSG" in *"$1"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: $2: did not say [$1]: ${HOOK_MSG:0:300}" ;; esac
+}
+hook_not_says() {  # hook_not_says <needle> <description>
+  case "$HOOK_MSG" in *"$1"*) fail=$((fail+1)); echo "FAIL: $2: wrongly said [$1]" ;; *) pass=$((pass+1)) ;; esac
+}
+QV_LINE="some_cmd | grep $QV 'pat'"
+mk_merged() {  # mk_merged <name> <clean|conflict> [line the resolution adds]
+  mmf_repo "$WORKDIR/$1" "$2" scripts/old.sh "$QV_LINE
+" scripts/shared.sh "${3:-}${3:+
+}"
+}
+M="$(mk_merged mm1 clean)"
+if mmf_built "$M" scripts/old.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3015 the fixture did not build"; fi
+hook_run "$M" "git push"
+want_hook 0 "#3015 a line already on main, arriving only through a merge of main, is not this push's"
+hook_run "$M" "git commit -q --allow-empty -m more && git push"
+want_hook 0 "#3015 the same holds when the command commits before it pushes"
+
+M="$(mk_merged mm2 conflict "$QV_LINE")"
+if mmf_built "$M" scripts/old.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3015 the conflict fixture did not build"; fi
+hook_run "$M" "git push"
+want_hook 2 "#3015 a line the conflict resolution adds is still the branch's, and refused"
+hook_says "scripts/shared.sh" "#3015 the refusal names the line the resolution added"
+hook_not_says "scripts/old.sh" "#3015 and does not name main's line beside it"
+
+M="$(mk_merged mm3 conflict "plain resolution text")"
+hook_run "$M" "git push"
+want_hook 0 "#3015 control: a conflict resolved with clean text is allowed"
+
+M="$(mk_merged mm4 clean)"
+git -C "$M" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+hook_run "$M" "git push"
+want_hook 2 "#3015 with no default branch known the merge is not set apart, so main's line is judged as before"
+hook_says "scripts/old.sh" "#3015 the whole range was read"
+hook_says "could not be told from the branch's" "#3015 the refusal says part of what it judged came in through the merge"
+
+M="$(mk_merged mm5 clean)"
+git -C "$M" branch -q --unset-upstream >/dev/null 2>&1
+hook_run "$M" "git push -u origin feat"
+want_hook 0 "#3015 a first push that merged main is not judged on main's line, as before"
+printf '%s\n' "$QV_LINE" > "$M/notes/feat.txt"
+"${G[@]}" -C "$M" commit -qam "feat adds the construct" >/dev/null 2>&1
+hook_run "$M" "git push -u origin feat"
+want_hook 2 "#3015 and a first push still reads the branch's own line"
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "test-check-grep-quiet-invert: ALL PASSED ($pass checks)"
