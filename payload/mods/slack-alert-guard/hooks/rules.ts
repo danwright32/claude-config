@@ -99,15 +99,6 @@ export const inScope = (path: string, text: string): boolean => {
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
 }
 
-/**
- * The paths inScope reads as code whatever their text (a code extension, or a name with none, which
- * may hold a script), as a pattern, case ignored: the files of a pull request whose diff can carry
- * wording, picked out where the guard cannot run code of its own (gh's jq, #2973).
- */
-export const WORDING_PATH = `(\\.(${[...CODE].join('|')})|(^|/)\\.?[^/.]+)$`
-/** gh's jq over GitHub's list of a pull request's files: one JSON line each, its name and its patch where WORDING_PATH matches it (null when GitHub gives none), false where it does not. */
-export const FILES_JQ = `.[] | [.filename, (if (.filename | test(${JSON.stringify(WORDING_PATH)}; "i")) then .patch else false end)] | @json`
-
 // Prose files are read by people, never run, so they post nothing. Only these are ruled out as
 // senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
 // may still send, so it is read as a sender is.

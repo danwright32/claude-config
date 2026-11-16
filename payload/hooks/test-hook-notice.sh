@@ -133,6 +133,31 @@ for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no no
     elif notice is not None and d.get("systemMessage") != notice:
         print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))')"
   [ -z "$shape" ] && ok || bad "#2521 $name: hook_ask_json did not print one valid ask carrying its reason and notice: $shape"
+  # hook_allow_json: a PreToolUse allow carrying the tricky text as its reason and its notice, as
+  # one valid object; with no reason it carries none, and with no notice no systemMessage
+  # (claude-config#3058).
+  out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" "$BASH" -c '. "$0" && hook_allow_json "$HN_A" "$HN_B"; echo "@@"; hook_allow_json "" "$HN_B"; echo "@@"; hook_allow_json "$HN_A"' "$LIB" 2>/dev/null)"
+  shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 3:
+    print("printed %d parts, not 3: %r" % (len(parts), parts[:2])); sys.exit()
+for n, what, reason, notice in ((0, "with a reason and a notice", want, "notice: " + want), (1, "with no reason", None, "notice: " + want), (2, "with no notice", want, None)):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); continue
+    h = {"hookEventName": "PreToolUse", "permissionDecision": "allow"}
+    if reason is not None:
+        h["permissionDecisionReason"] = reason
+    if d.get("hookSpecificOutput") != h:
+        print("%s: hookSpecificOutput was %r" % (what, d.get("hookSpecificOutput")))
+    elif d.get("systemMessage") != notice:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))
+    elif set(d) - {"hookSpecificOutput", "systemMessage"}:
+        print("%s: it carried more: %r" % (what, sorted(d)))')"
+  [ -z "$shape" ] && ok || bad "#3058 $name: hook_allow_json did not print one valid allow carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------

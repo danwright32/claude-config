@@ -61,7 +61,8 @@ FH_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$FH_LIB_DIR" != "${BASH_SOURCE[0]}" ] || F
 declare -F is_test >/dev/null 2>&1 || . "$FH_LIB_DIR/source-class.sh"
 
 # The language family a path is read as. prose has no code; shell keeps $expansions inside double
-# quotes, and a string handed to a program runner, as code (SHELL STRINGS above); hash languages comment with #;
+# quotes as code (a $(...) one read as a command of its own, so its strings are data unless a runner
+# takes them), and a string handed to a program runner, as code (SHELL STRINGS above); hash languages comment with #;
 # slash languages with // and /* */; sql with --.
 fh_lang() {   # $1 = path
   local base="${1##*/}"
@@ -76,6 +77,12 @@ fh_lang() {   # $1 = path
     *) echo shell ;;   # no extension: a script here is a shell script (claude-sync, the bin/ tools)
   esac
 }
+
+# The commands that RUN a program handed to them as a string (SHELL STRINGS above), as one awk
+# alternation, named once: the awk below reads it, and so does the lessons advisory, which asks the
+# same question of the command a heredoc is handed to (claude-config#3071). No backslash in it, so it
+# travels through awk -v unchanged.
+FH_RUNNER_WORDS='awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch'
 
 # The awk that does the work. `want` is code (print the normalized lines), catch, retry or any (exit
 # 0 when the construct is present, 1 when not). One pass, so a large pushed file costs one read.
@@ -109,7 +116,8 @@ function join(A, lo, hi,   B, m, j, k, t) {
   return B[1]
 }
 function keep_expansion(i,   c, d, j) {
-  # A shell $expansion inside double quotes is code: $name, ${...}, $(...), $((...)).
+  # A shell $expansion inside double quotes is code, copied whole: $name, ${...}, $((...)). A $(...)
+  # never reaches here: normalize reads it as a command of its own (claude-config#3071).
   c = C[i + 1]
   if (c == "(") {
     d = 0
@@ -151,7 +159,7 @@ function closes_unseen(s, i,   before, after) {
   return 1
 }
 function normalize(s,   i, c, nx, k, t3) {
-  NC = split(s, C, ""); reset_out(); i = 1
+  NC = split(s, C, ""); reset_out(); i = 1; SD = 0; ansic = 0
   # A slash language line that is the middle of a block comment opened above the hunk.
   if (lang == "slash" && !block && triple == "" && !tmpl && s ~ /^[ \t]*\*([ \t\/]|$)/) {
     k = index(s, "*/")
@@ -174,19 +182,33 @@ function normalize(s,   i, c, nx, k, t3) {
     if (q != "") {
       if (qcode) {
         # A program handed to a command that runs it: its text is code, copied as it stands.
-        if (q == "\"" && c == "\\") { emit_span(i, i + 1); i += 2; continue }
-        if (c == q) { emit1(q); q = ""; qcode = 0; i++; continue }
+        if ((q == "\"" || ansic) && c == "\\") { emit_span(i, i + 1); i += 2; continue }
+        if (c == q) { emit1(q); q = ""; qcode = 0; ansic = 0; i++; continue }
         emit1(c); i++; continue
       }
-      # Inside shell single quotes a backslash is an ordinary character, never an escape.
-      if (c == "\\" && !(lang == "shell" && q == "\x27")) { qn++; i += 2; continue }
-      if (c == q) { if (qn) emit1("S"); emit1(q); q = ""; i++; continue }
+      # Inside shell single quotes a backslash is an ordinary character, never an escape, except in
+      # an ANSI C string (a dollar sign before the single quote), where a backslash escapes the quote
+      # (claude-config#3071). No single quote may be written here: this program is a shell string.
+      if (c == "\\" && !(lang == "shell" && q == "\x27" && !ansic)) { qn++; i += 2; continue }
+      if (c == q) { if (qn) emit1("S"); emit1(q); q = ""; ansic = 0; i++; continue }
+      # A command substitution inside double quotes is a command of its own (claude-config#3071):
+      # its words are code and its strings are judged as at the top level, so a fixture handed to
+      # printf there is data. Copied whole, as it was, the fixture read as code. The double quote it
+      # sits in is put back at the ) that closes it. An arithmetic $(( )) is still copied whole.
+      if (lang == "shell" && q == "\"" && c == "$" && C[i + 1] == "(" && C[i + 2] != "(") {
+        SD++; SQN[SD] = qn; SP[SD] = 1; q = ""; emit1("$"); emit1("("); i += 2; continue
+      }
       if (lang == "shell" && q == "\"" && (c == "$") && C[i + 1] ~ /[A-Za-z_({]/) {
         k = keep_expansion(i); emit_span(i, k); i = k + 1; continue
       }
       qn++; i++; continue
     }
     # Outside any string or comment.
+    if (SD) {
+      # Inside a command substitution opened within double quotes: its closing ) returns to them.
+      if (c == "(") SP[SD]++
+      else if (c == ")" && --SP[SD] == 0) { emit1(")"); q = "\""; qn = SQN[SD]; SD--; i++; continue }
+    }
     if (lang == "slash" && nx == "//") break
     if (lang == "slash" && nx == "/*") { block = 1; i += 2; continue }
     # The close of a block comment opened above the hunk: what came before it was comment.
@@ -207,6 +229,7 @@ function normalize(s,   i, c, nx, k, t3) {
     if (c == "\"" || c == "\x27") {
       # In shell, a quoted string handed to a command that runs it (awk, a shell, python -c, trap,
       # eval) is a program, so its text stays code; handed to any other command it is data.
+      ansic = (lang == "shell" && c == "\x27" && i > 1 && C[i - 1] == "$")
       q = c; qn = 0; qcode = (lang == "shell" && runs_program()); emit1(c); qi = i; qo = OLEN; i++; continue
     }
     emit1(c); i++
@@ -216,7 +239,7 @@ function normalize(s,   i, c, nx, k, t3) {
   # it stands; when it opens one instead, the text after it is the first line of that program.
   if (lang == "shell" && q == "\x27" && !qcode) { q = ""; qcode = 0; return join(O, 1, qo) substr(s, qi + 1) }
   if (q != "" && qn) emit1("S")
-  q = ""; qcode = 0   # an ordinary string never runs past its line
+  q = ""; qcode = 0; ansic = 0; SD = 0   # an ordinary string never runs past its line
   return join(O, 1, OLEN)
 }
 function runs_program() {
@@ -227,7 +250,7 @@ function runs_program() {
 }
 function runner_word(w) {
   sub(/^.*\//, "", w)
-  return (w ~ /^(awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch)$/)
+  return (w ~ ("^(" runners ")$"))
 }
 function is_retry_token(t) { return tolower(t) ~ /retr(y|ies|ied|ying)/ }
 function is_attempt_token(t) {
@@ -318,9 +341,9 @@ fh__run() {   # $1 = want  $2 = path  [$3 = a file of lines; stdin when absent]
   lang="$(fh_lang "$2")"
   is_test "$2" && testfile=1
   if [ -n "${3:-}" ]; then
-    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK" "$3"
+    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" -v runners="$FH_RUNNER_WORDS" "$FH_AWK" "$3"
   else
-    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" "$FH_AWK"
+    LC_ALL=C awk -v want="$1" -v lang="$lang" -v testfile="$testfile" -v runners="$FH_RUNNER_WORDS" "$FH_AWK"
   fi
 }
 

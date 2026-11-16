@@ -24,7 +24,11 @@ Two routes are judged:
     judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
     judged the same way (claude-config#2318); an import written in a JavaScript or TypeScript comment
-    is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
+    is an example, not one (claude-config#2397). The variable name projects keep a webhook in is a name
+    and no address, so a JavaScript or TypeScript file that only declares it (an object literal's key
+    set to null, undefined or a string that is no address anyone receives at, or a member of an
+    interface or a type alias) is not one that posts, and a file that reads it still is
+    (lib/data-names.py, claude-config#3050). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
     path with the interpreter its #! names (claude-config#2400), or is code given inline (python3 -c,
@@ -102,9 +106,13 @@ def unworked_paths_refused():
     return REFUSE_UNWORKED_PATHS or os.environ.get("SLACK_GATE_UNWORKED_PATHS") == "refuse"
 
 # The endpoints and names that post: Slack's Web API methods that put a message in front of people,
-# an incoming webhook's host, and the variable name projects keep a webhook in.
-MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessage)|hooks\.slack\.com|slack_webhook",
-                    re.I)
+# an incoming webhook's host, and the variable name projects keep a webhook in. That last one is a
+# name and no address, so a JavaScript or TypeScript file that only declares it, reading nothing
+# kept under it, is not one that posts (lib/data-names.py, claude-config#3050). The group called name
+# is how that reading tells it from the addresses. It is written only here, inside the pattern: as a
+# string of its own it would make this file one the gate refuses to run, its suites with it.
+MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessage)|hooks\.slack\.com|"
+                    r"(?P<name>slack_webhook)", re.I)
 SEND_TOOLS = {"slack_send_message", "slack_schedule_message", "slack_post_message", "slack_reply_to_thread"}
 
 SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
@@ -6021,8 +6029,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 try:
                     # Read whole, comments and docstrings included: a script handed it as data can
                     # read its text and post to an address it finds there (py_marker is only for
-                    # a file run as Python, lessons review at d05bf8b).
-                    hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
+                    # a file run as Python, lessons review at d05bf8b). The webhook's name where a
+                    # JavaScript or TypeScript file only declares it is no address to find (#3050).
+                    hit = self.named_in(self.content(path).decode("utf-8", "replace"), self.own_language(path))
                 except OSError:
                     continue  # unreadable to us is unreadable to the script that would read it
                 if not hit:
