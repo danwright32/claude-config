@@ -37,13 +37,15 @@ export const CHECK_MODS = {
  * `bash tools/check-mod-shared-parts.sh <mods folder>` in a checkout of this repository (#3082, signed
  * off by Dan, 2026-11-16). It reads every mod in the folder for a hand rolled copy of what mod-kit
  * shares. Its own commands are read as writing nothing; what kept the hold is the python program it
- * runs through a variable (`python3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"`), which writes each
+ * runs through a variable (`python3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"`), which writes each
  * mod's hooks with the comments taken out into a folder the script makes under the temporary folder
  * and removes as it ends. That write is real, and its path is built inside python from the
  * program's arguments, which no reader places, so the script was held on every run for the held
  * files under the folder.
  *
- * `texts` is the script and the program it runs, which loads nothing but python's own library. A run
+ * `texts` is the script and the program it runs, which loads nothing but python's own library: it
+ * imports os, re and sys, and the script runs it isolated (-I), so a file beside it named for one of
+ * them is never loaded in its place. A run
  * is let through only while neither has changed since the checkout left the default branch, where
  * tests/test-area-check-shared-parts-read-only.sh runs them before every merge: over a throwaway
  * checkout holding this repository's own mods, it is red when a run changes any path in the checkout

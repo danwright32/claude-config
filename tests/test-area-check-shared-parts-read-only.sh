@@ -29,12 +29,14 @@
 #     after it, with its texts as the checkout left the default branch with them. Every other shape,
 #     a changed text, a copy elsewhere, another repository, and everything chained with the run, the
 #     other script let through by name included, is still judged.
+#   - A file left beside the program under the name of a module it imports (tools/lib/re.py) is never
+#     loaded, since the script runs the program isolated (python3 -I). Git is not asked about a file
+#     it does not track, so the texts comparison could not see one. The control: under a copy of the
+#     script without -I, the planted module is loaded and writes into the folder.
 #   - The guard on this suite's own temporary folder (tests/area-check-named-reader.sh named_tmp): a
 #     mktemp that fails stops the suite, and the folder it ran from is still there.
 # What it cannot prove, said so it is never claimed (L460): what a python3 other than this machine's
-# does, and a file left beside the program under the name of a module it imports (tools/lib/re.py),
-# which python would load in its place. Git compares the texts it is asked about, and a file it does
-# not track is not one of them; this suite is red while this checkout holds such a file.
+# does.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -130,10 +132,11 @@ make_repo(){   # $1 = folder
   git -C "$repo" -c user.email=t@example.com -c user.name=t commit -q -m fixture >/dev/null 2>&1 || return 1
   git -C "$repo" update-ref refs/remotes/origin/main HEAD
 }
-# python3, standing in only to say what it was handed, and then the real one.
+# python3, standing in only to say what it was handed, and then the real one (or, for the planted
+# module below, the python3 PY_EXEC names).
 mkdir -p "$TMP/bin" "$TMP/tmp"
 PY_CALLS="$TMP/python-calls"
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$PY_LOG"\nexec "%s" "$@"\n' "$REAL_PY" > "$TMP/bin/python3"; chmod +x "$TMP/bin/python3"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$PY_LOG"\nexec "${PY_EXEC:-%s}" "$@"\n' "$REAL_PY" > "$TMP/bin/python3"; chmod +x "$TMP/bin/python3"
 # The script as the area check lets it through: `bash tools/check-mod-shared-parts.sh payload/mods`
 # from the root of the checkout. Only the stand in, and a temporary folder of its own, are set
 # around it.
@@ -163,7 +166,7 @@ run_scan "$REPO"
 printf '%s\n' "$out" | grep -q "^check-mod-shared-parts: $mods mods checked in payload/mods\$" && [ "$code" -le 1 ] \
   && check "the run did its work: it read both mods" ok \
   || check "the run did its work: it read both mods" "exit=$code out=$(printf '%s\n' "$out" | tail -n 3)"
-[ "$(grep -c "^$REPO/tools/lib/ts_source\.py " "$PY_CALLS")" -ge "$((1 + 2 * mods))" ] && [ "$(grep -c -v "^$REPO/tools/lib/ts_source\.py " "$PY_CALLS")" -eq 0 ] \
+[ "$(grep -c "^-I $REPO/tools/lib/ts_source\.py " "$PY_CALLS")" -ge "$((1 + 2 * mods))" ] && [ "$(grep -c -v "^-I $REPO/tools/lib/ts_source\.py " "$PY_CALLS")" -eq 0 ] \
   && check "by the checkout's own program and no other, once and then at least twice a mod" ok \
   || check "by the checkout's own program and no other, once and then at least twice a mod" "$(grep -c . "$PY_CALLS") runs: $(sed -n '1,3p' "$PY_CALLS")"
 case "$(copies_in)" in "$TMP/tmp/check-mod-shared-parts."*) check "its copies were written under the temporary folder, outside the checkout" ok ;;
@@ -221,6 +224,41 @@ control "the program writing its copies into the folder it reads" "$PROGRAM" 's/
 run_scan "$REPO" TMPDIR="$REPO/payload/mods"
 case "$(copies_in)" in "$REPO/payload/mods/check-mod-shared-parts."*) check "with TMPDIR set to the folder, the script's copies are made inside the folder" ok ;;
   *) check "with TMPDIR set to the folder, the script's copies are made inside the folder" "strip-hooks was handed: $(copies_in); out=$out" ;; esac
+
+# 5. A module left beside the program under the name of one of python's own (tools/lib/re.py). Git
+# is not asked about a file it does not track, so the texts comparison cannot see one; the script
+# runs the program isolated (python3 -I), which keeps the program's own folder off python's search
+# path, so it is never loaded. The planted one writes into the folder the run is handed.
+#
+# Some pythons load re before the program starts (Homebrew's 3.14 did on 2026-11-16, through its
+# site packages; Xcode's 3.9 did not), and there a planted re.py is never loaded with or without
+# -I, so nothing could be seen to fail. So both runs use a python3 that does not, and where this
+# machine has none the two checks are UNMEASURED, said and never counted as passes (L411).
+PLAIN_PY=""
+for p in "$REAL_PY" /usr/bin/python3 /usr/local/bin/python3; do
+  [ -x "$p" ] && "$p" -c 'import sys; sys.exit(1 if "re" in sys.modules else 0)' 2>/dev/null && { PLAIN_PY="$p"; break; }
+done
+planted(){   # $1 = checkout -> sets seen: what a run changed there with tools/lib/re.py planted
+  local before after
+  printf '%s\n' 'import os, sys' 'open(os.path.join(sys.argv[2], "planted-by-re"), "w").close()' > "$1/tools/lib/re.py" || { seen="tools/lib/re.py could not be planted"; return; }
+  before="$(whole "$1")"; run_scan "$1" PY_EXEC="$PLAIN_PY"; after="$(whole "$1")"
+  seen="$(changed "$before" "$after")"
+}
+if [ -z "$PLAIN_PY" ]; then
+  echo "UNMEASURED: every python3 found here loads re before the program starts, so a planted tools/lib/re.py is never loaded and what python3 -I refuses could not be seen."
+else
+  ISOLATED="$TMP/isolated"
+  cp -R "$REPO" "$ISOLATED" && planted "$ISOLATED" || seen="the checkout could not be made"
+  [ -z "$seen" ] && printf '%s\n' "$out" | grep -q "^check-mod-shared-parts: $mods mods checked in payload/mods\$" && [ "$code" -le 1 ] \
+    && check "a module planted as tools/lib/re.py is never loaded: the run reads both mods and leaves the checkout as it was" ok \
+    || check "a module planted as tools/lib/re.py is never loaded: the run reads both mods and leaves the checkout as it was" "the listing showed: ${seen:-no difference}; exit=$code out=$(printf '%s\n' "$out" | tail -n 3)"
+  # The control (L1): the same plant, under a copy of the script that runs the program without -I.
+  OPEN="$TMP/not-isolated"
+  cp -R "$REPO" "$OPEN" && sed 's/python3 -I /python3 /' "$OPEN/$SCRIPT" > "$OPEN/$SCRIPT.changed" && ! cmp -s "$OPEN/$SCRIPT" "$OPEN/$SCRIPT.changed" \
+    && cat "$OPEN/$SCRIPT.changed" > "$OPEN/$SCRIPT" && rm -f "$OPEN/$SCRIPT.changed" && planted "$OPEN" || seen="a copy of the script without -I could not be made"
+  case "$seen" in *"payload/mods/planted-by-re"*) check "control: run without -I, the planted module is loaded and writes into the folder" ok ;;
+    *) check "control: run without -I, the planted module is loaded and writes into the folder" "the listing showed: ${seen:-no difference}; out=$out" ;; esac
+fi
 
 # ---- The rule, on the real reader and real git ----
 # How many checks must run is set here, not measured: 31 of the run's shape and its text, one for

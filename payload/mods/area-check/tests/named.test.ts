@@ -40,7 +40,7 @@ test('the list of texts the world answers git about is the one the code hands gi
 const SCAN = 'tools/check-mod-shared-parts.sh'
 // A script held for what the real one is held for: a python program named by a variable, handed the
 // folder and a folder of its own.
-const SCAN_UNREADABLE = '#!/bin/bash\ndir="${1%/}"\nTS_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ts_source.py"\nstripped="$(mktemp -d "${TMPDIR:-/tmp}/check-mod-shared-parts.XXXXXX")" || exit 1\ntrap \'rm -rf "$stripped"\' EXIT\npython3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"\n'
+const SCAN_UNREADABLE = '#!/bin/bash\ndir="${1%/}"\nTS_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ts_source.py"\nstripped="$(mktemp -d "${TMPDIR:-/tmp}/check-mod-shared-parts.XXXXXX")" || exit 1\ntrap \'rm -rf "$stripped"\' EXIT\npython3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"\n'
 const both = ($: unknown, on: Parameters<typeof world>[1]) => {
   const w = ours($, on)
   w.files[`${APP}/${SCAN}`] = SCAN_UNREADABLE

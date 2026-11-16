@@ -29,9 +29,18 @@ let runs = 0
 const START = String.raw`(?:^|[;&|{(]|\b(?:if|then|else|elif|do|while|until)\b|!)\s*`
 // A line that sources a file: `. x` or `source x` at the start of a command.
 const SOURCES = new RegExp(`${START}(?:\\.|source)\\s+(\\S.*)$`)
-// A line that runs a program file: an interpreter at the start of a command, and its first word.
-// One given a program on the command line (`perl -e`, `python3 -c`, `python3 -`) names no file.
-const RUNS = new RegExp(`${START}(?:python3?|node|bun|deno|ruby|perl|bash|sh|zsh)\\s+(\\S+)`)
+// A line that runs a program file: an interpreter at the start of a command, and what follows it.
+const RUNS = new RegExp(`${START}(?:python3?|node|bun|deno|ruby|perl|bash|sh|zsh)\\s+(\\S.*)$`)
+// The word naming the program file: the first that is no option (`python3 -I x.py`,
+// `node --no-warnings x.mjs`). One given its program on the command line (`perl -MFile::Find -e`,
+// `python3 -c`, `python3 -`) names no file, and is null here.
+const programWord = rest => {
+  for (const word of rest.split(/\s+/)) {
+    if (word === '-' || /^-[A-Za-z]*[ce]$/.test(word)) return null
+    if (!word.startsWith('-')) return word
+  }
+  return null
+}
 const FILE = String.raw`([A-Za-z0-9_.-]+\.(?:sh|py|mjs|cjs|js|ts|rb|pl))\b`
 // The file a word names: on the word itself, or through a variable the same text gives such a name.
 const nameOf = (word, body) => {
@@ -54,13 +63,12 @@ for (const text of named.texts) {
     if (/^\s*#/.test(line)) continue
     const sourced = SOURCES.exec(line)
     const ran = sourced ? null : RUNS.exec(line)
-    if (ran && ran[1].startsWith('-')) continue
-    const m = sourced ?? ran
-    if (!m) continue
+    const word = sourced ? sourced[1] : ran ? programWord(ran[1]) : null
+    if (word === null) continue
     if (sourced) lines++
     else runs++
     const verb = sourced ? 'sources' : 'runs'
-    const name = nameOf(m[1], body)
+    const name = nameOf(word, body)
     if (!name) problems.push(`${text}:${i + 1} ${verb} a file this suite cannot name: ${line.trim()}`)
     else if (!listed.has(name)) problems.push(`${text}:${i + 1} ${verb} ${name}, which ${entry}.texts does not list`)
     else used.add(name)

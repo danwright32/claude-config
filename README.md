@@ -8136,7 +8136,7 @@ only): `bash tools/check-mod-shared-parts.sh <mods folder>`, under the same cond
 of its own: the script and `tools/lib/ts_source.py`, the python program it runs. The script's own
 commands read as writing nothing, the `cp` lines it prints included, which were first taken for
 the write. What kept the hold is that program, run through a variable
-(`python3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"`): it really writes, each mod's hooks with
+(`python3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"`): it really writes, each mod's hooks with
 the comments taken out, into a folder the script makes under `TMPDIR` and removes as it ends, at a
 path python builds from its arguments, which no reader places. A command that sets a value is
 judged for this script too, since `TMPDIR` set to the folder puts those copies inside it.
@@ -8144,8 +8144,10 @@ judged for this script too, since `TMPDIR` set to the folder puts those copies i
 throwaway checkout over mod-kit and the area check and is red when a run changes any path there or
 adds one, an ignored one included, when a copy of the script or of the program changed to write
 into the folder is not caught, and when the script sources a file or runs a program the list in
-`named.ts` lacks. Not proved there: a file left beside the program under the name of a python
-module it imports (`tools/lib/re.py`), which git is not asked about while untracked. Each script is
+`named.ts` lacks. A file left beside the program under the name of a python module it imports
+(`tools/lib/re.py`) is one git is not asked about while untracked, so the script runs the program
+isolated (`python3 -I`), which never loads it; the suite plants one and is red if a run loads it,
+and its control shows a copy of the script without `-I` loading it. Each script is
 let through for itself alone, so the two chained in one command are both judged. What the two
 suites share (the guarded temporary folder, the listings of a checkout, the reader of the list and
 the rule's checks on mod-kit's real reader) is in `tests/area-check-named-reader.sh`,
