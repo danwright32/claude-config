@@ -5,6 +5,8 @@
 # A phrase is matched case insensitively, on word boundaries, and ONLY inside a comment or a
 # documentation line. It is a finding when no issue reference (`#NNNN`, or a GitHub issue URL)
 # sits on that line or within two lines either side of it.
+# One exception to the case rule: a phrase in Title Case run straight on from another capitalised
+# word, outside a markdown heading, ends a proper name and is skipped (deferrals.py is_name, #3019).
 #
 # Every phrase was measured against the whole of Slate's main checkout on 2026-09-18 before it
 # was kept, and the phrases that fired mostly on true sentences were DROPPED. The counts, the

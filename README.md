@@ -1098,7 +1098,9 @@ effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
 A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
-at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+at most, is a mention and is not judged (#2133). A phrase in Title Case run straight on from another
+capitalised word, outside a markdown heading, ends a proper name (a calendar event type, say) and is
+not judged either (#3019). `deferral-edit-check.sh` says the same thing at the
 moment the text is written.
 
 </td><td>
@@ -6272,7 +6274,12 @@ live both ask; only a command that runs it counts, as the program or the script 
 `cat` or `grep`, which Dan approved on 2026-10-16 as a narrowing of the overnight merge ban; one
 that may run it but cannot be read for certain, a variable or substitution as the program or script,
 a shell fed what cannot be read, xargs, `eval` of a variable, or inline code running a process that
-names it, is `unreadable` with a repository that cannot be told, so overnight it is refused), of the
+names it, is `unreadable` with a repository that cannot be told, so overnight it is refused; and
+since #3036 a merge the command's own words do not run, which `gh` reads as no gh command: the `gh
+pr merge` in `eval`'s text, read as `gh` reads it, as the helper there already was, and one behind
+`ssh`, another machine's, or in an alias being set, run later with words nobody has typed yet, so
+`alias g=gh` counts, each `unreadable` with a repository that cannot be told; `builtin` before
+`eval`, `alias`, `source` or `.` is looked past), of the
 git checkout a path sits in (`$.modkit.workingTree({ path })`, found by its `.git` entry on the
 disk), of where that checkout stands (`$.modkit.branch({ path })`, #978: its main working tree,
 branch, default branch, whether it is on it, and the issues the branch names, each part of it
@@ -6376,7 +6383,8 @@ words); the scan fails a mod undoing YAML's `''` by hand, matching a single quot
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
 each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
 taken whole, each hunk walked by its header's counts, one that does not add up left out with its
-reason kept while the files after it are still named, #3021, and how
+reason kept while the files after it are still named, #3021, the line that ran it past its counts
+read again as the next file's first line, #3036, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
@@ -6981,7 +6989,9 @@ a look changing file an inline script, or a patch that cannot be read whole or c
 input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
 marks unread (`eval "printf ... > app/site.css"`, `$TOOL --write app/site.css`, an alias set to such
 a command), placed in the folder it runs in and held as could not check where that cannot be
-followed; a write whose destination cannot be followed is held when the command names a look
+followed, and since #3036 one named in the words of such a command inside a shell script the call
+runs, judged the same way; a write whose destination cannot be followed is held when the command
+names a look
 changing file anywhere (a glob such as `app/*.tsx` included), and runs when it names none. Kept per
 project (the main working tree, so every worktree shares it, read with mod-kit's `$.modkit.branch`
 and named by `$.modkit.repo`) under the issue the branch names, each one when it names several, else

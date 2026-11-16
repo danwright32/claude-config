@@ -740,6 +740,19 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         }
         targets.push({ path: f.path, word: f.word, inScript: s.word, ...('does' in f && f.does === 'remove' ? { removes: true as const } : {}) })
       }
+    // #3036: a command in the script that mod-kit marks `unread` runs what its words do not say, so
+    // the reading above gives no write for it: `bash fix.sh`, fix.sh holding the eval #3021 holds
+    // typed whole, ran unasked. Judged as that one is, by the look and mod hook files its words
+    // name, each placed in the folder its command runs in (a variable the script sets followed
+    // through the script's own text), and held as could not check where that folder is not known.
+    // Such a script's writes are not all named, so its text naming the plugin store counts too.
+    if (s.lang === 'shell')
+      for (const u of read.unread ?? []) {
+        scriptStore ||= mentionsStore(s.text)
+        const folder = u.folder === undefined || u.folder === UNPLACED || u.folder.startsWith(`${UNPLACED}/`) ? undefined : u.folder
+        for (const t of await programGuesses($, u.words.join('\n'), folder, at, named, s.text))
+          targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
+      }
     for (const u of read.unnamed) {
       if (u.targets) {
         for (const p of u.targets)

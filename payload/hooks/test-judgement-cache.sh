@@ -419,7 +419,8 @@ echo
 echo "judgement cache: the reader's parses of large texts, kept between runs (#2918)"
 # Dan's decision of 2026-11-15: for heavy load, a parse of a large unchanged file is kept between gate
 # calls, keyed on the text's whole contents (never a path or a time), the reader's code, the directory
-# and HOME (which the reader reads for a cd to ~), signed with the cache's key like a judgement. A
+# and HOME (which the reader reads for a cd to ~), and the home of every ~someuser the text names
+# (which it reads from the password database), signed with the cache's key like a judgement. A
 # changed text, a changed reader, a forged or altered entry, or a shape the cache cannot give back
 # exactly is a miss or is not kept, and none of it is seen by a judgement's recorder.
 cat > "$T/parses.py" <<'PY'
@@ -456,6 +457,49 @@ home = os.environ.get("HOME")
 os.environ["HOME"] = "/elsewhere"
 expect("the same text with another HOME is a miss", jc.Parses(d, code).get(big, "/w") is None)
 os.environ["HOME"] = home
+# A cd to ~someuser is read by the reader from the password database, never HOME, so a parse kept
+# while that user's home was one folder is a miss once it has moved (claude-config#2918, the lessons
+# review of PR #3029). The database is stood in for, since a test cannot move a real user's home.
+import pwd, types
+real_getpwnam = pwd.getpwnam
+homes = {"someuser": "/srv/homes/someuser"}
+def fake_getpwnam(name):
+    if name in homes:
+        return types.SimpleNamespace(pw_dir=homes[name])
+    raise KeyError(name)
+pwd.getpwnam = fake_getpwnam
+tilde = big + "cd ~someuser/repo && git push\n"
+where = []
+tilde_value = (sw.commands(tilde, "/w", parts=where), where)
+expect("the reader reads ~someuser from the password database (%r)" % (tilde_value[0][-1],),
+       tilde_value[0][-1][0] == "/srv/homes/someuser/repo")
+td = os.path.join(work, "tilde")
+jc.Parses(td, code).put(tilde, "/w", tilde_value)
+expect("a parse naming ~someuser is kept and given back", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
+homes["someuser"] = "/Volumes/moved/someuser"
+expect("once someuser's home has moved, the kept parse is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
+del homes["someuser"]
+expect("and once someuser is gone, it is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
+homes["someuser"] = "/srv/homes/someuser"
+expect("with the home back where it was, it is a hit again", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
+quoted = big + "cd \"~some\"'user'/repo; ls\n"
+jc.Parses(td, code).put(quoted, "/w", tilde_value)
+expect("a parse naming a quoted ~someuser is kept", jc.Parses(td, code).get(quoted, "/w") == tilde_value)
+homes["someuser"] = "/Volumes/moved/someuser"
+expect("a quoted ~someuser is keyed too", jc.Parses(td, code).get(quoted, "/w") is None)
+homes["someuser"] = "/srv/homes/someuser"
+def broken_getpwnam(name):
+    raise OSError("the directory service is not answering")
+pwd.getpwnam = broken_getpwnam
+expect("a password database that cannot answer is a miss, never a crash",
+       jc.Parses(td, code).get(tilde, "/w") is None)
+pwd.getpwnam = fake_getpwnam
+many = big + "".join("cd ~u%d/x\n" % i for i in range(jc.MAX_TILDE_NAMES + 1))
+md = os.path.join(work, "many-tildes")
+jc.Parses(md, code).put(many, "/w", (sw.commands(many, "/w"), []))
+expect("a text naming more users than the key looks up is not kept",
+       not os.path.isdir(md) or not [n for n in os.listdir(md) if n.endswith(".json")])
+pwd.getpwnam = real_getpwnam
 small = "echo hi\n" * 10
 jc.Parses(d, code).put(small, "/w", (sw.commands(small, "/w"), []))
 expect("a small text is not kept", len([n for n in os.listdir(d) if n.endswith(".json")]) == 1)
@@ -503,6 +547,41 @@ rec.closed = True
 expect("inside a judgement it keeps and gives back the parse", again == value)
 expect("and the judgement's record stays whole (%s)" % rec.tainted, rec.tainted is None)
 expect("and records none of it (%d reads)" % len(rec.reads), not rec.reads)
+# A judgement records the home of every ~user it reads, so a kept judgement is a miss once that home
+# has moved, as a kept parse is (the lessons review of this change): asked by the reader itself, and
+# asked for the reader when its parse came from the cache and it did not run.
+pwd.getpwnam = fake_getpwnam
+homes["someuser"] = "/srv/homes/someuser"
+rec = jc.Recorder()
+jc.install(rec, [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc])
+expect("the stand in gives ~someuser's home as expanduser does (%r)" % gate.os.path.expanduser("~someuser/x"),
+       gate.os.path.expanduser("~someuser/x") == "/srv/homes/someuser/x"
+       and gate.os.path.expanduser("~someuser") == "/srv/homes/someuser"
+       and gate.os.path.expanduser("~nosuch/x") == "~nosuch/x"
+       and gate.os.path.expanduser("~/x") == os.path.join(os.environ["HOME"], "x"))
+rec.closed = True
+expect("and records the home of each ~name it was asked, never HOME's (%r)" % sorted(rec.reads),
+       ("home", "someuser") in rec.reads and ("home", "nosuch") in rec.reads
+       and not any(k[0] == "home" and k[1] == "" for k in rec.reads))
+# The parse hit, under a recorder of its own, so only what the hit asked is in it. The reader alone
+# would ask "someuser"; the hit asks every name the text could name, "s" to "someuser", which shows
+# the answer came from the kept parse.
+reader = gate.load_reader()
+rec = jc.Recorder()
+jc.install(rec, [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc])
+gate.PARSES[0] = jc.Parses(td, code)
+hit = reader.commands(tilde, "/w")
+gate.PARSES[0] = None
+rec.closed = True
+expect("a parse from the cache is the reader's", hit == tilde_value[0])
+homes_asked = sorted(k[1] for k in rec.reads if k[0] == "home")
+expect("on a parse hit the judgement asked the home of every name the text could name (%r)" % homes_asked,
+       homes_asked == sorted(jc.tilde_names(tilde)))
+reads = [[k[0], jc._normal(list(k[1:])), a] for k, a in rec.reads.items()]
+expect("with nothing moved, nothing it asked has changed (%r)" % jc.changed(reads), jc.changed(reads) is None)
+homes["someuser"] = "/srv/moved/someuser"
+expect("once someuser's home has moved, the judgement's record has changed", jc.changed(reads) is not None)
+pwd.getpwnam = real_getpwnam
 print("; ".join(bad) or "ok")
 PY
 out="$(env -u SLACK_GATE_CACHE_DIR PYTHONHASHSEED=0 python3 -B "$T/parses.py" "$DIR/slack_drafts_only_gate.py" "$T/work" 2>&1)"
