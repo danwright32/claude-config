@@ -7,7 +7,32 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
-            "if": "Bash(git *)|Bash(npm *)|Bash(ls *)|Bash(cat *)|Bash(grep *)|Bash(find *)"
+            "if": "Bash(git *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(npm *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(ls *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(cat *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(grep *)"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/rtk-rewrite.sh",
+            "if": "Bash(find *)"
           },
           {
             "type": "command",

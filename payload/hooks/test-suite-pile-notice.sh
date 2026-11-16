@@ -221,7 +221,29 @@ rm -rf "$LW"
 
 echo "suite pile notice: an age written in days is read as days"
 out="$(prompt d1 "$WORK/days")"
-says "a suite a day old is said" "$out" "1-02:03:04"
+says "a suite a day old is said, with its units" "$out" "the oldest running 1d 2h"
+never_says "and never as the bare form ps writes" "$out" "1-02:03:04"
+
+# Every age ps writes is said with its units (claude-config#3033). On 2026-11-15 a session read
+# `running 04:41`, which is four minutes, as four hours, took a live builder's suites for orphans and
+# nearly had them stopped. Each form ps can write is converted by the ONE function in the library,
+# and an age it cannot read is said to be unreadable rather than passed through as if it were one.
+echo "suite pile library: every form of elapsed time ps writes is said with its units (claude-config#3033)"
+units() { ( . "$LIB" && etime_in_units "$1" ) 2>&1; }
+for pair in "41|41s" "7|7s" "00:04|4s" "04:41|4m 41s" "59:59|59m 59s" "10:05|10m 05s" \
+            "02:05:09|2h 05m" "1:00:00|1h 00m" "23:59:59|23h 59m" \
+            "3-04:05:06|3d 4h" "1-02:03:04|1d 2h" "12-00:00:00|12d 0h"; do
+  got="$(units "${pair%%|*}")"
+  if [ "$got" = "${pair#*|}" ]; then check "ps age ${pair%%|*} is said as ${pair#*|}" ok
+  else check "ps age ${pair%%|*} is said as ${pair#*|}" "said '$got'"; fi
+done
+for bad in "" "abc" "1:2:3:4" "-05"; do
+  got="$(units "$bad")"
+  case "$got" in
+    "an unreadable age ($bad)") check "an age ps never writes ('$bad') is said to be unreadable" ok ;;
+    *) check "an age ps never writes ('$bad') is said to be unreadable" "said '$got'" ;;
+  esac
+done
 
 echo "suite pile notice: a run of the runner is judged by its newest suite, not its own age (claude-config#2106)"
 out="$(prompt r1 "$WORK/progressing")"
