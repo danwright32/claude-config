@@ -4138,11 +4138,41 @@ a line other than a blank or a comment to any list in its checkout, from the ind
 tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
 other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
 about, since that command could write the list by a glob or a variable first. So a Bash call holding
-the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
-commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
-then. What it still cannot see: a list written under a name built at
-run time in an earlier call and then committed by something other than `git commit` (an alias,
-`commit-tree`, a merge, a cherry-pick, a pull).
+the words `git` and `commit` passes the hook's screen; with python3 failing or missing such a commit
+is asked about as a commit (missing passed it until #3023).
+
+A line counts only when a commit that passed that ask put it there (#3023). Asking about `git
+commit` left every other way a line reaches HEAD unasked: a git alias for commit, `git commit-tree`,
+a merge, a cherry pick, a rebase, a pull. So the list is judged where it is used. The question about
+a commit names up to 8 of the lines it adds and notes them; the hook runs again after every Bash call
+(`db-write-ask.sh --ran`, under PostToolUse, which only a call that was let through and ran reaches),
+and a noted question from the same session for the same command is the proof Dan said yes, so each
+noted line HEAD now holds goes on this Mac's record, `~/.claude/state/supabase-test-projects/approved`
+(one hash per line, of the clone, the list's path and the ref; the state folder is never synced). A
+write passes only for a project whose line is in HEAD and on that record, whatever carried it to
+HEAD. The record is held like the list: a shell write naming it and an Edit, Write or MultiEdit under
+it are asked about. Staging the list and committing it in one command is asked about once, by the
+question that names the lines.
+- What changes for a list that already exists: its lines are on no record, so each write on its
+  project is asked about, the question saying how to get the line approved (take it out in one
+  commit, put it back with a `git commit`, which is asked about). The same holds for a line that
+  arrives by a pull, for a second clone of the repository, and for the other Mac.
+- What the record cannot see: a line approved once stays approved for that list in that clone, so one
+  taken out and put back by a route nobody asked about is trusted again. A yes to a question that
+  names no line (a staging, a commit after another command, a commit the hook cannot check) approves
+  nothing, and nor do lines past the 8 a question names.
+- What a commit costs, measured on the personal MacBook on 2026-11-15 with `git commit -m x` in this
+  repository, 60 runs each of the hook from main and from #3023 taken turn about at a load average of
+  15 to 18: median 129.6 ms before and 108.2 after, least 94.9 and 71.6. Cut: python3 starts without
+  the site module (5.2 ms), hashlib, datetime and socket load only where used (3.9 ms), the database
+  call library loads for a commit only when its command holds a redirection (7.0 ms), and a commit
+  with nothing before it in its command but a `cd` or a read no longer has git walk the untracked
+  files it cannot commit (14.3 ms against 6.7). Left alone, the largest: the libraries are compiled
+  on every run (about 19 ms), because `-B` keeps python3 from writing bytecode into the synced hooks
+  folder, and a cache elsewhere would be a file no hook asks about that the hook then runs. Added:
+  one more start of the hook after every Bash call, median 13.8 ms and least 7.1 in the same run,
+  beside the other hooks PostToolUse already starts; it reads the payload and leaves unless a
+  question is waiting.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

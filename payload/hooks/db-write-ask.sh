@@ -4,6 +4,8 @@
 # Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|mcp__.*)
 # hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
 # and before an edge function deploy that turns JWT verification off, or may (#2660).
+# Also run as `db-write-ask.sh --ran` under PostToolUse(Bash), where it decides nothing and only
+# learns that a commit it asked about ran (#3023, below).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql, on both Macs, and
@@ -72,12 +74,22 @@
 # string), is asked about too, as is a `git commit` that would add a line other than a blank or a
 # comment to any list in its checkout; one only removing lines passes (lib/db-apply-approval.py,
 # list_shell_change).
+# Since #3023 a line of the list counts only when a commit that passed that ask put it there. A line
+# reached HEAD with no question through a git alias for commit, git commit-tree, a merge, a cherry
+# pick, a rebase or a pull, and naming git commands could never end that. So the question about a
+# commit notes the lines it names, the hook runs again once a Bash call has run (`--ran`, registered
+# under PostToolUse, which only a call that was let through reaches) and puts the lines HEAD now
+# holds on this Mac's record, and a write passes only for a project whose line is in HEAD and on that
+# record, whatever route carried it there (lib/db-apply-approval.py, "A LINE COUNTS ONLY WHEN").
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
 # every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
 # name of the test project list, or names a Salesforce write tool, or, since #2989, is a Bash call
-# holding the word commit (commit_call, which is no database call).
+# holding the words git and commit (commit_call, which is no database call).
+#
+# WHAT A COMMIT COSTS (claude-config#3023) is measured in the README, beside this hook's section,
+# with what was cut and the largest cost left alone.
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let
@@ -91,18 +103,67 @@
 
 set -uo pipefail
 
+# AFTER A BASH CALL (--ran, claude-config#3023). Nearly every call finds no question waiting and
+# leaves here, before anything else starts. The payload is still read off the pipe first, so
+# Claude Code is never left writing a large one to a hook that has gone.
+RAN=0
+if [ "${1:-}" = "--ran" ]; then
+  RAN=1
+  set -- "${CLAUDE_HOME:-${HOME:-}/.claude}/state/supabase-test-projects/pending"/*.json
+  [ -e "${1:-}" ] || { cat >/dev/null 2>&1; exit 0; }
+fi
+
 payload="$(cat 2>/dev/null || true)"
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
+# Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
+# (#1906). Without the library it still asks, keeping only characters that need no escaping.
+load_notice() {
+  # shellcheck source=lib/hook-notice.sh
+  . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || {  # the library is missing
+    hook_ask_json() {
+      local n="${2:-}"
+      if [ -n "$n" ]; then printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}, "systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" "${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      else printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; fi; }
+    hook_notice_json() { printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
+  }
+}
+
+if [ "$RAN" = 1 ]; then
+  # A question is waiting. A call that names no commit answers none; one that does is handed to
+  # lib/db-apply-approval.py's commit_ran, which approves the lines its question named and prints
+  # nothing, or says why Dan's yes could not be recorded. This gives no decision: the call has run.
+  case "$payload" in *commit*) ;; *) exit 0 ;; esac
+  command -v python3 >/dev/null 2>&1 || exit 0
+  note="$(printf '%s' "$payload" | python3 -I -B -S -c '
+import importlib.util, json, sys
+sys.stdout.reconfigure(errors="replace")
+try:
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+except Exception:
+    sys.exit()
+ti = d.get("tool_input") if isinstance(d, dict) else None
+command = ti.get("command") if isinstance(ti, dict) else None
+if d.get("tool_name") != "Bash" or not isinstance(command, str):
+    sys.exit()
+spec = importlib.util.spec_from_file_location("db_apply_approval_shared", sys.argv[1] + "/lib/db-apply-approval.py")
+ap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ap)
+sys.stdout.write((ap.commit_ran(d.get("session_id"), command) or "").replace("\x00", ""))
+' "$HOOK_DIR" 2>/dev/null)" || note="db-write-ask.sh could not check whether this command was a commit Dan said yes to, because its check (python3) failed. A line it added to a test project list is not trusted, so a write on its project is asked about (claude-config#3023)"
+  if [ -n "$note" ]; then load_notice; hook_notice_json "$note"; fi
+  exit 0
+fi
+
 # The screen: a payload holding none of these words, in any case, names no database call.
 DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
 db_call=0
 sf_call=0
-# A Bash call naming a commit is read for one adding a project to a test project list (#2989). It is
-# no database call, so when python3 fails it is asked about as a commit, and when python3 is missing
-# it passes: without python3 no list is trusted, so a commit adding to one lets nothing through.
+# A Bash call naming git and a commit is read for one adding a project to a test project list
+# (#2989). It is no database call, so when python3 fails or is missing it is asked about as a commit
+# (#3023: the question about a commit is how a line comes to be trusted, so it is never skipped).
 commit_call=0
 shopt -s nocasematch
 for w in $DB_SCREEN_WORDS; do
@@ -110,19 +171,20 @@ for w in $DB_SCREEN_WORDS; do
 done
 case "$payload" in *sobjectrecord*) sf_call=1 ;; esac
 shopt -u nocasematch
-case "$payload" in *'"Bash"'*commit*|*commit*'"Bash"'*) commit_call=1 ;; esac
+# Only a payload whose tool is Bash, by its tool_name and not by the word Bash anywhere in it (an
+# Edit whose text held both words was read as a commit, #3023), and only one holding both words: a
+# command with no git in it runs no git commit this hook could read.
+case "$payload" in
+  *commit*)
+    case "$payload" in
+      *git*)
+        bash_tool='"tool_name"[[:space:]]*:[[:space:]]*"Bash"'
+        if [[ "$payload" =~ $bash_tool ]]; then commit_call=1; fi ;;
+    esac ;;
+esac
 [ "$db_call$sf_call$commit_call" != 000 ] || exit 0
 
-# Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
-# (#1906). Without the library it still asks, keeping only characters that need no escaping.
-# shellcheck source=lib/hook-notice.sh
-. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || {  # the library is missing
-  hook_ask_json() {
-    local n="${2:-}"
-    if [ -n "$n" ]; then printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}, "systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" "${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
-    else printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; fi; }
-  hook_notice_json() { printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
-}
+load_notice
 
 # Cleaned by the shared reader before python3 parses it (claude-config#1944). Without the library
 # the payload is read as it came, and python3 is looked for directly.
@@ -139,11 +201,13 @@ fi
 # decision from this hook either way.
 if ps_reader_missing python3; then
   [ "$db_call" = 1 ] && hook_ask_json "db-write-ask.sh asks before this database call because python3 is not on PATH, and it is what classifies a statement as read only, so nothing could be. Install python3 (claude-config#2521)"
+  [ "$db_call$commit_call" = 01 ] && hook_ask_json "db-write-ask.sh asks before this commit because python3 is not on PATH, so whether it adds a project to a test project list could not be told. Install python3 (claude-config#3023)"
   exit 0
 fi
 
-out="$(printf '%s' "$payload" | python3 -I -B -c '
-import importlib.util, json, os, re, socket, sys
+# -S: the hook uses the standard library only, and the site module was 5.2 ms of every start (#3023).
+out="$(printf '%s' "$payload" | python3 -I -B -S -c '
+import importlib.util, json, os, re, sys
 sys.stdout.reconfigure(errors="replace")
 
 DB_SQL = "mcp__claude_ai_Supabase__execute_sql"
@@ -169,6 +233,7 @@ def part(name, file):
         return None, "lib/" + file + " could not be loaded beside the hook (" + type(e).__name__ + ")"
 
 def mac_name():
+    import socket  # here, not at the top: only a question names the Mac (1.3 ms of every start, #3023)
     host = socket.gethostname().split(".")[0]
     if host.startswith("Daniels-MacBook-Pro-2"):
         return "the personal MacBook"
@@ -227,14 +292,24 @@ def ask(why, issue="2521", what=DATABASE_CALL):
     for a command that holds both kinds."""
     emit("db-write-ask.sh asks before this " + what + ": " + why + " (claude-config#" + issue + ")", sf_notice())
 
-# Which other calls reach a database, and which statements they carry (claude-config#2536).
-calls, calls_why = part("db_write_calls_shared", "db-write-calls.py")
-
 try:
     d = json.loads(raw)
 except Exception:
     d = None
 tool = d.get("tool_name") if isinstance(d, dict) else None
+
+# Which other calls reach a database, and which statements they carry (claude-config#2536). A Bash
+# call the screen found no database word in (the second argument) is here only as a commit, and a
+# commit check needs this library just to take a redirection out of a command, so it is loaded
+# then and not before: 7 ms of every commit (claude-config#3023).
+COMMIT_ONLY = tool == "Bash" and sys.argv[2:3] == ["0"]
+calls, calls_why = None, None
+def load_calls():
+    global calls, calls_why
+    if calls is None and calls_why is None:
+        calls, calls_why = part("db_write_calls_shared", "db-write-calls.py")
+if not COMMIT_ONLY:
+    load_calls()
 if not isinstance(tool, str):
     # A payload it cannot read is judged by its raw text: one naming a database tool is asked about.
     named = [t for t in WATCHED if t in raw]
@@ -273,6 +348,16 @@ if tool in ("Edit", "Write", "MultiEdit"):
     if listed is not None:
         ask(tool + " writes " + listed + ", the list of the test Supabase projects of this checkout, whose "
             "supabase db query -f runs pass without asking", "2643", "edit of a test project list")
+    # The record of the list lines Dan approved is held the same way (claude-config#3023): only a
+    # commit he answered yes to may add to it.
+    try:
+        recorded = ap.is_list_record(tool, d.get("tool_input"))
+    except Exception as e:
+        recorded = "the file (" + type(e).__name__ + " reading its path)"
+    if recorded is not None:
+        ask(tool + " writes " + recorded + ", in the record this hook keeps of the test project lines Dan "
+            "approved, which only a commit he answered yes to adds to", "3023",
+            "edit of the record of approved test project lines")
     sys.exit()
 # A shell command that writes that list, and a commit that adds a line to one, are held the same way
 # (claude-config#2989). lib/db-apply-approval.py says which commands those are.
@@ -282,17 +367,27 @@ if tool == "Bash":
     if isinstance(bcmd, str) and ("supabase-test-projects" in bcmd.lower() or "commit" in bcmd):
         ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
         bsw, bsw_why = part("shell_words_shared", "shell-words.py")
-        missing = ap_why or bsw_why or (calls_why if calls is None else None)
+        def strip(s, found=None):
+            # Every redirection strip_redirects takes out holds < or >, so text holding neither
+            # is its own answer (test-db-write-ask-approved-lines.sh holds that of the library).
+            if calls is None and "<" not in s and ">" not in s:
+                return s
+            load_calls()
+            return calls.strip_redirects(s, found)
+        missing = ap_why or bsw_why or calls_why
         if missing:
             ask(missing + ", so whether this command writes the test project list of a checkout, or commits a "
                 "project onto one, could not be told", "2989", "change to a test project list")
         try:
-            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, calls.strip_redirects)
+            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"))
         except Exception as e:
-            change = ("the command could not be read (" + type(e).__name__ + "), so whether it writes a "
-                      "test project list of a checkout, or commits a project onto one, could not be told")
+            change = ((calls_why or "the command could not be read (" + type(e).__name__ + ")") + ", so whether "
+                      "it writes a test project list of a checkout, or commits a project onto one, could not be told")
         if change is not None:
-            ask(change, "2989", "change to a test project list")
+            ask(change, "2989, claude-config#3023", "change to a test project list")
+if COMMIT_ONLY:
+    # Nothing else to read: the screen found no word a database call could hold.
+    sys.exit()
 if tool not in (DB_SQL, DB_MIGRATION) and tool != "Bash" and not tool.startswith("mcp__"):
     sys.exit()
 
@@ -445,7 +540,7 @@ if found is None:
 why, s = found
 ask(why + (", on " + where if isinstance(project, str) and project else "")
     + ("" if s is None else ". " + said(s)), "2536")
-' "$HOOK_DIR" 2>/dev/null)"
+' "$HOOK_DIR" "$db_call" 2>/dev/null)"
 rc=$?
 
 US=$'\x1f'

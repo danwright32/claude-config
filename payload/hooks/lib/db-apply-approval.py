@@ -88,17 +88,51 @@ command included, is asked about until it is committed. And db-write-ask.sh hold
 MultiEdit of the list (is_test_list) as it holds a database write, and since #2989 a shell command
 that writes it, or a `git commit` that would add a line to one (list_shell_change): before that, a
 session that appended a ref with a shell command and then committed it was trusted once the commit
-landed. What that still cannot see is in list_shell_change's own docstring.
+landed.
+
+A LINE COUNTS ONLY WHEN A COMMIT THAT PASSED THE ASK PUT IT THERE (claude-config#3023). Asking about
+`git commit` left every other way a line reaches HEAD unasked: a git alias for commit, `git
+commit-tree`, a merge, a cherry pick, a rebase, a pull. Naming git commands could never end that, so
+the list is judged where it is used. When a write runs, its project's line must be in HEAD (above)
+and on this Mac's record of approved lines, and whatever route carried a line to HEAD, one not on
+the record marks nothing. The record is written in two steps, because a hook that runs before a
+command cannot know Dan's answer:
+  - list_shell_change, asking about a commit, notes the lines its question names (ask_recorded):
+    one file in <record>/pending holding the session, a hash of the command, the checkout, the
+    commit HEAD was on, and each (list, line). Only lines the question shows are noted, so Dan
+    approves exactly what he read (L64), and only lines that are a ref.
+  - db-write-ask.sh, run again after every Bash call (`--ran`, PostToolUse, which Claude Code runs
+    only for a call that was let through and ran), hands the command to commit_ran. A waiting
+    question from the same session for the same command is the proof Dan said yes. Each noted line
+    that HEAD's list now holds, HEAD having moved, goes on <record>/approved, and the question is
+    taken away.
+<record> is $CLAUDE_HOME/state/supabase-test-projects, on this Mac only (the state folder is never
+synced). approved holds one sha256 per line, of the clone (its git common directory, so every
+worktree of it counts and another clone does not), the list's path in it and the ref; no ref is
+written out. A question for the same session and command is dropped whenever that command is read
+again (forget_asks), so one Dan refused cannot be answered later by the same text running when it
+has nothing left to add. The record is held like the list: a shell command naming it (its path
+holds the list's name) and an Edit, Write or MultiEdit under it (is_list_record) are asked about.
+WHAT THE RECORD CANNOT SEE: a line approved once stays approved for that list in that clone, so one
+taken out and put back by a route nobody asked about is trusted again. A line carried here by a
+pull, or committed before #3023, is not on it: its write is asked about, the question saying to take
+the line out in one commit and put it back with a `git commit`, which is asked about. And a script
+that writes the record under a name built at run time is not seen.
 
   on_test_project(workdir, flags)
       (True, the ref) or (False, why the run's project is not one its checkout marks as test).
   is_test_list(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is a checkout's TEST_LIST, else None.
-  list_shell_change(command, cwd, sw, strip)
+  list_shell_change(command, cwd, sw, strip, session_id=None)
       None, or why a Bash command may write a TEST_LIST or commit a line added to one (#2989).
+  is_list_record(tool, tool_input)
+      The path an Edit, Write or MultiEdit writes when it is under the record of approved lines.
+  commit_ran(session_id, command)
+      Called once a Bash call has run: approves the lines a waiting question of it named (#3023).
+      None, or a sentence saying why Dan's yes could not be recorded.
 """
-import datetime
-import hashlib
+# datetime and hashlib are imported where they are used: a commit check, which every `git commit`
+# pays for, needs neither (2.6 ms of the two on the personal MacBook, 2026-11-15, #3023).
 import json
 import os
 import re
@@ -119,7 +153,9 @@ REF = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # lines and lines starting with # ignored, read from beside the supabase folder the run uses.
 TEST_LIST = os.path.join(".claude", "supabase-test-projects")
 TEST_LIST_BYTES = 64 * 1024
-# How long git may take to show the committed list; the hook's own limit is 10 seconds.
+# How long any one run of git may take: showing the committed list, naming the clone, listing a
+# checkout or diffing it. The runs of one check share COMMIT_SECONDS besides (_git), so a check ends
+# inside the hook's own limit of 10 seconds however many times it runs git.
 GIT_SECONDS = 4
 # The edits of that list an Edit, Write or MultiEdit makes are held like a database write.
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
@@ -127,6 +163,7 @@ SHA = re.compile(r"[0-9a-f]{64}")
 
 
 def _sha256(path):
+    import hashlib
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
@@ -150,6 +187,7 @@ def _stamp_ns(stamp):
     """A transcript entry's ISO timestamp in nanoseconds since the epoch, or None."""
     if not isinstance(stamp, str) or not stamp:
         return None
+    import datetime
     try:
         t = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError:
@@ -334,17 +372,27 @@ def is_test_list(tool, tool_input):
     return path if parts[-2:] == TEST_LIST.split(os.sep) else None
 
 
-def _uncommitted(path, raw):
+def is_list_record(tool, tool_input):
+    """The file_path an Edit, Write or MultiEdit writes when it is under the record of the list
+    lines Dan approved (a state/supabase-test-projects folder, wherever it sits), else None."""
+    if tool not in EDIT_TOOLS or not isinstance(tool_input, dict):
+        return None
+    path = tool_input.get("file_path")
+    if not isinstance(path, str):
+        return None
+    parts = os.path.normpath(path.replace("\\", "/")).lower().split("/")
+    held = list(RECORD_PARTS)
+    return path if any(parts[i:i + len(held)] == held for i in range(len(parts))) else None
+
+
+def _uncommitted(path, raw, deadline):
     """None when raw, the bytes of the file at path, are what git has committed for it at HEAD,
     else why not. Only a committed list is trusted, so a session that adds a live ref to it, which
     it can do with any shell command, is asked about until the change is committed."""
     folder, name = os.path.split(path)
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
-    try:
-        r = subprocess.run(["git", "-C", folder, "show", "HEAD:./" + name], capture_output=True,
-                           timeout=GIT_SECONDS, env=env, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError) as e:
-        return "could not be compared with what git has committed (" + type(e).__name__ + ")"
+    r, why = _git(folder, ["show", "HEAD:./" + name], deadline)
+    if r is None:
+        return "could not be compared with what git has committed: " + why
     if r.returncode != 0:
         return "is not committed in git, and only a committed list is trusted"
     if r.stdout != raw:
@@ -352,11 +400,71 @@ def _uncommitted(path, raw):
     return None
 
 
+# THE RECORD OF APPROVED LINES (claude-config#3023; the header says how it is written and why).
+# Where it sits under the Claude home, in parts. Its last part is the list's own file name, so any
+# shell command naming the record names the list, and is asked about by list_shell_change.
+RECORD_PARTS = ("state", TEST_LIST.split(os.sep)[-1])
+# How many added lines one question about a commit names. Only those are approved by its answer.
+LINES_SHOWN = 8
+# A question nobody answered is cleared after this long, so the folder cannot grow without end.
+PENDING_SECONDS = 7 * 24 * 3600
+
+
+def _record_dir():
+    home = os.environ.get("CLAUDE_HOME") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(home, *RECORD_PARTS)
+
+
+def _digest(*parts):
+    import hashlib
+    return hashlib.sha256("\0".join(parts).encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def _clone(folder, deadline):
+    """(the clone folder is a checkout of, folder's path inside the checkout, None), or (None, None,
+    why git could not say). The clone is its git common directory, resolved, which every worktree
+    of one clone shares and no other clone does; the path is "" at the top, else ends with a slash."""
+    r, why = _git(folder, ["rev-parse", "--git-common-dir", "--show-prefix"], deadline)
+    if r is None:
+        return None, None, why
+    if r.returncode != 0:
+        return None, None, "git rev-parse failed (exit " + str(r.returncode) + ")"
+    out = r.stdout.decode("utf-8", "surrogateescape").split("\n")
+    if not out[0]:
+        return None, None, "git named no clone"
+    return os.path.realpath(os.path.join(folder, out[0])), (out[1] if len(out) > 1 else ""), None
+
+
+def _unapproved(workdir, ref, deadline):
+    """None when ref's line of workdir's TEST_LIST is on this Mac's record of approved lines, else
+    why it is not trusted. Fails closed: a clone git cannot name and a record that cannot be read
+    approve nothing."""
+    clone, prefix, why = _clone(workdir, deadline)
+    if why is not None:
+        return "whether Dan was asked about that line could not be told: " + why
+    record = os.path.join(_record_dir(), "approved")
+    try:
+        with open(record, "rb") as f:
+            approved = set(f.read().decode("ascii", "replace").split())
+    except FileNotFoundError:
+        approved = set()
+    except OSError as e:
+        return ("the record of the lines Dan approved, " + record + ", could not be read (" + type(e).__name__
+                + "), so no line is trusted")
+    if _digest("1", clone, prefix + "/".join(TEST_LIST.split(os.sep)), ref) in approved:
+        return None
+    return ("no git commit this hook asked Dan about is on this Mac's record as adding that line: it may have "
+            "come by a merge, a pull, a rebase, a cherry pick, a git alias, git commit-tree, another clone, or "
+            "a commit made before claude-config#3023. For its runs to pass, take the line out in one commit "
+            "and put it back with a git commit, which is asked about")
+
+
 def on_test_project(workdir, flags):
     """(True, the ref) when a `supabase db query -f` run in workdir with flags goes to a project its
     checkout marks as test (TEST_LIST, claude-config#2643), else (False, why not). Fails closed: a
     list missing, unreadable, not text, larger than TEST_LIST_BYTES, other than what git has committed
-    for it, or holding any line that is not a ref or a comment marks nothing."""
+    for it, or holding any line that is not a ref or a comment marks nothing, and nor does a line
+    no commit Dan answered yes to is on record as adding (_unapproved, claude-config#3023)."""
     why = _flags_why_not(flags, QUERY_FLAGS, "a test project's list covers only a run")
     if why is not None:
         return False, why
@@ -371,7 +479,8 @@ def on_test_project(workdir, flags):
         return False, "project " + ref + " is not marked as test: " + TEST_LIST + " could not be read (" + type(e).__name__ + ")"
     if len(raw) > TEST_LIST_BYTES:
         return False, "project " + ref + " is not marked as test: " + TEST_LIST + " is larger than a list of refs"
-    why = _uncommitted(path, raw)
+    deadline = time.monotonic() + COMMIT_SECONDS
+    why = _uncommitted(path, raw, deadline)
     if why is not None:
         return False, "project " + ref + " is not marked as test: " + TEST_LIST + " " + why
     try:
@@ -389,6 +498,11 @@ def on_test_project(workdir, flags):
         refs.add(line)
     if ref not in refs:
         return False, "project " + ref + " is not marked as test in " + TEST_LIST
+    # In HEAD is not enough: the line counts only when a commit Dan answered yes to put it there,
+    # whatever route carried it here (claude-config#3023).
+    why = _unapproved(workdir, ref, deadline)
+    if why is not None:
+        return False, "project " + ref + " is on " + TEST_LIST + " as committed, but is not trusted as test: " + why
     return True, ref
 
 
@@ -402,7 +516,8 @@ GIT_LIST_READS = {"diff", "show", "log", "status", "blame", "ls-files", "cat-fil
 # The git subcommands that may come before a commit in its own command, when the checkout holds a
 # list: none of them can write a list the command does not name.
 GIT_BEFORE_COMMIT = GIT_LIST_READS | {"add", "rm"}
-# The whole of a run of git and every commit check in one command; the hook's own limit is 10 seconds.
+# The whole of the git one check runs: every commit check in one command, one test project check,
+# or the approvals one Bash call earned. The hook's own limit is 10 seconds.
 COMMIT_SECONDS = 6
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -466,13 +581,20 @@ def _counts(line):
     return bool(s) and not s.startswith("#")
 
 
-def _list_additions(folder, deadline):
+def _list_additions(folder, deadline, untracked=True):
     """(lists, added, None) for the checkout folder is in: whether it holds any list, tracked or
-    not ignored, and each (path, line) a commit there could add to one, from the index or the
-    working tree (which `git commit -a`, or an add in the same command, stages), a blank line or a
-    comment aside. ([], [], None) when folder is in no checkout; (None, None, why) when git fails."""
+    not ignored, and each (path, line, whether the path is as git diff names it, from the top of
+    the checkout) a commit there could add to one, from the index or the working tree (which `git
+    commit -a`, or an add in the same command, stages), a blank line or a comment aside. ([], [],
+    None) when folder is in no checkout; (None, None, why) when git fails.
+
+    untracked False leaves the files git does not track out, for a commit nothing in its command
+    comes before but a cd or a read: no commit can take a file that was never added, and listing
+    them has git walk the whole working tree, which was over half of what git cost a commit here
+    (14.3 ms against 6.7, medians of 15 in this repository on 2026-11-15, claude-config#3023)."""
     spec = ":(top,glob,icase)**/" + "/".join(TEST_LIST.split(os.sep))
-    r, why = _git(folder, ["ls-files", "-z", "-t", "-c", "-o", "--exclude-standard", "--", spec], deadline)
+    listing = ["ls-files", "-z", "-t", "-c"] + (["-o", "--exclude-standard"] if untracked else [])
+    r, why = _git(folder, listing + ["--", spec], deadline)
     if r is None:
         return None, None, why
     if r.returncode != 0:
@@ -490,7 +612,7 @@ def _list_additions(folder, deadline):
                     text = f.read(TEST_LIST_BYTES).decode("utf-8", "replace")
             except OSError as err:
                 return None, None, e[2:] + " could not be read (" + type(err).__name__ + ")"
-            added.extend((e[2:], l.strip()) for l in text.splitlines() if _counts(l))
+            added.extend((e[2:], l.strip(), False) for l in text.splitlines() if _counts(l))
     if len(lists) == len([e for e in entries if e.startswith("? ")]):
         return lists, added, None
     r, why = _git(folder, ["rev-parse", "-q", "--verify", "HEAD^{commit}"], deadline)
@@ -509,11 +631,169 @@ def _list_additions(folder, deadline):
             if line.startswith("+++ "):
                 path = line[6:] if line.startswith("+++ b/") else None
             elif line.startswith("+") and _counts(line[1:]):
-                added.append((path or "a test project list", line[1:].strip()))
+                added.append((path or "a test project list", line[1:].strip(), path is not None))
     return lists, added, None
 
 
-def list_shell_change(command, cwd, sw, strip):
+def _pending():
+    """Each question waiting on the record as (its file, what it holds), oldest first; one that
+    cannot be read as a question is left out. [] when there is no record yet."""
+    folder = os.path.join(_record_dir(), "pending")
+    try:
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".json"))
+    except OSError:
+        return []
+    found = []
+    for n in names:
+        try:
+            with open(os.path.join(folder, n), "rb") as f:
+                rec = json.loads(f.read(1 << 20).decode("utf-8", "replace"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            found.append((os.path.join(folder, n), rec))
+    return found
+
+
+def _same_call(rec, session_id, command):
+    return rec.get("session") == session_id and rec.get("command") == _digest("command", command)
+
+
+def forget_asks(session_id, command):
+    """Drop every waiting question of this session for this command. Called whenever the command is
+    read again before it runs: whatever was asked about it before was not answered yes (the question
+    would be gone), so it must not be answered by this run, which may be asked nothing."""
+    if not isinstance(session_id, str) or not session_id:
+        return
+    for path, rec in _pending():
+        if _same_call(rec, session_id, command):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def ask_recorded(session_id, command, folder, shown, deadline):
+    """Note, for commit_ran, the lines the question about a commit names. shown is the (path, line,
+    whether path is from the top of the checkout) it showed, of the commit in folder. None, or the
+    sentence the question must add because the note could not be made: without one a yes cannot be
+    told from a no, so no line of it will be trusted."""
+    asked = [(p, l, top) for p, l, top in shown if REF.fullmatch(l)]
+    if not asked:
+        return None
+    lost = ", so answering yes will not make the line trusted: its runs will be asked about"
+    if not isinstance(session_id, str) or not session_id:
+        return "This hook was given no session id and could not record the question" + lost
+    clone, prefix, why = _clone(folder, deadline)
+    if why is not None:
+        return "This hook could not record the question (" + why + ")" + lost
+    r, why = _git(folder, ["rev-parse", "-q", "--verify", "HEAD^{commit}"], deadline)
+    if r is None:
+        return "This hook could not record the question (" + why + ")" + lost
+    base = r.stdout.decode("ascii", "replace").strip() if r.returncode == 0 else ""
+    # A list git does not track yet is named from folder; the record names every list from the top.
+    lines = [[p if top else os.path.normpath(prefix + p).replace(os.sep, "/"), l] for p, l, top in asked]
+    rec = {"v": 1, "session": session_id, "command": _digest("command", command), "folder": folder,
+           "clone": clone, "base": base, "at": int(time.time()),
+           "lines": [pair for pair in lines if not pair[0].startswith("..")]}
+    pending = os.path.join(_record_dir(), "pending")
+    try:
+        os.makedirs(pending, mode=0o700, exist_ok=True)
+        # Questions nobody answered, cleared once they are old.
+        for n in os.listdir(pending):
+            path = os.path.join(pending, n)
+            if time.time() - os.stat(path).st_mtime > PENDING_SECONDS:
+                os.unlink(path)
+        name = "%d-%d.json" % (time.time_ns(), os.getpid())
+        with open(os.path.join(pending, name + ".part"), "w") as f:
+            json.dump(rec, f)
+        os.replace(os.path.join(pending, name + ".part"), os.path.join(pending, name))
+    except OSError as e:
+        return "This hook could not record the question (" + type(e).__name__ + " writing " + pending + ")" + lost
+    return None
+
+
+def _approve(rec, deadline):
+    """Put on the record each line of one answered question that HEAD's list now holds. None, or
+    why it could not be done."""
+    folder, lines, base = rec.get("folder"), rec.get("lines"), rec.get("base")
+    if not isinstance(folder, str) or not isinstance(lines, list) or not isinstance(base, str):
+        return "the question on record could not be read"
+    clone, _, why = _clone(folder, deadline)
+    if why is not None:
+        return why
+    if clone != rec.get("clone"):
+        return "the checkout at " + _shown(folder, 120) + " is no longer the clone the question was asked in"
+    r, why = _git(folder, ["rev-parse", "-q", "--verify", "HEAD^{commit}"], deadline)
+    if r is None:
+        return why
+    head = r.stdout.decode("ascii", "replace").strip() if r.returncode == 0 else ""
+    if not head or head == base:
+        # The command ran and committed nothing there, so there is nothing to approve.
+        return None
+    held, keys = {}, []
+    for pair in lines:
+        if not (isinstance(pair, list) and len(pair) == 2 and all(isinstance(x, str) for x in pair)):
+            return "the question on record could not be read"
+        path, line = pair
+        if path not in held:
+            r, why = _git(folder, ["show", "HEAD:" + path], deadline)
+            if r is None:
+                return why
+            held[path] = ({l.strip() for l in r.stdout.decode("utf-8", "replace").splitlines()}
+                          if r.returncode == 0 else set())
+        if line in held[path] and REF.fullmatch(line):
+            keys.append(_digest("1", clone, path, line))
+    if not keys:
+        return None
+    record = os.path.join(_record_dir(), "approved")
+    try:
+        fd = os.open(record, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, ("\n".join(keys) + "\n").encode("ascii"))
+        finally:
+            os.close(fd)
+    except OSError as e:
+        return type(e).__name__ + " writing " + record
+    return None
+
+
+def commit_ran(session_id, command):
+    """Called once a Bash call has run (PostToolUse). A question about it still waiting, from the
+    same session for the same command, is the proof Dan answered yes: its lines that HEAD now holds
+    go on the record, and the question is taken away. None, or a sentence for a notice saying an
+    approval could not be recorded, so the write that follows is asked about and Dan knows why."""
+    if not isinstance(session_id, str) or not session_id or not isinstance(command, str):
+        return None
+    deadline = time.monotonic() + COMMIT_SECONDS
+    failed = []
+    for path, rec in _pending():
+        if not _same_call(rec, session_id, command):
+            continue
+        why = _approve(rec, deadline)
+        if why is not None:
+            failed.append(why)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if not failed:
+        return None
+    return ("db-write-ask.sh could not record Dan's approval of the line this commit added to a " + TEST_LIST
+            + ": " + "; ".join(failed) + ". The line is not trusted, so a write on its project is asked about; to "
+            "have it approved, take the line out in one commit and put it back with a git commit "
+            "(claude-config#3023)")
+
+
+def _named_thing(text):
+    """What a command naming the list's file name names: the record of approved lines when the name
+    comes under a state folder, else the list."""
+    if "/".join(RECORD_PARTS) in text.lower().replace("\\", "/"):
+        return "this hook's record of the test project lines Dan approved (" + "/".join(RECORD_PARTS) + ")"
+    return TEST_LIST + ", the list of the test Supabase projects of a checkout,"
+
+
+def list_shell_change(command, cwd, sw, strip, session_id=None):
     """None when a Bash command neither writes a checkout's TEST_LIST nor commits a line added to
     one (claude-config#2989), else why it may. Before this, an `echo <ref> >>` into the list and
     then `git commit` made the project trusted with no question.
@@ -527,24 +807,35 @@ def list_shell_change(command, cwd, sw, strip):
     since that command could write the list, by a glob or a variable, before the commit stages it.
     A commit whose checkout cannot be told (a variable, --git-dir, GIT_DIR) is asked about.
 
-    WHAT IT CANNOT SEE: a list written by a script file run in an earlier call, or under a name
-    built at run time, and then committed by a command other than `git commit` (an alias,
-    `git commit-tree`, a merge, a cherry-pick, a pull). sw is lib/shell-words.py and strip db-write-calls'
-    strip_redirects, which with found lists the redirections it took out."""
+    The question about a commit adding lines is how a line comes to be trusted (claude-config#3023):
+    it names up to LINES_SHOWN of them, and notes those for commit_ran under session_id, the hook
+    payload's session (ask_recorded). A yes to any other question here approves no line. A list one
+    of these commands cannot see being committed (a script, a name built at run time, an alias,
+    `git commit-tree`, a merge, a cherry pick, a pull) is not a gap any more: its lines reach HEAD
+    with no question, are on no record, and so mark nothing. sw is lib/shell-words.py and strip
+    db-write-calls' strip_redirects, which with found lists the redirections it took out."""
     name = _list_name()
     named = name in command.lower()
     if not named and "commit" not in command:
         return None
+    forget_asks(session_id, command)
     here = cwd if isinstance(cwd, str) and cwd.startswith("/") else ""
     records = sw.every_command(command, here)
     rest = command
     before = []
     deadline = time.monotonic() + COMMIT_SECONDS
+    staged = None
     for d, text, _, why, _ in records:
         if name in text.lower():
             if why or not _only_reads(text, sw, strip, GIT_LIST_READS):
-                return ("the command `" + _shown(text) + "` names " + TEST_LIST + ", the list of the test "
-                        "Supabase projects of a checkout, and is not one that only reads it")
+                held = ("the command `" + _shown(text) + "` names " + _named_thing(text)
+                        + " and is not one that only reads it")
+                # A git add or rm of the list only stages it, so its question waits for the end: a
+                # commit after it in the same command is asked about first, by the question that
+                # names the lines, whose yes is the one that approves them (claude-config#3023).
+                if why or not _only_reads(text, sw, strip, GIT_BEFORE_COMMIT):
+                    return held
+                staged = staged or held
             rest = rest.replace(text, "", 1)
         words = _words_of(text, sw, strip)
         g = sw.git_read(words) if words else None
@@ -560,15 +851,23 @@ def list_shell_change(command, cwd, sw, strip):
         if not folder.startswith("/") or "$" in folder or "`" in folder:
             return ("the command `" + _shown(text) + "` commits in a checkout this hook cannot tell, so "
                     "whether it adds a project to a " + TEST_LIST + " could not be told")
-        lists, added, why = _list_additions(folder, deadline)
+        # Nothing before this commit but a cd or a read: it can take no file git does not track.
+        alone = all(not unread and _only_reads(t, sw, strip, GIT_LIST_READS, ("cd",)) for t, unread in before)
+        lists, added, why = _list_additions(folder, deadline, untracked=not alone)
         if why is not None:
             return ("the command `" + _shown(text) + "` commits, and whether it adds a project to a "
                     + TEST_LIST + " could not be told: " + why)
         if added:
-            shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120) for p, l in added[:3])
-            return ("the command `" + _shown(text) + "` would commit " + shown + (", and more" if len(added) > 3 else "")
+            # Each line once, though the index and the working tree may both hold it.
+            added = list(dict.fromkeys(added))
+            shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120)
+                              for p, l, _ in added[:LINES_SHOWN])
+            lost = ask_recorded(session_id, command, folder, added[:LINES_SHOWN], deadline)
+            return ("the command `" + _shown(text) + "` would commit " + shown
+                    + (", and more, which a yes here does not approve" if len(added) > LINES_SHOWN else "")
                     + ", and a project on a committed " + TEST_LIST + " has its supabase db query -f runs pass "
-                    "without asking")
+                    "without asking once Dan has said yes to the commit adding it"
+                    + ("" if lost is None else ". " + lost))
         if lists:
             for t, unread in before:
                 # cd, a reader, or a git add, rm or read, writing nothing by a redirection or option.
@@ -577,6 +876,8 @@ def list_shell_change(command, cwd, sw, strip):
                 return ("the command commits in a checkout holding " + ", ".join(_shown(p, 120) for p in lists[:3])
                         + " after `" + _shown(t) + "`, which could write the list before the commit stages it")
         before.append((text, why))
+    if staged is not None:
+        return staged
     if named and name in rest.lower():
         return ("the command names " + TEST_LIST + ", the list of the test Supabase projects of a "
                 "checkout, where this hook cannot tell whether it writes it (a heredoc, or a string it "

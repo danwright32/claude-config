@@ -1030,9 +1030,20 @@ printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
 LIST="$TESTP/.claude/supabase-test-projects"
 TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null)
 "${TESTP_GIT[@]}" init -q
-commit_list() {  # commit_list <printf format>: the list holding that text, committed
+# commit_list <printf format>: the list holding that text, committed as Dan answering yes. Since
+# claude-config#3023 a line counts only when a commit that passed the hook's question put it there,
+# so the hook reads the commit before it runs (asking when it adds a line), git commits, and the
+# hook is told the call ran, as the settings do after every Bash call. Committing behind the hook's
+# back, as this helper did before, now leaves the line untrusted, which
+# test-db-write-ask-approved-lines.sh holds for each route.
+commit_list() {
+  local call
   printf "$1" > "$LIST"
-  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects && "${TESTP_GIT[@]}" commit -q -m list
+  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects || return
+  call="$(apply_payload 'git commit -q -m list' "$TESTP" s1 "$NONE_T")"
+  run "$HOOK" "$EMPTY_HOME" "$call" >/dev/null
+  "${TESTP_GIT[@]}" commit -q -m list >/dev/null 2>&1
+  (cd "$WORK" && printf '%s' "$call" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" --ran >/dev/null 2>&1)
 }
 LIST_TEXT='# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n'
 commit_list "$LIST_TEXT"
@@ -1170,13 +1181,14 @@ shell_list "a commit after another command in a checkout with no list passes" no
 # test-db-write-ask-git-fails.sh: a fake git there names the git command that lists a checkout,
 # and the push gate runs any suite naming it before every push, which this one is too slow for
 # (PR #2999, see that suite's header). The library missing is asked about, naming it, below.
-# An untracked list that cannot be read is asked about, saying so.
+# An untracked list that cannot be read is asked about, saying so, by a commit an add comes before:
+# a commit alone cannot take a file git does not track, and since #3023 does not look for one.
 mkdir -p "$TESTP/locked/.claude"; printf 'liveprojectref000009\n' > "$TESTP/locked/.claude/supabase-test-projects"
 chmod 000 "$TESTP/locked/.claude/supabase-test-projects"
 if cat "$TESTP/locked/.claude/supabase-test-projects" >/dev/null 2>&1; then
   check "an unreadable untracked list is asked about (#2989)" "UNMEASURED: this user can read a file with no permissions (root?), so the unreadable case cannot be made"
 else
-  r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+  r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git add -A && git commit -m x' "$TESTP" s1 "$NONE_T")")"
   case "$(decision "$r")|$(field "$r" reason)" in
     "ask rc=0|"*"locked/.claude/supabase-test-projects could not be read (PermissionError)"*) check "an unreadable untracked list is asked about (#2989)" ok ;;
     *) check "an unreadable untracked list is asked about (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
@@ -1215,8 +1227,10 @@ esac
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'ls -la' "$TESTP" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" ok || check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" "$(decision "$r")"
 rm -rf "$WORK/part"
-# A commit is no database call: python3 failing asks about it as a commit, and python3 missing passes
-# it, since without python3 no list is trusted. An Edit holding the word is never read as one.
+# A commit is no database call: python3 failing, or missing, asks about it as a commit (missing
+# passed it until #3023, on the ground that no list is trusted without python3; the question about a
+# commit is now how a line comes to be trusted, so it fails closed like the rest). An Edit holding
+# the word is never read as one.
 PYFAIL="$APPLY/pyfail"; mkdir -p "$PYFAIL"
 printf '#!/bin/sh\nexit 1\n' > "$PYFAIL/python3"; chmod +x "$PYFAIL/python3"
 CP="$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")"
@@ -1230,7 +1244,10 @@ r="$(PATH="$PYFAIL:$PATH" run "$HOOK" "$EMPTY_HOME" "$EP")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" ok || check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" "$(decision "$r") $(field "$r" reason)"
 if ! npp_reaches_python3 "$NOPY"; then
   r="$(run_nopy "$CP")"
-  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a commit passes, since no list is trusted then (#2989)" ok || check "with no python3, a commit passes, since no list is trusted then (#2989)" "$(decision "$r") $(field "$r" reason)"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"before this commit"*"python3 is not on PATH"*) check "with no python3, a commit is asked about, naming python3 (#3023)" ok ;;
+    *) check "with no python3, a commit is asked about, naming python3 (#3023)" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
 fi
 
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
