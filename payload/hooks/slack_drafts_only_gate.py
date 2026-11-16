@@ -560,8 +560,15 @@ JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx"
 # require('x'), and process.getBuiltinModule('x'), which loads a builtin by its name with no require or
 # import (claude-config#2476). Read from the code with its comments blanked (js_code): an import written
 # in a comment is an example, and following it refused every suite importing a harness that shows one
-# (#2397).
-IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# (#2397). And the test runners' own loaders (claude-config#3020): vi.importActual, jest.requireActual,
+# vi.importMock, jest.requireMock, jest.createMockFromModule and jest.genMockFromModule each load the
+# module they name, the original or the original read to build a mock of its shape, so a test file
+# reaching a module that posts only through one of them passed unread. A TypeScript type argument may
+# stand between the name and its call (`vi.importActual<typeof import("./x")>("./x")`).
+JS_RUNNER_LOADS = (r"\b(?:importActual|requireActual|importMock|requireMock|createMockFromModule|genMockFromModule)"
+                   r"(?:\s*<[^()'\"`]*(?:\([^()'\"`]*\)[^()'\"`]*)*>)?\s*\(")
+IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\(|"""
+                         + JS_RUNNER_LOADS + r""")\s*(['"`])([^'"`\n]+)\1""")
 # A type only import statement, up to its from: `import type { A, B as C }`, `import type A`,
 # `import type * as ns` (claude-config#2526). The whole statement is erased before anything runs, so
 # the module it names is never loaded. Measured 2026-11-10 (bun 1.3.11, node 22.22.2, deno, with and
@@ -895,7 +902,10 @@ JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|
                      r"mainModule)\b")
 # JS_ACTS's quoted module names, read in strings too (js_acts blanks strings for the rest).
 JS_ACTS_MODULE = re.compile(r"""['"](node:)?(https?|net|tls|http2|dgram)['"]""")
-JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# A test runner's loader handed a name that is not written out is one more of these (JS_RUNNER_LOADS,
+# claude-config#3020).
+JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])|"""
+                        + JS_RUNNER_LOADS + r"""\s*(?!['"`\s])""")
 # What can run a string as code, so that import text inside a string is an import after all
 # (claude-config#2484, signed off by Dan on 2026-11-09: import text in an ordinary string literal is not
 # followed, a string handed to something that runs it as code still is). eval, Function and the routes
@@ -1287,9 +1297,11 @@ def sh_command_at(text, start, at):
 # (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
 # but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
 # 973,000, and sh_locals asks once per local (claude-config#2784).
-# Each is compiled only when sh_binds first reaches it for that name: most names are settled by the
-# first, and compiling all three for each of the claude-sync suite's 1,000 names was a twentieth of
-# judging it (claude-config#2918).
+# Each is compiled for a name only when a text could need it (claude-config#2918): the assign form only
+# for a name that is not one run of word characters, since sh_assign_starts finds the rest with
+# str.find; the arithmetic form only for a text holding "(("; the binders only for a line holding the
+# name and one of SH_BINDER_WORDS. Compiling all three for each of the claude-sync suite's 1,000 names
+# was a twentieth of judging it.
 @functools.lru_cache(maxsize=None)
 def sh_bind_pattern(kind, name):
     n = re.escape(name)
@@ -1298,6 +1310,33 @@ def sh_bind_pattern(kind, name):
     if kind == "arithmetic":
         return re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b")
     return re.compile(SH_BINDERS.format(n))
+
+
+# The words a binder (SH_BINDERS) must hold, one of them in its match: a text or a line with none of
+# them binds nothing that way.
+SH_BINDER_WORDS = re.compile(r"read|for|select|local|declare|typeset|export|unset|getopts|mapfile|let|printf|\$\{")
+# What sh_bind_pattern("assign") matches after the name, and a character before it that makes the name
+# the end of a longer word.
+SH_ASSIGN_TAIL = re.compile(r"(?:\[[^\]\n]*\])?\+?=")
+SH_WORD_BEFORE = re.compile(r"[\w$]")
+
+
+def sh_assign_starts(name, text):
+    """Where sh_bind_pattern("assign", name).finditer(text) finds a match, in order, found with
+    str.find and two patterns compiled once rather than one compiled for each name (claude-config#2918).
+    A name that is not one run of word characters is left to that pattern."""
+    if not SH_WORD_RUN.fullmatch(name):
+        for m in sh_bind_pattern("assign", name).finditer(text):
+            yield m.start()
+        return
+    width, at = len(name), text.find(name)
+    while at >= 0:
+        tail = None if at and SH_WORD_BEFORE.match(text, at - 1) else SH_ASSIGN_TAIL.match(text, at + width)
+        if tail:
+            yield at
+            at = text.find(name, tail.end())
+        else:
+            at = text.find(name, at + 1)
 
 
 @functools.lru_cache(maxsize=None)
@@ -1331,8 +1370,6 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
 SH_UNKNOWN_DIR = "${unknown directory}"
-# A here string that is one file's text, the file named by a plain word (stdin_of, claude-config#2887).
-HERE_FILE = re.compile(r"""("?)\$\((?:cat\s+|<\s*)([^\s$`()"'\\|;&<>*?\[\]{}~]+)\s*\)\1""")
 # An assignment, as raw_words steps past it: plain, an append, or an array element.
 SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # The builtins that cannot change a shell variable, the only commands a `local` value is taken across
@@ -1487,7 +1524,9 @@ _data_names = load_lib("data_names", "data-names.py")
 DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 # Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
 # for one command in a function, and a function that evaluates its argument (claude-config#2912).
-ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM)
+# It also reads text handed to eval, to a shell's -c or to such a function through a variable or a
+# substitution (handed_text_reason, claude-config#3020), for which it is given SH_UNKNOWN_DIR.
+ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, SH_UNKNOWN_DIR)
 # The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
 _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The cache of the calls this gate allowed (claude-config#2918).
@@ -1613,6 +1652,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
         self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
         self.indirect_memo = {}  # {a command's text: sh_indirect's answer for it}
+        self.tokens_memo = {}  # {a text: its sh_tokens, as a tuple}
         # {id of a walk's result: (that result, the starts of its uncertain spans in order, the furthest
         # end of the spans up to each)}, for sh_cwd_at
         self.cwd_spans = {}
@@ -2070,10 +2110,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if kind == "<<<":
                 v = self.sh_value(target, d) if target is not None else None
                 # A here string of one file's text (`<<< "$(cat post.sh)"`, `<<< $(<post.sh)`) is
-                # that file (claude-config#2887).
-                m = HERE_FILE.fullmatch(target or "") if v is None else None
-                stdin = (self.pieces_of(m.group(2), d) if m else
-                         self.text_piece(None if v is None else v + "\n", "a here-string"))
+                # that file (claude-config#2887), read as text handed to eval is (text_of_file, #3020).
+                found = self.text_of_file(target, d) if v is None else None
+                stdin = found if found is not None else \
+                    self.text_piece(None if v is None else v + "\n", "a here-string")
             elif kind in ("<<", "<<-"):
                 body, is_body = self.fed(text, whole)
                 quoted = target is not None and re.search(r"['\"\\]", target)
@@ -2101,12 +2141,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pieces = self.stdin_of(d, text, whole, redirs)
         return [("unknown", None, "")] if pieces is None else pieces
 
-    def fed_reason(self, name, pieces, read_file, read_text):
+    def fed_reason(self, name, pieces, read_file, read_text, unread=None):
         """The reason what a program reads on its input posts, or None (claude-config#2887): each piece
         read as the same text handed by name is, a file by read_file(path, its word) and text by
         read_text(text). Code a program was given to write it names what it names, as script() reads
         it. A piece whose text cannot be worked out, what any program the gate does not read prints
-        (a download, say) or a file it may have written, is refused: the gate cannot see what it holds."""
+        (a download, say) or a file it may have written, is refused: the gate cannot see what it holds.
+        unread(where it came from) words that refusal for text read another way than on the input."""
         for kind, value, label in pieces:
             if kind == "file":
                 reason = read_file(value, label or value)
@@ -2120,6 +2161,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # note_unreadable leaves alone; what such a script does with a file it is handed is
                 # judged where it is handed one (sh_stdin_acts).
                 continue
+            elif unread:
+                reason = self.unfollow(unread(f", which comes from {label}" if label else ""))
             else:
                 came = f", which comes from {label}," if label else ""
                 reason = self.unfollow(f"{name} reads its input{came} and what that holds cannot be read, so "
@@ -2135,12 +2178,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         each ran the file's text unread. A file is read as the script it is when handed by name, and
         text as the commands or code it is (a heredoc's, as before, where the command is)."""
         pieces = self.fed_pieces(d, text, whole)
-        if pieces is False:
-            return None
+        return None if pieces is False else self.pieces_reason(name, pieces, d, depth, shell_hint, lang)
 
+    def pieces_reason(self, name, pieces, d, depth, shell_hint, lang, file_how="runs what it reads on its input",
+                      text_how="runs commands from its input", unread=None):
+        """The reason pieces of code name runs post, or None: input_code's reading, which text handed
+        to eval or a shell's -c shares (handed_text_reason, claude-config#3020) with its own wording
+        (file_how, text_how, and unread for a piece that cannot be read, as fed_reason takes it)."""
         def read_file(path, word):
             reason = self.script(path, d, depth, shell_hint, lang, f"the script {word}")
-            return f"{name} runs what it reads on its input: {reason}" if reason else None
+            return f"{name} {file_how}: {reason}" if reason else None
 
         def read_text(body):
             hit = MARKER.search(body)
@@ -2149,13 +2196,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     inner = self.line(body, d, depth + 1, body)
                 except self.sw.Unreadable:
                     inner = f"it names {hit.group(0)}" if hit else None
-                return f"{name} runs commands from its input, one of which posts: {inner}" if inner else None
+                return f"{name} {text_how}, one of which posts: {inner}" if inner else None
             if hit:
-                return f"{name} runs a script from its input that names {hit.group(0)}"
+                return f"{name} runs a script from its input that names {hit.group(0)}" if unread is None else \
+                    f"{name} {text_how}, which names {hit.group(0)}"
             here = os.path.abspath(d or os.getcwd())
             return self.imports(f"the script {name} reads from its input", None, here, body, lang) if lang else None
 
-        return self.fed_reason(name, pieces, read_file, read_text)
+        return self.fed_reason(name, pieces, read_file, read_text, unread)
 
     def split_here(self, name, operand, d, text, whole, depth, shell_hint, lang):
         """input_code for a here string the shared reader split into words (`sh <<< $(cat post.sh)`
@@ -3979,14 +4027,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # Counted only until the count passes allowed, which settles it: sh_locals asks this of the
         # whole of claude-sync less the bodies around one local, 629 times for the claude-sync suite,
         # and counting every assignment there was 0.4 s of it (claude-config#2918).
+        # No pattern is compiled for name where none is needed (claude-config#2918): an assignment is
+        # found by str.find (sh_assign_starts), and each pattern below holds a piece of text of its own,
+        # so a text without that piece is settled without one. That was 1,400 of the 2,300 patterns
+        # compiled judging the claude-sync suite, 0.07 s, each also pushing out of the re module's
+        # cache a pattern the rest of the gate asks it for.
         count = 0
-        for m in sh_bind_pattern("assign", name).finditer(text):
-            if not sh_comment_at(text, m.start()) and not sh_quoted_word_at(text, m.start()):
+        for at in sh_assign_starts(name, text):
+            if not sh_comment_at(text, at) and not sh_quoted_word_at(text, at):
                 count += 1
                 if count > allowed:
                     return True
-        if any(not sh_comment_at(text, m.start()) for m in sh_bind_pattern("arithmetic", name).finditer(text)):
+        if "((" in text and any(not sh_comment_at(text, m.start())
+                                for m in sh_bind_pattern("arithmetic", name).finditer(text)):
             return True
+        if not SH_BINDER_WORDS.search(text):
+            return False
         # A binder never spans a line (no newline can sit inside one), so only the lines that hold the
         # name are read, each by its own bounds: a lookbehind and \b still see the text around them,
         # and the line break at the end reads as the end does. The same matches as one pass over the
@@ -3998,6 +4054,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             end = text.find("\n", at)
             end = len(text) if end < 0 else end
             pos = start if not text[start:end].lstrip(" \t").startswith("#") else end
+            if not SH_BINDER_WORDS.search(text, pos, end):
+                pos = end  # no binder's own word on this line
             while pos < end:
                 binders = binders or sh_bind_pattern("binders", name)
                 m = binders.search(text, pos, end)
@@ -4631,13 +4689,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return re.sub(r"\\(.)", lambda e: "" if e.group(1) == "\n" else
                       e.group(1) if e.group(1) in "$`\"\\" else "\\" + e.group(1), m.group(1), flags=re.S)
 
-    def sh_eval_call(self, head, evals):
+    def sh_eval_call(self, head, evals, raw=False):
         """For a command mentioning a function of evals (name: the positions of the arguments it
         evaluates in the caller's shell): the texts it evaluates, where it is a plain call whose
         evaluated arguments are written out; False where it is anything else (an argument built from
         a variable, the name in a trap, or a word of its own handed to another command), as what it
         then evaluates cannot be read. None where it mentions none of them, or names one only inside
-        a longer string another command is handed (a message, text printf writes to a file)."""
+        a longer string another command is handed (a message, text printf writes to a file). With
+        raw, a plain call's evaluated arguments as written, written out or not (claude-config#3020)."""
         # Every command of a text is asked this (sh_eval_text_reason), and a command can mention a
         # name only where it holds it, so one without any is passed over before any search, and the
         # rest searched by one pattern for the whole set of names (#2918).
@@ -4649,11 +4708,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         toks = self.sh_tokens(self.sw.command_rest(self.sh_strip_openers(head))[0])
         raws, k = [], 0
         while k < len(toks):
-            kind, raw = toks[k]
+            kind, tok = toks[k]
             if kind == "op":
-                k += 2 if SH_REDIRECT.fullmatch(raw) else 1
+                k += 2 if SH_REDIRECT.fullmatch(tok) else 1
                 continue
-            raws.append(raw)
+            raws.append(tok)
             k += 1
         if raws and raws[0] not in evals and raws[0] != "trap" and \
                 not any(re.sub(r"""['"]""", "", w) in evals for w in raws):
@@ -4665,14 +4724,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         rest = " ".join(raws[1:])
         if mention.search(rest):
             return False
-        lits = []
-        for n in sorted(evals[raws[0]]):
-            if n < len(raws):
-                lit = self.sh_literal_word(raws[n])
-                if lit is None:
-                    return False
-                lits.append(lit)
-        return lits
+        handed = [raws[n] for n in sorted(evals[raws[0]]) if n < len(raws)]
+        if raw:
+            return handed
+        lits = [self.sh_literal_word(w) for w in handed]
+        return False if any(lit is None for lit in lits) else lits
 
     def sh_lit_heads(self, lit, cwd):
         """The commands a written out condition runs, each with its openers taken off, or None where
@@ -4853,7 +4909,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return argv, env
 
     def sh_tokens(self, s):
-        """s's words and operators, as (kind, raw text), up to the first unquoted line break."""
+        """s's words and operators, as (kind, raw text), up to the first unquoted line break, read once
+        for each text, as a list of the caller's own: judging the claude-sync suite asked for 50,000
+        readings of 20,000 texts, 0.09 s of them repeats (claude-config#2918)."""
+        got = self.tokens_memo.get(s)
+        if got is None:
+            got = self.tokens_memo[s] = tuple(self.sh_tokens_read(s))
+        return list(got)
+
+    def sh_tokens_read(self, s):
+        """sh_tokens, read afresh."""
         out, i, n = [], 0, len(s)
         while i < n:
             c = s[i]
@@ -5477,10 +5542,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return f"{name} sends a request whose address comes from a variable, and the command names {hit.group(0)}"
             # A config file curl is handed is the request it describes (claude-config#2887).
             return self.curl_config(name, words, d, text, whole) if name in ("curl", "curlie") else None
+        if name == "eval" and why == sw.WHY_VARIABLE:
+            # Text handed through a variable or a substitution, read where the gate can read it
+            # (handed_text_reason in lib/sh-walk-shapes.py, claude-config#3020).
+            reason = self.handed_text_reason("eval", self.raw_words(text)[1:], d, depth)
+            if reason:
+                return reason
         if name in SHELLS:
             if wrapper.endswith(" -c") and not why:
                 return None  # its string's commands are the records after this one
             operand, inline, stdin = self.operands(words)
+            if wrapper.endswith(" -c") and why == sw.WHY_VARIABLE:
+                code = self.operands(self.raw_words(text) or words)[1]  # the code word as written (#3020)
+                reason = self.handed_text_reason(f"{name} -c", [code[1]], d, depth) if code else None
+                if reason:
+                    return reason
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
             # The shell by name, which decides how a file with a NUL in its first line is read (#2977).
@@ -6782,6 +6858,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             cur = parent
 
     @staticmethod
+    @functools.lru_cache(maxsize=1024)
     def fed(text, whole):
         """(what a command reading its input is fed, whether that is a heredoc body) for one record.
 
@@ -6790,6 +6867,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pipeline the command sits in, so the line holding it is what feeds it. Where neither can be
         found, the whole line is, which can only refuse more, never less. The same command written
         twice in a script reads the same here, so every place it is written counts.
+
+        Worked out once for each (text, whole): it depends on them alone, and judging the claude-sync
+        suite asked it 285 times of 190, the repeats 0.08 s of searching the suite's 1.8 MB again
+        (claude-config#2918).
         """
         lines, starts = lines_of(whole)
         key = text.strip()
