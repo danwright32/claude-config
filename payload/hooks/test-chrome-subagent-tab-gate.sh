@@ -95,6 +95,9 @@ echo "chrome subagent tab gate: a subagent's call that names no tab is refused"
 run "${C}navigate" '{"url": "https://example.com"}' "$SUB" general-purpose
 refused "a subagent may not navigate without naming a tab"
 says "and it says why" "first tab"
+# claude-config#3095: a tab the agent's own click opened is the one tabId it may take from the
+# list, to close it, so the refusal must not forbid that outright.
+says "and the tabs_context_mcp prohibition carries its one exception" "except to close a tab your own click opened"
 says "and tells it to pass its own tabId" "tabId"
 says "and where that tabId comes from" "tabs_create_mcp"
 says "and names the tool it refused" "${C}navigate"
