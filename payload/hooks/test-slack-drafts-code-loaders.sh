@@ -1073,8 +1073,8 @@ echo "slack drafts only: a launcher's package run is read as one beside a folder
 # and an endpoint in its arguments was not seen either. No launcher reads such a word as a file: npm
 # takes a word for a path only where it starts with . / or ~, or holds a / outside a scope. So a
 # package spec is always read as the package, and as the file of that name as well where there is
-# one, the call refused where either reading refuses. A word that can only be a path (./x) is read as
-# the file alone. Measured through this wrapper on main at 2963c2b: every command in the first list
+# one, the call refused where either reading refuses. A word that can only be a path (./x) was read as
+# the file alone, and since #3083 (the section below) only where it names a script. Measured through this wrapper on main at 2963c2b: every command in the first list
 # below passed but `npx @acme/tool --method chat.postMessage`, which was refused as a path run with an
 # endpoint in its arguments, and every command in the list with no folder was refused.
 PB="$T/p3069/beside"; PN="$T/p3069/alone"
@@ -1140,7 +1140,7 @@ for runs in "npx @acme/ondisk quiet.json" \
 done
 run_pb "npx @acme/ondisk quiet.json"
 says "#3069 and the refusal is the script's, in the words it had before" "the script @acme/ondisk runs a command that posts"
-# A word that can only be a path is read as the file alone, where the path reading is the right one:
+# A path naming a script is read as the file alone, where the path reading is the right one:
 # the gate reads the script, so a quiet one handed a data file naming an endpoint passes, which a
 # package (code the gate cannot read) handed the same file does not, and one that posts is refused as
 # the script it is.

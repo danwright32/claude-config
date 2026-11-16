@@ -89,7 +89,7 @@ FH_RUNNER_WORDS='awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*
 # os.system) or as SQL (a client's execute or query, a tagged sql template). The lessons advisory
 # reads a test file's string as code only on a line holding one (claude-config#3083). Bare run( and
 # call( are left out on purpose: they are what a suite names its own helpers, and of the 150 added
-# lines measured for #3083 they were the commonest call a fixture string was handed to. No backslash
+# lines measured for #3083 on 2026-11-16 they were the commonest call a fixture string was handed to. No backslash
 # in it, so it travels through the environment into awk unchanged.
 FH_RUNNER_CALLS='(^|[^A-Za-z0-9_$])(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|check_call|check_output|getoutput|getstatusoutput)[[:space:]]*[(]|subprocess[.](run|call)[[:space:]]*[(]|[.](execute|executemany|executescript|query|unsafe|raw|rpc)[[:space:]]*[(]|(^|[^A-Za-z0-9_$])(sql|SQL)[[:space:]]*[`]'
 

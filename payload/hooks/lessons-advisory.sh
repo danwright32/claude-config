@@ -451,7 +451,7 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 }
 
 # One flag per added line for the trigger above: 1 where the line is judged, 0 where it is data.
-# Outside a shell TEST file every line is judged, exactly as before: a script in source that writes
+# Outside a TEST file every line is judged, exactly as before: a script in source that writes
 # a command out with printf and runs it later is the case that must still fire, and a SQL statement
 # in a string is how most code issues one. In a shell test file a line is judged on its CODE text,
 # read by the stripper the other triggers use (lib/failure-handling.sh, L370), so a quoted argument
