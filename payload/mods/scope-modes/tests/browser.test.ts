@@ -206,6 +206,68 @@ describe('a batch, item by item', () => {
     expect(batch([{ name: 'computer', input: { tabId: 7, action: 'screenshot' } }, { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } }], own({ 7: 'localhost' }))).toBeUndefined()
     expect(batch([click, { name: 'read_page', input: { tabId: 8 } }], own({ 7: 'localhost', 8: 'localhost' }))).toBeUndefined()
   })
+  // #3107: closing a tab reaches no host, so the close is the one item a tab still takes after an
+  // action that may have moved its page. Which tabs may be closed is the rule a close alone obeys.
+  const click = { name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }
+  const close = (tabId?: number) => ({ name: 'tabs_close_mcp', input: tabId === undefined ? {} : { tabId } })
+  test('after a click, or any other action that may move the page, the tab can be closed in the same batch (#3107)', () => {
+    expect(batch([click, close(7)], own({ 7: 'localhost' }))).toBeUndefined()
+    expect(batch([click, { name: `${C}tabs_close_mcp`, input: { tabId: 7 } }], own({ 7: 'localhost' }))).toBeUndefined()
+    for (const moved of [
+      { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } },
+      { name: 'computer', input: { tabId: 7, action: 'key', text: 'Return' } },
+      { name: 'form_input', input: { tabId: 7, ref: 'r', value: 'v' } },
+      { name: 'javascript_tool', input: { tabId: 7, text: 'location.href' } },
+      { name: 'navigate', input: { tabId: 7, url: 'localhost:3000' } },
+    ])
+      expect({ moved, r: batch([moved, close(7)], own({ 7: 'localhost' })) }).toEqual({ moved, r: undefined })
+    // Two clicks of two tabs, each tab closed after its own.
+    expect(batch([click, { name: 'computer', input: { tabId: 8, action: 'left_click', coordinate: [1, 2] } }, close(7), close(8)], own({ 7: 'localhost', 8: 'localhost' }))).toBeUndefined()
+  })
+  test('the close is the only thing lifted: a read, a click, typing or a navigate off a test host after the click is still refused, before the close or after it (#3107)', () => {
+    const b = own({ 7: 'localhost' })
+    expect(batch([click, { name: 'get_page_text', input: { tabId: 7 } }, close(7)], b)).toMatch(/^use mcp__claude-in-chrome__get_page_text on tab 7 after an action in the same batch that may have left the test host/)
+    expect(batch([click, click, close(7)], b)).toMatch(/^use mcp__claude-in-chrome__computer on tab 7 after an action in the same batch that may have left the test host/)
+    expect(batch([click, { name: 'navigate', input: { tabId: 7, url: 'bank.example.com' } }, close(7)], b)).toMatch(/^open bank\.example\.com in the browser/)
+    expect(batch([click, { name: 'navigate', input: { tabId: 7, url: 'back' } }, close(7)], b)).toMatch(/^go back in the browser/)
+    // The close reads no host, so it does not stand in for the navigate that does.
+    for (const later of [
+      { name: 'get_page_text', input: { tabId: 7 } },
+      { name: 'read_page', input: { tabId: 7 } },
+      { name: 'computer', input: { tabId: 7, action: 'screenshot' } },
+      { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } },
+      click,
+      { name: 'javascript_tool', input: { tabId: 7, text: 'document.cookie' } },
+    ])
+      expect({ later, r: batch([click, close(7), later], b) }).toEqual({ later, r: `use ${C}${later.name} on tab 7 after an action in the same batch that may have left the test host` })
+    expect(batch([click, close(7), { name: 'navigate', input: { tabId: 7, url: 'bank.example.com' } }], b)).toMatch(/^open bank\.example\.com in the browser/)
+    // The action before the close is judged as it always was.
+    expect(batch([click, close(7)], own({ 7: 'bank.example.com' }))).toMatch(/^use mcp__claude-in-chrome__computer on tab 7, whose page is on bank\.example\.com/)
+    expect(batch([click, close(7)], own({ 7: null }))).toMatch(/^use mcp__claude-in-chrome__computer on tab 7, whose page is not on a test host/)
+    expect(batch([click, close(7)], own())).toMatch(/^use mcp__claude-in-chrome__computer on tab 7, which this session did not create/)
+  })
+  test('a close after a click in the same batch closes only what a close alone may: a created tab, or one its own action opened (#3107)', () => {
+    const NEVER = /^use mcp__claude-in-chrome__tabs_close_mcp on tab (\d+), which this session did not create and did not see appear in its tab group after its own action/
+    const why = 'the record of tabs opened by this session could not be read (disk full)'
+    const cases: [string, Browser, number | undefined][] = [
+      ['a tab that was there before', own({ 7: 'localhost' }), 3],
+      ['a tab nobody recorded', { tabs: tabs({ 7: 'localhost' }), listed: [], opened: ['12'] }, 13],
+      ['an opened tab while the record of them cannot be read', { tabs: tabs({ 7: 'localhost' }), listed: [], opened: { unreadable: why } }, 12],
+      ['no tab named', own({ 7: 'localhost' }), undefined],
+    ]
+    // Each is refused inside the batch with the very words a close alone gets.
+    for (const [what, b, tab] of cases) {
+      const alone = refuse('tabs_close_mcp', tab === undefined ? {} : { tabId: tab }, b)
+      expect({ what, alone }).toEqual({ what, alone: expect.stringMatching(/^use mcp__claude-in-chrome__tabs_close_mcp /) })
+      expect({ what, r: batch([click, close(tab)], b) }).toEqual({ what, r: alone })
+      expect({ what, r: batch([click, close(7), close(tab)], b) }).toEqual({ what, r: alone })
+    }
+    expect(batch([click, close(3)], own({ 7: 'localhost' }))).toMatch(NEVER)
+    expect(batch([click, close(12)], { tabs: tabs({ 7: 'localhost' }), listed: [], opened: { unreadable: why } })).toMatch(/on tab 12, which this session did not create, and whether its own action opened it is not known, because the record/)
+    // What a close alone may close, the batch may: the tab its click opened, and its own tab with the record of opened tabs unreadable.
+    expect(batch([click, close(12), close(7)], { tabs: tabs({ 7: 'localhost' }), listed: [], opened: ['12'] })).toBeUndefined()
+    expect(batch([click, close(7)], { tabs: tabs({ 7: 'localhost' }), listed: [], opened: { unreadable: why } })).toBeUndefined()
+  })
   test('a tab made inside the batch, a nested batch, and a refused item refuse the whole batch', () => {
     expect(batch([{ name: 'tabs_create_mcp', input: {} }, { name: 'navigate', input: { tabId: 99, url: 'localhost' } }], own())).toMatch(/on tab 99, which this session did not create/)
     expect(batch([{ name: 'browser_batch', input: { actions: [] } }], own())).toMatch(/^use mcp__claude-in-chrome__browser_batch inside a browser_batch/)

@@ -7641,7 +7641,8 @@ page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
-after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
+which reaches no host and is judged as a close alone is), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
