@@ -456,6 +456,48 @@ home = os.environ.get("HOME")
 os.environ["HOME"] = "/elsewhere"
 expect("the same text with another HOME is a miss", jc.Parses(d, code).get(big, "/w") is None)
 os.environ["HOME"] = home
+# A cd to ~someuser is read by the reader from the password database, never HOME, so a parse kept
+# while that user's home was one folder is a miss once it has moved (claude-config#2918, the lessons
+# review of PR #3029). The database is stood in for, since a test cannot move a real user's home.
+import pwd, types
+real_getpwnam = pwd.getpwnam
+homes = {"someuser": "/Users/someuser"}
+def fake_getpwnam(name):
+    if name in homes:
+        return types.SimpleNamespace(pw_dir=homes[name])
+    raise KeyError(name)
+pwd.getpwnam = fake_getpwnam
+tilde = big + "cd ~someuser/repo && git push\n"
+where = []
+tilde_value = (sw.commands(tilde, "/w", parts=where), where)
+expect("the reader reads ~someuser from the password database (%r)" % (tilde_value[0][-1],),
+       tilde_value[0][-1][0] == "/Users/someuser/repo")
+td = os.path.join(work, "tilde")
+jc.Parses(td, code).put(tilde, "/w", tilde_value)
+expect("a parse naming ~someuser is kept and given back", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
+homes["someuser"] = "/Volumes/moved/someuser"
+expect("once someuser's home has moved, the kept parse is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
+del homes["someuser"]
+expect("and once someuser is gone, it is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
+homes["someuser"] = "/Users/someuser"
+expect("with the home back where it was, it is a hit again", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
+quoted = big + "cd \"~some\"'user'/repo; ls\n"
+jc.Parses(td, code).put(quoted, "/w", tilde_value)
+homes["someuser"] = "/Volumes/moved/someuser"
+expect("a quoted ~someuser is keyed too", jc.Parses(td, code).get(quoted, "/w") is None)
+homes["someuser"] = "/Users/someuser"
+def broken_getpwnam(name):
+    raise OSError("the directory service is not answering")
+pwd.getpwnam = broken_getpwnam
+expect("a password database that cannot answer is a miss, never a crash",
+       jc.Parses(td, code).get(tilde, "/w") is None)
+pwd.getpwnam = fake_getpwnam
+many = big + "".join("cd ~u%d/x\n" % i for i in range(jc.MAX_TILDE_NAMES + 1))
+md = os.path.join(work, "many-tildes")
+jc.Parses(md, code).put(many, "/w", (sw.commands(many, "/w"), []))
+expect("a text naming more users than the key looks up is not kept",
+       not os.path.isdir(md) or not [n for n in os.listdir(md) if n.endswith(".json")])
+pwd.getpwnam = real_getpwnam
 small = "echo hi\n" * 10
 jc.Parses(d, code).put(small, "/w", (sw.commands(small, "/w"), []))
 expect("a small text is not kept", len([n for n in os.listdir(d) if n.endswith(".json")]) == 1)

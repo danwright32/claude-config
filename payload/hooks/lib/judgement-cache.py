@@ -56,6 +56,7 @@ import importlib.util as _util
 import io
 import json
 import os as _os
+import re
 import secrets
 import stat as _stat
 import sys
@@ -774,7 +775,9 @@ def evict(dirpath, max_entries=None, max_total=None):
 #
 # KEYED (Parses.key) on the text's whole contents (its hash), never a path or a time; the reader's
 # code, as the bytes the gate ran it from; the directory it is read from; HOME, which the reader
-# reads for a cd to ~; and the Python. A text with any one of these different is a miss.
+# reads for a cd to ~; the home of every user a ~someuser in the text names (Parses.tilde_homes),
+# which it reads from the password database; and the Python. A text with any one of these different
+# is a miss.
 # SIGNED with the judgements' key (signing_key): the entry's body, as the bytes written, under an HMAC
 # with its key in a header line, so checking it costs no second serialisation. Anything wrong with an
 # entry is a miss and the text is read afresh. GIVEN BACK EXACTLY: a parse is kept only in the shape
@@ -829,6 +832,33 @@ def _parse_decode(enc):
     return cmds, parts
 
 
+# A cd to ~someuser is read by the reader (os.path.expanduser) from the password database, not HOME,
+# so a parse depends on where every user it names has their home (the lessons review of PR #3029).
+# The names it can ask are found in the text as written: whatever follows a ~ up to a slash or white
+# space, with the quotes and backslashes the reader would take out removed, and every leading part of
+# that, since a word can end at any character the shell treats as the end of one (`cd ~bob;`). That
+# asks more names than the reader would, each a lookup of a fraction of a millisecond: the claude-sync
+# suite and claude-sync between them name 20, about 4 ms in all (the median of seven runs,
+# 2026-11-16; the first took 16). A name holding white space is not looked
+# for; no macOS account's short name can hold one. A text naming more than MAX_TILDE_NAMES is not kept.
+MAX_TILDE_NAMES = 256
+MAX_TILDE_NAME = 255  # characters of one name; a longer run after a ~ is looked up to this length
+_TILDE_RUN = re.compile(r"~([^/\s]+)")
+_TILDE_QUOTING = str.maketrans("", "", "'\"\\")
+
+
+def tilde_names(s):
+    """Every user name a ~ in s could make the reader look up, or None when there are more than
+    MAX_TILDE_NAMES."""
+    names = set()
+    for m in _TILDE_RUN.finditer(s):
+        run = m.group(1)[:MAX_TILDE_NAME].translate(_TILDE_QUOTING)
+        names.update(run[:i] for i in range(1, len(run) + 1))
+        if len(names) > MAX_TILDE_NAMES:
+            return None
+    return names
+
+
 def _write(dirpath, name, data):
     """Write data to dirpath/name whole: under a temporary name, then renamed into place."""
     _os.makedirs(dirpath, mode=0o700, exist_ok=True)
@@ -851,13 +881,28 @@ class Parses:
 
     def __init__(self, dirpath, code):
         self.dirpath, self.code = dirpath, code
+        self._homes = {}  # user name -> where the reader would take ~name, asked once per run
+
+    def tilde_homes(self, s):
+        """{name: home} for every user a ~ in s names who has a home, as the reader would resolve it,
+        or None when s names too many to look up. A lookup that raises (a directory service not
+        answering) raises out of here, so the caller keeps or uses nothing."""
+        names = tilde_names(s)
+        if names is None:
+            return None
+        for name in names - self._homes.keys():
+            self._homes[name] = _os.path.expanduser("~" + name)
+        return {n: self._homes[n] for n in sorted(names) if self._homes[n] != "~" + n}
 
     def key(self, s, cwd):
         home = _os.environ.get("HOME")
         if not isinstance(s, str) or not isinstance(cwd, str) or not home:
             return None  # with no HOME the reader would ask the password database, which is not keyed
+        users = self.tilde_homes(s)
+        if users is None:
+            return None
         parts = {"format": PARSE_FORMAT, "kind": "parse", "reader": self.code, "cwd": cwd, "home": home,
-                 "python": [sys.version, sys.executable], "length": len(s),
+                 "users": users, "python": [sys.version, sys.executable], "length": len(s),
                  "text": _sha(s.encode("utf-8", errors="surrogatepass"))}
         return "parse-" + _sha(json.dumps(parts, sort_keys=True).encode("utf-8", errors="surrogatepass"))
 
