@@ -209,6 +209,32 @@ run_n7 "bash outerq.sh"
 allowed "#2977 a file bash sources whose part before the NUL posts nothing passes"
 run_n7 "source srcquiet.sh"
 read_refused "#2977 a file sourced by the session's own shell, which may be zsh, is refused"
+# $0 of such a file is the word that ran it, as any script's is (#2913), and of one that is sourced
+# the script that ran (claude-config#3020). It was left unknown, so a cd built from it was not
+# followed, and the file sourced after the cd was read from the folder the command ran in: a quiet
+# b.sh there passed while the script sourced the one beside itself, which posts.
+mkdir -p "$N7/hooks/lib" "$N7/q/hooks/lib"
+printf '%s\n' "$POST" > "$N7/hooks/b.sh"
+printf '%s\n' 'echo quiet' > "$N7/b.sh"
+printf '%s\n' 'echo quiet' > "$N7/q/hooks/b.sh"
+printf '%s\n' "$POST" > "$N7/q/b.sh"
+printf 'echo a\0b\ncd "$(dirname "$0")"\n. ./b.sh\n' > "$N7/hooks/zero.sh"
+cp "$N7/hooks/zero.sh" "$N7/q/hooks/zero.sh"
+printf 'cd "$(dirname "$0")"; . ./b.sh\0junk\n' > "$N7/hooks/lib/srczero.sh"
+cp "$N7/hooks/lib/srczero.sh" "$N7/q/hooks/lib/srczero.sh"
+printf '%s\n' '. "$(dirname "${BASH_SOURCE[0]}")/lib/srczero.sh"' > "$N7/hooks/runs-srczero.sh"
+cp "$N7/hooks/runs-srczero.sh" "$N7/q/hooks/runs-srczero.sh"
+run_n7 "dash hooks/zero.sh"
+refused "#3020 \$0 of a file with a NUL in its first line is the word that ran it, so the file it sources after a cd built from it is the one read"
+says "#3020 and that file posts" "REFUSED: this command posts to Slack"
+says "#3020 naming the file beside the script" "hooks/b.sh"
+run_n7 "cd $N7/q && dash hooks/zero.sh"
+allowed "#3020 the same script beside a quiet file passes, whatever the folder it ran from holds"
+run_n7 "bash hooks/runs-srczero.sh"
+refused "#3020 \$0 in such a file that bash sources is the script that ran"
+says "#3020 so the file it reaches is the one that posts" "REFUSED: this command posts to Slack"
+run_n7 "cd $N7/q && bash hooks/runs-srczero.sh"
+allowed "#3020 and the same beside a quiet file passes"
 
 echo "slack drafts only: NODE_OPTIONS, a perl glob, perl's \$SIG and sort by name, and a write in the background (claude-config#2912)"
 
@@ -861,6 +887,100 @@ for runs in "npx vitest run src/mocks-poster.test.ts" "./node_modules/.bin/vites
 done
 run_d9 "npx vitest run src/poster.test.ts"
 read_refused "#2359 the same test without the mock is still refused (the control)"
+
+echo
+echo "slack drafts only: a module loaded through the test runner's own loaders is followed as an import (claude-config#3020)"
+
+# vi.importActual, jest.requireActual and the runners' other loaders (importMock, requireMock,
+# createMockFromModule, genMockFromModule) each load the module they name: the original, or the
+# original read to build a mock of its shape. A test file reaching a module that posts only through
+# one of them, with no import, require or import() of it, passed: the gate followed none of those
+# calls. Each is now followed as an import is, and one whose path is not written out is read as a
+# require of a computed name is.
+MK_RUN="./node_modules/.bin/vitest run"
+mk_case b.test.ts 'import { vi } from "vitest";' 'const real = await vi.importActual("./other.ts");'
+allowed "#3020 the control: a module that posts nothing, loaded by vi.importActual, passes"
+mk_case b.test.ts 'import { vi } from "vitest";' 'const real = await vi.importActual("./posts.ts");'
+read_refused "#3020 a module that posts, loaded only by vi.importActual, is followed and refused"
+says "#3020 and the refusal names the module" "posts.ts"
+mk_case b.test.ts 'const real = await vi.importActual<typeof Posts>("./posts.ts");'
+read_refused "#3020 and with a type argument naming no import"
+mk_case b.test.ts 'const real = await vi.importActual(`./posts.ts`);'
+read_refused "#3020 and with the path in a template"
+mk_case b.test.ts 'const m = await vi.importMock("./posts.ts");'
+read_refused "#3020 and by vi.importMock, which loads the module to mock its shape"
+MK_RUN="./node_modules/.bin/jest"
+for call in 'jest.requireActual("./posts")' 'jest.requireMock("./posts.ts")' 'jest.createMockFromModule("./posts.ts")' \
+  'jest.genMockFromModule("./posts.ts")' 'jest . requireActual ( "./posts.ts" )'; do
+  mk_case b.test.js "const m = $call;"
+  read_refused "#3020 and by jest's loader: $call"
+done
+mk_case b.test.js 'const m = jest.requireActual("./other.ts");'
+allowed "#3020 the control: jest.requireActual of a module that posts nothing passes"
+mk_case b.test.js '// const m = jest.requireActual("./posts.ts");'
+allowed "#3020 a loader call in a comment loads nothing"
+mk_case b.test.js "const s = 'jest.requireActual(\"./posts.ts\")';"
+allowed "#3020 nor one inside an ordinary string"
+mk_case b.test.ts 'import { vi } from "vitest";' 'const real = await vi.importActual("./posts.ts");'
+run_mk "node b.test.ts"
+read_refused "#3020 the call is followed whatever runs the file"
+
+echo
+echo "slack drafts only: text handed to eval or a shell's -c is read where the gate can read it, and refused where it cannot (claude-config#3020)"
+
+# `X="$(cat cmd.txt)"; eval "$X"` ran a file's text with the file never read, where the same text fed
+# to a shell's input (`bash <<< "$(cat cmd.txt)"`, #2887) was. Text eval, a shell's -c or a function
+# that evaluates its argument is handed through a variable or a substitution is now read where the
+# gate can read it: a value worked out, and the text of one file (cat or <, straight or through a
+# variable set once from it), by the reader #2887 uses for a here string. Text it cannot read, a
+# program's output or a variable set nowhere, is refused in the command itself, as input a shell
+# reads is; inside a script on disk it stays behind the #2683 switch, as a file run by a path the
+# gate cannot work out does.
+E3="$T/e3020"
+mkdir -p "$E3"
+printf '%s\n' "$POST" > "$E3/cmd.txt"
+printf '%s\n' "$POST" > "$E3/post.sh"
+printf '%s\n' 'echo quiet' > "$E3/quiet.txt"
+run_e3() { run_raw "$(payload Bash "$(bash_input "$1")" "$E3")"; }
+for c in "eval \"\$(cat quiet.txt)\"" "X=\"\$(cat quiet.txt)\"; eval \"\$X\"" "X='echo hi'; eval \"\$X\"" "eval 'echo hi'" \
+  "run() { eval \"\$1\"; }; run \"\$(cat quiet.txt)\"" "run() { eval \"\$1\"; }; run 'echo hi'" \
+  "bash -c \"\$(cat quiet.txt)\"" "eval \"\$(cat missing-3020.txt)\""; do
+  run_e3 "$c"
+  allowed "#3020 the control, text that posts nothing passes: $c"
+done
+for c in "eval \"\$(cat cmd.txt)\"" "eval \$(cat cmd.txt)" "eval \"\$(< cmd.txt)\"" "eval \"\`cat cmd.txt\`\"" \
+  "X=\"\$(cat cmd.txt)\"; eval \"\$X\"" "X=\$(<cmd.txt); eval \$X" "X=\"\$(cat cmd.txt)\"; eval \"\${X}\"" \
+  "D=.; eval \"\$(cat \"\$D/cmd.txt\")\"" "X='bash post.sh'; eval \"\$X\"" \
+  "run() { eval \"\$1\"; }; run \"\$(cat cmd.txt)\"" "run() { eval \"\$1\"; }; X=\"\$(cat cmd.txt)\"; run \"\$X\"" \
+  "bash -c \"\$(cat cmd.txt)\"" "X=\"\$(cat cmd.txt)\"; sh -c \"\$X\"" \
+  "printf '%s\\n' 'bash post.sh' > made-3020.txt; eval \"\$(cat made-3020.txt)\""; do
+  run_e3 "$c"
+  refused "#3020 text that posts, read from a file or a value worked out, is refused: $c"
+  says "#3020 as the post it is: $c" "REFUSED: this command posts to Slack"
+done
+for c in "eval \"\$(date)\"" "eval \"\$UNSET_3020\"" "X=\"\$(date)\"; eval \"\$X\"" "eval \"\$(cat \"\$UNSET_3020/cmd.txt\")\"" \
+  "eval \"\$(cat quiet.txt) --flag\"" "X=\"\$(cat quiet.txt)\"; X=\"\$(date)\"; eval \"\$X\"" \
+  "run() { eval \"\$1\"; }; run \"\$(date)\"" "run() { eval \"\$1\"; }; run \"\$UNSET_3020\"" \
+  "bash -c \"\$(date)\"" "sh -c \"\$UNSET_3020\""; do
+  run_e3 "$c"
+  read_refused "#3020 text the gate cannot read is refused in the command itself: $c"
+  says "#3020 as a check it could not make: $c" "REFUSED: the gate could not check whether this command posts to Slack"
+done
+# Inside a script on disk: the text of a file is read there too, and text the gate cannot read
+# stays behind the #2683 switch, so a script evaluating a variable its caller sets runs as before.
+printf '%s\n' 'X="$(cat cmd.txt)"' "eval \"\$X\"" > "$E3/file-posts.sh"
+printf '%s\n' 'X="$(cat quiet.txt)"' "eval \"\$X\"" > "$E3/file-quiet.sh"
+printf '%s\n' "[ -n \"\${PAUSE_3020:-}\" ] && eval \"\${PAUSE_3020}\"" "eval \"\$(date +%s >/dev/null)\"" 'echo done' > "$E3/unread.sh"
+run_e3 "bash file-posts.sh"
+refused "#3020 a script on disk evaluating the text of a file that posts is refused"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+run_e3 "bash file-quiet.sh"
+allowed "#3020 and one evaluating the text of a quiet file passes"
+run_e3 "bash unread.sh"
+allowed "#3020 a script on disk evaluating text the gate cannot read passes as before, with the #2683 switch off"
+SLACK_GATE_UNWORKED_PATHS=refuse run_e3 "bash unread.sh"
+read_refused "#3020 and is refused with the switch on"
+says "#3020 as a check it could not make" "REFUSED: the gate could not check whether this command posts to Slack"
 
 echo
 

@@ -560,8 +560,15 @@ JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx"
 # require('x'), and process.getBuiltinModule('x'), which loads a builtin by its name with no require or
 # import (claude-config#2476). Read from the code with its comments blanked (js_code): an import written
 # in a comment is an example, and following it refused every suite importing a harness that shows one
-# (#2397).
-IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# (#2397). And the test runners' own loaders (claude-config#3020): vi.importActual, jest.requireActual,
+# vi.importMock, jest.requireMock, jest.createMockFromModule and jest.genMockFromModule each load the
+# module they name, the original or the original read to build a mock of its shape, so a test file
+# reaching a module that posts only through one of them passed unread. A TypeScript type argument may
+# stand between the name and its call (`vi.importActual<typeof import("./x")>("./x")`).
+JS_RUNNER_LOADS = (r"\b(?:importActual|requireActual|importMock|requireMock|createMockFromModule|genMockFromModule)"
+                   r"(?:\s*<[^\n;{}=]*?>)?\s*\(")
+IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\(|"""
+                         + JS_RUNNER_LOADS + r""")\s*(['"`])([^'"`\n]+)\1""")
 # A type only import statement, up to its from: `import type { A, B as C }`, `import type A`,
 # `import type * as ns` (claude-config#2526). The whole statement is erased before anything runs, so
 # the module it names is never loaded. Measured 2026-11-10 (bun 1.3.11, node 22.22.2, deno, with and
@@ -895,7 +902,10 @@ JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|
                      r"mainModule)\b")
 # JS_ACTS's quoted module names, read in strings too (js_acts blanks strings for the rest).
 JS_ACTS_MODULE = re.compile(r"""['"](node:)?(https?|net|tls|http2|dgram)['"]""")
-JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# A test runner's loader handed a name that is not written out is one more of these (JS_RUNNER_LOADS,
+# claude-config#3020).
+JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])|"""
+                        + JS_RUNNER_LOADS + r"""\s*(?!['"`\s])""")
 # What can run a string as code, so that import text inside a string is an import after all
 # (claude-config#2484, signed off by Dan on 2026-11-09: import text in an ordinary string literal is not
 # followed, a string handed to something that runs it as code still is). eval, Function and the routes
@@ -1331,8 +1341,6 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
 SH_UNKNOWN_DIR = "${unknown directory}"
-# A here string that is one file's text, the file named by a plain word (stdin_of, claude-config#2887).
-HERE_FILE = re.compile(r"""("?)\$\((?:cat\s+|<\s*)([^\s$`()"'\\|;&<>*?\[\]{}~]+)\s*\)\1""")
 # An assignment, as raw_words steps past it: plain, an append, or an array element.
 SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # The builtins that cannot change a shell variable, the only commands a `local` value is taken across
@@ -1487,7 +1495,8 @@ _data_names = load_lib("data_names", "data-names.py")
 DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 # Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
 # for one command in a function, and a function that evaluates its argument (claude-config#2912).
-ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM)
+ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, unworked_paths_refused,
+                                                                    SH_UNKNOWN_DIR)
 # The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
 _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The cache of the calls this gate allowed (claude-config#2918).
@@ -2070,10 +2079,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if kind == "<<<":
                 v = self.sh_value(target, d) if target is not None else None
                 # A here string of one file's text (`<<< "$(cat post.sh)"`, `<<< $(<post.sh)`) is
-                # that file (claude-config#2887).
-                m = HERE_FILE.fullmatch(target or "") if v is None else None
-                stdin = (self.pieces_of(m.group(2), d) if m else
-                         self.text_piece(None if v is None else v + "\n", "a here-string"))
+                # that file (claude-config#2887), read as text handed to eval is (text_of_file, #3020).
+                found = self.text_of_file(target, d) if v is None else None
+                stdin = found if found is not None else \
+                    self.text_piece(None if v is None else v + "\n", "a here-string")
             elif kind in ("<<", "<<-"):
                 body, is_body = self.fed(text, whole)
                 quoted = target is not None and re.search(r"['\"\\]", target)
