@@ -1,6 +1,7 @@
-"""Two readings for the Slack drafts gate (claude-config#2913): an endpoint a program only compares
-against or lists, told from one it sends to; and the directory a script's cd moves to when the
-target is built from $0 or BASH_SOURCE.
+"""Three readings for the Slack drafts gate: an endpoint a program only compares against or lists,
+told from one it sends to (claude-config#2913); the webhook's name where a file only declares it,
+told from where it is read (claude-config#3050); and the directory a script's cd moves to when the
+target is built from $0 or BASH_SOURCE (#2913).
 
 Names held only as data. Dan decided on 2026-11-14 (#2913, "Teach the gate", no exemption list) that
 the gate should tell a Slack posting address that is only compared or listed, such as a refusal list
@@ -27,6 +28,36 @@ test runner, a module NODE_OPTIONS preloads, which is refused outright since tha
 apart from it). A package the gate does not read counts as able to send, as everywhere else in the
 gate.
 
+The webhook's name only declared (claude-config#3050). The last thing the gate's MARKER looks for,
+its group called name, is the variable name projects keep a webhook in, never an address: a file
+posts through it only by reading what is kept under it and sending that. (It is not written out in
+this file, nor as a string of its own in the gate's: a file doing so is one the gate refuses to
+run.) On 2026-11-15 three runs of test files by name were refused in a work repository whose
+worker has a Slack module, two of them for files that name the variable and read nothing: a fixture
+holding it as a key, and a module naming it in a type. In JavaScript and TypeScript two uses read
+nothing, and the name is left out of the file's judgement there, as code and as text a program is
+handed (named_in):
+
+- the key of an object literal, written as a name or as one quoted word, straight after the { or a
+  comma inside it, set to null, to undefined, or to one string written out that is no address anyone
+  receives at: plain words (letters, digits, spaces, _ and -), or a URL whose host is reserved for
+  tests (.test, .example, .invalid, .localhost, example.com, example.net, example.org, localhost,
+  127.0.0.1), and followed by a comma or the closing }, with no spread (...) after it in the same
+  literal, which would set the key again. What a program finds under that key is what is written
+  there. A flag (true, 1) is not one: in a query's selection it asks for what is stored;
+- a member of an interface or a type alias whose body opens on the header's own line, the member
+  starting its line or following { ; or a comma, typed only string, null, undefined, unknown or
+  never. A type is erased before anything runs.
+
+Every other use is judged as before and refuses: a member read (env.NAME), a
+destructuring, a shorthand, a key set to a variable, a call, a template, a concatenation or any other
+address, the name in a string or assigned to, and a type written anywhere else. The reading does not
+ask what the program can do, as a name held as data does, because nothing is held: a file that only
+declares the name gives a program nothing to send to but what the gate has read. A comment is still
+held as data, not left out, since a line the gate misreads as a comment could hold a read. The other
+names the gate looks for are addresses and are never read this way, and a module that reads the name
+is refused wherever it is reached from.
+
 The directory after cd. A suite run by a relative path that moves with `cd "$(dirname "$0")/.."` and
 then sources `"$(dirname "${BASH_SOURCE[0]}")/lib/..."` was refused as a path the gate could not work
 out, because the shared reader keeps a cd target holding $ as written. Such a target is now worked out
@@ -50,6 +81,23 @@ JS_COMPARE = ("===", "!==", "==", "!=")
 JS_ARRAY_AFTER = set("([{,=:;!&|?+-*/%<>~^")
 JS_ARRAY_WORDS = frozenset({"return", "in", "of", "case", "typeof", "void", "yield", "await", "throw", "else",
                             "do", "delete", "instanceof"})
+# The webhook's name only declared (module docstring, #3050). A quoted key holds one plain word.
+KEY_WORD = re.compile(r"[\w$-]+")
+KEY_COLON = re.compile(r"\s*:\s*")
+# What a key may be set to and still give a program nothing to send to: null or undefined, plain
+# words, or a URL whose host is reserved for tests and documentation (RFC 2606, RFC 6761) or is
+# this machine. A URL's host ends at the first / ? or #, so nothing after an @ can be one.
+INERT_WORD = re.compile(r"(?:null|undefined)(?![\w$])")
+INERT_TEXT = re.compile(r"[\w -]*")
+TEST_HOST = (r"(?:[a-z0-9-]+\.)*(?:test|example|invalid|localhost)|(?:[a-z0-9-]+\.)*example\.(?:com|net|org)|"
+             r"localhost|127\.0\.0\.1")
+INERT_URL = re.compile(r"[a-z][a-z0-9+.-]*://(?:" + TEST_HOST + r")(?::\d+)?(?:[/?#]\S*)?", re.I)
+# The line that opens an interface's or a type alias's body, up to its {, and a member's type that
+# holds no name a value could have.
+TYPE_HEAD = re.compile(r"[ \t]*(?:export[ \t]+)?(?:declare[ \t]+)?(?:interface[ \t]+[A-Za-z_$][\w$]*(?:<[^{}()=]*>)?"
+                       r"(?:[ \t]+extends[ \t]+[\w$.,<> \t]+?)?|type[ \t]+[A-Za-z_$][\w$]*(?:<[^{}()=]*>)?[ \t]*=)[ \t]*")
+TYPE_VALUE = r"(?:string|null|undefined|unknown|never)"
+TYPE_MEMBER = re.compile(r"\s*\??\s*:\s*" + TYPE_VALUE + r"(?:\s*\|\s*" + TYPE_VALUE + r")*[ \t]*(?:[;,}]|\r?\n|\Z)")
 # A substitution in a cd target whose value depends on the directory it runs in.
 CWD_BOUND = re.compile(r"(?<![\w$])(?:pwd|cd)(?![\w-])")
 # A member reached by a computed name (`fsp["write" + "File"]`, `process[k]`, `H[i]`): whatever the
@@ -140,6 +188,101 @@ def js_held(text, code, quoted, a, b):
     return False
 
 
+def js_literal(text, quoted, at):
+    """The index after the string literal that starts at text[at], and what it holds, where it is one
+    whole string written out: quoted (never a template), on one line, with no backslash, so what it
+    holds is exactly what is written. (None, None) for anything else."""
+    if at >= len(text) or text[at] not in "'\"" or not quoted[at]:
+        return None, None
+    end = text.find(text[at], at + 1)
+    if end < 0 or not all(quoted[at:end + 1]) or (end + 1 < len(quoted) and quoted[end + 1] == 1):
+        return None, None
+    held = text[at + 1:end]
+    if "\\" in held or "\n" in held:
+        return None, None
+    return end + 1, held
+
+
+def js_declared(text, code, quoted, a, b):
+    """Whether the webhook's name at text[a:b] is only declared there (module docstring): the key of
+    an object literal set to null, undefined or a string that is no address anyone receives at, or a
+    member of an interface or a type alias given a type with no value in it. code and quoted are
+    js_scan's. Anything this cannot place is not declared, and is judged as every name is."""
+    n = len(code)
+    if not code[a:b].strip():
+        return False  # in a comment: held only as data there (js_held), as before
+    kinds = set(quoted[a:b])
+    if kinds == {0}:
+        s, e = a, b
+        while s and re.match(r"[\w$]", code[s - 1]) and not quoted[s - 1]:
+            s -= 1
+        while e < n and re.match(r"[\w$]", code[e]) and not quoted[e]:
+            e += 1
+    elif kinds == {1}:
+        s = a
+        while s and quoted[s - 1] == 1:
+            s -= 1
+        e, held = js_literal(text, quoted, s)
+        if e is None or e < b or not KEY_WORD.fullmatch(held):
+            return False
+    else:
+        return False
+    # The last character before the name that is not blank, found by stepping back: a fixture file
+    # can hold the name thousands of times, and a copy of the text for each is what would cost.
+    j = s - 1
+    while j >= 0 and code[j].isspace():
+        j -= 1
+    before = code[j] if j >= 0 else ""
+    k = js_opener(code, quoted, s - 1)
+    if k is None or code[k] != "{":
+        return False
+    # A member of an interface or a type alias, whose body opens on the header's own line: erased
+    # before anything runs, so it reads nothing. Only where the type holds no name that could be a
+    # value's, so a brace misread as a type's body still declares nothing that is read.
+    line = code.rfind("\n", 0, k) + 1
+    if kinds == {0} and not any(quoted[line:k]) and TYPE_HEAD.fullmatch(code, line, k) \
+            and (before in ("{", ";", ",") or not code[code.rfind("\n", 0, s) + 1:s].strip()) \
+            and TYPE_MEMBER.match(code, e):
+        return True
+    # An object literal's key: straight after the { or a comma inside it, and before a colon.
+    if before not in ("{", ","):
+        return False
+    m = KEY_COLON.match(code, e)
+    if m is None:
+        return False
+    v = m.end()
+    word = INERT_WORD.match(code, v)
+    if word is not None and not any(quoted[v:word.end()]):
+        v = word.end()
+    else:
+        v, held = js_literal(text, quoted, v)
+        if v is None or not (INERT_URL.fullmatch(held) or INERT_TEXT.fullmatch(held)):
+            return False
+    while v < n and code[v].isspace():
+        v += 1
+    return code[v:v + 1] in (",", "}") and not js_spread_after(code, quoted, v)
+
+
+def js_spread_after(code, quoted, at):
+    """Whether a spread (...) stands between index at of JavaScript code and the bracket closing the
+    level at is in, at that level: in an object literal it sets every key it carries over the ones
+    written before it. True too where the level never closes, which cannot be placed."""
+    depth = 0
+    for k in range(at, len(code)):
+        if quoted[k]:
+            continue
+        c = code[k]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if not depth:
+                return False
+            depth -= 1
+        elif c == "." and not depth and code.startswith("...", k):
+            return True
+    return True
+
+
 def js_computed(text, js_scan):
     """JS_COMPUTED's first hit in a JavaScript text's code, its strings blanked to their quotes and its
     regex literals to spaces, that is not an array literal after a keyword (`return [a, b]`)."""
@@ -156,20 +299,29 @@ def js_computed(text, js_scan):
 
 
 def make(marker, js_scan, py_marker, js_sink):
-    """The base class for the gate's Judge (module docstring). marker is its MARKER, js_scan its
-    reading of a JavaScript file's comments and strings, py_marker its reading of a Python file,
-    which fills a list it is handed with the first name held only as data, and js_sink its JS_SINK."""
+    """The base class for the gate's Judge (module docstring). marker is its MARKER, whose group
+    called name, where it has one, is the one thing it finds that is a variable's name and no
+    address; js_scan its reading of a JavaScript file's comments and strings, py_marker its reading
+    of a Python file, which fills a list it is handed with the first name held only as data, and
+    js_sink its JS_SINK."""
+
+    def js_named(text):
+        """(each endpoint in JavaScript text, the webhook's name left out wherever it is only declared
+        (js_declared, #3050); js_scan's reading of the text, or None where nothing is named)."""
+        hits = list(marker.finditer(text))
+        if not hits:
+            return hits, None
+        code, quoted = js_scan(text)
+        return [m for m in hits if not (m.groupdict().get("name")
+                                        and js_declared(text, code, quoted, m.start(), m.end()))], (code, quoted)
 
     def js_marks(text):
         """(the first endpoint in JavaScript text not held only as data, or None; where there is none,
         the first one held only as data, or None)."""
-        hits = list(marker.finditer(text))
-        if not hits:
-            return None, None
-        code, quoted = js_scan(text)
+        hits, scan = js_named(text)
         held = None
         for m in hits:
-            if not js_held(text, code, quoted, m.start(), m.end()):
+            if not js_held(text, *scan, m.start(), m.end()):
                 return m, None
             held = held or m
         return None, held
@@ -185,6 +337,15 @@ def make(marker, js_scan, py_marker, js_sink):
             if kind == "js":
                 return js_marks(text)
             return marker.search(text), None
+
+        def named_in(self, text, kind):
+            """The first endpoint in a file's whole text, read as what a program handed the file can
+            find in it: comments and strings count, since the program reads them as text. In a
+            JavaScript or TypeScript file (kind "js") the webhook's name is left out wherever it is
+            only declared, where the text gives nothing to send to (js_declared, #3050)."""
+            if kind == "js":
+                return next(iter(js_named(text)[0]), None)
+            return marker.search(text)
 
         def held_names(self):
             """The names this call let through as held only as data, as (where, name), in order."""

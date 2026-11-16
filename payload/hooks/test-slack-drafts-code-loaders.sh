@@ -8,7 +8,9 @@
 # from $0 or BASH_SOURCE worked out. And lib/sh-walk-shapes.py (#2912): a for loop over words written
 # out sourcing a path built from its name, NAME=value for one command in a function, and a function
 # that evaluates its argument. And lib/js-mocks.py (#2359): a test file's import of a module the same
-# file replaces with vi.mock or jest.mock and a factory is not followed. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# file replaces with vi.mock or jest.mock and a factory is not followed. And lib/data-names.py again
+# (#3050): the webhook's variable name where a JavaScript or TypeScript file only declares it, told
+# from where it is read. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -1057,6 +1059,169 @@ run_e3 "$(printf 'true\n\tenv bin/post')"
 refused "#3020 and behind a runner"
 run_e3 "$(printf 'true\r\n\tnohup bin/post')"
 refused "#3020 and after a return, a line break and a tab"
+
+echo
+echo "slack drafts only: a file that only declares the webhook's name is not one that posts (claude-config#3050)"
+
+# On 2026-11-15, in a work repository whose worker has a Slack module, three runs of test files by
+# name were refused: one file's fixtures held the word slack_webhook, one imported a module that
+# names it, and one imported a route reaching the module that sends. The first two name the variable
+# without reading it. slack_webhook is the name projects keep a webhook in, never an address, so a
+# file posts through it only by reading what is kept under it. Two uses read nothing and are now
+# left out: the name as an object literal's key set to null, undefined or a string that is no
+# address anyone receives at, and the name as a member of an interface or a type alias, which is
+# erased. Every other use (a member read, a destructuring, a string, a key set to anything else)
+# refuses as before, and so does the third run, which reaches a module that reads the name and
+# sends. These files are written from the issue's words: the work repository is not on this Mac.
+printf '%s\n' 'export async function notify(env: { SLACK_WEBHOOK_URL?: string }, text: string) {' \
+  '  if (env.SLACK_WEBHOOK_URL) await fetch(env.SLACK_WEBHOOK_URL, { method: "POST", body: text });' '}' > "$MK/hook.ts"
+printf '%s\n' 'import { notify } from "./hook.ts";' 'export const run = (env: object, text: string) => notify(env, text);' > "$MK/engine.ts"
+printf '%s\n' 'import { run } from "./engine.ts";' 'export const handle = (env: object) => run(env, "hi");' > "$MK/route.ts"
+printf '%s\n' 'export interface Env {' '  DB: unknown;' '  SLACK_WEBHOOK_URL?: string;' '}' \
+  'export type Team = { id: string; slack_webhook: string | null };' 'export const DEFAULTS = { retries: 3 };' > "$MK/env.ts"
+printf '%s\n' 'export const rank = (rows: { id: string }[]) => rows.map((r) => r.id);' > "$MK/rank.ts"
+MK_RUN="./node_modules/.bin/vitest run"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' 'it("ranks", () => expect(rank([{ id: "t1" }])).toEqual(["t1"]));'
+allowed "#3050 the control: a test file naming nothing passes"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' \
+  'const team = { id: "t1", slack_webhook: null };' 'it("ranks", () => expect(rank([team])).toEqual(["t1"]));'
+allowed "#3050 a test file whose fixture row holds the name as a key set to null passes"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' \
+  'const env = { DB: null, SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' 'it("ranks", () => expect(rank([])).toEqual([]));'
+allowed "#3050 and as a key of a worker's env set to an address reserved for tests"
+for value in 'undefined' '""' "'fake-hook'" '"http://localhost:8787/hook"' '"https://example.com/hook"' '"https://hooks.slack.invalid/x"'; do
+  mk_case c.test.ts "const team = { id: 't1', slack_webhook: $value, name: 'a' };"
+  allowed "#3050 a key set to a value that is no address anyone receives at passes: $value"
+done
+mk_case c.test.ts 'const rows = [' '  {' '    id: "t1",' '    "slack_webhook": null,' '  },' '  { id: "t2", slack_webhook_url: undefined },' '];'
+allowed "#3050 a quoted key, and keys over several lines, pass"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env.ts";' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));'
+allowed "#3050 a test file importing a module that names it only in an interface and a type alias passes"
+printf '%s\n' 'import { DEFAULTS } from "./env.ts";' 'console.log(DEFAULTS);' > "$MK/d.test.ts"
+run_mk "./node_modules/.bin/vitest run c.test.ts d.test.ts"
+allowed "#3050 and with several test files named in one run"
+# Handed to the runner by a launcher, as the three runs of the issue were. In $D9, which holds no
+# folder named vitest: beside one, the gate reads `npx vitest` as that path and none of the files.
+cp "$MK/env.ts" "$MK/hook.ts" "$D9/src/"
+printf '%s\n' 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env";' \
+  'const team = { id: "t1", slack_webhook: null };' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));' > "$D9/src/declares.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'const env = { DB: null, SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' \
+  'it("adds", () => {});' > "$D9/src/env-fixture.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'import { notify } from "./hook";' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' 'it("notifies", () => notify(env, "hi"));' > "$D9/src/notifies.test.ts"
+for runs in "npx vitest run src/declares.test.ts" "pnpm dlx vitest run src/declares.test.ts" "bunx vitest run src/env-fixture.test.ts" \
+  "./node_modules/.bin/vitest run src/declares.test.ts" "npx vitest run src/declares.test.ts src/env-fixture.test.ts src/quiet.test.ts"; do
+  run_d9 "$runs"
+  allowed "#3050 test files that only declare the name pass, handed to the runner by a launcher: $runs"
+done
+for runs in "npx vitest run src/notifies.test.ts" "pnpm dlx vitest run src/notifies.test.ts" "./node_modules/.bin/vitest run src/notifies.test.ts" \
+  "npx vitest run src/declares.test.ts src/notifies.test.ts" "npx vitest run src/notifies.test.ts src/declares.test.ts"; do
+  run_d9 "$runs"
+  read_refused "#3050 a test file importing the module that reads the name and sends is still refused: $runs"
+  says "#3050 and the refusal names that module: $runs" "hook"
+done
+MK_RUN="./node_modules/.bin/jest"
+mk_case c.spec.ts 'import { DEFAULTS } from "./env.ts";' 'const team = { id: "t1", slack_webhook: null };'
+allowed "#3050 and run by jest"
+run_mk "node c.spec.ts"
+allowed "#3050 the reading is of the file's text, so it is the same whatever runs the file"
+# The third run of the issue reaches a module that reads the name and sends, so it is refused still,
+# through every loader the gate follows, with a declared name beside the loader hiding nothing.
+MK_RUN="./node_modules/.bin/vitest run"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { handle } from "./route.ts";' 'it("handles", () => expect(handle({})).toBeDefined());'
+read_refused "#3050 a test file whose route reaches the module that reads the name and sends is still refused"
+says "#3050 and the refusal names that module" "hook.ts"
+says "#3050 and the name it reads" "it names SLACK_WEBHOOK"
+for target in ./hook.ts ./posts.ts; do
+  for line in "import { x } from \"$target\";" "import \"$target\";" "export * from \"$target\";" "const m = await import(\"$target\");" \
+    "const m = require(\"$target\");" "const m = await vi.importActual(\"$target\");" "const m = await vi.importMock(\"$target\");" \
+    "const m = await vi.importActual<{ send: () => void }>(\"$target\");" "const m = jest.requireActual(\"$target\");" \
+    "const m = jest.requireMock(\"$target\");" "const m = jest.createMockFromModule(\"$target\");" "const m = jest.genMockFromModule(\"$target\");"; do
+    mk_case c.test.ts 'const env = { SLACK_WEBHOOK_URL: "https://hooks.example.test/x", slack_webhook: null };' "$line"
+    read_refused "#3050 a module that can post is still refused beside a declared name, reached by: $line"
+  done
+done
+run_mk "./node_modules/.bin/vitest run d.test.ts c.test.ts"
+read_refused "#3050 and named after a file that only declares the name"
+# Every use that reads the name, or sets it to something the gate cannot see is no address, refuses
+# as before, in the test file itself and in a module it imports.
+for line in 'const hook = env.SLACK_WEBHOOK_URL;' \
+  'const { SLACK_WEBHOOK_URL } = process.env;' \
+  'const { slack_webhook: hook } = row;' \
+  'const env = { SLACK_WEBHOOK_URL: process.env.HOOK };' \
+  'const env = { SLACK_WEBHOOK_URL: hook };' \
+  'const env = { SLACK_WEBHOOK_URL };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test@hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/" + id };' \
+  'const env = { SLACK_WEBHOOK_URL: `https://${host}/x` };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/\x2e" };' \
+  'const env = { SLACK_WEBHOOK_URL: null as unknown as string };' \
+  'const env = { SLACK_WEBHOOK_URL: null ?? hook };' \
+  'const env = { SLACK_WEBHOOK_URL: null, ...process.env };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/x", DB: { rows: [] }, ...real };' \
+  'const pick = { select: { slack_webhook: true } };' \
+  'const pick = { slack_webhook: 1 };' \
+  'const key = "SLACK_WEBHOOK_URL";' \
+  'const hook = on ? slack_webhook : null;' \
+  'const hook = [on ? a : b, slack_webhook][1];' \
+  'function send(a, slack_webhook) { return fetch(slack_webhook); }' \
+  'process.env.SLACK_WEBHOOK_URL = "https://example.test/x";' \
+  'function f(env: { SLACK_WEBHOOK_URL: string }) { return env; }' \
+  'class Env { SLACK_WEBHOOK_URL = process.env.HOOK; }' \
+  'const type = { SLACK_WEBHOOK_URL: string };' \
+  'const env = { SLACK_WEBHOOK_URL: null };  const hook = env.SLACK_WEBHOOK_URL;' \
+  'interface Env { SLACK_WEBHOOK_URL?: string }  const hook = env.SLACK_WEBHOOK_URL;' \
+  'interface Env { SLACK_WEBHOOK_URL: typeof hook }' \
+  'interface Env { SLACK_WEBHOOK_URL: string }  const env = { SLACK_WEBHOOK_URL: string };'; do
+  mk_case c.test.ts "$line"
+  read_refused "#3050 a use that is no bare declaration stays refused: $line"
+  says "#3050 as a file naming what posts: $line" "c.test.ts posts to Slack (it names "
+  printf '%s\n' "$line" 'export const DEFAULTS = { retries: 3 };' > "$MK/uses.ts"
+  mk_case c.test.ts 'import { DEFAULTS } from "./uses.ts";'
+  read_refused "#3050 and in a module the test file imports: $line"
+  says "#3050 named as that module: $line" "uses.ts), which posts to Slack (it names "
+done
+mk_case c.test.ts 'const base = { DB: null };' 'const env = { ...base, SLACK_WEBHOOK_URL: "https://example.test/x", nested: { ...base } };'
+allowed "#3050 a spread before the key, or inside a value after it, leaves the key as written"
+# A fixture file can hold the name once per row, so the reading is judged at that size too: 5,000
+# rows, each read by stepping back to its own row's brace and never by a copy of the file.
+{
+  printf '%s\n' 'export const rows = ['
+  for ((i = 0; i < 5000; i++)); do printf '  { id: "t%d", slack_webhook: null, name: "team %d" },\n' "$i" "$i"; done
+  printf '%s\n' '];'
+} > "$MK/rows.ts"
+mk_case c.test.ts 'import { rows } from "./rows.ts";'
+allowed "#3050 a fixture module holding the name in each of 5,000 rows is read in time and passes"
+printf '%s\n' 'export const last = { id: "t5000", slack_webhook: process.env.HOOK };' >> "$MK/rows.ts"
+mk_case c.test.ts 'import { rows } from "./rows.ts";'
+read_refused "#3050 and one row among them set to something else is still found"
+# A key built in brackets is no declared name. The name in a string inside brackets reads as a list's
+# element, held only as data (#2913), which a runner able to send refuses as it always did.
+mk_case c.test.ts 'const env = { ["SLACK_WEBHOOK_URL"]: process.env.HOOK };'
+read_refused "#3050 a key computed from a string stays refused"
+# A header and its { on two lines is not read as a type's: in JavaScript `type` and `interface` are
+# names there, and the braces a block holding a label.
+mk_case c.test.ts 'type' 'Env = { SLACK_WEBHOOK_URL: string };'
+read_refused "#3050 a type alias whose header is split over lines is not read as one"
+mk_case c.test.ts 'interface Env' '{ SLACK_WEBHOOK_URL: string }'
+read_refused "#3050 nor an interface whose brace is on the next line"
+# The other names are addresses, and a file holding one is judged as before whatever it is set to.
+mk_case c.test.ts 'const methods = { "chat.postMessage": null, chat_postMessage: null };'
+read_refused "#3050 a posting method as a key is not a declared name"
+mk_case c.test.ts 'interface Hosts { "hooks.slack.com": string }'
+read_refused "#3050 nor a webhook's host as a member of an interface"
+# A shell script and a Python script are read as before: this reading is of JavaScript and TypeScript.
+printf '%s\n' 'ENV = {"SLACK_WEBHOOK_URL": None}' > "$MK/names.py"
+run_mk "python3 names.py"
+read_refused "#3050 a Python script naming it is unchanged"
+printf '%s\n' '#!/bin/bash' 'curl -d hi "$SLACK_WEBHOOK_URL"' > "$MK/send.sh"
+run_mk "bash send.sh"
+refused "#3050 a shell script sending to what the variable holds is refused"
+run_mk "node -e 'const env = { SLACK_WEBHOOK_URL: null }; fetch(process.env.SLACK_WEBHOOK_URL)'"
+refused "#3050 and code given inline"
 
 echo
 
