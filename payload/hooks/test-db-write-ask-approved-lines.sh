@@ -49,14 +49,21 @@ RECORD="$HOME_A/.claude/state/supabase-test-projects"
 NONE_T="$WORK/no-apply.jsonl"
 printf '{"type": "user", "sessionId": "s1", "message": {"role": "user", "content": "hi"}}\n' > "$NONE_T"
 
-# bash_payload <event> <command> <cwd> [session]: a Bash call as Claude Code sends it.
+# bash_payload <event> <command> <cwd> [session] [call id]: a Bash call as Claude Code sends it. Every
+# live payload, before and after, carries the call's own id as tool_use_id (measured on Claude Code
+# 2.1.325). Left out here it is one named after the checkout, so the call before and the call after
+# in one checkout are one call unless a case says otherwise; "-" sends a payload with no id at all.
 bash_payload() {
+  local id="${5:-}"
+  if [ -z "$id" ]; then id="toolu_${3##*/}"; id="${id//[^A-Za-z0-9_]/_}"; fi
   python3 -c 'import json, sys
 d = {"session_id": sys.argv[4], "transcript_path": sys.argv[5], "hook_event_name": sys.argv[1], "cwd": sys.argv[3],
      "tool_name": "Bash", "tool_input": {"command": sys.argv[2], "description": "d"}}
+if sys.argv[6] != "-":
+    d["tool_use_id"] = sys.argv[6]
 if sys.argv[1] == "PostToolUse":
     d["tool_response"] = {"stdout": "", "stderr": "", "interrupted": False}
-print(json.dumps(d))' "$1" "$2" "$3" "${4:-s1}" "$NONE_T"
+print(json.dumps(d))' "$1" "$2" "$3" "${4:-s1}" "$NONE_T" "$id"
 }
 # said <hook output> <exit code>: "<decision> rc=<exit>|<reason>|<notice>".
 said() {
@@ -70,16 +77,16 @@ except Exception:
 h = d.get("hookSpecificOutput") or {}
 print(h.get("permissionDecision", "none") + " rc=" + sys.argv[1] + "|" + h.get("permissionDecisionReason", "") + "|" + d.get("systemMessage", ""), end="")' "$2"
 }
-# before <command> <cwd> [session]: the hook's answer before that Bash call runs.
+# before <command> <cwd> [session] [call id]: the hook's answer before that Bash call runs.
 before() {
   local body rc
-  body="$(cd "$WORK" && bash_payload PreToolUse "$1" "$2" "${3:-s1}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" 2>/dev/null)"; rc=$?
+  body="$(cd "$WORK" && bash_payload PreToolUse "$1" "$2" "${3:-s1}" "${4:-}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" 2>/dev/null)"; rc=$?
   said "$body" "$rc"
 }
-# after <command> <cwd> [session]: the hook as the settings run it once that Bash call has run.
+# after <command> <cwd> [session] [call id]: the hook as the settings run it once that Bash call has run.
 after() {
   local body rc
-  body="$(cd "$WORK" && bash_payload PostToolUse "$1" "$2" "${3:-s1}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" --ran 2>/dev/null)"; rc=$?
+  body="$(cd "$WORK" && bash_payload PostToolUse "$1" "$2" "${3:-s1}" "${4:-}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" --ran 2>/dev/null)"; rc=$?
   said "$body" "$rc"
 }
 CARRY='supabase db query --linked --yes -f carry.sql'
@@ -149,6 +156,45 @@ if grep -q approvedref00000001 "$RECORD/approved" 2>/dev/null; then
 else
   check "the record holds a hash of the line, never the project ref itself" ok
 fi
+
+# THE CALL AFTER IS PAIRED WITH THE QUESTION BY THE CALL'S ID, NEVER BY ITS COMMAND'S TEXT. The rtk
+# hook rewrites a command before it runs, and the payload after the call then carries the rewritten
+# text: `git commit --allow-empty -m probe4` before, `rtk git commit --allow-empty -m probe4` after,
+# under one tool_use_id (a capture of both payloads on Claude Code 2.1.325, 2026-11-15). Paired by
+# text, no approval was ever recorded for a rewritten commit while every case here passed.
+R="$WORK/rewritten"; new_repo "$R" rewrittenref000001
+stage_line "$R" rewrittenref000001
+before 'git commit -q -m list' "$R" s1 toolu_rewritten1 >/dev/null
+G "$R" commit -q -m list
+after 'rtk git commit -q -m list' "$R" s1 toolu_rewritten1 >/dev/null
+r="$(write "$R")"
+case "$r" in "allow rc=0||") check "a commit whose command a hook rewrote before it ran (rtk in front) still has its yes recorded" ok ;; *) check "a commit whose command a hook rewrote before it ran (rtk in front) still has its yes recorded" "${r:0:400}" ;; esac
+# The same command text under another call's id answers nothing: it is another call.
+R="$WORK/othercall"; new_repo "$R" othercallref000001
+stage_line "$R" othercallref000001
+before 'git commit -q -m list' "$R" s1 toolu_asked1 >/dev/null
+G "$R" commit -q -m list
+after 'git commit -q -m list' "$R" s1 toolu_neverasked1 >/dev/null
+unasked "a call after with another id than the one asked about, its command the same, is not an approval" "$R" othercallref000001
+# A payload with no call id: nothing could pair a yes with it, so the question says so and records
+# nothing, and a call after with no id answers nothing.
+R="$WORK/noid"; new_repo "$R" noidref00000000001
+stage_line "$R" noidref00000000001
+r="$(before 'git commit -q -m list' "$R" s1 -)"
+case "$r" in "ask rc=0|"*noidref00000000001*"no id for this call"*"will not make the line trusted"*) check "a commit whose payload carries no call id is asked about, saying a yes will not be remembered" ok ;; *) check "a commit whose payload carries no call id is asked about, saying a yes will not be remembered" "${r:0:500}" ;; esac
+G "$R" commit -q -m list
+after 'git commit -q -m list' "$R" s1 - >/dev/null
+unasked "and a call after with no id approves nothing" "$R" noidref00000000001
+# An id that is not the plain word Claude Code sends names no file of the record.
+R="$WORK/oddid"; new_repo "$R" oddidref0000000001
+stage_line "$R" oddidref0000000001
+r="$(before 'git commit -q -m list' "$R" s1 '../../oddid-escaped')"
+case "$r" in "ask rc=0|"*oddidref0000000001*"no id for this call"*"will not make the line trusted"*) check "a call id that is not a plain word is not recorded under, and the question says a yes will not be remembered" ok ;; *) check "a call id that is not a plain word is not recorded under, and the question says a yes will not be remembered" "${r:0:500}" ;; esac
+found="$(find "$HOME_A" -name '*oddid-escaped*' 2>/dev/null)"
+[ -z "$found" ] && check "and nothing is written under a name built from it" ok || check "and nothing is written under a name built from it" "found $found"
+G "$R" commit -q -m list
+after 'git commit -q -m list' "$R" s1 '../../oddid-escaped' >/dev/null
+unasked "and a call after carrying it approves nothing" "$R" oddidref0000000001
 
 # The list staged and committed in one command is asked about once, by the question that names the
 # line, so its yes approves it. Asked as a staging only, that yes would have approved nothing.
@@ -239,12 +285,21 @@ r="$(before 'git commit -q -m list' "$R")"
 case "$r" in "ask rc=0|"*) check "the commit Dan will refuse is asked about" ok ;; *) check "the commit Dan will refuse is asked about" "${r:0:300}" ;; esac
 G "$R" -c alias.ci=commit ci -q -m "by an alias, after the no"
 unasked "a line Dan refused, then committed through an alias, is not trusted" "$R" refusedref00000001
-# The same command sent again now has nothing to add, so it is not asked about, and its running
-# must not turn the earlier, refused question into an approval.
-r="$(before 'git commit -q -m list' "$R")"
+# The same command sent again is another call. It now has nothing to add, so it is not asked about,
+# and its running must not turn the earlier, refused question into an approval.
+r="$(before 'git commit -q -m list' "$R" s1 toolu_later1)"
 case "$r" in "none rc=0||") check "the same commit command with nothing left to add is not asked about" ok ;; *) check "the same commit command with nothing left to add is not asked about" "${r:0:300}" ;; esac
-after 'git commit -q -m list' "$R" >/dev/null
+after 'git commit -q -m list' "$R" s1 toolu_later1 >/dev/null
 unasked "a refused question is not turned into an approval by the same command running later" "$R" refusedref00000001
+# And should the refused call itself ever be read again, whatever was asked of it before is void:
+# this reading decides, and it asks nothing, so nothing is left for its running to answer.
+if [ -e "$RECORD/pending/toolu_refused.json" ]; then
+  before 'git commit -q -m list' "$R" >/dev/null
+  after 'git commit -q -m list' "$R" >/dev/null
+  unasked "a question is dropped when its own call is read again with nothing left to add" "$R" refusedref00000001
+else
+  check "a question is dropped when its own call is read again with nothing left to add" "the refused question is not waiting under its call id, so nothing here measures it"
+fi
 
 # A question in one session is not answered by a command running in another.
 R="$WORK/othersession"; new_repo "$R" sessionref00000001
@@ -362,6 +417,13 @@ printf 'not json\n' > "$RECORD/pending/garbage.json"
 r="$(after 'git commit -q -m list' "$R")"
 case "$r" in "none rc=0||") check "a waiting question that cannot be read is passed over in silence" ok ;; *) check "a waiting question that cannot be read is passed over in silence" "${r:0:300}" ;; esac
 rm -f "$RECORD/pending/garbage.json"
+# One filed under this call's own id is this call's question: its yes cannot be recorded, and a
+# notice says so, never silence.
+printf 'not json\n' > "$RECORD/pending/toolu_gitgone.json"
+r="$(after 'git commit -q -m list' "$R")"
+case "$r" in "none rc=0||"*"could not record"*"could not be read"*3023*) check "a question under the call's own id that cannot be read is said in a notice" ok ;; *) check "a question under the call's own id that cannot be read is said in a notice" "${r:0:400}" ;; esac
+[ ! -e "$RECORD/pending/toolu_gitgone.json" ] && check "and it is taken away, so it is said once" ok || check "and it is taken away, so it is said once" "it is still waiting"
+unasked "and that line is still not trusted" "$R" gitgoneref00000001
 # One budget bounds all the git a test project check runs, set short rather than waited out (L524).
 SLOWGIT="$WORK/slowgit"; mkdir -p "$SLOWGIT"
 printf '#!/bin/sh\nexec sleep 5\n' > "$SLOWGIT/git"; chmod +x "$SLOWGIT/git"
@@ -458,15 +520,20 @@ spied "$EDIT_BASH"
 [ -e "$SPY/python.log" ] && check "an Edit holding the words Bash and commit never starts python3" "python3 was started" || check "an Edit holding the words Bash and commit never starts python3" ok
 spied "$(bash_payload PreToolUse 'gh pr view 12 --json commits' "$OK_R")"
 [ -e "$SPY/python.log" ] && check "a command holding the word commit and no git never starts python3" "python3 was started" || check "a command holding the word commit and no git never starts python3" ok
-# After a Bash call. With a question waiting (the untracked case above left one), a call naming a
-# commit starts python3 to look for its question, and a call naming none does not.
-if ls "$RECORD"/pending/*.json >/dev/null 2>&1; then
-  spied "$(bash_payload PostToolUse 'git commit -m unrelated' "$OK_R")" --ran
-  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after a call naming a commit starts python3" ok || check "with a question waiting, the hook after a call naming a commit starts python3" "python3 was never started, so the cases below measure nothing"
-  spied "$(bash_payload PostToolUse 'ls -la' "$OK_R")" --ran
-  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after a call naming no commit never starts python3" "python3 was started" || check "with a question waiting, the hook after a call naming no commit never starts python3" ok
+# After a Bash call, with a question waiting: the call it was asked about starts python3, whatever
+# its command now reads, and any other call, a commit included, does not. A refused question waits
+# up to a week, and no call in that week should pay for it.
+R="$WORK/waiting"; new_repo "$R" waitingref00000001
+stage_line "$R" waitingref00000001
+before 'git commit -m x' "$R" s1 toolu_waiting1 >/dev/null
+if [ -e "$RECORD/pending/toolu_waiting1.json" ]; then
+  spied "$(bash_payload PostToolUse 'rtk proxy anything at all' "$R" s1 toolu_waiting1)" --ran
+  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after the call it was asked about starts python3" ok || check "with a question waiting, the hook after the call it was asked about starts python3" "python3 was never started, so the cases below measure nothing"
+  before 'git commit -m x' "$R" s1 toolu_waiting1 >/dev/null
+  spied "$(bash_payload PostToolUse 'git commit -m x' "$R" s1 toolu_another1)" --ran
+  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after any other call, a commit included, never starts python3" "python3 was started" || check "with a question waiting, the hook after any other call, a commit included, never starts python3" ok
 else
-  check "with a question waiting, the hook after a call naming a commit starts python3" "the cases above left no question waiting, so nothing here measures it"
+  check "with a question waiting, the hook after the call it was asked about starts python3" "no question is waiting under its call id, so nothing here measures it"
 fi
 # With none waiting, as after nearly every call, it leaves before anything else starts.
 rm -f "$RECORD"/pending/*.json

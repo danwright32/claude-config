@@ -81,6 +81,9 @@
 # under PostToolUse, which only a call that was let through reaches) and puts the lines HEAD now
 # holds on this Mac's record, and a write passes only for a project whose line is in HEAD and on that
 # record, whatever route carried it there (lib/db-apply-approval.py, "A LINE COUNTS ONLY WHEN").
+# The question and the call after are paired by the call's own id (tool_use_id), never by the
+# command's text, which another hook may rewrite before it runs (the rtk hook does: the payload
+# after a rewritten call carries `rtk git commit ...`, measured on Claude Code 2.1.325).
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
@@ -111,6 +114,7 @@ if [ "${1:-}" = "--ran" ]; then
   RAN=1
   set -- "${CLAUDE_HOME:-${HOME:-}/.claude}/state/supabase-test-projects/pending"/*.json
   [ -e "${1:-}" ] || { cat >/dev/null 2>&1; exit 0; }
+  WAITING=("$@")
 fi
 
 payload="$(cat 2>/dev/null || true)"
@@ -132,10 +136,19 @@ load_notice() {
 }
 
 if [ "$RAN" = 1 ]; then
-  # A question is waiting. A call that names no commit answers none; one that does is handed to
-  # lib/db-apply-approval.py's commit_ran, which approves the lines its question named and prints
-  # nothing, or says why Dan's yes could not be recorded. This gives no decision: the call has run.
-  case "$payload" in *commit*) ;; *) exit 0 ;; esac
+  # A question is waiting, in a file named by the id of the call it was asked about. A payload that
+  # does not hold that id, as a whole JSON string, is not that call's and answers none: a question
+  # Dan refused waits up to a week, and no other call pays for it. This is a screen only (the id
+  # may sit anywhere in the payload); lib/db-apply-approval.py's commit_ran reads the payload's own
+  # tool_use_id, approves the lines that call's question named and prints nothing, or says why
+  # Dan's yes could not be recorded. The command's text is not read at all: a hook may have
+  # rewritten it since the question. This gives no decision: the call has run.
+  asked=0
+  for q in "${WAITING[@]}"; do
+    q="${q##*/}"
+    case "$payload" in *"\"${q%.json}\""*) asked=1; break ;; esac
+  done
+  [ "$asked" = 1 ] || exit 0
   command -v python3 >/dev/null 2>&1 || exit 0
   note="$(printf '%s' "$payload" | python3 -I -B -S -c '
 import importlib.util, json, sys
@@ -144,14 +157,12 @@ try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
 except Exception:
     sys.exit()
-ti = d.get("tool_input") if isinstance(d, dict) else None
-command = ti.get("command") if isinstance(ti, dict) else None
-if d.get("tool_name") != "Bash" or not isinstance(command, str):
+if not isinstance(d, dict) or d.get("tool_name") != "Bash":
     sys.exit()
 spec = importlib.util.spec_from_file_location("db_apply_approval_shared", sys.argv[1] + "/lib/db-apply-approval.py")
 ap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ap)
-sys.stdout.write((ap.commit_ran(d.get("session_id"), command) or "").replace("\x00", ""))
+sys.stdout.write((ap.commit_ran(d.get("session_id"), d.get("tool_use_id")) or "").replace("\x00", ""))
 ' "$HOOK_DIR" 2>/dev/null)" || note="db-write-ask.sh could not check whether this command was a commit Dan said yes to, because its check (python3) failed. A line it added to a test project list is not trusted, so a write on its project is asked about (claude-config#3023)"
   if [ -n "$note" ]; then load_notice; hook_notice_json "$note"; fi
   exit 0
@@ -380,7 +391,7 @@ if tool == "Bash":
             ask(missing + ", so whether this command writes the test project list of a checkout, or commits a "
                 "project onto one, could not be told", "2989", "change to a test project list")
         try:
-            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"))
+            change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"), d.get("tool_use_id"))
         except Exception as e:
             change = ((calls_why or "the command could not be read (" + type(e).__name__ + ")") + ", so whether "
                       "it writes a test project list of a checkout, or commits a project onto one, could not be told")

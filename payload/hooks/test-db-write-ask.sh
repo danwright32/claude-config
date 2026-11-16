@@ -1035,12 +1035,13 @@ TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c com
 # so the hook reads the commit before it runs (asking when it adds a line), git commits, and the
 # hook is told the call ran, as the settings do after every Bash call. Committing behind the hook's
 # back, as this helper did before, now leaves the line untrusted, which
-# test-db-write-ask-approved-lines.sh holds for each route.
+# test-db-write-ask-approved-lines.sh holds for each route. The question and the call after are
+# paired by the call's own id (tool_use_id), which every live payload carries, so this one does too.
 commit_list() {
   local call
   printf "$1" > "$LIST"
   "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects || return
-  call="$(apply_payload 'git commit -q -m list' "$TESTP" s1 "$NONE_T")"
+  call="$(apply_payload 'git commit -q -m list' "$TESTP" s1 "$NONE_T" | python3 -c 'import json, sys; d = json.load(sys.stdin); d["tool_use_id"] = "toolu_commitlist1"; print(json.dumps(d))')"
   run "$HOOK" "$EMPTY_HOME" "$call" >/dev/null
   "${TESTP_GIT[@]}" commit -q -m list >/dev/null 2>&1
   (cd "$WORK" && printf '%s' "$call" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" --ran >/dev/null 2>&1)
