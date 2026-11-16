@@ -106,6 +106,7 @@ import {
   type ProposedIssue,
 } from './wake.ts'
 import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
+import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn as questionLinks, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
@@ -2042,7 +2043,10 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   )
   const issues = sorted.offer
   const lessons = claimed.has(LESSONS_KEY) ? read.lessons : []
-  const questions = [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)]
+  // Only those still open (#3018): not answered on record, and not about closed or merged work.
+  const asked = await stillOpen($, [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)])
+  rememberAsked(asked)
+  const questions = asked.map(a => a.q)
   // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
   // offer, and this session says nothing of them (lessons review).
   const offers = issues.length > 0 || lessons.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0 || sorted.elsewhere > 0 || (night.offers && ![...keys].some(has))
@@ -2292,6 +2296,113 @@ const noteDeclined = async ($: EngineInterface, input: Record<string, unknown>, 
   }
 }
 
+// ---- #3018: an overnight question is offered only while it is still open (decided in settled.ts) ----
+
+// Where a question's answer is kept: the answered folder the before bed round keeps its answers in.
+const answeredQuestionPath = (dir: string, repo: string | null, q: NightQuestion) => `${dir}/answered/${settledKey(repo, q)}.json`
+
+// What GitHub says of one issue or pull request a question names. A pull request's number reads as
+// an issue in gh issue view, and a merged one is closed there. Any failure is a check not made.
+const namedState = async ($: EngineInterface, item: Named): Promise<ItemState> => {
+  const r = await ghAnyAccount($, ['issue', 'view', String(item.number), '--repo', item.repo, '--json', 'state'])
+  if (!('stdout' in r)) return { state: 'unchecked', why: ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun)) }
+  let state: string
+  try {
+    state = String((JSON.parse(r.stdout) as { state?: unknown }).state ?? '').toUpperCase()
+  } catch {
+    return { state: 'unchecked', why: "GitHub's answer was not JSON" }
+  }
+  if (state === 'OPEN') return { state: 'open' }
+  if (state === 'CLOSED' || state === 'MERGED') return { state: 'closed' }
+  return { state: 'unchecked', why: `GitHub gave its state as "${state}"` }
+}
+
+// The questions still open, each once, with the repository each is in (its own, or its folder's),
+// which its answer is kept by. One answered on record, or whose every named issue and pull request
+// is closed or merged, is left out and logged; one GitHub could not be asked about is kept, saying so.
+const stillOpen = async ($: EngineInterface, qs: readonly NightQuestion[]): Promise<{ q: NightQuestion; repo: string | null }[]> => {
+  const dir = (await sleepPaths($)).dir
+  const looked = new Map<string, Promise<ItemState>>()
+  const stateOf = (item: Named) => {
+    const k = `${repoKey(item.repo)}#${item.number}`
+    const had = looked.get(k)
+    if (had) return had
+    const p = namedState($, item)
+    looked.set(k, p)
+    return p
+  }
+  const out: { q: NightQuestion; repo: string | null }[] = []
+  for (const q of distinctQuestions(qs)) {
+    const repo = q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)
+    try {
+      if (await $.fs.exists(answeredQuestionPath(dir, repo, q))) {
+        $.ui.log(`scope-modes: "${q.text}" is not offered: its answer is on record`, { to: 'debug' })
+        continue
+      }
+    } catch (err) {
+      $.ui.log(`scope-modes: whether "${q.text}" was answered could not be read (${msg(err)}), so it is offered`, { to: 'debug' })
+    }
+    // A link's repository is mod-kit's one link reader's to say (#961); one it does not read is no item.
+    // A reader that fails could not say, so the question is offered saying why, never judged settled
+    // on its other items (L11).
+    const links: Named[] = []
+    const unread: string[] = []
+    for (const link of questionLinks(q.text)) {
+      const number = linkNumber(link)
+      if (number === null) continue
+      try {
+        const named = await $.modkit.linkRepo({ link })
+        if (named) links.push({ repo: named, number })
+      } catch (err) {
+        unread.push(`which repository ${link} names could not be read: ${msg(err)}`)
+      }
+    }
+    const v = judgeNamed(await Promise.all(namedItems(q, repo, links).map(async item => ({ item, state: await stateOf(item) }))))
+    if (v.settled && unread.length === 0) {
+      $.ui.log(`scope-modes: "${q.text}" is not offered: everything it names is closed or merged`, { to: 'debug' })
+      continue
+    }
+    const why = [...unread, ...(!v.settled && v.unchecked ? [v.unchecked] : [])].join('; ')
+    out.push({ q: why ? { ...q, unchecked: why } : q, repo })
+  }
+  return out
+}
+
+// The questions this session offered, by the number its prompt gave each (3.n), so the picker Dan
+// answers records each answer (#3018). As with the proposals' numbers (rememberOffered), a number two
+// offers in one session give to different questions is dropped, since an answer cannot say which was
+// meant: a missed record only offers it again, where a wrong one would hide a question for good.
+const askedByNumber = new Map<string, { q: NightQuestion; repo: string | null }>()
+const ambiguousAsked = new Set<string>()
+const rememberAsked = (asked: readonly { q: NightQuestion; repo: string | null }[]) => {
+  asked.forEach((a, k) => {
+    const n = `3.${k + 1}`
+    if (ambiguousAsked.has(n)) return
+    const had = askedByNumber.get(n)
+    if (had !== undefined && (had.q.text !== a.q.text || repoKey(had.repo) !== repoKey(a.repo) || had.q.issue !== a.q.issue)) {
+      ambiguousAsked.add(n)
+      askedByNumber.delete(n)
+    } else askedByNumber.set(n, a)
+  })
+}
+
+// Each question Dan answered in a morning picker, kept in the answered folder, so no later morning
+// offers it. One that cannot be kept is logged: it is offered again, never lost.
+const noteAnswered = async ($: EngineInterface, input: Record<string, unknown>, result: { result?: unknown }) => {
+  if (!askedByNumber.size) return
+  const answers = (result.result as { answers?: unknown } | undefined)?.answers
+  const found = answeredIn(input.questions, answers, new Set(askedByNumber.keys()))
+  if (!found.length) return
+  const dir = (await sleepPaths($)).dir
+  for (const { n, answer } of found) {
+    const a = askedByNumber.get(n)
+    if (!a) continue
+    const record = { repo: a.repo, issue: a.q.issue, text: a.q.text, answer, at: await $.clock.now(), by: await $.session.id() }
+    const failed = await writeWhole($, answeredQuestionPath(dir, a.repo, a.q), `${JSON.stringify(record)}\n`)
+    if (failed) $.ui.log(`scope-modes: Dan's answer to "${a.q.text}" could not be recorded (${failed}), so a later morning may offer it again`, { to: 'debug' })
+  }
+}
+
 // When the night a generation names began (its leading time), or null for one named by no time.
 const nightStart = (generation: string): number | null => {
   const at = Number(/^(\d+)-/.exec(generation)?.[1])
@@ -2405,9 +2516,14 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   // again (#1389: on 2026-10-20 four were offered here that had been filed eleven days before).
   const sorted = await sortProposals($, claimedIssues, since)
   const issues = sorted.offer
-  if (!issues.length && !questions.length && !sorted.filed.length && !sorted.declined.length) return
+  // The questions still open, each once across the nights (#3018: on 2026-11-15 four were offered
+  // here, two a note that asked nothing written twice, two answered the morning after).
+  const asked = await stillOpen($, questions)
+  rememberAsked(asked)
+  const stillAsked = asked.map(a => a.q)
+  if (!issues.length && !stillAsked.length && !sorted.filed.length && !sorted.declined.length) return
   const lead =
-    issues.length || questions.length
+    issues.length || stillAsked.length
       ? `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
       : `Proposals for ${mine} from an earlier night, which no session in it was open to offer, turn out to be filed or declined already.`
   try {
@@ -2417,7 +2533,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
         offers: issues.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0,
         issues,
         lessons: [],
-        questions,
+        questions: stillAsked,
         lead,
         forRepo: mine,
         ...(sorted.filed.length ? { filed: sorted.filed } : {}),
@@ -5603,7 +5719,11 @@ export const register: Register = on => {
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (filing && !r.deny) await noteProposalFiled($, filing.dir, r)
       // A morning picker of proposals Dan answered: what he left is declined (#1389).
-      if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) await noteDeclined($, input, r)
+      if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) {
+        await noteDeclined($, input, r)
+        // And each overnight question he answered (3.n) is recorded answered (#3018).
+        await noteAnswered($, input, r)
+      }
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)

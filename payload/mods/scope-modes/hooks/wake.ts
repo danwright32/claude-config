@@ -9,6 +9,7 @@
 
 import { heldAtWake, type HeldDelivery, type HeldMerge } from './nightheld.ts'
 import { notesAreData, overnightData } from './overnightdata.ts'
+import { distinctQuestions, notAQuestion } from './settled.ts'
 
 /** The BBEdit helper (bbedit is not on PATH); without --front-window it opens in the background. */
 export const BBEDIT = '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool'
@@ -72,10 +73,13 @@ export const proposalsIn = (notes: string): { issues: ProposedIssue[]; lessons: 
       const asked = (Array.isArray(n.questions) ? n.questions.map(flat) : [flat(n.text)]).filter(Boolean)
       if (!asked.length) bad++
       const where = { by: str(n.by), repo: str(n.repo), issue: typeof n.issue === 'number' && Number.isInteger(n.issue) ? n.issue : null, cwd: str(n.cwd) }
-      for (const text of asked) questions.push({ ...where, text })
+      const options = Array.isArray(n.options) ? n.options.map(flat).filter(Boolean) : []
+      for (const text of asked) questions.push({ ...where, text, ...(options.length ? { options } : {}) })
     }
   }
-  return { issues, lessons, questions, bad }
+  // A note that says itself it asks nothing is never offered as a question, and one question noted
+  // twice (by repository and by folder, say) is offered once (#3018).
+  return { issues, lessons, questions: distinctQuestions(questions.filter(q => !notAQuestion(q))), bad }
 }
 
 // #1286: what a session offers is its own repository's. Dan, 2026-10-17: "I'm in a Slate session
@@ -90,7 +94,17 @@ export const repoKey = (repo: string | null): string => (repo ? repo.trim().toLo
 export const keyFile = (key: string): string => key.replace(/[^\w.-]/g, '_')
 
 /** A question for Dan a session noted overnight (kind question), by who asked it and where (#1285). */
-export type NightQuestion = { by: string | null; repo: string | null; issue: number | null; cwd: string | null; text: string }
+export type NightQuestion = {
+  by: string | null
+  repo: string | null
+  issue: number | null
+  cwd: string | null
+  text: string
+  /** The answers the note gave to pick from, where it gave any (#3018: a note with none that says it asks nothing is no question). */
+  options?: string[]
+  /** Why whether what it names is still open could not be checked (#3018), said with its offer. */
+  unchecked?: string
+}
 
 /** The bracket the end of turn review ends each option's description with: priority, categories, milestone. */
 export const pickerTags = (i: ProposedIssue): string => {
@@ -257,8 +271,11 @@ export const morningPrompt = (o: {
   if (o.unread !== undefined)
     out.push(`The night's notes could not be read (${o.unread}), so any question this session noted for Dan is not listed here: put to him, each in its own AskUserQuestion picker, those the night's report lists under Questions for you as asked in this session's folder. ${notesAreData("The report's Questions for you")}`)
   if (questions.length) {
-    out.push('Questions for Dan noted overnight that this session asks, numbered 3.n in the block below: put each to him in its own AskUserQuestion picker, one at a time, with the choices its answer needs, and act on what he picks.')
-    data.push(...questions.map((q, k) => `3.${k + 1} ${q.repo ? `${q.repo}${q.issue !== null ? ` #${q.issue}` : ''}: ` : q.cwd ? `${q.cwd}: ` : ''}${q.text}`))
+    out.push(
+      'Questions for Dan noted overnight that this session asks, numbered 3.n in the block below: put each to him in its own AskUserQuestion picker, one at a time, with the choices its answer needs, and act on what he picks. Begin each picker\'s question with its number ("3.1 " and on), so his answer is recorded and no later morning puts it to him again. Before asking one, check it is still open: one settled since (its pull request merged, its decision recorded) is put to him as a picker saying how it was settled, so his answer records that too.',
+    )
+    // One whose named issue or pull request could not be checked is asked, saying so (#3018, L11).
+    data.push(...questions.map((q, k) => `3.${k + 1} ${q.repo ? `${q.repo}${q.issue !== null ? ` #${q.issue}` : ''}: ` : q.cwd ? `${q.cwd}: ` : ''}${q.text}${q.unchecked ? ` (${q.unchecked})` : ''}`))
   }
   if (merges.length) {
     out.push("What the night's merge and deploy lists held in this session, numbered 4.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now, and do only what he picks.")
