@@ -461,7 +461,7 @@ os.environ["HOME"] = home
 # review of PR #3029). The database is stood in for, since a test cannot move a real user's home.
 import pwd, types
 real_getpwnam = pwd.getpwnam
-homes = {"someuser": "/Users/someuser"}
+homes = {"someuser": "/srv/homes/someuser"}
 def fake_getpwnam(name):
     if name in homes:
         return types.SimpleNamespace(pw_dir=homes[name])
@@ -471,7 +471,7 @@ tilde = big + "cd ~someuser/repo && git push\n"
 where = []
 tilde_value = (sw.commands(tilde, "/w", parts=where), where)
 expect("the reader reads ~someuser from the password database (%r)" % (tilde_value[0][-1],),
-       tilde_value[0][-1][0] == "/Users/someuser/repo")
+       tilde_value[0][-1][0] == "/srv/homes/someuser/repo")
 td = os.path.join(work, "tilde")
 jc.Parses(td, code).put(tilde, "/w", tilde_value)
 expect("a parse naming ~someuser is kept and given back", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
@@ -479,13 +479,13 @@ homes["someuser"] = "/Volumes/moved/someuser"
 expect("once someuser's home has moved, the kept parse is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
 del homes["someuser"]
 expect("and once someuser is gone, it is a miss", jc.Parses(td, code).get(tilde, "/w") is None)
-homes["someuser"] = "/Users/someuser"
+homes["someuser"] = "/srv/homes/someuser"
 expect("with the home back where it was, it is a hit again", jc.Parses(td, code).get(tilde, "/w") == tilde_value)
 quoted = big + "cd \"~some\"'user'/repo; ls\n"
 jc.Parses(td, code).put(quoted, "/w", tilde_value)
 homes["someuser"] = "/Volumes/moved/someuser"
 expect("a quoted ~someuser is keyed too", jc.Parses(td, code).get(quoted, "/w") is None)
-homes["someuser"] = "/Users/someuser"
+homes["someuser"] = "/srv/homes/someuser"
 def broken_getpwnam(name):
     raise OSError("the directory service is not answering")
 pwd.getpwnam = broken_getpwnam
