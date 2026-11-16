@@ -6233,7 +6233,11 @@ else `unresolved` with why, never empty and never safe; and `unread` (#2983, #30
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
 `$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
-every guard holds or refuses it rather than judging its words alone), of which files a command
+every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the settings
+a command is run with, each `NAME=value` written in front of it or given to a runner before it
+(`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a shell's
+script, also given on each script run the write reader lists in `runs`, so a guard can see what a
+script reads from its environment, of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -7342,7 +7346,11 @@ whole and as each piece a split would make) as each of its words, and marks an a
 which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
 arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
 as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
-each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
+each judged as the name it spells; a sum mod-kit does not work out is still held. Since #3088 a
+sum in the newer spelling (`"a|\\$((0-9))"`), which every shell works out, is given as that one
+text, and the guard reads `$((...))` as arithmetic, never as a command substitution
+(rules.ts `arithmeticMarked`): one holding a variable is held as a variable's value, and one holding
+a command substitution as a command's output. Over this Mac's
 distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
