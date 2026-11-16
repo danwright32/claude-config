@@ -7644,7 +7644,10 @@ mod-kit marks unread, refused with its reason (`eval`, a command a value names s
 which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
-Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
+#3099 it may also close, and only close, a tab first listed in its tab group after its own click,
+typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
+that was in the group before or that appears with no such action behind it) or on a
 page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
@@ -7738,7 +7741,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585
+#1765, #1812, #2064, #2261, #2585, #3099
 
 </td></tr>
 <tr><td>
