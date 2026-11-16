@@ -4191,7 +4191,7 @@ commits the line or runs a file on that project, so later sessions and every wor
 do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
 MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
 (#2989), the question naming up to eight of them and how he approves one; a commit whose every added
-line he approved passes, once the record holds them all (below).
+line he approved passes, and says so when the record could not take one (below).
 - Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
   after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
   to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
@@ -4204,12 +4204,14 @@ line he approved passes, once the record holds them all (below).
 - A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
   session's transcript (both captured the same day), so it passes on Dan's picker in that session,
   and the record is written by a call of the main session.
-- A record that cannot be written trusts nothing (#3058). Before, the failure was swallowed: his
-  picker let the main session's call through, nothing was kept, and the next session asked him to
-  approve the same line again with no reason given. Now that call, a write or a commit adding the
-  line, is asked about, the question
-  naming the record and the error, and saying that once the record can be written the same picker
-  counts with no new one asked.
+- When the record cannot be written, the hook says so, and his picker still counts for that call (#3058).
+  Before, the failure was swallowed: his picker let the main session's call through, nothing was
+  kept, and the next session asked him to approve the same line again with no reason given. Now
+  that call, a write or a commit adding the line, still goes through on his picker (Dan chose on
+  2026-11-16 to keep that trust, answering the picker `Keep #3041's old trust`), and the hook says
+  beside it, in a notice and never as a question, which line could not be saved, the record's path
+  and the error, and that a later session will ask him again until the record can be written.
+  Nothing is kept until then; once it can be written, the same picker is saved by the next call.
 - What changes for a list that already exists: its lines are approved by nobody yet, so each write
   on its project is asked about, the question saying how Dan approves the line. One picker a line
   is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
