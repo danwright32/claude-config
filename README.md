@@ -3237,6 +3237,15 @@ on main is not this push's, and is not reported anywhere else either. The duplic
 assets gates still read the whole range from the upstream. Each suite builds its case with
 `lib/merged-main-fixture.sh`.
 
+A merge of main can only be set apart once it is committed. In `git commit --no-edit && git push`
+with the merge still in progress, the merge commit does not exist when the gates run, so each of
+them reads the commit the command is about to make as the branch's own work, every line main
+brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
+to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+Reading the pending merge as a merge of its second parent was the other option, and was not taken:
+each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
+added later would miss it without a word.
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
