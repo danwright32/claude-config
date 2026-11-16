@@ -89,10 +89,8 @@ import {
   nameFromOutput,
   nameFromVariable,
   removalFilledIn,
-  leadingVariable,
   findNamesReachNoLook,
   outputTrusted,
-  freshTemp,
   relTo,
   shapeKind,
   shellVarPath,
@@ -136,6 +134,7 @@ import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
+import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something

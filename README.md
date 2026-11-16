@@ -6328,7 +6328,12 @@ git apply or patch places the names by -p, folder, a named file and -R) is read 
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
 the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
-patch by hand. `hooks/quoted.ts` holds `pythonText` too
+patch by hand. What a shell script's own variables hold (a temporary file or folder it made with
+bare `mktemp`, by `madeTemp`, `freshTemp` and `tempWord`; its own folder by the `BASH_SOURCE`
+idiom, by `ownFolderVar`, `ownFolderPath` and `withoutOwnFolder`) is read only through
+`hooks/scriptvars.ts`, kept by each mod that asks at `hooks/mod-kit/scriptvars.ts` (#3022: the
+design round guard wrote it, and the area check, which could place no write into such a folder,
+held every checker copying into one). `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
@@ -7978,16 +7983,32 @@ write in the script's own text can be placed (#2407, #2565): a full path, a path
 folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
 and `"$1"/gen/*.ts` as everything under `<folder>/gen`). Each placed write is then judged where it
 lands, so a script handed `src/` that writes `"$1/gen.ts"` is held only if `src/gen.ts` would be.
-A name relative to wherever the script runs, one built from any other value (a folder made with
-`mktemp` among them), a pattern matched in the folder itself (`"$1"/*.ts`), and a name built on
+Since #3022 (Dan, 2026-11-15) the script's own variables are read with mod-kit's
+`hooks/scriptvars.ts`, the reader the design round guard kept until then: a plain name in a folder
+the script made itself with bare `mktemp -d` (`"$scratch/copy"`), or a file it made with bare
+`mktemp`, lands in no file of the checkout, so it is placed nowhere and judged nowhere; a file
+sourced through the variable holding the script's own folder (`source "$HERE/lib.sh"`, HERE set
+by the `BASH_SOURCE` idiom) is read as part of the script, its writes placed with the script's;
+and that idiom's `cd`, which runs in a shell of its own, does not count as the script changing
+folder. A name relative to wherever the script runs, one built from any other value (a folder
+`mktemp` made from a template, with any flag but `-d`, or where the script names `TMPDIR`; a name
+holding a command's output, `"$scratch/$(basename "$d")"`), a pattern matched in the folder itself
+(`"$1"/*.ts`), a file sourced any other way or not there, and a name built on
 `$1` in a script that defines a function, gives `set` new values or changes folder keep the whole
-folder held. So
-`bash tools/check-mods.sh payload/mods`, which copies into a folder it makes with `mktemp`, is still
-held (Dan chose to keep that hold on #2527). A script whose text
-runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
-it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
+folder held. A script whose text
+runs what cannot be read as commands keeps the hold too (#2619), by the mark mod-kit's reader puts
+on each such command (#3021; the area check read them its own way until #3022): text run through
+`eval`, an alias
+it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), `ssh`, a
+trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. A script in another language (node, python, ruby) whose only part
+arithmetic names no command. So
+`bash tools/check-mods.sh payload/mods` is still held, though no longer for copying into a folder
+of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test
+"$d"`, `"$tsc"`), makes its folder from a template under `TMPDIR`, names each copy through another
+variable, runs inline perl whose writes its words do not name, and sources one file by a command's
+output, each of which keeps the hold on its own (measured 2026-11-16).
+A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
 importing a local module by a fixed name reads, so the folder it is handed is read, not written
