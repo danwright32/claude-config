@@ -121,6 +121,11 @@ load_notice() {
   }
 }
 
+# The payload is matched under LC_ALL=C too, so a byte that is not UTF-8 hides no word after it
+# (claude-config#1885). The session's locale is tried first, since only it counts a Unicode space
+# as [[:space:]], so a match is only ever added, never lost.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+
 # The screen: a payload holding none of these words, in any case, names no database call.
 DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
 db_call=0
@@ -143,7 +148,7 @@ case "$payload" in
     case "$payload" in
       *git*)
         bash_tool='"tool_name"[[:space:]]*:[[:space:]]*"Bash"'
-        if [[ "$payload" =~ $bash_tool ]]; then commit_call=1; fi ;;
+        if payload_match "$payload" "$bash_tool"; then commit_call=1; fi ;;
     esac ;;
 esac
 [ "$db_call$sf_call$commit_call" != 000 ] || exit 0

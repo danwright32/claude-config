@@ -465,13 +465,16 @@ def _put_on_record(keys):
     covers this session, and the next one asks again, naming how."""
     folder = _record_dir()
     try:
+        # A key is a hex digest, so strict is the decision: a key holding anything else is refused
+        # before the record is opened, and never written as a line that would trust nothing.
+        data = ("\n".join(keys) + "\n").encode("ascii", "strict")
         os.makedirs(folder, mode=0o700, exist_ok=True)
         fd = os.open(os.path.join(folder, "approved"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
-            os.write(fd, ("\n".join(keys) + "\n").encode("ascii"))
+            os.write(fd, data)
         finally:
             os.close(fd)
-    except OSError:
+    except (OSError, UnicodeError):
         pass
 
 
