@@ -50,7 +50,6 @@ import {
   UNTRACED_EDIT,
   UNTRACED_LANGUAGE,
   UNTRACED_NONE,
-  FILES_JQ,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -61,7 +60,7 @@ import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { type InputFs, inputTexts } from './mod-kit/inputs.ts'
 import { patchFiles, patchPlacing, placedName } from './mod-kit/patch.ts'
-import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf, waitingNamed } from './night.ts'
+import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, choicesOf, chosenKey, isOverdue, morningLines, morningQuestion, morningReaches, reaskDue, reaskLine, sleepEndOf } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -94,7 +93,7 @@ type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; 
 // Could not check: git or a read failed for the file itself, so the call is held and told to try again.
 // late: it failed by running out of time, so it is told as a timeout, not a refusal (#2792).
 type Unchecked = { unchecked: string; late?: true }
-type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold } | { merge: string }
+type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold }
 const PASS: Verdict = { pass: true }
 
 // The arguments the tool takes, without the keys the engine carries beside them.
@@ -217,7 +216,7 @@ const foreignUses = async ($: EngineInterface, path: string, names: string[], de
 // The keys of a change Dan has not yet approved; a store that cannot be read throws. While he is
 // asleep, wording a session chose overnight and that has not expired goes through too (#2628): a
 // choice is never an approval, so awake it is held as before. Given the `file` the wording goes in, a
-// choice letting it through there holds merges in that file's repository too (#2833).
+// choice letting it through there is put to Dan from that file's repository too (#2833).
 const unapproved = async ($: EngineInterface, keys: string[], file?: string): Promise<string[]> => {
   const out: string[] = []
   for (const k of keys) if ((await $.store.get(k)) === undefined) out.push(k)
@@ -274,11 +273,11 @@ const chosenKeysOf = async ($: EngineInterface, id: string): Promise<string[]> =
  * The GitHub repository a file is in (#2833), as owner/name in lower case: the origin of the checkout
  * holding it, read from the nearest folder that exists, so a worktree removed since is read through
  * the checkout it was under, which has the same origin. null when git or the origin cannot say, or
- * not by `deadline` (a merge's one deadline, #2973; SCAN_MS from now when none is given).
+ * not within SCAN_MS.
  */
-const repoOf = async ($: EngineInterface, path: string, deadline?: number): Promise<string | null> => {
+const repoOf = async ($: EngineInterface, path: string): Promise<string | null> => {
   try {
-    const end = deadline ?? (await $.clock.now()) + SCAN_MS
+    const end = (await $.clock.now()) + SCAN_MS
     const where = await placed($, path, end)
     if (!where) return null
     const ms = Math.floor(end - (await $.clock.now()))
@@ -287,38 +286,24 @@ const repoOf = async ($: EngineInterface, path: string, deadline?: number): Prom
     if (r.exitCode !== 0 || r.isStdoutTruncated) return null
     return (await $.modkit.repo({ root: where.top, remote: r.stdout.trim() })).github?.toLowerCase() ?? null
   } catch (err) {
-    $.ui.log(`slack-alert-guard: the repository ${path} is in could not be read, so a choice made there holds merges in every repository: ${message(err)}`, { to: 'debug' })
+    $.ui.log(`slack-alert-guard: the repository ${path} is in could not be read, so a choice made there is put to Dan in any session: ${message(err)}`, { to: 'debug' })
     return null
   }
 }
 
 /**
- * The repositories a choice holds merges in (#2833), and the files whose repository could not be
+ * The repositories a choice is asked about in (#2833), and the files whose repository could not be
  * read, read again here: a choice made before #2833 is read from its file.
  */
-const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice, deadline?: number): Promise<{ repos: string[]; unread: string[] }> => {
+const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice): Promise<{ repos: string[]; unread: string[] }> => {
   const repos: string[] = []
   const unread: string[] = []
   for (const p of c.places ?? [{ file: c.file, repo: null }]) {
-    const r = p.repo ?? (await repoOf($, p.file, deadline))
+    const r = p.repo ?? (await repoOf($, p.file))
     if (r) repos.push(r)
     else unread.push(p.file)
   }
   return { repos, unread }
-}
-
-/**
- * The repository each choice was chosen in (#3030), by id: as recorded when it was made, read again
- * from its file where that could not be read then or a choice made before #2833 records none, and
- * null where neither can say, which a refusal says rather than naming one.
- */
-const chosenIn = async ($: EngineInterface, cs: readonly SlackAlertChoice[], deadline?: number): Promise<Record<string, string | null>> => {
-  const out: Record<string, string | null> = {}
-  for (const c of cs) {
-    const first = c.places?.[0] ?? { file: c.file, repo: null }
-    out[c.id] = first.repo ?? (await repoOf($, first.file, deadline))
-  }
-  return out
 }
 
 /**
@@ -328,7 +313,7 @@ const chosenIn = async ($: EngineInterface, cs: readonly SlackAlertChoice[], dea
  * as before, so it is never left unasked; a session whose own repository cannot be read asks only
  * its own. The session's repository is read only when some choice is not its own.
  */
-const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], self: string, deadline?: number): Promise<SlackAlertChoice[]> => {
+const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], self: string): Promise<SlackAlertChoice[]> => {
   const out: SlackAlertChoice[] = []
   let here: string | null | undefined
   for (const c of all) {
@@ -336,22 +321,22 @@ const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], s
       out.push(c)
       continue
     }
-    const { repos, unread } = await choiceRepos($, c, deadline)
+    const { repos, unread } = await choiceRepos($, c)
     if (unread.length) {
       out.push(c)
       continue
     }
     // A path inside the folder, since repoOf asks git from the folder holding the path it is given.
-    if (here === undefined) here = await repoOf($, `${(await $.session.cwd()).replace(/\/+$/, '')}/.`, deadline)
+    if (here === undefined) here = await repoOf($, `${(await $.session.cwd()).replace(/\/+$/, '')}/.`)
     if (here !== null && repos.includes(here)) out.push(c)
   }
   return out
 }
 
 /**
- * Asleep, wording a choice lets through in a file is held against merges there too (#2833): the
- * file and its repository are added to each such choice's places, so a pull request in another
- * repository carrying it is still held.
+ * Asleep, wording a choice lets through in a file is put to Dan from there too (#2833): the file and
+ * its repository are added to each such choice's places, so a session working in that repository
+ * also asks him about it in the morning (askedHere).
  */
 const placeChoices = async ($: EngineInterface, chosen: string[], file: string): Promise<void> => {
   const done = new Set<string>()
@@ -364,165 +349,6 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
     const next = [...places, { file, repo: await repoOf($, file) }]
     for (const key of await chosenKeysOf($, c.id)) await $.store.set(key, { ...((await $.store.get(key)) as SlackAlertChoice), places: next } satisfies SlackAlertChoice)
   }
-}
-
-/**
- * A merge carrying wording chosen overnight (#2628): while any choice waits on Dan, each pull request
- * a command merges is read with gh pr diff, and one whose added lines carry a choice is refused, so
- * nothing posts it before he approves it. Only in the repositories the choice holds (#2833): one
- * made in another repository lets the merge through, and one whose repository cannot be read holds
- * it wherever it is. A merge that cannot be read, a command whose effect cannot be read at all
- * (#3021), a diff gh cannot give, or a pull request whose repository gh cannot say, is held as
- * could not check; a diff gh did not give within its time is
- * held as a timeout (#2792). With no choice waiting, no command is read.
- *
- * A diff gh cannot give (#2973) holds the merge only over the choices that hold its repository: none
- * there, and it passes. A diff gh cuts short is read again file by file, only the files that can carry
- * wording (diffInParts). One that cannot be read either way is held as could not check, naming each
- * choice it waits on, the session that made it and where it is approved.
- */
-const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
-  const waiting = await choices($)
-  if (!waiting.length) return PASS
-  // One deadline for the whole read (#2973 lessons review, L842): every gh and git call is given
-  // only the time left, so the hook answers inside Claude Code's 10 s, never killed mid read.
-  const deadline = (await $.clock.now()) + SCAN_MS
-  const cwd = await $.session.cwd()
-  const home = (await $.env.get('HOME')) ?? ''
-  const self = await $.session.id()
-  // The choices named, with who asks Dan about each, by askedHere as the merge refusal's are, and
-  // the repository each was chosen in (#3030).
-  const named = async (cs: SlackAlertChoice[]): Promise<string> => {
-    const mine = new Set((await askedHere($, cs, self, deadline)).map(x => x.id))
-    return waitingNamed(cs, mine, await chosenIn($, cs, deadline))
-  }
-  const waits = 'while Slack alert wording chosen overnight waits on Dan'
-  const late = (what: string): Verdict => ({ unchecked: `${what} within ${SCAN_MS / 1000} seconds, ${waits}`, late: true })
-  const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting)}` })
-  for (const c of await $.modkit.pipeline({ command, cwd, home })) {
-    // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
-    // whose text the shell expands, a word rtk's proxy splits) may run a merge its words do not
-    // show: `eval "gh pr merge 12 --squash"` was read as no merge and ran. Held as could not check,
-    // saying what gets it read (L111), since the same call sent again is held the same.
-    if (c.unread)
-      return {
-        unchecked: `${c.words.join(' ')} is a command ${c.unread}, so whether it merges a pull request cannot be told until the commands it runs are written out in its place, ${waits}: ${await named(waiting)}`,
-      }
-    const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
-    if (m === undefined) continue
-    if ('unreadable' in m) return unreadable()
-    const folder = c.folder ?? cwd
-    const repoArgs = m.repo ? ['-R', m.repo] : []
-    // The pull request's repository: the one the command names, else the one gh reads it in, asked
-    // only when it is needed; late when gh ran out of the time left.
-    let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
-    const repoOfPr = async (): Promise<string | null | { late: true }> => {
-      if (prRepo !== undefined) return prRepo
-      const v = await ghWithin($, ['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], folder, deadline)
-      if (v.late) return { late: true }
-      const link = v.r.exitCode === 0 && !v.r.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.r.stdout.trim() }) : null
-      if (!link) return null
-      prRepo = link.toLowerCase()
-      return prRepo
-    }
-    const d = await ghWithin($, ['gh', 'pr', 'diff', ...m.selector, ...repoArgs], folder, deadline)
-    // A gh that failed once its whole time was spent was killed at its timeout (#2792).
-    if (d.late) return late("gh did not give the pull request's diff")
-    const r = d.r
-    let diff = r.stdout
-    if (r.exitCode !== 0 || r.isStdoutTruncated) {
-      const why = `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'})`
-      const repo = await repoOfPr()
-      if (repo !== null && typeof repo === 'object') return late('gh did not say which repository the pull request is in')
-      if (repo === null) return { unchecked: `${why}, nor say which repository it is in, ${waits}: ${await named(waiting)}` }
-      // Only a choice holding this repository, or whose own repository cannot be read, holds it.
-      const bearing: SlackAlertChoice[] = []
-      for (const x of waiting) {
-        const { repos, unread } = await choiceRepos($, x, deadline)
-        if (unread.length || repos.includes(repo)) bearing.push(x)
-      }
-      if (!bearing.length) continue
-      const parts = r.exitCode === 0 ? await diffInParts($, m.selector, repoArgs, folder, deadline) : { unread: 'it was not read again' }
-      if ('late' in parts) return late(parts.late)
-      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing)}` }
-      diff = parts.text
-    }
-    const carrying = carried(diff, waiting)
-    if (!carrying.length) continue
-    const held: SlackAlertChoice[] = []
-    const unreadFiles: string[] = []
-    for (const x of carrying) {
-      const { repos, unread } = await choiceRepos($, x, deadline)
-      if (unread.length) {
-        held.push(x)
-        unreadFiles.push(...unread)
-        continue
-      }
-      const repo = await repoOfPr()
-      if (repo !== null && typeof repo === 'object') return late('gh did not say which repository the pull request is in')
-      if (repo === null) return unreadable()
-      if (repos.includes(repo)) held.push(x)
-    }
-    if (!held.length) continue
-    // A choice this session may not ask about (askedHere, #2833) is said to be asked in its own
-    // repository, never put to Dan from here.
-    const mine = new Set((await askedHere($, held, self, deadline)).map(x => x.id))
-    const away: Record<string, string> = {}
-    for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x, deadline)).repos[0] ?? ''
-    return { merge: mergeRefusal(held, unreadFiles, away, await chosenIn($, held, deadline)) }
-  }
-  return PASS
-}
-
-/**
- * A gh call given only the time left before `deadline` (#2973): late when none is left, or when it
- * failed once that time was spent, as gh killed at its timeout does (#2792).
- */
-const ghWithin = async ($: EngineInterface, argv: string[], folder: string, deadline: number): Promise<{ r: Awaited<ReturnType<EngineInterface['process']['run']>>; late: false } | { late: true }> => {
-  const ms = Math.floor(deadline - (await $.clock.now()))
-  if (ms <= 0) return { late: true }
-  const r = await $.process.run(argv, { timeoutMs: ms, cwd: folder })
-  if (r.exitCode !== 0 && (await $.clock.now()) >= deadline) return { late: true }
-  return { r, late: false }
-}
-
-/**
- * A pull request's diff read file by file (#2973), for one whose whole diff gh cut short (a work
- * repository's, 7.6 MB of pictures embedded in settled design files): GitHub's list of its files, the
- * patch given only for a file that can carry wording (WORDING_PATH, picked out by gh's own jq, so the
- * pictures are never sent), joined for carried(). Unread, with why, when the list is cut short too,
- * holds fewer files than the pull request changes (GitHub lists at most 3,000), or gives no patch for
- * a file that could carry wording (GitHub leaves one out past its own size limit); late, saying
- * what did not answer, when the merge's one deadline ran out (#2792).
- */
-const diffInParts = async ($: EngineInterface, selector: string[], repoArgs: string[], folder: string, deadline: number): Promise<{ text: string } | { unread: string } | { late: string }> => {
-  const firstLine = (r: { exitCode: number; stderr: string }, short: string) => `exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || short}`
-  const v = await ghWithin($, ['gh', 'pr', 'view', ...selector, ...repoArgs, '--json', 'url,changedFiles', '--jq', '"\\(.changedFiles) \\(.url)"'], folder, deadline)
-  if (v.late) return { late: 'gh did not say which files the pull request changes' }
-  const said = v.r.exitCode === 0 && !v.r.isStdoutTruncated ? /^(\d+) (\S+)$/.exec(v.r.stdout.trim()) : null
-  const link = said?.[2] ?? ''
-  const repo = said ? await $.modkit.linkRepo({ link }) : null
-  const number = /\/pull\/(\d+)/.exec(link)?.[1]
-  if (!said || !repo || !number) return { unread: `gh could not say which files it changes (${firstLine(v.r, v.r.stdout.trim().slice(0, 80) || 'nothing said')})` }
-  const f = await ghWithin($, ['gh', 'api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate', '--jq', FILES_JQ], folder, deadline)
-  if (f.late) return { late: "GitHub did not list the pull request's files" }
-  if (f.r.exitCode !== 0 || f.r.isStdoutTruncated) return { unread: `GitHub's list of its files could not be read either (${firstLine(f.r, 'cut short')})` }
-  const files: [string, string | null | false][] = []
-  for (const line of f.r.stdout.split('\n')) {
-    if (!line.trim()) continue
-    let row: unknown
-    try {
-      row = JSON.parse(line)
-    } catch {
-      row = undefined
-    }
-    if (!Array.isArray(row) || typeof row[0] !== 'string' || !(typeof row[1] === 'string' || row[1] === null || row[1] === false)) return { unread: `GitHub's list of its files could not be read (${line.slice(0, 80)})` }
-    files.push([row[0], row[1]])
-  }
-  if (files.length !== Number(said[1])) return { unread: `GitHub listed ${files.length} of the ${said[1]} files it changes` }
-  const blind = files.filter(([, p]) => p === null).map(([n]) => n)
-  if (blind.length) return { unread: `GitHub gives no diff for ${blind.join(', ')}, which could carry wording` }
-  return { text: files.flatMap(([, p]) => (typeof p === 'string' ? [p] : [])).join('\n') }
 }
 
 /**
@@ -873,8 +699,6 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     // Only a command that can write the guard's own record is refused (#2904), never one that
     // only lists, searches or reads the store.
     if (writesOwnRecord(w, home, mentionsStore(command))) return { own: true }
-    const merging = await judgeMerge($, command)
-    if (!('pass' in merging)) return merging
     // A patch writes files its words do not name, so it is read for what it changes (#2971).
     const patches = w.unnamed.filter(u => u.what === 'a patch')
     const commands = patches.length ? await $.modkit.pipeline({ command, cwd, home }) : []
@@ -937,10 +761,6 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
   if ('unchecked' in v) {
     await drawCard($, id, 'The Slack alert guard could not check this call, so it is held.', v.unchecked)
     return cannotCheck(v.unchecked)
-  }
-  if ('merge' in v) {
-    await drawCard($, id, 'This pull request carries Slack alert wording chosen overnight that you have not approved.', 'It merges once you approve the wording.')
-    return v.merge
   }
   const { file, added, removed, keys, literal, send } = v.hold
   // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
@@ -1007,7 +827,7 @@ export const register: Register = on => {
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
 
     // Wording chosen overnight, put to Dan in the morning (#2628): only his Approve wording records an
-    // approval; anything else leaves the choice held and asked again.
+    // approval; anything else leaves the choice waiting and asked again. It holds no merge (#3030).
     const morning = async (id: string) => {
       const keys = await chosenKeysOf($, id)
       const c = (await choices($)).find(x => x.id === id)
@@ -1021,12 +841,12 @@ export const register: Register = on => {
       if (r.deny !== undefined || r.isError) return r
       const out = (r.result ?? {}) as AskResult
       const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : q
-      const still = `the wording chosen overnight for ${c.file} stays held, and no pull request carrying it can merge`
+      const still = `the wording chosen overnight for ${c.file} is still not approved`
       if (out.afkTimeoutMs !== undefined) return say(r, `Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${still}. It is put to him again at his next message.`)
       const chosen = out.answers?.[shown] ?? out.answers?.[q]
       if (typeof chosen !== 'string' || !chosen.trim()) return say(r, `Dan gave no answer, so nothing is recorded and ${still}. It is put to him again at his next message.`)
       if (chosen === CHANGE) {
-        // Recorded as his answer (#2993), so no other session puts it to him again; it stays held.
+        // Recorded as his answer (#2993), so no other session puts it to him again; it stays unapproved.
         let unkept = ''
         try {
           const at = await $.clock.now()
@@ -1034,7 +854,7 @@ export const register: Register = on => {
         } catch (err) {
           unkept = ` His answer could not be kept (${message(err)}), so other sessions may put it to him again.`
         }
-        return say(r, `Dan answered ${CHANGE}: nothing is approved, and ${still}. Ask him what it should say, change it in ${c.file}, and show him the new message, which is asked about as any new wording is.${unkept}`)
+        return say(r, `Dan answered ${CHANGE}: nothing is approved. Ask him what it should say, change it in ${c.file}, and show him the new message, which is asked about as any new wording is.${unkept}`)
       }
       if (chosen !== APPROVE) {
         const again = 'put the wording chosen overnight to him again'
@@ -1052,7 +872,7 @@ export const register: Register = on => {
       } catch (err) {
         return say(r, `Dan answered ${APPROVE}, but it could not be recorded (${message(err)}), so ${still}. Tell him, and ask again.`)
       }
-      return say(r, `Dan answered ${APPROVE}: the wording chosen overnight for ${c.file} is recorded as approved, and a pull request carrying it may merge.`)
+      return say(r, `Dan answered ${APPROVE}: the wording chosen overnight for ${c.file} is recorded as approved.`)
     }
 
     const decide = async () => {
@@ -1160,7 +980,6 @@ export const register: Register = on => {
       keys: waiting.keys,
       rendered,
       session: await $.session.id(),
-      chosenBy: await $.session.id(),
       places: [{ file: waiting.file, repo: await repoOf($, waiting.file) }],
     }
     for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
@@ -1173,12 +992,12 @@ export const register: Register = on => {
       noted = ` The note for the night report could not be written (${message(err)}); the morning question still comes.`
     }
     const resend = `Send the ${waiting.tool} call to ${waiting.file} again now, unchanged.`
-    return { result: `Recorded as this session's choice, not approved: Dan is asked in the morning whether to keep it, and no pull request carrying it can merge until he approves it. ${resend}${noted}` }
+    return { result: `Recorded as this session's choice, not approved: Dan is asked in the morning whether to keep it. ${resend}${noted}` }
   }).catch(($, e, next) => neverThrows(() => ({ deny: `The Slack alert guard could not record the choice (${message(next.error)}), so the edit stays held.` }), () => ({ deny: HELD }), { deny: HELD }))
 
   // In the morning (#2628): each choice waiting on Dan is put to him by the session that made it, or
   // once that one ended, by a session working in the repository it was made in (#2833); one past its
-  // time is marked expired, said once in each such session, and stays held. One still unapproved two
+  // time is marked expired, said once in each such session, and stays unapproved. One still unapproved two
   // hours after sleep ended is put to him once by every other awake session on the Mac (#2993).
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
@@ -1212,7 +1031,7 @@ export const register: Register = on => {
       return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
     } catch (err) {
       // Never read as nothing waiting: Claude is told, so Dan hears that a choice may be unasked.
-      const line = `The Slack alert guard could not read the wording chosen overnight (${message(err)}), so any choice waiting on Dan is not listed here: tell him in one line. Pull requests carrying it still cannot merge.`
+      const line = `The Slack alert guard could not read the wording chosen overnight (${message(err)}), so any choice waiting on Dan is not listed here: tell him in one line.`
       return { ...r, context: [...(r.context ?? []), line] }
     }
   })
