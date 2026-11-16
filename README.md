@@ -3242,6 +3242,12 @@ with the merge still in progress, the merge commit does not exist when the gates
 them reads the commit the command is about to make as the branch's own work, every line main
 brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
 to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+`git merge --continue && git push` is the same command and is refused the same way (#3081): a
+`git merge --continue` is read as the commit it makes, by every push gate, through
+`ps_commit_in_chain`. Read as no commit, as it was, nothing folded the pending merge commit in, so a
+conflict resolution went out with no gate having read it. With a merge of any other branch in
+progress the gates now read that pending commit, as they do for `git commit`. It is the only
+spelling of `git merge` that concludes a merge in progress (measured on git 2.51.1).
 Reading the pending merge as a merge of its second parent was the other option, and was not taken:
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
@@ -7638,7 +7644,10 @@ mod-kit marks unread, refused with its reason (`eval`, a command a value names s
 which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
-Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
+#3099 it may also close, and only close, a tab first listed in its tab group after its own click,
+typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
+that was in the group before or that appears with no such action behind it) or on a
 page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
@@ -7732,7 +7741,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585
+#1765, #1812, #2064, #2261, #2585, #3099
 
 </td></tr>
 <tr><td>
