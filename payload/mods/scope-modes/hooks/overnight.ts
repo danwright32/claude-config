@@ -21,7 +21,8 @@ import { browserRefusal, type Browser } from './browser.ts'
 //   included (#1592);
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
 // - any Chrome tool (mcp__claude-in-chrome__*) outside a tab this session created or off a test
-//   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064);
+//   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064),
+//   except closing a tab its own click opened in its tab group (#3099);
 //   headless automation (Playwright, by tool or by command) is on no list;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes, except the merged branch a gh pr merge deletes with -d
@@ -59,7 +60,7 @@ export type OvernightCall = {
   ghRepo?: string | null
   /** mod-kit's reader of a command line, for text the call hands a command as a word (#1132). */
   read: (text: string) => Promise<Cmd[]>
-  /** For a Chrome call: the tabs this session created and the project's test hosts; absent, none (#2064). */
+  /** For a Chrome call: the tabs this session created, the ones its own action opened (#3099) and the project's test hosts; absent, none (#2064). */
   browser?: Browser
   /**
    * The judge of a `gh pr merge --admin` that passed the repository rule (adminmerge.ts, #2125): why

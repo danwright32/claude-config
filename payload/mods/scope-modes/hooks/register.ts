@@ -42,7 +42,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
+import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -1332,14 +1332,23 @@ const resultTexts = (content: unknown): string[] =>
     : Array.isArray(content)
       ? content.flatMap(c => (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text' ? [String((c as { text?: unknown }).text ?? '')] : []))
       : []
-// Written by version, so two results landing at once both count (assume it runs twice).
+// Written by version, so two results landing at once both count (assume it runs twice). The tabs
+// the session's own action opened (#3099) are a second record, written after the first and judged
+// against it as just written, so a tab this same result created is never also one it opened.
 const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
-  for (let i = 0; i < 5; i++) {
+  let tabs: BrowserTabs | undefined
+  for (let i = 0; i < 5 && !tabs; i++) {
     const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
     const next = tabsAfter(held.value ?? {}, tool, input, texts)
-    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) return
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) tabs = next
   }
-  throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+  if (!tabs) throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get({ plugin: 'scope-modes', key: 'browserGroup' })
+    const next = groupAfter(held.value ?? null, tabs, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserGroup' }, next, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error("the record of the tabs this session's own action opened kept changing underneath five writes in a row")
 }
 // The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
 // copy: a session must not add a host by editing the file overnight. The default branch is the one
@@ -1377,7 +1386,14 @@ const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> =>
     const now = await $.clock.now()
     for (const [id, c] of chromeCalls) if (id !== self && now - c.at < PENDING_MS) tabs = tabsAfter(tabs, c.tool, c.input, [])
   }
-  return { tabs, listed: await committedTestHosts($) }
+  // The tabs its own action opened (#3099), which it may close: none when the record cannot be read.
+  let opened: string[] = []
+  try {
+    opened = (await $.state.get({ plugin: 'scope-modes', key: 'browserGroup' })).value?.opened ?? []
+  } catch {
+    opened = []
+  }
+  return { tabs, listed: await committedTestHosts($), opened }
 }
 
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
