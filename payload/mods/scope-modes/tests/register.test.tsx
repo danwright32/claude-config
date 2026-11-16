@@ -4483,6 +4483,17 @@ test("an earlier night's question whose issue or pull request has closed or merg
   expect(offered[0]).not.toContain('pull/54')
 })
 
+test("an earlier night's question naming a link mod-kit could not read is offered, saying so, though everything else it names has merged (#3018 review)", withDeps, async ($, on) => {
+  const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight?'] })]
+  const { w, clock } = world(on, { ...IN_LEDGER, gh: { pr: null, issues: { 53: 'MERGED', 54: 'MERGED' } }, linkReaderFailsOn: '/pull/54', files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight? (which repository https://github.com/exampleco/ledger/pull/54 names could not be read')
+})
+
 test("an earlier night's question whose pull request GitHub could not be asked about is offered, saying the check could not be made (#3018)", withDeps, async ($, on) => {
   const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Apply the migration in PR #52?'] })]
   const { w, clock } = world(on, { ...IN_LEDGER, issueViewFails: 'HTTP 502', files: { [EARLIER]: `${notes.join('\n')}\n` } })

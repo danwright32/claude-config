@@ -2343,18 +2343,27 @@ const stillOpen = async ($: EngineInterface, qs: readonly NightQuestion[]): Prom
       $.ui.log(`scope-modes: whether "${q.text}" was answered could not be read (${msg(err)}), so it is offered`, { to: 'debug' })
     }
     // A link's repository is mod-kit's one link reader's to say (#961); one it does not read is no item.
+    // A reader that fails could not say, so the question is offered saying why, never judged settled
+    // on its other items (L11).
     const links: Named[] = []
+    const unread: string[] = []
     for (const link of questionLinks(q.text)) {
       const number = linkNumber(link)
-      const named = number === null ? null : await $.modkit.linkRepo({ link }).catch(() => null)
-      if (named && number !== null) links.push({ repo: named, number })
+      if (number === null) continue
+      try {
+        const named = await $.modkit.linkRepo({ link })
+        if (named) links.push({ repo: named, number })
+      } catch (err) {
+        unread.push(`which repository ${link} names could not be read: ${msg(err)}`)
+      }
     }
     const v = judgeNamed(await Promise.all(namedItems(q, repo, links).map(async item => ({ item, state: await stateOf(item) }))))
-    if (v.settled) {
+    if (v.settled && unread.length === 0) {
       $.ui.log(`scope-modes: "${q.text}" is not offered: everything it names is closed or merged`, { to: 'debug' })
       continue
     }
-    out.push({ q: v.unchecked ? { ...q, unchecked: v.unchecked } : q, repo })
+    const why = [...unread, ...(!v.settled && v.unchecked ? [v.unchecked] : [])].join('; ')
+    out.push({ q: why ? { ...q, unchecked: why } : q, repo })
   }
   return out
 }
