@@ -3885,10 +3885,15 @@ an object's key is not read as running or writing anything. A package is still r
 imported or required.
 
 Since claude-config#2865 the first word npx, bunx, pnpx, npm exec, pnpm dlx or yarn dlx is handed is
-read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`)
-naming no file on disk and none an earlier command wrote: before, `@scope/name@1` was read as a path
-to a script. A package counts as able to post, as an imported one does, so it is refused when it is
-handed an endpoint or a file whose text names one. `claude mcp add` and the other `claude mcp`
+read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`):
+before, `@scope/name@1` was read as a path to a script. A package counts as able to post, as an
+imported one does, so it is refused when it is handed an endpoint or a file whose text names one.
+Since claude-config#3069 that holds whatever is on disk: a folder or a file of the package's name in
+the directory used to make the word a path, and a path holding no `/` is read as nothing, so beside a
+folder named `vitest` the test file `npx vitest run posts.test.ts` names was never opened. Where a
+file of that name is on disk, or an earlier command wrote one, the word is read as that file as well,
+and the call is refused where either reading refuses. A word that can only be a path (`./x.js`,
+`dir/x.js`) is read as the file alone. `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
@@ -7356,7 +7361,11 @@ command sets to a plain name is judged by that name, and `$PWD`, `$HOME`, `$OLDP
 name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's title included, read
 whole and as each piece a split would make) as each of its words, and marks an argument whose every
 `$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
-which holds no variable's value. Over this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a
+which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
+arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
+as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
+each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
+distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
 would not apply to the file as it stands (its text missing, or there more than once without

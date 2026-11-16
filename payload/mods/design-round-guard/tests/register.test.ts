@@ -3996,12 +3996,14 @@ test('#1951: a quoted glob handed to a script, or searched for by grep, runs', w
 // escaped dollar (`"wall mount|flush|\$[0-9],[0-9]{3}|price"`) was held as a write whose name the
 // shell fills in, because the command names a page elsewhere. The shell hands that dollar on as
 // written (mod-kit's unexpanded), so the pattern is the name it spells, and that is no look changing
-// file. (The call itself wrote `\\$[0-9]`: there the $ is bare and `$[0-9]` is the shell's old
-// arithmetic expansion, a value the shell fills in, which stays held below.)
+// file. #3070: the call itself wrote `\\$[0-9]`, where the $ is bare and `$[0-9]` is the shell's old
+// arithmetic expansion. mod-kit works that sum out, so the script is handed one of two known texts
+// (`\-9` from bash and zsh, the word as typed from dash and ksh), neither a variable's value, and it
+// runs too. One mod-kit does not work out, or that spells a screen file, stays held below.
 const PATTERN_3051 = (part: string) => `S=/private/tmp/s; python3 -I "$S/scripts/rt2.py" "$S/tvpages/lg-g6.html" "wall mount|flush|bezel|${part}|price|tilt" | cut -c1-400 | head -50`
 test('#3051: a search pattern holding an escaped dollar, handed to a script, runs', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
-  const commands = [PATTERN_3051('\\$[0-9],[0-9]{3}'), PATTERN_3051("'\\$'[0-9]"), PATTERN_3051('[0-9],[0-9]{3}'), PATTERN_3051('ends in \\$')]
+  const commands = [PATTERN_3051('\\$[0-9],[0-9]{3}'), PATTERN_3051("'\\$'[0-9]"), PATTERN_3051('[0-9],[0-9]{3}'), PATTERN_3051('ends in \\$'), PATTERN_3051('\\\\$[0-9],[0-9]{3}')]
   for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
   expect(w.ran.length).toBe(commands.length)
 })
@@ -4011,7 +4013,10 @@ test('#3051 control: a pattern or name holding a dollar the shell expands is sti
   for (const command of [
     PATTERN_3051('$N[0-9]'),
     PATTERN_3051('\\$[0-9]$N'),
-    PATTERN_3051('\\\\$[0-9],[0-9]{3}'),
+    // #3070: a sum of a variable, a sum beside a variable, and a worked sum spelling a screen file.
+    PATTERN_3051('\\\\$[N-9],[0-9]{3}'),
+    PATTERN_3051('\\\\$[0-9]$N'),
+    'python3 /tmp/x.py "app/page$[1+1].tsx"',
     'python3 /tmp/x.py "app/$N.tsx"',
     'python3 /tmp/x.py "app/\\$N.tsx"',
   ])
