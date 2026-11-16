@@ -131,7 +131,7 @@ def read_agent(job):
                 continue
             try:
                 t = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
-            except ValueError:
+            except (AttributeError, TypeError, ValueError):   # a timestamp that is not ISO text
                 bad += 1
                 continue
             if t < since or t >= until:
@@ -246,18 +246,26 @@ def main():
     zone = ZoneInfo(a.tz)
     day = lambda t: datetime.fromtimestamp(t, zone).strftime("%m-%d")
 
-    # A file last written before the window began holds no line inside it.
-    fresh = lambda paths: [(p, since, until) for p in paths if os.stat(p).st_mtime >= since]
-    jobs = fresh(glob.glob(os.path.join(a.root, "*", "*", "subagents", "agent-*.jsonl")))
-    flow_jobs = fresh(glob.glob(os.path.join(a.root, "*", "*", "subagents", "workflows", "*", "agent-*.jsonl")))
-    everything = jobs + flow_jobs
+    # A file last written before the window began holds no line inside it. One that is gone by the
+    # time it is looked at (deleted since the listing, or a link to nothing) is unreadable.
+    everything = []
+    unreadable = 0
+    for path in (glob.glob(os.path.join(a.root, "*", "*", "subagents", "agent-*.jsonl"))
+                 + glob.glob(os.path.join(a.root, "*", "*", "subagents", "workflows", "*", "agent-*.jsonl"))):
+        try:
+            written = os.stat(path).st_mtime
+        except OSError:
+            unreadable += 1
+            continue
+        if written >= since:
+            everything.append((path, since, until))
     if len(everything) < SERIAL_BELOW:
         read = [read_agent(j) for j in everything]
     else:
         with Pool(min(8, os.cpu_count() or 1)) as pool:
             read = pool.map(read_agent, everything, chunksize=8)
     rows = []
-    unreadable = bad_lines = short = flow_agents = 0
+    bad_lines = short = flow_agents = 0
     for (path, _, _), r in zip(everything, read):
         if r is None:
             continue
@@ -265,11 +273,11 @@ def main():
             unreadable += 1
             continue
         bad_lines += r["bad"]
-        if r["end"] - r["start"] < SHORT_AGENT_S:
-            short += 1
-            continue
         if os.sep + "workflows" + os.sep in path[len(a.root):]:
             flow_agents += 1
+            continue
+        if r["end"] - r["start"] < SHORT_AGENT_S:
+            short += 1
             continue
         r["session"] = os.path.relpath(path, a.root).split(os.sep)[1]
         r["active"] = max(1.0, sum(e - s for s, e in r["segs"]))

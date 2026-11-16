@@ -28,7 +28,8 @@ mkdir -p "$P/-proj-a/s1/subagents/workflows/w1" "$P/-proj-b/s2/subagents"
 #   A line from the day BEFORE the window (9999 tokens) that must be ignored.
 #   10:00:00 to 10:00:40  one 40 second test run. Its request is written as two lines with one
 #                         message id, so it counts once and the last usage (100) wins.
-#   then a pause of 9 minutes 20 seconds with no command open: NOT running.
+#   then a pause of 9 minutes 20 seconds with no command open: NOT running. In the pause sit a
+#   line that is not JSON and a line whose timestamp is a number: two bad lines, never a crash.
 #   10:10:00 to 10:20:00  a second stretch of 600 seconds.
 # Active 640 seconds, 300 output tokens, 2 requests, 40 seconds inside the shell.
 # Set by the fixture, not measured.
@@ -38,6 +39,7 @@ cat > "$P/-proj-a/s1/subagents/agent-a1.jsonl" <<'EOF'
 {"timestamp":"2026-11-10T10:00:00Z","cwd":"/work/alpha","message":{"id":"m1","model":"model-x","usage":{"output_tokens":100},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npx vitest run secretsuite"}}]}}
 {"timestamp":"2026-11-10T10:00:40Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}
 {"timestamp":"2026-11-10T10:05:00Z", this line is not json
+{"timestamp":1794300000,"message":{"content":[]}}
 {"timestamp":"2026-11-10T10:10:00Z","message":{"id":"m2","model":"model-x","usage":{"output_tokens":200},"content":[]}}
 {"timestamp":"2026-11-10T10:14:00Z","message":{"content":[]}}
 {"timestamp":"2026-11-10T10:18:00Z","message":{"id":"m3","content":[]}}
@@ -83,6 +85,14 @@ cat > "$P/-proj-b/s2/subagents/agent-b1.jsonl" <<'EOF'
 {"timestamp":"2026-11-10T10:19:00Z","isApiErrorMessage":true,"message":{"model":"<synthetic>","id":"e1","usage":{"output_tokens":0},"content":[{"type":"text","text":"You've hit your 5-hour limit, resets 3pm (America/New_York)"}]}}
 EOF
 
+# A second workflow agent that ran five seconds: it is counted with the workflow agents, where the
+# reader looks for it, not with the ordinary agents that were too short.
+# Set by the fixture, not measured.
+cat > "$P/-proj-a/s1/subagents/workflows/w1/agent-w2.jsonl" <<'EOF'
+{"timestamp":"2026-11-10T10:12:00Z","cwd":"/work/alpha","message":{"content":[]}}
+{"timestamp":"2026-11-10T10:12:05Z","message":{"content":[]}}
+EOF
+
 run(){ python3 "$TOOL" --root "$P" --since 2026-11-10T00:00:00+00:00 --until 2026-11-11T00:00:00+00:00 --min-samples 1 "$@" 2>&1; }
 
 out="$(run --cap 2)"; rc=$?
@@ -92,7 +102,7 @@ check "the window, its length and the cap judged are stated" \
 # 640 + 480 + 240 = 1360 seconds = 0.38 hours. The pause, the day before and the 5 second agent are out.
 # Set by the fixture, not measured.
 check "agent hours count running time only, and what was left out is said" \
-  $'AGENTS\tagents=3\tsessions=2\tagent_hours=0.38\tdropped_short=1\tworkflow_agents=1\tbad_lines=1\tunreadable=0' "$out"
+  $'AGENTS\tagents=3\tsessions=2\tagent_hours=0.38\tdropped_short=1\tworkflow_agents=2\tbad_lines=2\tunreadable=0' "$out"
 check "agent hours are given per day" $'BY_DAY\t11-10\t0.38' "$out"
 check "the label is the working folder's name" $'BY_REPO\talpha\t2' "$out"
 check "a second working folder is a second label" $'BY_REPO\tbeta\t1' "$out"
@@ -179,9 +189,11 @@ check "and says so" "NEEDS AN OFFSET" "$out"
 # A transcript that cannot be read is counted and named as unreadable, and the rest are still measured.
 U="$WORK/unreadable"; mkdir -p "$U/-proj-u/s5/subagents/agent-dir.jsonl"
 cp "$P/-proj-b/s2/subagents/agent-b1.jsonl" "$U/-proj-u/s5/subagents/agent-b1.jsonl"
+# A link to a transcript that is gone stands for one deleted between the listing and the read.
+ln -s "$U/gone.jsonl" "$U/-proj-u/s5/subagents/agent-gone.jsonl"
 out="$(python3 "$TOOL" --root "$U" --since 2026-11-10T00:00:00+00:00 --until 2026-11-11T00:00:00+00:00 --cap 7 2>&1)"; rc=$?
 is "an unreadable transcript does not stop the report" 0 "$rc"
-check "it is counted as unreadable, not as an agent that never ran" $'agents=1\tsessions=1\tagent_hours=0.07\tdropped_short=0\tworkflow_agents=0\tbad_lines=0\tunreadable=1' "$out"
+check "it is counted as unreadable, not as an agent that never ran" $'agents=1\tsessions=1\tagent_hours=0.07\tdropped_short=0\tworkflow_agents=0\tbad_lines=0\tunreadable=2' "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
