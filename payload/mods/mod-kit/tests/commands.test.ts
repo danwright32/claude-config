@@ -923,3 +923,68 @@ describe('commands: runners, tests, traps and what cannot be read (#3021)', () =
     expect(unreads('ls; eval "$x"; git status')).toEqual([undefined, EVAL, undefined])
   })
 })
+
+// #3070: `$[...]` is the old arithmetic expansion of bash and zsh (measured 2026-11-16 on bash 3.2,
+// zsh and sh: `"x\\$[0-9]"` is handed on as `x\-9`). The reader knew `$((...))` and not this, so a
+// search pattern holding one was read as holding a variable's value. A word whose only expansions
+// are such sums of whole numbers is given as those shells hand it on (`worked`), beside the word as
+// typed, which is what dash and ksh hand on (measured: to them `$[` is text).
+describe('pipeline: old arithmetic, $[...] (#3070)', () => {
+  const last = (cmd: string) => pipeline(cmd).filter(c => !c.substitution).pop()
+  const worked = (cmd: string) => last(cmd)?.worked
+  test('a word whose only expansions are sums of whole numbers is given as bash and zsh hand it on', () => {
+    expect(worked(String.raw`python3 s.py "x\\$[0-9]" "a$[1 + 2]b" x$[3]y "$[2 * 3 - 10]" "$[-4*2]" "\$5 $[1+1]"`)).toEqual([null, null, String.raw`x\-9`, 'a3b', 'x3y', '-4', '-8', '$5 2'])
+    // The words stay as typed.
+    expect(last(String.raw`python3 s.py "x\\$[0-9]"`)?.words).toEqual(['python3', 's.py', String.raw`x\$[0-9]`])
+  })
+  test('a word the reader does not work out, or holding any other expansion, is given none', () => {
+    // A name, a number bash reads as octal and zsh as ten, a division, a bracket inside, a
+    // substitution, another expansion beside it, one never closed, an empty one, two signs, a sum
+    // past what a shell counts to, one in single quotes or escaped, and the newer spelling.
+    for (const word of ['"$[N + 1]"', '"$[010 + 1]"', '"$[7 / 2]"', '"$[1 + [2]]"', '"$[ $(echo 4) + 1 ]"', '"$N$[1]"', '"$[1]$(x)"', '"$[1"', '"$[]"', '"$[1 - -2]"', '"$[9223372036854775807 + 1]"', `'$[1]'`, '"\\$[1]"', '$((1+2))'])
+      expect({ word, worked: worked(`python3 s.py ${word}`) }).toEqual({ word, worked: undefined })
+  })
+  test('it is never left as written, and its text is derived as arithmetic is', () => {
+    expect(last(`python3 s.py "x$[1+1]" '$[1]'`)?.unexpanded).toEqual([false, false, false, true])
+    expect(last('python3 s.py "\\$5 $[1+1]"')?.unexpanded).toBeUndefined()
+    expect(last('echo "x$[1+1]"')?.derived).toEqual([null, { text: 'x2', commands: [] }])
+    expect(last('echo "$[N+1]"')?.derived?.[1]).toEqual({ unresolved: 'it is arithmetic, which this reader does not work out', commands: [] })
+  })
+  test('a substitution inside it is still read as run', () => {
+    const all = pipeline('echo "$[ $(git push) + 1 ]"')
+    expect(all[0]).toMatchObject({ words: ['git', 'push'], substitution: true })
+    expect(all[1]?.derived?.[1]).toMatchObject({ unresolved: 'it is arithmetic, which this reader does not work out', commands: [{ words: ['git', 'push'] }] })
+  })
+  test('outside quotes one holding a blank or a redirect is read word by word, as dash and ksh run it', () => {
+    expect(commands('echo $[1 > 2]')).toEqual([['echo', '$[1', '>', '2]']])
+    expect(worked('echo $[1 + 2]')).toBeUndefined()
+  })
+})
+
+// #3022: a backslash before a new line joins the two lines, as every shell reads it (measured
+// 2026-11-16 on bash, zsh and dash). The reader took the pair for a word holding a new line, so the
+// copy step of tools/check-mods.sh was read as removing a file of that name.
+describe('a backslash before a new line joins the two lines (#3022)', () => {
+  test('outside quotes it is no word, and ends none', () => {
+    expect(commands('cp -R a \\\n  b')).toEqual([['cp', '-R', 'a', 'b']])
+    expect(commands('rm -rf "$c/types" \\\n  && mkdir -p "$c/types" \\\n  && cp -R a "$c/types/"')).toEqual([['rm', '-rf', '$c/types'], ['mkdir', '-p', '$c/types'], ['cp', '-R', 'a', '$c/types/']])
+    expect(commands('git pu\\\nsh')).toEqual([['git', 'push']])
+    expect(commands('ls | \\\n wc -l')).toEqual([['ls'], ['wc', '-l']])
+    expect(commands('echo $(git \\\n push)')[0]).toEqual(['git', 'push'])
+  })
+  test('inside double quotes it is taken out of the word, and inside single quotes it is kept', () => {
+    expect(commands('echo "in do\\\nuble"')).toEqual([['echo', 'in double']])
+    expect(commands("echo 'in sin\\\ngle'")).toEqual([['echo', 'in sin\\\ngle']])
+  })
+  test('a backslash that is itself escaped, or one ending a comment, joins nothing', () => {
+    expect(commands('echo one \\\\\necho two')).toEqual([['echo', 'one', '\\'], ['echo', 'two']])
+    expect(commands('echo a \\\n  # note \\\ngit push')).toEqual([['echo', 'a'], ['git', 'push']])
+  })
+  test('a heredoc opened on a continued line starts its body after the whole line', () => {
+    const cmd = 'cat <<EOF \\\n  > out.txt\nbody\nEOF\ngit status'
+    expect(commands(cmd)).toEqual([['cat', '<<EOF', '>', 'out.txt'], ['git', 'status']])
+    expect(pipeline(cmd)[0]?.heredocs).toEqual([{ word: 1, body: 'body', quoted: false }])
+    // A comment ending in a backslash continues nothing, so the body starts on the next line.
+    expect(commands('cat <<EOF # \\\nbody\nEOF\ngit status')).toEqual([['cat', '<<EOF'], ['git', 'status']])
+  })
+})
