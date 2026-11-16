@@ -55,6 +55,33 @@ test('what cannot be read says so: a hunk that does not add up, an unknown line 
   expect(patchedPaths([], true, 'diff --git a/x.png b/x.png\nBinary files a/x.png and b/x.png differ\n')).toEqual(['x.png'])
 })
 
+// #3021: readPatch returned at the first hunk that did not add up, so every file after it went
+// unnamed, and a guard asking which files a patch reaches was told of the first alone.
+test('a hunk that does not add up is said once, and every file after it is still named, its hunks read', () => {
+  const broken = '--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n'
+  const next = 'diff --git a/y.ts b/y.ts\n--- a/y.ts\n+++ b/y.ts\n@@ -1 +1 @@\n-a\n+b\n'
+  const last = '--- a/z.ts\n+++ b/z.ts\n@@ -1 +1 @@\n*c\n'
+  expect(readPatch(broken + next + last)).toEqual({
+    files: [
+      { from: 'a/x.ts', to: 'b/x.ts', hunks: [] },
+      { from: 'a/y.ts', to: 'b/y.ts', hunks: [{ before: 'a', after: 'b' }] },
+      { from: 'a/z.ts', to: 'b/z.ts', hunks: [] },
+    ],
+    unreadable: 'a hunk holds a line starting "d"',
+  })
+  expect(patchFiles(broken + next)).toBeUndefined()
+  expect(patchedPaths([], true, broken + next + last)).toEqual(['x.ts', 'y.ts', 'z.ts'])
+  // A hunk holding more lines than its header says is read past the same way.
+  expect(readPatch(`--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1 @@\n same\n${next}`).files.map(f => f.to)).toEqual(['b/x.ts', 'b/y.ts'])
+})
+
+// #3021: a quoted name was undone one UTF-16 unit at a time, so a character outside the Basic
+// Multilingual Plane, two units, came back as two replacement characters and named no file.
+test('a quoted name holding a character outside the Basic Multilingual Plane keeps it', () => {
+  expect(readPatch('diff --git "a/\\t\u{1F600}.ts" b/plain.ts\n').files).toEqual([{ from: 'a/\t\u{1F600}.ts', to: 'b/plain.ts', hunks: [] }])
+  expect(readPatch('--- "a/\u{1F600}\\"x.ts"\n+++ "b/\u{1F600}\\"x.ts"\n').files).toEqual([{ from: 'a/\u{1F600}"x.ts', to: 'b/\u{1F600}"x.ts', hunks: [] }])
+})
+
 test('names are placed as the command places them: its -p, its folder, git apply stripping one by default', () => {
   const f = { from: 'a/lib/x.ts', to: 'b/lib/x.ts', hunks: [] }
   expect(placedName('b/lib/x.ts', f, patchPlacing([], true), true)).toBe('lib/x.ts')

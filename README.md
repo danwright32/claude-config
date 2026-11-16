@@ -6171,7 +6171,10 @@ here-string, `echo` or `cat` piped in), each read as the commands it runs, `env 
 `find -exec` runs past any wrapper, a `case`'s clauses, a redirect as its own word however it is
 spaced, a subshell's parentheses as commands their own, the words naming a function (`w()`,
 `function w`) as a command of their own, so a body on the same line (`w(){ sed -i ...; }`) is read
-as the commands it holds (#2619); `$.modkit.pipeline` gives the same commands,
+as the commands it holds (#2619), and since #3021 a `[[ ]]` test kept as one command, its `&&`,
+`||` and parentheses words of it, a trap's text read as the commands it runs later, placed where
+the shell that set it ends, and `setsid`, `flock`, `ionice` and `arch` read as running the command
+after them; `$.modkit.pipeline` gives the same commands,
 each with the words of the command a `|` feeds it from, since only the reader can tell a pipe from a
 `;` or `&&`, the body of each heredoc feeding it and whether its delimiter was quoted, which stops
 the shell expanding it (#831), whether the shell left its program's text as written (`asWritten`,
@@ -6185,7 +6188,11 @@ of one and null where that cannot be followed (a variable the command did not se
 `popd`), the folder is it live asks GitHub about a merge in, #2000; and, for each word holding a
 command substitution, `derived` (#2141): what its substitutions run and, where each is a plain `cat`
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
-else `unresolved` with why, never empty and never safe), of which files a command
+else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
+command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
+every guard holds or refuses it rather than judging its words alone), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -6226,7 +6233,12 @@ build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path an
 (a checkout or restore carrying `from`, where git puts the file back from, #1158), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
-log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976), of whether a
+log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in
+`unread` since #3021, each command `pipeline` marks unread, with its words, why and the folder it
+runs in, since what it changes is unknown, never nothing: sleep mode refuses it overnight, the
+design round guard judges it by the look files its words name, ask before saving asks about the
+lasting memory its words name, the collision guard puts it to its judge, and the Slack alert guard
+holds it while a choice waits or where it names the plugin store), of whether a
 prompt is Dan's own words (`$.modkit.isDans({ origin })`, #1135: only what he types, at the Mac or
 from his phone through Remote Control, never a handoff's opening prompt or any other plugin's, asked
 by every mod that needs it), of what Dan and Claude are told when he types an answer to a mod's
@@ -6352,7 +6364,9 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
-each name on both sides with git's quoting undone, each hunk walked by its header's counts, and how
+each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
+taken whole, each hunk walked by its header's counts, one that does not add up left out with its
+reason kept while the files after it are still named, #3021, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
@@ -6437,7 +6451,9 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
+session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+`eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
+folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
 and toast in the other session (a refused message is tried once more by mod-kit, then said on the
 card); a removal says remove rather than edit in both. An unreadable record or a judgment that
@@ -6929,80 +6945,82 @@ since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the li
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
 of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
 merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
-and judged against that side rather than the conflict on disk; since #2777 one run first on its
-line is measured the same way, since nothing after it can change what it puts back, and since #2830
-one chained, piped, backgrounded or paired with another is too, wherever every command before or
-beside it only reads (cat, grep, git status, git log) or is another restore of named paths; one git
-cannot read, one beside a command that may move its source (a switch, an add, a fetch, a script),
-two where one reads the index, or a line writing inside .git, is judged whole with the refusal
-saying why), a program whose text names the files it writes (since #2847 also a python or node
-script file the command runs, its own code read as inline code is, a name its code writes where the
-folder cannot be followed held as could not check; since #2855 also a shell script's own commands
-and the scripts it runs, a script named through a variable the command sets, a script the command
-writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
-a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
-passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
-`mktemp -d`, and since #3022 only where it starts the path (`root + ch + ...` lands under root), so
-a suite writing pages under its own temp folder runs; since #2924 a shell script
-whose own commands, read whole, write only names its text spells or temporary files it made, run no
-other script and no text a value decides, and source only files read the same, is not judged as
-writing the arguments it is handed, so `milestone-candidates.sh --like "<title naming page.html>"`
-runs), a patch git apply, git am or patch reads from a file judged since #3022 by the files it
-changes (mod-kit's patch reader, placed as the command places them), and a look changing file an
-inline script, or a patch that cannot be read whole or comes on standard input, only mentions; a
-write whose destination cannot be
-followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
-included), and runs when it names none. Kept per project (the main working tree, so every worktree
-shares it, read with mod-kit's `$.modkit.branch` and named by `$.modkit.repo`) under the issue the
-branch names, each one when it names several, else the branch (an agent worktree's branch names
-none, whatever digits its random id holds, so a later agent never inherits an answer given on
-another's, #1306; his Skip them on that branch is also kept under the worktree's own folder, and an
-issue a later branch of the SAME worktree names reads it when it has no answer of its own, so a
-builder renaming its branch to name its issue is not asked again, while another worktree, the main
-checkout and a settled round are not carried to, #1740; since #1904 the skip question may carry
-`issue`, the issue a refused builder works on, and Dan then reads "issue #N in <repo> (this builder
-only)" in place of that branch, its answer kept where it was, contract 3); an answer kept under an
-issue counts only when it carries the branch reading it was kept by (`reading` 2 or newer, #1322),
-since one kept before #1306 may sit under an issue an agent branch's digits spelled (#7831, #26 and
-#84 on 2026-10-17), so it reads as no answer and that issue is asked again, while nothing is deleted
-and answers under a branch or a session still count; on the default branch for that session only,
-since every later issue may be built there; a new issue starts held. Settled is Dan's Settled to the
-design rounds skill's closing picker, "Is this design settled?" (`metadata.source` `design-settled`,
-with `call`, the refused call's id, or `path`, a folder in the project's checkout, when none waits,
-and `issue` when the branch names none), recorded for what the refused call waits on, as Skip them
-is, with a named `issue` beside it, never instead (#1046), and never the folder the session runs in
-(#1010); a `path` that is not absolute is refused by name; skipped is his Skip them to "Skip design
-rounds for this issue?" (`metadata.source` `design-round-guard:<the refused call's id>`), as ask
-before saving asks, whose third answer, Not a look change (named Not a look or wording change from
-#1911 until #2845, while a hold could be for a message's words alone; since #2845 none is, so every
-answer names the look only), lets
-that one call through when it is sent again unchanged, from the same folder in the same session
-within the hour, and keeps his word with why under `pass:<the call's key>`. Since #1138 the skip
-question carries `onScreen`, one plain sentence from the session saying what on screen changes
-(which control or area, on which screen) or that nothing visible does; the question leads with it
-and names the issue and file after it, and it is refused, with nothing asked, when the sentence is
-missing, longer than 300 characters or names a file. Since #2294 the question is not asked at all
-for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
-finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
-in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
-any text Dan reads in an app's screen, an issue whose answers cannot be read, and a pass that cannot
-be kept are held and asked as before (a mod's hook file is read on its own terms, below, and since
-#2845 a change there to a message's words alone passes too). A typed answer to the skip question
-records nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in
-mod-kit's
-one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
-yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
-rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
-raises `$.designRound.answered` with the question and answer, which picker manners checks off on
-the issue (#2261). Not a look change raises nothing: it lets one call through and
-records nothing for the issue, so its question stays open there. The grey card drawn for a
-refused edit leads in plain words and names the file after (#1145). Since #1151 a program the
-shell runs (inline or on standard input) is judged by its own text, with a bare name placed in
-the folder it runs in, a cd before it followed,
-never the session's folder, and held as a write that cannot be followed where that cd cannot be; a
-write whose own name is fixed and not look changing (`$D/spec.json`) is no look edit wherever its
-folder is, so what its heredoc's data names is data. A design round's own files in the scratchpad
-pass however the command names them. Since #1191 the session's scratchpad
+and judged against that side rather than the conflict on disk; since #2777 one run first on its line
+is measured the same way, since nothing after it can change what it puts back, and since #2830 one
+chained, piped, backgrounded or paired with another is too, wherever every command before or beside
+it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
+read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why), a
+program whose text names the files it writes (since #2847 also a python or node script file the
+command runs, its own code read as inline code is, a name its code writes where the folder cannot be
+followed held as could not check; since #2855 also a shell script's own commands and the scripts it
+runs, a script named through a variable the command sets, a script the command writes first from a
+heredoc, read as that text, and the local modules a script imports; since #2991 a name such a
+script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
+that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and
+since #3022 only where it starts the path (`root + ch + ...` lands under root), so a suite writing
+pages under its own temp folder runs; since #2924 a shell script whose own commands, read whole,
+write only names its text spells or temporary files it made, run no other script and no text a value
+decides, and source only files read the same, is not judged as writing the arguments it is handed,
+so `milestone-candidates.sh --like "<title naming page.html>"` runs; since #3021 the script's text
+is read through mod-kit alone, which keeps a `[[ ]]` test whole and reads a trap's text, and a
+command in it that mod-kit marks unread, or that runs through `setsid`, `flock`, `ionice`, `arch` or
+`ssh`, keeps its arguments judged), a patch git apply, git am or patch reads from a file judged
+since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
+a look changing file an inline script, or a patch that cannot be read whole or comes on standard
+input, only mentions, and since #3021 one named in the words of a command typed whole that mod-kit
+marks unread (`eval "printf ... > app/site.css"`, `$TOOL --write app/site.css`, an alias set to such
+a command), placed in the folder it runs in and held as could not check where that cannot be
+followed; a write whose destination cannot be followed is held when the command names a look
+changing file anywhere (a glob such as `app/*.tsx` included), and runs when it names none. Kept per
+project (the main working tree, so every worktree shares it, read with mod-kit's `$.modkit.branch`
+and named by `$.modkit.repo`) under the issue the branch names, each one when it names several, else
+the branch (an agent worktree's branch names none, whatever digits its random id holds, so a later
+agent never inherits an answer given on another's, #1306; his Skip them on that branch is also kept
+under the worktree's own folder, and an issue a later branch of the SAME worktree names reads it
+when it has no answer of its own, so a builder renaming its branch to name its issue is not asked
+again, while another worktree, the main checkout and a settled round are not carried to, #1740;
+since #1904 the skip question may carry `issue`, the issue a refused builder works on, and Dan then
+reads "issue #N in <repo> (this builder only)" in place of that branch, its answer kept where it
+was, contract 3); an answer kept under an issue counts only when it carries the branch reading it
+was kept by (`reading` 2 or newer, #1322), since one kept before #1306 may sit under an issue an
+agent branch's digits spelled (#7831, #26 and #84 on 2026-10-17), so it reads as no answer and that
+issue is asked again, while nothing is deleted and answers under a branch or a session still count;
+on the default branch for that session only, since every later issue may be built there; a new issue
+starts held. Settled is Dan's Settled to the design rounds skill's closing picker, "Is this design
+settled?" (`metadata.source` `design-settled`, with `call`, the refused call's id, or `path`, a
+folder in the project's checkout, when none waits, and `issue` when the branch names none), recorded
+for what the refused call waits on, as Skip them is, with a named `issue` beside it, never instead
+(#1046), and never the folder the session runs in (#1010); a `path` that is not absolute is refused
+by name; skipped is his Skip them to "Skip design rounds for this issue?" (`metadata.source`
+`design-round-guard:<the refused call's id>`), as ask before saving asks, whose third answer, Not a
+look change (named Not a look or wording change from #1911 until #2845, while a hold could be for a
+message's words alone; since #2845 none is, so every answer names the look only), lets that one call
+through when it is sent again unchanged, from the same folder in the same session within the hour,
+and keeps his word with why under `pass:<the call's key>`. Since #1138 the skip question carries
+`onScreen`, one plain sentence from the session saying what on screen changes (which control or
+area, on which screen) or that nothing visible does; the question leads with it and names the issue
+and file after it, and it is refused, with nothing asked, when the sentence is missing, longer than
+300 characters or names a file. Since #2294 the question is not asked at all for an edit to an app's
+React screen file that the guard's own reading (rules.ts logicOnlyChange) finds changes only logic:
+no JSX, string, comment, number, true or false, word a look is spelled in, stylesheet or swapped
+import. It goes ahead and is kept under `auto:<the call's key>` with why; any text Dan reads in an
+app's screen, an issue whose answers cannot be read, and a pass that cannot be kept are held and
+asked as before (a mod's hook file is read on its own terms, below, and since #2845 a change there
+to a message's words alone passes too). A typed answer to the skip question records nothing, and Dan
+is told so in a toast while Claude is told to say so and ask again, in mod-kit's one wording
+(`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not yet, with
+nothing recorded and no toast, and Claude takes his words as the next round's feedback rather than
+asking again (#1336). Once Skip them or Settled is stored, and only then, the guard raises
+`$.designRound.answered` with the question and answer, which picker manners checks off on the issue
+(#2261). Not a look change raises nothing: it lets one call through and records nothing for the
+issue, so its question stays open there. The grey card drawn for a refused edit leads in plain words
+and names the file after (#1145). Since #1151 a program the shell runs (inline or on standard input)
+is judged by its own text, with a bare name placed in the folder it runs in, a cd before it
+followed, never the session's folder, and held as a write that cannot be followed where that cd
+cannot be; a write whose own name is fixed and not look changing (`$D/spec.json`) is no look edit
+wherever its folder is, so what its heredoc's data names is data. A design round's own files in the
+scratchpad pass however the command names them. Since #1191 the session's scratchpad
 (`<temp>/claude-<uid>/<project>/<session id>/scratchpad`, known by `$.session.id()` under Claude
 Code's own temp folder, `CLAUDE_CODE_TMPDIR` when set, else `/tmp`, a folder with a space in its
 name included) is in no checkout, so never held and asking for no issue or branch, while a folder
@@ -7025,112 +7043,110 @@ session notes folder (`~/.claude/state/session-notes/`, any session's, known by 
 never held and its files are never listed, whatever checkout it is: a copy of a repository an agent
 cloned there to read is a checkout of its own, and deleting it was held as a look change. A write
 into such a copy, a delete in a folder only shaped like the notes folder, and one that climbs out of
-it are judged as before. Since #1165 a
-python program is judged only by the names it can open, never those in what it holds as data (a
-comment, a block spanning lines it puts in a file), read from mod-kit's `code`; where data cannot be
-told from code (another language, a program that runs a process, builds code at run time or cuts
-text into parts, or text the shell may have changed) its whole text is still the guess. Since #1194
-a sentence on one line that mentions a look file (a README line a script puts in, quoting
-`screen.css`) is data too, while a one line literal that is only a path, or is passed to open, Path,
-os, os.path, shutil or pathlib's `/`, or names a variable that is, still counts; and a name added
-onto a folder held in a variable (`root + "/app/page.tsx"`, `f"{root}/app/page.tsx"`) is that
-folder's, read as a joined name, where before it read as a file at the disk's root, in no checkout,
-and was never held. A mod's own hook file (`mods/<mod>/hooks/` in TSX or JSX, the mod's folder
-holding `.claude-plugin/plugin.json`) counts, since it draws Claude Code's panels, but an Edit,
-MultiEdit or Write to one whose changed lines hold no JSX element and, comments aside, name no word
-a mod draws with (a colour, frame, border, row, pane, band, card and the like) and spell no colour
-(a hex value, an ANSI escape, rgb()) passes unasked (rules.ts `modHookLogicOnly`; a file its reader
-cannot follow is asked about). Since #1248 the lines such a change touches end where it ends
-(rules.ts `changedSpan`), so the guard no longer reads the untouched line below a change with it,
-and a logic line added directly above a line that draws is judged alone. That only partly meets
-#1248's aim of letting logic only edits through: by Dan's choice no drawing word is exempted, so
-manual steps' #1245 notification helper, which reads the card, and the line that calls it with the
-card, are still asked about. Since #1275 a mod's hook file in plain TypeScript
-(`mods/<mod>/hooks/*.ts`, `.mts` or `.cts`, not a `.d.ts`, the mod's folder holding its plugin.json)
-counts too, judged by what in it reaches what the mod draws, read beside the mod's other hook files
-(rules.ts `drawsChange`): a line builder making mod-kit's text runs, dividers or buttons (manual
-steps' `cardLines`, where #1263's divider had passed unasked), anything handed to a drawing call
-(`$.modkit.bandRow`, `pane`, `card`, `$.ui.open`) or used inside JSX (an event handler aside), and
-every top level name those use, through the imports between the mod's files; a type, a comment or
-spacing draws nothing. Any other edit there passed, however it was worded, as did every edit to a
-`.ts` file that draws nothing (since #1841 one changing a message's words is held, below); a shell
-write is judged by the file it leaves (since #1576 one to a file that already draws too); a mod
-whose hook files cannot be listed or read is held. Since #3017 one only some of whose files cannot
-be read (a merge conflict left in one) is held only where the mod draws at all, read from its own
-code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named in any file of its hooks
-folder or the folders inside it (any `ui.` member but `log`, `toast` and `ask`; mod-kit's band row,
-pane, card or buttons), or a line built. A mod drawing nothing, such as this guard, is judged as
-code there. Since #3027 the folders inside the hooks folder are read only where that answer needs
-them, once per mod for a call (a shell write still reads them before it runs). Since #1296 a value
-reaching what draws through a
-local or a function's parameter is followed too (a card's sentence handed to a function that draws
-it, a card's words held in a local, what a function a followed value calls returns), compared with
-what it treats as data taken out, so what a call it makes is handed, what a value is only tested
-for, what a method works on, a line builder's own parameters and which call a card attaches to
-(`toolUseId`) are no part of the look. Measured over the 420 real edits to mods' `.ts` hook files in
-this repository's history, 87 are held where 62 were, about half of the new ones a changed sentence
-on a guard's grey card that passed before. Since #1756 those sentences passed again (until #1841,
-below, held them as a message's words): the words a mod hands mod-kit's blocked card
-(`$.modkit.blocked`: its guard name, reason and safe way) are copy in a tool result row, not
-drawing, and the card's look is mod-kit's own, judged in mod-kit's `card.ts` (measured over the 563
-changes to mods' `.ts` hook files on main on 2026-10-26, 57 are held where 97 were, every one of the
-40 a guard's refusal words, none held that passed before). And an Edit, MultiEdit or Write leaving a
-mod's `.ts` hook file with a bracket open, half of a change made in two edits (#1747's loop given
-its opening brace in one Edit and its closing one in the next), passes, since such a text is no
-TypeScript and draws nothing (rules.ts `bracketsOpen`); the edit closing it is judged against the
-file as it was before the first, so a look change made across the two is still held. That earlier
-text is kept in memory, so after a reload, or for a file a shell write left so, the edit is held as
-before. And a shell write to a `.ts` file that draws nothing yet is judged by the file it leaves
-(Dan, 2026-10-17: judge after, and undo): one it made draw, on an issue he has not answered for, is
-put back as it was, a file it made is taken away, and the call waits on him as a refused edit does,
-its result withheld for the guard's words; what the command wrote is first kept in the session's
-scratchpad (`design-round-guard/<call id>-<file>`) and read back, and the file is put back only
-while it still holds exactly what the command wrote, so a copy that cannot be kept, a file changed
-again since, a put back that fails or a file unreadable after the command each leaves the file as it
-is and says why, never that it was undone. The command's other effects stand. Since #1341 an Edit,
-MultiEdit or Write to a mod's hook file (`.ts`, `.tsx` or `.jsx`) that changes only its comments
-passes unasked (rules.ts `commentOnlyChange`: the two texts read the same with comments taken out,
-spacing read as the language reads it, so a reflowed comment passes; a JSX comment counts only where
-it stands between tags, since beside JSX text it can add or take away a space on screen; a comment
-naming `@jsx` is kept as code; words spelled like a comment in a string, template literal, JSX text
-or quoted prop are what is shown). An app's own screen file is not read so, since Tailwind reads
-every word of a file, its comments included, for the classes it builds. Since #1576 a shell write to
-a mod hook file, `.ts`, `.tsx` or `.jsx`, one that already draws included, runs and is judged by
-what it leaves, by the rule an Edit of it is judged by, so the shell and the Edit tool agree: a
-logic or comment change stands, a change to what the mod draws on an issue Dan has not answered for
-is put back as #1296 puts one back, and a file that cannot be read before the command runs is held
-whole, saying so (rules.ts `shellUnread`). And a returned conditional is read as each value it may
-return, so the #1483 edit turning `return inNotes(path) ? undefined : { what: ... }` into ifs
-returning the same values, refused at the time, draws nothing new; reproduced, words in its comments
-were not why. An Edit, MultiEdit or Write to an existing `.tsx` or `.jsx` file whose one difference
-is a component's data prop (a name that names no look or visible state, values made only of names,
-property access, calls and `??`, `||`, `&&`, `!`, `?:`, and no literal but the empty string) passes
-unasked; any other change to such a file is asked about (#1010). The guard words both questions and
-their answers itself and reads his choice from the dialog's own result; answers the call carries,
-his own typed words, a dialog that closed while he was away, a subagent's question and any write
-Claude makes record nothing, and a write to the guard's own record
-(`~/.claude/plugins/store/design-round-guard_*`) is refused, as is a shell write whose destination
-cannot be followed when it names such a file or the command names the plugin store. The refusal
-names the file and both ways on, and holds only the change it refused, never the file, so an earlier
-edit can still be undone (#1158); a subagent is refused alike and told to stop and report the line
-the main session asks with. A branch, checkout or record it cannot read refuses, saying which. The
-main session's calls are judged at `tool.check`, after the settings hooks, so a call one of them
-refuses is never turned into a question; a subagent's at `tool.call`, where its loop is known. Since
-#1524 a settled design page (`.html`) under `docs/design` at the top of a checkout passes unasked,
-whatever the issue's answers, while the text the call leaves is exactly what `make-settled.py` wrote
-(Dan, 2026-10-23: "Let it through"): the design rounds skill's own check,
-`python3 -I ~/.claude/skills/design-rounds/design_file.py --sealed` with the text on its input,
-holds it to the seal make-settled.py writes as the file's last line, the SHA-256 of everything above
-it, so any hand edit is held and the refusal says why. The text is read before the call runs: a
-Write's content, an Edit's or MultiEdit's result, what a git checkout or restore alone puts back, or
-the source of one plain `cp` alone; any other shell write there, a check that cannot run and a skill
-older than the seal are judged as before. The seal proves the text is unchanged since it was sealed,
-not who sealed it. Since #1586 a script file a command runs (an interpreter's script operand such as
-`python3 gen.py`, `bash x.sh` or `node build.mjs`, or a script run by its own name, one ending in a
-script language's extension or named by `./` or `../`) is judged by each file it is handed as an
-argument, read from mod-kit's `runs`: what a script writes cannot be read before it runs, so a
-screen file among them is held as an Edit of it would be, the refusal saying the guard cannot read
-what the script does with it, and Dan's Not a look change lets one such call through
+it are judged as before. Since #1165 a python program is judged only by the names it can open, never
+those in what it holds as data (a comment, a block spanning lines it puts in a file), read from
+mod-kit's `code`; where data cannot be told from code (another language, a program that runs a
+process, builds code at run time or cuts text into parts, or text the shell may have changed) its
+whole text is still the guess. Since #1194 a sentence on one line that mentions a look file (a
+README line a script puts in, quoting `screen.css`) is data too, while a one line literal that is
+only a path, or is passed to open, Path, os, os.path, shutil or pathlib's `/`, or names a variable
+that is, still counts; and a name added onto a folder held in a variable (`root + "/app/page.tsx"`,
+`f"{root}/app/page.tsx"`) is that folder's, read as a joined name, where before it read as a file at
+the disk's root, in no checkout, and was never held. A mod's own hook file (`mods/<mod>/hooks/` in
+TSX or JSX, the mod's folder holding `.claude-plugin/plugin.json`) counts, since it draws Claude
+Code's panels, but an Edit, MultiEdit or Write to one whose changed lines hold no JSX element and,
+comments aside, name no word a mod draws with (a colour, frame, border, row, pane, band, card and
+the like) and spell no colour (a hex value, an ANSI escape, rgb()) passes unasked (rules.ts
+`modHookLogicOnly`; a file its reader cannot follow is asked about). Since #1248 the lines such a
+change touches end where it ends (rules.ts `changedSpan`), so the guard no longer reads the
+untouched line below a change with it, and a logic line added directly above a line that draws is
+judged alone. That only partly meets #1248's aim of letting logic only edits through: by Dan's
+choice no drawing word is exempted, so manual steps' #1245 notification helper, which reads the
+card, and the line that calls it with the card, are still asked about. Since #1275 a mod's hook file
+in plain TypeScript (`mods/<mod>/hooks/*.ts`, `.mts` or `.cts`, not a `.d.ts`, the mod's folder
+holding its plugin.json) counts too, judged by what in it reaches what the mod draws, read beside
+the mod's other hook files (rules.ts `drawsChange`): a line builder making mod-kit's text runs,
+dividers or buttons (manual steps' `cardLines`, where #1263's divider had passed unasked), anything
+handed to a drawing call (`$.modkit.bandRow`, `pane`, `card`, `$.ui.open`) or used inside JSX (an
+event handler aside), and every top level name those use, through the imports between the mod's
+files; a type, a comment or spacing draws nothing. Any other edit there passed, however it was
+worded, as did every edit to a `.ts` file that draws nothing (since #1841 one changing a message's
+words is held, below); a shell write is judged by the file it leaves (since #1576 one to a file that
+already draws too); a mod whose hook files cannot be listed or read is held. Since #3017 one only
+some of whose files cannot be read (a merge conflict left in one) is held only where the mod draws
+at all, read from its own code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named
+in any file of its hooks folder or the folders inside it (any `ui.` member but `log`, `toast` and
+`ask`; mod-kit's band row, pane, card or buttons), or a line built. A mod drawing nothing, such as
+this guard, is judged as code there. Since #3027 the folders inside the hooks folder are read only
+where that answer needs them, once per mod for a call (a shell write still reads them before it
+runs). Since #1296 a value reaching what draws through a local or a function's parameter is followed
+too (a card's sentence handed to a function that draws it, a card's words held in a local, what a
+function a followed value calls returns), compared with what it treats as data taken out, so what a
+call it makes is handed, what a value is only tested for, what a method works on, a line builder's
+own parameters and which call a card attaches to (`toolUseId`) are no part of the look. Measured
+over the 420 real edits to mods' `.ts` hook files in this repository's history, 87 are held where 62
+were, about half of the new ones a changed sentence on a guard's grey card that passed before. Since
+#1756 those sentences passed again (until #1841, below, held them as a message's words): the words a
+mod hands mod-kit's blocked card (`$.modkit.blocked`: its guard name, reason and safe way) are copy
+in a tool result row, not drawing, and the card's look is mod-kit's own, judged in mod-kit's
+`card.ts` (measured over the 563 changes to mods' `.ts` hook files on main on 2026-10-26, 57 are
+held where 97 were, every one of the 40 a guard's refusal words, none held that passed before). And
+an Edit, MultiEdit or Write leaving a mod's `.ts` hook file with a bracket open, half of a change
+made in two edits (#1747's loop given its opening brace in one Edit and its closing one in the
+next), passes, since such a text is no TypeScript and draws nothing (rules.ts `bracketsOpen`); the
+edit closing it is judged against the file as it was before the first, so a look change made across
+the two is still held. That earlier text is kept in memory, so after a reload, or for a file a shell
+write left so, the edit is held as before. And a shell write to a `.ts` file that draws nothing yet
+is judged by the file it leaves (Dan, 2026-10-17: judge after, and undo): one it made draw, on an
+issue he has not answered for, is put back as it was, a file it made is taken away, and the call
+waits on him as a refused edit does, its result withheld for the guard's words; what the command
+wrote is first kept in the session's scratchpad (`design-round-guard/<call id>-<file>`) and read
+back, and the file is put back only while it still holds exactly what the command wrote, so a copy
+that cannot be kept, a file changed again since, a put back that fails or a file unreadable after
+the command each leaves the file as it is and says why, never that it was undone. The command's
+other effects stand. Since #1341 an Edit, MultiEdit or Write to a mod's hook file (`.ts`, `.tsx` or
+`.jsx`) that changes only its comments passes unasked (rules.ts `commentOnlyChange`: the two texts
+read the same with comments taken out, spacing read as the language reads it, so a reflowed comment
+passes; a JSX comment counts only where it stands between tags, since beside JSX text it can add or
+take away a space on screen; a comment naming `@jsx` is kept as code; words spelled like a comment
+in a string, template literal, JSX text or quoted prop are what is shown). An app's own screen file
+is not read so, since Tailwind reads every word of a file, its comments included, for the classes it
+builds. Since #1576 a shell write to a mod hook file, `.ts`, `.tsx` or `.jsx`, one that already
+draws included, runs and is judged by what it leaves, by the rule an Edit of it is judged by, so the
+shell and the Edit tool agree: a logic or comment change stands, a change to what the mod draws on
+an issue Dan has not answered for is put back as #1296 puts one back, and a file that cannot be read
+before the command runs is held whole, saying so (rules.ts `shellUnread`). And a returned
+conditional is read as each value it may return, so the #1483 edit turning `return inNotes(path) ?
+undefined : { what: ... }` into ifs returning the same values, refused at the time, draws nothing
+new; reproduced, words in its comments were not why. An Edit, MultiEdit or Write to an existing
+`.tsx` or `.jsx` file whose one difference is a component's data prop (a name that names no look or
+visible state, values made only of names, property access, calls and `??`, `||`, `&&`, `!`, `?:`,
+and no literal but the empty string) passes unasked; any other change to such a file is asked about
+(#1010). The guard words both questions and their answers itself and reads his choice from the
+dialog's own result; answers the call carries, his own typed words, a dialog that closed while he
+was away, a subagent's question and any write Claude makes record nothing, and a write to the
+guard's own record (`~/.claude/plugins/store/design-round-guard_*`) is refused, as is a shell write
+whose destination cannot be followed when it names such a file or the command names the plugin
+store. The refusal names the file and both ways on, and holds only the change it refused, never the
+file, so an earlier edit can still be undone (#1158); a subagent is refused alike and told to stop
+and report the line the main session asks with. A branch, checkout or record it cannot read refuses,
+saying which. The main session's calls are judged at `tool.check`, after the settings hooks, so a
+call one of them refuses is never turned into a question; a subagent's at `tool.call`, where its
+loop is known. Since #1524 a settled design page (`.html`) under `docs/design` at the top of a
+checkout passes unasked, whatever the issue's answers, while the text the call leaves is exactly
+what `make-settled.py` wrote (Dan, 2026-10-23: "Let it through"): the design rounds skill's own
+check, `python3 -I ~/.claude/skills/design-rounds/design_file.py --sealed` with the text on its
+input, holds it to the seal make-settled.py writes as the file's last line, the SHA-256 of
+everything above it, so any hand edit is held and the refusal says why. The text is read before the
+call runs: a Write's content, an Edit's or MultiEdit's result, what a git checkout or restore alone
+puts back, or the source of one plain `cp` alone; any other shell write there, a check that cannot
+run and a skill older than the seal are judged as before. The seal proves the text is unchanged
+since it was sealed, not who sealed it. Since #1586 a script file a command runs (an interpreter's
+script operand such as `python3 gen.py`, `bash x.sh` or `node build.mjs`, or a script run by its own
+name, one ending in a script language's extension or named by `./` or `../`) is judged by each file
+it is handed as an argument, read from mod-kit's `runs`: what a script writes cannot be read before
+it runs, so a screen file among them is held as an Edit of it would be, the refusal saying the guard
+cannot read what the script does with it, and Dan's Not a look change lets one such call through
 where the script only reads it. Since #1682 a module run with `python -m` and a tool run through
 `npx` are judged the same way. Since #1593 a settled design under `docs/design` handed to a script
 runs and is read again once it ran: unchanged or still sealed it stands, otherwise, on an issue Dan
@@ -7173,113 +7189,109 @@ a declaration drawn, a value followed into one, whole, the data it hands a call 
 every function that draws (the innermost one around a drawing call or element, a render hook's
 handler among them, so a new local naming the card there is asked about as Dan chose for #1248), no
 name what is drawn uses is imported from another file or under another name, the drawn parts read
-the same, and, from #1823 until #2845, the wording of every message a person reads is the same
-(Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about"):
-each string reaching a toast, a
-notification (`$.ui.notify`, the goal tracker's terminal-notifier and its `waitingOnYou`, so #1245's
-helper stays held as #1248 recorded), a transcript line (a debug one aside), a pane status, a
-question, a blocked card, or the `reason`, `block`, `deny`, `result`, `systemMessage` or `text` of
-an answer, followed into each as values are followed into what is drawn, and whatever each call of a
-function that sends one is handed, each wording counted once (rules.ts `modHookDrawingUntouched`,
-and until #2845 `messageWordingSame`); a change judged a run of lines at a time keeps its whole
-wording where a run passed only by this reading. A tool's description, read only by Claude, is no
-message. A JSX element
-or a colour in those lines, and hook files that cannot be listed or read, are held as before.
-Replayed over the 3,107 Edit, MultiEdit and Write calls to mods' hook files in this Mac's
-transcripts (2026-10-04 to 2026-10-27), of the 333 to `.tsx` files whose text before the call could
-be settled 104 are held where 49 now are; the 55 let through change imports, types, logic, words
-only Claude reads, or when and where the steps card shows and what its buttons act on, none changes
-what a mod draws or a message's words, and none that passed is held. From #1841 until #2845 a
-mod's `.ts` hook file was held for the same message wording too, not only for what it draws
-(rules.ts `modHookTsHold`, since #2845 `modHookTsChange`: `drawsChange`, or `messageWordingSame`
-finding the words changed; the yes or no wrapper
+the same, and, from #1823 until #2845, the wording of every message a person reads is the same (Dan,
+2026-10-27: "Timing wording can go through, but message wording should be asked about"): each string
+reaching a toast, a notification (`$.ui.notify`, the goal tracker's terminal-notifier and its
+`waitingOnYou`, so #1245's helper stays held as #1248 recorded), a transcript line (a debug one
+aside), a pane status, a question, a blocked card, or the `reason`, `block`, `deny`, `result`,
+`systemMessage` or `text` of an answer, followed into each as values are followed into what is
+drawn, and whatever each call of a function that sends one is handed, each wording counted once
+(rules.ts `modHookDrawingUntouched`, and until #2845 `messageWordingSame`); a change judged a run of
+lines at a time keeps its whole wording where a run passed only by this reading. A tool's
+description, read only by Claude, is no message. A JSX element or a colour in those lines, and hook
+files that cannot be listed or read, are held as before. Replayed over the 3,107 Edit, MultiEdit and
+Write calls to mods' hook files in this Mac's transcripts (2026-10-04 to 2026-10-27), of the 333 to
+`.tsx` files whose text before the call could be settled 104 are held where 49 now are; the 55 let
+through change imports, types, logic, words only Claude reads, or when and where the steps card
+shows and what its buttons act on, none changes what a mod draws or a message's words, and none that
+passed is held. From #1841 until #2845 a mod's `.ts` hook file was held for the same message wording
+too, not only for what it draws (rules.ts `modHookTsHold`, since #2845 `modHookTsChange`:
+`drawsChange`, or `messageWordingSame` finding the words changed; the yes or no wrapper
 `modHookTsShows` that only tests called is gone since #1911), by an Edit, MultiEdit, Write, git put
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before; since #2991 so does taking away any look changing file git has never had
 in its index, such as an untracked copy of the mods folder in a worktree; since #3022 git is asked
-once per checkout for every file a call takes away); when a message is sent,
-the logic around it, and a tool's or its input schema's description pass, a property the schema
-names `reason` or `text` being no message. Since
-#2788 only the words of a string the change adds, rewords or takes away count, so a change to code
-alone passes even where the reading follows a message less far after it than before (a verdict
-handed through a helper that hands it straight back), and a comment holds no string. Since
-#1925 the words Dan reads in a mod's picker are a message's too: an answer's label and description
-(an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
-header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
-words a person reads count there (Dan, 2026-10-28: "Narrow it first"; rules.ts `messageWordingSame`
-with `words`, since #2845 `messageWords`): a string a message is only computed from passes, that
-is a regular expression, a quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a
-command's words and flags
-(what a process run is handed, a notifier excepted, and anything spelled like `--repo` or `-R`),
-what a string is split, searched or keyed by (only what `replace` looks for), what the disk and
-environment are asked, and a string with no letter in it (a separator); a `join` with words in it
-(`' and '`) is read. Until #1864 a `.tsx` or `.jsx` file's messages were read whole as #1823 read
-them. Replayed over the 3,173 such calls in this Mac's transcripts (2026-10-04 to 2026-10-28), of
-the 2,336 edits to existing `.ts` hook files whose text before could be settled 308 are held where
-58 were, and of the 71 new `.ts` files 17 where 9 were; nothing held before passes, and the `.tsx`
-holds are unchanged at 49. Read whole, the new holds were 297; narrowing to the words read lets 41
-of them through, each changing only a regular expression, a compared value or tool name, a command's
-words or flags, or a separator, and holds 2 it had passed, where a word left a message but stayed in
-a pattern. Six still held change a single word used as a tag rather than said (a `kind: 'input'`
-value, a `told: 'note'` value, a lookup table's keys, a command's name in a list built before it
-runs). Since #1864 a one word name (`^[a-z][a-z0-9_:-]*$`) is read as a tag where its own place says
-so, never from how the same word is used elsewhere in the file (which flipped a value both shown and
-compared): a field of a record that holds more than words (`kind: 'focus'`, `told: running ?
-'note' : 'prompt'` beside an id, an argv's `'gh'` beside the repository, printf's escape keys beside
-what they stand for), an argument handed to a function of the file that only runs it as a command's
-word, searches with it or compares it, and an answer the function's own signature names
-(`Promise<... | 'home' | 'away'>`); a table of words, a list read by index or joined, a key read as
-words (`label`, `title` and the like) and anything inside a message are still words (rules.ts
-`tagAt`, `answerTag`). A `.tsx` or `.jsx` file's messages are read for their words the same way.
-Replayed over the same 3,173 calls, 5 more `.ts` edits pass (303 held where 308 were; new files
-unchanged at 17) and 1 `.tsx` edit (48 where 49), manual steps' press handler rewritten on
-2026-10-16, whose only changed strings are the button names it compares, which Dan approved letting
-through (2026-10-28); nothing newly held, and every `.ts` hold #1837 made still held. Mod-kit's
-printf escape keys stay held, since the same edit also added words a refusal says. Since #2845
-(Dan, 2026-11-12: "any words") none of these wording holds stands: an edit to a mod's hook file,
-`.ts`, `.tsx` or `.jsx`, by an Edit, MultiEdit, Write, git put back or shell write, that adds,
-rewords or takes away only the words of a message (a toast, a notification, a transcript line, a
-refusal's reason, a tool's result, a picker's question or answers) passes with nothing asked and is
-kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
+once per checkout for every file a call takes away); when a message is sent, the logic around it,
+and a tool's or its input schema's description pass, a property the schema names `reason` or `text`
+being no message. Since #2788 only the words of a string the change adds, rewords or takes away
+count, so a change to code alone passes even where the reading follows a message less far after it
+than before (a verdict handed through a helper that hands it straight back), and a comment holds no
+string. Since #1925 the words Dan reads in a mod's picker are a message's too: an answer's label and
+description (an object beside a `label`, or in an `options` list), and since #1934 the question's
+own text and header (an object in a `questions` list, or one with a `question` beside its
+`options`). Only the words a person reads count there (Dan, 2026-10-28: "Narrow it first"; rules.ts
+`messageWordingSame` with `words`, since #2845 `messageWords`): a string a message is only computed
+from passes, that is a regular expression, a quoted value compared (`=== 'object'`, `case`, `in`), a
+type's union, a command's words and flags (what a process run is handed, a notifier excepted, and
+anything spelled like `--repo` or `-R`), what a string is split, searched or keyed by (only what
+`replace` looks for), what the disk and environment are asked, and a string with no letter in it (a
+separator); a `join` with words in it (`' and '`) is read. Until #1864 a `.tsx` or `.jsx` file's
+messages were read whole as #1823 read them. Replayed over the 3,173 such calls in this Mac's
+transcripts (2026-10-04 to 2026-10-28), of the 2,336 edits to existing `.ts` hook files whose text
+before could be settled 308 are held where 58 were, and of the 71 new `.ts` files 17 where 9 were;
+nothing held before passes, and the `.tsx` holds are unchanged at 49. Read whole, the new holds were
+297; narrowing to the words read lets 41 of them through, each changing only a regular expression, a
+compared value or tool name, a command's words or flags, or a separator, and holds 2 it had passed,
+where a word left a message but stayed in a pattern. Six still held change a single word used as a
+tag rather than said (a `kind: 'input'` value, a `told: 'note'` value, a lookup table's keys, a
+command's name in a list built before it runs). Since #1864 a one word name (`^[a-z][a-z0-9_:-]*$`)
+is read as a tag where its own place says so, never from how the same word is used elsewhere in the
+file (which flipped a value both shown and compared): a field of a record that holds more than words
+(`kind: 'focus'`, `told: running ? 'note' : 'prompt'` beside an id, an argv's `'gh'` beside the
+repository, printf's escape keys beside what they stand for), an argument handed to a function of
+the file that only runs it as a command's word, searches with it or compares it, and an answer the
+function's own signature names (`Promise<... | 'home' | 'away'>`); a table of words, a list read by
+index or joined, a key read as words (`label`, `title` and the like) and anything inside a message
+are still words (rules.ts `tagAt`, `answerTag`). A `.tsx` or `.jsx` file's messages are read for
+their words the same way. Replayed over the same 3,173 calls, 5 more `.ts` edits pass (303 held
+where 308 were; new files unchanged at 17) and 1 `.tsx` edit (48 where 49), manual steps' press
+handler rewritten on 2026-10-16, whose only changed strings are the button names it compares, which
+Dan approved letting through (2026-10-28); nothing newly held, and every `.ts` hold #1837 made still
+held. Mod-kit's printf escape keys stay held, since the same edit also added words a refusal says.
+Since #2845 (Dan, 2026-11-12: "any words") none of these wording holds stands: an edit to a mod's
+hook file, `.ts`, `.tsx` or `.jsx`, by an Edit, MultiEdit, Write, git put back or shell write, that
+adds, rewords or takes away only the words of a message (a toast, a notification, a transcript line,
+a refusal's reason, a tool's result, a picker's question or answers) passes with nothing asked and
+is kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
 returning `{ words }`; a record that cannot be kept holds the call, a shell write's file put back,
 and the refusal and card say the guard read it as leaving the look unchanged but could not record
 that, never that it changes the look, for #2294's logic only pass alike, L11; a shell command also
-changing a file that is held and undone has its words only files put back too, recording nothing,
-so a refused command leaves nothing behind, Dan 2026-11-12).
-Only a change to how the mod looks is held: a drawing call, JSX, a line builder, a colour or frame,
-and the words inside what the mod draws (a band row, a pane, a card's text), which are drawing. This
-reverses the wording holds of #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's
-narrowing now decides which words are named rather than which are held. The reading of what counts
-as a message's words above is unchanged and decides what the record names. Alert and Slack wording
-stays with the Slack alert guard. Answers kept in
-the mod's store on this Mac. A patch it reads from a device or a fifo is never opened, through
-mod-kit's `inputTexts` (#1765): the read waited for ever, so the call never ran; one fed on standard
-input is the heredoc, read in the command. Nor is a look file a call writes, or what a `cp` copies
-onto a settled design, when it is no ordinary file (a fifo, `/dev/stdin`), through mod-kit's
-`currentText` (#1814): its text is unreadable, never empty, so the file is held whole and the
-refusal says why. Since #1951 a pattern a script file is handed with every pattern character quoted
-or escaped (mod-kit's `quoted` on a run's argument, such as a sweep script's search term
-`'*push*'`), which the shell matched against no file, is judged as the one file its characters name,
-as any other argument a script is handed is (#1586), so a quoted glob handed as data runs; a glob
-the shell expands, one also spelled bare in the command, a quoted name that is itself a look
-changing or mod hook file's or holds a group, and any pattern handed to a tool are held as before.
-Since #1953 a name a shell variable fills in, handed to a script or a tool (`P='app/*push*'; python3
-sweep.py $P`, a loop's `$f`, what a `read` takes in), is held as a name the guard cannot read, as a
-command's output is (rules.ts `nameFromVariable`): placed in a checkout by mod-kit it waits on that
-issue's answer, and placed nowhere it is held as unsure. A variable the command sets to a plain name
-is judged by that name, and `$PWD`, `$HOME`, `$OLDPWD` and `$TMPDIR` name a folder, no file. mod-kit
-gives a `for` loop over plain words (an issue's title included, read whole and as each piece a split
-would make) as each of its words, and marks an argument whose every `$` is in single quotes or after
-a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`), which holds no variable's value. Over
-this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a run was handed such a name 431 times
-in 106,896 before mod-kit followed loops and marked quoted dollars, and 211 times in 107,428 after.
-Since #1954 an Edit or MultiEdit the guard would hold that would not apply to the file as it stands
-(its text missing, or there more than once without `replace_all`, read past curly quotes as Claude
-Code's Edit matches them; rules.ts `editWouldNotApply`) is refused saying so, to be sent again with
-the file's own text, with no card and nothing asked of Dan: the #1951 builder's Edit, its old text
-missing a parenthesis, was held for Dan as a change to a message's words.
+changing a file that is held and undone has its words only files put back too, recording nothing, so
+a refused command leaves nothing behind, Dan 2026-11-12). Only a change to how the mod looks is
+held: a drawing call, JSX, a line builder, a colour or frame, and the words inside what the mod
+draws (a band row, a pane, a card's text), which are drawing. This reverses the wording holds of
+#1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's narrowing now decides which
+words are named rather than which are held. The reading of what counts as a message's words above is
+unchanged and decides what the record names. Alert and Slack wording stays with the Slack alert
+guard. Answers kept in the mod's store on this Mac. A patch it reads from a device or a fifo is
+never opened, through mod-kit's `inputTexts` (#1765): the read waited for ever, so the call never
+ran; one fed on standard input is the heredoc, read in the command. Nor is a look file a call
+writes, or what a `cp` copies onto a settled design, when it is no ordinary file (a fifo,
+`/dev/stdin`), through mod-kit's `currentText` (#1814): its text is unreadable, never empty, so the
+file is held whole and the refusal says why. Since #1951 a pattern a script file is handed with
+every pattern character quoted or escaped (mod-kit's `quoted` on a run's argument, such as a sweep
+script's search term `'*push*'`), which the shell matched against no file, is judged as the one file
+its characters name, as any other argument a script is handed is (#1586), so a quoted glob handed as
+data runs; a glob the shell expands, one also spelled bare in the command, a quoted name that is
+itself a look changing or mod hook file's or holds a group, and any pattern handed to a tool are
+held as before. Since #1953 a name a shell variable fills in, handed to a script or a tool
+(`P='app/*push*'; python3 sweep.py $P`, a loop's `$f`, what a `read` takes in), is held as a name
+the guard cannot read, as a command's output is (rules.ts `nameFromVariable`): placed in a checkout
+by mod-kit it waits on that issue's answer, and placed nowhere it is held as unsure. A variable the
+command sets to a plain name is judged by that name, and `$PWD`, `$HOME`, `$OLDPWD` and `$TMPDIR`
+name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's title included, read
+whole and as each piece a split would make) as each of its words, and marks an argument whose every
+`$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
+which holds no variable's value. Over this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a
+run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
+dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
+would not apply to the file as it stands (its text missing, or there more than once without
+`replace_all`, read past curly quotes as Claude Code's Edit matches them; rules.ts
+`editWouldNotApply`) is refused saying so, to be sent again with the file's own text, with no card
+and nothing asked of Dan: the #1951 builder's Edit, its old text missing a parenthesis, was held for
+Dan as a change to a message's words.
 
 </td><td>
 
@@ -7539,7 +7551,10 @@ list in `hooks/overnight.ts` is refused by effect (issue, label and milestone wr
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
-expands, which rtk splits into a command, is refused as unread), and a line running gh that way
+expands, which rtk splits into a command, is refused as unread), since #3021 every other command
+mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
+which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
@@ -8252,8 +8267,10 @@ kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for th
 a `wording` note, and the call sent again goes through; a choice lets wording through only while
 sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
-chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
-not check, and a diff gh did not give within its time as a timeout (#2792).
+chosen wording is refused; a merge that cannot be read, a command whose effect cannot be read at all
+(mod-kit's `unread`, #3021: `eval "gh pr merge 12"`, the same through `ssh` or an alias), or a diff
+gh cannot give, is held as could not check, and a diff gh did not give within its time as a timeout
+(#2792).
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata

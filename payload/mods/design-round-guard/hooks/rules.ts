@@ -1733,6 +1733,8 @@ export type RunCommand = {
   program?: unknown
   heredocs?: readonly { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   folder?: string | null
+  /** Why what it runs cannot be read from its words, as mod-kit says it (#3021); absent where it can. */
+  unread?: string
 }
 
 /**
@@ -1984,91 +1986,6 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
   return out
 }
 
-/**
- * A shell text with each `&&` and `||` inside a `[[ ... ]]` test written as `-a` and `-o` (#2924),
- * for mod-kit's pipeline, which splits a test at them, so `[[ -z "$repo" || "$repo" == --* ]]` read as
- * a command named by `$repo`. A test is found only from a `[[` standing as a word outside quotes to
- * its `]]` on the same line, with no `;` and no command substitution of its own left open; a test
- * that cannot be followed is left as written, so a command after a test is never joined into it.
- */
-export const joinTests = (text: string): string => {
-  let out = ''
-  let quote = ''
-  let test = false
-  let depth = 0
-  // Where the open test starts, in the text and in what is written.
-  let from = 0
-  let kept = 0
-  for (let i = 0; i < text.length; ) {
-    const ch = text[i] as string
-    const next = text[i + 1] ?? ''
-    if (quote) {
-      if (ch === '\\' && quote === '"') {
-        out += ch + next
-        i += 2
-        continue
-      }
-      if (ch === quote) quote = ''
-      out += ch
-      i++
-      continue
-    }
-    if (ch === '\\') {
-      out += ch + next
-      i += 2
-      continue
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch
-      out += ch
-      i++
-      continue
-    }
-    if (!test) {
-      if (ch === '#' && (i === 0 || /\s/.test(text[i - 1] as string))) {
-        const end = text.indexOf('\n', i)
-        out += text.slice(i, end < 0 ? text.length : end)
-        i = end < 0 ? text.length : end
-        continue
-      }
-      if (ch === '[' && next === '[' && (i === 0 || /[\s;&|(!]/.test(text[i - 1] as string)) && /\s/.test(text[i + 2] ?? '')) {
-        test = true
-        depth = 0
-        from = i
-        kept = out.length
-        out += '[['
-        i += 2
-        continue
-      }
-      out += ch
-      i++
-      continue
-    }
-    if (ch === '\n' || (ch === ';' && depth === 0)) {
-      // Not followed to its end: written as it stands, and read on from here as any other text.
-      out = out.slice(0, kept) + text.slice(from, i)
-      test = false
-      continue
-    }
-    if (ch === '$' && next === '(') depth++
-    else if (ch === ')' && depth > 0) depth--
-    if (depth === 0 && ch === ']' && next === ']') {
-      test = false
-      out += ']]'
-      i += 2
-      continue
-    }
-    if (depth === 0 && ((ch === '&' && next === '&') || (ch === '|' && next === '|'))) {
-      out += ch === '&' ? '-a' : '-o'
-      i += 2
-      continue
-    }
-    out += ch
-    i++
-  }
-  return test ? out.slice(0, kept) + text.slice(from) : out
-}
-
 /** The usual idiom a script finds its own folder by (#2924), as one value in double quotes. */
 const OWN_FOLDER = /^"\$\(cd (?:-P )?"\$\(dirname "\$(?:\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE)"\)"(?: (?:>|&>) ?\/dev\/null(?: 2>&1)?)? && pwd(?: -P)?\)"$/
 
@@ -2096,20 +2013,15 @@ export const ownFolderVar = (v: string, text: string): boolean => {
 }
 
 /**
- * The text each `trap` in a script's commands runs later (#2924): its first word, as mod-kit's
- * pipeline gives it with its quotes taken off, read with the script's own text, since mod-kit's write
- * reader reads none of it. A trap resetting (`-`) or ignoring (`''`) a signal runs nothing.
- */
-export const trapBodies = (commands: readonly RunCommand[]): string[] =>
-  commands.filter(c => c.words[0] === 'trap' && c.words.length >= 3 && c.words[1] !== '-' && c.words[1] !== '').map(c => c.words[1] as string)
-
-/**
  * Commands that run text or another command handed to them later (#2924), whose effect mod-kit's
  * write reader does not read: eval, exec, alias, and the runners that take a command as words
  * (xargs, env, builtin, nohup, sudo, doas, time, nice, timeout, parallel, watch, caffeinate, stdbuf,
- * unbuffer). `command` is one of them unless it only looks a name up (-v, -V).
+ * unbuffer, and since #3021 setsid, flock, ionice and arch), and ssh, which runs its command on
+ * another machine. mod-kit's pipeline reads past most of them and gives the command they run, so one
+ * standing here as the command is one whose command it could not give. `command` is one of them
+ * unless it only looks a name up (-v, -V).
  */
-const RUNS_LATER = /^(?:eval|exec|alias|xargs|env|builtin|nohup|sudo|doas|time|nice|timeout|parallel|watch|caffeinate|stdbuf|unbuffer)$/
+const RUNS_LATER = /^(?:eval|exec|alias|xargs|env|builtin|nohup|sudo|doas|time|nice|timeout|parallel|watch|caffeinate|stdbuf|unbuffer|setsid|flock|ionice|arch|ssh)$/
 
 /** What mod-kit's write reader gives of a script's text, as argumentUnreached reads it (#2924). */
 export type ScriptReading = {
@@ -2124,13 +2036,13 @@ const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPL
 
 /**
  * Why a shell script may write a file it is handed as an argument (#2924), or undefined where it
- * cannot: `reading` is mod-kit's write reader over its text with its trap bodies (trapBodies), and
- * `commands` its pipeline over the same. It cannot where every file its commands write, empty, stamp
+ * cannot: `reading` is mod-kit's write reader over its text, and `commands` its pipeline over the
+ * same, each reading a trap's text as the commands it runs (#3021). It cannot where every file its commands write, empty, stamp
  * or take away, and every file git changes, is one its own text names by a path the reader places, or
  * a temporary file or folder it made (`temp`, madeTemp); every program in it names every file it
  * writes, or only loads a module; it runs no other script and hands none its words; and nothing in
- * it runs text or a command a value decides (a command named by an expansion, eval, exec, alias and
- * the runners RUNS_LATER names), and each file it sources is one the guard read and found the same
+ * it runs text or a command a value decides (a command named by an expansion, eval, exec, alias,
+ * the runners RUNS_LATER names, and any command mod-kit marks unread), and each file it sources is one the guard read and found the same
  * (`sourced`). An argument reaches a command only through `$1`, `$@` or a variable holding it, which
  * the reader can never place, so each such route shows here as a name it could not place.
  * What this trusts is what the guard trusts of a command typed whole: mod-kit's reader of what a
@@ -2144,6 +2056,10 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
     const run = scriptOf(c)
     if (run && !((first === 'source' || first === '.') && sourced(c))) return first === 'source' || first === '.' ? `it sources ${run.word}, which could not be read whole` : `it runs ${run.word}`
   }
+  // Whatever else mod-kit's reader marks unread (#3021): its words are not what runs, so a value
+  // in them may reach a write no reader sees. Said after the routes above, which name theirs.
+  const unread = commands.find(c => c.unread)?.unread
+  if (unread) return `it runs a command ${unread}`
   for (const f of [...reading.files, ...reading.changes.filter(c => c.does !== 'folder' && c.does !== 'mode'), ...(reading.byGit ?? [])])
     if (!placed(f.path) && !temp(f.word)) return `it writes ${f.word}`
   for (const u of reading.unnamed) if (!u.onlyLoads && !(u.targets && u.targets.every(placed))) return 'it runs a program whose writes are not all named'

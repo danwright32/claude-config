@@ -357,8 +357,9 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
  * a command merges is read with gh pr diff, and one whose added lines carry a choice is refused, so
  * nothing posts it before he approves it. Only in the repositories the choice holds (#2833): one
  * made in another repository lets the merge through, and one whose repository cannot be read holds
- * it wherever it is. A merge that cannot be read, a diff gh cannot give, or a pull request whose
- * repository gh cannot say, is held as could not check; a diff gh did not give within its time is
+ * it wherever it is. A merge that cannot be read, a command whose effect cannot be read at all
+ * (#3021), a diff gh cannot give, or a pull request whose repository gh cannot say, is held as
+ * could not check; a diff gh did not give within its time is
  * held as a timeout (#2792). With no choice waiting, no command is read.
  *
  * A diff gh cannot give (#2973) holds the merge only over the choices that hold its repository: none
@@ -386,6 +387,14 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
   const late = (what: string): Verdict => ({ unchecked: `${what} within ${SCAN_MS / 1000} seconds, ${waits}`, late: true })
   const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting, null)}` })
   for (const c of await $.modkit.pipeline({ command, cwd, home })) {
+    // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
+    // whose text the shell expands, a word rtk's proxy splits) may run a merge its words do not
+    // show: `eval "gh pr merge 12 --squash"` was read as no merge and ran. Held as could not check,
+    // saying what gets it read (L111), since the same call sent again is held the same.
+    if (c.unread)
+      return {
+        unchecked: `${c.words.join(' ')} is a command ${c.unread}, so whether it merges a pull request cannot be told until the commands it runs are written out in its place, ${waits}: ${await named(waiting, null)}`,
+      }
     const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
     if (m === undefined) continue
     if ('unreadable' in m) return unreadable()

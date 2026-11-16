@@ -57,8 +57,6 @@ import {
   freshTemp,
   madeTemp,
   argumentUnreached,
-  trapBodies,
-  joinTests,
   ownFolderVar,
   type RunCommand,
   argvStart,
@@ -2950,15 +2948,15 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
 // #2924: a shell script's arguments are not judged as writes only where argumentUnreached finds no
 // route by which one may reach a write. Each route below is named by its own reason, so a control
 // held in the register tests is known to be held by the rule meant to hold it.
+// The script's text goes to mod-kit's readers as it is written (#3021): they keep a `[[ ]]` test
+// whole and read a trap's text as the commands it runs, which this guard did for itself until then
+// (joinTests and trapBodies, each with a case it read wrong: `trap -- text` ran `--`).
 const unreached = (text: string, sourced = true): string | undefined => {
-  const own = pipelineIn(joinTests(text), '/s', '/h') as readonly RunCommand[]
-  const later = trapBodies(own)
-  const all = later.length ? `${text}\n${later.join('\n')}\n` : text
   const temp = (word: string) => {
     const v = /^\$(?:\{(\w+)\}|(\w+))$/.exec(word)
-    return v !== null && madeTemp((v[1] ?? v[2]) as string, all, new Set(), true)
+    return v !== null && madeTemp((v[1] ?? v[2]) as string, text, new Set(), true)
   }
-  return argumentUnreached(commandWrites(all, '/s', '/h'), pipelineIn(joinTests(all), '/s', '/h') as readonly RunCommand[], temp, () => sourced)
+  return argumentUnreached(commandWrites(text, '/s', '/h'), pipelineIn(text, '/s', '/h') as readonly RunCommand[], temp, () => sourced)
 }
 const BASE_2924 = 'like="${2:-}"\nif [[ -z "$like" || "$like" == --* ]]; then exit 2; fi\nwhile [[ $# -gt 0 && -n "$(printf %s "$1")" ]]; do shift; done\ngh_err="$(mktemp)"\ntrap \'rm -f "$gh_err"\' EXIT\nout=""\nout="$(mktemp)"\ngh issue list >"$out" 2>"$gh_err"\nprintf \'%s\' "$like" | python3 -c \'import sys; print(sys.stdin.read(), sys.argv[1])\' "$like"\nprintf x > /s/notes.txt\nsource /s/catch-all.sh\n'
 
@@ -2991,21 +2989,32 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
     ['command cp a "$like"', 'it writes $like'],
     ['exec > "$like"', 'it writes $like'],
     ['alias ls="cp a $like"', 'it runs alias'],
+    // #3021 (the lessons review of PR #3008): setsid, flock, ionice and arch only run the command
+    // after them, which mod-kit's pipeline now gives; one left standing as the command, and ssh,
+    // which runs its command on another machine, is held as running what nobody reads.
+    ['setsid cp a "$like"', 'it writes $like'],
+    ['flock /tmp/s.lock cp a "$like"', 'it writes $like'],
+    ['ionice -c 3 cp a "$like"', 'it writes $like'],
+    ['arch -arm64 cp a "$like"', 'it writes $like'],
+    ['setsid', 'it runs setsid'],
+    ['flock -n 9', 'it runs flock'],
+    ['ionice -p "$like"', 'it runs ionice'],
+    ['[ "$(arch)" = arm64 ]', 'it runs arch'],
+    ['ssh host "cp a $like"', 'it runs ssh'],
+    // A trap's text after `--` is its text, never the `--`.
+    ["trap -- 'rm -f \"$like\"' EXIT", 'it writes $like'],
+    // What mod-kit marks unread is a route too: a trap whose text the shell expands runs whatever
+    // the value holds, read again as commands, and a word rtk's proxy splits is the command itself.
+    ['trap "echo $like" EXIT', 'it runs a command setting a trap whose text the shell expands, so what it runs later cannot be read'],
+    ['rtk proxy "echo $like"', 'it runs a command split by rtk proxy from one word the shell expands, so what it runs cannot be read'],
+    // A test kept whole names no command by its values, and one after it is still read.
+    ['[[ -z "$like" || "$like" == --* ]] && cp a "$like"', 'it writes $like'],
   ] as [string, string][])
     expect({ add, why: unreached(`${BASE_2924}${add}\n`) }).toEqual({ add, why })
   // A file sourced that could not be read whole.
   expect(unreached(BASE_2924, false)).toBe('it sources /s/catch-all.sh, which could not be read whole')
   // `command -v` only looks a name up.
   expect(unreached(`${BASE_2924}command -v gh >/dev/null 2>&1\n`)).toBeUndefined()
-})
-
-test('#2924: joinTests joins only a test it can follow to its end on one line', () => {
-  expect(joinTests('if [[ -z "$r" || "$r" == --* ]]; then exit; fi && x')).toBe('if [[ -z "$r" -o "$r" == --* ]]; then exit; fi && x')
-  expect(joinTests('[[ -n "$(a && b)" && -f x ]] && y')).toBe('[[ -n "$(a && b)" -a -f x ]] && y')
-  expect(joinTests("echo '[[ a || b ]]' && x")).toBe("echo '[[ a || b ]]' && x")
-  // Unfollowable, returned as written: a test across lines, a ; inside one, one never closed.
-  for (const text of ['[[ a ||\n b ]] && c', '[[ a; b || c ]]', '[[ a || b'])
-    expect(joinTests(text)).toBe(text)
 })
 
 test('#2924: ownFolderVar reads the one usual idiom for a script\'s own folder, and nothing that may name another', () => {

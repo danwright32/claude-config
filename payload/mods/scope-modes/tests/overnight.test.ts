@@ -211,9 +211,13 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(asked.length).toBe(3)
   })
   test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
-    expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
-    // stdbuf is a runner mod-kit's reader reads past, so its gh meets the lists like any other.
+    expect(await bash('chronic gh issue comment 5 --body x')).toBe(unresolved)
+    // stdbuf is a runner mod-kit's reader reads past, so its gh meets the lists like any other, as
+    // setsid's, flock's, ionice's and arch's do since #3021.
     expect(await bash('stdbuf -o0 gh pr merge 5 --squash')).toBeUndefined()
+    expect(await bash('setsid gh issue comment 5 --body x')).toBeUndefined()
+    expect(await bash('setsid gh -R other/x pr merge 5')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash('flock /tmp/merge.lock arch -arm64 ionice -c 3 gh -R other/x pr merge 5')).toBe('write to other/x from a checkout of o/r')
     expect(await bash('chronic /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
     expect(await bash('frobwrap --quiet gh issue comment 5 --body x')).toBe(unresolved)
     expect(await bash('frobwrap 5 gh pr merge 5')).toBe(unresolved)
@@ -225,7 +229,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('cat ./gh && ls bin/gh && chmod +x scripts/gh')).toBeUndefined()
     // gh as an argument that runs nothing: a search term, a path (#834 review of 7ee831c).
     expect(await bash('grep gh README.md && grep -rn gh src && ls gh && git log -- gh')).toBeUndefined()
-    expect(await bash('setsid gh -R o/r pr merge 5')).toBe(unresolved)
+    expect(await bash('frobwrap gh -R o/r pr merge 5')).toBe(unresolved)
     expect(await bash('nohupish /opt/homebrew/bin/gh pr merge 5')).toBe(unresolved)
   })
   test('a gh that is a search pattern followed by the searching tool\'s own flags runs nothing (#2127)', async () => {
@@ -234,7 +238,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('grep -n -e gh -e pipeline src/a.ts && rg -n gh --glob "*.ts" src')).toBeUndefined()
     // Flags before a gh subcommand still reach it, by whichever flag takes a value (gh -R o/r pr).
     // Every case is read before any is compared, so a failure names each case that changed.
-    const flagged = ['setsid gh -R o/r issue comment 5 --body x', 'setsid gh --repo o/r pr merge 5', 'frobwrap gh -e x pr merge 5', 'setsid gh -R o/r api repos/o/r/issues/5/comments -f body=x']
+    const flagged = ['chronic gh -R o/r issue comment 5 --body x', 'chronic gh --repo o/r pr merge 5', 'frobwrap gh -e x pr merge 5', 'chronic gh -R o/r api repos/o/r/issues/5/comments -f body=x']
     expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: unresolved })))
     // A real gh call the reader reads is judged wherever it sits in the line.
     const placed = [
@@ -842,6 +846,21 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
   })
+  // #3021: a command line in a string was cut at its first & to find where it ends, the & of an `&>`
+  // redirect included, so `git log &> notes.md` was read as `git log` alone and the write went ahead.
+  test('a git command line in code that redirects with &> writes a file, so it is refused (#3021)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    for (const c of [
+      `python3 -c "import subprocess; subprocess.run('git log &> /x/notes.md', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run('git log -5 &>> /x/notes.md', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run('git show HEAD:x &>/x/notes.md', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run('git log > /x/notes.md', shell=True)"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
+    // An & that ends the command (one run in the background, an &&) still ends it, so a read passes.
+    for (const c of [`python3 -c "import subprocess; subprocess.run('git log -5 & wait', shell=True)"`, `python3 -c "import subprocess; subprocess.run('git log -5 && echo done', shell=True)"`])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
 })
 
 describe('what is never approved, and the disk readers', () => {
@@ -958,6 +977,28 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash(`rtk proxy "git push $(cat flags.txt)"`)).toBe(unread)
     // Two words or more reach the command as they stand, as they would written plainly.
     expect(await bash('rtk proxy gh issue view "$N" -R other/x', { look: nowhere })).toBeUndefined()
+  })
+  // #3021: mod-kit's reader marks every command whose words are not what runs, and each is refused
+  // for its own reason. Before, eval, a command a value names, an alias, ssh and a trap's text were
+  // judged by their words alone, so `$TOOL push --force` and a trap that force pushes went ahead.
+  test('every other command mod-kit cannot read is refused too, each for its own reason (#3021)', async () => {
+    const named = 'run a command named by a value the shell expands, so what it runs cannot be read'
+    expect(await bash('eval "$x"')).toBe('run a command run as text by eval, so what it runs cannot be read')
+    expect(await bash('"$@"')).toBe(named)
+    expect(await bash('$TOOL push --force origin main')).toBe(named)
+    expect(await bash(`alias gp='git push --force'; gp`)).toBe('run a command setting an alias, which changes what a later word runs, so that cannot be read')
+    expect(await bash('ssh build-host rm -rf /srv/app')).toBe('run a command run by ssh on another machine, so what it does cannot be read')
+    expect(await bash('trap "rm -rf $dir" EXIT; make')).toBe('run a command setting a trap whose text the shell expands, so what it runs later cannot be read')
+    // A trap's text is read as the commands it runs, and judged as they are.
+    expect(await bash(`trap 'git push --force origin main' EXIT; make`)).toBe('force push')
+    expect(await bash(`trap -- 'git push --force origin main' EXIT; make`)).toBe('force push')
+  })
+  test('controls: a command the reader can read goes ahead as before (#3021)', async () => {
+    expect(await bash(`trap 'echo done' EXIT; make`)).toBeUndefined()
+    expect(await bash('"$HOME/bin/tool" x')).toBeUndefined()
+    expect(await bash('[[ -z "$repo" || "$repo" == --* ]] && echo x')).toBeUndefined()
+    expect(await bash('if (( $# < 2 )); then echo x; fi')).toBeUndefined()
+    expect(await bash('setsid make test')).toBeUndefined()
   })
   test('rtk named by its path, or behind another runner, is still rtk', async () => {
     expect(await bash('/opt/homebrew/bin/rtk proxy gh issue view 7 -R other/x', { look: nowhere })).toBeUndefined()

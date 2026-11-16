@@ -314,6 +314,17 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
     const read = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
     for (const t of read) for (const m of await mentioned(patch ? (patchNames(t) ?? t) : t, home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
   }
+  // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
+  // whose text the shell expands, a word rtk's proxy splits) runs what its words do not say, so its
+  // words were read as writing nothing: `eval "printf ... >> AGENTS.md"` saved unasked. Guessed at
+  // as a program the reader read is, from the lasting memory its words name, a bare name placed in
+  // the folder mod-kit says it runs in and asked about where that cannot be followed.
+  for (const u of w.unread ?? [])
+    for (const m of await mentioned(u.words.join('\n'), home, inCheckout, isSet, u.folder, command))
+      if (!out.includes(m)) {
+        out.push(m)
+        guessed.push(m)
+      }
   return { files: out, guessed, handed }
 }
 

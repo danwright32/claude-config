@@ -979,11 +979,12 @@ type Placed = { path?: string }
  * (#2904): any file it writes, changes or has git change is the record, in any command; and in a
  * command naming the store, any place it reaches is the store folder or a folder holding it (a
  * removal, a move or a copy onto it), or anything it writes cannot be named: a path the reader could
- * not resolve, a program, xargs, a patch, or a script handed arguments. A listing, a search or a read
- * of the store writes nothing, so it passes.
+ * not resolve, a program, xargs, a patch, a script handed arguments, or a command whose effect
+ * cannot be read at all (#3021: eval, a command a value names, an alias, ssh). A listing, a search
+ * or a read of the store writes nothing, so it passes.
  */
 export const writesOwnRecord = (
-  w: { files: Placed[]; changes: Placed[]; byGit?: Placed[]; unnamed: unknown[]; runs?: unknown[] },
+  w: { files: Placed[]; changes: Placed[]; byGit?: Placed[]; unnamed: unknown[]; runs?: unknown[]; unread?: unknown[] },
   home: string,
   named: boolean,
 ): boolean => {
@@ -995,7 +996,7 @@ export const writesOwnRecord = (
     const p = path.replace(/\/+$/, '')
     return /\/plugins\/store$/.test(p) || (p !== '' && store.startsWith(`${p}/`))
   }
-  return placed.some(p => p.path === undefined || holdsStore(p.path)) || w.unnamed.length > 0 || (w.runs ?? []).length > 0
+  return placed.some(p => p.path === undefined || holdsStore(p.path)) || w.unnamed.length > 0 || (w.runs ?? []).length > 0 || (w.unread ?? []).length > 0
 }
 
 const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')

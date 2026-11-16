@@ -152,6 +152,13 @@ describe('commands', () => {
     expect(commands('sudo proxy git push')).toEqual([['proxy', 'git', 'push']])
     expect(commands('rtk gh proxy x')).toEqual([['gh', 'proxy', 'x']])
   })
+  // #3021: the comment on proxyRuns said an option the proxy does not know is the command, while the
+  // code read past it. The code is the stricter reading and stays: rtk 0.31.0 takes such an option
+  // for the command and fails to start it, so the words after it are judged though they never run.
+  test("an option rtk's proxy does not know is read past, so the words after it are judged", () => {
+    expect(commands('rtk proxy --bogus git push --force')).toEqual([['git', 'push', '--force']])
+    expect(commands('rtk proxy -x git push')).toEqual([['git', 'push']])
+  })
   test("a command rtk's proxy runs is marked, and one it splits from a word the shell expands is unread", () => {
     expect(pipeline('rtk proxy gh issue view 5')[0]?.proxied).toBe(true)
     expect(pipeline(`rtk proxy 'gh issue view 5' > out.txt`)[0]).toMatchObject({ words: ['gh', 'issue', 'view', '5', '>', 'out.txt'], proxied: true })
@@ -773,5 +780,146 @@ describe('a function defined on one line (#2619)', () => {
   })
   test("the body's braces are a group of their own, so its closing brace takes no feed from the group around it", () => {
     expect(fed('curl x | while read l; do w() { cat; }; sh; done')).toEqual([['curl', undefined], ['read', 'curl'], ['w()', 'curl'], ['cat', 'curl'], ['}', undefined], ['sh', 'curl'], ['done', undefined]])
+  })
+})
+
+// #3021: what the reader gave no word for. setsid, flock, ionice and arch only run the command after
+// them and were read as the command (the lessons review of PR #3008: `setsid cp a "$like"` wrote
+// nothing); a `[[ ]]` test was split at its && and ||, so `[[ -z "$repo" || "$repo" == --* ]]` gave
+// a command named `$repo`, which the design round guard rewrote the text to avoid (#2924); a trap's
+// text was a word, never the commands it runs; and eval, an alias, ssh and a command a value names
+// were given as their words with nothing saying that what they run cannot be read.
+describe('commands: runners, tests, traps and what cannot be read (#3021)', () => {
+  const EVAL = 'run as text by eval, so what it runs cannot be read'
+  const NAMED = 'named by a value the shell expands, so what it runs cannot be read'
+  const ALIAS = 'setting an alias, which changes what a later word runs, so that cannot be read'
+  const TRAP = 'setting a trap whose text the shell expands, so what it runs later cannot be read'
+  const SSH = 'run by ssh on another machine, so what it does cannot be read'
+  const unreads = (cmd: string) => pipeline(cmd).map(c => c.unread)
+
+  test('setsid, flock, ionice and arch run the command after them, each read by its own options', () => {
+    expect(commands('setsid cp a b')).toEqual([['cp', 'a', 'b']])
+    expect(commands('setsid -f --wait git push')).toEqual([['git', 'push']])
+    expect(commands('flock /tmp/x.lock git push')).toEqual([['git', 'push']])
+    expect(commands('flock -n -w 5 /tmp/x.lock rm -rf x')).toEqual([['rm', '-rf', 'x']])
+    expect(commands('flock --timeout 5 -E 3 /tmp/x.lock rm x')).toEqual([['rm', 'x']])
+    expect(commands(`flock /tmp/x.lock -c 'git push && rm x'`)).toEqual([['git', 'push'], ['rm', 'x']])
+    expect(commands(`flock -x /tmp/x.lock --command 'git push'`)).toEqual([['git', 'push']])
+    expect(commands('ionice -c 3 -n 7 cp a b')).toEqual([['cp', 'a', 'b']])
+    expect(commands('ionice -c3 --classdata 7 cp a b')).toEqual([['cp', 'a', 'b']])
+    expect(commands('arch -x86_64 git push')).toEqual([['git', 'push']])
+    expect(commands('arch -arch arm64e -e FOO=1 -d BAR git push')).toEqual([['git', 'push']])
+    expect(commands('sudo setsid nice flock /tmp/l arch -arm64 rm x')).toEqual([['rm', 'x']])
+  })
+  test('one of them with no command to run is the command itself', () => {
+    expect(commands('setsid')).toEqual([['setsid']])
+    expect(commands('flock -n 9')).toEqual([['flock', '-n', '9']])
+    expect(commands('ionice -p 89 91')).toEqual([['ionice', '-p', '89', '91']])
+    expect(commands('arch')).toEqual([['arch']])
+    expect(commands('arch -arch')).toEqual([['arch', '-arch']])
+  })
+
+  test('a [[ ]] test is one command, its && and || and parentheses words of it', () => {
+    expect(commands('[[ -z "$repo" || "$repo" == --* ]] && exit 1')).toEqual([['[[', '-z', '$repo', '||', '$repo', '==', '--*', ']]'], ['exit', '1']])
+    expect(commands('if [[ -n "$a" && ( "$b" == x || "$c" == y ) ]]; then git push; fi')).toEqual([['[[', '-n', '$a', '&&', '(', '$b', '==', 'x', '||', '$c', '==', 'y', ')', ']]'], ['git', 'push'], ['fi']])
+    expect(commands('true && ! [[ a||b ]]; x')).toEqual([['true'], ['[[', 'a', '||', 'b', ']]'], ['x']])
+    expect(commands('[[ $x =~ ^(a|b)&$ ]] || y')).toEqual([['[[', '$x', '=~', '^(a|b)&$', ']]'], ['y']])
+    expect(unreads('[[ -z "$repo" || "$repo" == --* ]]')).toEqual([undefined])
+  })
+  test('a ]] in quotes or in a substitution ends no test, and what a substitution in one runs is still read', () => {
+    expect(commands('[[ "$(x || y)" == "]]" || -z $a ]] || z')).toEqual([['x'], ['y'], ['[[', '$(x || y)', '==', ']]', '||', '-z', '$a', ']]'], ['z']])
+  })
+  test('a [[ that is no test, or one not followed to its ]] on the line, is read as before', () => {
+    expect(commands('echo [[ a || b ]]')).toEqual([['echo', '[[', 'a'], ['b', ']]']])
+    expect(commands('[[a || b ]]')).toEqual([['[[a'], ['b', ']]']])
+    expect(commands('[[ a || b\nc ]]')).toEqual([['[[', 'a'], ['b'], ['c', ']]']])
+    expect(commands('[[ a ; b || c ]]')).toEqual([['[[', 'a'], ['b'], ['c', ']]']])
+    expect(commands('[[ a || b')).toEqual([['[[', 'a'], ['b']])
+  })
+
+  test("a trap's text is read as the commands it runs, after the rest of what its shell runs", () => {
+    expect(commands(`trap 'rm -f "$tmp"' EXIT; make`)).toEqual([['trap', 'rm -f "$tmp"', 'EXIT'], ['make'], ['rm', '-f', '$tmp']])
+    expect(unreads(`trap 'rm -f "$tmp"' EXIT; make`)).toEqual([undefined, undefined, undefined])
+    expect(commands(`trap 'git push; rm x' INT TERM`)).toEqual([['trap', 'git push; rm x', 'INT', 'TERM'], ['git', 'push'], ['rm', 'x']])
+    expect(commands(`bash -c "trap 'git push' EXIT; make"; ls`)).toEqual([['trap', 'git push', 'EXIT'], ['make'], ['git', 'push'], ['ls']])
+    expect(commands(`(cd sub; trap 'rm x' EXIT; make); ls`)).toEqual([['('], ['cd', 'sub'], ['trap', 'rm x', 'EXIT'], ['make'], ['rm', 'x'], [')'], ['ls']])
+    expect(commands(`trap 'trap "git push" EXIT' INT`)).toEqual([['trap', 'trap "git push" EXIT', 'INT'], ['trap', 'git push', 'EXIT'], ['git', 'push']])
+  })
+  test('trap -- text is the text after the --, never the -- itself', () => {
+    expect(commands(`trap -- 'git push' EXIT`)).toEqual([['trap', '--', 'git push', 'EXIT'], ['git', 'push']])
+    expect(commands('trap -- - EXIT')).toEqual([['trap', '--', '-', 'EXIT']])
+  })
+  test('a trap that lists, resets or ignores runs nothing', () => {
+    for (const cmd of ['trap', 'trap -p', 'trap -l', 'trap - EXIT', `trap '' HUP`, 'trap EXIT', 'trap 2 INT', `trap ' ' INT`]) expect(pipeline(cmd)).toHaveLength(1)
+    expect(unreads('trap - EXIT')).toEqual([undefined])
+  })
+  test('a trap whose text the shell expands is read as written, and is unread', () => {
+    expect(pipeline(`trap "rm -f $tmp" EXIT`).map(c => [c.words, c.unread])).toEqual([[['trap', 'rm -f $tmp', 'EXIT'], TRAP], [['rm', '-f', '$tmp'], undefined]])
+    expect(unreads('trap "$cleanup" EXIT')[0]).toBe(TRAP)
+    expect(unreads('trap "$(mk)" EXIT')).toContain(TRAP)
+    expect(unreads(`find . -exec trap "$X" EXIT ';'`)).toContain(TRAP)
+  })
+
+  test('eval is unread, whatever its text, and so is one behind builtin or command', () => {
+    expect(pipeline('eval "$x"')[0]).toMatchObject({ words: ['eval', '$x'], unread: EVAL })
+    expect(unreads(`eval 'git push'`)).toEqual([EVAL])
+    expect(pipeline('builtin eval "$x"')[0]).toMatchObject({ words: ['builtin', 'eval', '$x'], unread: EVAL })
+    expect(unreads('command eval "$x"')).toEqual([EVAL])
+    expect(unreads(`bash -c 'eval "$x"'`)).toEqual([EVAL])
+    expect(unreads('eval')).toEqual([undefined])
+    expect(unreads('echo eval x')).toEqual([undefined])
+  })
+  test('a command named by a value the shell expands is unread', () => {
+    expect(pipeline('"$@"')[0]).toMatchObject({ words: ['$@'], unread: NAMED })
+    expect(unreads('$cmd --write x')).toEqual([NAMED])
+    expect(unreads('sudo "$TOOL" x')).toEqual([NAMED])
+    expect(unreads('"${TOOL:-/usr/bin/rm}" x')).toEqual([NAMED])
+    expect(unreads('"$DIR/$tool" x')).toEqual([NAMED])
+    expect(pipeline('$(command -v fixer) x').map(c => c.unread)).toEqual([undefined, NAMED])
+    expect(unreads('`which fixer` x')).toContain(NAMED)
+    expect(unreads('<(echo x)')).toContain(NAMED)
+    // A shell's -c text the outer shell expands is the command `$FIX`, and one it leaves is too.
+    expect(unreads('bash -c "$FIX"')).toEqual([NAMED])
+    expect(unreads(`bash -c '$FIX'`)).toEqual([NAMED])
+    expect(unreads(`xargs "$CMD"`)).toEqual([NAMED])
+    expect(pipeline(`find . -exec "$CMD" {} ';'`).map(c => c.unread)).toEqual([undefined, NAMED])
+  })
+  test('one whose name is spelled after the value, or whose $ is text, is named as any path names one', () => {
+    expect(unreads('"$HOME/bin/tool" x')).toEqual([undefined])
+    expect(unreads('"$(brew --prefix)/bin/git" push')).toEqual([undefined, undefined])
+    expect(unreads(`'$x' a`)).toEqual([undefined])
+    expect(unreads('\\$x a')).toEqual([undefined])
+    expect(unreads('X=$(date) make')).toEqual([undefined, undefined])
+    expect(unreads('arr[$i]=x')).toEqual([undefined])
+    expect(unreads('n+=$i')).toEqual([undefined])
+  })
+  test('a bare value before the name is unread where the shell splits it into words, as bash does', () => {
+    expect(unreads(`bash -c '$PREFIX/bin/tool x'`)).toEqual([NAMED])
+    expect(unreads(`zsh -c '$PREFIX/bin/tool x'`)).toEqual([undefined])
+    expect(unreads(`bash -c '"$PREFIX/bin/tool" x'`)).toEqual([undefined])
+  })
+  test('a value inside arithmetic names no command', () => {
+    expect(pipeline('(( $# < 2 )) && exit 1').some(c => c.unread)).toBe(false)
+    expect(pipeline('for ((i=0; $i<3; i++)); do echo x; done').some(c => c.unread)).toBe(false)
+    // Two subshells are not arithmetic.
+    expect(unreads('( ( $cmd ) )')).toContain(NAMED)
+  })
+  test('setting an alias is unread, listing one is not', () => {
+    expect(pipeline(`alias gp='git push'`)[0]).toMatchObject({ words: ['alias', 'gp=git push'], unread: ALIAS })
+    expect(unreads('builtin alias ll="ls -l"')).toEqual([ALIAS])
+    expect(unreads('alias')).toEqual([undefined])
+    expect(unreads('alias -p')).toEqual([undefined])
+    expect(unreads('alias gp')).toEqual([undefined])
+  })
+  test('ssh runs its command on another machine, so it is unread and never read as run here', () => {
+    expect(pipeline('ssh host rm -rf x')[0]).toMatchObject({ words: ['ssh', 'host', 'rm', '-rf', 'x'], unread: SSH })
+    expect(unreads('/usr/bin/ssh -p 22 host')).toEqual([SSH])
+    expect(unreads('sudo ssh host ls')).toEqual([SSH])
+    expect(unreads('echo ssh host')).toEqual([undefined])
+  })
+  test("a mark rtk's proxy gave stands, and every other command of the line carries none", () => {
+    const proxy = 'split by rtk proxy from one word the shell expands, so what it runs cannot be read'
+    expect(unreads('rtk proxy "$CMD"')).toEqual([proxy])
+    expect(unreads('ls; eval "$x"; git status')).toEqual([undefined, EVAL, undefined])
   })
 })

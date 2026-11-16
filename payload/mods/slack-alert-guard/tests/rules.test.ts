@@ -413,6 +413,10 @@ test('a command writes the own record when a place it reaches is the record, or,
   expect(writesOwnRecord({ ...none, files: [{}] }, home, true)).toBe(true)
   expect(writesOwnRecord({ ...none, unnamed: [{}] }, home, true)).toBe(true)
   expect(writesOwnRecord({ ...none, runs: [{}] }, home, true)).toBe(true)
+  // #3021: a command whose effect cannot be read (eval, a command a value names) may write it too.
+  expect(writesOwnRecord({ ...none, unread: [{}] }, home, true)).toBe(true)
+  expect(writesOwnRecord({ ...none, unread: [] }, home, true)).toBe(false)
+  expect(writesOwnRecord({ ...none, unread: [{}] }, home, false)).toBe(false)
   // Not naming the store, only the record itself counts, as before.
   expect(writesOwnRecord({ ...none, files: [{}], unnamed: [{}], changes: [{ path: `${home}/.claude` }] }, home, false)).toBe(false)
 })

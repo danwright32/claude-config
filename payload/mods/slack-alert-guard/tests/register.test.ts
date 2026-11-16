@@ -1845,6 +1845,29 @@ test('a choice whose repository cannot be read, or a pull request whose reposito
   expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
 })
 
+// #3021: while wording chosen overnight waits on Dan, each command of a Bash call is read for a
+// merge. One mod-kit marks `unread` (eval, a command a value names, ssh) may run a merge its words
+// do not show, so it passed as no merge: `eval "gh pr merge 12 --squash"`, the same through ssh and
+// through an alias each ran (mod-kit's merge reader held only an eval or a program that is a
+// variable). It is held as could not check, naming why and each choice.
+test('a command whose effect cannot be read is held while a choice waits, since it may merge; with none waiting nothing is read (#3021)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'eval "$MERGE_STEP"' }))).toBe('')
+  const id = await chooseReword($, w)
+  const ran = w.ran.length
+  const unread = ['eval "gh pr merge 12 --squash"', 'ssh build gh pr merge 12 --squash', `alias m='gh pr merge 12 --squash'; m`, '"$GH" pr merge 12 --squash', 'ls lib && eval "$MERGE_STEP"']
+  for (const command of unread) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('could not check'), says: why.includes('so whether it merges a pull request cannot be told until the commands it runs are written out in its place, while Slack alert wording chosen overnight waits on Dan'), names: why.includes(id) }).toEqual({ command, held: true, says: true, names: true })
+  }
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'eval "$MERGE_STEP"' }))).toContain('eval $MERGE_STEP is a command run as text by eval, so what it runs cannot be read, so whether it merges')
+  expect(w.ran.length).toBe(ran)
+  // A command that can be read and merges nothing passes, as before.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'ls lib' }))).toBe('')
+  expect(w.ran.length).toBe(ran + 1)
+})
+
 test('a choice unanswered for three days expires, said once, and stays held; it is never approval (#2628)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)
@@ -2274,6 +2297,20 @@ test("a command that only lists or reads the plugin store passes; one that can w
     `cd ${HOME}/.claude/plugins && rm store/slack-alert-guard_inline-ab12cd34ef56.json`,
   ]
   for (const command of refused) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, expect.stringContaining('own record')])
+  expect(w.ran.length).toBe(passes.length)
+})
+
+// #3021: a command mod-kit marks `unread` (eval, a command a value names) runs what its words do not
+// say, so in a command naming the store it may write the record, as a program may: until then
+// `eval "printf '{}' > <the record>"` was read as writing nothing and ran.
+test("a command whose effect cannot be read is refused where it names the plugin store, and passes where it does not (#3021)", withKit, async ($, on) => {
+  const DIR = `${HOME}/.claude/plugins/store`
+  const w = world($, on)
+  const refused = [`eval "printf '{}' > ${STORE}"`, `"$TOOL" --out ${DIR}`, `alias tidy='rm ${STORE}'`]
+  for (const command of refused) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, expect.stringContaining('own record')])
+  expect(w.ran).toEqual([])
+  const passes = ['eval "$(ssh-agent -s)"', '"$TOOL" --version']
+  for (const command of passes) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
   expect(w.ran.length).toBe(passes.length)
 })
 

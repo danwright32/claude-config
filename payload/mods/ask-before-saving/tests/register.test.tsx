@@ -703,6 +703,19 @@ test('a program that really writes lasting memory is asked about, by its argumen
   expect(w.ran).toEqual([])
 })
 
+// #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias) runs what its
+// words do not say, so its words were read as writing nothing and a save through one ran unasked.
+// It is guessed at as a program is: by the lasting memory its words name, in the folder it runs in.
+test('a command whose effect cannot be read is asked about when its words name lasting memory, and passes when they name none (#3021)', withKit, async ($, on) => {
+  const w = world($, on)
+  const asked = [`eval "printf '%s' '- Use pnpm.' >> AGENTS.md"`, '$TOOL --append AGENTS.md', `alias note='tee -a ~/.claude/CLAUDE.md'`, `cd $SOMEWHERE && eval "cat rule.txt >> CLAUDE.md"`]
+  for (const command of asked) expect({ command, asked: refusalOf(await call($, { tool: 'Bash', command })).includes(ASKS) }).toEqual({ command, asked: true })
+  expect(w.ran).toEqual([])
+  const passes = ['"$@"', 'eval "$(ssh-agent -s)"', '$TOOL --version', `cd /tmp/round && eval "date > CLAUDE.md"`]
+  for (const command of passes) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(passes.length)
+})
+
 test('a command whose real write target cannot be read is still asked about when its text mentions lasting memory', withKit, async ($, on) => {
   const w = world($, on)
   const commands = [
