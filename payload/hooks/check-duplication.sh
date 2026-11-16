@@ -11,8 +11,8 @@
 # detector shape anywhere in the config.
 #
 # The detector is lib/duplication.py (python3, standard library only). The verdict is a COMPARISON,
-# never a stored baseline: the tree at the merge base is measured, the tree being pushed is
-# measured, and the push is refused only for a duplicate group whose copy count GREW. Existing
+# never a stored baseline: the tree at the merge base is measured (with the default branch merged
+# into it when the branch merges main in, #3054), the tree being pushed is measured, and the push is refused only for a duplicate group whose copy count GREW. Existing
 # duplication never fails a push (Slate's is #2561 and #2562), and there is no state file to go
 # stale. Source roots are found from the tree itself (src, app, lib, components, worker, scripts,
 # whichever exist); a repo with none prints ONE line saying so and exits 0, because a silent skip
