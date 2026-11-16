@@ -414,19 +414,86 @@ else
   esac
 fi
 chmod 600 "$RECORD/approved"
-# The record cannot be written: Dan's picker still covers this session's write, and nothing is kept.
-HOME_B="$WORK/home-nowrite"; mkdir -p "$HOME_B/.claude/state/supabase-test-projects"; chmod 500 "$HOME_B/.claude/state/supabase-test-projects"
+# The record cannot be written (claude-config#3058). Before, the failure was swallowed: his picker
+# let the call through, nothing was kept, and the next session asked him to approve the same line
+# again with no reason given. Dan chose on 2026-11-16 to keep that trust: a line he approved in a
+# picker is trusted for that call even when the record cannot take it. So a commit and a write on
+# the picker's line still go through, and the hook says the save failed, naming the line, the
+# record and the error, as a notice on the call it lets through and never as a question. Nothing
+# is kept, so a later session is asked. The control: the same fixture, the record made writable,
+# passes on the picker already given with nothing said, and a later session keeps it.
+REC_B="$WORK/home-nowrite/.claude/state/supabase-test-projects"
+HOME_B="$WORK/home-nowrite"; mkdir -p "$REC_B"; chmod 500 "$REC_B"
 R="$WORK/nowrite"; new_repo "$R" nowriteref00000001
-stage_line "$R" nowriteref00000001; G "$R" commit -q -m list
+stage_line "$R" nowriteref00000001
 trust "$R" nowriteref00000001
-if : 2>/dev/null > "$HOME_B/.claude/state/supabase-test-projects/probe"; then
-  check "with a record that cannot be written, Dan's picker still lets the session's write pass" "UNMEASURED: this user can write into a folder with no write permission (root?), so the case cannot be made"
+if : 2>/dev/null > "$REC_B/probe"; then
+  check "with a record that cannot be written, a commit and a write on Dan's picker go through, saying the save failed" "UNMEASURED: this user can write into a folder with no write permission (root?), so the case cannot be made"
 else
+  r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R")"
+  case "$r" in
+    "ask rc=0|"*) check "a commit of a line Dan approved, whose record cannot be written, passes, saying the save failed" "it is asked about, though his picker covers the line: ${r:0:900}" ;;
+    "none rc=0||") check "a commit of a line Dan approved, whose record cannot be written, passes, saying the save failed" "it passes and says nothing of the save that failed" ;;
+    "none rc=0||"*nowriteref00000001*"$REC_B/approved"*"could not be written"*PermissionError*"ask him to approve"*3058*) check "a commit of a line Dan approved, whose record cannot be written, passes, saying the save failed" ok ;;
+    *) check "a commit of a line Dan approved, whose record cannot be written, passes, saying the save failed" "${r:0:900}" ;;
+  esac
+  # The same commit in a command the screen reads as a database call too (its message holds the
+  # word supabase) leaves by another way out of the hook, and still says it.
+  r="$(HOME_USED="$HOME_B" before 'git commit -q -m supabase' "$R")"
+  case "$r" in
+    "none rc=0||"*nowriteref00000001*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "and so does one whose message holds a database word, which leaves the hook by another way" ok ;;
+    *) check "and so does one whose message holds a database word, which leaves the hook by another way" "${r:0:900}" ;;
+  esac
+  G "$R" commit -q -m list
   r="$(HOME_USED="$HOME_B" write "$R")"
-  case "$r" in "allow rc=0||") check "with a record that cannot be written, Dan's picker still lets the session's write pass" ok ;; *) check "with a record that cannot be written, Dan's picker still lets the session's write pass" "${r:0:400}" ;; esac
+  case "$r" in
+    "ask rc=0|"*) check "a write on a line Dan approved, whose record cannot be written, is let through, saying the save failed" "it is asked about, though his picker covers the line: ${r:0:900}" ;;
+    "allow rc=0||") check "a write on a line Dan approved, whose record cannot be written, is let through, saying the save failed" "it is let through and says nothing of the save that failed" ;;
+    "allow rc=0||"*nowriteref00000001*"$REC_B/approved"*"could not be written"*PermissionError*"ask him to approve"*3058*) check "a write on a line Dan approved, whose record cannot be written, is let through, saying the save failed" ok ;;
+    *) check "a write on a line Dan approved, whose record cannot be written, is let through, saying the save failed" "${r:0:900}" ;;
+  esac
+  # Without lib/hook-notice.sh beside the hook the write is still let through, and the failed save
+  # still said, in the hook's own plain JSON.
+  NONOTE="$WORK/nonote"; mkdir -p "$NONOTE/hooks"
+  cp "$HOOK" "$NONOTE/hooks/"; cp -R "$DIR/lib" "$NONOTE/hooks/lib"; rm -f "$NONOTE/hooks/lib/hook-notice.sh"
+  body="$(cd "$WORK" && bash_payload PreToolUse "$CARRY" "$R" | env -u CLAUDE_HOME HOME="$HOME_B" bash "$NONOTE/hooks/db-write-ask.sh" 2>/dev/null)"; r="$(said "$body" $?)"
+  case "$r" in
+    "allow rc=0||"*nowriteref00000001*"could not be written"*PermissionError*"lib/hook-notice.sh is missing"*) check "with lib/hook-notice.sh missing, that write is still let through and the failed save still said" ok ;;
+    *) check "with lib/hook-notice.sh missing, that write is still let through and the failed save still said" "${r:0:900}" ;;
+  esac
+  # A subagent's call writes nothing on the record, so it has no failed save to say.
+  r="$(AGENT=1 HOME_USED="$HOME_B" write "$R")"
+  case "$r" in "allow rc=0||") check "a subagent's write on that picker passes with nothing said, since it saves nothing" ok ;; *) check "a subagent's write on that picker passes with nothing said, since it saves nothing" "${r:0:400}" ;; esac
+  [ -e "$REC_B/approved" ] && check "and nothing was put on the record" "$REC_B/approved exists" || check "and nothing was put on the record" ok
   HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" unasked "and a later session's write is asked about" "$R" nowriteref00000001
+  # A commit adding one line with a picker and one without is asked about for the one without
+  # only, and the notice beside the question says the save of the other failed.
+  R2="$WORK/nowritemix"; new_repo "$R2" nowritemixref00001
+  stage_line "$R2" nowritemixref00001; stage_line "$R2" nowritemixref00002
+  trust "$R2" nowritemixref00001
+  r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R2")"
+  mix_reason="${r#*|}"; mix_notice="${mix_reason#*|}"; mix_reason="${mix_reason%%|*}"
+  case "$r" in
+    "ask rc=0|"*) case "$mix_reason" in
+        *nowritemixref00001*) check "a commit adding a line with a picker and one without, whose record cannot be written, is asked about for the one without only" "the question names the line his picker covers: ${mix_reason:0:700}" ;;
+        *nowritemixref00002*"in no picker"*AskUserQuestion*) check "a commit adding a line with a picker and one without, whose record cannot be written, is asked about for the one without only" ok ;;
+        *) check "a commit adding a line with a picker and one without, whose record cannot be written, is asked about for the one without only" "${mix_reason:0:700}" ;;
+      esac
+      case "$mix_notice" in
+        *nowritemixref00002*) check "and the notice beside that question says the save of the line his picker covers failed" "the notice names the line with no picker: ${mix_notice:0:700}" ;;
+        *"goes through"*) check "and the notice beside that question says the save of the line his picker covers failed" "the notice says the call goes through, beside a question about it (L11): ${mix_notice:0:700}" ;;
+        *nowritemixref00001*"$REC_B/approved"*"could not be written"*PermissionError*"still counts for this call"*3058*) check "and the notice beside that question says the save of the line his picker covers failed" ok ;;
+        *) check "and the notice beside that question says the save of the line his picker covers failed" "${mix_notice:0:700}" ;;
+      esac ;;
+    *) check "a commit adding a line with a picker and one without, whose record cannot be written, is asked about for the one without only" "${r:0:900}" ;;
+  esac
+  chmod 700 "$REC_B"
+  r="$(HOME_USED="$HOME_B" write "$R")"
+  case "$r" in "allow rc=0||") check "once the record can be written, the same picker covers the write with nothing said" ok ;; *) check "once the record can be written, the same picker covers the write with nothing said" "${r:0:400}" ;; esac
+  r="$(HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" write "$R")"
+  case "$r" in "allow rc=0||") check "and a later session keeps it by the record" ok ;; *) check "and a later session keeps it by the record" "${r:0:400}" ;; esac
 fi
-chmod 700 "$HOME_B/.claude/state/supabase-test-projects"
+chmod 700 "$REC_B"
 # This session's transcript cannot be read: nobody looked for Dan's picker, so the question says
 # the transcript could not be read and never that he approved the line in no picker (L11). The
 # control is the same write with a transcript that reads and holds no picker.
@@ -599,15 +666,15 @@ else
 fi
 
 # --- a record key that is not ASCII is refused, never written and never raised on -----------------
-# Every key is a hex digest; anything else is refused before the record is opened, and the failure
-# is kept quiet like any other failure to write it.
+# Every key is a hex digest; anything else is refused before the record is opened, and the refusal
+# is returned as why, like any other failure to write it (claude-config#3058), never kept quiet.
 keyed="$(env -u CLAUDE_HOME HOME="$WORK/keyhome" python3 -B - "$DIR/lib" <<'PY'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
 ap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ap)
 try:
-    ap._put_on_record(["abcé", "\ud800"])
+    why = ap._put_on_record(["abcé", "\ud800"])
 except Exception as e:
     print("raised " + type(e).__name__)
     sys.exit()
@@ -615,11 +682,49 @@ rec = os.path.join(ap._record_dir(), "approved")
 if os.path.exists(rec):
     print("wrote " + repr(open(rec, "rb").read()))
     sys.exit()
-ap._put_on_record(["0123abcd"])
-print("ok" if open(rec, "rb").read() == b"0123abcd\n" else "a hex key was not written")
+if not (isinstance(why, str) and "UnicodeEncodeError" in why and rec in why):
+    print("the refusal was not said, naming the record and the error: " + repr(why))
+    sys.exit()
+why = ap._put_on_record(["0123abcd"])
+if why is not None:
+    print("a hex key written was said to fail: " + repr(why))
+    sys.exit()
+if ap._on_record() != ({"0123abcd"}, None):
+    print("a hex key was not written: " + repr(open(rec, "rb").read()))
+    sys.exit()
+# A short write that a failure cut off leaves a fragment with no newline; the next key written
+# must not fuse onto it, or it is lost while reported kept.
+with open(rec, "ab") as f:
+    f.write(b"4567")
+why = ap._put_on_record(["89abcdef"])
+held, _ = ap._on_record()
+print("ok" if why is None and "89abcdef" in held else "a key written after a fragment was lost: " + repr(open(rec, "rb").read()))
 PY
 )"
-check "a record key that is not ASCII is refused unwritten and not raised on, while a hex key is written" "$keyed"
+check "a record key that is not ASCII is refused unwritten, said and not raised on, while a hex key is written" "$keyed"
+# A failed save is said on the caller's list (claude-config#3058), so a call that writes the record
+# and gives no list is refused before the write, never left to drop a failed save in silence.
+nolist="$(env -u CLAUDE_HOME HOME="$WORK/nolisthome" python3 -B - "$DIR/lib" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
+ap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ap)
+rec = os.path.join(ap._record_dir(), "approved")
+try:
+    ap._keep(["0123abcd"], ["someref000000000001"], None)
+    print("it was not refused")
+    sys.exit()
+except TypeError:
+    pass
+if os.path.exists(rec):
+    print("it wrote the record before it was refused: " + repr(open(rec, "rb").read()))
+    sys.exit()
+said = []
+ap._keep(["0123abcd"], ["someref000000000001"], said)
+print("ok" if not said and ap._on_record() == ({"0123abcd"}, None) else "with a list, a save that worked said " + repr(said))
+PY
+)"
+check "a call that writes the record with no list for a failed save is refused before the write" "$nolist"
 
 # --- the settings never run the hook after a tool call --------------------------------------------
 wiring="$(python3 - "$SETTINGS" <<'PY'

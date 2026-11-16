@@ -331,7 +331,48 @@ W="$(mk_repo testfile src/clean.ts 'export const clean = 1;' src/a.tsx "$BOOKER_
 run_hook "$W" "git push"
 want_eq "a copy inside a test file is not judged" 0 "$HOOK_RC"
 
-# 10. The header carries the registration line the settings check compares against.
+# 10. A merge of main does not make the branch answer for main's copies (claude-config#3054).
+#     A branch pushed once merges main in after main gained a duplicated line. From the upstream,
+#     the pushed tree held main's pair and the base did not, so the branch was refused for a copy
+#     it never wrote. What the merge brought in is set apart by the shared answer every push gate
+#     reads (ps_merged_apart, #3015); a copy the conflict resolution adds is still the branch's.
+#     The files are Python, a code extension the detector reads, so the fixture writes no screen
+#     file (the design round guard held a .tsx one, #3057).
+. "$DIR/lib/merged-main-fixture.sh"
+DUP_LINE='message = "a long line copied into two places on main, long enough to clear the single line floor of the detector"'
+mk_merged(){  # mk_merged <name> <clean|conflict> [line the resolution adds]
+  mmf_repo "$WORKDIR/merged-$1" "$2" src/dupe.py "$DUP_LINE
+$DUP_LINE
+" src/shared.py "${3:-}${3:+
+}"
+}
+W="$(mk_merged mm1 clean)"
+if mmf_built "$W" src/dupe.py; then ok; else bad "#3054 the fixture did not build: the branch must track origin/feat and hold main's file through one merge"; fi
+run_hook "$W" "git push"
+want_eq "#3054 a copy already on main, arriving only through a merge of main, is not this push's" 0 "$HOOK_RC"
+want_notice "#3054 and the pass says no new groups" "no new duplicate groups" "$HOOK_OUT"
+run_hook "$W" "git commit -q --allow-empty -m more && git push"
+want_eq "#3054 the same holds when the command commits before it pushes" 0 "$HOOK_RC"
+
+W="$(mk_merged mm2 conflict "$DUP_LINE")"
+if mmf_built "$W" src/dupe.py && grep -q "as the branch has it" "$W/src/shared.py"; then ok; else bad "#3054 the conflict fixture was not resolved into one merge commit"; fi
+run_hook "$W" "git push"
+want_eq "#3054 a copy the conflict resolution adds is still the branch's, and refused" 2 "$HOOK_RC"
+want_has "#3054 the refusal names the file the resolution added it to" "src/shared.py" "$HOOK_ERR"
+
+W="$(mk_merged mm3 conflict "plain resolution text")"
+run_hook "$W" "git push"
+want_eq "#3054 control: a conflict resolved with text that copies nothing is allowed" 0 "$HOOK_RC"
+
+# When the merge cannot be set apart (no default branch known), the range is judged whole as
+# before, never not at all, and the refusal says part of it came in through the merge (L93).
+W="$(mk_merged mm4 clean)"
+git -C "$W" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_hook "$W" "git push"
+want_eq "#3054 with no default branch known the merge is not set apart, so main's copy is judged as before" 2 "$HOOK_RC"
+want_has "#3054 and the refusal says why the merge was not set apart" "could not be told from the branch's" "$HOOK_ERR"
+
+# 11. The header carries the registration line the settings check compares against.
 grep -q 'Claude Code PreToolUse(Bash) hook' "$HOOK" && ok || bad "the hook header must declare Claude Code PreToolUse(Bash) hook"
 
 echo

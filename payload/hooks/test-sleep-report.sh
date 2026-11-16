@@ -199,6 +199,54 @@ check_eq "the report after them carries every finding (#909)" "" "$missing"
 note '{"kind":"question","by":"aaaa1111","repo":"o/r","issue":14,"text":"Keep the old flag?","why":"not asked: the 10 minutes for bedtime questions ran out"}' >/dev/null 2>&1
 has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (left before bed: not asked: the 10 minutes for bedtime questions ran out)" "$(report_of g5)"
 
+# #3056: the report lists what the morning pickers offer. On 2026-11-15 a note that said itself it
+# asked nothing, noted once by repository and once by folder, was put to Dan as two questions, and a
+# real question noted the same two ways was put twice. The pickers stopped that (#3018); the report
+# still listed every row. A note that asks nothing is left out of the report, as Dan chose on
+# 2026-11-16 over listing it under a heading of its own.
+FYI3056='Build order for tonight: the schema change lands before the importer. This is not a question, nothing to answer.'
+note '{"kind":"question","by":"aaaa1111","repo":"o/r","text":"'"$FYI3056"'"}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":["'"$FYI3056"'"]}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","repo":"o/r","issue":41,"text":"Apply the migration in PR #52?","options":["Apply it","Leave it"]}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":["Apply the  migration in PR #52?"]}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":["Merge #5 now? No decision needed on the rename."]}' >/dev/null 2>&1
+r5="$(report_of g5)"
+asks5="$(section_rows "$r5" "Questions for you")"
+check_eq "#3056 a question noted by repository and by folder is listed once" 1 "$(printf '%s\n' "$asks5" | grep -c -F 'Apply the migration in PR #52?')"
+has "#3056 with the repository and issue the first noting gave" "o/r#41: Apply the migration in PR #52?" "$asks5"
+lacks "#3056 a note that says it asks nothing is not a question" "Build order for tonight" "$asks5"
+lacks "#3056 a note that asks nothing is left out of the report entirely (Dan, 2026-11-16)" "Build order for tonight" "$r5"
+has "#3056 a question beside a part that asks nothing about something else is still asked" "/r/repo: Merge #5 now? No decision needed on the rename." "$asks5"
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":[" "],"text":"Rename the queue?"}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/other","questions":[]}' >/dev/null 2>&1
+asks5="$(section_rows "$(report_of g5)" "Questions for you")"
+has "#3056 review: a list with no words falls back to the note's text" "/r/repo: Rename the queue?" "$asks5"
+has "#3056 review: a question with no words at all is still listed (L215)" "/r/other: (noted with no words)" "$asks5"
+
+# #3056: the report and the morning pickers decide which notes are questions by one rule, held to one
+# set of cases both suites run (L83, L342). The mod's suite runs them against notAQuestion and
+# distinctQuestions; this runs the same cases against the report's own. Everything after each `=` is JSON.
+QFIX="$DIR/../mods/scope-modes/tests/night-question-fixtures.ts"
+qfix_json(){ sed -n "/^export const $1 = /,/^]/p" "$QFIX" | sed "1s/^export const $1 = //"; }
+qfix_out="$(python3 -B -c '
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("sleep_report", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+nq, dq = json.loads(sys.argv[2]), json.loads(sys.argv[3])
+print("cases %d" % (len(nq) + len(dq)))
+for f in nq:
+    got = m.not_a_question(f["text"], f.get("options"))
+    if got != f["notAQuestion"]:
+        print("MISMATCH not_a_question: %s (expected %s, got %s)" % (f["name"], f["notAQuestion"], got))
+for f in dq:
+    got = m.distinct_questions(f["questions"])
+    if got != f["distinct"]:
+        print("MISMATCH distinct_questions: %s (expected %s, got %s)" % (f["name"], json.dumps(f["distinct"]), json.dumps(got)))
+' "$PY" "$(qfix_json NOT_A_QUESTION_FIXTURES)" "$(qfix_json DISTINCT_FIXTURES)" 2>&1)"
+check_eq "#3056 the shared question cases read as JSON, every one" "cases $(grep -c '"name": ' "$QFIX")" "$(printf '%s\n' "$qfix_out" | grep '^cases ')"
+check_eq "#3056 the report decides every shared question case as the pickers do" "" "$(printf '%s\n' "$qfix_out" | grep -v '^cases ')"
+
 # Two renders out of order, made to happen every time (#909): the first note's render reads the
 # notes and is then held before it replaces the report; a second note lands and renders. The held
 # render must never put back a report that is missing the second note. Each wait is on a marker
