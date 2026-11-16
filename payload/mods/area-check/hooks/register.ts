@@ -74,7 +74,6 @@ import {
   type ScriptPlaced,
   runsInTurn,
   questionKey,
-  legacyQuestionKey,
   restructureQuestion,
   sleepNotes,
   sweepKeys,
@@ -996,24 +995,17 @@ const release = async ($: EngineInterface, h: Held, decided: { decision: Decisio
 }
 
 // A restructure question still waiting on Dan for this held call is settled by any decision.
-// Under its own key and the key it had before #2246, since a question asked then may still wait.
 const settleQuestion = async ($: EngineInterface, h: Held) => {
   for (const f of heldFiles(h)) {
-    for (const k of [await questionKey(f.repo, f.rel), legacyQuestionKey(f.repo, f.rel)]) {
-      if (k === undefined) continue
-      const q = (await $.store.get(k)) as Question | undefined
-      if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
-    }
+    const k = await questionKey(f.repo, f.rel)
+    const q = (await $.store.get(k)) as Question | undefined
+    if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
   }
 }
 
-// The question about a file: under its own key, or, for an answer given before #2246, the key it had then.
-const answeredQuestion = async ($: EngineInterface, repo: string, rel: string): Promise<Question | undefined> => {
-  const q = (await $.store.get(await questionKey(repo, rel))) as Question | undefined
-  if (q !== undefined) return q
-  const old = legacyQuestionKey(repo, rel)
-  return old === undefined ? undefined : ((await $.store.get(old)) as Question | undefined)
-}
+// The question about a file, under its own key.
+const answeredQuestion = async ($: EngineInterface, repo: string, rel: string): Promise<Question | undefined> =>
+  (await $.store.get(await questionKey(repo, rel))) as Question | undefined
 
 // Scope modes, called in place as the engine needs (skew.ts). Not loaded is home: awake, and away
 // from nothing; any other failure is the decision's own failure, said to Claude.
@@ -1442,7 +1434,6 @@ export const register: Register = on => {
       }
     }
     const k = await questionKey(h.repo, h.rel)
-    // A question asked before #2246 waits under its old key: Dan has now answered it.
     await settleQuestion($, h)
     if (chosen === 'Fold in') {
       await $.store.delete(k)

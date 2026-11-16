@@ -866,19 +866,6 @@ export type Question =
  */
 export const questionKey = async (repo: string, rel: string): Promise<string> => `question:${await sha256(`${repo}\n${rel}`)}`
 
-/** The store's own limit on a key, which it refuses past on get, set and delete (#2246). */
-export const STORE_KEY_MAX = 256
-
-/**
- * The key a question had before #2246, read so an answer Dan already gave still stands for its week,
- * and cleared with the call it waits on. Undefined where it would pass the store's limit, since no
- * question was ever kept there. Deleting this read is #2256, once a week has passed since install.
- */
-export const legacyQuestionKey = (repo: string, rel: string): string | undefined => {
-  const k = `question:${repo}\n${rel}`
-  return k.length <= STORE_KEY_MAX ? k : undefined
-}
-
 // A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
 const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i
 const SLOT = /<[^>]*>|\{\{|\[\s*(?:reason|why)[^\]]*\]/i
