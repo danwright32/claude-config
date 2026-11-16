@@ -478,8 +478,8 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 # over the main line of every local Swift repository (Overture, Ovation, backstage, Downbeat,
 # PostRoll, playeditapp, Intonation; 4163 commits): the trigger fired on a Swift test file 21 times,
 # in 17 commits, 18 of them on words held only in a comment (16) or a string (2), none a removal the
-# test ran; replayed with this rule, none of the 18 fires. The other 3 are Swift's own .drop(while:),
-# in code, which this does not change. Go and Ruby tests are judged whole, as before: no local
+# test ran; replayed with this rule, none of the 18 fires. The other 3 are calls to Swift's own drop
+# method (drop while a character is a space), in code, which this does not change. Go and Ruby tests are judged whole, as before: no local
 # repository holds one, so there was nothing to measure.
 trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the path
   local as lines kind

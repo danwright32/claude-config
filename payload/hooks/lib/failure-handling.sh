@@ -92,8 +92,9 @@ FH_RUNNER_WORDS='awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*
 # lines measured for #3083 on 2026-11-16 they were the commonest call a fixture string was handed to. No backslash
 # in it, so it travels through the environment into awk unchanged. Swift's (claude-config#3104):
 # SQLite's C calls sqlite3_exec and sqlite3_prepare, a client's execute (as above), and a Process
-# given its arguments or started with Process.run.
-FH_RUNNER_CALLS='(^|[^A-Za-z0-9_$])(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|check_call|check_output|getoutput|getstatusoutput)[[:space:]]*[(]|subprocess[.](run|call)[[:space:]]*[(]|[.](execute|executemany|executescript|query|unsafe|raw|rpc)[[:space:]]*[(]|(^|[^A-Za-z0-9_$])(sql|SQL)[[:space:]]*[`]|sqlite3_(exec|prepare[_a-z0-9]*)[[:space:]]*[(]|Process[.](run|launchedProcess)[[:space:]]*[(]|[.]arguments[[:space:]]*='
+# given its arguments or started with Process.run. And a client's prepare, which better-sqlite3
+# and others run (db.prepare(...).run()), found by the lessons review of #3104.
+FH_RUNNER_CALLS='(^|[^A-Za-z0-9_$])(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|check_call|check_output|getoutput|getstatusoutput)[[:space:]]*[(]|subprocess[.](run|call)[[:space:]]*[(]|[.](execute|executemany|executescript|query|prepare|unsafe|raw|rpc)[[:space:]]*[(]|(^|[^A-Za-z0-9_$])(sql|SQL)[[:space:]]*[`]|sqlite3_(exec|prepare[_a-z0-9]*)[[:space:]]*[(]|Process[.](run|launchedProcess)[[:space:]]*[(]|[.]arguments[[:space:]]*='
 
 # The awk that does the work. `want` is code (print the normalized lines), catch, retry or any (exit
 # 0 when the construct is present, 1 when not). One pass, so a large pushed file costs one read.

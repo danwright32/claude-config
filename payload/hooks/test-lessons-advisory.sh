@@ -282,6 +282,9 @@ assert_contains "control: SQL handed to a query call in a TypeScript test still 
 R=$(make_repo fixturetssql $'beforeEach(async () => {\n  await sql`TRUNCATE contacts`\n})' api/contacts.test.ts)
 out=$(run_hook "git push" "$R")
 assert_contains "control: SQL in a tagged template in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetsprepare $'afterEach(() => {\n  db.prepare(\'DELETE FROM contacts\').run()\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to a prepare call in a TypeScript test still fires" 'destructive data operation' "$out"
 R=$(make_repo fixturepyrun $'def teardown():\n    subprocess.run("rm -rf /var/data/customers", shell=True)' tests/test_guard.py)
 out=$(run_hook "git push" "$R")
 assert_contains "control: a removal handed to subprocess.run in a Python test still fires" 'destructive data operation' "$out"
