@@ -40,6 +40,16 @@ or git checkout names a work repository (work_checkout, the reading a lookup the
 From a directory known to name nothing they post as before #2997; where the command cannot be placed,
 or a cd or directory option in the substitution takes the program elsewhere, they stay refused.
 
+Three more readings since claude-config#3020. From a directory known to name nothing, a program whose
+output cannot be read is still judged by the folder names it can print (listed_names): the entries of
+the directory it runs in and of each folder it is handed, and the names a glob in it matches, since
+"$(ls ~/apps)" posted the name of every checkout there. A name of those programs that the shell
+profile redefines, as a function or alias in a shell snapshot Claude Code sources before every
+command (profile_redefines), is refused wherever the command runs, and so is every one of them when
+a snapshot cannot be read. And an assignment of a token variable from `gh auth token` alone
+(`GH_TOKEN=$(gh auth token -u <account>) gh ...`) sets the account the command runs as: it is left
+out of what is judged as posted (token_spans), where before it was refused from a work checkout.
+
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
 through each signed in account until one can read it), the owners and repositories in this Mac's dev
@@ -111,6 +121,7 @@ read by lib/work-names.py;
 WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45);
 WN_SCRIPTS_NOTICE_DIR and WN_SESSION_ENV_DIR, read by check-work-names-publish.sh for the notice.
 """
+import glob
 import importlib.util
 import json
 import os
@@ -1042,13 +1053,61 @@ def _word_spans(text):
 READS_DIR = re.compile(r"\$|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 
 
+# A token for another account (claude-config#3020). `GH_TOKEN=$(gh auth token -u <account>) gh ...` is
+# how the global rules say to run gh as another signed in account without switching the active one,
+# and from a work checkout it was refused: the substitution was read as a program whose output is
+# posted. An assignment of one of the variables gh reads a token from, whose whole value is one
+# `gh auth token` with only its account and host options, sets the account the command runs as: gh
+# prints a token there, which goes into the variable and nowhere else. So the assignment is left out
+# of what is judged as posted, the account it names included (token_spans). The variable read back
+# into posted text is still refused, as set from something only running the command can tell.
+TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
+TOKEN_SET = re.compile(r"(?<![^\s;&|(){}])(?:%s)=(\"?)(\$\(\s*gh\s+auth\s+token"
+                       r"(?:\s+(?:(?:-u|--user|-h|--hostname)(?:\s+|=)[A-Za-z0-9][A-Za-z0-9._-]*|--secure-storage))*"
+                       r"\s*\))\1(?![^\s;&|)])" % "|".join(TOKEN_VARS))
+
+
+def token_spans(command, parts):
+    """[(start, end)] in command for each assignment that only sets the account gh runs as (the
+    comment above), given the parts lib/shell-words.py cut command into. It counts only where it is
+    an assignment as the shell reads one: among the assignments in front of a command's name or
+    standing alone, or an operand of export and the like given nothing but assignments and names; with
+    the substitution written directly in it, in double quotes exactly when the value opens with one;
+    and only while gh still runs gh (trusted_names, and no shell snapshot redefining it). Anything
+    else is left in, and judged as before."""
+    if not any(v + "=" in command for v in TOKEN_VARS) or "auth" not in command:
+        return []
+    if "gh" not in trusted_names(command, among={"gh"}) or "gh" in profile_redefines()[0]:
+        return []
+    spans = []
+    for part in parts:
+        start = part["start"]
+        text = command[start:part["end"]]
+        rest, _assigns = scan._sw.command_rest(text)
+        if not text.endswith(rest):
+            continue
+        head = len(text) - len(rest)  # where the command's own name starts, past its assignments
+        sets = False
+        if rest.strip():
+            words = scan._sw.command_words(TOKEN_SET.sub(" ", rest))
+            sets = bool(words) and words[0] in SETS_VARS and _sets_vars(words)
+        inner = {(s - start, e - start): q for s, e, q in part.get("inner") or ()}
+        for m in TOKEN_SET.finditer(text):
+            if inner.get((m.start(2), m.end(2))) is not bool(m.group(1)):
+                continue
+            if m.end() <= head or (sets and m.start() >= head):
+                spans.append((start + m.start(), start + m.end()))
+    return spans
+
+
 def posted_text(command, keep_cds=None):
     """command as it is judged for what it posts (claude-config#2909): the text of every plain cd, and
     the path after each --body-file or -F of a gh pr or issue command, blanked out. Neither is posted:
     a cd's directory is where the command runs, and a body file is judged by what it holds, read by
     _file_bodies, which refuses one it cannot read. On 2026-11-13 a report filed from a work project
     was refused for the project's name in its notes folder path and in a cd into its checkout, while
-    its title and its file named nothing.
+    its title and its file named nothing. An assignment that only sets the account gh runs as is
+    blanked too, whatever else its command holds (token_spans, claude-config#3020).
 
     Only a simple command made of plain words is touched, and only when those words are exactly the
     ones the shared reader (lib/shell-words.py) cuts from it, so a reading the two disagree on leaves
@@ -1065,7 +1124,7 @@ def posted_text(command, keep_cds=None):
     try:
         parts = []
         found = scan._sw.commands(command, parts=parts)
-        blank = []
+        blank = token_spans(command, parts)
         keep_cd = bool(READS_DIR.search(command)) if keep_cds is None else keep_cds
         for _entry, part in zip(found, parts):
             if part.get("inner") or part.get("openers"):
@@ -1388,13 +1447,14 @@ LOOKUP_VARS = frozenset({"PATH", "path", "BASH_ENV", "ENV", "HOME", "XDG_CONFIG_
 ASSIGNED = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
 
 
-def trusted_names(command, depth=0):
-    """The names of TRUSTED that still run the program they name anywhere in command: all of them,
-    less each one a function or alias in it defines, and none once it changes how names are found or
-    how the shell or git starts (LOOKUP_VARS, any GIT_ variable, REBINDS). A string an eval, sh -c or
-    env -S there runs is read the same way, and one that cannot be read leaves none. Raises
+def trusted_names(command, depth=0, among=TRUSTED):
+    """The names of among (TRUSTED unless given) that still run the program they name anywhere in
+    command: all of them, less each one a function or alias in it defines, and none once it changes
+    how names are found or how the shell or git starts (LOOKUP_VARS, any GIT_ variable, REBINDS). A
+    string an eval, sh -c or env -S there runs is read the same way, and one that cannot be read
+    leaves none. What the shell profile defines is not read here (profile_redefines). Raises
     scan._sw.Unreadable."""
-    out = set(TRUSTED)
+    out = set(among)
     for _d, text in scan._sw.commands(command):
         words = scan._sw.command_words(text)
         fn = DEFINES.match(text)
@@ -1414,8 +1474,79 @@ def trusted_names(command, depth=0):
         if wrap:
             if wrap[1] is None or depth >= scan._sw.MAX_DEPTH:
                 return set()
-            out &= trusted_names(wrap[1], depth + 1)
+            out &= trusted_names(wrap[1], depth + 1, among)
     return out
+
+
+# The shell profile (claude-config#3020). Claude Code runs every Bash command as
+# `zsh -c 'source <a shell snapshot> && eval <the command>'`: the snapshot holds the functions and
+# aliases of the shell profile as they were when the session started, so a `git () { ... }` or an
+# `alias cat=...` there makes the bare name run something else in every command, with nothing in the
+# command to show it. Measured on 2026-11-15 (Claude Code on macOS, zsh): a PreToolUse hook is not
+# told which snapshot is its session's. Its payload and its environment name none, and the path
+# appears only in the zsh -c line the Bash tool starts after the hook has answered. What the hook can
+# read is the folder every session's snapshot is written to (shell-snapshots in the Claude Code
+# configuration folder, files named snapshot-<shell>-<milliseconds>-<random>.sh). So every snapshot
+# there is read, and a name any of them redefines is taken as redefined: a snapshot left by another
+# session, or an old one, can only refuse more. A folder that is not there holds no snapshot, and
+# then nothing is sourced; one that is there and cannot be read leaves no name trusted.
+# A snapshot is zsh's own printing of the profile (`name () {`, `function name {`,
+# `alias -- name=value`, one to a line), read a line at a time, in a function's body too: the
+# definition forms trusted_names reads in a command (DEFINES, alias, function), and every NAME= on an
+# alias line, since a line may define several.
+PROFILE_NAMES = TRUSTED | frozenset({"gh"})
+SNAPSHOT_FILE = re.compile(r"snapshot-.*\.sh\Z")
+PROFILE_ALIAS = re.compile(r"\s*alias\s+(.*)")
+PROFILE_ALIAS_NAME = re.compile(r"(?:^|[\s'\"])([^\s='\"]+)=")
+PROFILE_FUNCTION = re.compile(r"\s*function\s+([^{(;]+)")
+_PROFILE = []
+
+
+def snapshots_dir():
+    """The folder Claude Code writes its shell snapshots to (WN_SHELL_SNAPSHOTS is the tests' seam)."""
+    given = os.environ.get("WN_SHELL_SNAPSHOTS")
+    if given:
+        return given
+    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(home, "shell-snapshots")
+
+
+def profile_defines(text):
+    """The names one shell snapshot's text defines as a function or an alias."""
+    names = set()
+    for line in text.splitlines():
+        fn = DEFINES.match(line)
+        if fn:
+            names |= set(fn.group(1).split())
+        fn = PROFILE_FUNCTION.match(line)
+        if fn:
+            names |= {w.rstrip("(){") for w in fn.group(1).split()}
+        alias = PROFILE_ALIAS.match(line)
+        if alias:
+            names |= set(PROFILE_ALIAS_NAME.findall(alias.group(1)))
+    return names
+
+
+def profile_redefines():
+    """(the names of PROFILE_NAMES a shell snapshot redefines, why none can be trusted or None), read
+    once per run. Every name when the folder or a snapshot in it cannot be read."""
+    if not _PROFILE:
+        where, names, why = snapshots_dir(), set(), None
+        try:
+            files = sorted(f for f in os.listdir(where) if SNAPSHOT_FILE.match(f))
+        except FileNotFoundError:
+            files = []
+        except OSError as e:
+            files, why = [], "the folder of shell snapshots could not be read (%s)" % type(e).__name__
+        for f in files:
+            try:
+                with open(os.path.join(where, f), encoding="utf-8", errors="replace") as fh:
+                    names |= profile_defines(fh.read())
+            except OSError as e:
+                why = "the shell snapshot %s could not be read (%s)" % (f, type(e).__name__)
+                break
+        _PROFILE.append((set(PROFILE_NAMES) if why else names & PROFILE_NAMES, why))
+    return _PROFILE[0]
 
 
 # What runs beside a posting and changes nothing a git lookup or a cat reads (the lessons review of
@@ -1502,6 +1633,17 @@ def _git_place(read):
     return False
 
 
+def _program(text, trusted):
+    """The name the one command text runs, where it is one of trusted written as the shell finds it
+    (the bare word, no path, quote or backslash), else None."""
+    words = scan._sw.command_words(text)
+    rest = text.lstrip()
+    name = words[0] if words else ""
+    if name not in trusted or not rest.startswith(name) or rest[len(name):len(name) + 1].strip():
+        return None
+    return name
+
+
 def prints(text, trusted):
     """What the one command text prints (OWN, FILES, PLACE or UNREAD), as the comment above says.
     trusted: the names that still run what they name in the whole command (trusted_names)."""
@@ -1510,9 +1652,8 @@ def prints(text, trusted):
         return OWN
     if GLOB.search(QUOTED.sub("", text)):
         return UNREAD
-    rest = text.lstrip()
-    name = words[0]
-    if name not in trusted or not rest.startswith(name) or rest[len(name):len(name) + 1].strip():
+    name = _program(text, trusted)
+    if name is None:
         return UNREAD
     if name in PRINTS_OWN_WORDS:
         return OWN
@@ -1520,6 +1661,7 @@ def prints(text, trusted):
         return PLACE
     if name != "cat":
         return UNREAD
+    rest = text.lstrip()
     i, n = 3, len(rest)
     while i < n:
         if rest[i] in " \t\n":
@@ -1671,8 +1813,81 @@ def cat_files(command, where):
     return "\n".join(texts)
 
 
+# A folder listing (claude-config#3020). From a directory known to name nothing, a program whose
+# output cannot be read posts as it did before #2997 (#3016), and "$(ls ~/apps)" run from a personal
+# checkout then posted the name of every checkout beside it, work ones included. So such a program is
+# still judged by the folder names it can print (listed_names): the entries of the directory it runs
+# in, the entries of each folder one of its words names, and each name an unquoted glob in one
+# matches. One level only: what a program finds deeper (ls -R, find with no depth) is not read.
+LISTS = "listing"
+# The most names read for one program; past it the listing is refused, never read in part.
+LIST_LIMIT = 20000
+WORD_VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _folder_path(word, place):
+    """The path one word of a program names where it runs, or None for a word that names none this
+    check can list (an option, a word holding a variable whose value is not known here, which is
+    refused on its own as an expansion). A leading ~ is the home directory, ~+ and ~- the directory
+    and the one before it, and each $NAME is its value. Raises CannotTell for a word a substitution
+    builds or another user's home, which this check cannot work out."""
+    if "$(" in word or "`" in word:
+        raise CannotTell("is handed %s, a word built by another substitution, so the folder it may list "
+                         "cannot be worked out" % word[:80])
+    known = dict(place.environ or {})
+    known.update({k: v for k, v in place.vars.items() if isinstance(v, str) and v != scan.RUNTIME})
+    missing = [m.group(1) or m.group(2) for m in WORD_VAR.finditer(word)
+               if (m.group(1) or m.group(2)) not in known]
+    if missing or "$" in WORD_VAR.sub("", word):
+        return None
+    word = WORD_VAR.sub(lambda m: known[m.group(1) or m.group(2)], word)
+    if word.startswith("-") or not word:
+        return None
+    head, sep, tail = word.partition("/")
+    if head.startswith("~"):
+        base = {"~": known.get("HOME"), "~+": place.cwd, "~-": place.previous}.get(head)
+        if not base:
+            raise CannotTell("is handed %s, a home or directory this check cannot work out" % word[:80])
+        word = base + sep + tail
+    return os.path.normpath(os.path.join(place.cwd, word))
+
+
+def listed_names(command, place, trusted):
+    """The folder names a program run where the command does can print, one to a line (the comment
+    above). A program that prints only its own words (PRINTS_OWN_WORDS, by a name in trusted) is here
+    for a glob in them, and prints the names it matches and no folder's entries: `echo ../*` names the
+    folders beside the checkout, never what they hold. Raises CannotTell for a folder it cannot read
+    or one holding more than LIST_LIMIT names."""
+    own_words = _program(command, trusted) in PRINTS_OWN_WORDS
+    folders, names = ([] if own_words else [place.cwd]), []
+    for word in scan._sw.command_words(command)[1:]:
+        path = _folder_path(word, place)
+        if path is None:
+            continue
+        found = glob.glob(path) if GLOB.search(path) else [path]
+        if GLOB.search(path):
+            names += found
+        if not own_words:
+            folders += [p for p in found if os.path.isdir(p)]
+        if len(names) > LIST_LIMIT:
+            raise CannotTell("names more than %d files with a glob, which this check does not read" % LIST_LIMIT)
+    for folder in dict.fromkeys(folders):
+        try:
+            names += os.listdir(folder)
+        except OSError as e:
+            raise CannotTell("can list the folder %s, which this check could not read (%s)"
+                             % (folder, type(e).__name__))
+        if len(names) > LIST_LIMIT:
+            raise CannotTell("can list more than %d names in the folders it is handed, which this check "
+                             "does not read" % LIST_LIMIT)
+    return "\n".join(names)
+
+
 def _expanded(shown, hit):
     """How the text a name was found in reached the posted text, for a refusal."""
+    if isinstance(shown, Ran) and shown.printed == LISTS:
+        return ("has %s, which this check cannot read the output of, and a folder it can list names %s"
+                % (shown, _shown(hit)))
     if isinstance(shown, Ran) and shown.printed == FILES:
         return "has %s, and the file it prints names %s" % (shown, _shown(hit))
     if isinstance(shown, Ran):
@@ -1694,7 +1909,9 @@ def variables_posted(text, place):
     path and git checkout (place_text), or (shown, None, why not) where that cannot be told: a program
     whose output cannot be read, and one a cd or directory option takes elsewhere, among them. From a
     directory known to name nothing (work_checkout False, #3016) a program whose output cannot be read
-    and is not taken elsewhere is left out, and a lookup or cat is judged as it reads now."""
+    and is not taken elsewhere is judged only by the folder names it can print (listed_names, #3020),
+    and a lookup or cat is judged as it reads now. A name the shell profile redefines
+    (profile_redefines, #3020) is a program whose output cannot be read, refused wherever it runs."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
     judged = posted_text(text, keep_cds=False)
@@ -1726,9 +1943,11 @@ def variables_posted(text, place):
                                      "starts from"))
     if "$(" not in judged and "`" not in judged:
         return out
-    # Each program a substitution runs, by where it runs (#2997).
+    # Each program a substitution runs, by where it runs (#2997). A name the shell profile redefines
+    # (a function or alias in a shell snapshot, profile_redefines) is not the program it names (#3020).
     try:
-        trusted = trusted_names(text)
+        shadowed, profile_unread = profile_redefines()
+        trusted = trusted_names(text) - shadowed
         runs = substitution_runs(judged, trusted)
         changer = changes_before(text, trusted) if any(p in (FILES, PLACE) for _c, p, _m in runs) else None
     except Exception as e:  # noqa: BLE001  a reading that fails refuses: what it missed cannot be told
@@ -1750,7 +1969,22 @@ def variables_posted(text, place):
         seen.add(key)
         shown = Ran("a substitution running %s" % key[0][:120])
         shown.printed = printed
+        name = (scan._sw.command_words(command) or [""])[0]
+        if printed == UNREAD and name in shadowed:
+            # Refused wherever the command runs (#3020): the profile decides what the name prints.
+            out.append((shown, None, "runs %s, and %s, so what it prints cannot be read before the command "
+                                     "runs" % (name, ("whether the shell profile redefines that name cannot be "
+                                                      "told: " + profile_unread) if profile_unread else
+                                               "the shell profile redefines that name (a function or alias in a "
+                                               "shell snapshot Claude Code sources before every command)")))
+            continue
         if printed == UNREAD and personal and not moved:
+            # Posted as before #2997 (#3016), but still judged by the folder names it can print (#3020).
+            try:
+                shown.printed = LISTS
+                out.append((shown, listed_names(command, place, trusted), None))
+            except CannotTell as e:
+                out.append((shown, None, "%s" % e))
             continue
         if printed == UNREAD:
             out.append((shown, None, "prints what this check cannot read before the command runs"))

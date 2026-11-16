@@ -58,6 +58,9 @@ CALLS="$WORK/gh-calls"
 LIST="$WORK/list.json"
 VIS="$WORK/visibility"   # lines: <owner/name> <PUBLIC|PRIVATE> [<the only token that can see it>]
 CO="$WORK/checkout"; mkdir -p "$CO"
+# The folder of shell snapshots the gate reads (WN_SHELL_SNAPSHOTS, claude-config#3020): none until the
+# checks of the shell profile write one, so no check reads this Mac's own.
+SNAPS="$WORK/shell-snapshots"
 
 # A fake gh: two signed in accounts, a visibility table, and the work repository list.
 cat > "$BIN/gh" <<'SH'
@@ -141,7 +144,7 @@ run(){   # $1 = the command; output in out, exit code in rc, the decision in dec
   : > "$CALLS"
   out="$(cd "$dir" && printf '%s' "$payload" | PATH="$BIN:$PATH" HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" \
     FAKE_VIS="$VIS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH,$WORD_HASH" WORK_NAMES_PROJECT_LIST="$PROJECTS" \
-    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" bash "$GATE" 2>&1)"; rc=$?
+    HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$PROJ_HASHES" WN_SHELL_SNAPSHOTS="$SNAPS" bash "$GATE" 2>&1)"; rc=$?
   decision="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
 }
 refused(){ [ "$rc" -eq 2 ] || [ "$decision" = deny ]; }
@@ -855,6 +858,154 @@ RUN_DIR="$WORKCO" run "cd \"\$(git rev-parse --show-toplevel)\" && gh issue crea
 check "#2997 (control) a substitution naming only where a cd goes is not posted: $out" passed
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/private-notes --title \"\$(git remote -v)\" --body x"
 check "#2997 (control) a private repository is not asked about its programs: $out" passed
+
+# ---------------------------------------------------------------- a folder listing (claude-config#3020)
+# From a directory naming nothing, a program whose output this check cannot read posts as before
+# #2997 (#3016). But a listing prints the names of the folders beside it: "$(ls ~/apps)" run from a
+# personal checkout posted every sibling checkout's name, work ones included. So such a program is
+# still judged by the folder names it can print: the entries of the directory it runs in, of each
+# folder one of its words names, and the names an unquoted glob in it matches.
+mkdir -p "$HOMEDIR/apps/acme-widgets" "$HOMEDIR/apps/garden" "$HOMEDIR/garden/ferns" "$HOMEDIR/garden/moss"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ..)\""
+check "#3020 a listing of the folder holding the checkouts, from a personal checkout, is refused: $out" refused
+check "#3020 naming the work checkout the listing holds: $out" has "$out" "acme-widgets"
+check "#3020 and saying a folder it lists names it: $out" has "$out" "a folder it can list"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ~/apps)\""
+check "#3020 and one of a folder under the home directory, written with a tilde: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls -1 \"\$HOME/apps\")\""
+check "#3020 and written through \$HOME: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(find ~/apps -maxdepth 1 -type d)\""
+check "#3020 and by any other program handed the folder: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ~/apps | head -3)\""
+check "#3020 and through a pipe: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ~/apps/*)\""
+check "#3020 and the names a glob matches there: $out" refused
+check "#3020 saying the name it matched: $out" has "$out" "acme-widgets"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls -d ~/apps/acme*)\""
+check "#3020 and a glob matching the work checkout alone: $out" refused
+RUN_DIR="$WORK/apps" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls)\""
+check "#3020 and a bare listing run from the folder holding the checkouts: $out" refused
+run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$(ls ~/apps)\""
+check "#3020 and a gh api write posting one: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ~/garden)\""
+check "#3020 (control) a listing of a folder whose entries name nothing passes: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls)\""
+check "#3020 (control) and a bare listing from a checkout whose entries name nothing: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ~/garden/*)\""
+check "#3020 (control) and a glob matching names that name nothing: $out" passed
+run "gh issue create --repo danwright-test/private-notes --title x --body \"\$(ls ~/apps)\""
+check "#3020 (control) and a private repository is not asked what a listing holds: $out" passed
+RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ~/garden)\""
+check "#3020 (control) from a work checkout a listing stays refused as output this check cannot read: $out" refused_unread
+
+# ---------------------------------------------------------------- a token for another account (claude-config#3020)
+# GH_TOKEN=$(gh auth token -u <account>) gh ..., the way the global rules say to run gh as another
+# account without switching the active one, was refused from a work checkout: the substitution was
+# read as a program whose output is posted. A token variable set from gh auth token alone sets the
+# account the command runs as. It is not posted text, and neither is the account it names.
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 a gh command run as another account from a work checkout passes: $out" passed
+RUN_DIR="$WORKCO" run "GH_TOKEN=\"\$(gh auth token --user bob)\" gh issue comment 5 --repo danwright-test/public-notes --body y"
+check "#3020 and with the substitution in double quotes and the long option: $out" passed
+RUN_DIR="$WORKCO" run "GITHUB_TOKEN=\$(gh auth token --hostname github.com -u bob) gh pr comment 5 --repo danwright-test/public-notes --body y"
+check "#3020 and with gh's other token variable and a host: $out" passed
+RUN_DIR="$WORKCO" run "export GH_TOKEN=\$(gh auth token -u bob); gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and exported for the commands after it: $out" passed
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u acme-corp) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and the account it names is not posted, so an account named as a work owner passes too: $out" passed
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<'EOF'
+nothing to see
+EOF
+)\""
+check "#3020 and beside a heredoc body: $out" passed
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body \"copied from the acme-widgets issue\""
+check "#3020 the text it posts is still judged: $out" refused
+check "#3020 by the name it holds: $out" has "$out" "acme-widgets"
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title \"\$(gh auth token -u bob)\" --body y"
+check "#3020 the same substitution in the posted text is still a program whose output is posted: $out" refused_unread
+RUN_DIR="$WORKCO" run "TITLE=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and so is one setting any other variable: $out" refused_unread
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh api user --jq .login) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and a token variable set from any other gh command: $out" refused_unread
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob; cat named.md) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and from more than the one command: $out" refused_unread
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(./gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and from a program at ./gh, which is not gh: $out" refused_unread
+RUN_DIR="$WORKCO" run "gh() { cat named.md; }; GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and once the command defines a function named gh: $out" refused_unread
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob)x gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and where the substitution is only part of the value: $out" refused_unread
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title \"\$GH_TOKEN\" --body y"
+check "#3020 and the token variable expanded into the posted text is refused: $out" refused
+
+# ---------------------------------------------------------------- the shell profile (claude-config#3020)
+# A function or alias from the shell profile reaches every Bash call: Claude Code sources a shell
+# snapshot of them in front of each command. The hook is not told which snapshot is its session's
+# (measured 2026-11-15: neither the payload nor its environment names one), so every snapshot in the
+# folder is read, and a trusted name any of them redefines is refused wherever the command runs.
+mkdir -p "$SNAPS"
+cat > "$SNAPS/snapshot-zsh-1794000000000-quiet1.sh" <<'SNAP'
+# Snapshot file
+unalias -a 2>/dev/null || true
+# Functions
+newshoot () {
+	local name="$1"
+	git status
+}
+# Aliases
+alias -- claudesync='~/sync/claude-sync pull'
+alias -- which-command=whence
+unalias find 2>/dev/null || true
+function find {
+  command find "$@"
+}
+export PATH=/usr/local/bin:/usr/bin:/bin
+SNAP
+printf 'nothing to see\n' > "$CLEANGIT/clean.md"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body \"\$(cat clean.md)\""
+check "#3020 (control) a snapshot defining other names leaves git and cat as they are: $out" passed
+cat > "$SNAPS/snapshot-zsh-1794000000001-gitfn2.sh" <<'SNAP'
+# Functions
+git () {
+	command cat "$HOME/notes/named.md"
+}
+SNAP
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 git in a substitution is refused once a shell snapshot defines a function of that name: $out" refused
+check "#3020 saying the shell profile redefines it: $out" has "$out" "shell profile"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
+check "#3020 (control) while cat, which that snapshot leaves alone, still passes: $out" passed
+rm -f "$SNAPS/snapshot-zsh-1794000000001-gitfn2.sh"
+printf '%s\n' "alias -- cat='head -1'" 'function pwd {' '  echo elsewhere' '}' > "$SNAPS/snapshot-zsh-1794000000002-alias3.sh"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat clean.md)\""
+check "#3020 and cat once a snapshot aliases it: $out" refused
+check "#3020 with the same reason: $out" has "$out" "shell profile"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(pwd)\" --body x"
+check "#3020 and pwd behind the function keyword: $out" refused
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 (control) while git, with its snapshot gone, passes again: $out" passed
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<'EOF'
+nothing to see
+EOF
+)\""
+check "#3020 a heredoc body through the aliased cat is refused too, since the alias decides what prints: $out" refused
+rm -f "$SNAPS/snapshot-zsh-1794000000002-alias3.sh"
+printf '%s\n' "alias -- gh='gh --repo danwright-test/private-notes'" > "$SNAPS/snapshot-zsh-1794000000003-ghfn4.sh"
+RUN_DIR="$WORKCO" run "GH_TOKEN=\$(gh auth token -u bob) gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 and a token read through a gh the profile redefines is not taken as a token: $out" refused
+rm -f "$SNAPS/snapshot-zsh-1794000000003-ghfn4.sh"
+mkdir "$SNAPS/snapshot-zsh-1794000000004-unread.sh"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 a snapshot that cannot be read leaves no name trusted: $out" refused
+check "#3020 and says it could not be read: $out" has "$out" "could not be read"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(date +%F)\""
+check "#3020 which refuses a program printing its own words as well: $out" refused
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title x --body y"
+check "#3020 (control) while a command with no substitution is not asked about the profile: $out" passed
+rmdir "$SNAPS/snapshot-zsh-1794000000004-unread.sh"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 (control) and with it gone git passes again: $out" passed
+rm -rf "$SNAPS"
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
