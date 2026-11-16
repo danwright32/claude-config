@@ -322,8 +322,8 @@ describe("mod-kit's awk reader (#2974)", () => {
   // they take about as long as each other; read in time growing with the length squared, as before
   // #2974, the one reading takes several times as long. Each side is timed nine times, the order
   // alternating, and judged by its FASTEST time: a busy Mac only ever adds time, so the fastest of
-  // nine is the one it interrupted least, and the two fastest must be within three times of each
-  // other. A ratio per round does not do: measured on 2026-11-16 at load 13 to 18 on 12 cores, one
+  // nine is the one it interrupted least, and the long side's fastest must be under three times the
+  // short side's (only that way round: a reader slow on long programs is the fault). A ratio per round does not do: measured on 2026-11-16 at load 13 to 18 on 12 cores, one
   // round's ratio ran from 0.12 to 10 with nothing broken, and the median of nine reached 1.81,
   // while the fastest times gave 0.87 to 1.07 in four runs. With the check of the whole output put
   // back they gave 7.0 and 7.15 (not sixteen, since the rest of codeVerdict reads in linear time).
