@@ -655,6 +655,82 @@ want_says "DEFERRAL WITHOUT AN ISSUE" "edit hook: and for the finding rather tha
 grep -q '^# Claude Code PreToolUse(Bash) hook' "$PUSH_HOOK" && check "push hook declares itself a PreToolUse(Bash) hook" ok || check "push hook declares itself a PreToolUse(Bash) hook" "header line missing"
 grep -q '^# Claude Code PostToolUse(Edit|Write|MultiEdit) hook' "$EDIT_HOOK" && check "edit hook declares itself a PostToolUse(Edit|Write|MultiEdit) hook" ok || check "edit hook declares itself a PostToolUse(Edit|Write|MultiEdit) hook" "header line missing"
 
+# ---------------------------------------------------------------------------------------------
+# A merge of main does not make the branch answer for main's lines (claude-config#3015).
+# ---------------------------------------------------------------------------------------------
+# A branch pushed once, then main gains a deferral with no issue (in a guide that must hold an old
+# script byte for byte, say), and the branch merges main in. From the upstream, the range held
+# everything main gained since, so the gate refused the branch for a line it never wrote and must
+# not edit. What a merge of the default branch brought in is set apart, by the one helper the
+# other push gates use; a line the conflict resolution adds is still the branch's.
+#   $1 = name, $2 = clean | conflict, $3 = what the conflict resolution adds of its own
+MAIN_DEFERRAL=$'# Old script\n# good enough for now, the lock comes with the outbox\n'
+mk_merged_main() {
+  local W; W="$(mk_repo "$1")"
+  (
+    cd "$W" || exit 1
+    mkdir -p src && printf '%s\n' "shared line" > src/shared.ts
+    "${G[@]}" add src/shared.ts && "${G[@]}" commit -qm shared && "${G[@]}" push -q origin main
+    "${G[@]}" checkout -qb feat
+    printf '%s\n' "export const feat = 1;" > src/feat.ts
+    "${G[@]}" add src/feat.ts && "${G[@]}" commit -qm feat && "${G[@]}" push -qu origin feat
+    if [ "$2" = conflict ]; then
+      printf '%s\n' "shared line, as the branch has it" > src/shared.ts
+      "${G[@]}" add src/shared.ts && "${G[@]}" commit -qm "feat edits shared"
+    fi
+    "${G[@]}" checkout -q main
+    mkdir -p guide && printf '%s' "$MAIN_DEFERRAL" > guide/old.md && "${G[@]}" add guide/old.md
+    if [ "$2" = conflict ]; then printf '%s\n' "shared line, as main has it" > src/shared.ts; "${G[@]}" add src/shared.ts; fi
+    "${G[@]}" commit -qm "main gains a guide" && "${G[@]}" push -q origin main
+    "${G[@]}" checkout -q feat
+    "${G[@]}" merge -q --no-edit origin/main
+    if [ "$2" = conflict ]; then
+      printf '%s\n' "shared line, as the branch has it" "$3" > src/shared.ts
+      "${G[@]}" add src/shared.ts && "${G[@]}" commit -q --no-edit
+    fi
+  ) >/dev/null 2>&1
+  printf '%s' "$W"
+}
+W="$(mk_merged_main m1 clean)"
+if [ -f "$W/guide/old.md" ] && [ "$(git -C "$W" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ] \
+   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then check "#3015 fixture builds" ok
+else check "#3015 fixture builds" "the branch must track origin/feat and hold main's guide through one merge"; fi
+run_push "$W" "git push"
+want_rc 0 "#3015 a deferral already on main, arriving only through a merge of main, is not this push's"
+run_push "$W" "git commit -q --allow-empty -m more && git push"
+want_rc 0 "#3015 the same holds when the command commits before it pushes"
+
+W="$(mk_merged_main m2 conflict "// the retry is good enough for now")"
+if grep -q "as the branch has it" "$W/src/shared.ts" 2>/dev/null \
+   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then check "#3015 conflict fixture builds" ok
+else check "#3015 conflict fixture builds" "the conflict was not resolved into one merge commit"; fi
+run_push "$W" "git push"
+want_rc 2 "#3015 a deferral the conflict resolution adds is still the branch's, and refused"
+want_says "src/shared.ts:2: for now:" "#3015 the refusal names the line the resolution added"
+case "$MSG" in *guide/old.md*) check "#3015 main's line is not named beside it" "said: ${MSG:0:300}" ;; *) check "#3015 main's line is not named beside it" ok ;; esac
+
+W="$(mk_merged_main m3 conflict "// plain resolution text")"
+run_push "$W" "git push"
+want_rc 0 "#3015 control: a conflict resolved with no deferral is allowed"
+
+# When the merge cannot be set apart (no default branch known), the whole range is judged as it
+# was before, never not at all, and the refusal says part of it came in through the merge (L93).
+W="$(mk_merged_main m4 clean)"
+git -C "$W" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_push "$W" "git push"
+want_rc 2 "#3015 with no default branch known the merge is not set apart, so main's line is judged as before"
+want_says "guide/old.md:2: for now:" "#3015 the whole range was read"
+want_says "could not be told from the branch's" "#3015 the refusal says part of what it judged came in through the merge"
+
+# A first push of the branch (no upstream) is unchanged: judged from where it leaves main.
+W="$(mk_merged_main m5 clean)"
+git -C "$W" branch -q --unset-upstream >/dev/null 2>&1
+run_push "$W" "git push -u origin feat"
+want_rc 0 "#3015 a first push that merged main is not judged on main's line, as before"
+commit_file "$W" src/feat.ts $'export const feat = 1;\n// good enough for now\n'
+run_push "$W" "git push -u origin feat"
+want_rc 2 "#3015 and a first push still reads the branch's own line"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -515,6 +515,98 @@ want_style_code 2 "a scanner that crashes judging an excluded path refuses the p
 case "$STYLE_MSG" in *style-scan.py*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: that refusal names the scanner: $STYLE_MSG" ;; esac
 
 
+# --- a merge of main does not make the branch answer for main's lines (claude-config#3015) ---
+# A branch pushed once, then main gains a line carrying a forbidden character (in a guide that
+# must hold an old script byte for byte, say), and the branch merges main in to resolve a conflict.
+# From the upstream, the range holds everything main gained since, so the gate refused the branch
+# for a line it never wrote and must not edit; four branches in one day each needed a skip. What a
+# merge of the default branch brought in is set apart by the one helper the other push gates use.
+#   $1 = clean    the merge is clean, the branch adds nothing of its own beyond it
+#        conflict the merge conflicts in app/shared.ts and its resolution adds $2 of its own
+mk_merged_main_repo() {
+  local root="$WORKDIR/merged.$RANDOM$RANDOM"
+  mkdir -p "$root"
+  git init -q --bare "$root/origin.git"
+  git init -q -b main "$root/work"
+  (
+    cd "$root/work" || exit 1
+    git config user.email t@t.t; git config user.name t; git config commit.gpgsign false
+    mkdir -p app guide
+    echo baseline > README.md
+    printf '%s\n' "shared line" > app/shared.ts
+    git add README.md app/shared.ts; git commit -qm init
+    git remote add origin "$root/origin.git"
+    git push -qu origin main
+    git checkout -qb feat
+    printf '%s\n' "export const feat = 1;" > app/feat.ts
+    git add app/feat.ts; git commit -qm feat
+    git push -qu origin feat
+    if [ "$1" = conflict ]; then
+      printf '%s\n' "shared line, as the branch has it" > app/shared.ts
+      git add app/shared.ts; git commit -qm "feat edits shared"
+    fi
+    git checkout -q main
+    printf '%s\n' "# Old script" "$BAD" > guide/old.md
+    git add guide/old.md
+    [ "$1" = conflict ] && printf '%s\n' "shared line, as main has it" > app/shared.ts && git add app/shared.ts
+    git commit -qm "main gains a guide"
+    git push -q origin main
+    git checkout -q feat
+    if [ "$1" = conflict ]; then
+      git merge -q --no-edit origin/main
+      printf '%s\n' "shared line, as the branch has it" "$2" > app/shared.ts
+      git add app/shared.ts
+      git commit -q --no-edit
+    else
+      git merge -q --no-edit origin/main
+    fi
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+W="$(mk_merged_main_repo clean)"
+if [ -f "$W/guide/old.md" ] && [ "$(git -C "$W" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ] \
+   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3015 fixture: the branch must track origin/feat and hold main's guide through one merge"; fi
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 0 "#3015 a forbidden character already on main, arriving only through a merge of main, is not this push's"
+run_style_hook "$E2E" "cd $W && git commit -q --allow-empty -m more && git push"
+want_style_code 0 "#3015 the same holds when the command commits before it pushes"
+
+W="$(mk_merged_main_repo conflict "$BAD")"
+if [ -f "$W/guide/old.md" ] && grep -q "as the branch has it" "$W/app/shared.ts" \
+   && [ "$(git -C "$W" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3015 fixture: the conflict was not resolved into one merge commit"; fi
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 2 "#3015 a forbidden character the conflict resolution adds is still the branch's, and refused"
+want_says "app/shared.ts" "#3015 the refusal names the line the resolution added"
+want_silent_on "guide/old.md" "#3015 and does not name main's line beside it"
+
+# The control for the conflict case: the same resolution with clean text is allowed, so the
+# refusal above is the resolution's own line and not the conflicted file judged whole.
+W="$(mk_merged_main_repo conflict "plain resolution text")"
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 0 "#3015 a conflict resolved with clean text is allowed"
+
+# When the merge cannot be set apart (no default branch known), the whole range is judged as it
+# was before, never not at all, and the refusal says part of it came in through the merge (L93).
+W="$(mk_merged_main_repo clean)"
+git -C "$W" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_style_hook "$E2E" "cd $W && git push"
+want_style_code 2 "#3015 with no default branch known the merge is not set apart, so main's line is judged as before"
+want_says "guide/old.md" "#3015 the whole range was read"
+want_says "could not be told from the branch's" "#3015 the refusal says part of what it judged came in through the merge"
+
+# A first push of the branch (no upstream) is unchanged: it is judged from where it leaves main,
+# which already starts past the merge, so main's line is not read and the branch's own still is.
+W="$(mk_merged_main_repo clean)"
+git -C "$W" branch -q --unset-upstream >/dev/null 2>&1
+run_style_hook "$E2E" "cd $W && git push -u origin feat"
+want_style_code 0 "#3015 a first push that merged main is not judged on main's line, as before"
+printf '%s\n' "$BAD" > "$W/app/feat.ts"
+git -C "$W" -c user.email=t@t.t -c user.name=t commit -qam "feat writes a dash" >/dev/null 2>&1
+run_style_hook "$E2E" "cd $W && git push -u origin feat"
+want_style_code 2 "#3015 and a first push still reads the branch's own line"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
