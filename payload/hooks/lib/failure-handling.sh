@@ -61,7 +61,8 @@ FH_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$FH_LIB_DIR" != "${BASH_SOURCE[0]}" ] || F
 declare -F is_test >/dev/null 2>&1 || . "$FH_LIB_DIR/source-class.sh"
 
 # The language family a path is read as. prose has no code; shell keeps $expansions inside double
-# quotes, and a string handed to a program runner, as code (SHELL STRINGS above); hash languages comment with #;
+# quotes as code (a $(...) one read as a command of its own, so its strings are data unless a runner
+# takes them), and a string handed to a program runner, as code (SHELL STRINGS above); hash languages comment with #;
 # slash languages with // and /* */; sql with --.
 fh_lang() {   # $1 = path
   local base="${1##*/}"
@@ -115,7 +116,8 @@ function join(A, lo, hi,   B, m, j, k, t) {
   return B[1]
 }
 function keep_expansion(i,   c, d, j) {
-  # A shell $expansion inside double quotes is code: $name, ${...}, $(...), $((...)).
+  # A shell $expansion inside double quotes is code, copied whole: $name, ${...}, $((...)). A $(...)
+  # never reaches here: normalize reads it as a command of its own (claude-config#3071).
   c = C[i + 1]
   if (c == "(") {
     d = 0

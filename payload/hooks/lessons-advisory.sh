@@ -391,6 +391,9 @@ trig_retry_or_failure_handling(){   # $1 = a file holding the added lines  $2 = 
 # touching it: data the test feeds the gate, not a removal that runs. trig_destructive_judged says
 # which lines are judged at all; the cleanup rule above still decides each one it passes.
 trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the path
+  # Written to a file, never handed over as <(...): a process substitution is a child the shell
+  # never waits for, and bash 3.2 can drop what follows when it exits (claude-config#1984).
+  trig_destructive_judged "$1" "$2" > "$1.flags" || : > "$1.flags"
   # The pattern travels in the ENVIRONMENT: `awk -v` processes backslash escapes, so `fs\.rm\(`
   # would arrive as the invalid `fs.rm(` (L434). ENVIRON is read verbatim.
   TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk '
@@ -428,7 +431,7 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
       }
       if (other > 0 || own == 0) fire = 1
     }
-    END { exit !fire }' <(trig_destructive_judged "$1" "$2") "$1"
+    END { exit !fire }' "$1.flags" "$1"
 }
 
 # One flag per added line for the trigger above: 1 where the line is judged, 0 where it is data.
@@ -443,53 +446,71 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 # handed a statement in a test (psql -c "DROP ...", sqlite3 db <<EOF), whose target in a test is a
 # throwaway database, and a script a test writes out and then runs itself.
 trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the path
-  local as
+  local as lines
   as="$(trig_read_as "$2")"
   if ! is_test "$2" || [ "$(fh_lang "$as")" != shell ]; then
     awk '{ print 1 }' "$1"
     return
   fi
+  # The code text, one line for each added line. A reader that failed, or answered with a different
+  # number of lines, is no reading: every line is then judged as before, never read as data.
+  lines="$(awk 'END { print NR }' "$1")"
+  if ! fh_code_only "$as" < "$1" > "$1.code" || [ "$(awk 'END { print NR }' "$1.code")" != "$lines" ]; then
+    awk '{ print 1 }' "$1"
+    return
+  fi
+  # Where each heredoc opens and the word that ends it, from the one reading of a marker
+  # (lib/shell-words.py heredoc-markers, claude-config#2080). With no python3 there are none, and
+  # every body line is judged on its code text, as before.
+  python3 -B "$HOOK_DIR/lib/shell-words.py" heredoc-markers < "$1" > "$1.markers" 2>/dev/null || : > "$1.markers"
   TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk -v runners="$FH_RUNNER_WORDS" '
     function runs(text,   n, W, k, w) {
       n = split(text, W, /[ \t]+/)
       for (k = 1; k <= n; k++) { w = W[k]; sub(/^.*\//, "", w); if (w ~ ("^(" runners ")$")) return 1 }
       return 0
     }
-    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); hd = ""; n = 0 }
-    # The first file is the code text, one line for each added line.
+    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); n = 0; qh = 0; qt = 0 }
     FILENAME == ARGV[1] { code[FNR] = $0; next }
+    # line number TAB marker, one row for each heredoc a line opens, in order.
+    FILENAME == ARGV[2] { k = index($0, "\t"); ln = substr($0, 1, k - 1) + 0; nm[ln]++; mk[ln, nm[ln]] = substr($0, k + 1); next }
     {
       n = FNR
       # What the line is as code, kept for the fallback at the END.
       ascode[n] = (tolower(code[n]) ~ re) ? 1 : 0
-      if (hd != "") {
+      if (qh < qt) {
         t = $0
-        if (hdtab) sub(/^\t+/, "", t)
-        if (t == hd) { hd = ""; flag[n] = 0; next }
+        sub(/^\t+/, "", t)
+        if (t == Q[qh + 1]) { qh++; flag[n] = 0; next }
         # A body handed to something that runs it is that program, read as it stands.
         flag[n] = (hdrun && tolower($0) ~ re) ? 1 : 0
         next
       }
       flag[n] = ascode[n]
-      # A heredoc opens here when its << is in the code text (so not inside a string), never <<<.
-      if (match(code[n], /<<-?/) && substr(code[n], RSTART, 3) != "<<<" && match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
-        h = substr($0, RSTART, RLENGTH); hdtab = (h ~ /^<<-/)
-        sub(/^<<-?[ \t]*["\047]?/, "", h); hd = h; opened = n
-        pre = substr($0, 1, RSTART - 1); sub(/.*[|;&(`]/, "", pre)
-        post = substr($0, RSTART + RLENGTH)
+      # A heredoc opens here only when its << is in the code text, so not inside a string.
+      p = index(code[n], "<<")
+      if ((n in nm) && p) {
+        for (k = 1; k <= nm[n]; k++) Q[++qt] = mk[n, k]
+        opened = n
+        # The command it is handed to: the words since the last | ; & ( or backtick, once each
+        # redirection (2>&1, >&2, &>file) is taken out, since its & separates nothing.
+        pre = substr(code[n], 1, p - 1)
+        gsub(/[0-9]*[<>]&[0-9-]*/, " ", pre); gsub(/&>>?/, " ", pre)
+        sub(/.*[|;&(`]/, "", pre)
+        post = substr(code[n], p)
         hdrun = runs(pre)
         if (!hdrun && index(post, "|")) { sub(/^[^|]*\|/, "", post); hdrun = runs(post) }
       }
     }
     END {
       # Only ADDED lines arrive, so a heredoc whose closing line is unchanged never closes here, and
-      # every added line after it, in later hunks too, would read as its body. Measured on a real
-      # push (claude-config#2334): a cleanup loop 100 lines below such a heredoc went unjudged. So a
-      # heredoc never seen to close is no evidence: every line after its opening is judged as code,
-      # as it was before claude-config#3071, which fires on any fixture text in that body.
-      if (hd != "") for (k = opened + 1; k <= n; k++) flag[k] = ascode[k]
+      # every added line after it, in later hunks too, would read as its body. Found 2026-11-16
+      # replaying the last 150 claude-config merges (claude-config#2334): a cleanup loop a hunk
+      # below such a heredoc went unjudged. So a heredoc never seen to close is no evidence: every
+      # line after its opening is judged as code, as before claude-config#3071, which fires on any
+      # fixture text in that body.
+      if (qh < qt) for (k = opened + 1; k <= n; k++) flag[k] = ascode[k]
       for (k = 1; k <= n; k++) print flag[k]
-    }' <(fh_code_only "$as" < "$1") "$1"
+    }' "$1.code" "$1.markers" "$1"
 }
 
 # A workflow job added with no `timeout-minutes` (L313). The platform default is six hours, and a
@@ -545,7 +566,8 @@ findings=""
 # One scratch file for the whole scan, removed on the way out. Named, so a run killed part way
 # through leaves something attributable rather than an anonymous file (claude-config#36).
 LINES_FILE="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work.advisory.XXXXXXXX")"
-trap 'rm -f "$LINES_FILE"' EXIT
+# The destructive trigger keeps its readings of these lines beside them (trig_destructive_judged).
+trap 'rm -f "$LINES_FILE" "$LINES_FILE.code" "$LINES_FILE.markers" "$LINES_FILE.flags"' EXIT
 for i in "${!TRIG_IDS[@]}"; do
   hit_files=""
   while IFS= read -r f; do
