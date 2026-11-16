@@ -22,7 +22,8 @@ import { browserRefusal, type Browser } from './browser.ts'
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
 // - any Chrome tool (mcp__claude-in-chrome__*) outside a tab this session created or off a test
 //   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064),
-//   except closing a tab its own click opened in its tab group (#3099);
+//   except closing a tab first listed in its tab group after its own click, typing, form fill
+//   or script in a tab it created (#3099);
 //   headless automation (Playwright, by tool or by command) is on no list;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes, except the merged branch a gh pr merge deletes with -d

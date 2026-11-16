@@ -129,7 +129,7 @@ describe('the Chrome tools, one by one', () => {
     expect(refuse('navigate', { tabId: 7, url: 'localhost' })).toMatch(/did not create/)
     expect(refuse('tabs_create_mcp', {})).toBeUndefined()
   })
-  test('closing a tab: only one this session created', () => {
+  test('closing a tab this session created goes ahead, and closing one it did not is refused', () => {
     expect(refuse('tabs_close_mcp', { tabId: 7 }, own({ 7: 'bank.example.com' }))).toBeUndefined()
     expect(refuse('tabs_close_mcp', { tabId: 9 }, own({ 7: 'localhost' }))).toMatch(/^use mcp__claude-in-chrome__tabs_close_mcp on tab 9, which this session did not create/)
   })
