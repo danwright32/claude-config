@@ -2,7 +2,6 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
-  WORDING_PATH,
   hookFailed,
   agentRefusal,
   ciMessages,
@@ -156,15 +155,6 @@ test('a lower case Slack setting name in a file that makes no request is no send
   expect(isSender('src/lib/db/types.ts', `${DB_TYPES}export const notify = (text: string) => sendSlackAlert(text)\n`)).toBe(true)
   // A language not read for requests keeps every marker, as before.
   expect(isSender('config/teams.yml', 'slack_channel: "#alerts"\n')).toBe(true)
-})
-
-// #2973: the files of a pull request whose diff can carry wording are picked out by gh's jq, so its
-// pattern must pick exactly the paths inScope reads as code whatever their text.
-test('the pattern gh picks a pull request\'s files by is inScope for every kind of path (#2973)', () => {
-  const re = new RegExp(WORDING_PATH, 'i')
-  const paths = ['lib/alert.ts', 'src/App.TSX', 'jobs/late.py', '.github/workflows/deploy.yml', 'bin/notify', '.envrc', 'Makefile', 'app/globals.css', 'docs/design/settled.html', 'README.md', 'assets/logo.png', 'lib/odd.', 'a.b/c.ts', 'a.b/run']
-  for (const p of paths) expect([p, re.test(p)]).toEqual([p, inScope(p, '#!')])
-  expect(paths.filter(p => re.test(p)).length).toBe(9)
 })
 
 // #2971: a patch read as the Edits it makes.

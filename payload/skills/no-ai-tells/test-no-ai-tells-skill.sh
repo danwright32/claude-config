@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Tests for what the no-ai-tells skill says about reading the list and writing drafts (claude-config#3060).
+#
+# On 2026-11-16 the skill said to fetch the Wikipedia list of AI writing signs and nothing more. The
+# page is about 250,000 characters, one WebFetch reads 100,000, and the first call ended with a note
+# that 151,549 characters were unread, so a run checked a draft against about 40% of the list and
+# reported it clean. The unread part held the promotional vocabulary, the summary endings and the em
+# dash section. The skill also said "Suggestions only" and "Never rewrite the full text", while the
+# global rules and the prose hook call it to correct a draft that is then shown and saved word for
+# word, so every such run went against the skill's own text.
+#
+# What this holds the skill to, each a fixed phrase it must carry:
+#   1. it reads on with the offset each result gives, until no part is left unread;
+#   2. it confirms the end of the list was reached, rather than trusting a missing note;
+#   3. a partial read is never reported as clean;
+#   4. on a session's own draft it writes the corrected draft in full, which is the text shown and saved;
+#   5. on text Dan pastes in it suggests edits only;
+#   6. it never sends, posts or saves anything itself;
+#   7. the unconditional "suggestions only" lines that contradicted the callers are gone;
+#   8. no em or en dash in the skill.
+# A control then removes one required phrase and confirms the check reports it, so a check that can
+# never fail is caught here rather than trusted.
+#
+# NO_AI_TELLS_SKILL points the suite at another copy, which is how a broken copy is shown to fail.
+set -uo pipefail
+
+# Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/suite-deadline.sh" || {
+  echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+suite_deadline_arm || exit $?
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL="${NO_AI_TELLS_SKILL:-$DIR/SKILL.md}"
+
+pass=0
+fail=0
+check() { # check <description> <result>   ("ok" passes, anything else is the failure text)
+  if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi
+}
+# ok when the text holds the words exactly, else what is missing. Matched with case, never a pipe into
+# grep -q, which can stop reading early and fail the pipeline under pipefail. No ${x,,}: macOS ships
+# bash 3.2, which has no case conversion.
+holds() { # holds <text> <fixed words>
+  case "$1" in *"$2"*) echo ok ;; *) echo "missing: $2" ;; esac
+}
+lacks() { # lacks <text> <fixed words>
+  case "$1" in *"$2"*) echo "still says: $2" ;; *) echo ok ;; esac
+}
+
+if [ -r "$SKILL" ]; then text="$(cat "$SKILL")"; else text=""; check "the no-ai-tells skill is readable" "cannot read $SKILL"; fi
+
+# ---- 1. read on with the offset until nothing is left unread ----
+check "the skill says one fetch is never the whole list" "$(holds "$text" "one call is never the whole list")"
+check "the skill reads on with the offset each result gives" "$(holds "$text" 'with the `offset` that result gives')"
+check "the skill repeats until no part is left unread" "$(holds "$text" "Repeat until a result has no such note")"
+
+# ---- 2. the end of the list is confirmed, not inferred from a missing note ----
+check "the skill confirms the read reached the page's See also heading" "$(holds "$text" 'reaches the page'"'"'s "See also" heading')"
+check "the skill does not trust a missing note alone" "$(holds "$text" "rather than trusting the absence of a note")"
+
+# ---- 3. a partial read is never reported clean ----
+check "a partial read is never reported as clean" "$(holds "$text" "never report the text clean")"
+check "a partial read is named as partial" "$(holds "$text" "say the check was partial")"
+
+# ---- 4. a session's own draft comes back corrected, in full ----
+check "the skill has a mode for a session's own draft" "$(holds "$text" "**A session's own draft.**")"
+check "on its own draft the session gets the corrected draft in full" "$(holds "$text" "write the corrected draft in full")"
+check "the corrected draft is the text shown and saved as the Slack draft" "$(holds "$text" "exactly the text saved as the draft")"
+check "the skill runs before the text is shown or offered in a picker" "$(holds "$text" "before the text is shown or offered in a picker")"
+
+# ---- 5. text Dan pastes in gets suggestions only ----
+check "the skill has a mode for text Dan pastes in" "$(holds "$text" "**Text Dan pastes in.**")"
+check "pasted text gets suggestions, never a rewrite" "$(holds "$text" "Text Dan pastes in is never rewritten in full")"
+
+# ---- 6. the skill never sends, posts or saves ----
+check "the skill never sends, posts or saves anything itself" "$(holds "$text" "never sends, posts or saves anything")"
+
+# ---- 7. the lines that contradicted the callers are gone ----
+check "the unconditional 'never rewrite the full text' rule is gone" "$(lacks "$text" "**Never rewrite the full text.**")"
+check "the unconditional 'suggestions only' line is gone" "$(lacks "$text" "Do **not** output a rewritten version of the text. Suggestions only.")"
+check "the description no longer limits the skill to suggestions" "$(lacks "$text" "description: Reviews writing and suggests specific edits")"
+
+# ---- 8. the style rule: no em or en dash in the skill ----
+dashes="$(grep -n -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$SKILL" 2>/dev/null)"
+check "the no-ai-tells skill holds no em or en dash" "$([ -z "$dashes" ] && echo ok || echo "$dashes")"
+
+# ---- control: the checks above can fail ----
+# The same check run on the skill with its offset line removed must report it missing. Without this a
+# helper that always printed ok would pass every check above on any text at all.
+broken="$(grep -v -F 'offset' <<< "$text")"
+check "control: a copy without the offset instruction is caught" \
+  "$([ "$(holds "$broken" 'with the `offset` that result gives')" != ok ] && echo ok || echo "the check passed a copy that lacks the phrase")"
+check "control: a copy that still says suggestions only is caught" \
+  "$([ "$(lacks "Do **not** output a rewritten version of the text. Suggestions only." "Do **not** output a rewritten version of the text. Suggestions only.")" != ok ] && echo ok || echo "the check passed a copy that holds the phrase")"
+
+echo ""
+echo "passed: $pass, failed: $fail"
+echo "SUITE-RESULT passed=$pass failed=$fail"
+[ "$fail" -eq 0 ]

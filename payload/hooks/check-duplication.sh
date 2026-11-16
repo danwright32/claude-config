@@ -11,8 +11,8 @@
 # detector shape anywhere in the config.
 #
 # The detector is lib/duplication.py (python3, standard library only). The verdict is a COMPARISON,
-# never a stored baseline: the tree at the merge base is measured, the tree being pushed is
-# measured, and the push is refused only for a duplicate group whose copy count GREW. Existing
+# never a stored baseline: the tree at the merge base is measured (with the default branch merged
+# into it when the branch merges main in, #3054), the tree being pushed is measured, and the push is refused only for a duplicate group whose copy count GREW. Existing
 # duplication never fails a push (Slate's is #2561 and #2562), and there is no state file to go
 # stale. Source roots are found from the tree itself (src, app, lib, components, worker, scripts,
 # whichever exist); a repo with none prints ONE line saying so and exits 0, because a silent skip
@@ -146,6 +146,20 @@ else
 fi
 [ -n "$mb" ] || skip "no base commit could be worked out for this push (no upstream, no origin/main, no previous commit), so nothing was compared."
 
+# A copy is this push's only when the branch itself adds it (claude-config#3054). After a branch
+# pushed once merges main in, the tree at its upstream lacks everything main gained since, so this
+# gate refused branches for copies already on main that they never wrote. So the base is what
+# merging that main commit into the start gives, the shared answer the other push gates read
+# (ps_merged_apart, #3015): a copy the conflict resolution adds is still the branch's and still
+# judged. When it cannot be set apart the start is the base as before, and the refusal says why.
+from="$mb"
+merge_unsplit=""
+apart="$(ps_merged_apart "$mb")"
+case "$apart" in
+  "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+  "whole "*) merge_unsplit="${apart#whole }" ;;
+esac
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.dupcheck.XXXXXXXX")" || WORK=""
 case "${WORK%/}" in
   ''|/|"${HOME%/}") skip "a throwaway directory could not be made, so nothing was compared." ;;
@@ -153,13 +167,14 @@ esac
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/base" "$WORK/head"
 
-# The base tree: only the roots that exist at the merge base. A first push that creates src/ has
-# an empty base, and everything duplicated in it is then genuinely new.
-base_roots="$(git ls-tree --name-only "$mb" 2>/dev/null | python3 "$DETECTOR" roots 2>/dev/null)"
+# The base tree: only the roots that exist at the merge base (or the tree with main merged in,
+# above). A first push that creates src/ has an empty base, and everything duplicated in it is then
+# genuinely new.
+base_roots="$(git ls-tree --name-only "$from" 2>/dev/null | python3 "$DETECTOR" roots 2>/dev/null)"
 if [ -n "$base_roots" ]; then
   # shellcheck disable=SC2086
-  if ! git archive "$mb" $base_roots 2>/dev/null | tar -x -C "$WORK/base" 2>/dev/null; then
-    skip "the tree at $(git rev-parse --short "$mb" 2>/dev/null) could not be read, so nothing was compared."
+  if ! git archive "$from" $base_roots 2>/dev/null | tar -x -C "$WORK/base" 2>/dev/null; then
+    skip "the tree at $(git rev-parse --short "$from" 2>/dev/null) could not be read, so nothing was compared."
   fi
 fi
 
@@ -204,7 +219,9 @@ summary="$(printf '%s\n' "$report" | awk 'NR == 1')"
 body="$(printf '%s\n' "$report" | awk 'NR > 1')"
 
 if [ "$rc" -eq 0 ]; then
-  hook_allow_notice "duplication check: no new duplicate groups ($summary; against $(git rev-parse --short "$mb" 2>/dev/null))."
+  merged_note=""
+  [ "$from" != "$mb" ] && merged_note=" with the default branch it merges in"
+  hook_allow_notice "duplication check: no new duplicate groups ($summary; against $(git rev-parse --short "$mb" 2>/dev/null)$merged_note)."
 fi
 if [ "$rc" -ne 1 ]; then
   skip "the detector failed ($(awk 'NR == 1' "$WORK/err" 2>/dev/null)), so nothing was compared."
@@ -214,6 +231,7 @@ fi
 {
   base_label="$(git rev-parse --short "$mb" 2>/dev/null)"
   [ -n "$base" ] && base_label="$base_label (the merge base with $base)"
+  [ "$from" != "$mb" ] && base_label="$base_label with the default branch it merges in"
   if [ "$from_worktree" -eq 1 ]; then
     echo "PUSH BLOCKED: the commit this command is about to make would add duplicated code"
     echo "that the base did not have."
@@ -226,6 +244,12 @@ fi
   echo "Compared against $base_label, in $(printf '%s' "$head_roots" | tr '\n' ' ' | sed 's/ *$//' | sed 's/ /, /g'):"
   printf '%s\n' "$body"
   echo ""
+  if [ -n "$merge_unsplit" ]; then
+    echo "These commits merge the default branch in, and what that merge brought could not be"
+    echo "set apart, so a copy above may already be on the default branch rather than this"
+    echo "branch's own: $merge_unsplit."
+    echo ""
+  fi
   if [ "$pending_widened" -eq 1 ]; then
     echo "The git add in this command could not be read, so the whole working tree was"
     echo "read, and a line above may belong to a file this commit will not carry. To judge"
