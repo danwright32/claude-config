@@ -16,21 +16,25 @@ export type PatchHunk = { before: string; after: string }
  */
 export type PatchFile = { from: string | null; to: string | null; hunks: PatchHunk[]; binary?: true }
 /**
- * Every file a patch names, as far as it could be read, and `unreadable`, why the rest could not be:
- * a hunk whose lines do not add up to its header. A tool applying it refuses the whole patch then.
+ * Every file a patch names, and `unreadable`, why its hunks could not all be read: the first hunk
+ * whose lines do not add up to its header, which is left out. Every file after such a hunk is
+ * still named and its hunks read. A tool applying the patch refuses the whole of it then.
  */
 export type PatchReading = { files: PatchFile[]; unreadable?: string }
 
 // A name as git or diff writes it: a timestamp after a tab cut off, a name git quotes (one holding a
 // quote, a backslash, a control or a non-ASCII character) read with its C escapes undone, octal
-// escapes as the UTF-8 bytes they spell.
+// escapes as the UTF-8 bytes they spell. A character written as itself is taken whole, both units
+// of one outside the Basic Multilingual Plane together (#3021: taken a unit at a time, each half
+// became a replacement character, and the name read named no file).
 const unquoted = (q: string): string => {
   const bytes: number[] = []
   const ESC: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
   for (let i = 1; i < q.length - 1; i++) {
-    const c = q[i] as string
+    const c = String.fromCodePoint(q.codePointAt(i) as number)
     if (c !== '\\') {
       bytes.push(...new TextEncoder().encode(c))
+      i += c.length - 1
       continue
     }
     const o = /^[0-7]{3}/.exec(q.slice(i + 1))
@@ -72,6 +76,7 @@ export const readPatch = (text: string): PatchReading => {
   let file: PatchFile | undefined
   // The file git's diff line started, until its own --- and +++ lines or a hunk.
   let opened: PatchFile | undefined
+  let unreadable: string | undefined
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] as string
     const d = /^diff --git (.+)$/.exec(line)
@@ -106,9 +111,16 @@ export const readPatch = (text: string): PatchReading => {
     let [olds, news] = [Number(h[1] ?? 1), Number(h[2] ?? 1)]
     const before: string[] = []
     const after: string[] = []
-    while (olds > 0 || news > 0) {
+    // Why this hunk cannot be read. The hunk is left out and the reading goes on from the line that
+    // broke it (#3021: it stopped there, so every file after it went unnamed), which is read again
+    // as what it may be, the next file's first line. Only the first reason is kept.
+    let broke: string | undefined
+    while (!broke && (olds > 0 || news > 0)) {
       const l = lines[++i]
-      if (l === undefined) return { files, unreadable: 'a hunk ends before its lines add up to its header' }
+      if (l === undefined) {
+        broke = 'a hunk ends before its lines add up to its header'
+        break
+      }
       if (l.startsWith('\\')) continue
       const [mark, body] = [l[0] ?? ' ', l.slice(1)]
       if (mark === ' ' || l === '') {
@@ -122,12 +134,16 @@ export const readPatch = (text: string): PatchReading => {
       } else if (mark === '+') {
         after.push(body)
         news--
-      } else return { files, unreadable: `a hunk holds a line starting ${JSON.stringify(mark)}` }
-      if (olds < 0 || news < 0) return { files, unreadable: 'a hunk holds more lines than its header says' }
+      } else {
+        broke = `a hunk holds a line starting ${JSON.stringify(mark)}`
+        i--
+      }
+      if (olds < 0 || news < 0) broke = 'a hunk holds more lines than its header says'
     }
-    file.hunks.push({ before: before.join('\n'), after: after.join('\n') })
+    if (broke) unreadable ??= broke
+    else file.hunks.push({ before: before.join('\n'), after: after.join('\n') })
   }
-  return { files }
+  return { files, ...(unreadable ? { unreadable } : {}) }
 }
 
 /**
