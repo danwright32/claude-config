@@ -7340,7 +7340,7 @@ name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's 
 whole and as each piece a split would make) as each of its words, and marks an argument whose every
 `$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
 which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
-arithmetic over whole numbers (`"x\\$[0-9]"`, a doubly escaped dollar in a search pattern) is given
+arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
 as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
 each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
 distinct Bash commands (2026-09-26 to 2026-10-30) a
