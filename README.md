@@ -5901,9 +5901,23 @@ fallback for a session where no line arrived.
   production audit workflow cannot run a shell, so the skill passes the number as `args.agentCap`;
   without a usable one the workflow falls back to the hook's default and logs that it did.
 - **The plan council and plan lite panels** are exempt, as the global `CLAUDE.md` says.
+- **Each number carries the review it was last judged in** (#2552): a `REVIEWED <hostname> <cap>
+  <date> claude-config#<issue>` line beside the table, with the measured reason under it. The suite
+  fails when a number moves and its line does not. The measurement is `tools/agent-cap-report.py`,
+  run on the Mac in question over the days since its cap last changed:
+
+      python3 tools/agent-cap-report.py --since 2026-11-09T22:14:00-05:00 --until 2026-11-16T10:54:00-05:00 --cap 7
+
+  It reads the subagent transcripts and prints how long sessions sat at exactly the cap (`AT_CAP`),
+  how many agents ran at once across the Mac, where agent time went, how many heavy commands
+  overlapped, and the days a usage limit reached an agent. It prints counts and working folder
+  names only, never command text, and refuses with a named reason (exit 1) rather than print an
+  empty report. `AT_CAP` is an upper bound on what the cap cost: a session at the cap with nothing
+  queued reads the same as one with work waiting.
 - Tests: `hooks/test-agent-cap.sh`, which also scans the payload's documents and fails on one that
-  writes a cap out by hand (seen failing on planted copies first), and
-  `skills/production-ready/test-production-audit.sh` for the workflow's ceiling.
+  writes a cap out by hand (seen failing on planted copies first),
+  `skills/production-ready/test-production-audit.sh` for the workflow's ceiling, and
+  `tools/test-agent-cap-report.sh` for the measurement.
 
 ## The context line and the long session nudge
 
