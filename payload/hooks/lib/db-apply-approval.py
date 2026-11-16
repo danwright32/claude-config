@@ -476,21 +476,28 @@ def _put_on_record(keys):
 
 
 def _trusted_by_dan(session_id, transcript_path):
-    """{(a list's resolved path, a ref)} for every picker of this session Dan answered TRUST.
-    Fails closed: no transcript, one that cannot be read, or a picker naming no absolute list path
-    or no ref gives nothing."""
+    """({(a list's resolved path, a ref)} for every picker of this session Dan answered TRUST, None),
+    or (nothing, why his pickers could not be looked for). Fails closed: no transcript, one that
+    cannot be read, or a picker naming no absolute list path or no ref gives nothing. The reason is
+    kept apart so no question says he approved a line in no picker when none was read (L11)."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
-        return set()
+        return set(), "the call named no session transcript"
     try:
         found = _pickers(transcript_path, session_id, TRUST_SOURCE, TRUST)
-    except (OSError, ValueError):
-        return set()
+    except (OSError, ValueError) as e:
+        return set(), "this session's transcript could not be read (" + type(e).__name__ + ")"
     lines = set()
     for meta, _ in found:
         listed, ref = meta.get("list"), meta.get("project_ref")
         if isinstance(listed, str) and listed.startswith("/") and isinstance(ref, str) and REF.fullmatch(ref):
             lines.add((os.path.realpath(listed), ref))
-    return lines
+    return lines, None
+
+
+def _unlooked(unread):
+    """What a question adds, of lines the record does not hold, when Dan's pickers could not be
+    looked for (unread, from _trusted_by_dan)."""
+    return ", and " + unread + ", so a picker of his in this session could not be looked for"
 
 
 # How Dan approves a line, said by every question about one he has not.
@@ -515,26 +522,33 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
     key = _digest("1", clone, prefix + LIST_PATH, ref)
     if key in approved:
         return None
-    if (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref) in _trusted_by_dan(session_id, transcript_path):
+    dan, unread = _trusted_by_dan(session_id, transcript_path)
+    if (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref) in dan:
         if not agent:
             _put_on_record([key])
         return None
+    if unread is not None:
+        return ("that line is not on this Mac's record of the lines Dan approved" + _unlooked(unread)
+                + ". A line counts only once he has approved it, whatever "
+                "commit, merge, pull, rebase or cherry pick carried it to HEAD. " + HOW_TO_TRUST)
     return ("Dan has approved that line in no picker, on this Mac's record or in this session, and a line counts "
             "only once he has, whatever commit, merge, pull, rebase or cherry pick carried it to HEAD. " + HOW_TO_TRUST)
 
 
 def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
-    """The lines of added, as _list_additions gives them for a commit in folder, that Dan has not
-    approved. One his picker in this session covers is put on the record unless the call is a
-    subagent's. Fails closed: when the clone, the record or the top of the checkout cannot be read,
-    every line is unapproved."""
+    """(the lines of added, as _list_additions gives them for a commit in folder, that Dan has not
+    approved; what the question says of them, reading after "which"). One his picker in this
+    session covers is put on the record unless the call is a subagent's. Fails closed: when the
+    clone, the record or the top of the checkout cannot be read, every line is unapproved, and the
+    question says what could not be read, as it does of a transcript (L11)."""
     clone, prefix, why = _clone(folder, deadline)
     approved, record_why = _on_record()
     r, top_why = _git(folder, ["rev-parse", "--show-toplevel"], deadline)
     if why is not None or record_why is not None or r is None or r.returncode != 0:
-        return added
+        unread = why or record_why or top_why or "git rev-parse failed (exit " + str(r.returncode) + ")"
+        return added, "could not be checked against the lines Dan approved: " + unread
     top_dir = r.stdout.decode("utf-8", "surrogateescape").rstrip("\n")
-    dan, left, keys = None, [], []
+    dan, unread, left, keys = None, None, [], []
     for p, line, top in added:
         # A list git does not track yet is named from folder; the record names every list from the top.
         rel = p if top else os.path.normpath(prefix + p).replace(os.sep, "/")
@@ -545,14 +559,15 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
         if key in approved:
             continue
         if dan is None:
-            dan = _trusted_by_dan(session_id, transcript_path)
+            dan, unread = _trusted_by_dan(session_id, transcript_path)
         if (os.path.realpath(os.path.join(top_dir, rel)), line) in dan:
             keys.append(key)
         else:
             left.append((p, line, top))
     if keys and not agent:
         _put_on_record(keys)
-    return left
+    return left, ("Dan has approved in no picker" if unread is None
+                  else "this Mac's record of the lines Dan approved does not hold" + _unlooked(unread))
 
 
 def on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True):
@@ -807,15 +822,16 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
                     + TEST_LIST + " could not be told: " + why)
         if added:
             # Each line once, though the index and the working tree may both hold it.
-            added = _not_approved(folder, list(dict.fromkeys(added)), deadline, session_id, transcript_path, agent)
+            added, unapproved = _not_approved(folder, list(dict.fromkeys(added)), deadline, session_id,
+                                              transcript_path, agent)
         if added:
             shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120)
                               for p, l, _ in added[:LINES_SHOWN])
             return ("the command `" + _shown(text) + "` would commit " + shown
                     + (", and more" if len(added) > LINES_SHOWN else "")
-                    + ", which Dan has approved in no picker. A project on a committed " + TEST_LIST + " has its "
-                    "supabase db query -f runs pass without asking only once he has, so answering yes here "
-                    "approves nothing: the line will mark no project as test. " + HOW_TO_TRUST)
+                    + ", which " + unapproved + ". A project on a committed " + TEST_LIST + " has its "
+                    "supabase db query -f runs pass without asking only once he has approved its line, so "
+                    "answering yes here approves nothing: the line will mark no project as test. " + HOW_TO_TRUST)
         if lists:
             for t, unread in before:
                 # cd, a reader, or a git add, rm or read, writing nothing by a redirection or option.

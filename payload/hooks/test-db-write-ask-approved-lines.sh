@@ -145,10 +145,15 @@ PY
 # in a picker for each ref the commit adds, the hook reads the commit before it runs, and git
 # commits. Prints the hook's answer before the commit.
 yes_commit() {
-  local cmd="git commit -q -m $2" r line
+  local cmd="git commit -q -m $2" r line added
+  # Read into a variable first, so no child is left that this shell never waits for (#2040). A
+  # commit adding nothing leaves one empty line here, which the pattern below does not match.
+  added="$(git -C "$1" diff --cached -U0 -- .claude/supabase-test-projects 2>/dev/null | grep -v '^+++')"
   while IFS= read -r line; do
     case "$line" in +[A-Za-z0-9_-]*) trust "$1" "${line#+}" ;; esac
-  done < <(git -C "$1" diff --cached -U0 -- .claude/supabase-test-projects 2>/dev/null | grep -v '^+++')
+  done <<ADDED
+$added
+ADDED
   r="$(before "$cmd" "$1" "${3:-s1}")"
   G "$1" commit -q -m "$2"
   printf '%s' "$r"
@@ -375,6 +380,13 @@ edit_payload() { python3 -c 'import json, sys; print(json.dumps({"session_id": "
 for t in Edit Write MultiEdit; do
   body="$(cd "$WORK" && edit_payload "$t" "$RECORD/approved" | env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" 2>/dev/null)"; r="$(said "$body" $?)"
   case "$r" in "ask rc=0|"*approved*3023*) check "a $t of the record of approved lines is asked about" ok ;; *) check "a $t of the record of approved lines is asked about" "${r:0:300}" ;; esac
+  # What adds to the record is Dan's picker, never a commit he was asked about: the question must
+  # not teach the rule the picker replaced.
+  case "$r" in
+    *"commit he answered yes"*) check "and the $t question names the picker he answered Trust, not a commit, as what adds to it" "it still says a commit he answered yes to adds to the record: ${r:0:400}" ;;
+    *"picker he answered Trust"*) check "and the $t question names the picker he answered Trust, not a commit, as what adds to it" ok ;;
+    *) check "and the $t question names the picker he answered Trust, not a commit, as what adds to it" "${r:0:400}" ;;
+  esac
 done
 r="$(before "echo 0000 >> $RECORD/approved" "$WORK")"
 case "$r" in "ask rc=0|"*"record of the test project lines Dan approved"*) check "a shell write to the record is asked about, naming it as the record" ok ;; *) check "a shell write to the record is asked about, naming it as the record" "${r:0:300}" ;; esac
@@ -391,6 +403,15 @@ if cat "$RECORD/approved" >/dev/null 2>&1; then
 else
   r="$(write "$R")"
   case "$r" in "ask rc=0|"*approved*"could not be read"*) check "a record that cannot be read trusts nothing, and the question says so" ok ;; *) check "a record that cannot be read trusts nothing, and the question says so" "${r:0:400}" ;; esac
+  # A commit adding a line then says the record could not be read, never that Dan approved the
+  # line in no picker, which nothing could look up (L11).
+  stage_line "$R" lockedref000000002
+  r="$(before 'git commit -q -m more' "$R")"
+  case "$r" in
+    "ask rc=0|"*"in no picker"*) check "and a commit adding a line says the record could not be read" "it claims he approved the line in no picker, with a record nothing could read: ${r:0:500}" ;;
+    "ask rc=0|"*lockedref000000002*"could not be checked against the lines Dan approved"*"could not be read"*"approves nothing"*) check "and a commit adding a line says the record could not be read" ok ;;
+    *) check "and a commit adding a line says the record could not be read" "${r:0:500}" ;;
+  esac
 fi
 chmod 600 "$RECORD/approved"
 # The record cannot be written: Dan's picker still covers this session's write, and nothing is kept.
@@ -406,6 +427,26 @@ else
   HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" unasked "and a later session's write is asked about" "$R" nowriteref00000001
 fi
 chmod 700 "$HOME_B/.claude/state/supabase-test-projects"
+# This session's transcript cannot be read: nobody looked for Dan's picker, so the question says
+# the transcript could not be read and never that he approved the line in no picker (L11). The
+# control is the same write with a transcript that reads and holds no picker.
+R="$WORK/notalk"; new_repo "$R" notalkref000000001
+stage_line "$R" notalkref000000001; G "$R" commit -q -m list
+r="$(TRANSCRIPT="$NONE_T" write "$R")"
+case "$r" in "ask rc=0|"*notalkref000000001*"in no picker"*) check "control: with a transcript that reads and holds no picker, the question says he approved it in no picker" ok ;; *) check "control: with a transcript that reads and holds no picker, the question says he approved it in no picker" "${r:0:500}" ;; esac
+r="$(TRANSCRIPT="$WORK/gone.jsonl" write "$R")"
+case "$r" in
+  "ask rc=0|"*"in no picker"*) check "a write with a transcript that is not there is asked about, saying the transcript could not be read" "it claims he approved the line in no picker, which nothing read: ${r:0:500}" ;;
+  "ask rc=0|"*notalkref000000001*"transcript"*"could not be read"*FileNotFoundError*3023*) check "a write with a transcript that is not there is asked about, saying the transcript could not be read" ok ;;
+  *) check "a write with a transcript that is not there is asked about, saying the transcript could not be read" "${r:0:500}" ;;
+esac
+stage_line "$R" notalkref000000002
+r="$(TRANSCRIPT="$WORK/gone.jsonl" before 'git commit -q -m more' "$R")"
+case "$r" in
+  "ask rc=0|"*"in no picker"*) check "and so is a commit adding a line, which says the same" "it claims he approved the line in no picker, which nothing read: ${r:0:500}" ;;
+  "ask rc=0|"*notalkref000000002*"transcript"*"could not be read"*FileNotFoundError*"approves nothing"*) check "and so is a commit adding a line, which says the same" ok ;;
+  *) check "and so is a commit adding a line, which says the same" "${r:0:500}" ;;
+esac
 # One budget bounds all the git a test project check runs, set short rather than waited out (L524).
 SLOWGIT="$WORK/slowgit"; mkdir -p "$SLOWGIT"
 printf '#!/bin/sh\nexec sleep 5\n' > "$SLOWGIT/git"; chmod +x "$SLOWGIT/git"

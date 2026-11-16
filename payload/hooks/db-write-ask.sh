@@ -314,14 +314,14 @@ if tool in ("Edit", "Write", "MultiEdit"):
         ask(tool + " writes " + listed + ", the list of the test Supabase projects of this checkout, whose "
             "supabase db query -f runs pass without asking", "2643", "edit of a test project list")
     # The record of the list lines Dan approved is held the same way (claude-config#3023): only a
-    # commit he answered yes to may add to it.
+    # picker he answered Trust may add to it, which this hook reads and no commit stands in for.
     try:
         recorded = ap.is_list_record(tool, d.get("tool_input"))
     except Exception as e:
         recorded = "the file (" + type(e).__name__ + " reading its path)"
     if recorded is not None:
         ask(tool + " writes " + recorded + ", in the record this hook keeps of the test project lines Dan "
-            "approved, which only a commit he answered yes to adds to", "3023",
+            "approved, which only a picker he answered Trust adds to", "3023",
             "edit of the record of approved test project lines")
     sys.exit()
 # A shell command that writes that list, and a commit that adds a line to one, are held the same way

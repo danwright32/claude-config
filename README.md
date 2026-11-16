@@ -4153,7 +4153,7 @@ of the clone, the list's path and the ref; the state folder is never synced), wh
 commits the line or runs a file on that project, so later sessions and every worktree of the clone
 do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
 MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
-(#2989), the question naming up to 8 such lines and how he approves one; a commit whose every added
+(#2989), the question naming up to eight of them and how he approves one; a commit whose every added
 line he approved passes.
 - Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
   after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
