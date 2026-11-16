@@ -550,7 +550,10 @@ const gitCallReads = async (text: string, at: number, read: OvernightCall['read'
     if (close < 0) return false
     body = body.slice(0, close)
   }
-  const stop = body.search(/[\n;|&)]/)
+  // The & of an `&>` or `&>>` redirect ends no command (#3021: cut there, `git log &> notes.md` was
+  // read as `git log` alone and the write went ahead), so the redirect stays a word of the line,
+  // unread as every word holding a > is, and the call is refused.
+  const stop = body.search(/[\n;|)]|&(?!>)/)
   const line = stop < 0 ? body : body.slice(0, stop)
   return gitArgsRead(line.split(/[ \t]+/).filter(Boolean).map(v => ({ lit: !/[{}$%`'"\\*?()<>[\]]/.test(v) && !v.startsWith('~'), v })), read)
 }
@@ -932,8 +935,12 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
-  // What rtk's proxy runs is read by mod-kit as that command, marked proxied (#2983).
-  if (call.commands.some(c => c.unread)) return PROXY_UNREAD
+  // What rtk's proxy runs is read by mod-kit as that command, marked proxied (#2983). Every command
+  // mod-kit marks unread is refused whole, with mod-kit's own reason (#3021): the word rtk's proxy
+  // splits, and eval, a command a value names, an alias, ssh and a trap whose text the shell
+  // expands, whose words are not what runs.
+  const unread = call.commands.find(c => c.unread)?.unread
+  if (unread) return unread.startsWith('split by rtk proxy') ? PROXY_UNREAD : `run a command ${unread}`
   for (const c of call.commands) {
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
@@ -965,7 +972,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !(await gitReadsOnly(c.program.text, call.read))) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
-    // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
+    // (chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
     // running it are let through; a command missing from that list fails closed. The word is a gh
     // call only when gh could reach one of its subcommands from it (ghRunsFrom): a search term or a

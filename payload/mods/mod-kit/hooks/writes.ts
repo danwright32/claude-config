@@ -1308,6 +1308,14 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
     const list = (into.stdout ??= [])
     if (!list.some(x => (o.path ? x.path === o.path : !x.path && x.word === o.word))) list.push(o)
   }
+  addUnread(into, from.unread ?? [])
+}
+// Each command whose effect cannot be read (#3021), once for the same words and reason.
+const addUnread = (into: ModKitWrites, unread: readonly { words: string[]; why: string }[]) => {
+  for (const u of unread) {
+    const list = (into.unread ??= [])
+    if (!list.some(x => x.why === u.why && x.words.length === u.words.length && x.words.every((w, i) => w === u.words[i]))) list.push(u)
+  }
 }
 
 // A command line's changes with those of every substitution the shell runs in it (#965), each given
@@ -1322,9 +1330,13 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
 // Each command is placed as `pipeline` places it (substitution, asWritten), so a program a
 // substitution runs is one the shell may have changed here too (#1171: the write reader never
 // marked one, so its `code` was given for it).
+// A command the reader marks `unread` (#3021: eval, a command a value names, an alias, ssh, a trap
+// whose text the shell expands, a word rtk's proxy splits) is given in `unread` with why, beside
+// whatever its words still name: what it changes cannot be read, which is never the same as nothing.
 const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): ModKitWrites => {
   const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
   const out = writes(cmds, cwd, home)
+  addUnread(out, cmds.flatMap(c => (c.unread ? [{ words: c.words, why: c.unread }] : [])))
   const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
   for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home, true))
   return out

@@ -24,8 +24,10 @@ const CLOSES = new Set(['fi', 'done', '}', 'esac'])
 // word or the next (sudo -u dan, stdbuf -oL), `attached` only in the same word (xargs -i{}), `long`
 // are the long options taking the next word unless written with =, `leading` the words before the
 // command (timeout's duration), and `noRun` the options under which it runs nothing (command -v
-// only prints where a command is). A Map, so a command named constructor is no runner (L738).
-type Runner = { values?: string; attached?: string; long?: string[]; leading?: number; noRun?: string }
+// only prints where a command is). `whole` is for a runner whose options are whole words after one
+// dash (arch's -x86_64): those listed take the next word, and every other takes none. A Map, so a
+// command named constructor is no runner (L738).
+type Runner = { values?: string; attached?: string; long?: string[]; leading?: number; noRun?: string; whole?: string[] }
 const TIMEOUT: Runner = { values: 'ks', long: ['--kill-after', '--signal'], leading: 1 }
 const RUNNERS = new Map<string, Runner>([
   ['sudo', { values: 'CDghpRrTtUu', long: ['--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host', '--other-user', '--prompt', '--role', '--type', '--user'] }],
@@ -41,6 +43,13 @@ const RUNNERS = new Map<string, Runner>([
   ['stdbuf', { values: 'eio', long: ['--error', '--input', '--output'] }],
   ['xargs', { values: 'aEdIJLnPRSs', attached: 'eil', long: ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'] }],
   ['caffeinate', { values: 'tw' }],
+  // #3021 (the lessons review of PR #3008: `setsid cp a "$like"` was read as writing nothing). flock
+  // runs the command after its lock file, or with -c after the file a string its shell runs
+  // (begins); given only a descriptor it runs none. ionice naming a process (-p, -P, -u) runs none.
+  ['setsid', {}],
+  ['flock', { values: 'wE', long: ['--wait', '--timeout', '--conflict-exit-code'], leading: 1 }],
+  ['ionice', { values: 'cn', long: ['--class', '--classdata', '--pid', '--pgid', '--uid'], noRun: 'pPu' }],
+  ['arch', { whole: ['-arch', '-d', '-e'] }],
   // rtk runs the command after it for a shorter output, and rtk-rewrite.sh writes it in front of
   // every gh and git command, so `rtk gh pr merge 7` is a merge to every guard (claude-config#1181:
   // the overnight judge read it as a command named rtk while the merge gates read the merge).
@@ -64,6 +73,10 @@ const runs = (words: string[], at: number, r: Runner): number | undefined => {
       continue
     }
     if (!w.startsWith('-')) break
+    if (r.whole) {
+      if (r.whole.includes(w)) i++
+      continue
+    }
     for (let j = 1; j < w.length; j++) {
       const letter = w[j] as string
       if (r.noRun?.includes(letter)) return undefined
@@ -296,6 +309,29 @@ const namesFunction = (words: readonly string[], given: 1 | 2): boolean => {
   if (given === 2) return k >= 2 && words[k - 2] === 'function' && words.slice(0, k - 2).every(w => LEADS.has(w))
   return words.slice(0, word ? k - 1 : k).every(w => LEADS.has(w))
 }
+// Where the `]]` closing a test whose text starts at `from` stands (#3021), or -1: a `]]` standing
+// as a word of its own, outside quotes and substitutions, before the line or the command ends (a
+// new line, a `;`, a comment). A test that cannot be followed that far is not read as one.
+const testEndFrom = (cmd: string, from: number): number => {
+  for (let i = from; i < cmd.length; i++) {
+    const c = cmd[i] as string
+    if (c === '\n' || c === ';') return -1
+    if (c === '\\') i++
+    else if (c === "'") {
+      i = cmd.indexOf("'", i + 1)
+      if (i < 0) return -1
+    } else if (c === '"') {
+      for (i++; i < cmd.length && cmd[i] !== '"'; i++) {
+        if (cmd[i] === '\\') i++
+        else if (cmd[i] !== '<' && cmd[i] !== '>') i = subEnd(cmd, i) ?? i
+      }
+      if (i >= cmd.length) return -1
+    } else if (c === '#' && /\s/.test(cmd[i - 1] as string)) return -1
+    else if (subEnd(cmd, i) !== undefined) i = subEnd(cmd, i) as number
+    else if (c === ']' && cmd[i + 1] === ']' && /\s/.test(cmd[i - 1] as string) && /^(?:[\s;&|)]|$)/.test(cmd.slice(i + 2, i + 3))) return i
+  }
+  return -1
+}
 const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
@@ -406,6 +442,8 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     listed()
     cmds.push({ words: ['esac'], starts: [at] })
   }
+  // Where the `]]` of the test being read stands (#3021), -1 outside one.
+  let testEnd = -1
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i] as string
     if (quote) {
@@ -460,6 +498,29 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       word = ''
       inWord = false
       closeCase(at)
+    }
+    // A `[[` where a command would begin opens a test (#3021), one command to its `]]`: its && and
+    // || and its parentheses are words of it, and a lone & or |, or one inside a word's own
+    // parentheses (a pattern it matches), is a character. Split at them, `[[ -z "$r" || "$r" == x ]]`
+    // gave a command named `$r`. Only where its `]]` is found on the same line (testEndFrom):
+    // otherwise it is read as before, so a command after a test never closed is not joined into it.
+    if (c === '[' && !inWord && i >= testEnd && cmd[i + 1] === '[' && /\s/.test(cmd[i + 2] ?? '') && words.every(w => LEADS.has(w))) testEnd = testEndFrom(cmd, i + 2)
+    if (i < testEnd && (c === '&' || c === '|')) {
+      if (wordParens === 0 && cmd[i + 1] === c) {
+        endWord()
+        words.push(c + c)
+        starts.push(i++)
+      } else {
+        begin(i)
+        word += c
+      }
+      continue
+    }
+    if (i < testEnd && wordParens === 0 && ((c === '(' && !inWord) || c === ')')) {
+      endWord()
+      words.push(c)
+      starts.push(i)
+      continue
     }
     const sub = subEnd(cmd, i)
     if (sub !== undefined) {
@@ -643,6 +704,13 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
     }
     const next = runs(w, i, runner)
     if (next === undefined) break
+    // flock's -c after its lock file is a string its shell runs (#3021), read as a shell's -c is.
+    if (name === 'flock' && (w[next] === '-c' || w[next] === '--command')) {
+      w = ['sh', '-c', ...w.slice(next + 1)]
+      s = [-1, -1, ...s.slice(next + 1)]
+      i = 0
+      continue
+    }
     if (name === 'xargs') xargs = true
     const proxy = name === 'rtk' && w[next] === 'proxy' ? proxyRuns(w, next) : undefined
     if (proxy === null) break
@@ -676,10 +744,64 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
   return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}) }
 }
 
+// Why what a command runs cannot be read from its words (#3021), or undefined. Until then the reader
+// gave each of these as its words alone, so every guard judged the words and never what runs:
+// eval runs its text as commands; an alias changes what a later word runs; ssh runs its command on
+// another machine, where no reader here follows it; a trap whose text the shell expands runs text
+// nobody can read before then (the text as written is still read, readLine); and a command named
+// by a value (`"$@"`, `$cmd`, `$(command -v x)`, a process substitution) is whatever that value
+// holds. A name spelled after the value (`"$HOME/bin/tool"`) names the program as any path does,
+// unless the value stands bare where the shell splits it into words (`bare`, #1834), when it may
+// be the command and its words. A word whose every $ is text (`unexpanded`, #1953), one that sets
+// a variable, and a value inside arithmetic (`arithmetic`) name no command by a value. A caller
+// that knows no places (a find -exec's words) takes every $ and backtick as one the shell expands.
+// `builtin` is looked past: it runs the eval, alias or trap after it.
+const EVAL_UNREAD = 'run as text by eval, so what it runs cannot be read'
+const NAMED_UNREAD = 'named by a value the shell expands, so what it runs cannot be read'
+const ALIAS_UNREAD = 'setting an alias, which changes what a later word runs, so that cannot be read'
+const TRAP_UNREAD = 'setting a trap whose text the shell expands, so what it runs later cannot be read'
+const SSH_UNREAD = 'run by ssh on another machine, so what it does cannot be read'
+const SETS_PART = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
+const PLAIN_NAME = /^[A-Za-z0-9._+@%,:-]+$/
+type Places = { unexpanded?: boolean[]; bare?: number[][]; arithmetic?: boolean }
+const pastBuiltin = (words: readonly string[]): number => (words[0] === 'builtin' ? 1 : 0)
+const unreadOf = (words: readonly string[], p: Places): string | undefined => {
+  const o = pastBuiltin(words)
+  const head = words[o] ?? ''
+  const name = head.split('/').pop() ?? ''
+  const isText = (n: number) => p.unexpanded?.[n] === true
+  if (name === 'eval' && words.length > o + 1) return EVAL_UNREAD
+  if (name === 'alias' && words.slice(o + 1).some(w => !w.startsWith('-') && w.includes('='))) return ALIAS_UNREAD
+  if (name === 'ssh') return SSH_UNREAD
+  const text = trapText(words)
+  if (text !== undefined && /[$`]/.test(words[text] as string) && !isText(text)) return TRAP_UNREAD
+  if (/^[<>]\(/.test(head)) return NAMED_UNREAD
+  if (p.arithmetic || !/[$`]/.test(head) || isText(o) || SETS_PART.test(head)) return undefined
+  if (p.bare?.[o]?.length) return NAMED_UNREAD
+  return head.includes('/') && PLAIN_NAME.test(name) ? undefined : NAMED_UNREAD
+}
+// Which word of a trap is the text it runs later (#3021), or undefined when it runs none: `trap`
+// alone, -l and -p list; `-` resets and '' ignores; a number or a lone word is a signal to reset.
+// The text follows a `--` (the lessons review of PR #3008: `trap -- body EXIT` was read as running
+// `--`), and a signal follows the text.
+const trapText = (words: readonly string[]): number | undefined => {
+  const o = pastBuiltin(words)
+  if (words[o] !== 'trap') return undefined
+  const dashes = words[o + 1] === '--'
+  const k = o + (dashes ? 2 : 1)
+  const text = words[k]
+  if (text === undefined || words.length < k + 2) return undefined
+  if (text.trim() === '' || text === '-' || /^\d+$/.test(text) || (!dashes && /^-[lp]/.test(text))) return undefined
+  return k
+}
+
 // rtk's proxy (#2983, measured on rtk 0.31.0, `rtk proxy --help`): -v (repeatable), -u and
 // --skip-env take no value, and -h or --help prints its help and runs nothing. Where the command it
-// runs begins, or null when it runs none. An option it does not know is the command to rtk, which
-// then fails to start it; reading past one instead judges the words after it as the command.
+// runs begins, or null when it runs none. An option it does not know is read past, as one of its
+// own is, so the words after it are judged as the command. rtk 0.31.0 itself takes such an option
+// for the command and fails to start it (measured again on 2026-11-15: `rtk proxy --bogus echo hi`
+// and `rtk proxy -x echo hi` both end "Failed to execute command"), so reading past one judges a
+// command that never runs, the stricter reading, and holds if a later rtk learns the option.
 const proxyRuns = (words: readonly string[], at: number): number | null => {
   let i = at + 1
   for (; i < words.length; i++) {
@@ -875,9 +997,12 @@ const printfText = (args: readonly string[]): string | undefined => {
  * the shell hands it on with no expansion; absent where no word is one. Read for every shell, where
  * `splits` is for one that splits words.
  * `proxied` marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as
- * every runner is, unfiltered by rtk; `unread`, on one, says why what it runs cannot be read: given
- * one word, rtk splits it into the command itself, and a word the shell expands holds what nobody
- * can read before it runs. Its words are never what runs; sleep mode refuses one.
+ * every runner is, unfiltered by rtk.
+ * `unread` says why what a command runs cannot be read from its words: given one word, rtk's proxy
+ * splits it into the command itself, and a word the shell expands holds what nobody can read before
+ * it runs (#2983); and eval, a command a value names, an alias, ssh and a trap whose text the shell
+ * expands (#3021, unreadOf). Its words are never all of what runs, so every guard holds or refuses
+ * one, never judging it by its words alone.
  */
 export type Command = {
   words: string[]
@@ -995,8 +1120,9 @@ export type Line = (Command | { sub: Line })[]
 // input, and whether xargs runs them, each given to every command no | of its own feeds. `splits`
 // says the shell running them splits an unquoted expansion's value into words (#1834): the one a
 // Bash call runs in, at the top, and the shell itself for the script it is given. `proxied` and
-// `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983).
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string }
+// `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983). `arithmetic` says
+// the one command it feeds stands inside `(( ))`, where a value names no command (#3021).
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean }
 // The marks a feed gives each command it feeds.
 const carried = (f: Feed) => ({
   ...(f.xargs ? { xargs: true as const } : {}),
@@ -1053,11 +1179,13 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   // The language is said only where there is a program or script in it to read.
   const language = program || script ? languageOf(kind) : undefined
   const verdict = language && program && 'text' in program ? codeVerdict(language, program.text) : undefined
+  // Why what it runs cannot be read (#3021, unreadOf), where nothing before it already said so.
+  const unread = feed.unread ?? unreadOf(words, { unexpanded, bare: splits, arithmetic: feed.arithmetic })
   out.push({
     words,
     ...(feed.pipedFrom ? { pipedFrom: feed.pipedFrom } : {}),
     ...(fed.length ? { heredocs: fed } : {}),
-    ...carried(feed),
+    ...carried({ ...feed, unread }),
     ...(language ? { language } : {}),
     ...(program ? { program } : {}),
     ...(script ? { script } : {}),
@@ -1201,9 +1329,34 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     })
     return fed
   }
+  // The commands standing inside `(( ... ))` (#3021), where a value names no command: between two (
+  // written together and the two ) written together that close them, no other parenthesis between.
+  const arithmetic = new Set<number>()
+  const paren = (k: number, p: string) => read[k]?.words.length === 1 && read[k]?.words[0] === p
+  const together = (k: number) => read[k + 1]?.starts[0] === (read[k]?.starts[0] ?? -2) + 1
+  for (let k = 0; k + 1 < read.length; k++) {
+    if (!paren(k, '(') || !paren(k + 1, '(') || !together(k)) continue
+    let j = k + 2
+    while (j < read.length && !paren(j, '(') && !paren(j, ')')) j++
+    if (paren(j, ')') && paren(j + 1, ')') && together(j)) for (let m = k + 2; m < j; m++) arithmetic.add(m)
+  }
+  // Each trap's text (#3021, trapText), read as the commands it runs once the rest of what its
+  // shell runs is read: at the ) closing the subshell that set it, or at the end. Until then it was
+  // a word of the trap, so `trap 'git push' EXIT` pushed past every guard, and the two mods reading
+  // a trap's text themselves each read `trap -- text` their own way. It is read as it is written,
+  // in the shell that set it; where the shell expands it first, the trap is unread too (unreadOf).
+  const later: string[][] = [[]]
+  const laterFeed: Feed = { ...carried(outer), ...(outer.splits ? { splits: true } : {}) }
+  const runLater = (texts: string[]) => {
+    for (const t of texts) out.push(...readLine(t, opts, laterFeed))
+  }
   read.forEach((r, k) => {
     runSubs(k)
     const b = begun[k] as Begun
+    if (paren(k, '(')) later.push([])
+    if (paren(k, ')') && later.length > 1) runLater(later.pop() as string[])
+    const trap = trapText(b.words)
+    if (trap !== undefined) (later[later.length - 1] as string[]).push(b.words[trap] as string)
     if (b.words.length === 0) {
       // A command that only sets variables runs nothing, so it is no command, unless the reader
       // asked for it (#743): then it is given as its assignments.
@@ -1218,10 +1371,11 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       const feeder = f.words.length ? f.words : (read[r.from] as Split).words
       feed = { pipedFrom: feeder, stdin: piped(feeder, fedOf(f)) }
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
-    feed = { ...feed, ...marksOf(b, outer) }
+    feed = { ...feed, ...marksOf(b, outer), ...(arithmetic.has(k) ? { arithmetic: true } : {}) }
     if (outer.found) feed = { ...feed, found: outer.found }
     emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b))
   })
+  for (const texts of later.reverse()) runLater(texts)
   return out
 }
 
