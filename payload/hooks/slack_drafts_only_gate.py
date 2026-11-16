@@ -1310,6 +1310,33 @@ def sh_bind_pattern(kind, name):
     return re.compile(SH_BINDERS.format(n))
 
 
+# The words a binder (SH_BINDERS) must hold, one of them in its match: a text or a line with none of
+# them binds nothing that way.
+SH_BINDER_WORDS = re.compile(r"read|for|select|local|declare|typeset|export|unset|getopts|mapfile|let|printf|\$\{")
+# What sh_bind_pattern("assign") matches after the name, and a character before it that makes the name
+# the end of a longer word.
+SH_ASSIGN_TAIL = re.compile(r"(?:\[[^\]\n]*\])?\+?=")
+SH_WORD_BEFORE = re.compile(r"[\w$]")
+
+
+def sh_assign_starts(name, text):
+    """Where sh_bind_pattern("assign", name).finditer(text) finds a match, in order, found with
+    str.find and two patterns compiled once rather than one compiled for each name (claude-config#2918).
+    A name that is not one run of word characters is left to that pattern."""
+    if not SH_WORD_RUN.fullmatch(name):
+        for m in sh_bind_pattern("assign", name).finditer(text):
+            yield m.start()
+        return
+    width, at = len(name), text.find(name)
+    while at >= 0:
+        tail = None if at and SH_WORD_BEFORE.match(text, at - 1) else SH_ASSIGN_TAIL.match(text, at + width)
+        if tail:
+            yield at
+            at = text.find(name, tail.end())
+        else:
+            at = text.find(name, at + 1)
+
+
 @functools.lru_cache(maxsize=None)
 def sh_eval_mention(names):
     """Where a command mentions any of names (the functions of a text that evaluate an argument) as a
@@ -1623,6 +1650,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
         self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
         self.indirect_memo = {}  # {a command's text: sh_indirect's answer for it}
+        self.tokens_memo = {}  # {a text: its sh_tokens, as a tuple}
         # {id of a walk's result: (that result, the starts of its uncertain spans in order, the furthest
         # end of the spans up to each)}, for sh_cwd_at
         self.cwd_spans = {}
@@ -3997,14 +4025,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # Counted only until the count passes allowed, which settles it: sh_locals asks this of the
         # whole of claude-sync less the bodies around one local, 629 times for the claude-sync suite,
         # and counting every assignment there was 0.4 s of it (claude-config#2918).
+        # No pattern is compiled for name where none is needed (claude-config#2918): an assignment is
+        # found by str.find (sh_assign_starts), and each pattern below holds a piece of text of its own,
+        # so a text without that piece is settled without one. That was 1,400 of the 2,300 patterns
+        # compiled judging the claude-sync suite, 0.07 s, each also pushing out of the re module's
+        # cache a pattern the rest of the gate asks it for.
         count = 0
-        for m in sh_bind_pattern("assign", name).finditer(text):
-            if not sh_comment_at(text, m.start()) and not sh_quoted_word_at(text, m.start()):
+        for at in sh_assign_starts(name, text):
+            if not sh_comment_at(text, at) and not sh_quoted_word_at(text, at):
                 count += 1
                 if count > allowed:
                     return True
-        if any(not sh_comment_at(text, m.start()) for m in sh_bind_pattern("arithmetic", name).finditer(text)):
+        if "((" in text and any(not sh_comment_at(text, m.start())
+                                for m in sh_bind_pattern("arithmetic", name).finditer(text)):
             return True
+        if not SH_BINDER_WORDS.search(text):
+            return False
         # A binder never spans a line (no newline can sit inside one), so only the lines that hold the
         # name are read, each by its own bounds: a lookbehind and \b still see the text around them,
         # and the line break at the end reads as the end does. The same matches as one pass over the
@@ -4016,6 +4052,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             end = text.find("\n", at)
             end = len(text) if end < 0 else end
             pos = start if not text[start:end].lstrip(" \t").startswith("#") else end
+            if not SH_BINDER_WORDS.search(text, pos, end):
+                pos = end  # no binder's own word on this line
             while pos < end:
                 binders = binders or sh_bind_pattern("binders", name)
                 m = binders.search(text, pos, end)
@@ -4869,7 +4907,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return argv, env
 
     def sh_tokens(self, s):
-        """s's words and operators, as (kind, raw text), up to the first unquoted line break."""
+        """s's words and operators, as (kind, raw text), up to the first unquoted line break, read once
+        for each text, as a list of the caller's own: judging the claude-sync suite asked for 50,000
+        readings of 20,000 texts, 0.09 s of them repeats (claude-config#2918)."""
+        got = self.tokens_memo.get(s)
+        if got is None:
+            got = self.tokens_memo[s] = tuple(self.sh_tokens_read(s))
+        return list(got)
+
+    def sh_tokens_read(self, s):
+        """sh_tokens, read afresh."""
         out, i, n = [], 0, len(s)
         while i < n:
             c = s[i]
@@ -6809,6 +6856,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             cur = parent
 
     @staticmethod
+    @functools.lru_cache(maxsize=1024)
     def fed(text, whole):
         """(what a command reading its input is fed, whether that is a heredoc body) for one record.
 
@@ -6817,6 +6865,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pipeline the command sits in, so the line holding it is what feeds it. Where neither can be
         found, the whole line is, which can only refuse more, never less. The same command written
         twice in a script reads the same here, so every place it is written counts.
+
+        Worked out once for each (text, whole): it depends on them alone, and judging the claude-sync
+        suite asked it 285 times of 190, the repeats 0.08 s of searching the suite's 1.8 MB again
+        (claude-config#2918).
         """
         lines, starts = lines_of(whole)
         key = text.strip()
