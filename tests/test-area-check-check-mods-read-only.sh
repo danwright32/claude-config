@@ -54,7 +54,19 @@ fi
 
 NAMED="$ROOT/payload/mods/area-check/hooks/named.ts"
 # Resolved, since git names a checkout by where it really is and macOS's temporary folder is a link.
-TMP="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-check-mods.XXXXXX")" && pwd -P)"
+# A failed mktemp must stop here: `cd ""` stays where it is, so TMP would be the folder this ran
+# from and the EXIT trap below would delete it.
+TMP_MADE="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-check-mods.XXXXXX")" && [ -d "$TMP_MADE" ] || {
+  echo "FAIL: $(basename "$0"): no temporary folder could be made, so nothing was run"
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+TMP="$(cd "$TMP_MADE" && pwd -P)"
+case "$TMP" in "${TMPDIR:-/tmp}"*|/private/*|/tmp/*|/var/folders/*) ;; *)
+  echo "FAIL: $(basename "$0"): the temporary folder resolved to $TMP, outside the temporary area, so nothing was run"
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1 ;;
+esac
 trap 'rm -rf "$TMP"' EXIT
 
 # ---- The list, held to the texts ----
