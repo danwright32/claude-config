@@ -4790,6 +4790,29 @@ test('#3017: beside a sibling no reader can follow, a mod registering a band, a 
   expect(w.ran).toEqual([])
 })
 
+// #3027: #3017's drawsNothing read every file in the folders inside a mod's hooks folder on every
+// judgement of a hook .ts change, used or not. They are read only when the judgement needs them (a
+// sibling no reader can follow), once per mod for the call; a comment only edit, or any edit in a mod
+// read whole, reads none of them.
+test('#3027: the folders inside a mod hooks folder are read only when the draws nothing check needs them, once per mod for the call', withKit, async ($, on) => {
+  const HOLD = `${DRG}/hooks/mod-kit/hold.ts`
+  const w = world($, on, {
+    files: { ...DRG_FILES, [`${DRG}/hooks/rules.ts`]: DRG_RULES_OURS },
+    blobs: { [`/w/slate :2:${DRG_REL}/register.ts`]: DRG_REGISTER, [`/w/slate :2:${DRG_REL}/rules.ts`]: DRG_RULES_OURS },
+  })
+  const holdReads = () => w.reads.filter(p => p === HOLD).length
+  // Read whole: a logic edit and a comment only edit read nothing inside.
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: DRG_LOG, new_string: `  // say so\n${DRG_LOG}` }))).toBe('')
+  expect(holdReads()).toBe(0)
+  // A sibling no reader can follow: needed, and read once for the call however many files it judges.
+  w.files[`${DRG}/hooks/rules.ts`] = DRG_RULES_CONFLICT
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  expect(holdReads()).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${DRG_REL}/register.ts ${DRG_REL}/rules.ts` }))).toBe('')
+  expect(holdReads()).toBe(2)
+})
+
 test('#3017: an untracked scratch copy of a rendering mod file is judged as #2991 left it: written, held; taken away, run', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate-wt', files: { ...ONEMOD_FILES, [`${SCRATCH}/.keep`]: '' } })
   w.ctl.untracked = Object.keys(ONEMOD_FILES)

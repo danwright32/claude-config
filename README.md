@@ -6992,7 +6992,9 @@ be read (a merge conflict left in one) is held only where the mod draws at all, 
 code (rules.ts `drawsNothing`): a `.tsx` or `.jsx` file, a surface named in any file of its hooks
 folder or the folders inside it (any `ui.` member but `log`, `toast` and `ask`; mod-kit's band row,
 pane, card or buttons), or a line built. A mod drawing nothing, such as this guard, is judged as
-code there. Since #1296 a value reaching what draws through a
+code there. Since #3027 the folders inside the hooks folder are read only where that answer needs
+them, once per mod for a call (a shell write still reads them before it runs). Since #1296 a value
+reaching what draws through a
 local or a function's parameter is followed too (a card's sentence handed to a function that draws
 it, a card's words held in a local, what a function a followed value calls returns), compared with
 what it treats as data taken out, so what a call it makes is handed, what a value is only tested

@@ -48,6 +48,9 @@ import {
   drawnParts,
   drawsNothing,
   modHookTsChange,
+  modHookTsChangeUnread,
+  BEYOND_UNREAD,
+  type HookChange,
   messageWords,
   type Worded,
   isOwnRecord,
@@ -1185,6 +1188,7 @@ const drawingChange = async (
   input: Record<string, unknown>,
   notAlone: string | undefined,
   watch: Watched[],
+  beyondOf: (dir: string) => Promise<ModFile[] | null>,
 ): Promise<'held' | 'pass' | { unread: string } | { words: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
@@ -1196,7 +1200,11 @@ const drawingChange = async (
   } catch {
     return 'held'
   }
-  const beyond = await hooksBeyond($, dir)
+  // What modHookTsChange answers, the folders inside the hooks folder read only where it needs them (#3027).
+  const changeOf = async (before: string | undefined, after: string | undefined): Promise<HookChange | undefined> => {
+    const first = modHookTsChangeUnread(files, name, before, after)
+    return first === BEYOND_UNREAD ? modHookTsChange(files, name, before, after, await beyondOf(dir)) : first
+  }
   let now = files.find(f => f.name === name)?.text
   let after: string | undefined
   if (t.from !== undefined) {
@@ -1212,9 +1220,12 @@ const drawingChange = async (
     // Held where the file draws now. One that only sends a message passes (#2845), unrecorded: what
     // the call would change in it cannot be read, so no words can be named.
     if (tool !== 'Bash') {
-      const change = modHookTsChange(files, name, undefined, now, beyond)
+      const change = await changeOf(undefined, now)
       return change && 'look' in change ? 'held' : 'pass'
     }
+    // A shell write is judged once it ran, against the folders inside the hooks folder as they stood
+    // before it, so they are read now, whatever the judgement after needs.
+    const beyond = await beyondOf(dir)
     // A file whose drawing cannot be read now could not be judged after either: held, unless its
     // mod draws nothing (#3017), when what the command leaves is judged as an edit there would be.
     if (drawnParts(files, name) === null && !drawsNothing(files, name, now, now, beyond)) return 'held'
@@ -1240,13 +1251,13 @@ const drawingChange = async (
       }
       if (nowOpen && was !== undefined) return 'pass'
     } else if (nowOpen && was !== undefined) {
-      const change = modHookTsChange(files, name, was, after, beyond)
+      const change = await changeOf(was, after)
       if (change && 'look' in change) return 'held'
       midEdits.delete(t.path)
       return change ?? 'pass'
     }
   }
-  const change = modHookTsChange(files, name, now, after, beyond)
+  const change = await changeOf(now, after)
   return !change ? 'pass' : 'look' in change ? 'held' : change
 }
 
@@ -1474,6 +1485,17 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
+  // The files in the folders inside each mod's hooks folder (hooksBeyond), read the first time this
+  // call's judging needs them and kept for the rest of the call (#3027).
+  const beyondRead = new Map<string, Promise<ModFile[] | null>>()
+  const beyondOf = (dir: string): Promise<ModFile[] | null> => {
+    let got = beyondRead.get(dir)
+    if (!got) {
+      got = hooksBeyond($, dir)
+      beyondRead.set(dir, got)
+    }
+    return got
+  }
   // The mod hook files the call changes only in a message's words (#2845), by path, with their
   // checkout and the words: never held, and recorded where their issue has no answer from Dan.
   const wordedIn = new Map<string, { tree: string; words: string }>()
@@ -1711,7 +1733,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null)
       notFirst = await restoreAlone($, String(input.command ?? ''), true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])))
     if (modTs) {
-      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch)
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch, beyondOf)
       if (drawn === 'pass') continue
       if (drawn !== 'held' && 'words' in drawn) {
         wordedIn.set(t.path, { tree, words: drawn.words })

@@ -3672,7 +3672,8 @@ export const messageWords = (files: readonly ModFile[], name: string, before: st
 /**
  * Whether changing the mod hook file `name` from `before` to `after` (undefined for a file not there)
  * changes what its mod draws (#1275), read beside the mod's other hook files in `files`: whether
- * drawnParts differ. A file any of them cannot be read in is held, never passed.
+ * drawnParts differ, and true where any of them cannot be read. modHookTsChange holds that only
+ * where the mod draws at all (drawsNothing, #3017); in a mod drawing nothing it is judged as code.
  */
 export const drawsChange = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean => {
   const others = files.filter(f => f.name !== name)
@@ -3685,8 +3686,10 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
 
 /**
  * What changing a mod's plain TypeScript hook file changes (#1859, #2845): `look` where it changes
- * what the mod draws, or where that cannot be read; `words`, as messageWords names them, where it
- * changes only the words of a message a person reads; undefined where neither.
+ * what the mod draws, or where that cannot be read in a mod that draws at all (#3017: in a mod that
+ * draws nothing, drawsNothing, a file that cannot be read is judged as code); `words`, as
+ * messageWords names them, where it changes only the words of a message a person reads; undefined
+ * where neither.
  */
 export type HookChange = { look: true } | { words: string }
 /** A file an automatic pass let through because only a message's words changed (#2845), with the words messageWords names. */
@@ -3707,17 +3710,50 @@ export const modHookTsChange = (
   before: string | undefined,
   after: string | undefined,
   beyond: readonly ModFile[] | null = null,
-): HookChange | undefined => {
+): HookChange | undefined => hookChange(files, name, before, after, beyond) as HookChange | undefined
+
+/**
+ * modHookTsChange before the folders inside the hooks folder are read (#3027): its answer, or
+ * BEYOND_UNREAD where only they can give it, so a caller reads them then and asks modHookTsChange.
+ */
+export const modHookTsChangeUnread = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookChange | undefined | typeof BEYOND_UNREAD =>
+  hookChange(files, name, before, after, BEYOND_UNREAD)
+
+const hookChange = (
+  files: readonly ModFile[],
+  name: string,
+  before: string | undefined,
+  after: string | undefined,
+  beyond: Beyond,
+): HookChange | undefined | typeof BEYOND_UNREAD => {
   // #3017: drawsChange holds a file whose mod cannot be read whole (a merge conflict left beside it);
   // that is right only where the mod draws at all. `beyond` is what the folders inside the hooks
   // folder hold; a caller handing none has read nothing there, which proves nothing (lessons review).
+  // A caller that has not read them yet (BEYOND_UNREAD, #3027) is answered BEYOND_UNREAD where the
+  // answer needs them, and reads them only then.
   const blank = () => drawsNothing(files, name, before, after, beyond)
-  if (drawsChange(files, name, before, after) && !blank()) return { look: true }
+  if (drawsChange(files, name, before, after)) {
+    const none = blank()
+    if (none === BEYOND_UNREAD) return none
+    if (!none) return { look: true }
+  }
   const words = messageWords(files, name, before, after)
   // A mod drawing nothing whose messages cannot be read is judged as code: no words are claimed.
-  if (words === '' && blank()) return undefined
+  if (words === '') {
+    const none = blank()
+    if (none === BEYOND_UNREAD) return none
+    if (none) return undefined
+  }
   return words === undefined ? undefined : { words }
 }
+
+/**
+ * What a caller hands drawsNothing and modHookTsChange for the files in the folders inside a mod's
+ * hooks folder (#3017): the files, null where they could not be read (which proves nothing), or
+ * BEYOND_UNREAD where it has not read them yet (#3027), so it reads them only where the answer needs them.
+ */
+export const BEYOND_UNREAD: unique symbol = Symbol('the folders inside the hooks folder are not read yet')
+export type Beyond = readonly ModFile[] | null | typeof BEYOND_UNREAD
 
 // #3017: where a mod draws, read in its raw text, comments and strings included, so text no reader
 // can follow (a merge conflict) is read too, and a mention counts: a hold costs Dan one answer, a
@@ -3735,13 +3771,17 @@ export const registersSurface = (file: ModFile): boolean => /\.(tsx|jsx)$/i.test
  * folder (`files`) or the folders inside it (`beyond`, null where they could not be read, which
  * proves nothing), registers a surface (registersSurface), and no file read on its own builds what
  * mod-kit draws (drawnParts), a file no reader can follow on its own being judged by its surfaces alone.
+ * With `beyond` not read yet (BEYOND_UNREAD, #3027), false where the hooks folder alone shows the mod
+ * draws, and BEYOND_UNREAD where only the folders inside it can answer.
  */
-export const drawsNothing = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined, beyond: readonly ModFile[] | null): boolean => {
+export const drawsNothing = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined, beyond: Beyond): boolean | typeof BEYOND_UNREAD => {
   if (beyond === null) return false
   const sides = [before, after].flatMap(text => (text === undefined ? [] : [{ name, text }]))
-  const all = [...files.filter(f => f.name !== name), ...sides, ...beyond]
-  if (all.some(registersSurface)) return false
-  return ![...files.filter(f => f.name !== name), ...sides].some(f => (drawnParts([f], f.name)?.length ?? 0) > 0)
+  const own = [...files.filter(f => f.name !== name), ...sides]
+  if (own.some(registersSurface)) return false
+  if (own.some(f => (drawnParts([f], f.name)?.length ?? 0) > 0)) return false
+  if (beyond === BEYOND_UNREAD) return BEYOND_UNREAD
+  return !beyond.some(registersSurface)
 }
 
 // #2788: the text of every string, template text and JSX text in a file that stands in `a` and `b` a
