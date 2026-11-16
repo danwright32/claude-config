@@ -216,13 +216,18 @@ has "#3056 with the repository and issue the first noting gave" "o/r#41: Apply t
 lacks "#3056 a note that says it asks nothing is not a question" "Build order for tonight" "$asks5"
 check_eq "#3056 it is told once, under its own heading" "o/r: $FYI3056" "$(section_rows "$r5" "For your information")"
 has "#3056 a question beside a part that asks nothing about something else is still asked" "/r/repo: Merge #5 now? No decision needed on the rename." "$asks5"
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":[" "],"text":"Rename the queue?"}' >/dev/null 2>&1
+note '{"kind":"question","by":"aaaa1111","cwd":"/r/other","questions":[]}' >/dev/null 2>&1
+asks5="$(section_rows "$(report_of g5)" "Questions for you")"
+has "#3056 review: a list with no words falls back to the note's text" "/r/repo: Rename the queue?" "$asks5"
+has "#3056 review: a question with no words at all is still listed (L215)" "/r/other: (noted with no words)" "$asks5"
 
 # #3056: the report and the morning pickers decide which notes are questions by one rule, held to one
 # set of cases both suites run (L83, L342). The mod's suite runs them against notAQuestion and
 # distinctQuestions; this runs the same cases against the report's own. Everything after each `=` is JSON.
 QFIX="$DIR/../mods/scope-modes/tests/night-question-fixtures.ts"
 qfix_json(){ sed -n "/^export const $1 = /,/^]/p" "$QFIX" | sed "1s/^export const $1 = //"; }
-qfix_out="$(python3 -c '
+qfix_out="$(python3 -B -c '
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("sleep_report", sys.argv[1])
 m = importlib.util.module_from_spec(spec)

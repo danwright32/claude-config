@@ -503,9 +503,11 @@ def questions_of(notes):
             where_["why"] = why
         if options:
             where_["options"] = options
-        texts = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else [text_of(n)]
-        # A question noted with no words is still listed, never dropped as though absent (L215).
-        asked.extend(dict(where_, text=t) for t in ([t for t in texts if t] or ["(noted with no words)"]))
+        texts = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else []
+        # A list with no words falls back to the note's text, and a question noted with no words at
+        # all is still listed, never dropped as though absent (L215).
+        texts = [t for t in texts if t] or [text_of(n) or "(noted with no words)"]
+        asked.extend(dict(where_, text=t) for t in texts)
     told = [q for q in asked if not_a_question(q["text"], q.get("options"))]
     return distinct_questions([q for q in asked if q not in told]), distinct_questions(told)
 
