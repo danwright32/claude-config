@@ -620,8 +620,8 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
     if needs is not None:
         needs.extend({"section": "look", "text": t} for t in look)
 
-    # What the morning pickers will offer (#3056): a note that says itself it asks nothing is told
-    # under its own heading, and one question noted twice is listed once.
+    # What the morning pickers will offer (#3056): a note that says itself it asks nothing is left
+    # out, and one question noted twice is listed once.
     def asked_at(q):
         # Where it was asked: the repo and issue a worker named, else the folder the mod noted (#841).
         at = where(q) if q.get("repo") else (q.get("cwd") or "a session that did not say where")
