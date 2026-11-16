@@ -8317,13 +8317,14 @@ read) is told at Dan's next message to ask with metadata
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
 unanswered for three days expires: said once in each such session, still unapproved, and no longer
-letting wording through. In any mode, taking away wording that origin's copy of the file on its default branch
-(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
-live; no default branch, or git failing to say, holds as before.
+letting wording through. In any mode, taking away wording that origin's copy of the file on its
+default branch (named by mod-kit's branch reader, then one `git show`) does not hold passes, since
+it was never live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833, #3030
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833,
+#3030
 
 </td></tr>
 </tbody>
