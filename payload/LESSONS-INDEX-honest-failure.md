@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L857. An error that quotes the input it rejects must cap what it quotes and lists, or the answer outgrows the input and the error path fails silently.
 - L855. Limit the length of any text a person can paste before reading it, and test that the reading's work grows in step with length, or one input kills it.
 - L847. A refusal shipped as a failed build is retried and misreported by every watcher; give it a marker they recognise in the same change.
 - L838. An embed reports its own failures, timeouts included, to your system: one surfaced only to the host lands in analytics nobody of yours watches.

@@ -3308,6 +3308,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge a stored artifact by the rules it was written under: a new requirement fails every older one, and a restore gated on it refuses good data.
 
 ## Honest failure
+- **L857. An error or refusal that quotes the input it rejects must cap how much it quotes and
+  how many items it lists, because an answer that grows with the input can be far larger than
+  the input, and the error path then fails with no reason shown.**
+  (bidspoke#3810, 2026-11-16)
+  SHORT: An error that quotes the input it rejects must cap what it quotes and lists, or the answer outgrows the input and the error path fails silently.
 
 - **L855. Any code that reads text a person can paste or upload (a script, a template, a setting, a file) gets a limit on that text's length before the first reading, and a test that the reading's work grows in step with the length. Without both, one long or oddly shaped input exhausts the process with no message, and no ordinary test ever feeds it one.** (bidspoke#3734, 2026-11-14)
   SHORT: Limit the length of any text a person can paste before reading it, and test that the reading's work grows in step with length, or one input kills it.
