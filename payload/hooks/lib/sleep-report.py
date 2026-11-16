@@ -423,6 +423,93 @@ def text_of(n):
     return " ".join(str(t).split()) if t else ""
 
 
+# ---- which notes are questions (#3056) ----
+# The morning pickers decide the same thing in the scope modes mod (notAQuestion and
+# distinctQuestions in mods/scope-modes/hooks/settled.ts), and the two are held to one set of cases,
+# mods/scope-modes/tests/night-question-fixtures.ts, which test-sleep-report.sh runs against these.
+# Change one and the other with it, or a suite fails.
+#
+# A note is no question only when its words as a whole say so: no choices to pick from, nothing
+# asked, and a part of it saying, whole, that it asks nothing. A doubt keeps it a question: one
+# listed that asked nothing costs Dan a glance, one hidden that asked something is never answered.
+
+def _parts(text):
+    return [p for p in (" ".join(x.split()) for x in re.split(r"[.,;:!?\n]+", text)) if p]
+
+
+_ASKS_MARK = re.compile(r"\?(?=\s|$)")
+_ASKS_OPENING = re.compile(r"^(?:should|shall|can|could|would|will|do|does|did|is|are|was|were|may|might|which|what|when|where|who|whom|whose|why|how)\b", re.I)
+_SAYS_NOTHING_ASKED = re.compile(
+    r"^(?:(?:this|it) is )?(?:just )?(?:not (?:really )?a question|no (?:answer|reply|decision|action) (?:is )?(?:needed|required|wanted)"
+    r"|nothing to (?:answer|decide)|nothing (?:is )?needed from (?:you|dan)|for (?:your )?information(?: only)?|fyi)$", re.I)
+
+
+def not_a_question(text, options=()):
+    """A note that carries no choices, asks nothing, and says itself, whole, that it is not a question."""
+    if len(options or ()) >= 2 or _ASKS_MARK.search(text):
+        return False
+    ps = _parts(text)
+    return not any(_ASKS_OPENING.match(p) for p in ps) and any(_SAYS_NOTHING_ASKED.match(p) for p in ps)
+
+
+def _repo_key(repo):
+    return repo.strip().lower() if repo else None
+
+
+def _same(a, b, key):
+    return a is None or b is None or key(a) == key(b)
+
+
+def distinct_questions(qs):
+    """Each question once, in the order first noted: the same words (spacing aside), about no other
+    repository or issue, noted again (by repository once and by folder once, say) are one question,
+    carrying what the first lacked. Two folders, neither naming its repository, are two places."""
+    out = []
+    for q in qs:
+        words = " ".join(q["text"].split())
+        k = next((i for i, o in enumerate(out) if o["text"] == words
+                  and _same(o.get("repo"), q.get("repo"), _repo_key)
+                  and ((o.get("repo") is not None and q.get("repo") is not None) or _same(o.get("cwd"), q.get("cwd"), lambda c: c))
+                  and _same(o.get("issue"), q.get("issue"), lambda i: i)), None)
+        if k is None:
+            out.append(dict(q, text=words))
+            continue
+        o = dict(out[k])
+        for f in ("repo", "issue", "cwd", "why"):
+            if o.get(f) is None and q.get(f) is not None:
+                o[f] = q[f]
+        if not o.get("options") and q.get("options"):
+            o["options"] = q["options"]
+        out[k] = o
+    return out
+
+
+def questions_of(notes):
+    """The questions the night's notes put to Dan, and the notes that said they ask nothing, which
+    are told as information rather than dropped unseen (L507), each once."""
+    def s(x):
+        return " ".join(x.split()) if isinstance(x, str) and x.strip() else None
+
+    asked = []
+    for n in notes:
+        if n.get("kind") != "question":
+            continue
+        issue = n.get("issue") if isinstance(n.get("issue"), int) and not isinstance(n.get("issue"), bool) else None
+        options = [o for o in (s(x) for x in n["options"]) if o] if isinstance(n.get("options"), list) else []
+        where_ = {"repo": s(n.get("repo")), "issue": issue, "cwd": s(n.get("cwd"))}
+        # A before bed question left unasked or unanswered says why (#1279).
+        why = s(n.get("why"))
+        if why:
+            where_["why"] = why
+        if options:
+            where_["options"] = options
+        texts = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else [text_of(n)]
+        # A question noted with no words is still listed, never dropped as though absent (L215).
+        asked.extend(dict(where_, text=t) for t in ([t for t in texts if t] or ["(noted with no words)"]))
+    told = [q for q in asked if not_a_question(q["text"], q.get("options"))]
+    return distinct_questions([q for q in asked if q not in told]), distinct_questions(told)
+
+
 def build(record, notes, bad, final, now, github, session=None, all_notes=None, needs=None):
     """The report. `session`, since #1287, is the one session it covers: `notes` are then its own
     with the whole Mac's kinds, and `all_notes` every note, read for which sessions went quiet.
@@ -532,15 +619,17 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
     if needs is not None:
         needs.extend({"section": "look", "text": t} for t in look)
 
-    qs = []
-    for n in [n for n in notes if n["kind"] == "question"]:
+    # What the morning pickers will offer (#3056): a note that says itself it asks nothing is told
+    # under its own heading, and one question noted twice is listed once.
+    def asked_at(q):
         # Where it was asked: the repo and issue a worker named, else the folder the mod noted (#841).
-        at = where(n) if n.get("repo") else (n.get("cwd") or "a session that did not say where")
-        asked = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else []
-        # A before bed question left unasked or unanswered says why (#1279).
-        why = " (left before bed: %s)" % " ".join(str(n["why"]).split()) if isinstance(n.get("why"), str) and n["why"].strip() else ""
-        qs.extend("%s: %s%s" % (at, q, why) for q in (asked or [text_of(n)]))
-    section("Questions for you", qs)
+        at = where(q) if q.get("repo") else (q.get("cwd") or "a session that did not say where")
+        why = " (left before bed: %s)" % q["why"] if q.get("why") else ""
+        return "%s: %s%s" % (at, q["text"], why)
+
+    questions, told = questions_of(notes)
+    section("Questions for you", [asked_at(q) for q in questions])
+    section("For your information", [asked_at(q) for q in told])
 
     if final:
         section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.")
