@@ -143,9 +143,25 @@ export LC_ALL=C
 
 diff_opts=(--unified=0 --src-prefix=a/ --dst-prefix=b/ --diff-filter=ACMR)
 
+# A line is this push's only when the branch itself adds it (claude-config#3054). After a branch
+# pushed once merges main in, the range from its upstream holds every line main gained since, and
+# this advice was about lines the branch never wrote. So what that merge brought in is set apart by
+# the shared answer the push gates read (ps_merged_apart, #3015); a line the conflict resolution
+# adds is still the branch's and still scanned. When it cannot be set apart the whole range is
+# scanned as before, and the advice says why.
+from="$mb"
+merge_unsplit=""
+if [ -n "$mb" ]; then
+  apart="$(ps_merged_apart "$mb")"
+  case "$apart" in
+    "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+    "whole "*) merge_unsplit="${apart#whole }" ;;
+  esac
+fi
+
 raw=""
 pending_widened=0
-[ -n "$mb" ] && raw="$(git diff "${diff_opts[@]}" "$mb" HEAD 2>/dev/null)"
+[ -n "$from" ] && raw="$(git diff "${diff_opts[@]}" "$from" HEAD 2>/dev/null)"
 if [ "$commit_in_chain" -eq 1 ]; then
   raw="$raw
 $(git diff "${diff_opts[@]}" --cached 2>/dev/null)"
@@ -677,6 +693,11 @@ widened_line=""
 
 (The git add in this command could not be read, so every change in the working tree was
 scanned as part of the commit it is about to make.)"
+[ -n "$merge_unsplit" ] && widened_line="$widened_line
+
+(These commits merge the default branch in, and what that merge brought could not be set
+apart, so a line above may already be on the default branch rather than this branch's own:
+$merge_unsplit.)"
 
 gen_block=""
 [ -n "$gen_line" ] && gen_block="
