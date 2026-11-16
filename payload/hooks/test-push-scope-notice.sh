@@ -211,8 +211,11 @@ case "$grc:$gerr" in
 esac
 git -C "$PW" merge --abort >/dev/null 2>&1
 rm -f "$PW/notes/resolution.md"
-[ -z "$(git -C "$PW" status --porcelain 2>/dev/null)" ] && check "#3081 the side merge is put away clean before the next case" ok \
-  || check "#3081 the side merge is put away clean before the next case" "left [$(git -C "$PW" status --porcelain 2>/dev/null | head -c 200)]"
+# Read into a variable and cut there, never piped into head, which can end the producer early and
+# fail the pipeline under pipefail (L183).
+left="$(git -C "$PW" status --porcelain 2>/dev/null)"
+[ -z "$left" ] && check "#3081 the side merge is put away clean before the next case" ok \
+  || check "#3081 the side merge is put away clean before the next case" "left [${left:0:200}]"
 # A merge of main left in progress with no conflict at all is the same case: the commit is what is
 # missing, not a conflict.
 git -C "$PW" checkout -q main >/dev/null 2>&1
