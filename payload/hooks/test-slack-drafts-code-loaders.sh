@@ -1191,8 +1191,8 @@ allowed "#3050 a test file importing a module that names it only in an interface
 printf '%s\n' 'import { DEFAULTS } from "./env.ts";' 'console.log(DEFAULTS);' > "$MK/d.test.ts"
 run_mk "./node_modules/.bin/vitest run c.test.ts d.test.ts"
 allowed "#3050 and with several test files named in one run"
-# Handed to the runner by a launcher, as the three runs of the issue were. In $D9, which holds no
-# folder named vitest: beside one, the gate reads `npx vitest` as that path and none of the files.
+# Handed to the runner by a launcher, as the three runs of the issue were, in $D9. Since #3069 the
+# gate reads `npx vitest` as the package run even beside a folder named vitest.
 cp "$MK/env.ts" "$MK/hook.ts" "$D9/src/"
 printf '%s\n' 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env";' \
   'const team = { id: "t1", slack_webhook: null };' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));' > "$D9/src/declares.test.ts"
