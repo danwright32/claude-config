@@ -805,8 +805,9 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
 
     A yes to a question here approves no line (claude-config#3023): a line is trusted only once
     Dan approved it in a picker (_unapproved). So a commit is asked about only for the added lines
-    he has not approved (_not_approved, reading the record and the transcript of session_id), the
-    question naming up to LINES_SHOWN of them and how he approves one; agent is whether the call is
+    he has not approved (_not_approved, reading the record and the transcript of session_id), and
+    for those his picker covers that the record could not take (claude-config#3058), the question
+    naming up to LINES_SHOWN of them and why, and how he approves one; agent is whether the call is
     a subagent's, which writes nothing on the record. A list one of these commands cannot see being
     committed (a script, a name built at run time, an alias, `git commit-tree`, a merge, a cherry
     pick, a pull) is not a gap any more: its lines reach HEAD with no question, are approved by
