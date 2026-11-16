@@ -571,8 +571,10 @@ export type ModKitWrites = {
    * shell expands, one word rtk's proxy splits), each with its words and why. What such a command
    * changes is unknown, never nothing: a guard holds or refuses a call carrying one as it does a
    * write it cannot place. Whatever its words still name (a redirect) is in `files` as usual.
+   * `folder` is the absolute folder it runs in, as an unnamed program's is, so the names in its
+   * words can be placed; left out where a cd before it cannot be followed.
    */
-  unread?: { words: string[]; why: string }[]
+  unread?: { words: string[]; why: string; folder?: string }[]
 }
 
 /**

@@ -6103,7 +6103,10 @@ here-string, `echo` or `cat` piped in), each read as the commands it runs, `env 
 `find -exec` runs past any wrapper, a `case`'s clauses, a redirect as its own word however it is
 spaced, a subshell's parentheses as commands their own, the words naming a function (`w()`,
 `function w`) as a command of their own, so a body on the same line (`w(){ sed -i ...; }`) is read
-as the commands it holds (#2619); `$.modkit.pipeline` gives the same commands,
+as the commands it holds (#2619), and since #3021 a `[[ ]]` test kept as one command, its `&&`,
+`||` and parentheses words of it, a trap's text read as the commands it runs later, placed where
+the shell that set it ends, and `setsid`, `flock`, `ionice` and `arch` read as running the command
+after them; `$.modkit.pipeline` gives the same commands,
 each with the words of the command a `|` feeds it from, since only the reader can tell a pipe from a
 `;` or `&&`, the body of each heredoc feeding it and whether its delimiter was quoted, which stops
 the shell expanding it (#831), whether the shell left its program's text as written (`asWritten`,
@@ -6117,7 +6120,11 @@ of one and null where that cannot be followed (a variable the command did not se
 `popd`), the folder is it live asks GitHub about a merge in, #2000; and, for each word holding a
 command substitution, `derived` (#2141): what its substitutions run and, where each is a plain `cat`
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
-else `unresolved` with why, never empty and never safe), of which files a command
+else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
+command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
+every guard holds or refuses it rather than judging its words alone), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -6158,7 +6165,12 @@ build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path an
 (a checkout or restore carrying `from`, where git puts the file back from, #1158), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
-log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976), of whether a
+log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in
+`unread` since #3021, each command `pipeline` marks unread, with its words, why and the folder it
+runs in, since what it changes is unknown, never nothing: sleep mode refuses it overnight, the
+design round guard judges it by the look files its words name, ask before saving asks about the
+lasting memory its words name, the collision guard puts it to its judge, and the Slack alert guard
+holds it while a choice waits or where it names the plugin store), of whether a
 prompt is Dan's own words (`$.modkit.isDans({ origin })`, #1135: only what he types, at the Mac or
 from his phone through Remote Control, never a handoff's opening prompt or any other plugin's, asked
 by every mod that needs it), of what Dan and Claude are told when he types an answer to a mod's
@@ -6284,7 +6296,9 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
-each name on both sides with git's quoting undone, each hunk walked by its header's counts, and how
+each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
+taken whole, each hunk walked by its header's counts, one that does not add up left out with its
+reason kept while the files after it are still named, #3021, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
@@ -6369,7 +6383,9 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
+session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+`eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
+folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message
 and toast in the other session (a refused message is tried once more by mod-kit, then said on the
 card); a removal says remove rather than edit in both. An unreadable record or a judgment that
@@ -6878,8 +6894,13 @@ passes only where that variable is its `sys.argv[N]` and is handed a folder the 
 whose own commands, read whole, write only names its text spells or temporary files it made, run no
 other script and no text a value decides, and source only files read the same, is not judged as
 writing the arguments it is handed, so `milestone-candidates.sh --like "<title naming page.html>"`
-runs), and a
-look changing file a patch or inline script only mentions; a write whose destination cannot be
+runs; since #3021 the script's text is read through mod-kit alone, which keeps a `[[ ]]` test whole
+and reads a trap's text, and a command in it that mod-kit marks unread, or that runs through
+`setsid`, `flock`, `ionice`, `arch` or `ssh`, keeps its arguments judged), and a
+look changing file a patch or inline script only mentions, and since #3021 one named in the words
+of a command typed whole that mod-kit marks unread (`eval "printf ... > app/site.css"`,
+`$TOOL --write app/site.css`, an alias set to such a command), placed in the folder it runs in and
+held as could not check where that cannot be followed; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
 shares it, read with mod-kit's `$.modkit.branch` and named by `$.modkit.repo`) under the issue the
@@ -7465,7 +7486,10 @@ list in `hooks/overnight.ts` is refused by effect (issue, label and milestone wr
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
-expands, which rtk splits into a command, is refused as unread), and a line running gh that way
+expands, which rtk splits into a command, is refused as unread), since #3021 every other command
+mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
+which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
@@ -8178,8 +8202,10 @@ kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for th
 a `wording` note, and the call sent again goes through; a choice lets wording through only while
 sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
-chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
-not check, and a diff gh did not give within its time as a timeout (#2792).
+chosen wording is refused; a merge that cannot be read, a command whose effect cannot be read at all
+(mod-kit's `unread`, #3021: `eval "gh pr merge 12"`, the same through `ssh` or an alias), or a diff
+gh cannot give, is held as could not check, and a diff gh did not give within its time as a timeout
+(#2792).
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata

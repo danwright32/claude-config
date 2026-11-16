@@ -333,6 +333,22 @@ const KIT = new Map<string, unknown>([
   ["git {\"words\":[\"tee\",\">(cat >> notes.txt)\",\"<\",\"b.txt\"]}", null],
   ["commands {\"command\":\"bash <<EOF\\necho \\\\$(echo done >> notes.txt)\\nEOF\"}", [["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]],
   ["writes {\"command\":\"bash <<EOF\\necho \\\\$(echo done >> notes.txt)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}", {"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[],"stdout":[{"word":"notes.txt","path":"/repo/notes.txt"}]}],
+  // #3021: commands whose effect cannot be read, measured from mod-kit's readers on 2026-11-15.
+  ["commands {\"command\":\"eval \\\"$BUILD_STEP\\\"\"}",[["eval","$BUILD_STEP"]]],
+  ["git {\"words\":[\"eval\",\"$BUILD_STEP\"]}",null],
+  ["writes {\"command\":\"eval \\\"$BUILD_STEP\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/repo"}]}],
+  ["commands {\"command\":\"ls src\"}",[["ls","src"]]],
+  ["git {\"words\":[\"ls\",\"src\"]}",null],
+  ["writes {\"command\":\"ls src\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cd /other && eval \\\"$BUILD_STEP\\\"\"}",[["cd","/other"],["eval","$BUILD_STEP"]]],
+  ["git {\"words\":[\"cd\",\"/other\"]}",null],
+  ["writes {\"command\":\"cd /other && eval \\\"$BUILD_STEP\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/other"}]}],
+  ["commands {\"command\":\"eval \\\"$BUILD_STEP\\\" && \\\"$RUNNER\\\" --fix\"}",[["eval","$BUILD_STEP"],["$RUNNER","--fix"]]],
+  ["git {\"words\":[\"$RUNNER\",\"--fix\"]}",null],
+  ["writes {\"command\":\"eval \\\"$BUILD_STEP\\\" && \\\"$RUNNER\\\" --fix\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/repo"},{"words":["$RUNNER","--fix"],"why":"named by a value the shell expands, so what it runs cannot be read","folder":"/repo"}]}],
+  ["commands {\"command\":\"cd \\\"$D\\\" && eval \\\"$BUILD_STEP\\\"\"}",[["cd","$D"],["eval","$BUILD_STEP"]]],
+  ["git {\"words\":[\"cd\",\"$D\"]}",null],
+  ["writes {\"command\":\"cd \\\"$D\\\" && eval \\\"$BUILD_STEP\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read"}]}],
 ])
 
 type Judge = string | 'no-answer'
@@ -610,6 +626,73 @@ test('an ordinary git command is not judged', withDeps, async ($, on) => {
   await $.tool.call(bash('git status'))
   expect(w.reached).toContain('Bash')
   expect(w.prompts.length).toBe(0)
+})
+
+// #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap whose
+// text the shell expands) may switch the branch or write any file, and its words say neither, so the
+// guard read it as doing nothing and it ran unjudged beside another session. It is put to the judge
+// as a checkout wide git command is, against the checkout it runs in.
+const UNREAD_EVAL = 'eval $BUILD_STEP: run as text by eval, so what it runs cannot be read'
+
+test('a command whose effect cannot be read, in a checkout another session works in, is judged, and a Stop blocks it (#3021)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')], judge: '{"verdict":"Stop","reason":"They are mid rebase."}' })
+  const r = await $.tool.call(bash('eval "$BUILD_STEP"'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain(`The action: run a command whose effect cannot be read (${UNREAD_EVAL}) with the shell command: eval "$BUILD_STEP"\n`)
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They are mid rebase. Leave it to the other session, or ask Dan.')
+  expect(w.sent[0]?.text).toBe('Another session wanted to run eval $BUILD_STEP in this checkout while you are working in it, so it was stopped. Nothing here was touched.')
+})
+
+test('one judged Proceed runs with a toast naming it, and two in one checkout are judged once (#3021)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')] })
+  await $.tool.call(bash('eval "$BUILD_STEP"'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.toasts).toContain('Checked with the other session: safe to run eval $BUILD_STEP.')
+  await $.tool.call(bash('eval "$BUILD_STEP" && "$RUNNER" --fix', 'c2'))
+  expect(w.prompts.length).toBe(2)
+  expect(w.prompts[1]?.prompt).toContain(`The action: run 2 commands whose effect cannot be read (${UNREAD_EVAL}; $RUNNER --fix: named by a value the shell expands, so what it runs cannot be read) with the shell command: `)
+  expect(w.toasts).toContain('Checked with the other session: safe to run 2 commands that cannot be read.')
+  // What it wrote, if anything, is not known, so nothing is noted as this session's edit.
+  expect(w.edits).toEqual([])
+})
+
+test('one the judge cannot answer for is stopped (L42, #3021)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')], judge: 'no-answer' })
+  const r = await $.tool.call(bash('eval "$BUILD_STEP"'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe("Blocked: Couldn't check with the other session's work, so this was stopped. Try again, or ask Dan.")
+})
+
+test('one beside a record that cannot be read is stopped and names the record (#3021)', withDeps, async ($, on) => {
+  const w = world($, on, { unreadable: ['/sessions/x.json'] })
+  const r = await $.tool.call(bash('eval "$BUILD_STEP"'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain("Couldn't read another session's record (/sessions/x.json)")
+})
+
+test('one with nobody else in the checkout runs unjudged (#3021)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('elsewhere', { repoRoot: '/other' })] })
+  await $.tool.call(bash('eval "$BUILD_STEP"'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.prompts.length).toBe(0)
+})
+
+test('a command that can be read and writes nothing is still unjudged beside another session (#3021 control)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them')] })
+  await $.tool.call(bash('ls src'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.prompts.length).toBe(0)
+})
+
+test("one is judged against the checkout it runs in: the folder a cd before it leads to, or the session's own where that cannot be followed (#3021)", withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { repoRoot: '/other' })], repo: '/other' })
+  await $.tool.call(bash('cd /other && eval "$BUILD_STEP"'))
+  expect(w.runs).toContain('git -C /other rev-parse --show-toplevel')
+  expect(w.prompts.length).toBe(1)
+  await $.tool.call(bash('cd "$D" && eval "$BUILD_STEP"', 'c2'))
+  expect(w.runs).toContain('git -C /repo rev-parse --show-toplevel')
+  expect(w.prompts.length).toBe(2)
 })
 
 // The live check of #639 (2026-10-04): a guard message delivered to an interactive session arrived

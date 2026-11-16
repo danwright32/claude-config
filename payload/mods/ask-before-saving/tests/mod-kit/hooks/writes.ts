@@ -1310,11 +1310,11 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
   }
   addUnread(into, from.unread ?? [])
 }
-// Each command whose effect cannot be read (#3021), once for the same words and reason.
-const addUnread = (into: ModKitWrites, unread: readonly { words: string[]; why: string }[]) => {
+// Each command whose effect cannot be read (#3021), once for the same words, reason and folder.
+const addUnread = (into: ModKitWrites, unread: readonly NonNullable<ModKitWrites['unread']>[number][]) => {
   for (const u of unread) {
     const list = (into.unread ??= [])
-    if (!list.some(x => x.why === u.why && x.words.length === u.words.length && x.words.every((w, i) => w === u.words[i]))) list.push(u)
+    if (!list.some(x => x.why === u.why && x.folder === u.folder && x.words.length === u.words.length && x.words.every((w, i) => w === u.words[i]))) list.push(u)
   }
 }
 
@@ -1333,10 +1333,18 @@ const addUnread = (into: ModKitWrites, unread: readonly { words: string[]; why: 
 // A command the reader marks `unread` (#3021: eval, a command a value names, an alias, ssh, a trap
 // whose text the shell expands, a word rtk's proxy splits) is given in `unread` with why, beside
 // whatever its words still name: what it changes cannot be read, which is never the same as nothing.
+// Each carries the folder it runs in, as an inline program does (#1151), so a guard can place the
+// names in its words; left out where a cd before it cannot be followed.
 const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): ModKitWrites => {
   const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
-  const out = writes(cmds, cwd, home)
-  addUnread(out, cmds.flatMap(c => (c.unread ? [{ words: c.words, why: c.unread }] : [])))
+  const { writes: out, folders } = readWrites(cmds, cwd, home)
+  addUnread(
+    out,
+    cmds.flatMap((c, k) => {
+      const folder = folders[k]
+      return c.unread ? [{ words: c.words, why: c.unread, ...(folder ? { folder } : {}) }] : []
+    }),
+  )
   const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
   for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home, true))
   return out

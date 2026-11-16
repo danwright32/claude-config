@@ -95,7 +95,7 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   const v = await judge($, c)
   if (!v) return refuse($, toolUseId, "Couldn't check with the other session's work, so this was stopped.", 'Try again, or ask Dan.')
   if (v.verdict === 'Proceed') {
-    await $.ui.toast(c.doing === 'run' ? `Checked with the other session: safe to run ${c.action}.` : `Checked with the other session: safe to ${c.doing} ${c.shortName}.`)
+    await $.ui.toast(`Checked with the other session: safe to ${c.doing} ${c.shortName}.`)
     return undefined
   }
   const outcome = v.verdict === 'Worktree' ? 'it was moved to its own worktree to redo its change there' : 'it was stopped'
@@ -121,15 +121,29 @@ const decide = async ($: EngineInterface, toolUseId: string, c: Clash) => {
   return refuse($, toolUseId, reason, SAFE[v.verdict], note)
 }
 
-// The files a Bash call writes, as far as its words name them, read by mod-kit's one write reader
-// (#712) and judged as collide.ts's judgedWrites says. A cp or mv onto one existing folder lands
-// inside it; a path the disk cannot answer for is taken as the file itself, the reading that still
-// judges a clash on that name.
-const writtenFiles = async ($: EngineInterface, command: string): Promise<ShellWrite[]> => {
+// What mod-kit's one write reader (#712) gives for a Bash call, asked once per call: the files its
+// words name, and the commands whose effect cannot be read (#3021).
+type Reading = Awaited<ReturnType<EngineInterface['modkit']['writes']>>
+const readWrites = async ($: EngineInterface, command: string): Promise<Reading> => {
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
+  return $.modkit.writes({ command, cwd, home })
+}
+
+// How a toast and a message name a command: its words, cut where they run long.
+const NAMED_TO = 80
+const named = (words: readonly string[]): string => {
+  const text = words.join(' ')
+  return text.length > NAMED_TO ? `${text.slice(0, NAMED_TO - 3)}...` : text
+}
+
+// The files a Bash call writes, as far as its words name them, as mod-kit's write reader gives
+// them and judged as collide.ts's judgedWrites says. A cp or mv onto one existing folder lands
+// inside it; a path the disk cannot answer for is taken as the file itself, the reading that still
+// judges a clash on that name.
+const writtenFiles = async ($: EngineInterface, read: Reading): Promise<ShellWrite[]> => {
   const out: ShellWrite[] = []
-  for (const w of judgedWrites(await $.modkit.writes({ command, cwd, home }))) {
+  for (const w of judgedWrites(read)) {
     let isDir = false
     if (w.sources) isDir = (await $.fs.stat(w.path).catch(() => undefined))?.kind === 'dir'
     const { sources, ...write } = w
@@ -227,7 +241,41 @@ const check = async ($: EngineInterface, input: Record<string, unknown>): Promis
   // Edit is, and noted as this session's own once it has run. An rm is judged the same way (#674),
   // and an rm -r or mv of a folder once, on every file another session edited inside it: one
   // judgment, one card or toast, and one message to each session naming its own files.
-  const written = await writtenFiles($, command)
+  const read = await readWrites($, command)
+  // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
+  // whose text the shell expands, a word rtk's proxy splits) may switch the branch or write any
+  // file, and its words say neither: it was read as doing nothing, and ran unjudged beside another
+  // session. It is put to the judge as a checkout wide git command is, once per checkout, against
+  // the checkout of the folder mod-kit says it runs in, or the session's own where a cd before it
+  // cannot be followed. A folder git names no checkout for has nobody in it to ask, as there. What
+  // it writes is not known, so nothing is noted as this session's edit.
+  const unread = read.unread ?? []
+  if (unread.length) {
+    const list = await $.sessions.list()
+    if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
+    const cwd = await $.session.cwd()
+    const byRoot = new Map<string, typeof unread>()
+    for (const u of unread) {
+      const root = (await run($, ['git', '-C', u.folder ?? cwd, 'rev-parse', '--show-toplevel']))?.trim()
+      if (root) byRoot.set(root, [...(byRoot.get(root) ?? []), u])
+    }
+    for (const [root, cmds] of byRoot) {
+      const others = othersInRepo(list.open, list.selfId, root)
+      if (!others.length) continue
+      const one = cmds.length === 1 ? cmds[0] : undefined
+      const said = one ? named(one.words) : `${cmds.length} commands that cannot be read`
+      const blocked = await decide($, toolUseId, {
+        action: `run ${one ? 'a command' : `${cmds.length} commands`} whose effect cannot be read (${cmds.map(u => `${u.words.join(' ')}: ${u.why}`).join('; ')}) with the shell command: ${command}`,
+        shortName: said,
+        messageWhat: said,
+        doing: 'run',
+        root,
+        others,
+      })
+      if (blocked) return blocked
+    }
+  }
+  const written = await writtenFiles($, read)
   if (!written.length) return undefined
   const list = await $.sessions.list()
   if (list.unreadable.length) return unreadableRefusal($, toolUseId, list.unreadable)
