@@ -431,7 +431,7 @@ else
   r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R")"
   case "$r" in
     "ask rc=0|"*"in no picker"*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it claims he approved the line in no picker: ${r:0:500}" ;;
-    "ask rc=0|"*AskUserQuestion*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it asks for a new picker, though the one given counts once the record can be written: ${r:0:900}" ;;
+    "ask rc=0|"*AskUserQuestion*|"ask rc=0|"*"mark no project as test"*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it asks for a new picker, or says the line will never count, though the one given counts once the record can be written: ${r:0:900}" ;;
     "ask rc=0|"*nowriteref00000001*"approved in a picker"*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" ok ;;
     *) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "${r:0:900}" ;;
   esac

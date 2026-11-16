@@ -871,8 +871,8 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
                     + (", and more" if len(added) > LINES_SHOWN else "")
                     + ", which " + unapproved + ". A project on a committed " + TEST_LIST + " has its "
                     "supabase db query -f runs pass without asking only once he has approved its line, so "
-                    "answering yes here approves nothing: the line will mark no project as test."
-                    + (" " + HOW_TO_TRUST if picker else ""))
+                    "answering yes here approves nothing"
+                    + (": the line will mark no project as test. " + HOW_TO_TRUST if picker else "."))
         if lists:
             for t, unread in before:
                 # cd, a reader, or a git add, rm or read, writing nothing by a redirection or option.
