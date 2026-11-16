@@ -3788,7 +3788,17 @@ the environment (`os.getcwd`, `os.listdir`, `os.stat`, `os.walk`, `os.environ`, 
 `OS_READS`) pass, and any other use (`os.system`, `os.remove`, `os` handed on or renamed) refuses
 as before. Before it, any script importing `os` and handed the global rules file, which names
 `chat.postMessage` in its own Slack rule, was refused whatever it did; Dan chose on 2026-11-16 to
-trust a program the gate reads end to end, and nothing it cannot follow. The Python
+trust a program the gate reads end to end, and nothing it cannot follow. A module given another
+name is read through that name as through the imported one (claude-config#3102, `lib/py-aliases.py`):
+until then `q = pathlib` followed by `q.os.system(...)` passed, as did `p = os.path`, a walrus, a
+loop over `(glob,)`, a parameter's default and `from glob import os`. A module put where the gate
+does not follow it (an argument, a list, an attribute, a class body, a return) counts as the
+script being able to act; whether what is handed on is a module is asked of the standard library
+module itself, so `key=os.path.getsize` is a function and passes while `go(os.path)` does not.
+Measured 2026-11-16 over this project's session records, with the gate's own reading before and
+after: of 4,133 distinct Python texts (inline code, scripts written, scripts run), 994 passed
+before and the same 994 pass after. Not followed: a module held by one of the script's own
+modules and handed on rather than renamed. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.

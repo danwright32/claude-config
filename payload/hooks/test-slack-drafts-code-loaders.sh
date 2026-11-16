@@ -1535,6 +1535,155 @@ read_refused "#3085 a shell script whose loop reads the file it is handed is sti
 says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
 
 echo
+echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
+
+# The gate reads a module's attributes only from a name an import binds, so `q = pathlib` and then
+# q.os.system(...) was read as unable to act, and the data file the script was handed went unchecked
+# for a Slack posting address. Measured 2026-11-16 by the cases below against the gate as it stood:
+# every one marked "renamed", "handed on" or "imported out of" passed. A name is now followed through
+# each binding the gate can read (an assignment, an annotated one, a walrus, a tuple assignment, a
+# for loop or comprehension over a list written out, a parameter's default), and a module put
+# anywhere it cannot follow (an argument, a list, an attribute, a class body, a return) counts as
+# the script being able to act. Whether what is handed on is a module is asked of the standard
+# library module itself (lib/py-aliases.py), so os.path.getsize handed to sorted() is a function
+# and passes, and os.path handed to a helper is a module and does not.
+D02="$T/d3102"
+mkdir -p "$D02"
+printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$D02/msg.json"
+run_02() { run_raw "$(payload Bash "$(bash_input "$1")" "$D02")"; }
+w02() { local name="$1"; shift; printf '%s\n' "$@" > "$D02/$name"; }
+ACT02='.os.system("bash " + sys.argv[1])'
+w02 direct.py 'import glob, sys' "glob$ACT02"
+run_02 "python3 direct.py msg.json"
+read_refused "#3102 the control: a module reached through an imported name, handed a data file naming an endpoint, is refused"
+says "#3102 in the words the renamed forms below must now get too" "reaches the os module through glob"
+# Renamed by a binding the gate follows: the new name is read as the imported one is.
+w02 assign.py 'import pathlib, sys' 'q = pathlib' "q$ACT02"
+w02 assign-glob.py 'import glob, sys' 'q = glob' "q$ACT02"
+w02 ospath.py 'import os, sys' 'p = os.path' "p$ACT02"
+w02 twice.py 'import glob, sys' 'a = glob' 'b = a' "b$ACT02"
+w02 annotated.py 'import glob, sys' 'q: object = glob' "q$ACT02"
+w02 chained.py 'import glob, sys' 'a = b = glob' "b$ACT02"
+w02 walrus.py 'import glob, sys' "(q := glob)$ACT02"
+w02 walrus-if.py 'import glob, sys' 'if (q := glob):' "    q$ACT02"
+w02 tuple.py 'import glob, sys' 'q, r = glob, 1' "q$ACT02"
+w02 for.py 'import glob, sys' 'for m in (glob,):' "    m$ACT02"
+w02 comprehension.py 'import glob, sys' "[m$ACT02 for m in [glob]]"
+w02 default.py 'import glob, sys' 'def go(p, m=glob):' '    m.os.system("bash " + p)' 'go(sys.argv[1])'
+w02 kw-default.py 'import glob, sys' 'def go(p, *, m=glob):' '    m.os.system("bash " + p)' 'go(sys.argv[1])'
+w02 lambda-default.py 'import glob, sys' '(lambda p, m=glob: m.os.system("bash " + p))(sys.argv[1])'
+w02 submodule.py 'import glob, sys' 'f = glob.fnmatch' "f$ACT02"
+w02 lib_q.py 'import glob as helper'
+w02 local.py 'import lib_q, sys' 'h = lib_q.helper' "h$ACT02"
+for renamed in assign.py assign-glob.py ospath.py twice.py annotated.py chained.py walrus.py walrus-if.py tuple.py \
+  for.py comprehension.py default.py kw-default.py lambda-default.py submodule.py local.py; do
+  run_02 "python3 $renamed msg.json"
+  read_refused "#3102 a module renamed and then used to start a program is refused: $renamed"
+done
+run_02 "python3 assign.py msg.json"
+says "#3102 the refusal names the module reached and the name it was reached through" "reaches the os module through q"
+run_02 "python3 ospath.py msg.json"
+says "#3102 and for os.path given another name" "reaches the os module through p"
+run_02 "python3 -c 'import glob, sys; q = glob; q.os.system(\"bash \" + sys.argv[1])' msg.json"
+read_refused "#3102 code given inline that renames a module is refused"
+cat > "$D02/inline-renamed.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import glob, sys
+q = glob
+q.os.system("bash " + sys.argv[1])
+PY
+SH
+run_02 "bash inline-renamed.sh msg.json"
+read_refused "#3102 and code a shell script writes inline"
+# Put where the gate does not follow it: an argument, a list, a dictionary, an attribute, a class
+# body, a return, a lambda, one arm of a choice, a comparison another object answers, an assignment
+# whose two sides it cannot pair, and the two standard library calls that read attributes by name
+# (string.Formatter.get_field, functools.update_wrapper).
+w02 argument.py 'import glob, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'go(glob, sys.argv[1])'
+w02 ospath-argument.py 'import os, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'go(os.path, sys.argv[1])'
+w02 submodule-argument.py 'import glob, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'go(glob.fnmatch, sys.argv[1])'
+w02 local-argument.py 'import lib_q, sys' 'def go(m, p):' '    m.helper.os.system("bash " + p)' 'go(lib_q, sys.argv[1])'
+w02 list.py 'import glob, sys' "[glob][0]$ACT02"
+w02 dictionary.py 'import glob, sys' "{'m': glob}['m']$ACT02"
+w02 choice.py 'import glob, sys' "(glob if sys.argv else None)$ACT02"
+w02 either.py 'import glob, sys' 'q = glob or None' "q$ACT02"
+w02 starred.py 'import glob, sys' 'q, *r = glob, 1' "q$ACT02"
+w02 attribute.py 'import glob, sys' 'class H: pass' 'h = H()' 'h.m = glob' "h.m$ACT02"
+w02 ospath-attribute.py 'import os, sys' 'class H: pass' 'h = H()' 'h.m = os.path' "h.m$ACT02"
+w02 class-body.py 'import glob, sys' 'class H:' '    m = glob' "H.m$ACT02"
+w02 return.py 'import glob, sys' 'def get():' '    return glob' "get()$ACT02"
+w02 lambda.py 'import glob, sys' "(lambda: glob)()$ACT02"
+w02 comparison.py 'import glob, sys' 'class E:' '    def __eq__(self, o):' '        o.os.system("bash " + sys.argv[1])' 'E() == glob'
+w02 renamed-argument.py 'import glob, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'q = glob' 'go(q, sys.argv[1])'
+w02 get-field.py 'import glob, string, sys' 'string.Formatter().get_field("0.os.system", (glob,), {})[0]("bash " + sys.argv[1])'
+w02 update-wrapper.py 'import functools, glob, sys' 'class H: pass' 'h = H()' 'functools.update_wrapper(h, glob, assigned=())' "h$ACT02"
+for handed in argument.py ospath-argument.py submodule-argument.py local-argument.py list.py dictionary.py choice.py \
+  either.py starred.py attribute.py ospath-attribute.py class-body.py return.py lambda.py comparison.py \
+  renamed-argument.py get-field.py update-wrapper.py; do
+  run_02 "python3 $handed msg.json"
+  read_refused "#3102 a module handed on where the gate does not follow it is refused: $handed"
+done
+run_02 "python3 argument.py msg.json"
+says "#3102 the refusal names the module handed on" "puts the module glob where the gate does not follow it"
+run_02 "python3 ospath-argument.py msg.json"
+says "#3102 and os.path, which is a module" "puts the module os.path where the gate does not follow it"
+# A module imported out of another module's namespace is the same reach written as an import.
+w02 from-module.py 'import sys' 'from glob import os' 'os.system("bash " + sys.argv[1])'
+w02 from-module-as.py 'import sys' 'from glob import os as tool' 'tool.system("bash " + sys.argv[1])'
+for imported in from-module.py from-module-as.py; do
+  run_02 "python3 $imported msg.json"
+  read_refused "#3102 a module imported out of another module's namespace is refused: $imported"
+done
+run_02 "python3 from-module.py msg.json"
+says "#3102 the refusal names the module and where it was imported from" "imports os from glob, which reaches the os module through glob"
+# The controls: read only scripts that rename a module, hand its functions and classes on, and test
+# whether it was imported still pass, handed the same data file and the real rules file. Each of
+# these shapes is ordinary: a function as a sort key, a class as an argument's type, a class in an
+# isinstance or an except, a module kept under a shorter name.
+cat > "$D02/reads-renamed.py" <<'PY'
+import argparse, datetime, json, os, pathlib, re, sys
+from datetime import time, timezone
+from os import path
+from pathlib import Path
+try:
+    import zoneinfo
+except ImportError:
+    zoneinfo = None
+j = json
+pth = os.path
+loads = json.loads
+join = os.path.join
+P = pathlib.Path
+env = os.environ
+flags, kinds = re.I, (pathlib.Path, datetime.time)
+def sizes(names, key=os.path.getsize, codec=json):
+    return codec.dumps(sorted(names, key=key))
+def stamp(p: pathlib.Path, when: datetime.datetime = None) -> datetime.time:
+    return (when or datetime.datetime.now(timezone.utc)).time()
+parser = argparse.ArgumentParser()
+parser.add_argument("file", type=pathlib.Path)
+args = parser.parse_args()
+text = args.file.read_text()
+try:
+    rows = j.loads(text)
+except json.JSONDecodeError:
+    rows = list(map(loads, [ln for ln in text.splitlines() if ln.startswith("{")]))
+for fn in (len, str.strip):
+    print(fn(text[:40]))
+if zoneinfo is not None and zoneinfo and not isinstance(rows, (Path, time)):
+    print(pth.getsize(args.file), path.basename(str(args.file)), join("a", "b"), P("x").name, env.get("HOME"))
+print(sizes([str(args.file)]), stamp(args.file), isinstance(args.file, kinds), re.search("chat", text, flags) is not None)
+print([m.__name__ for m in ()], sorted([str(args.file)], key=pth.getsize))
+PY
+run_02 "python3 reads-renamed.py msg.json"
+allowed "#3102 the control: a read only script that renames modules and hands their functions on passes"
+run_02 "python3 reads-renamed.py $RULES"
+allowed "#3102 and handed the real rules file"
+run_02 "python3 -c 'import json, sys; j = json; print(len(j.loads(open(sys.argv[1]).read())))' msg.json"
+allowed "#3102 the control: code given inline that renames a module only to read passes"
+
+echo
 
 echo "passed: $pass, failed: $fail"
 
