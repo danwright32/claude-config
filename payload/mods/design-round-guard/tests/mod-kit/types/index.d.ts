@@ -406,6 +406,13 @@ export type ModKitCommand = {
    * never empty and never safe.
    */
   derived?: (ModKitDerived | null)[]
+  /**
+   * For each word whose only expansions are old arithmetic (`$[...]`) of whole numbers joined by
+   * + - and * (#3070), the word as bash and zsh hand it on (`"x\\$[0-9]"` is `x\-9`), null for every
+   * other word; absent where no word is one. dash and ksh hand such a word on as typed, so it is one
+   * of two known texts and never a variable's value: a reader that judges it judges both.
+   */
+  worked?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
@@ -558,6 +565,9 @@ export type ModKitWrites = {
    * a name, brace, bracket or quote can start), wherever the command spells it (#1953: a regex 'x$',
    * prose 'costs $5'; #2320: a regex "bar$"): the shell hands it on as written, so it holds no
    * variable's value, and its `path` is the file it spells (#2402: "src/big.ts$").
+   * A word whose only expansions are old arithmetic the reader works out (#3070: `"x\\$[0-9]"`) is
+   * given twice, each `unexpanded`: as typed, which dash and ksh hand on, and with each sum worked
+   * out, which bash and zsh do.
    */
   runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
   /**

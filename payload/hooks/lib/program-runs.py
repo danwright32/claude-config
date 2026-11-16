@@ -194,16 +194,26 @@ def make(marker, judged_by_name):
 
         def package_run(self, words, d, depth, launcher):
             """The reason a package a launcher runs posts, None where it does not, or False where
-            words[0] is not a package (#2865), which the caller then reads as before.
+            the caller is to read words[0] as before (#2865): it is not a package, or it is one that
+            does not post as a package and a file of its name is there to be read as well (#3069).
 
             words is what the launcher runs, its own options gone, and launcher names it (npx, npm
             exec, pnpm dlx). A package spec (PACKAGE_SPEC) is read as the package npm reads it as, never
             as a file: before #2865 `@scope/name@1` was read as a path, holding a /, so a command
             earlier in the call naming it (claude mcp add -- npx -y @scope/name@1) made it a script that
-            may be written, and the call was refused. A spec naming a file on disk, or one an earlier
-            command wrote (not a program that only names it), is still read as that file, as is any
-            path (./x.js). So is a program the gate reads by its own name (npx tsx), and a compiler
-            (npx tsc, read by what it builds).
+            may be written, and the call was refused. A path (./x.js) is read as the file it names, a
+            program the gate reads by its own name (npx tsx) as that program, and a compiler (npx tsc)
+            by what it builds.
+
+            A spec is the package whatever is on disk (#3069). Before, one naming a file or a folder
+            there, or a file an earlier command wrote (not a program that only names it), was handed
+            back as not a package, so beside a folder named vitest `npx vitest run posts.test.ts` was
+            read as a path, and a path holding no / is read as nothing: the files the package was
+            handed were never opened. No launcher reads such a word as a file (npm takes a word for a
+            path only where it starts with . / or ~, or holds a / outside a scope), so the name being
+            taken on disk says nothing about what runs. The file of that name is read as well, as
+            before, by handing the word back once the package reading finds no post, so the call is
+            refused where either reading refuses and nothing refused before #3069 passes after it.
 
             A package counts as able to act, as an import of one does (#2844): handed an endpoint, or
             a file naming one, it is refused. Each file it is handed is judged by its own text, as a
@@ -219,15 +229,17 @@ def make(marker, judged_by_name):
             if spec == base and judged_by_name(base):
                 return False  # judged by name where the caller reaches it (npx tsx, npm exec -- bash)
             path = self.resolve(spec, d)
-            if os.path.lexists(path) or any(kind != "maybe" for kind, _, _ in self.made_from(path) or ()):
-                return False
+            # A file or a folder of the package's name, on disk or written by an earlier command: read
+            # as well, by the caller, where the package reading below finds no post (#3069).
+            also_file = os.path.lexists(path) or any(kind != "maybe" for kind, _, _ in self.made_from(path) or ())
+            quiet = False if also_file else None
             if name in BUILDERS:
-                return None  # a build runs nothing it is handed; what it builds is read where run (#2844)
+                return quiet  # a build runs nothing it is handed; what it builds is read where run (#2844)
             label = f"the package {spec}, run by {launcher},"
             hit = marker.search(" ".join(words[1:]))
             if hit:
                 return f"{label} {PACKAGE_ACTS}, and is run with {hit.group(0)} in its arguments"
-            return self.every_file(words, d, depth, False, actor=(label, PACKAGE_ACTS))
+            return self.every_file(words, d, depth, False, actor=(label, PACKAGE_ACTS)) or quiet
 
 
         # ---- Python runners -------------------------------------------------------------------
