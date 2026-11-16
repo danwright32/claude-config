@@ -6333,7 +6333,8 @@ bare `mktemp`, by `madeTemp`, `freshTemp` and `tempWord`; its own folder by the 
 idiom, by `ownFolderVar`, `ownFolderPath` and `withoutOwnFolder`) is read only through
 `hooks/scriptvars.ts`, kept by each mod that asks at `hooks/mod-kit/scriptvars.ts` (#3022: the
 design round guard wrote it, and the area check, which could place no write into such a folder,
-held every checker copying into one). `hooks/quoted.ts` holds `pythonText` too
+held every checker copying into one); the scan fails a mod matching a bare `mktemp` substitution
+with a pattern, or naming `BASH_SOURCE`, by hand. `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`

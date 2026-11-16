@@ -1605,6 +1605,21 @@ for m in patch-git-line patch-header patch-hunk patch-binary; do
     || check "#2992: and names $m, pointing it at the copy of hooks/patch.ts" "$out"
 done
 case "$out" in *clean-asks-patch*) check "#2992: a mod asking the copy of hooks/patch.ts, or cutting a patch to the lines that might name a file, passes" "$out" ;; *) check "#2992: a mod asking the copy of hooks/patch.ts, or cutting a patch to the lines that might name a file, passes" ok ;; esac
+# #3022: the design round guard read a script's bare mktemp and its own folder by the BASH_SOURCE
+# idiom itself, and the area check could not read either. Both read with the copy of mod-kit's
+# hooks/scriptvars.ts now, so a mod matching a bare mktemp substitution or the idiom by hand fails
+# the run, pointed at that copy. A mod asking the copy passes.
+M9V="$TMPROOT/m9-script-vars"
+mkmodsrc "$M9V" clean-asks-vars "const t = tempWord(text, word); const own = ownFolderPath(text, path); const rest = withoutOwnFolder(text)"
+mkmodsrc "$M9V" vars-mktemp "const FRESH = /^\\\$\\(mktemp(?: -d)?\\)\$/"
+mkmodsrc "$M9V" vars-own-folder "const IDIOM = /dirname \"\\\$\\{BASH_SOURCE/"
+out="$(bash "$SHARED" "$M9V" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#3022: a mod reading a script's own variables by hand fails the run" ok || check "#3022: a mod reading a script's own variables by hand fails the run" "exit=$code out=$out"
+for m in vars-mktemp vars-own-folder; do
+  printf '%s\n' "$out" | grep "$m keeps its own script-vars" | grep -q 'hooks/mod-kit/scriptvars.ts' && check "#3022: and names $m, pointing it at the copy of hooks/scriptvars.ts" ok \
+    || check "#3022: and names $m, pointing it at the copy of hooks/scriptvars.ts" "$out"
+done
+case "$out" in *clean-asks-vars*) check "#3022: a mod asking the copy of hooks/scriptvars.ts passes" "$out" ;; *) check "#3022: a mod asking the copy of hooks/scriptvars.ts passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
