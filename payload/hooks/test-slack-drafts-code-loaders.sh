@@ -13,7 +13,9 @@
 # from where it is read. And lib/program-runs.py's package_run beside a folder or a file of the
 # package's name (#3069), kept here beside the other `npx vitest` cases, and beside a local package
 # folder a launcher is handed by path (#3083). And a Python script that uses os only to read, handed
-# a file naming an endpoint (#3085), kept here so the larger suite does not grow. Every other
+# a file naming an endpoint (#3085), kept here so the larger suite does not grow. And
+# lib/py-aliases.py (#3102): a Python module given another name, or put where the gate does not
+# follow it, is read as the imported name is. Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
