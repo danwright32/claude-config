@@ -654,7 +654,16 @@ why = ap._put_on_record(["0123abcd"])
 if why is not None:
     print("a hex key written was said to fail: " + repr(why))
     sys.exit()
-print("ok" if open(rec, "rb").read() == b"0123abcd\n" else "a hex key was not written")
+if ap._on_record() != ({"0123abcd"}, None):
+    print("a hex key was not written: " + repr(open(rec, "rb").read()))
+    sys.exit()
+# A short write that a failure cut off leaves a fragment with no newline; the next key written
+# must not fuse onto it, or it is lost while reported kept.
+with open(rec, "ab") as f:
+    f.write(b"4567")
+why = ap._put_on_record(["89abcdef"])
+held, _ = ap._on_record()
+print("ok" if why is None and "89abcdef" in held else "a key written after a fragment was lost: " + repr(open(rec, "rb").read()))
 PY
 )"
 check "a record key that is not ASCII is refused unwritten, said and not raised on, while a hex key is written" "$keyed"

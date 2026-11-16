@@ -475,8 +475,10 @@ def _put_on_record(keys):
     record = os.path.join(folder, "approved")
     try:
         # A key is a hex digest, so strict is the decision: a key holding anything else is refused
-        # before the record is opened, and never written as a line that would trust nothing.
-        data = ("\n".join(keys) + "\n").encode("ascii", "strict")
+        # before the record is opened, and never written as a line that would trust nothing. The
+        # leading newline ends any fragment an earlier short write left, so the first key here is
+        # never fused onto it; the record is read by whitespace, so a blank line costs nothing.
+        data = ("\n" + "\n".join(keys) + "\n").encode("ascii", "strict")
     except UnicodeError as e:
         return ("the record of the lines Dan approved, " + record + ", was not written: a key for it was not "
                 "a hex digest (" + type(e).__name__ + ")")
