@@ -4221,7 +4221,7 @@ commits the line or runs a file on that project, so later sessions and every wor
 do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
 MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
 (#2989), the question naming up to eight of them and how he approves one; a commit whose every added
-line he approved passes.
+line he approved passes, and says so when the record could not take one (below).
 - Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
   after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
   to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
@@ -4234,6 +4234,14 @@ line he approved passes.
 - A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
   session's transcript (both captured the same day), so it passes on Dan's picker in that session,
   and the record is written by a call of the main session.
+- When the record cannot be written, the hook says so, and his picker still counts for that call (#3058).
+  Before, the failure was swallowed: his picker let the main session's call through, nothing was
+  kept, and the next session asked him to approve the same line again with no reason given. Now
+  that call, a write or a commit adding the line, still goes through on his picker (Dan chose on
+  2026-11-16 to keep that trust, answering the picker `Keep #3041's old trust`), and the hook says
+  beside it, in a notice and never as a question, which line could not be saved, the record's path
+  and the error, and that a later session will ask him again until the record can be written.
+  Nothing is kept until then; once it can be written, the same picker is saved by the next call.
 - What changes for a list that already exists: its lines are approved by nobody yet, so each write
   on its project is asked about, the question saying how Dan approves the line. One picker a line
   is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
@@ -7354,7 +7362,11 @@ command sets to a plain name is judged by that name, and `$PWD`, `$HOME`, `$OLDP
 name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's title included, read
 whole and as each piece a split would make) as each of its words, and marks an argument whose every
 `$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
-which holds no variable's value. Over this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a
+which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
+arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
+as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
+each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
+distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
 would not apply to the file as it stands (its text missing, or there more than once without
@@ -8131,8 +8143,7 @@ One narrowing (#2254): a findings note to the installed helper,
 else, another subcommand, a substitution inside the note and everything else in the same command
 are judged as before. A question is kept in the store under a
 SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
-character key limit; an answer kept under the earlier key form is still read for its week (#2256
-removes that read).
+character key limit.
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
 session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set

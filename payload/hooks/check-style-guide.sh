@@ -17,9 +17,11 @@
 # unambiguous unicode characters that never appear by accident in normal
 # writing or code, so those are the two checks worth automating.
 #
-# Override: SKIP_STYLE_CHECK=1 git push ...  (docs describing the rule itself
-# need to reference the literal characters, or a false positive). Explain why
-# to the user first, same as the test gate -- never skip silently.
+# Text that must name one of the characters (a test, a regex, docs describing the
+# rule itself) writes it as an escape, so the file holds no literal one, and the
+# refusal says so first (claude-config#3082). Override, as the last resort for a
+# genuine false positive only: SKIP_STYLE_CHECK=1 git push ... Explain why to the
+# user first, same as the test gate; never skip silently.
 #
 # Fails OPEN on a git error, which allows the push. A hook payload it cannot parse is refused when
 # its raw text names a push (claude-config#1922).
@@ -272,9 +274,13 @@ pending_findings="$(scan "$pending_diff")" || scanner_refusal "the style scanner
   echo ""
   echo "Fix the text (use a period, comma, colon, or parentheses instead of a dash;"
   echo "remove the emoji), then push again."
-  echo "OVERRIDE: if this is a false positive, or the text genuinely needs to"
-  echo "reference the literal character (e.g. documenting this rule itself),"
-  echo "re-run with:"
+  echo "If the text must name the character itself (a test asserting copy holds"
+  echo "none, a regex stripping one, a lint rule, a document about this rule),"
+  echo "write it as an escape instead, so the file holds no literal character for"
+  printf '%s\n' 'this gate to catch: \u2014 for the em dash, \u2013 for the en dash,'
+  printf '%s\n' '\u{1F600} for an emoji. Do not skip this check to name the character.'
+  echo "LAST RESORT, only for a genuine false positive that no rewording or escape"
+  echo "can fix, re-run with:"
   echo "    SKIP_STYLE_CHECK=1 <your original git push command>"
   echo "BEFORE overriding you MUST explain to the user, in plain non-technical"
   echo "language, WHY skipping is legitimate here, so they can judge whether it"
