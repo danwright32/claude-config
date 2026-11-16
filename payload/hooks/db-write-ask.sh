@@ -81,6 +81,11 @@
 # COUNTS ONLY WHEN"). The hook's own question about a commit approves nothing: sleep mode can answer
 # a permission prompt with Dan asleep, and never a picker. A subagent's call (agent_id in the
 # payload, measured on Claude Code 2.1.325) passes on his picker and writes nothing on the record.
+# Since #3058, when the record cannot take a line he approved in a picker, the call still passes on
+# that picker (his picker answer of 2026-11-16, `Keep #3041's old trust`), and the hook says so in a
+# systemMessage beside it, naming the line, the record and the error: the one notice a test
+# project's write carries. Before, the failed save was swallowed, and the next session asked him
+# to approve the same line again with no reason given.
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
 # MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
@@ -118,6 +123,9 @@ load_notice() {
       if [ -n "$n" ]; then printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}, "systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}" "${n//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
       else printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; fi; }
     hook_notice_json() { printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
+    hook_allow_json() {
+      local r="${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"%s}, "systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${r:+, \"permissionDecisionReason\": \"$r\"}" "${2//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
   }
 }
 
@@ -177,7 +185,7 @@ fi
 # -S: the hook uses the standard library only, and the site module was 5.2 ms of every start
 # (the personal MacBook, 2026-11-15, claude-config#3023).
 out="$(printf '%s' "$payload" | python3 -I -B -S -c '
-import importlib.util, json, os, re, sys
+import atexit, importlib.util, json, os, re, sys
 sys.stdout.reconfigure(errors="replace")
 
 DB_SQL = "mcp__claude_ai_Supabase__execute_sql"
@@ -235,22 +243,43 @@ def sf_notice():
             + ("that rule" if len(hits) == 1 else "those rules") + " from that file on that Mac; it is not synced, "
             "so no session or sync removes it (claude-config#2521).")
 
+# What lib/db-apply-approval.py could not save on the record of approved lines during this call: a
+# line Dan approved in a picker is trusted for the call all the same (his picker answer of
+# 2026-11-16), so each is said as a notice beside whatever verdict the call leaves with, never as
+# a question (claude-config#3058).
+UNKEPT = []
+# Whether a verdict was written. A run that leaves with none, by any of the bare exits below, still
+# says what could not be saved: no_verdict runs at every exit, so no exit can drop the notice.
+VERDICT = []
+
+def plain(*texts):
+    """The texts that say anything, as one, with the unit separator that splits a verdict taken
+    out (and NUL, which a shell variable cannot hold)."""
+    return " ".join(t for t in texts if t).replace("\x1f", " ").replace("\x00", "")
+
+def leave(verdict=None):
+    if verdict is not None:
+        VERDICT.append(verdict)
+        sys.stdout.write(verdict)
+    sys.exit()
+
+@atexit.register
+def no_verdict():
+    if UNKEPT and not VERDICT:
+        sys.stdout.write("note\x1f" + plain(*UNKEPT))
+
 def release(reason):
     """Let the call through: Dan has already answered for it (claude-config#2763)."""
-    sys.stdout.write("allow\x1f" + reason.replace("\x1f", " ").replace("\x00", ""))
-    sys.exit()
+    leave("allow\x1f" + plain(reason) + "\x1f" + plain(*UNKEPT))
 
 def emit(decision_reason=None, message=None):
     """Hand the verdict to the shell, which builds the JSON through lib/hook-notice.sh: "ask", the
-    reason and the notice, or "note" and the notice, split by the unit separator, which is taken
-    out of both texts first (as is NUL, which a shell variable cannot hold)."""
-    def plain(t):
-        return (t or "").replace("\x1f", " ").replace("\x00", "")
+    reason and the notice, or "note" and the notice, split by the unit separator. The notice is
+    message and whatever could not be saved (UNKEPT)."""
+    notice = plain(message, *UNKEPT)
     if decision_reason is not None:
-        sys.stdout.write("ask\x1f" + plain(decision_reason) + "\x1f" + plain(message))
-    elif message:
-        sys.stdout.write("note\x1f" + plain(message))
-    sys.exit()
+        leave("ask\x1f" + plain(decision_reason) + "\x1f" + notice)
+    leave("note\x1f" + notice if notice else None)
 
 DATABASE_CALL = "database call"
 # The one kind of call asked about that changes no database: an edge function deploy that turns
@@ -350,7 +379,7 @@ if tool == "Bash":
                 "project onto one, could not be told", "2989", "change to a test project list")
         try:
             change = ap.list_shell_change(bcmd, d.get("cwd"), bsw, strip, d.get("session_id"),
-                                          d.get("transcript_path"), bool(d.get("agent_id")))
+                                          d.get("transcript_path"), bool(d.get("agent_id")), UNKEPT)
         except Exception as e:
             change = ((calls_why or "the command could not be read (" + type(e).__name__ + ")") + ", so whether "
                       "it writes a test project list of a checkout, or commits a project onto one, could not be told")
@@ -443,7 +472,7 @@ if tool == "Bash":
                     test_why = ap_why
                 else:
                     try:
-                        is_test, test_why = ap.on_test_project(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), bool(d.get("agent_id")))
+                        is_test, test_why = ap.on_test_project(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), bool(d.get("agent_id")), UNKEPT)
                     except Exception as e:
                         is_test, test_why = False, "whether its project is a test one could not be checked (" + type(e).__name__ + ")"
                     if is_test:
@@ -462,8 +491,7 @@ if tool == "Bash":
                 kept.append((f[0] + ", and no /db-apply Apply covers it: " + why
                              + ("" if test_why is None else "; nor a test project: " + test_why), f[1]))
         if not kept and not released:
-            sys.stdout.write("pass\x1f")
-            sys.exit()
+            leave("pass\x1f" + plain(*UNKEPT))
         if not kept:
             release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
         found = kept
@@ -527,13 +555,21 @@ if [ "$rc" -eq 0 ]; then
       exit 0 ;;
     "allow$US"*)
       # Dan's /db-apply Apply covers this push (claude-config#2763). The reason keeps only
-      # characters that need no escaping, as read-only-query-allow.sh's approval does.
-      reason="${out#allow$US}"
-      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      # characters that need no escaping, as read-only-query-allow.sh's approval does. After it
+      # comes what could not be saved on the record of approved lines, said as a notice beside
+      # the allow (claude-config#3058); with nothing to say, no second python3 is started.
+      rest="${out#allow$US}"
+      reason="${rest%%"$US"*}"
+      reason="${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      case "$rest" in *"$US"?*) hook_allow_json "$reason" "${rest#*"$US"}"; exit 0 ;; esac
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "$reason"
       exit 0 ;;
     "pass$US"*)
       # A file run on a project its checkout marks as test (claude-config#2643): let through with
-      # no reason and no notice, as Dan chose (2026-11-14).
+      # no reason and no notice, as Dan chose (2026-11-14). The one thing said beside it is that
+      # his approval of its line could not be saved on the record (claude-config#3058).
+      notice="${out#pass$US}"
+      if [ -n "$notice" ]; then hook_allow_json "" "$notice"; exit 0; fi
       printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}\n'
       exit 0 ;;
   esac

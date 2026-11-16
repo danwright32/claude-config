@@ -421,7 +421,8 @@ export const said = (r: R) => [...(r.context ?? []), typeof r.result === 'string
 export const REASON = 'This only renames a local variable inside one function.'
 export const SLACK = `${APP}/src/lib/slack.ts`
 // The question about that file under its fixed length key (#2246): the SHA-256 of "dan/app\nsrc/lib/slack.ts",
-// measured with shasum rather than with the code under test, and the key it was kept under before.
+// measured with shasum rather than with the code under test, and the key it was kept under before
+// (no longer read, #2256: a test fixture for proving that).
 export const QKEY = 'question:41ea88a6f2f85188ac883b6c67f9c59a2728aeddb0cdeb7020eeb21976ac7aee'
 export const OLD_QKEY = 'question:dan/app\nsrc/lib/slack.ts'
 
