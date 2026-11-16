@@ -7356,7 +7356,11 @@ command sets to a plain name is judged by that name, and `$PWD`, `$HOME`, `$OLDP
 name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's title included, read
 whole and as each piece a split would make) as each of its words, and marks an argument whose every
 `$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
-which holds no variable's value. Over this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a
+which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
+arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
+as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
+each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
+distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
 would not apply to the file as it stands (its text missing, or there more than once without
