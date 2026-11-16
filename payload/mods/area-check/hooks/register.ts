@@ -832,19 +832,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     // whether they passed, so a reading that lets everything through, or one that never places
     // anything, shows in the log rather than as quiet (L551).
     const placed = t.runs?.length ? await allPlaced($, t.runs, at) : null
-    if (t.runs && placed) {
-      let verdict: Awaited<ReturnType<typeof gatePath>> = PASS
-      const judged = new Set<string>()
-      for (const p of placed.flat()) {
-        if (judged.has(p.path)) continue
-        judged.add(p.path)
-        verdict = await gatePath($, id, { word: p.word, path: p.path, ...(p.tree ? { tree: true as const } : {}) }, agent)
-        if (!('pass' in verdict)) break
-      }
-      const decision = 'pass' in verdict ? 'passed' : 'held'
-      for (const [i, r] of t.runs.entries()) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: r.path, decision, placed: placed[i]?.length ?? 0 })
-      return verdict
-    }
+    if (t.runs && placed) return judgePlaced($, id, t.word, t.runs, placed, agent, at)
   }
   let under: Awaited<ReturnType<typeof underTree>>
   try {
@@ -855,6 +843,43 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
   }
   if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
   return gateFolder($, id, t.word, under.paths, agent)
+}
+
+// The placed writes of the scripts a word was handed to (#2407, #2565, #3082), each judged where it
+// lands, as that write typed in the command would be, so a held file among them refuses the command,
+// naming it. Each reading is logged with how many writes were placed and whether they passed, so a
+// reading that lets everything through, or one that never places anything, shows in the log rather
+// than as quiet (L551). `at` is where a failure to log is said to be.
+const judgePlaced = async ($: EngineInterface, id: string, word: string, runs: readonly ShellRun[], placed: readonly ScriptPlaced[][], agent: string | null, at: string): Promise<{ deny: string } | typeof PASS | Unread> => {
+  let verdict: Awaited<ReturnType<typeof gatePath>> = PASS
+  const judged = new Set<string>()
+  for (const p of placed.flat()) {
+    if (judged.has(p.path)) continue
+    judged.add(p.path)
+    verdict = await gatePath($, id, { word: p.word, path: p.path, ...(p.tree ? { tree: true as const } : {}) }, agent)
+    if (!('pass' in verdict)) break
+  }
+  const decision = 'pass' in verdict ? 'passed' : 'held'
+  for (const [i, r] of runs.entries()) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word, script: r.path, decision, placed: placed[i]?.length ?? 0 })
+  return verdict
+}
+
+// A word built as the command runs (`"$(git log -1 --format=%h)"`), handed only to scripts (#3082):
+// no write of theirs where each script's text is read and every write it makes is placed with none
+// built on what it is handed, and those writes are then judged in its stead. Read as handed no real
+// folder (SCRIPT_RUN_FROM), and any name built on what a script is handed keeps the word held,
+// whichever of its words the name was built on. Null, for the word to be judged as one that cannot
+// be named, wherever a script cannot be read, a write cannot be placed, or the reading throws (fail
+// closed).
+const gateHanded = async ($: EngineInterface, id: string, t: Unread & { runs: readonly ShellRun[] }, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread | null> => {
+  try {
+    const placed = await allPlaced($, t.runs, SCRIPT_RUN_FROM)
+    if (!placed || placed.flat().some(p => p.handed)) return null
+    return await judgePlaced($, id, t.word, t.runs, placed, agent, await $.session.cwd())
+  } catch (err) {
+    await failed($, t.word, err)
+    return null
+  }
 }
 
 // The files under a folder a command reaches, each judged as its first edit would be, and held once
@@ -900,12 +925,11 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   }
   for (const target of targets) {
     let t: Unread
-    if ('path' in target) {
-      const r = await gatePath($, id, target, agent)
-      if ('deny' in r) return r
-      if ('pass' in r) continue
-      t = r
-    } else t = target
+    const r = 'path' in target ? await gatePath($, id, target, agent) : target.runs ? await gateHanded($, id, { ...target, runs: target.runs }, agent) : null
+    if (r === null) t = target as Unread
+    else if ('deny' in r) return r
+    else if ('pass' in r) continue
+    else t = r
     try {
       const v = await judgeUnread($, id, t, command, agent)
       if ('pass' in v) continue
