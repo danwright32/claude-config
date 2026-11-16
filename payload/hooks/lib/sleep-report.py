@@ -485,8 +485,8 @@ def distinct_questions(qs):
 
 
 def questions_of(notes):
-    """The questions the night's notes put to Dan, and the notes that said they ask nothing, which
-    are told as information rather than dropped unseen (L507), each once."""
+    """The questions the night's notes put to Dan, each once. A note that says it asks nothing is
+    left out, as Dan chose on 2026-11-16 (#3056), the same rule the morning pickers apply."""
     def s(x):
         return " ".join(x.split()) if isinstance(x, str) and x.strip() else None
 
@@ -508,8 +508,7 @@ def questions_of(notes):
         # all is still listed, never dropped as though absent (L215).
         texts = [t for t in texts if t] or [text_of(n) or "(noted with no words)"]
         asked.extend(dict(where_, text=t) for t in texts)
-    told = [q for q in asked if not_a_question(q["text"], q.get("options"))]
-    return distinct_questions([q for q in asked if q not in told]), distinct_questions(told)
+    return distinct_questions([q for q in asked if not not_a_question(q["text"], q.get("options"))])
 
 
 def build(record, notes, bad, final, now, github, session=None, all_notes=None, needs=None):
@@ -629,9 +628,7 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
         why = " (left before bed: %s)" % q["why"] if q.get("why") else ""
         return "%s: %s%s" % (at, q["text"], why)
 
-    questions, told = questions_of(notes)
-    section("Questions for you", [asked_at(q) for q in questions])
-    section("For your information", [asked_at(q) for q in told])
+    section("Questions for you", [asked_at(q) for q in questions_of(notes)])
 
     if final:
         section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.")

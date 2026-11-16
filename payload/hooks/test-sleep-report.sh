@@ -202,7 +202,8 @@ has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (lef
 # #3056: the report lists what the morning pickers offer. On 2026-11-15 a note that said itself it
 # asked nothing, noted once by repository and once by folder, was put to Dan as two questions, and a
 # real question noted the same two ways was put twice. The pickers stopped that (#3018); the report
-# still listed every row. A note that asks nothing is told under its own heading, never as a question.
+# still listed every row. A note that asks nothing is left out of the report, as Dan chose on
+# 2026-11-16 over listing it under a heading of its own.
 FYI3056='Build order for tonight: the schema change lands before the importer. This is not a question, nothing to answer.'
 note '{"kind":"question","by":"aaaa1111","repo":"o/r","text":"'"$FYI3056"'"}' >/dev/null 2>&1
 note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":["'"$FYI3056"'"]}' >/dev/null 2>&1
@@ -214,7 +215,7 @@ asks5="$(section_rows "$r5" "Questions for you")"
 check_eq "#3056 a question noted by repository and by folder is listed once" 1 "$(printf '%s\n' "$asks5" | grep -c -F 'Apply the migration in PR #52?')"
 has "#3056 with the repository and issue the first noting gave" "o/r#41: Apply the migration in PR #52?" "$asks5"
 lacks "#3056 a note that says it asks nothing is not a question" "Build order for tonight" "$asks5"
-check_eq "#3056 it is told once, under its own heading" "o/r: $FYI3056" "$(section_rows "$r5" "For your information")"
+lacks "#3056 a note that asks nothing is left out of the report entirely (Dan, 2026-11-16)" "Build order for tonight" "$r5"
 has "#3056 a question beside a part that asks nothing about something else is still asked" "/r/repo: Merge #5 now? No decision needed on the rename." "$asks5"
 note '{"kind":"question","by":"aaaa1111","cwd":"/r/repo","questions":[" "],"text":"Rename the queue?"}' >/dev/null 2>&1
 note '{"kind":"question","by":"aaaa1111","cwd":"/r/other","questions":[]}' >/dev/null 2>&1
