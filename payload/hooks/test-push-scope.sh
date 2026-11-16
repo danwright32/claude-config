@@ -1939,6 +1939,370 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git st
 [ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3098 with no reader a staging route nothing commits is still neither" ok \
   || check "#3098 with no reader a staging route nothing commits is still neither" "exit $rc, printed [$r]"
 
+echo "push-scope: a commit that names the paths it takes (claude-config#3111)"
+
+# `git commit <paths>` takes those files' edits straight from the working tree, with no git add
+# (measured on git 2.51.1: the commit holds the path's edit, a directory's tracked edits, and with -i
+# what was staged as well; an untracked path is refused by git). ps_add_scope read only a git add
+# and a commit -a, so the gates folded in the index alone and the edit went out unread. The paths
+# are in the command, so they are read as an add's paths are.
+want_scope "git commit notes/a.txt -m x && git push" "PATHS|notes/a.txt" \
+  "#3111 a commit naming a path takes that path"
+want_scope "git commit -m x -- a.txt 'b c.txt' && git push" "PATHS|a.txt|b c.txt" \
+  "#3111 paths after a double dash, one of them quoted with a space"
+want_scope "git commit -m x a.txt && git push" "PATHS|a.txt" \
+  "#3111 a path after the message"
+want_scope "git commit -qm x notes && git push" "PATHS|notes" \
+  "#3111 a directory, after a cluster of short options ending in m"
+want_scope "git commit -o a.txt -m x && git push" "PATHS|a.txt" "#3111 with -o"
+want_scope "git commit --only a.txt -m x && git push" "PATHS|a.txt" "#3111 with --only"
+want_scope "git commit -i a.txt -m x && git push" "PATHS|a.txt" "#3111 with -i"
+want_scope "git commit --include a.txt -m x && git push" "PATHS|a.txt" "#3111 with --include"
+want_scope "git commit . -m x && git push" "PATHS|." "#3111 the dot is a path here, never every untracked file"
+want_scope "(git commit a.txt -m x) && git push" "PATHS|a.txt" "#3111 inside brackets"
+want_scope "git commit -F msg.txt a.txt && git push" "PATHS|a.txt" "#3111 the message file is no path, the word after it is"
+want_scope "git commit -m x a.txt 2>&1 && git push" "PATHS|a.txt" "#3111 a redirection is not a path"
+want_scope "git commit a.txt -m x > out.txt && git push" "PATHS|a.txt" "#3111 nor is the file a redirection writes"
+want_scope "git -C sub commit a.txt -m x && git -C sub push" "PATHS|a.txt" "#3111 behind git -C"
+want_scope "rtk git commit a.txt -m x && rtk git push" "PATHS|a.txt" "#3111 behind rtk"
+want_scope "git commit a.txt -m x && git commit b.txt -m y && git push" "PATHS|a.txt|b.txt" "#3111 two commits, each naming one"
+want_scope "git add b.txt && git commit a.txt -m x && git push" "PATHS|b.txt|a.txt" "#3111 beside an add naming another path"
+want_scope "git add a.txt && git commit a.txt -m x && git push" "PATHS|a.txt" "#3111 a path both name is listed once"
+want_scope "git add -u && git commit a.txt -m x && git push" "TRACKED|a.txt" "#3111 beside git add -u"
+want_scope "git commit -am x a.txt && git push" "TRACKED|a.txt" "#3111 beside commit -a"
+want_scope "git add -A && git commit a.txt -m x && git push" "ALL" "#3111 beside an add that takes everything"
+want_scope "git commit -Skey a.txt -m x && git push" "PATHS|a.txt" "#3111 a signing key glued to -S takes no word after it"
+want_scope "git commit -uno a.txt -m x && git push" "PATHS|a.txt" "#3111 nor does a mode glued to -u"
+# A list of paths in a file cannot be read from the command, so it is an add nobody can account
+# for. It used to be read as commit -a, by a pattern that takes any option holding an a for one.
+want_scope "git commit --pathspec-from-file=list.txt -m x && git push" "UNKNOWN" \
+  "#3111 paths named in a file are UNKNOWN, never narrowed to the index"
+want_scope "git commit --pathspec-from-file list.txt -m x && git push" "UNKNOWN" \
+  "#3111 and so with the file as a word of its own"
+# Controls: the value of an option is no path, and a commit only named is no commit.
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  want_scope "$c" "INDEX" "#3111 control, no path is named: $c"
+done <<'NOPATHS'
+git commit -m a.txt && git push
+git commit -F a.txt && git push
+git commit -qm 'see a.txt' && git push
+git commit -mfix.txt && git push
+git commit -C HEAD~1 && git push
+git commit --fixup HEAD~1 && git push
+git commit --file b.txt && git push
+git commit --file=b.txt && git push
+git commit -m x -m y && git push
+git commit -t b.txt && git push
+git commit -m 'git commit b.txt' && git push
+echo git commit b.txt && git commit -m x && git push
+git commit -m x 2>&1 && git push origin feat
+NOPATHS
+# The pattern that reads commit -a takes any option holding an a for one (--message, --author,
+# --squash, --cleanup, --trailer, --amend), so these are read as every tracked change, as they were
+# before. What matters here is that the word after each is still no path.
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  want_scope "$c" "TRACKED" "#3111 control, the value of an option is no path: $c"
+done <<'VALUES'
+git commit --message b.txt && git push
+git commit --message=b.txt && git push
+git commit --squash HEAD~1 && git push
+git commit --author 'A B <a@b.c>' --date now -m x && git push
+git commit -m x --cleanup strip --trailer 'Refs: 1' && git push
+git commit --reuse-message HEAD~1 && git push
+git commit --amend --no-edit && git push
+VALUES
+want_scope $'git commit -q -F - <<\'EOF\' && git push\nfix b.txt\nEOF' "INDEX" \
+  "#3111 control, a message read from the commit's own input names no path"
+want_scope 'git commit -m "$(cat <<'"'"'EOF'"'"'
+fix b.txt and c.txt
+EOF
+)" && git push' "INDEX" "#3111 control, a heredoc message that names files names no path"
+# With nothing to read the command the crude cut answers, which can only see more (L42).
+got="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_add_scope "git commit a.txt -m x && git push" | tr '\n' '|' | sed 's/|$//')"
+[ "$got" = "PATHS|a.txt" ] && check "#3111 with no reader a path a commit names is still read" ok \
+  || check "#3111 with no reader a path a commit names is still read" "got [$got]"
+got="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_add_scope "git commit -m x && git push" | tr '\n' '|' | sed 's/|$//')"
+[ "$got" = "INDEX" ] && check "#3111 with no reader a bare commit still takes only the index" ok \
+  || check "#3111 with no reader a bare commit still takes only the index" "got [$got]"
+# And as files, in the repository ps_pending_files is asked in (tracked.txt edited, the rest untracked).
+PF="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.commitpaths.XXXXXXXX")"
+git init -q -b main "$PF" 2>/dev/null
+( cd "$PF" && printf 'a\n' > tracked.txt && mkdir -p sub && printf 's\n' > sub/t.txt \
+    && git add tracked.txt sub/t.txt && gc commit -qm seed \
+    && printf 'changed\n' >> tracked.txt && printf 'changed\n' >> sub/t.txt \
+    && printf 'new\n' > named.txt ) >/dev/null 2>&1
+want_pending "git commit -qm x && git push" "EXACT" "#3111 control: a bare commit takes nothing beyond the index"
+want_pending "git commit tracked.txt -qm x && git push" "EXACT|tracked.txt" \
+  "#3111 a commit naming an edited file takes that file"
+want_pending "git commit -qm x -- sub && git push" "EXACT|sub/t.txt" \
+  "#3111 a commit naming a directory takes what changed under it"
+want_pending "git commit -qm tracked.txt && git push" "EXACT" \
+  "#3111 control: a message that is a file's name takes nothing"
+want_pending "git commit gone.txt -qm x && git push" "WIDENED|named.txt|sub/t.txt|tracked.txt" \
+  "#3111 a commit naming a path that is not there widens and says so"
+want_pending "git commit --pathspec-from-file=list.txt -qm x && git push" "WIDENED|named.txt|sub/t.txt|tracked.txt" \
+  "#3111 paths named in a file widen to the whole tree and say so"
+rm -rf "$PF"
+
+echo "push-scope: files a command writes before it stages, commits and pushes (claude-config#3113)"
+
+# ps_unread_write answers whether a command runs something that may write a file, then stages (a
+# git add, or a commit that takes files itself with -a or by naming paths), commits and pushes. The
+# gates read the files as they stand before the command runs, so what such a command writes goes
+# out unread. It prints what may write, as the refusal names it. Anything is taken to write unless
+# it is one of the commands measured to change no file (the probe in the pull request).
+writes() { # writes <description> <command> <what it must print>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_write "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
+}
+no_write() { # no_write <description> <command>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_write "$2")"; rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
+}
+while IFS='|' read -r c want; do
+  [ -n "$c" ] || continue
+  writes "#3113 a file may be written, then staged, committed and pushed" "$c" "$want"
+done <<'WRITES'
+cp ../held.txt notes/copied.md && git add -A && git commit -m x && git push|cp
+sed -i '' s/a/b/ a.txt && git add -u && git commit -m x && git push|sed
+npx prettier --write . && git add . && git commit -m x && git push|npx
+git apply fix.patch && git add -A && git commit -m x && git push|git apply
+git checkout -- a.txt && git add a.txt && git commit -m x && git push|git checkout
+git restore a.txt && git add a.txt && git commit -m x && git push|git restore
+git stash pop && git add -A && git commit -m x && git push|git stash
+cp a b && git commit -am x && git push|cp
+cp a b && git commit b -m x && git push|cp
+cp a b && git commit -m x -- b && git push|cp
+bash build.sh && git add . && git commit -m x && git push|bash
+bash -c 'cp a b' && git add b && git commit -m x && git push|cp
+python3 gen.py; git add out.txt; git commit -m x; git push|python3
+make fmt && git add -u && git commit -m x && git push|make
+(cd sub && npm run build) && git add -A && git commit -m x && git push|npm
+X=1 ./gen.sh && git add . && git commit -m x && git push|./gen.sh
+mv a b && git add -A && git commit -m x && git push|mv
+rm a && git add -A && git commit -m x && git push|rm
+touch a && git add a && git commit -m x && git push|touch
+gh pr checkout 5 && git add -A && git commit -m x && git push|gh
+git add a && cp x b && git add b && git commit -m x && git push|cp
+cp a b && git status && git add b && git commit -m x && git push origin HEAD|cp
+cp a b && git add b && git commit -m x && rtk git push|cp
+cp a b && git add b && git merge --continue && git push|cp
+echo hi > notes/new.txt && git add notes && git commit -m x && git push|echo into a file
+printf '%s\n' hi >> notes/new.txt; git add notes; git commit -m x; git push|printf into a file
+git diff > fix.patch && git add fix.patch && git commit -m x && git push|git diff into a file
+git show HEAD~1:a.txt >a.txt && git add a.txt && git commit -m x && git push|git show into a file
+git log --output=log.txt -1 && git add log.txt && git commit -m x && git push|git log
+echo x | tee f.txt && git add f.txt && git commit -m x && git push|tee
+if cp a b; then git add b && git commit -m x && git push; fi|cp
+WRITES
+writes "#3113 a heredoc written into a file, then staged, committed and pushed" \
+  $'cat > notes/h.txt <<\'EOF\'\nbody\nEOF\ngit add notes/h.txt && git commit -m x && git push' "cat into a file"
+# Controls: nothing before the staging step may write, or nothing stages, commits or pushes what
+# was written.
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  no_write "#3113 control" "$c"
+done <<'NOWRITES'
+git add -A && git commit -m x && git push
+cd repo && git add a.txt && git commit -m x && git push
+git status && git add -u && git commit -qm x && git push 2>&1 | tail -3
+git fetch origin && git add a && git commit -m x && git push
+git checkout -b new && git add a && git commit -m x && git push -u origin new
+git switch -c new 2>&1 && git add a && git commit -m x && git push -u origin new
+test -f a && git add a && git commit -m x && git push
+[ -f a ] && git add a && git commit -m x && git push
+echo staging && git add a && git commit -m x && git push
+echo staging >/dev/null 2>&1 && git add a && git commit -m x && git push
+git diff --stat 2>/dev/null && git add a && git commit -m x && git push
+git log -1 >&2; git add a; git commit -m x; git push
+X=1 Y=2 git add a && git commit -m x && git push
+git add a && cp x b && git commit -m x && git push
+cp a b && git commit -m x && git push
+cp a b && git add b && git push
+cp a b && git add b && git commit -m x
+git add a && git commit -m x && git push && cp a b
+git add a && git commit -m x && git push > out.txt
+git add a && git commit -m 'cp a b' && git push
+echo cp a b && git add a && git commit -m x && git push
+cat notes.txt && git add a && git commit -m x && git push
+git branch keep && git tag v1 && git add a && git commit -m x && git push
+NOWRITES
+no_write "#3113 control: a heredoc commit message writes no file" \
+  $'git add a.txt && git commit -m "$(cat <<\'EOF\'\ncp a b, then > c\nEOF\n)" && git push'
+no_write "#3113 control: nor does one read from the commit's own input" \
+  $'git add a.txt && git commit -q -F - <<\'EOF\' && git push\ncp a b > c\nEOF'
+# With nothing to read the command the crude cut answers, which can only see more (L42).
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cp a b && git add -A && git commit -m x && git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "cp" ] && check "#3113 with no reader a write before the add is still found" ok \
+  || check "#3113 with no reader a write before the add is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "(git apply fix.patch) && git commit -am x; git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "git apply" ] && check "#3113 with no reader a patch applied before a commit -a is still found" ok \
+  || check "#3113 with no reader a patch applied before a commit -a is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cd repo && git status && git add -A && git commit -m x && git push")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3113 with no reader an add, commit and push alone is still let through" ok \
+  || check "#3113 with no reader an add, commit and push alone is still let through" "exit $rc, printed [$r]"
+
+echo "push-scope: a push that names what it sends (claude-config#3112)"
+
+# ps_unread_push_source answers whether a push names, as the source of a refspec, something other
+# than the branch checked out that the gates did not read: `other`, when it holds commits that are
+# neither in the history of the branch checked out nor on the remote already; `unresolved`, when it
+# cannot be resolved to a commit before the command runs; `moved`, when the command makes or moves
+# it, or commits, before pushing it. The fixture is on feat, one merge commit ahead of origin/feat;
+# the branch other holds one commit nothing else does; the branch pushed holds one that origin has;
+# the tag onother is on other and the tag onhead on HEAD.
+RS="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.pushsource.XXXXXXXX")"
+PSRC="$(mmf_repo "$RS" clean guide/new.md $'from main\n')"
+( cd "$PSRC" && git checkout -qb other && printf 'only here\n' > notes/other.md && git add notes/other.md && gc commit -qm other \
+    && git checkout -q feat && git checkout -qb pushed && printf 'on origin\n' > notes/pushed.md && git add notes/pushed.md \
+    && gc commit -qm pushed && git push -qu origin pushed && git checkout -q feat \
+    && git tag onother other && git tag onhead ) >/dev/null 2>&1
+[ "$(git -C "$PSRC" branch --show-current 2>/dev/null)" = feat ] \
+  && [ "$(git -C "$PSRC" rev-list --count other --not HEAD --remotes=origin 2>/dev/null)" = 1 ] \
+  && [ "$(git -C "$PSRC" rev-list --count pushed --not HEAD --remotes=origin 2>/dev/null)" = 0 ] \
+  && [ "$(git -C "$PSRC" rev-list --count onhead --not HEAD 2>/dev/null)" = 0 ] \
+  && check "#3112 the fixture is on feat, and only other and its tag hold a commit neither feat nor origin has" ok \
+  || check "#3112 the fixture is on feat, and only other and its tag hold a commit neither feat nor origin has" "it is not, so the cases below prove nothing"
+OTHER_SHA="$(git -C "$PSRC" rev-parse other 2>/dev/null)"
+source_is() { # source_is <description> <command> <what it must print>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_push_source "$2" "$PSRC")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
+}
+source_read() { # source_read <description> <command>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_push_source "$2" "$PSRC")"; rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
+}
+while IFS='|' read -r c want; do
+  [ -n "$c" ] || continue
+  source_is "#3112 the push sends commits no gate read" "$c" "$want"
+done <<'SOURCES'
+git push origin other|other other
+git push origin other:other|other other
+git push origin +other:refs/heads/x|other other
+git push origin refs/heads/other|other refs/heads/other
+git push -u origin other|other other
+git push -f origin other|other other
+git push --force-with-lease origin other|other other
+git push -q origin other 2>&1 | tail -1|other other
+git push -o ci.skip origin other|other other
+git push origin feat other|other other
+git push origin HEAD other:x|other other
+git push origin onother|other onother
+git push origin tag onother|other onother
+git push --all origin|other --all
+git push --all|other --all
+git push origin --branches|other --branches
+git push --mirror origin|other --mirror
+git push --tags origin|other --tags
+git push origin feat --tags|other --tags
+rtk git push origin other|other other
+(git push origin other)|other other
+git status && git push origin other|other other
+git push && git push origin other|other other
+bash -c 'git push origin other'|other other
+git push origin "$BRANCH"|unresolved $BRANCH
+git push origin $BRANCH:feat|unresolved $BRANCH
+git push origin "$(cat branch.txt)"|unresolved $(cat branch.txt)
+git push origin nosuch|unresolved nosuch
+git push origin tag nosuch|unresolved nosuch
+git push origin 'refs/heads/*:refs/heads/*'|unresolved refs/heads/*
+git branch -f pushed other && git push origin pushed|moved pushed
+git branch -M pushed && git push origin pushed|moved pushed
+git branch new other && git push origin new|moved new
+git tag v9 other && git push origin v9|moved v9
+git tag -f onhead other && git push origin onhead|moved onhead
+git tag -a v9 -m 'rel nine' other && git push origin v9|moved v9
+git fetch origin main:pushed && git push origin pushed|moved pushed
+git worktree add -b new ../wt other && git push origin new|moved new
+git commit -m x && git push origin pushed|moved pushed
+git commit -m x && git push origin HEAD~1:feat|moved HEAD~1
+git merge --continue && git push origin pushed|moved pushed
+SOURCES
+source_is "#3112 a commit named by its hash is still another branch's" "git push origin $OTHER_SHA:refs/heads/x" "other $OTHER_SHA"
+source_is "#3112 asked through git -C" "git -C $PSRC push origin other" "other other"
+# Read, and let through: what the push sends is in the range the gates read, is on the remote
+# already, or is nothing at all.
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  source_read "#3112 control, the gates read what this sends" "$c"
+done <<'READ'
+git push
+git push origin
+git push -u origin feat
+git push origin feat:feat
+git push origin +feat
+git push origin refs/heads/feat
+git push origin feat:refs/heads/elsewhere
+git push origin HEAD
+git push origin HEAD:other
+git push origin HEAD:refs/heads/x
+git push origin @
+git push origin HEAD~1:feat
+git push origin pushed
+git push origin main
+git push origin onhead
+git push origin tag onhead
+git push --follow-tags origin feat
+git push origin "$(git branch --show-current)"
+git push -u origin $(git rev-parse --abbrev-ref HEAD)
+git push origin "$(git symbolic-ref --short HEAD)"
+git push origin --delete other
+git push -d origin other
+git push origin :other
+git push -n origin other
+git push --dry-run origin other
+git checkout -b new && git push -u origin new
+git switch -c new && git push -u origin new
+git switch -c new && git add a && git commit -m x && git push -u origin new
+git branch new && git push origin new
+git tag v9 && git push origin v9
+git tag -a v9 -m 'rel nine' && git push origin v9
+git commit -m x && git push -u origin feat
+git commit -m x && git push origin HEAD
+git commit -m 'git push origin other' && git push
+echo git push origin other && git push
+git push origin feat && git branch -f pushed other
+git fetch origin main && git push origin main
+READ
+# A name this command makes where HEAD is, when it is there already, is whatever it already was.
+source_is "#3112 a branch the command would make at HEAD, already there with commits of its own" \
+  "git branch other; git push origin other" "other other"
+# A repository with no commit has nothing to compare against, and git itself refuses its push.
+git init -q "$RS/empty" 2>/dev/null
+r="$(ps_unread_push_source "git push origin other" "$RS/empty")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 a repository with no commit is not asked" ok \
+  || check "#3112 a repository with no commit is not asked" "exit $rc, printed [$r]"
+r="$(cd "$PSRC" && ps_unread_push_source "git push origin other")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "other other" ] && check "#3112 the directory defaults to where it is asked" ok \
+  || check "#3112 the directory defaults to where it is asked" "exit $rc, printed [$r]"
+# Once every tag is in the range the gates read, a push of the tags sends nothing unread.
+git -C "$PSRC" tag -d onother >/dev/null 2>&1
+source_read "#3112 control, every tag is on the branch checked out" "git push --tags origin"
+# With nothing to read the command the crude cut answers, which can only see more (L42).
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git status; git push origin other" "$PSRC")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "other other" ] && check "#3112 with no reader a push of another branch is still found" ok \
+  || check "#3112 with no reader a push of another branch is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git branch -f pushed other && git push origin pushed" "$PSRC")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "moved pushed" ] && check "#3112 with no reader a branch moved before its push is still found" ok \
+  || check "#3112 with no reader a branch moved before its push is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git checkout -b new && git push -u origin new" "$PSRC")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 with no reader a branch made at HEAD and pushed is still let through" ok \
+  || check "#3112 with no reader a branch made at HEAD and pushed is still let through" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git push -u origin feat" "$PSRC")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 with no reader a push of the branch checked out is still let through" ok \
+  || check "#3112 with no reader a push of the branch checked out is still let through" "exit $rc, printed [$r]"
+rm -rf "$RS"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
