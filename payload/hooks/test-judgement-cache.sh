@@ -559,15 +559,24 @@ expect("the stand in gives ~someuser's home as expanduser does (%r)" % gate.os.p
        and gate.os.path.expanduser("~someuser") == "/srv/homes/someuser"
        and gate.os.path.expanduser("~nosuch/x") == "~nosuch/x"
        and gate.os.path.expanduser("~/x") == os.path.join(os.environ["HOME"], "x"))
+rec.closed = True
+expect("and records the home of each ~name it was asked, never HOME's (%r)" % sorted(rec.reads),
+       ("home", "someuser") in rec.reads and ("home", "nosuch") in rec.reads
+       and not any(k[0] == "home" and k[1] == "" for k in rec.reads))
+# The parse hit, under a recorder of its own, so only what the hit asked is in it. The reader alone
+# would ask "someuser"; the hit asks every name the text could name, "s" to "someuser", which shows
+# the answer came from the kept parse.
 reader = gate.load_reader()
+rec = jc.Recorder()
+jc.install(rec, [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc])
 gate.PARSES[0] = jc.Parses(td, code)
 hit = reader.commands(tilde, "/w")
 gate.PARSES[0] = None
 rec.closed = True
 expect("a parse from the cache is the reader's", hit == tilde_value[0])
-expect("the judgement asked someuser's home (%r)" % sorted(rec.reads),
-       ("home", "someuser") in rec.reads and ("home", "nosuch") in rec.reads)
-expect("and not HOME's, which the key holds", not any(k[0] == "home" and k[1] == "" for k in rec.reads))
+homes_asked = sorted(k[1] for k in rec.reads if k[0] == "home")
+expect("on a parse hit the judgement asked the home of every name the text could name (%r)" % homes_asked,
+       homes_asked == sorted(jc.tilde_names(tilde)))
 reads = [[k[0], jc._normal(list(k[1:])), a] for k, a in rec.reads.items()]
 expect("with nothing moved, nothing it asked has changed (%r)" % jc.changed(reads), jc.changed(reads) is None)
 homes["someuser"] = "/srv/moved/someuser"
