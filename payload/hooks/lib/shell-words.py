@@ -111,8 +111,48 @@ def shell_split(text):
     runs between its whitespace: found by one regular expression, where shlex reads one character
     at a time, and judging the claude-sync suite asked for 48,000 splits (claude-config#2918)."""
     if "'" in text or '"' in text or "\\" in text:
-        return shlex.split(text, posix=True)
+        return shlex_quoted_split(text)
     return SHLEX_PLAIN_WORD.findall(text)
+
+
+# One piece of a word as shlex.split(posix=True) reads it: a run of plain characters, a single quoted
+# string (all of it literal), a double quoted one (a backslash in it escapes only " and itself) or a
+# backslash and the character after it; or the whitespace between words.
+SHLEX_PIECE = re.compile(r"""([^ \t\r\n'"\\]+)|'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|\\([\s\S])|([ \t\r\n]+)""")
+SHLEX_DQ_ESCAPE = re.compile(r'\\([\\"])')
+
+
+def shlex_quoted_split(text):
+    """shlex.split(text, posix=True), answering and raising as it does, for a text holding a quote or a
+    backslash: read a piece at a time by SHLEX_PIECE, where shlex reads a character at a time through
+    four method calls, the third of a judgement of the claude-sync suite in shell_split's 28,000 splits
+    (claude-config#2918). A quote never closed or a backslash ending the text is left to shlex, so it
+    raises what shlex raises."""
+    words, word, quoted, at, n = [], [], False, 0, len(text)
+    match = SHLEX_PIECE.match
+    while at < n:
+        m = match(text, at)
+        if m is None:
+            return shlex.split(text, posix=True)
+        at = m.end()
+        plain, single, double, escaped, space = m.groups()
+        if space is not None:
+            if word or quoted:
+                words.append("".join(word))
+            word, quoted = [], False
+        elif plain is not None:
+            word.append(plain)
+        elif escaped is not None:
+            word.append(escaped)
+        elif single is not None:
+            word.append(single)
+            quoted = True
+        else:
+            word.append(SHLEX_DQ_ESCAPE.sub(r"\1", double) if "\\" in double else double)
+            quoted = True
+    if word or quoted:
+        words.append("".join(word))
+    return words
 
 
 def split(s, limit=None):
@@ -221,6 +261,26 @@ QUOTED_STOPS = {
     '"': (frozenset('"\\$`').__contains__, re.compile(r'["\\$`]').search),
     "hd": (frozenset("\\$`").__contains__, re.compile(r"[\\$`]").search),
 }
+
+
+def _stops(chars):
+    """(whether a character is one of chars, a search for the next one), as a QUOTED_STOPS entry."""
+    return frozenset(chars).__contains__, re.compile("[" + re.escape(chars) + "]").search
+
+
+# Every other frame reads most of its characters the same way, as one more character of its text, and
+# changes the reading only at these (commands()'s loop, branch by branch): in a frame holding commands,
+# a backslash, a quote ($' and $" too, at the $), a $ form, a backquote, a # that may start a comment,
+# a << or <<<, a separator (; & | and the line break, whose first character is the ; of the flattened
+# form's "; ") and a parenthesis; in ${ } its } as well as those it shares with quoted text; in $(( ))
+# and a plain ( ) the parentheses, and a # in an array's. $'...' ends at its quote and holds backslash
+# escapes. The reader goes straight to the next of them, as it does in quoted text: stepping one
+# character at a time through commands was most of the reader's time judging the claude-sync suite,
+# 2.8 million characters with claude-sync (claude-config#2918).
+_HOLDS_TEXT = "\\'\"$`"
+FRAME_STOPS = dict(QUOTED_STOPS, ansi=_stops("'\\"), param=_stops("}" + _HOLDS_TEXT),
+                   arith=_stops("()" + _HOLDS_TEXT), paren=_stops("#()" + _HOLDS_TEXT),
+                   **{k: _stops("#<|&;()\n" + _HOLDS_TEXT) for k in COMMAND_FRAMES})
 # A heredoc's opener up to its end marker word: <<, or <<- which strips leading tabs, and blanks.
 HEREDOC_START = re.compile(r"<<(-?)[ \t]*")
 # What ends the end marker word, as the shell reads a word.
@@ -538,8 +598,9 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
         # Inside single quotes only the closing quote changes the reading, and inside double quotes
         # or an unquoted heredoc body only the characters QUOTED_STOPS names: the reader goes
         # straight to the next of them, or to where the heredoc body it is in ends, which the top of
-        # this loop reads first, as it did stepping one character at a time (claude-config#2918).
-        stops = QUOTED_STOPS.get(k)
+        # this loop reads first, as it did stepping one character at a time (claude-config#2918). Every
+        # other frame goes straight to the next character it reads as more than text (FRAME_STOPS).
+        stops = FRAME_STOPS[k]
         if stops is not None and not stops[0](c):
             m = stops[1](s, i + 1)
             j = m.start() if m else n
