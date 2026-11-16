@@ -702,8 +702,11 @@ def ask_recorded(session_id, command, folder, shown, deadline):
         # Questions nobody answered, cleared once they are old.
         for n in os.listdir(pending):
             path = os.path.join(pending, n)
-            if time.time() - os.stat(path).st_mtime > PENDING_SECONDS:
-                os.unlink(path)
+            try:
+                if time.time() - os.stat(path).st_mtime > PENDING_SECONDS:
+                    os.unlink(path)
+            except FileNotFoundError:
+                pass   # another hook recording at the same moment cleared it first
         name = "%d-%d.json" % (time.time_ns(), os.getpid())
         with open(os.path.join(pending, name + ".part"), "w") as f:
             json.dump(rec, f)

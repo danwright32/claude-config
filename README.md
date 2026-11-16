@@ -4184,7 +4184,7 @@ database with no statement, and any other host's tool of that kind (a Neon branc
 it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
 code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
 server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
-names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`, `test-db-write-ask-git-fails.sh` and, for the record of approved lines, `test-db-write-ask-approved-lines.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.

@@ -506,7 +506,7 @@ r="$(before 'git commit -q -m list > /dev/null 2>&1' "$R")"
 case "$r" in "ask rc=0|"*"would commit the line nolibref0000000001"*) check "with it, a commit with a redirection is read as the commit it is" ok ;; *) check "with it, a commit with a redirection is read as the commit it is" "${r:0:400}" ;; esac
 rm -f "$RECORD"/pending/*.json
 # And that shortcut is true of the library: text holding neither < nor > comes back from it unchanged.
-same="$(python3 -I -B -S - "$DIR/lib" <<'PY'
+IFS= read -r -d '' same_prog <<'PY' || true
 import importlib.util, itertools, sys
 spec = importlib.util.spec_from_file_location("calls", sys.argv[1] + "/db-write-calls.py")
 calls = importlib.util.module_from_spec(spec)
@@ -521,7 +521,7 @@ for n in (1, 2, 3):
             bad.append(s)
 print("ok" if not bad else "changed %d of them, first: %r" % (len(bad), bad[0]))
 PY
-)"
+same="$(python3 -I -B -S -c "$same_prog" "$DIR/lib" </dev/null)"
 check "text holding neither < nor > comes back from strip_redirects unchanged, so skipping it there loses nothing" "$same"
 # The library loads without the modules only some of its paths need.
 lazy="$(python3 -I -B -S - "$DIR/lib" <<'PY'

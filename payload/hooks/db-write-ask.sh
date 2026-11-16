@@ -205,7 +205,8 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-# -S: the hook uses the standard library only, and the site module was 5.2 ms of every start (#3023).
+# -S: the hook uses the standard library only, and the site module was 5.2 ms of every start
+# (the personal MacBook, 2026-11-15, claude-config#3023).
 out="$(printf '%s' "$payload" | python3 -I -B -S -c '
 import importlib.util, json, os, re, sys
 sys.stdout.reconfigure(errors="replace")
@@ -233,7 +234,7 @@ def part(name, file):
         return None, "lib/" + file + " could not be loaded beside the hook (" + type(e).__name__ + ")"
 
 def mac_name():
-    import socket  # here, not at the top: only a question names the Mac (1.3 ms of every start, #3023)
+    import socket  # here, not at the top: only a question names the Mac (1.3 ms, 2026-11-15, #3023)
     host = socket.gethostname().split(".")[0]
     if host.startswith("Daniels-MacBook-Pro-2"):
         return "the personal MacBook"
@@ -301,7 +302,7 @@ tool = d.get("tool_name") if isinstance(d, dict) else None
 # Which other calls reach a database, and which statements they carry (claude-config#2536). A Bash
 # call the screen found no database word in (the second argument) is here only as a commit, and a
 # commit check needs this library just to take a redirection out of a command, so it is loaded
-# then and not before: 7 ms of every commit (claude-config#3023).
+# then and not before: 7 ms of every commit (the personal MacBook, 2026-11-15, claude-config#3023).
 COMMIT_ONLY = tool == "Bash" and sys.argv[2:3] == ["0"]
 calls, calls_why = None, None
 def load_calls():
