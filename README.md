@@ -6874,12 +6874,15 @@ and the scripts it runs, a script named through a variable the command sets, a s
 writes first from a heredoc, read as that text, and the local modules a script imports; since #2991
 a name such a script's python program only adds onto its own variable, `ch + "/app/index.html"`,
 passes only where that variable is its `sys.argv[N]` and is handed a folder the script made with
-`mktemp -d`, so a suite writing pages under its own temp folder runs; since #2924 a shell script
+`mktemp -d`, and since #3022 only where it starts the path (`root + ch + ...` lands under root), so
+a suite writing pages under its own temp folder runs; since #2924 a shell script
 whose own commands, read whole, write only names its text spells or temporary files it made, run no
 other script and no text a value decides, and source only files read the same, is not judged as
 writing the arguments it is handed, so `milestone-candidates.sh --like "<title naming page.html>"`
-runs), and a
-look changing file a patch or inline script only mentions; a write whose destination cannot be
+runs), a patch git apply, git am or patch reads from a file judged since #3022 by the files it
+changes (mod-kit's patch reader, placed as the command places them), and a look changing file an
+inline script, or a patch that cannot be read whole or comes on standard input, only mentions; a
+write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
 shares it, read with mod-kit's `$.modkit.branch` and named by `$.modkit.repo`) under the issue the
@@ -7125,7 +7128,8 @@ back or shell write alike, a file made or taken away read as one with no text (s
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before; since #2991 so does taking away any look changing file git has never had
-in its index, such as an untracked copy of the mods folder in a worktree); when a message is sent,
+in its index, such as an untracked copy of the mods folder in a worktree; since #3022 git is asked
+once per checkout for every file a call takes away); when a message is sent,
 the logic around it, and a tool's or its input schema's description pass, a property the schema
 names `reason` or `text` being no message. Since
 #2788 only the words of a string the change adds, rewords or takes away count, so a change to code

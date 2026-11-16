@@ -908,12 +908,27 @@ export const argvIndex = (program: string, v: string): number | undefined => {
   return n
 }
 
+// Whether the python expression starting at `i` is the whole value it is part of (#3022): what comes
+// before it, past white space and line continuations, is the text's start, a call's opening
+// parenthesis (`open(`), a plain assignment's `=`, or `return`. Anything else (a `+`, a `,` inside
+// os.path.join or a list, a bracket of its own) may put another value in front, so it is not.
+const startsPath = (text: string, i: number): boolean => {
+  let j = i - 1
+  while (j >= 0 && (/\s/.test(text[j] as string) || (text[j] === '\\' && text[j + 1] === '\n'))) j--
+  if (j < 0) return true
+  const c = text[j] as string
+  if (c === '(') return /[\w]/.test(text[j - 1] ?? '')
+  if (c === '=') return !/[=!<>+\-*/%&|^@:]/.test(text[j - 1] ?? '')
+  return /(?<![\w.])return$/.test(text.slice(Math.max(0, j - 6), j + 1))
+}
+
 /**
  * Whether every place a python program's text spells a name that looks absolute adds it onto a
  * variable the program takes from its arguments, each handed a temporary folder the script made
  * itself (#2991): `open(ch + "/app/index.html", "w")` or `f"{ch}/app/index.html"`, `ch` bound only to
  * `sys.argv[N]` (argvIndex), the program's command handing `$X` or `$X/<plain name>` there (`words`,
- * as mod-kit reads it, argvStart), and X madeTemp in `script`. Such a write lands in no file of the
+ * as mod-kit reads it, argvStart), and X madeTemp in `script`, the variable or its f-string starting
+ * the path (startsPath, #3022). Such a write lands in no file of the
  * product. False wherever a step cannot be shown, so the write is judged as before: a variable from
  * anywhere else (`ch = "."`, `ch = os.getcwd()`, `$(pwd)`), a shell's braces, another interpreter.
  * `text` is the program as the names were found in it (its code), `program` its whole text.
@@ -924,12 +939,18 @@ export const inScriptTemp = (text: string, name: string, program: string, words:
   const vars = new Set<string>()
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
-    const head = text.slice(Math.max(0, i - 64), i)
+    const from = Math.max(0, i - 64)
+    const head = text.slice(from, i)
     // The variable alone, never an attribute (`self.ch`) or another name ending in it; and braces
-    // only inside an f-string, since a plain string's `{ch}` is no variable at all.
-    const v = /(?<![\w.])([A-Za-z_]\w*)\s*\+\s*[rRbBuUfF]{0,2}['"]$/.exec(head)?.[1] ?? /(?<!\w)(?:[fF][rR]?|[rR][fF])['"][^'"\n{}]*\{([A-Za-z_]\w*)\}$/.exec(head)?.[1]
-    if (v === undefined) return false
-    vars.add(v)
+    // only inside an f-string, since a plain string's `{ch}` is no variable at all, with nothing
+    // before them in it (`f"/w/slate{ch}/..."` lands under /w/slate, #3022).
+    const added = /(?<![\w.])([A-Za-z_]\w*)\s*\+\s*[rRbBuUfF]{0,2}['"]$/.exec(head)
+    const braced = added ? null : /(?<!\w)(?:[fF][rR]?|[rR][fF])['"]\{([A-Za-z_]\w*)\}$/.exec(head)
+    const m = added ?? braced
+    // And the variable, or the f-string, starts the path (#3022): `root + ch + "/app/index.html"`
+    // lands under root, whatever ch holds.
+    if (!m || !startsPath(text, from + m.index)) return false
+    vars.add(m[1] as string)
   }
   const at = argvStart(words)
   if (!vars.size || at === undefined) return false
