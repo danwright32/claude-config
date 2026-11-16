@@ -18,7 +18,10 @@
 #   3. main gains <main path> holding <main content> (the offending line), pushed;
 #   4. feat merges origin/main. In mode conflict, each side first edits <conflict path>, and the
 #      resolution keeps the branch's line and adds <resolution extra> after it, the line that is
-#      still the branch's own and must still be judged.
+#      still the branch's own and must still be judged. Mode pending builds the same conflict and
+#      stages the same resolution but never commits it, so the merge is still in progress
+#      (MERGE_HEAD names it), as it is when one command concludes it and pushes,
+#      `git commit --no-edit && git push` (claude-config#3062).
 # <conflict path> defaults to src/shared.ts. Contents are written with printf '%s', so a caller
 # that wants a trailing newline puts one in.
 #
@@ -58,7 +61,7 @@ mmf_repo() {
     mmf__git "$w" add notes/feat.txt
     mmf__git "$w" commit -qm feat
     mmf__git "$w" push -qu origin feat
-    if [ "$mode" = conflict ]; then
+    if [ "$mode" = conflict ] || [ "$mode" = pending ]; then
       mmf__write "$w/$conflict_path" $'shared line, as the branch has it\n'
       mmf__git "$w" add "$conflict_path"
       mmf__git "$w" commit -qm "feat edits the shared file"
@@ -67,7 +70,7 @@ mmf_repo() {
     mmf__git "$w" checkout -q main
     mmf__write "$w/$main_path" "$main_content"
     mmf__git "$w" add "$main_path"
-    if [ "$mode" = conflict ]; then
+    if [ "$mode" = conflict ] || [ "$mode" = pending ]; then
       mmf__write "$w/$conflict_path" $'shared line, as main has it\n'
       mmf__git "$w" add "$conflict_path"
     fi
@@ -76,11 +79,11 @@ mmf_repo() {
 
     mmf__git "$w" checkout -q feat
     mmf__git "$w" merge -q --no-edit origin/main
-    if [ "$mode" = conflict ]; then
+    if [ "$mode" = conflict ] || [ "$mode" = pending ]; then
       mmf__write "$w/$conflict_path" "shared line, as the branch has it
 $extra"
       mmf__git "$w" add "$conflict_path"
-      mmf__git "$w" commit -q --no-edit
+      [ "$mode" = pending ] || mmf__git "$w" commit -q --no-edit
     fi
   } >/dev/null 2>&1
   printf '%s' "$w"
@@ -91,4 +94,19 @@ mmf_built() {  # <work> <main path>
   [ "$(git -C "$1" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ] || return 1
   [ "$(git -C "$1" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 1 ] || return 1
   git -C "$1" diff --quiet HEAD 2>/dev/null || return 1
+}
+
+#   mmf_pending <work> <main path> : 0 when a pending fixture holds what its cases rest on: the
+#                                    branch tracks origin/feat, the merge of main is still in
+#                                    progress (MERGE_HEAD names it), no merge commit sits between
+#                                    the upstream and HEAD yet, nothing is left unmerged, and main's
+#                                    file is staged for the commit that would conclude the merge.
+#                                    Asserted for the same reason as mmf_built (L1).
+mmf_pending() {  # <work> <main path>
+  [ -e "$1/$2" ] || return 1
+  [ "$(git -C "$1" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" = origin/feat ] || return 1
+  git -C "$1" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 || return 1
+  [ "$(git -C "$1" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 0 ] || return 1
+  [ -z "$(git -C "$1" diff --name-only --diff-filter=U 2>/dev/null)" ] || return 1
+  git -C "$1" diff --cached --name-only 2>/dev/null | grep -qxF "$2"
 }

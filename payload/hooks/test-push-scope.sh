@@ -1523,6 +1523,45 @@ for f in "$(printf 'git\035push\035\035a b\037c\037')" "$(printf 'git\035push\03
     "$([ "$r" = "2|a b|c" ] && echo ok || echo "got [$r]")"
 done
 
+echo "push-scope: a merge of main still in progress, concluded by the command that pushes (claude-config#3062)"
+
+# ps_pending_merge_of_default answers whether the commit a command makes before it pushes would
+# conclude a merge that brings the default branch's commits in, which no gate can set apart before
+# that commit exists. It asks ps_commit_in_chain, the question every gate asks before folding the
+# pending commit in, so it is true exactly where the gates would misread.
+. "$DIR/lib/merged-main-fixture.sh"
+WP="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.pendmerge.XXXXXXXX")"
+PW="$(mmf_repo "$WP" pending guide/old.md $'from main\n')"
+mmf_pending "$PW" guide/old.md && check "#3062 the fixture leaves a merge of main in progress" ok \
+  || check "#3062 the fixture leaves a merge of main in progress" "it does not, so the cases below prove nothing"
+r="$(ps_pending_merge_of_default "git commit --no-edit && git push" "$PW")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = origin/main ] && check "#3062 a commit and push in one command concludes the merge of main" ok \
+  || check "#3062 a commit and push in one command concludes the merge of main" "exit $rc, printed [$r]"
+r="$(cd "$PW" && ps_pending_merge_of_default "git commit --no-edit && git push")"; rc=$?
+[ "$rc" -eq 0 ] && check "#3062 the directory defaults to where it is asked" ok || check "#3062 the directory defaults to where it is asked" "exit $rc"
+ps_pending_merge_of_default "git push" "$PW" >/dev/null \
+  && check "#3062 a push alone does not conclude it" "said it does" || check "#3062 a push alone does not conclude it" ok
+git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
+ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
+  && check "#3062 once the merge is committed nothing is pending" "said it is" || check "#3062 once the merge is committed nothing is pending" ok
+# Left in progress again, with no default branch known: nothing can say what came from main, and the
+# gates judge the range whole as ps_merged_apart does, so this does not answer yes.
+git -C "$PW" checkout -q main >/dev/null 2>&1
+printf 'again\n' > "$PW/again.txt"; git -C "$PW" add again.txt >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm again >/dev/null 2>&1
+git -C "$PW" push -q origin main >/dev/null 2>&1
+git -C "$PW" checkout -q feat >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t merge -q --no-commit --no-ff origin/main >/dev/null 2>&1
+ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
+  && check "#3062 control: a clean merge of main left uncommitted is pending" ok \
+  || check "#3062 control: a clean merge of main left uncommitted is pending" "said it is not"
+git -C "$PW" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+git -C "$PW" symbolic-ref -d refs/remotes/origin/HEAD >/dev/null 2>&1
+ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
+  && check "#3062 with no default branch known it does not answer yes" "said yes" \
+  || check "#3062 with no default branch known it does not answer yes" ok
+rm -rf "$WP"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
