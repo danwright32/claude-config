@@ -245,7 +245,7 @@ planted(){   # $1 = checkout -> sets seen: what a run changed there with tools/l
   seen="$(changed "$before" "$after")"
 }
 if [ -z "$PLAIN_PY" ]; then
-  echo "UNMEASURED: every python3 found here loads re before the program starts, so a planted tools/lib/re.py is never loaded and what python3 -I refuses could not be seen."
+  echo "SUITE-PART-UNMEASURED the planted module control: every python3 found here loads re before the program starts, so a planted tools/lib/re.py is never loaded and what python3 -I refuses could not be seen"
 else
   ISOLATED="$TMP/isolated"
   cp -R "$REPO" "$ISOLATED" && planted "$ISOLATED" || seen="the checkout could not be made"
