@@ -42,7 +42,6 @@ A hook with no such header line is not judged at all: the header is the hook's o
 it belongs, and without one there is nothing to compare the settings against. Only the hooks
 directory itself is read, not lib/, because nothing in lib/ is registered.
 """
-import fnmatch
 import glob
 import json
 import os
@@ -186,19 +185,21 @@ def if_runs_for(cond, tool, command):
     if pattern.endswith(":*"):
         prefix = pattern[:-2]
         return command == prefix or command.startswith(prefix + " ")
-    return fnmatch.fnmatchcase(command, pattern)
+    # Only `*` was measured as a wildcard, so `?` and `[` are read as themselves.
+    return re.fullmatch(".*".join(re.escape(p) for p in pattern.split("*")), command, re.S) is not None
 
 
 def runs_for(settings, hook, command):
-    """0 when a PreToolUse entry registering `hook` would run for this Bash command, 1 when none would."""
+    """0 when a PreToolUse entry registering `hook` would run for this Bash command, 1 when none would.
+    A matcher that is not a valid pattern raises, so the caller answers "not judged" (L11)."""
     events = json.load(open(settings, errors="replace")).get("hooks", {})
     for g in events.get("PreToolUse", []):
         matcher = g.get("matcher", "")
         try:
             if matcher not in ("", "*") and re.fullmatch(matcher, "Bash") is None:
                 continue
-        except re.error:
-            continue
+        except re.error as e:
+            raise ValueError(f"matcher {matcher!r} is not a valid pattern ({e})")
         for h in g.get("hooks", []):
             if hook in names(h.get("command", "")) and if_runs_for(h.get("if", ""), "Bash", command):
                 return 0
@@ -210,10 +211,11 @@ def main(argv):
         try:
             return runs_for(argv[2], argv[3], argv[4])
         except (OSError, ValueError, AttributeError, TypeError) as e:
-            print(f"could not read {argv[2]}: {e}", file=sys.stderr)
+            print(f"could not judge {argv[2]}: {e}", file=sys.stderr)
             return 2
-    if len(argv) != 3:
-        print("usage: hook-registration.py <settings file> <hooks dir>", file=sys.stderr)
+    if len(argv) != 3 or argv[1] == "--runs-for":
+        print("usage: hook-registration.py <settings file> <hooks dir>\n"
+              "       hook-registration.py --runs-for <settings file> <hook basename> <command>", file=sys.stderr)
         return 2
     try:
         faults = faults_for(argv[1], argv[2])

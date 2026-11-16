@@ -433,6 +433,17 @@ runs_case "#3035 the prefix form with a colon runs for a command it names" 0 "$C
 runs_case "#3035 one rule per if does not run for a command no rule names" 1 "$CONDS/split.json" rw.sh "echo git status"
 runs_case "#3035 a rule for another tool does not run for a Bash command" 1 "$CONDS/split.json" quiet.sh "git status"
 runs_case "#3035 a settings file that cannot be read is not judged" 2 "$CONDS/missing.json" rw.sh "git status"
+# Only `*` was measured as a wildcard, so a `?` or `[` in a rule is read as itself, and a matcher
+# that is not a valid pattern leaves the question unjudged rather than answered no (L11).
+printf '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/rw.sh", "if": "Bash(git ?tatus)"}]}]}}\n' > "$CONDS/unmeasured.json"
+printf '{"hooks": {"PreToolUse": [{"matcher": "Bash(", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/rw.sh", "if": "Bash(git *)"}]}]}}\n' > "$CONDS/badmatcher.json"
+runs_case "#3035 a ? in a rule is not taken as a wildcard nobody measured" 1 "$CONDS/unmeasured.json" rw.sh "git status"
+runs_case "#3035 a matcher that is not a valid pattern is not judged" 2 "$CONDS/badmatcher.json" rw.sh "git status"
+python3 "$DIR/lib/hook-registration.py" --runs-for "$CONDS/split.json" rw.sh >/dev/null 2>"$CONDS/usage.err"
+usage_rc=$?
+[ "$usage_rc" -eq 2 ] && grep -q -- '--runs-for <settings file> <hook basename> <command>' "$CONDS/usage.err" \
+  && check "#3035 a malformed --runs-for is refused with a usage naming that form" ok \
+  || check "#3035 a malformed --runs-for is refused with a usage naming that form" "exit $usage_rc, said [$(cat "$CONDS/usage.err")]"
 
 # The real settings: the payload copy inside the checkout, the installed copy once deployed.
 . "$DIR/lib/settings-file.sh"
