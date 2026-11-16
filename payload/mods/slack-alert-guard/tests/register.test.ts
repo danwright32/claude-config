@@ -1543,7 +1543,7 @@ test('an edit to a script the Slack drafts gate names passes: a gate that only m
 })
 
 // #2628: in sleep mode the session chooses held wording and keeps working; Dan is asked in the
-// morning, and nothing carrying the wording merges until he approves it. Dan, 2026-11-09: "You
+// morning, and the choice holds no merge meanwhile (#3030). Dan, 2026-11-09: "You
 // should just choose the alert in sleep mode and put it to me in the morning to see if I want
 // something else."
 const CHOOSE = 'mcp__slack-alert-guard__choose'
