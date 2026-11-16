@@ -1772,7 +1772,9 @@ ps__commit_route() {
 # The cost is small where it was counted: on the personal MacBook, in the transcripts of the 45
 # days to 2026-11-16, of about 4,064 Bash calls that ran a push, 1 ran any of these first (a script
 # in a heredoc), by a pattern written beside this code, which sizes the cost and proves nothing
-# about what this function matches (L107). The work MacBook is not counted.
+# about what this function matches (L107). The same commands as the 4,067 counted above for #3092:
+# each count used its own pattern for what a push is, and they differ by 3 calls. The work MacBook
+# is not counted.
 #
 # It refuses, like ps_unread_commit_route and for its reason: the remedy is one more command, after
 # which the branch and the index are what the gates read.

@@ -452,6 +452,41 @@ case "$grc:$gerr" in
   2:*notes/other.md*) check "#3098 and the style gate then reads the line the checkout staged" ok ;;
   *) check "#3098 and the style gate then reads the line the checkout staged" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
 esac
+# A route question that cannot be asked is not one answered no (L1033, claude-config#1900). The hook
+# read every exit but 0 as nothing to refuse, so beside a library that lacks one of the two
+# questions (an older library under a newer hook) it let the command through with nothing said.
+# Asked of a copy of the hook whose library has the question renamed away; the copy with the
+# library whole is the control, so the refusal is the missing question's and not the copy's.
+copy_hook() { # copy_hook <folder> [<the library function to take away>] -> the hook and lib/ copied there
+  mkdir -p "$1" && cp "$HOOK" "$1/push-scope-notice.sh" && cp -R "$DIR/lib" "$1/lib" || return 1
+  [ -n "${2:-}" ] || return 0
+  sed "s/^$2() {/${2}_taken_away() {/" "$DIR/lib/push-scope.sh" > "$1/lib/push-scope.sh"
+}
+run_copy() { # run_copy <folder> <command> <cwd> -> the copied hook's exit code; stderr in $W/err
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
+    "$2" "$3" | bash "$1/push-scope-notice.sh" >/dev/null 2>"$W/err"
+}
+git -C "$PM" reset -q --hard >/dev/null 2>&1
+copy_hook "$W/whole" && run_copy "$W/whole" "git push" "$PM"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -s "$W/err" ] && check "#3098 control: a copy of the hook with its library whole lets a push through" ok \
+  || check "#3098 control: a copy of the hook with its library whole lets a push through" "exit $rc [$(head -c 200 "$W/err")], so the cases below would be refused for the copy's sake"
+for q in ps_unread_move_or_stage ps_unread_commit_route; do
+  copy_hook "$W/without-$q" "$q"
+  if grep -q "^$q() {" "$W/without-$q/lib/push-scope.sh" 2>/dev/null || [ ! -s "$W/without-$q/lib/push-scope.sh" ]; then
+    check "#3098 the copied library has $q taken away" "it does not, so the case below proves nothing"
+  else check "#3098 the copied library has $q taken away" ok; fi
+  # The command each question would have answered for, so nothing else refuses it first.
+  case "$q" in ps_unread_commit_route) c="git pull && git push" ;; *) c="git checkout other && git push" ;; esac
+  run_copy "$W/without-$q" "$c" "$PM"; rc=$?
+  err="$(cat "$W/err")"
+  case "$rc:$err" in
+    2:*"could not ask"*"$q"*) check "#3098 beside a library that lacks $q the push is refused, naming the question" ok ;;
+    *) check "#3098 beside a library that lacks $q the push is refused, naming the question" "exit $rc [${err:0:200}]" ;;
+  esac
+  run_copy "$W/without-$q" "git status" "$PM"; rc=$?
+  [ "$rc" -eq 0 ] && [ ! -s "$W/err" ] && check "#3098 and a command that does not push is still let through there ($q)" ok \
+    || check "#3098 and a command that does not push is still let through there ($q)" "exit $rc [$(head -c 200 "$W/err")]"
+done
 
 echo "push scope notice: silent where there is nothing to announce"
 
