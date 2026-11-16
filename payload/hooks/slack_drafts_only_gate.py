@@ -1436,7 +1436,12 @@ def remember_readings(mod):
             # judgement cache is on (PARSES, lib/judgement-cache.py's Parses, claude-config#2918).
             kept = PARSES[0]
             got = kept.get(s, cwd) if kept is not None else None
-            if got is None:
+            if got is not None:
+                # The reader did not run, so the home of each ~user it would have read is asked here,
+                # through this run's os, which a judgement records (the parse's key holds them too).
+                for name in sorted(_cache.tilde_names(s) or ()):
+                    os.path.expanduser("~" + name)
+            else:
                 where = []
                 got = (plain(s, cwd, parts=where), where)
                 if kept is not None:
