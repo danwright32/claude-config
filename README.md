@@ -4163,11 +4163,54 @@ a line other than a blank or a comment to any list in its checkout, from the ind
 tree; a commit that only removes lines passes. In a checkout holding a list, a commit after any
 other command in the same call (anything but `cd`, a reader, or a git add, rm or read) is asked
 about, since that command could write the list by a glob or a variable first. So a Bash call holding
-the word `commit` now passes the hook's screen (about 130 ms per commit); with python3 failing such a
-commit is asked about as a commit, and with python3 missing it passes, since no list is trusted
-then. What it still cannot see: a list written under a name built at
-run time in an earlier call and then committed by something other than `git commit` (an alias,
-`commit-tree`, a merge, a cherry-pick, a pull).
+the words `git` and `commit` passes the hook's screen; with python3 failing or missing such a commit
+is asked about as a commit (missing passed it until #3023).
+
+A line counts only when Dan himself approved it (#3023). Asking about `git commit` left every other
+way a line reaches HEAD unasked: a git alias for commit, `git commit-tree`, a merge, a cherry pick, a
+rebase, a pull. So the list is judged where it is used: a write passes only for a project whose line
+is in HEAD and that Dan approved, whatever carried the line to HEAD. His approval is a picker,
+read from the session's transcript as his Apply is: one question he answered `Trust` (not one that
+timed out, failed or came with its answer filled in), carrying the metadata `{"source":
+"db-test-project", "list": "<absolute path of the list>", "project_ref": "<the ref>"}`. The hook
+keeps it on this Mac's record, `~/.claude/state/supabase-test-projects/approved` (one hash per line,
+of the clone, the list's path and the ref; the state folder is never synced), when the main session
+commits the line or runs a file on that project, so later sessions and every worktree of the clone
+do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
+MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
+(#2989), the question naming up to eight of them and how he approves one; a commit whose every added
+line he approved passes.
+- Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
+  after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
+  to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
+  permission rule allowing the commit, and from a subagent, so neither the classifier nor a rule
+  answers it. But sleep mode approves Claude Code's permission prompts for an overnight worker
+  (#834), so a prompt can be answered with Dan asleep, and it never answers a picker. That build
+  also paired the call after a commit with its question by the command's text, and the payload
+  after a call carries the command as the rtk hook rewrote it (`rtk git commit ...`, captured the
+  same day), so no rewritten commit would have been recorded. Nothing runs after a call now.
+- A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
+  session's transcript (both captured the same day), so it passes on Dan's picker in that session,
+  and the record is written by a call of the main session.
+- What changes for a list that already exists: its lines are approved by nobody yet, so each write
+  on its project is asked about, the question saying how Dan approves the line. One picker a line
+  is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
+  second clone of the repository, and for the other Mac (Dan accepted this on 2026-11-15, as the
+  main session relayed).
+- What the record cannot see: a line approved once stays approved for that list in that clone, so one
+  taken out and put back by a route nobody asked about is trusted again. And a program that writes
+  a picker into the session's transcript is not seen, as for the Apply.
+- What a commit costs, measured on the personal MacBook on 2026-11-15 with `git commit -m x` in this
+  repository, 60 runs each of the hook from main and from #3023 taken turn about at a load average of
+  19 to 24: median 95.6 ms before and 74.3 after, least 86.2 and 64.3 (two earlier runs of 60 a side
+  on earlier builds gave 129.6 and 108.2 at a load average of 15 to 18, and 91.9 and 69.9 at 19 to
+  26). Cut: python3 starts without the site module (5.2 ms), hashlib, datetime and socket load only
+  where used (3.9 ms), the database call library loads for a commit only when its command holds a
+  redirection (7.0 ms), and a commit with nothing before it in its command but a `cd` or a read no
+  longer has git walk the untracked files it cannot commit (14.3 ms against 6.7). Left alone, the
+  largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
+  writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
+  about that the hook then runs. Nothing was added: the hook is not started after a call.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -4179,7 +4222,7 @@ database with no statement, and any other host's tool of that kind (a Neon branc
 it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
 code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
 server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
-names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+names were measured on the personal MacBook only. Suites: `test-db-write-ask.sh`, `test-db-write-ask-git-fails.sh` and, for the record of approved lines, `test-db-write-ask-approved-lines.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.

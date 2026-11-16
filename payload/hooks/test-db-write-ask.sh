@@ -1030,10 +1030,32 @@ printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
 LIST="$TESTP/.claude/supabase-test-projects"
 TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null)
 "${TESTP_GIT[@]}" init -q
-commit_list() {  # commit_list <printf format>: the list holding that text, committed
+# commit_list <printf format>: the list holding that text, committed, its two refs approved by Dan.
+# Since claude-config#3023 a line counts only when Dan himself approved it in a picker (metadata
+# source "db-test-project", answered Trust), so NONE_T, the transcript these cases' payloads name,
+# holds his picker for each, which the cases below that answer an Apply never rewrite (they write
+# transcripts of their own). A line committed with no picker is untrusted, which
+# test-db-write-ask-approved-lines.sh holds for each route it can arrive by.
+commit_list() {
   printf "$1" > "$LIST"
-  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects && "${TESTP_GIT[@]}" commit -q -m list
+  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects || return
+  "${TESTP_GIT[@]}" commit -q -m list >/dev/null 2>&1
 }
+python3 - "$NONE_T" "$LIST" testprojectref000001 anothertestref000002 <<'PY'
+import json, sys
+path, listed = sys.argv[1:3]
+with open(path, "a") as f:
+    for n, ref in enumerate(sys.argv[3:]):
+        q = "Trust " + ref + " as a test project?"
+        ask = {"questions": [{"question": q, "header": "Test project", "multiSelect": False,
+                              "options": [{"label": "Trust", "description": "d"}, {"label": "Cancel", "description": "d"}]}],
+               "metadata": {"source": "db-test-project", "list": listed, "project_ref": ref}}
+        f.write(json.dumps({"type": "assistant", "sessionId": "s1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_trust%d" % n, "name": "AskUserQuestion", "input": ask}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "sessionId": "s1", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_trust%d" % n, "content": "answered"}]},
+            "toolUseResult": {"questions": ask["questions"], "answers": {q: "Trust"}, "annotations": {}}}) + "\n")
+PY
 LIST_TEXT='# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n'
 commit_list "$LIST_TEXT"
 printf 'update a set note = 1 where id = 7;\n' > "$TESTP/carry.sql"
@@ -1170,13 +1192,14 @@ shell_list "a commit after another command in a checkout with no list passes" no
 # test-db-write-ask-git-fails.sh: a fake git there names the git command that lists a checkout,
 # and the push gate runs any suite naming it before every push, which this one is too slow for
 # (PR #2999, see that suite's header). The library missing is asked about, naming it, below.
-# An untracked list that cannot be read is asked about, saying so.
+# An untracked list that cannot be read is asked about, saying so, by a commit an add comes before:
+# a commit alone cannot take a file git does not track, and since #3023 does not look for one.
 mkdir -p "$TESTP/locked/.claude"; printf 'liveprojectref000009\n' > "$TESTP/locked/.claude/supabase-test-projects"
 chmod 000 "$TESTP/locked/.claude/supabase-test-projects"
 if cat "$TESTP/locked/.claude/supabase-test-projects" >/dev/null 2>&1; then
   check "an unreadable untracked list is asked about (#2989)" "UNMEASURED: this user can read a file with no permissions (root?), so the unreadable case cannot be made"
 else
-  r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")")"
+  r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload 'git add -A && git commit -m x' "$TESTP" s1 "$NONE_T")")"
   case "$(decision "$r")|$(field "$r" reason)" in
     "ask rc=0|"*"locked/.claude/supabase-test-projects could not be read (PermissionError)"*) check "an unreadable untracked list is asked about (#2989)" ok ;;
     *) check "an unreadable untracked list is asked about (#2989)" "$(decision "$r") $(field "$r" reason)" ;;
@@ -1215,8 +1238,10 @@ esac
 r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload 'ls -la' "$TESTP" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" ok || check "with lib/db-apply-approval.py missing, a command naming neither the list nor a commit passes (#2989)" "$(decision "$r")"
 rm -rf "$WORK/part"
-# A commit is no database call: python3 failing asks about it as a commit, and python3 missing passes
-# it, since without python3 no list is trusted. An Edit holding the word is never read as one.
+# A commit is no database call: python3 failing, or missing, asks about it as a commit (missing
+# passed it until #3023, on the ground that no list is trusted without python3; the question about a
+# commit is now how a line comes to be trusted, so it fails closed like the rest). An Edit holding
+# the word is never read as one.
 PYFAIL="$APPLY/pyfail"; mkdir -p "$PYFAIL"
 printf '#!/bin/sh\nexit 1\n' > "$PYFAIL/python3"; chmod +x "$PYFAIL/python3"
 CP="$(apply_payload 'git commit -m x' "$TESTP" s1 "$NONE_T")"
@@ -1230,7 +1255,10 @@ r="$(PATH="$PYFAIL:$PATH" run "$HOOK" "$EMPTY_HOME" "$EP")"
 [ "$(decision "$r")" = "none rc=0" ] && check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" ok || check "with python3 failing, an Edit holding the word commit is not asked about (#2989)" "$(decision "$r") $(field "$r" reason)"
 if ! npp_reaches_python3 "$NOPY"; then
   r="$(run_nopy "$CP")"
-  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a commit passes, since no list is trusted then (#2989)" ok || check "with no python3, a commit passes, since no list is trusted then (#2989)" "$(decision "$r") $(field "$r" reason)"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"before this commit"*"python3 is not on PATH"*) check "with no python3, a commit is asked about, naming python3 (#3023)" ok ;;
+    *) check "with no python3, a commit is asked about, naming python3 (#3023)" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
 fi
 
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
@@ -1247,14 +1275,18 @@ for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --y
 done
 # The picker metadata the skill documents must carry every key the approval library reads, so a key
 # added there (such as "pending", #2800) cannot leave the skill writing pickers that cover nothing.
+# Since #3023 the library reads a second picker, the one by which Dan approves a test project line,
+# so the keys it reads must each be in the metadata the skill documents for one of the two.
 skill_meta="$(grep -m 1 -E '^\{"source": "db-apply"' "$SKILL_MD")"
+skill_trust="$(grep -m 1 -E '^\{"source": "db-test-project"' "$SKILL_MD")"
 lib_keys="$(grep -oE 'meta\.get\("[a-z_]+"\)' "$DIR/lib/db-apply-approval.py" | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u | tr '\n' ' ')"
 missing="$(python3 -c 'import json, sys
 try:
-    m = json.loads(sys.argv[1])
+    m = dict(json.loads(sys.argv[1]), **json.loads(sys.argv[3]))
 except ValueError:
-    print("no metadata JSON line in SKILL.md"); sys.exit()
-print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys")"
+    print("a metadata JSON line is missing from SKILL.md"); sys.exit()
+print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys" "$skill_trust")"
+case "$skill_trust" in *'"list"'*'"project_ref"'*) check "the skill documents the picker that approves a test project line, with its list and its ref" ok ;; *) check "the skill documents the picker that approves a test project line, with its list and its ref" "found: ${skill_trust:0:200}" ;; esac
 case "$lib_keys" in *pending*) check "the approval library reads the pending list" ok ;; *) check "the approval library reads the pending list" "keys read: $lib_keys" ;; esac
 [ -z "$missing" ] && check "the skill's documented picker metadata names every key the approval reads" ok || check "the skill's documented picker metadata names every key the approval reads" "missing: $missing"
 
