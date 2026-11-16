@@ -4141,47 +4141,51 @@ about, since that command could write the list by a glob or a variable first. So
 the words `git` and `commit` passes the hook's screen; with python3 failing or missing such a commit
 is asked about as a commit (missing passed it until #3023).
 
-A line counts only when a commit that passed that ask put it there (#3023). Asking about `git
-commit` left every other way a line reaches HEAD unasked: a git alias for commit, `git commit-tree`,
-a merge, a cherry pick, a rebase, a pull. So the list is judged where it is used. The question about
-a commit names up to 8 of the lines it adds and notes them; the hook runs again after every Bash call
-(`db-write-ask.sh --ran`, under PostToolUse, which only a call that was let through and ran reaches),
-and a question noted under that call's own id, from the same session, is the proof Dan said yes, so
-each noted line HEAD now holds goes on this Mac's record,
-`~/.claude/state/supabase-test-projects/approved` (one hash per line, of the clone, the list's path
-and the ref; the state folder is never synced). The two are paired by the call's id (the payload's
-`tool_use_id`), never by the command's text: with the rtk hook rewriting, a commit sent as `git
-commit --allow-empty -m probe4` came back after the call as `rtk git commit --allow-empty -m probe4`
-under the one id (both payloads captured on Claude Code 2.1.325, 2026-11-15), so a pairing by text
-would have recorded no approval for any rewritten commit. A payload with no id, or one that is not
-the plain word Claude Code sends, has its commit asked about with the question saying a yes will not
-be remembered. A
-write passes only for a project whose line is in HEAD and on that record, whatever carried it to
-HEAD. The record is held like the list: a shell write naming it and an Edit, Write or MultiEdit under
-it are asked about. Staging the list and committing it in one command is asked about once, by the
-question that names the lines.
-- What changes for a list that already exists: its lines are on no record, so each write on its
-  project is asked about, the question saying how to get the line approved (take it out in one
-  commit, put it back with a `git commit`, which is asked about). The same holds for a line that
-  arrives by a pull, for a second clone of the repository, and for the other Mac.
+A line counts only when Dan himself approved it (#3023). Asking about `git commit` left every other
+way a line reaches HEAD unasked: a git alias for commit, `git commit-tree`, a merge, a cherry pick, a
+rebase, a pull. So the list is judged where it is used: a write passes only for a project whose line
+is in HEAD and that Dan approved, whatever carried the line to HEAD. His approval is a picker,
+read from the session's transcript as his Apply is: one question he answered `Trust` (not one that
+timed out, failed or came with its answer filled in), carrying the metadata `{"source":
+"db-test-project", "list": "<absolute path of the list>", "project_ref": "<the ref>"}`. The hook
+keeps it on this Mac's record, `~/.claude/state/supabase-test-projects/approved` (one hash per line,
+of the clone, the list's path and the ref; the state folder is never synced), when the main session
+commits the line or runs a file on that project, so later sessions and every worktree of the clone
+do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
+MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
+(#2989), the question naming up to 8 such lines and how he approves one; a commit whose every added
+line he approved passes.
+- Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
+  after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
+  to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
+  permission rule allowing the commit, and from a subagent, so neither the classifier nor a rule
+  answers it. But sleep mode approves Claude Code's permission prompts for an overnight worker
+  (#834), so a prompt can be answered with Dan asleep, and it never answers a picker. That build
+  also paired the call after a commit with its question by the command's text, and the payload
+  after a call carries the command as the rtk hook rewrote it (`rtk git commit ...`, captured the
+  same day), so no rewritten commit would have been recorded. Nothing runs after a call now.
+- A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
+  session's transcript (both captured the same day), so it passes on Dan's picker in that session,
+  and the record is written by a call of the main session.
+- What changes for a list that already exists: its lines are approved by nobody yet, so each write
+  on its project is asked about, the question saying how Dan approves the line. One picker a line
+  is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
+  second clone of the repository, and for the other Mac (Dan accepted this on 2026-11-15, as the
+  main session relayed).
 - What the record cannot see: a line approved once stays approved for that list in that clone, so one
-  taken out and put back by a route nobody asked about is trusted again. A yes to a question that
-  names no line (a staging, a commit after another command, a commit the hook cannot check) approves
-  nothing, and nor do lines past the 8 a question names.
+  taken out and put back by a route nobody asked about is trusted again. And a program that writes
+  a picker into the session's transcript is not seen, as for the Apply.
 - What a commit costs, measured on the personal MacBook on 2026-11-15 with `git commit -m x` in this
   repository, 60 runs each of the hook from main and from #3023 taken turn about at a load average of
-  19 to 26: median 91.9 ms before and 69.9 after, least 86.6 and 66.1 (an earlier 60 a side, at a
-  load average of 15 to 18, gave 129.6 and 108.2, least 94.9 and 71.6). Cut: python3 starts without
-  the site module (5.2 ms), hashlib, datetime and socket load only where used (3.9 ms), the database
-  call library loads for a commit only when its command holds a redirection (7.0 ms), and a commit
-  with nothing before it in its command but a `cd` or a read no longer has git walk the untracked
-  files it cannot commit (14.3 ms against 6.7). Left alone, the largest: the libraries are compiled
-  on every run (about 19 ms), because `-B` keeps python3 from writing bytecode into the synced hooks
-  folder, and a cache elsewhere would be a file no hook asks about that the hook then runs. Added:
-  one more start of the hook after every Bash call, median 6.4 ms and least 5.4 in the same run of
-  60, beside the other hooks PostToolUse already starts; it reads the payload and leaves unless a
-  question is waiting, and with one waiting for another call (a refused question waits up to a week)
-  it leaves once it finds the payload does not hold that call's id, median 7.9 ms and least 6.9.
+  19 to 24: median 95.6 ms before and 74.3 after, least 86.2 and 64.3 (two earlier runs of 60 a side
+  on earlier builds gave 129.6 and 108.2 at a load average of 15 to 18, and 91.9 and 69.9 at 19 to
+  26). Cut: python3 starts without the site module (5.2 ms), hashlib, datetime and socket load only
+  where used (3.9 ms), the database call library loads for a commit only when its command holds a
+  redirection (7.0 ms), and a commit with nothing before it in its command but a `cd` or a read no
+  longer has git walk the untracked files it cannot commit (14.3 ms against 6.7). Left alone, the
+  largest: the libraries are compiled on every run (about 19 ms), because `-B` keeps python3 from
+  writing bytecode into the synced hooks folder, and a cache elsewhere would be a file no hook asks
+  about that the hook then runs. Nothing was added: the hook is not started after a call.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

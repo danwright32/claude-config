@@ -1030,22 +1030,32 @@ printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
 LIST="$TESTP/.claude/supabase-test-projects"
 TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null)
 "${TESTP_GIT[@]}" init -q
-# commit_list <printf format>: the list holding that text, committed as Dan answering yes. Since
-# claude-config#3023 a line counts only when a commit that passed the hook's question put it there,
-# so the hook reads the commit before it runs (asking when it adds a line), git commits, and the
-# hook is told the call ran, as the settings do after every Bash call. Committing behind the hook's
-# back, as this helper did before, now leaves the line untrusted, which
-# test-db-write-ask-approved-lines.sh holds for each route. The question and the call after are
-# paired by the call's own id (tool_use_id), which every live payload carries, so this one does too.
+# commit_list <printf format>: the list holding that text, committed, its two refs approved by Dan.
+# Since claude-config#3023 a line counts only when Dan himself approved it in a picker (metadata
+# source "db-test-project", answered Trust), so NONE_T, the transcript these cases' payloads name,
+# holds his picker for each, which the cases below that answer an Apply never rewrite (they write
+# transcripts of their own). A line committed with no picker is untrusted, which
+# test-db-write-ask-approved-lines.sh holds for each route it can arrive by.
 commit_list() {
-  local call
   printf "$1" > "$LIST"
   "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects || return
-  call="$(apply_payload 'git commit -q -m list' "$TESTP" s1 "$NONE_T" | python3 -c 'import json, sys; d = json.load(sys.stdin); d["tool_use_id"] = "toolu_commitlist1"; print(json.dumps(d))')"
-  run "$HOOK" "$EMPTY_HOME" "$call" >/dev/null
   "${TESTP_GIT[@]}" commit -q -m list >/dev/null 2>&1
-  (cd "$WORK" && printf '%s' "$call" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" --ran >/dev/null 2>&1)
 }
+python3 - "$NONE_T" "$LIST" testprojectref000001 anothertestref000002 <<'PY'
+import json, sys
+path, listed = sys.argv[1:3]
+with open(path, "a") as f:
+    for n, ref in enumerate(sys.argv[3:]):
+        q = "Trust " + ref + " as a test project?"
+        ask = {"questions": [{"question": q, "header": "Test project", "multiSelect": False,
+                              "options": [{"label": "Trust", "description": "d"}, {"label": "Cancel", "description": "d"}]}],
+               "metadata": {"source": "db-test-project", "list": listed, "project_ref": ref}}
+        f.write(json.dumps({"type": "assistant", "sessionId": "s1", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_trust%d" % n, "name": "AskUserQuestion", "input": ask}]}}) + "\n")
+        f.write(json.dumps({"type": "user", "sessionId": "s1", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_trust%d" % n, "content": "answered"}]},
+            "toolUseResult": {"questions": ask["questions"], "answers": {q: "Trust"}, "annotations": {}}}) + "\n")
+PY
 LIST_TEXT='# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n'
 commit_list "$LIST_TEXT"
 printf 'update a set note = 1 where id = 7;\n' > "$TESTP/carry.sql"
@@ -1265,14 +1275,18 @@ for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --y
 done
 # The picker metadata the skill documents must carry every key the approval library reads, so a key
 # added there (such as "pending", #2800) cannot leave the skill writing pickers that cover nothing.
+# Since #3023 the library reads a second picker, the one by which Dan approves a test project line,
+# so the keys it reads must each be in the metadata the skill documents for one of the two.
 skill_meta="$(grep -m 1 -E '^\{"source": "db-apply"' "$SKILL_MD")"
+skill_trust="$(grep -m 1 -E '^\{"source": "db-test-project"' "$SKILL_MD")"
 lib_keys="$(grep -oE 'meta\.get\("[a-z_]+"\)' "$DIR/lib/db-apply-approval.py" | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u | tr '\n' ' ')"
 missing="$(python3 -c 'import json, sys
 try:
-    m = json.loads(sys.argv[1])
+    m = dict(json.loads(sys.argv[1]), **json.loads(sys.argv[3]))
 except ValueError:
-    print("no metadata JSON line in SKILL.md"); sys.exit()
-print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys")"
+    print("a metadata JSON line is missing from SKILL.md"); sys.exit()
+print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys" "$skill_trust")"
+case "$skill_trust" in *'"list"'*'"project_ref"'*) check "the skill documents the picker that approves a test project line, with its list and its ref" ok ;; *) check "the skill documents the picker that approves a test project line, with its list and its ref" "found: ${skill_trust:0:200}" ;; esac
 case "$lib_keys" in *pending*) check "the approval library reads the pending list" ok ;; *) check "the approval library reads the pending list" "keys read: $lib_keys" ;; esac
 [ -z "$missing" ] && check "the skill's documented picker metadata names every key the approval reads" ok || check "the skill's documented picker metadata names every key the approval reads" "missing: $missing"
 

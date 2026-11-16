@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # test-db-write-ask-approved-lines.sh: db-write-ask.sh trusts a line of a checkout's Supabase test
-# project list only when a commit Dan answered yes to put it there (claude-config#3023).
+# project list only when Dan himself approved it in a picker (claude-config#3023).
 #
 # Before this, the hook asked about `git commit` and nothing else, so a line still reached HEAD with
 # no question through a git alias for commit, git commit-tree, a merge, a cherry pick, a rebase or a
 # pull, and a file run on that project then passed unasked. Enumerating git commands could never
 # end that, so the list is now judged where it is used: when a database write runs, a line counts
-# only if it is in HEAD and on this Mac's record of the lines a commit that passed the ask added.
+# only if it is in HEAD and Dan approved it, in a picker of this session or on this Mac's record of
+# the lines he approved in one. A commit having run after the hook's question approves nothing,
+# since sleep mode can answer a permission prompt with Dan asleep and never a picker.
 # Each route above is driven here with real git in a throwaway checkout, and the write that follows
 # must be asked about. Every ref is invented, and no database is ever reached: the hook only reads
 # the command it is handed.
@@ -49,21 +51,22 @@ RECORD="$HOME_A/.claude/state/supabase-test-projects"
 NONE_T="$WORK/no-apply.jsonl"
 printf '{"type": "user", "sessionId": "s1", "message": {"role": "user", "content": "hi"}}\n' > "$NONE_T"
 
-# bash_payload <event> <command> <cwd> [session] [call id]: a Bash call as Claude Code sends it. Every
-# live payload, before and after, carries the call's own id as tool_use_id (measured on Claude Code
-# 2.1.325). Left out here it is one named after the checkout, so the call before and the call after
-# in one checkout are one call unless a case says otherwise; "-" sends a payload with no id at all.
+# The suite's transcript: every picker a case has Dan answer is appended to it, and every payload
+# names it unless TRANSCRIPT names another (NONE_T, a later session's, holds no picker).
+TALK="$WORK/talk.jsonl"
+cp "$NONE_T" "$TALK"
+# bash_payload <event> <command> <cwd> [session]: a Bash call as Claude Code sends it. AGENT=1 makes
+# it a subagent's call: its payload carries agent_id and agent_type and names the MAIN session's
+# transcript (both captured on Claude Code 2.1.325, 2026-11-15); a main session's carries neither.
 bash_payload() {
-  local id="${5:-}"
-  if [ -z "$id" ]; then id="toolu_${3##*/}"; id="${id//[^A-Za-z0-9_]/_}"; fi
-  python3 -c 'import json, sys
+  python3 -c 'import json, os, sys
 d = {"session_id": sys.argv[4], "transcript_path": sys.argv[5], "hook_event_name": sys.argv[1], "cwd": sys.argv[3],
+     "tool_use_id": "toolu_suite1", "permission_mode": "auto",
      "tool_name": "Bash", "tool_input": {"command": sys.argv[2], "description": "d"}}
-if sys.argv[6] != "-":
-    d["tool_use_id"] = sys.argv[6]
-if sys.argv[1] == "PostToolUse":
-    d["tool_response"] = {"stdout": "", "stderr": "", "interrupted": False}
-print(json.dumps(d))' "$1" "$2" "$3" "${4:-s1}" "$NONE_T" "$id"
+if os.environ.get("AGENT") == "1":
+    d["agent_id"] = "a9bba4c0ffee"
+    d["agent_type"] = "general-purpose"
+print(json.dumps(d))' "$1" "$2" "$3" "${4:-s1}" "${TRANSCRIPT:-$TALK}"
 }
 # said <hook output> <exit code>: "<decision> rc=<exit>|<reason>|<notice>".
 said() {
@@ -77,16 +80,10 @@ except Exception:
 h = d.get("hookSpecificOutput") or {}
 print(h.get("permissionDecision", "none") + " rc=" + sys.argv[1] + "|" + h.get("permissionDecisionReason", "") + "|" + d.get("systemMessage", ""), end="")' "$2"
 }
-# before <command> <cwd> [session] [call id]: the hook's answer before that Bash call runs.
+# before <command> <cwd> [session]: the hook's answer before that Bash call runs.
 before() {
   local body rc
-  body="$(cd "$WORK" && bash_payload PreToolUse "$1" "$2" "${3:-s1}" "${4:-}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" 2>/dev/null)"; rc=$?
-  said "$body" "$rc"
-}
-# after <command> <cwd> [session] [call id]: the hook as the settings run it once that Bash call has run.
-after() {
-  local body rc
-  body="$(cd "$WORK" && bash_payload PostToolUse "$1" "$2" "${3:-s1}" "${4:-}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" --ran 2>/dev/null)"; rc=$?
+  body="$(cd "$WORK" && bash_payload PreToolUse "$1" "$2" "${3:-s1}" | env -u CLAUDE_HOME HOME="${HOME_USED:-$HOME_A}" bash "$HOOK" 2>/dev/null)"; rc=$?
   said "$body" "$rc"
 }
 CARRY='supabase db query --linked --yes -f carry.sql'
@@ -113,13 +110,47 @@ in_head() {
   case $'\n'"$held"$'\n' in *$'\n'"$2"$'\n'*) return 0 ;; esac
   return 1
 }
-# yes_commit <dir> <message word>: the staged list committed as Dan answering yes: the hook asks, the
-# commit runs, and the hook is told it ran. Prints the hook's answer before the commit.
+# trust <dir> <ref> [answer] [session] [shape]: Dan answering the picker that names <dir>'s list and
+# <ref>, appended to the transcript as Claude Code writes one: the picker's input on the assistant
+# entry holding its tool_use, his choice in toolUseResult.answers on the user entry carrying its
+# tool_result (the shape lib/db-apply-approval.py reads an Apply from). The shapes are the ways a
+# picker is NOT his answer: timeout, prefilled, two (questions), error, othersource.
+trust() {
+  python3 - "${TRANSCRIPT:-$TALK}" "$1/.claude/supabase-test-projects" "$2" "${3:-Trust}" "${4:-s1}" "${5:-}" <<'PY'
+import json, sys, time
+path, listed, ref, answer, sid, shape = sys.argv[1:7]
+q = "Trust " + ref + " as a test project?"
+ask = {"questions": [{"question": q, "header": "Test project", "multiSelect": False,
+                      "options": [{"label": "Trust", "description": "d"}, {"label": "Cancel", "description": "d"}]}],
+       "metadata": {"source": "db-test-project", "list": listed, "project_ref": ref}}
+result = {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}
+if shape == "timeout":
+    result["afkTimeoutMs"] = 60000
+if shape == "prefilled":
+    ask["answers"] = {q: answer}
+if shape == "two":
+    ask["questions"] = ask["questions"] * 2
+if shape == "othersource":
+    ask["metadata"]["source"] = "db-apply"
+uid = "toolu_trust%d" % time.time_ns()
+with open(path, "a") as f:
+    f.write(json.dumps({"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": uid, "name": "AskUserQuestion", "input": ask}]}}) + "\n")
+    f.write(json.dumps({"type": "user", "sessionId": sid, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": uid, "content": "answered", "is_error": shape == "error"}]},
+        "toolUseResult": result}) + "\n")
+PY
+}
+# yes_commit <dir> <message word>: the staged list committed with Dan's approval: he answers Trust
+# in a picker for each ref the commit adds, the hook reads the commit before it runs, and git
+# commits. Prints the hook's answer before the commit.
 yes_commit() {
-  local cmd="git commit -q -m $2" r
+  local cmd="git commit -q -m $2" r line
+  while IFS= read -r line; do
+    case "$line" in +[A-Za-z0-9_-]*) trust "$1" "${line#+}" ;; esac
+  done < <(git -C "$1" diff --cached -U0 -- .claude/supabase-test-projects 2>/dev/null | grep -v '^+++')
   r="$(before "$cmd" "$1" "${3:-s1}")"
   G "$1" commit -q -m "$2"
-  after "$cmd" "$1" "${3:-s1}" >/dev/null
   printf '%s' "$r"
 }
 # unasked <label> <dir> <ref>: the line is in HEAD, and the write is asked about, naming the project
@@ -137,18 +168,22 @@ unasked() {
   esac
 }
 
-# --- the control: a line a commit Dan answered yes to added is trusted ---------------------------
+# --- the control: a line Dan approved in a picker is trusted --------------------------------------
 OK_R="$WORK/approved"; new_repo "$OK_R" approvedref00000001
 stage_line "$OK_R" approvedref00000001
-r="$(yes_commit "$OK_R" list)"
+r="$(before 'git commit -q -m list' "$OK_R")"
 case "$r" in
-  "ask rc=0|"*approvedref00000001*supabase-test-projects*) check "a commit adding a line to the list is asked about, naming the line" ok ;;
-  *) check "a commit adding a line to the list is asked about, naming the line" "${r:0:400}" ;;
+  "ask rc=0|"*approvedref00000001*supabase-test-projects*"approves nothing"*AskUserQuestion*db-test-project*) check "a commit adding a line Dan has not approved is asked about, naming the line and how he approves it" ok ;;
+  *) check "a commit adding a line Dan has not approved is asked about, naming the line and how he approves it" "${r:0:700}" ;;
 esac
+trust "$OK_R" approvedref00000001
+r="$(before 'git commit -q -m list' "$OK_R")"
+case "$r" in "none rc=0||") check "a commit whose every added line Dan approved in a picker is not asked about" ok ;; *) check "a commit whose every added line Dan approved in a picker is not asked about" "${r:0:400}" ;; esac
+G "$OK_R" commit -q -m list
 r="$(write "$OK_R")"
 case "$r" in
-  "allow rc=0||") check "a write on a project whose line a commit that passed the ask added passes, with nothing said" ok ;;
-  *) check "a write on a project whose line a commit that passed the ask added passes, with nothing said" "${r:0:400}" ;;
+  "allow rc=0||") check "a write on a project whose line Dan approved passes, with nothing said" ok ;;
+  *) check "a write on a project whose line Dan approved passes, with nothing said" "${r:0:400}" ;;
 esac
 [ -s "$RECORD/approved" ] && check "the approved line is on this Mac's record, under its own home" ok || check "the approved line is on this Mac's record, under its own home" "no $RECORD/approved"
 if grep -q approvedref00000001 "$RECORD/approved" 2>/dev/null; then
@@ -156,66 +191,82 @@ if grep -q approvedref00000001 "$RECORD/approved" 2>/dev/null; then
 else
   check "the record holds a hash of the line, never the project ref itself" ok
 fi
+r="$(TRANSCRIPT="$NONE_T" write "$OK_R")"
+case "$r" in "allow rc=0||") check "and it stays trusted in a later session, whose transcript holds no picker, by the record" ok ;; *) check "and it stays trusted in a later session, whose transcript holds no picker, by the record" "${r:0:400}" ;; esac
 
-# THE CALL AFTER IS PAIRED WITH THE QUESTION BY THE CALL'S ID, NEVER BY ITS COMMAND'S TEXT. The rtk
-# hook rewrites a command before it runs, and the payload after the call then carries the rewritten
-# text: `git commit --allow-empty -m probe4` before, `rtk git commit --allow-empty -m probe4` after,
-# under one tool_use_id (a capture of both payloads on Claude Code 2.1.325, 2026-11-15). Paired by
-# text, no approval was ever recorded for a rewritten commit while every case here passed.
-R="$WORK/rewritten"; new_repo "$R" rewrittenref000001
-stage_line "$R" rewrittenref000001
-before 'git commit -q -m list' "$R" s1 toolu_rewritten1 >/dev/null
+# A COMMIT HAVING RUN APPROVES NOTHING. The first build took a commit running after the hook's
+# question as Dan's yes. Sleep mode approves Claude Code's permission prompts for an overnight
+# worker (payload/mods/scope-modes, #834), so a prompt can be answered with Dan asleep; a picker
+# cannot (sleep mode never answers a question, and a subagent has none to ask).
+R="$WORK/yesonly"; new_repo "$R" yesonlyref00000001
+stage_line "$R" yesonlyref00000001
+r="$(before 'git commit -q -m list' "$R")"
+case "$r" in "ask rc=0|"*yesonlyref00000001*) check "the commit of a line with no picker is asked about" ok ;; *) check "the commit of a line with no picker is asked about" "${r:0:300}" ;; esac
 G "$R" commit -q -m list
-after 'rtk git commit -q -m list' "$R" s1 toolu_rewritten1 >/dev/null
-r="$(write "$R")"
-case "$r" in "allow rc=0||") check "a commit whose command a hook rewrote before it ran (rtk in front) still has its yes recorded" ok ;; *) check "a commit whose command a hook rewrote before it ran (rtk in front) still has its yes recorded" "${r:0:400}" ;; esac
-# The same command text under another call's id answers nothing: it is another call.
-R="$WORK/othercall"; new_repo "$R" othercallref000001
-stage_line "$R" othercallref000001
-before 'git commit -q -m list' "$R" s1 toolu_asked1 >/dev/null
-G "$R" commit -q -m list
-after 'git commit -q -m list' "$R" s1 toolu_neverasked1 >/dev/null
-unasked "a call after with another id than the one asked about, its command the same, is not an approval" "$R" othercallref000001
-# A payload with no call id: nothing could pair a yes with it, so the question says so and records
-# nothing, and a call after with no id answers nothing.
-R="$WORK/noid"; new_repo "$R" noidref00000000001
-stage_line "$R" noidref00000000001
-r="$(before 'git commit -q -m list' "$R" s1 -)"
-case "$r" in "ask rc=0|"*noidref00000000001*"no id for this call"*"will not make the line trusted"*) check "a commit whose payload carries no call id is asked about, saying a yes will not be remembered" ok ;; *) check "a commit whose payload carries no call id is asked about, saying a yes will not be remembered" "${r:0:500}" ;; esac
-G "$R" commit -q -m list
-after 'git commit -q -m list' "$R" s1 - >/dev/null
-unasked "and a call after with no id approves nothing" "$R" noidref00000000001
-# An id that is not the plain word Claude Code sends names no file of the record.
-R="$WORK/oddid"; new_repo "$R" oddidref0000000001
-stage_line "$R" oddidref0000000001
-r="$(before 'git commit -q -m list' "$R" s1 '../../oddid-escaped')"
-case "$r" in "ask rc=0|"*oddidref0000000001*"no id for this call"*"will not make the line trusted"*) check "a call id that is not a plain word is not recorded under, and the question says a yes will not be remembered" ok ;; *) check "a call id that is not a plain word is not recorded under, and the question says a yes will not be remembered" "${r:0:500}" ;; esac
-found="$(find "$HOME_A" -name '*oddid-escaped*' 2>/dev/null)"
-[ -z "$found" ] && check "and nothing is written under a name built from it" ok || check "and nothing is written under a name built from it" "found $found"
-G "$R" commit -q -m list
-after 'git commit -q -m list' "$R" s1 '../../oddid-escaped' >/dev/null
-unasked "and a call after carrying it approves nothing" "$R" oddidref0000000001
+unasked "a commit that ran after its question is no approval: the line is not trusted" "$R" yesonlyref00000001
 
-# The list staged and committed in one command is asked about once, by the question that names the
-# line, so its yes approves it. Asked as a staging only, that yes would have approved nothing.
+# Only Dan's own choice of Trust, for this list and this ref, in this session, counts.
+# not_by <label> <checkout name> <ref> <answer> <session> <shape>
+not_by() {
+  local R="$WORK/$2"
+  new_repo "$R" "$3"; stage_line "$R" "$3"; G "$R" commit -q -m list
+  trust "$R" "$3" "$4" "$5" "$6"
+  unasked "$1" "$R" "$3"
+}
+not_by "a picker Dan answered Cancel approves nothing" cancelled cancelref000000001 Cancel s1 ""
+not_by "a picker that timed out with Dan away approves nothing" timedout timeoutref00000001 Trust s1 timeout
+not_by "a picker sent with its answer already filled in approves nothing" prefilled prefilledref000001 Trust s1 prefilled
+not_by "a picker of two questions approves nothing" twoquestions twoqref00000000001 Trust s1 two
+not_by "a picker that failed approves nothing" errored erroredref00000001 Trust s1 error
+not_by "a picker answered in another session approves nothing" othersession sessionref00000001 Trust s2 ""
+not_by "a picker carrying another source, the Apply's, approves nothing" othersource sourceref000000001 Trust s1 othersource
+R="$WORK/otherref"; new_repo "$R" wantedref000000001
+stage_line "$R" wantedref000000001; G "$R" commit -q -m list
+trust "$R" unrelatedref000001
+unasked "a picker naming another project approves nothing for this one" "$R" wantedref000000001
+R="$WORK/otherlist"; new_repo "$R" otherlistref000001
+stage_line "$R" otherlistref000001; G "$R" commit -q -m list
+trust "$OK_R" otherlistref000001
+unasked "a picker naming another checkout's list approves nothing for this one" "$R" otherlistref000001
+R="$WORK/notranscript"; new_repo "$R" notalkref000000001
+stage_line "$R" notalkref000000001; G "$R" commit -q -m list
+trust "$R" notalkref000000001
+TRANSCRIPT="$WORK/absent.jsonl" unasked "a transcript that cannot be read approves nothing" "$R" notalkref000000001
+
+# A SUBAGENT'S CALL WRITES NOTHING ON THE RECORD. Dan's picker in the session's transcript lets its
+# write pass, and the record is written only by a call of the main session.
+R="$WORK/byagent"; new_repo "$R" agentref0000000001
+stage_line "$R" agentref0000000001; G "$R" commit -q -m list
+trust "$R" agentref0000000001
+r="$(AGENT=1 write "$R")"
+case "$r" in "allow rc=0||") check "a subagent's write on a line Dan approved in this session's picker passes" ok ;; *) check "a subagent's write on a line Dan approved in this session's picker passes" "${r:0:400}" ;; esac
+TRANSCRIPT="$NONE_T" unasked "and it put nothing on the record: a later session's write is asked about" "$R" agentref0000000001
+write "$R" >/dev/null
+r="$(TRANSCRIPT="$NONE_T" write "$R")"
+case "$r" in "allow rc=0||") check "the main session's write puts Dan's approval on the record, which a later session keeps" ok ;; *) check "the main session's write puts Dan's approval on the record, which a later session keeps" "${r:0:400}" ;; esac
+R="$WORK/agentcommit"; new_repo "$R" agentcommitref0001
+stage_line "$R" agentcommitref0001
+trust "$R" agentcommitref0001
+r="$(AGENT=1 before 'git commit -q -m list' "$R")"
+case "$r" in "none rc=0||") check "a subagent's commit of a line Dan approved is not asked about" ok ;; *) check "a subagent's commit of a line Dan approved is not asked about" "${r:0:400}" ;; esac
+G "$R" commit -q -m list
+TRANSCRIPT="$NONE_T" unasked "and it put nothing on the record either" "$R" agentcommitref0001
+
+# The list staged and committed in one command is asked about as the commit, by the question that
+# names the line and says how Dan approves it.
 R="$WORK/onecommand"; new_repo "$R" onecmdref000000001
 printf 'onecmdref000000001\n' >> "$R/.claude/supabase-test-projects"
 ONE='git add -f .claude/supabase-test-projects && git commit -q -m list'
 r="$(before "$ONE" "$R")"
 case "$r" in "ask rc=0|"*"would commit the line onecmdref000000001"*) check "the list staged and committed in one command is asked about as the commit, naming the line" ok ;; *) check "the list staged and committed in one command is asked about as the commit, naming the line" "${r:0:400}" ;; esac
 G "$R" add -f .claude/supabase-test-projects; G "$R" commit -q -m list
-after "$ONE" "$R" >/dev/null
-r="$(write "$R")"
-case "$r" in "allow rc=0||") check "and a yes to it approves the line" ok ;; *) check "and a yes to it approves the line" "${r:0:400}" ;; esac
 # Staged with no commit that adds a line after it, it is asked about as a staging, as before.
 r="$(before 'git add -f .claude/supabase-test-projects && npm test' "$R")"
 case "$r" in "ask rc=0|"*"is not one that only reads it"*) check "the list staged before a command that is no commit is still asked about" ok ;; *) check "the list staged before a command that is no commit is still asked about" "${r:0:400}" ;; esac
-: > "$R/.claude/supabase-test-projects"
 r="$(before "$ONE" "$R")"
 case "$r" in "ask rc=0|"*"is not one that only reads it"*) check "the list staged before a commit that adds no line is still asked about" ok ;; *) check "the list staged before a commit that adds no line is still asked about" "${r:0:400}" ;; esac
 r="$(before 'echo onecmdref000000001 >> .claude/supabase-test-projects && git commit -q -am list' "$R")"
 case "$r" in "ask rc=0|"*"is not one that only reads it"*) check "a write of the list before a commit is asked about as the write, never put off" ok ;; *) check "a write of the list before a commit is asked about as the write, never put off" "${r:0:400}" ;; esac
-G "$R" checkout -q -- .claude/supabase-test-projects
 
 # --- each route that put a line in HEAD with no question: the write is asked about ---------------
 R="$WORK/alias"; new_repo "$R" aliasref0000000001
@@ -259,75 +310,19 @@ mkdir -p "$UP/.claude"; stage_line "$UP" pullref00000000001; G "$UP" commit -q -
 G "$R" pull -q "$UP" main
 unasked "a line a pull brought into HEAD is not trusted" "$R" pullref00000000001
 
-# A commit the hook never asked about: one made before this shipped, on the other Mac, or by a
-# person at a terminal. Nothing told the hook it ran, so nothing is on the record.
+# A line nobody asked Dan about: committed before this shipped, on the other Mac, or by a person at
+# a terminal. The question says how he approves it, and his picker is all it takes: no commit.
 R="$WORK/neverasked"; new_repo "$R" oldref000000000001
 stage_line "$R" oldref000000000001; G "$R" commit -q -m "before the record existed"
-unasked "a line committed with no question on record is not trusted" "$R" oldref000000000001
+unasked "a line Dan approved in no picker is not trusted" "$R" oldref000000000001
 r="$(write "$R")"
 case "$r" in
-  *"take the line out"*"git commit"*) check "the question says how to get the line approved: take it out, and put it back with a git commit" ok ;;
-  *) check "the question says how to get the line approved: take it out, and put it back with a git commit" "${r:0:500}" ;;
+  *AskUserQuestion*Trust*db-test-project*project_ref*) check "the question says how Dan approves the line: a picker carrying the hook's metadata" ok ;;
+  *) check "the question says how Dan approves the line: a picker carrying the hook's metadata" "${r:0:700}" ;;
 esac
-# And that way out works: the line taken out in one commit, put back in another that is asked about.
-: > "$R/.claude/supabase-test-projects"; G "$R" add -f .claude/supabase-test-projects
-r="$(yes_commit "$R" out)"
-case "$r" in "none rc=0||") check "the commit taking the line out is not asked about" ok ;; *) check "the commit taking the line out is not asked about" "${r:0:300}" ;; esac
-stage_line "$R" oldref000000000001
-yes_commit "$R" back >/dev/null
+trust "$R" oldref000000000001
 r="$(write "$R")"
-case "$r" in "allow rc=0||") check "after the line is put back by a commit that passed the ask, the write passes" ok ;; *) check "after the line is put back by a commit that passed the ask, the write passes" "${r:0:400}" ;; esac
-
-# Dan answered no: the hook asked, the commit never ran, and the line then arrived another way.
-R="$WORK/refused"; new_repo "$R" refusedref00000001
-stage_line "$R" refusedref00000001
-r="$(before 'git commit -q -m list' "$R")"
-case "$r" in "ask rc=0|"*) check "the commit Dan will refuse is asked about" ok ;; *) check "the commit Dan will refuse is asked about" "${r:0:300}" ;; esac
-G "$R" -c alias.ci=commit ci -q -m "by an alias, after the no"
-unasked "a line Dan refused, then committed through an alias, is not trusted" "$R" refusedref00000001
-# The same command sent again is another call. It now has nothing to add, so it is not asked about,
-# and its running must not turn the earlier, refused question into an approval.
-r="$(before 'git commit -q -m list' "$R" s1 toolu_later1)"
-case "$r" in "none rc=0||") check "the same commit command with nothing left to add is not asked about" ok ;; *) check "the same commit command with nothing left to add is not asked about" "${r:0:300}" ;; esac
-after 'git commit -q -m list' "$R" s1 toolu_later1 >/dev/null
-unasked "a refused question is not turned into an approval by the same command running later" "$R" refusedref00000001
-# And should the refused call itself ever be read again, whatever was asked of it before is void:
-# this reading decides, and it asks nothing, so nothing is left for its running to answer.
-if [ -e "$RECORD/pending/toolu_refused.json" ]; then
-  before 'git commit -q -m list' "$R" >/dev/null
-  after 'git commit -q -m list' "$R" >/dev/null
-  unasked "a question is dropped when its own call is read again with nothing left to add" "$R" refusedref00000001
-else
-  check "a question is dropped when its own call is read again with nothing left to add" "the refused question is not waiting under its call id, so nothing here measures it"
-fi
-
-# A question in one session is not answered by a command running in another.
-R="$WORK/othersession"; new_repo "$R" sessionref00000001
-stage_line "$R" sessionref00000001
-before 'git commit -q -m list' "$R" s1 >/dev/null
-G "$R" commit -q -m list
-after 'git commit -q -m list' "$R" s2 >/dev/null
-unasked "a commit told as run by another session than the one asked is not an approval" "$R" sessionref00000001
-# Dan said yes and the command then committed nothing (a commit hook of the repository refused it,
-# say), while the line was already in HEAD by a route nobody asked about: HEAD did not move, so the
-# yes approves nothing.
-R="$WORK/nothingran"; new_repo "$R" stuckref0000000001
-stage_line "$R" stuckref0000000001; G "$R" -c alias.ci=commit ci -q -m "by an alias"
-stage_line "$R" stuckref0000000001
-r="$(before 'git commit -q -m again' "$R")"
-case "$r" in "ask rc=0|"*stuckref0000000001*) check "a commit adding a line a second time is asked about" ok ;; *) check "a commit adding a line a second time is asked about" "${r:0:300}" ;; esac
-after 'git commit -q -m again' "$R" >/dev/null
-G "$R" reset -q --hard
-unasked "a yes to a commit that then committed nothing approves nothing" "$R" stuckref0000000001
-# A question nobody answered is cleared once it is old, when the next one is recorded; a recent one stays.
-OLD_Q="$RECORD/pending/1-1.json"; NEW_Q="$RECORD/pending/2-2.json"
-printf '{"session": "long gone"}\n' > "$OLD_Q"; printf '{"session": "still open"}\n' > "$NEW_Q"
-python3 -c 'import os, sys, time; t = time.time() - 8 * 24 * 3600; os.utime(sys.argv[1], (t, t))' "$OLD_Q"
-R="$WORK/sweep"; new_repo "$R" sweepref0000000001
-stage_line "$R" sweepref0000000001
-before 'git commit -q -m list' "$R" >/dev/null
-[ ! -e "$OLD_Q" ] && [ -e "$NEW_Q" ] && check "a question unanswered for over a week is cleared when another is recorded, and a recent one is kept" ok || check "a question unanswered for over a week is cleared when another is recorded, and a recent one is kept" "old one $([ -e "$OLD_Q" ] && echo kept || echo cleared), recent one $([ -e "$NEW_Q" ] && echo kept || echo cleared)"
-rm -f "$NEW_Q"
+case "$r" in "allow rc=0||") check "after Dan answers that picker the write passes, with no commit needed" ok ;; *) check "after Dan answers that picker the write passes, with no commit needed" "${r:0:400}" ;; esac
 
 # --- what an approval covers ---------------------------------------------------------------------
 # The line and the list it is on, in that clone: a branch of it, and a worktree of it, are covered.
@@ -356,17 +351,24 @@ r="$(write "$R")"
 case "$r" in "allow rc=0||") check "an approved line stays trusted when another line arrives unasked" ok ;; *) check "an approved line stays trusted when another line arrives unasked" "${r:0:400}" ;; esac
 printf 'secondref000000002' > "$R/supabase/.temp/project-ref"
 unasked "the line that arrived unasked beside an approved one is not trusted" "$R" secondref000000002
-# Only the lines the question showed are approved: a commit adding more than it names leaves the rest.
+# Each line is approved on its own: a commit adding twelve, one of them approved, is asked about the
+# other eleven, names up to eight of them, and leaves them untrusted whatever is answered.
 R="$WORK/many"; new_repo "$R" manyref0000000001
 for i in 01 02 03 04 05 06 07 08 09 10 11 12; do printf 'manyref00000000%s\n' "$i" >> "$R/.claude/supabase-test-projects"; done
 G "$R" add -f .claude/supabase-test-projects
-r="$(yes_commit "$R" many)"
-shown=0; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do case "$r" in *"manyref00000000$i"*) shown=$((shown + 1)) ;; esac; done
-case "$r" in *"and more"*) [ "$shown" -lt 12 ] && [ "$shown" -ge 1 ] && check "a commit adding more lines than the question holds says there are more" ok || check "a commit adding more lines than the question holds says there are more" "it named $shown of 12" ;; *) check "a commit adding more lines than the question holds says there are more" "${r:0:500}" ;; esac
+trust "$R" manyref0000000001
+r="$(before 'git commit -q -m many' "$R")"
+shown=0; for i in 02 03 04 05 06 07 08 09 10 11 12; do case "$r" in *"manyref00000000$i"*) shown=$((shown + 1)) ;; esac; done
+case "$r" in
+  *manyref0000000001*) check "a commit adding more unapproved lines than the question holds names some and says there are more" "it named the line Dan approved: ${r:0:300}" ;;
+  "ask rc=0|"*"and more"*) [ "$shown" -lt 11 ] && [ "$shown" -ge 1 ] && check "a commit adding more unapproved lines than the question holds names some and says there are more" ok || check "a commit adding more unapproved lines than the question holds names some and says there are more" "it named $shown of 11" ;;
+  *) check "a commit adding more unapproved lines than the question holds names some and says there are more" "${r:0:500}" ;;
+esac
+G "$R" commit -q -m many
 r="$(write "$R")"
-case "$r" in "allow rc=0||") check "a line the question named is approved" ok ;; *) check "a line the question named is approved" "${r:0:400}" ;; esac
+case "$r" in "allow rc=0||") check "the line Dan approved is trusted, though its commit added others" ok ;; *) check "the line Dan approved is trusted, though its commit added others" "${r:0:400}" ;; esac
 printf 'manyref0000000012' > "$R/supabase/.temp/project-ref"
-unasked "a line the question did not name is not approved by its answer" "$R" manyref0000000012
+unasked "a line of the same commit Dan approved no picker for is not trusted" "$R" manyref0000000012
 
 # --- the record itself is held like the list -----------------------------------------------------
 edit_payload() { python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": {"file_path": sys.argv[2], "old_string": "a", "new_string": "b", "content": "c"}}))' "$1" "$2"; }
@@ -374,8 +376,6 @@ for t in Edit Write MultiEdit; do
   body="$(cd "$WORK" && edit_payload "$t" "$RECORD/approved" | env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" 2>/dev/null)"; r="$(said "$body" $?)"
   case "$r" in "ask rc=0|"*approved*3023*) check "a $t of the record of approved lines is asked about" ok ;; *) check "a $t of the record of approved lines is asked about" "${r:0:300}" ;; esac
 done
-body="$(cd "$WORK" && edit_payload Write "$RECORD/pending/x.json" | env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" 2>/dev/null)"; r="$(said "$body" $?)"
-case "$r" in "ask rc=0|"*) check "a Write of a question waiting on the record is asked about" ok ;; *) check "a Write of a question waiting on the record is asked about" "${r:0:300}" ;; esac
 r="$(before "echo 0000 >> $RECORD/approved" "$WORK")"
 case "$r" in "ask rc=0|"*"record of the test project lines Dan approved"*) check "a shell write to the record is asked about, naming it as the record" ok ;; *) check "a shell write to the record is asked about, naming it as the record" "${r:0:300}" ;; esac
 r="$(before "cat $RECORD/approved" "$WORK")"
@@ -393,37 +393,19 @@ else
   case "$r" in "ask rc=0|"*approved*"could not be read"*) check "a record that cannot be read trusts nothing, and the question says so" ok ;; *) check "a record that cannot be read trusts nothing, and the question says so" "${r:0:400}" ;; esac
 fi
 chmod 600 "$RECORD/approved"
-# The record cannot be written: the question about the commit says a yes will not be remembered.
-HOME_B="$WORK/home-nowrite"; mkdir -p "$HOME_B/.claude/state"; printf 'in the way\n' > "$HOME_B/.claude/state/supabase-test-projects"
+# The record cannot be written: Dan's picker still covers this session's write, and nothing is kept.
+HOME_B="$WORK/home-nowrite"; mkdir -p "$HOME_B/.claude/state/supabase-test-projects"; chmod 500 "$HOME_B/.claude/state/supabase-test-projects"
 R="$WORK/nowrite"; new_repo "$R" nowriteref00000001
-stage_line "$R" nowriteref00000001
-r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R")"
-case "$r" in "ask rc=0|"*nowriteref00000001*"could not record"*) check "a question that cannot be recorded says a yes will not be remembered" ok ;; *) check "a question that cannot be recorded says a yes will not be remembered" "${r:0:500}" ;; esac
-G "$R" commit -q -m list; HOME_USED="$HOME_B" after 'git commit -q -m list' "$R" >/dev/null
-r="$(HOME_USED="$HOME_B" write "$R")"
-case "$r" in "ask rc=0|"*nowriteref00000001*) check "and the write that follows is asked about" ok ;; *) check "and the write that follows is asked about" "${r:0:400}" ;; esac
-# git failing once the commit has run: no approval, and a notice says the answer was not recorded.
-R="$WORK/gitgone"; new_repo "$R" gitgoneref00000001
-stage_line "$R" gitgoneref00000001
-before 'git commit -q -m list' "$R" >/dev/null
-G "$R" commit -q -m list
-GITSTUB="$WORK/gitstub"; mkdir -p "$GITSTUB"
-printf '#!/bin/sh\necho "fatal: index file corrupt" >&2\nexit 3\n' > "$GITSTUB/git"; chmod +x "$GITSTUB/git"
-body="$(cd "$WORK" && bash_payload PostToolUse 'git commit -q -m list' "$R" | PATH="$GITSTUB:$PATH" env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" --ran 2>/dev/null)"; r="$(said "$body" $?)"
-case "$r" in "none rc=0||"*"could not record"*3023*) check "git failing after the commit ran is said in a notice, with no decision" ok ;; *) check "git failing after the commit ran is said in a notice, with no decision" "${r:0:400}" ;; esac
-unasked "and that line is not trusted" "$R" gitgoneref00000001
-# A waiting question that is not a record at all is passed over.
-printf 'not json\n' > "$RECORD/pending/garbage.json"
-r="$(after 'git commit -q -m list' "$R")"
-case "$r" in "none rc=0||") check "a waiting question that cannot be read is passed over in silence" ok ;; *) check "a waiting question that cannot be read is passed over in silence" "${r:0:300}" ;; esac
-rm -f "$RECORD/pending/garbage.json"
-# One filed under this call's own id is this call's question: its yes cannot be recorded, and a
-# notice says so, never silence.
-printf 'not json\n' > "$RECORD/pending/toolu_gitgone.json"
-r="$(after 'git commit -q -m list' "$R")"
-case "$r" in "none rc=0||"*"could not record"*"could not be read"*3023*) check "a question under the call's own id that cannot be read is said in a notice" ok ;; *) check "a question under the call's own id that cannot be read is said in a notice" "${r:0:400}" ;; esac
-[ ! -e "$RECORD/pending/toolu_gitgone.json" ] && check "and it is taken away, so it is said once" ok || check "and it is taken away, so it is said once" "it is still waiting"
-unasked "and that line is still not trusted" "$R" gitgoneref00000001
+stage_line "$R" nowriteref00000001; G "$R" commit -q -m list
+trust "$R" nowriteref00000001
+if : 2>/dev/null > "$HOME_B/.claude/state/supabase-test-projects/probe"; then
+  check "with a record that cannot be written, Dan's picker still lets the session's write pass" "UNMEASURED: this user can write into a folder with no write permission (root?), so the case cannot be made"
+else
+  r="$(HOME_USED="$HOME_B" write "$R")"
+  case "$r" in "allow rc=0||") check "with a record that cannot be written, Dan's picker still lets the session's write pass" ok ;; *) check "with a record that cannot be written, Dan's picker still lets the session's write pass" "${r:0:400}" ;; esac
+  HOME_USED="$HOME_B" TRANSCRIPT="$NONE_T" unasked "and a later session's write is asked about" "$R" nowriteref00000001
+fi
+chmod 700 "$HOME_B/.claude/state/supabase-test-projects"
 # One budget bounds all the git a test project check runs, set short rather than waited out (L524).
 SLOWGIT="$WORK/slowgit"; mkdir -p "$SLOWGIT"
 printf '#!/bin/sh\nexec sleep 5\n' > "$SLOWGIT/git"; chmod +x "$SLOWGIT/git"
@@ -455,15 +437,6 @@ else
   case "$r" in "ask rc=0|"*"before this commit"*"python3 is not on PATH"*3023*) check "with no python3, a commit is asked about, naming python3" ok ;; *) check "with no python3, a commit is asked about, naming python3" "${r:0:400}" ;; esac
   r="$(nopy "$(bash_payload PreToolUse 'ls -la' "$OK_R")")"
   case "$r" in "none rc=0||") check "with no python3, a command that is no commit and no database call passes" ok ;; *) check "with no python3, a command that is no commit and no database call passes" "${r:0:300}" ;; esac
-  # A question left waiting, so the hook has something to look for once the command has run.
-  R="$WORK/nopy-repo"; new_repo "$R" nopyref00000000001
-  stage_line "$R" nopyref00000000001
-  before 'git commit -q -m list' "$R" >/dev/null
-  G "$R" commit -q -m list
-  r="$(nopy "$(bash_payload PostToolUse 'git commit -q -m list' "$R")" --ran)"
-  case "$r" in "none rc=0||") check "with no python3, the hook after a commit records nothing and says nothing" ok ;; *) check "with no python3, the hook after a commit records nothing and says nothing" "${r:0:300}" ;; esac
-  unasked "and that line is not trusted" "$R" nopyref00000000001
-  rm -f "$RECORD"/pending/*.json
 fi
 # python3 failing: only a Bash call that could be a git commit is asked about as one.
 PYFAIL="$WORK/pyfail"; mkdir -p "$PYFAIL"
@@ -475,14 +448,6 @@ case "$r" in "ask rc=0|"*"before this commit"*) check "with python3 failing, a c
 EDIT_BASH='{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/tmp/notes.txt","old_string":"git commit the notes","new_string":"Bash"}}'
 r="$(failing "$EDIT_BASH")"
 case "$r" in "none rc=0||") check "with python3 failing, an Edit holding the words Bash and commit is not asked about as a commit" ok ;; *) check "with python3 failing, an Edit holding the words Bash and commit is not asked about as a commit" "${r:0:300}" ;; esac
-# python3 failing after a commit ran, with a question waiting: a notice says the yes was not recorded.
-R="$WORK/pyfail-repo"; new_repo "$R" pyfailref000000001
-stage_line "$R" pyfailref000000001
-before 'git commit -q -m list' "$R" >/dev/null
-G "$R" commit -q -m list
-body="$(cd "$WORK" && bash_payload PostToolUse 'git commit -q -m list' "$R" | PATH="$PYFAIL:$PATH" env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" --ran 2>/dev/null)"; r="$(said "$body" $?)"
-case "$r" in "none rc=0||"*"could not check"*python3*3023*) check "with python3 failing after a commit ran, a notice says its approval could not be checked" ok ;; *) check "with python3 failing after a commit ran, a notice says its approval could not be checked" "${r:0:400}" ;; esac
-unasked "and that line is not trusted" "$R" pyfailref000000001
 r="$(failing "$(bash_payload PreToolUse 'gh pr view 12 --json commits' "$OK_R")")"
 case "$r" in "none rc=0||") check "with python3 failing, a command holding the word commit and no git is not asked about" ok ;; *) check "with python3 failing, a command holding the word commit and no git is not asked about" "${r:0:300}" ;; esac
 
@@ -493,9 +458,9 @@ SPY="$WORK/spy"; mkdir -p "$SPY"
 printf '#!/bin/sh\nprintf "%%s %%s %%s\\n" "$1" "$2" "$3" >> "%s"\nexec "%s" "$@"\n' "$SPY/python.log" "$REAL_PY" > "$SPY/python3"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n' "$SPY/git.log" "$REAL_GIT" > "$SPY/git"
 chmod +x "$SPY/python3" "$SPY/git"
-spied() {  # spied <payload> [--ran]: the hook run with both stand ins first on the PATH
+spied() {  # spied <payload>: the hook run with both stand ins first on the PATH
   rm -f "$SPY/python.log" "$SPY/git.log"
-  (cd "$WORK" && printf '%s' "$1" | PATH="$SPY:$PATH" env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" ${2:+"$2"} >/dev/null 2>&1)
+  (cd "$WORK" && printf '%s' "$1" | PATH="$SPY:$PATH" env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" >/dev/null 2>&1)
 }
 spied "$(bash_payload PreToolUse 'git commit -m x' "$OK_R")"
 if [ -s "$SPY/python.log" ] && [ -s "$SPY/git.log" ]; then
@@ -520,31 +485,6 @@ spied "$EDIT_BASH"
 [ -e "$SPY/python.log" ] && check "an Edit holding the words Bash and commit never starts python3" "python3 was started" || check "an Edit holding the words Bash and commit never starts python3" ok
 spied "$(bash_payload PreToolUse 'gh pr view 12 --json commits' "$OK_R")"
 [ -e "$SPY/python.log" ] && check "a command holding the word commit and no git never starts python3" "python3 was started" || check "a command holding the word commit and no git never starts python3" ok
-# After a Bash call, with a question waiting: the call it was asked about starts python3, whatever
-# its command now reads, and any other call, a commit included, does not. A refused question waits
-# up to a week, and no call in that week should pay for it.
-R="$WORK/waiting"; new_repo "$R" waitingref00000001
-stage_line "$R" waitingref00000001
-before 'git commit -m x' "$R" s1 toolu_waiting1 >/dev/null
-if [ -e "$RECORD/pending/toolu_waiting1.json" ]; then
-  spied "$(bash_payload PostToolUse 'rtk proxy anything at all' "$R" s1 toolu_waiting1)" --ran
-  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after the call it was asked about starts python3" ok || check "with a question waiting, the hook after the call it was asked about starts python3" "python3 was never started, so the cases below measure nothing"
-  before 'git commit -m x' "$R" s1 toolu_waiting1 >/dev/null
-  spied "$(bash_payload PostToolUse 'git commit -m x' "$R" s1 toolu_another1)" --ran
-  [ -e "$SPY/python.log" ] && check "with a question waiting, the hook after any other call, a commit included, never starts python3" "python3 was started" || check "with a question waiting, the hook after any other call, a commit included, never starts python3" ok
-else
-  check "with a question waiting, the hook after the call it was asked about starts python3" "no question is waiting under its call id, so nothing here measures it"
-fi
-# With none waiting, as after nearly every call, it leaves before anything else starts.
-rm -f "$RECORD"/pending/*.json
-spied "$(bash_payload PostToolUse 'git commit -m x' "$OK_R")" --ran
-[ -e "$SPY/python.log" ] && check "after a Bash call with no question waiting, python3 never starts" "python3 was started" || check "after a Bash call with no question waiting, python3 never starts" ok
-r="$(after 'git commit -m x' "$OK_R")"
-case "$r" in "none rc=0||") check "after a Bash call with no question waiting, the hook says nothing" ok ;; *) check "after a Bash call with no question waiting, the hook says nothing" "${r:0:300}" ;; esac
-# A payload larger than a pipe holds is still read to its end, so its writer is never cut off.
-big="$(python3 -c 'import json; print(json.dumps({"session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {"stdout": "x" * 400000}}))')"
-printf '%s' "$big" | env -u CLAUDE_HOME HOME="$HOME_A" bash "$HOOK" --ran >/dev/null 2>&1; codes=("${PIPESTATUS[@]}")
-[ "${codes[0]}" = 0 ] && [ "${codes[1]}" = 0 ] && check "with no question waiting, a large payload is read to its end before the hook leaves" ok || check "with no question waiting, a large payload is read to its end before the hook leaves" "its writer ended ${codes[0]}, the hook ${codes[1]}"
 # What python3 loads for a commit that passes, read from python3's own account of its imports: not
 # the site module, and none of the modules only a question or a write needs.
 SPY2="$WORK/spy-imports"; mkdir -p "$SPY2"
@@ -571,7 +511,6 @@ r="$(partial 'git commit -q -m list > /dev/null 2>&1')"
 case "$r" in "ask rc=0|"*db-write-calls.py*) check "without it, a commit with a redirection is asked about, naming the library" ok ;; *) check "without it, a commit with a redirection is asked about, naming the library" "${r:0:400}" ;; esac
 r="$(before 'git commit -q -m list > /dev/null 2>&1' "$R")"
 case "$r" in "ask rc=0|"*"would commit the line nolibref0000000001"*) check "with it, a commit with a redirection is read as the commit it is" ok ;; *) check "with it, a commit with a redirection is read as the commit it is" "${r:0:400}" ;; esac
-rm -f "$RECORD"/pending/*.json
 # And that shortcut is true of the library: text holding neither < nor > comes back from it unchanged.
 IFS= read -r -d '' same_prog <<'PY' || true
 import importlib.util, itertools, sys
@@ -601,23 +540,18 @@ PY
 )"
 [ "$lazy" = none ] && check "the approval library loads without hashlib or datetime, which a commit check never needs" ok || check "the approval library loads without hashlib or datetime, which a commit check never needs" "loaded: $lazy"
 
-# --- the settings run the hook after a Bash call, to learn that an asked commit ran --------------
+# --- the settings never run the hook after a tool call --------------------------------------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
-import json, re, sys
+import json, sys
 d = json.load(open(sys.argv[1]))
-hits = [(e.get("matcher", ""), h) for e in d.get("hooks", {}).get("PostToolUse", [])
-        for h in e.get("hooks", []) if h.get("command", "").endswith("/hooks/db-write-ask.sh --ran")]
-if len(hits) != 1:
-    print("registered %d times after a tool call" % len(hits)); sys.exit()
-m, h = hits[0]
-bad = [] if re.fullmatch(m, "Bash") else ["matcher %s does not match Bash" % m]
-bad += ["also runs after " + t for t in ("Edit", "Read", "mcp__claude_ai_Supabase__execute_sql") if re.fullmatch(m, t)]
-if not isinstance(h.get("timeout"), int):
-    bad.append("no timeout")
-print("ok" if not bad else ", ".join(bad))
+hits = [h for e in d.get("hooks", {}).get("PostToolUse", []) for h in e.get("hooks", [])
+        if "db-write-ask.sh" in h.get("command", "")]
+before = [h for e in d.get("hooks", {}).get("PreToolUse", []) for h in e.get("hooks", [])
+          if "db-write-ask.sh" in h.get("command", "")]
+print("ok" if not hits and before else "registered %d times after a tool call, %d before one" % (len(hits), len(before)))
 PY
 )"
-check "the settings run the hook after every Bash call, and after nothing else" "$wiring"
+check "the settings run the hook before a call and never after one: a commit having run approves nothing" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
