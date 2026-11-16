@@ -314,6 +314,63 @@ stepped="$(python3 -B "$stepped_py" "$SW" 2>&1)"
 rm -f "$stepped_py"
 check "#2918 the reader goes straight through quoted text and heredoc bodies, and reads them as before" "$stepped"
 
+# And through the text of commands, ${ }, $(( )), a plain ( ) and $'...', each of which changes the
+# reading only at a few characters (FRAME_STOPS): stepping one character at a time through commands was
+# most of the reader's time judging the claude-sync suite once quoted text was gone past (#2918, a
+# second cut). shell_split reads a quoted command a piece at a time, answering and raising as
+# shlex.split does, here over every text of up to four of the characters shlex reads specially.
+frames_py="$(mktemp "${TMPDIR:-/tmp}/sw-frames.XXXXXX")" || exit 1
+cat > "$frames_py" <<'PY'
+import importlib.util, itertools, shlex, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+taken = [0]
+class Counted(str):
+    def __getitem__(self, k):
+        taken[0] += 1
+        return str.__getitem__(self, k)
+wrong = []
+words = "alpha/beta-gamma.x=1 " * 500
+for label, text, want in (
+        ("commands", "echo %s\ngit push %s" % (words, words), ["echo " + words.strip(), "git push " + words.strip()]),
+        ("${ }", "echo ${x:-%s}; git push" % words, ["echo ${x:-%s}" % words, "git push"]),
+        ("$(( ))", "echo $((%s)); git push" % ("1 + 2 * " * 500 + "3"), ["echo $((%s))" % ("1 + 2 * " * 500 + "3"), "git push"]),
+        ("an array's ( )", "a=(%s); git push" % words, ["a=(%s)" % words, "git push"]),
+        ("$'...'", "echo $'%s'; git push" % words, ["echo $'%s'" % words, "git push"])):
+    taken[0] = 0
+    got = [t.strip() for d, t in sw.commands(Counted(text), "/")]
+    if got != want:
+        wrong.append("%s read as %r" % (label, [g[:30] for g in got]))
+    if taken[0] > 400:
+        wrong.append("%s: %d characters taken one at a time, of %d" % (label, taken[0], len(text)))
+def answer(fn, t):
+    try:
+        return fn(t)
+    except ValueError as e:
+        return ("ValueError", str(e))
+for k in range(5):
+    for combo in itertools.product("a'\"\\ \n\t", repeat=k):
+        t = "".join(combo)
+        if answer(sw.shell_split, t) != answer(lambda x: shlex.split(x, posix=True), t):
+            wrong.append("shell_split(%r) is %r, shlex.split gives %r" % (t, answer(sw.shell_split, t), answer(lambda x: shlex.split(x, posix=True), t)))
+            break
+read = [0]
+real = sw.shlex.split
+def counted(*a, **k):
+    read[0] += 1
+    return real(*a, **k)
+sw.shlex.split = counted
+sw.shell_split("git commit -m \"it's \\\"done\\\"\" --author 'A B' a\\ b")
+sw.shlex.split = real
+if read[0]:
+    wrong.append("a quoted command was handed to shlex, which reads it a character at a time")
+print("; ".join(wrong[:5]) or "ok")
+PY
+frames="$(python3 -B "$frames_py" "$SW" 2>&1)"
+rm -f "$frames_py"
+check "#2918 the reader goes straight through commands, \${ }, \$(( )), ( ) and \$'...', and splits quoted words as shlex does" "$frames"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
