@@ -57,6 +57,7 @@ hook that slow is killed and the command goes unscreened.
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
 """
+import functools
 import os
 import re
 import shlex
@@ -75,6 +76,14 @@ def join_continuations(s):
     way had a newline for its first word and its assignments left in front (claude-config#2447)."""
     if "\\\n" not in s:
         return s
+    return _joined(s)
+
+
+@functools.lru_cache(maxsize=4096)
+def _joined(s):
+    """join_continuations for a text holding a backslash newline, worked out once for each text: the
+    Slack drafts gate asked for 165,000 joins of 35,000 texts judging the claude-sync suite, most of
+    them commands continued over several lines, read a character at a time (claude-config#2918)."""
     out, i, n, quote = [], 0, len(s), ""
     while i < n:
         c = s[i]

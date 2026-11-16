@@ -1640,6 +1640,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
         self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
         self.indirect_memo = {}  # {a command's text: sh_indirect's answer for it}
+        self.tokens_memo = {}  # {a text: its sh_tokens, as a tuple}
         # {id of a walk's result: (that result, the starts of its uncertain spans in order, the furthest
         # end of the spans up to each)}, for sh_cwd_at
         self.cwd_spans = {}
@@ -4890,7 +4891,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return argv, env
 
     def sh_tokens(self, s):
-        """s's words and operators, as (kind, raw text), up to the first unquoted line break."""
+        """s's words and operators, as (kind, raw text), up to the first unquoted line break, read once
+        for each text, as a list of the caller's own: judging the claude-sync suite asked for 50,000
+        readings of 20,000 texts, 0.09 s of them repeats (claude-config#2918)."""
+        got = self.tokens_memo.get(s)
+        if got is None:
+            got = self.tokens_memo[s] = tuple(self.sh_tokens_read(s))
+        return list(got)
+
+    def sh_tokens_read(self, s):
+        """sh_tokens, read afresh."""
         out, i, n = [], 0, len(s)
         while i < n:
             c = s[i]
@@ -6819,6 +6829,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             cur = parent
 
     @staticmethod
+    @functools.lru_cache(maxsize=1024)
     def fed(text, whole):
         """(what a command reading its input is fed, whether that is a heredoc body) for one record.
 
@@ -6827,6 +6838,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pipeline the command sits in, so the line holding it is what feeds it. Where neither can be
         found, the whole line is, which can only refuse more, never less. The same command written
         twice in a script reads the same here, so every place it is written counts.
+
+        Worked out once for each (text, whole): it depends on them alone, and judging the claude-sync
+        suite asked it 285 times of 190, the repeats 0.08 s of searching the suite's 1.8 MB again
+        (claude-config#2918).
         """
         lines, starts = lines_of(whole)
         key = text.strip()

@@ -4202,10 +4202,32 @@ for i in range(20000):
             break
     if len(wrong) > 2:
         break
+# And three readings asked again of the same text are worked out once (#2918, the same round): a
+# command's tokens, what a command reading its input is fed, and a continued command joined.
+j = gate.Judge(gate.load_reader())
+reads = []
+real_read = j.sh_tokens_read
+j.sh_tokens_read = lambda s: reads.append(s) or real_read(s)
+first, again = j.sh_tokens('a "b c" >x'), j.sh_tokens('a "b c" >x')
+if first != again or first != [("word", "a"), ("word", '"b c"'), ("op", ">"), ("word", "x")] or len(reads) != 1:
+    wrong.append("sh_tokens gave %r then %r, reading the text %d times" % (first, again, len(reads)))
+first.append("mine")
+if j.sh_tokens('a "b c" >x')[-1] == "mine":
+    wrong.append("sh_tokens handed out its own kept list")
+whole = "cat <<EOF\nbody\nEOF\necho done\n"
+was = gate.Judge.fed.cache_info().hits
+if gate.Judge.fed("cat <<EOF", whole) != ("body", True) or gate.Judge.fed("cat <<EOF", whole) != ("body", True) \
+        or gate.Judge.fed.cache_info().hits != was + 1:
+    wrong.append("fed was not worked out once for a (text, whole) asked twice")
+sw = gate.load_reader()
+was = sw._joined.cache_info().misses
+if sw.join_continuations("a \\\n b 'c\\\nd'") != "a  b 'c\\\nd'" or sw.join_continuations("a \\\n b 'c\\\nd'") != "a  b 'c\\\nd'" \
+        or sw._joined.cache_info().misses != was + 1 or sw.join_continuations("plain") != "plain":
+    wrong.append("join_continuations was not worked out once for a text asked twice, or joined it wrong")
 print("; ".join(wrong) or "ok")
 PY
 bindcuts="$(python3 -B "$T/bindcuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
-check "sh_binds compiles a pattern only for a form the text can hold, and finds assignments as the pattern does (#2918)" "$bindcuts"
+check "sh_binds compiles a pattern only for a form the text can hold, finds assignments as the pattern does, and tokens, feeds and joins are read once for each text (#2918)" "$bindcuts"
 
 # Since #2912 every command of a text is asked whether it calls a function that evaluates its
 # argument (sh_eval_text_reason), and the claude-sync suite's check() is one, so every one of its
