@@ -8087,8 +8087,7 @@ One narrowing (#2254): a findings note to the installed helper,
 else, another subcommand, a substitution inside the note and everything else in the same command
 are judged as before. A question is kept in the store under a
 SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
-character key limit; an answer kept under the earlier key form is still read for its week (#2256
-removes that read).
+character key limit.
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
 session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
