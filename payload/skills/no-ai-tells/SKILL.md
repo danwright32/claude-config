@@ -1,54 +1,70 @@
 ---
 name: no-ai-tells
-description: Reviews writing and suggests specific edits to make it sound genuinely human. Fetches the latest AI writing patterns from Wikipedia and flags any found in the text.
+description: Checks writing against the whole Wikipedia list of AI writing signs. On a draft the session wrote, it hands back the corrected draft in full; on text Dan pastes in, it suggests specific edits.
 user-invokable: true
 args:
   - name: task
-    description: Text to review — paste the copy you want suggestions for
+    description: Text to review, pasted in for suggested edits
     required: false
 ---
 
-## MANDATORY FIRST STEP
+## MANDATORY FIRST STEP: read the whole list
 
-Fetch the current signs of AI writing from Wikipedia before producing any output:
+Before producing any output, read every part of the Wikipedia list of AI writing signs:
 
 ```
 https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing
 ```
 
-Extract every pattern, phrase, and structural habit listed as a sign of AI writing. Treat this as your live blacklist for this writing session.
+The page is about 250,000 characters and one WebFetch reads at most 100,000, so one call is never the whole list. Measured on 2026-11-16: the first call ended with a note that 151,549 characters were unread, and the unread part held the promotional vocabulary, the summary endings and the em dash section (claude-config#3060).
+
+1. Call WebFetch on the URL with a prompt asking for every sign in that part: each heading, with the words, phrases and habits it lists, quoted as the page gives them.
+2. When a result says part of the page was not read, call WebFetch again on the same URL with the `offset` that result gives. Repeat until a result has no such note.
+3. The list is read only once a part you read reaches the page's "See also" heading, which comes after the last sign. Check for it, rather than trusting the absence of a note.
+4. If this session has already read the whole list this way, use what it read rather than fetching it again.
+
+If any part could not be read (a fetch failed, or "See also" never arrived), check against what was read, say which part is missing, and never report the text clean: say the check was partial.
+
+Every sign read is the list to check against for this session.
 
 ---
 
-## What You're Doing
+## Two modes
 
-You are reviewing text the user has provided and suggesting specific edits to make it sound more human. You do **not** rewrite the text — you identify problems and tell the user exactly what to change and how.
+**A session's own draft.** When a session runs this skill on text it wrote, which it is about to show Dan or put in front of other people (a Slack message, an email, a PR description, an issue or PR comment, any prose the prose hook flagged), apply every fix and write the corrected draft in full. That corrected draft is the text shown to Dan and, for a Slack message, exactly the text saved as the draft (global CLAUDE.md, Slack section). Run the skill before the text is shown or offered in a picker, so nothing is reworded after Dan has seen or chosen it. After the draft, list each change in one line: the phrase as it was, and the sign it matched.
 
-Your output is a list of concrete, actionable suggestions. Each suggestion names the specific phrase or sentence, explains what's wrong with it, and offers a replacement or direction.
+**Text Dan pastes in.** When Dan hands over text of his own (the `task` argument, or text pasted with the command), suggest edits and do not rewrite it. Follow "The review process" below.
 
----
+When it is unclear which mode applies, text the session wrote is its own draft, and text Dan wrote is his.
 
-## How to Apply the Wikipedia Findings
+## This skill never sends
 
-After fetching the page, internalize the full list of AI signals. Then for every sentence you write, ask:
-
-- Does this sentence contain any word from the AI vocabulary list (delve, tapestry, pivotal, underscore, foster, garner, vibrant, landscape, showcase, testament, crucial, intricate, enduring, quietly, etc.)?
-- Am I using "quietly" as a filler adverb (e.g. "quietly became the standard," "quietly reshaping the industry")? Cut it or name what actually happened.
-- Am I using "serves as," "stands as," "marks," or "represents" where "is" would do?
-- Am I constructing a "Not only X, but also Y" pattern?
-- Am I listing exactly three things to sound comprehensive?
-- Am I making a vague significance claim ("this is a pivotal moment," "reflects broader trends")?
-- Am I attributing to unnamed experts ("experts argue," "industry reports suggest")?
-- Am I writing a "Despite its strengths, it faces challenges" conclusion?
-- Am I using em dashes excessively?
-- Am I addressing the reader with "let's explore" or "you will notice"?
-- Am I varying synonyms of a key term unnecessarily (elegant variation)?
-
-If yes to any of these: flag it and suggest a replacement.
+It writes text. It never sends, posts or saves anything. Saving a Slack draft, posting a comment or sending an email is the calling session's step, under the rules that govern that step, and the Slack rules save drafts only, never a sent message.
 
 ---
 
-## What Human Writing Actually Sounds Like
+## How to apply the list
+
+For every sentence, ask:
+
+- Does it contain a word from the list's AI vocabulary (delve, tapestry, pivotal, underscore, foster, garner, vibrant, landscape, showcase, testament, crucial, intricate, enduring, quietly, and the rest the page names)?
+- Is "quietly" a filler adverb ("quietly became the standard", "quietly reshaping the industry")? Cut it or name what actually happened.
+- Is "serves as", "stands as", "marks" or "represents" doing the work of "is"?
+- Is it a "Not only X, but also Y" construction?
+- Does it list exactly three things to sound comprehensive?
+- Does it make a vague significance claim ("this is a pivotal moment", "reflects broader trends")?
+- Does it attribute to unnamed experts ("experts argue", "industry reports suggest")?
+- Is it a "Despite its strengths, it faces challenges" conclusion?
+- Does it hold an em dash or en dash at all? Dan's writing rules allow none, so each one is a finding.
+- Does it address the reader with "let's explore" or "you will notice"?
+- Does it vary synonyms for a key term for no reason (elegant variation)?
+- Does it match any other sign the page lists?
+
+If yes to any of these, it is a finding.
+
+---
+
+## What human writing sounds like
 
 Human writers:
 - Use "is" and "are" without shame
@@ -63,25 +79,24 @@ Human writers:
 
 ---
 
-## The Review Process
+## The review process (text Dan pastes in)
 
-1. Fetch the Wikipedia page. Read the full list.
-2. Read the user's text in full.
-3. Scan every sentence against the AI signals list.
+1. Read the whole list, as the first step says.
+2. Read the text in full.
+3. Scan every sentence against the list.
 4. Output a numbered list of suggestions. For each:
-   - Quote the exact phrase or sentence that needs changing
-   - Name the AI pattern it matches (from the Wikipedia list or the checks above)
-   - Provide a concrete suggested replacement — not a direction, an actual rewrite of that phrase or sentence. Example: don't say "replace with something more specific"; say "try: 'She filed the report at 4am'". The suggestion can be loose or offer a couple of options, but it must be real text the user can drop in or riff from.
-5. End with a brief summary: how many issues found, and the most common pattern type.
-
-Do **not** output a rewritten version of the text. Suggestions only.
+   - Quote the exact phrase or sentence that needs changing.
+   - Name the sign it matches, from the Wikipedia list or the checks above.
+   - Give a concrete replacement: not a direction, an actual rewrite of that phrase or sentence. Don't say "replace with something more specific"; say "try: 'She filed the report at 4am'". It can be loose or offer a couple of options, but it must be real text Dan can drop in or riff from.
+5. End with a short count: how many findings, and the commonest kind.
 
 ---
 
-## Hard Rules
+## Hard rules
 
-- **Never rewrite the full text.** Suggest specific, targeted edits only.
-- **Quote exactly** — use the user's actual words, not paraphrases.
-- **Always provide real replacement text.** Don't say "make this more specific" — write what the specific version could be. The user refines it; you draft it.
-- **Specific over general, always.** Name the exact AI pattern, not just "this sounds AI-ish."
+- **Text Dan pastes in is never rewritten in full.** Suggest specific, targeted edits only.
+- **A session's own draft comes back corrected, in full.** Never as suggestions the session applies afterwards, which leaves the text shown different from the text checked.
+- **Quote exactly.** Use the actual words, not paraphrases.
+- **Always give real replacement text.** Don't say "make this more specific": write what the specific version could be.
+- **Name the exact sign**, not just "this sounds AI-ish".
 - **If in doubt, flag it.** Better to over-suggest than miss something.

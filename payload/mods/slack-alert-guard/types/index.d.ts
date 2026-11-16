@@ -31,8 +31,8 @@ export type SlackAlertApproval = { at: number; file: string; text: string[]; ren
 
 /**
  * Wording a session chose while Dan was asleep (#2628), kept in the mod's store under `chosen:<key>`
- * for each store key his approval would be kept under. Never an approval: no pull request carrying it
- * may merge until he answers Approve wording in the morning picker.
+ * for each store key his approval would be kept under. Never an approval: only his Approve wording in
+ * the morning picker records one. It holds no merge (#3030).
  */
 export type SlackAlertChoice = {
   /** The held call's id, which the morning question's `metadata.source` names. */
@@ -49,23 +49,18 @@ export type SlackAlertChoice = {
    * a repository it holds asks (#2833), or any session when that repository cannot be read.
    */
   session: string | null
-  /**
-   * The session that made it (#3030), kept when `session` is cleared at its end, so a refusal can
-   * still say who chose it. Absent on a choice made before #3030, which a refusal says it does not record.
-   */
-  chosenBy?: string
-  /** When it expired unanswered: still held, said once in each session that may ask it (#2833). */
+  /** When it expired unanswered: still unapproved, said once in each session that may ask it (#2833). */
   expired?: number
   /**
-   * When Dan answered Change wording to it: still held, and never put to him again by a session that
-   * did not make it (#2993); the session that made it asks as before, and a merge refusal still can.
+   * When Dan answered Change wording to it: still unapproved, and never put to him again by a session
+   * that did not make it (#2993); the session that made it asks as before.
    */
   rejected?: number
   /**
-   * Where it holds merges (#2833): the file it was chosen in, then each file in another place its
+   * Where it is put to Dan from (#2833): the file it was chosen in, then each file in another place its
    * wording was let through while Dan was asleep, with the GitHub repository each is in as owner/name
-   * in lower case, null where that could not be read (read again at a merge). Absent on a choice
-   * made before #2833, read from `file` at a merge.
+   * in lower case, null where that could not be read (read again when asked). Absent on a choice
+   * made before #2833, read from `file`.
    */
   places?: SlackAlertPlace[]
 }

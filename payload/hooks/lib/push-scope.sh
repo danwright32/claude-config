@@ -24,6 +24,9 @@
 #                      per situation a push hook meets (the contract is above them)
 #   ps_merged_apart: what that range is diffed from once a merge of the default branch is set
 #                      apart, so a branch answers only for its own lines (claude-config#3015)
+#   ps_pending_merge_of_default: does the command's commit conclude a merge of the default branch
+#                      still in progress, which nothing can set apart before that commit exists, so
+#                      push-scope-notice.sh refuses the push for every gate (claude-config#3062)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -1539,6 +1542,49 @@ ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answe
     return 0
   fi
   printf 'whole %s\n' "git merge-tree could not work out the merge of $def into the last pushed commit (exit $rc; it needs git 2.38 or later)"
+}
+
+# ---- a merge of the default branch still in progress, concluded by the pushing command (claude-config#3062) ----
+# ps_merged_apart sets apart a merge that is COMMITTED. In `git commit --no-edit && git push` with a
+# conflicted merge of main in progress, the merge commit does not exist yet when a PreToolUse hook
+# runs, so there is no merge in the range to set apart, and every gate folds the commit the command
+# is about to make in as a change against HEAD, the branch's last commit: the whole of what main
+# brought in reads as the branch's own. The #3015 and #3054 builders both met it.
+#
+# Two ways out were weighed. Reading the pending merge as a merge of its second parent would mean
+# every gate diffing its pending part from a merge-tree of HEAD and that parent instead of HEAD, and
+# each gate reads the pending part its own way (the index, the files an add names, the files a
+# commit -a takes, new files whole), so the fix would be one opt in per gate, which a new gate
+# misses without a word (L621). Refusing the combined form loses nothing: run as two commands, the
+# merge commit exists when the push is judged and ps_merged_apart sets it apart, already tested. So
+# push-scope-notice.sh refuses it, once, for every push gate, on this question.
+#
+# Asked with ps_commit_in_chain, the very question each gate asks before folding the pending commit
+# in, so it is true exactly where the gates would misread: a git merge --continue is not read as a
+# commit by them, nor here. Only a merge bringing in default branch commits HEAD lacks counts: a
+# merge of any other branch brings lines the gates never judged, which are the push's own and are
+# read right already. With no default branch known nothing can say what came from main, and the
+# gates judge the range whole as ps_merged_apart says; this answers no there rather than refusing a
+# push the separated form would judge no differently.
+#
+# Every commit MERGE_HEAD names is read (an octopus merge names several). Prints the default branch
+# ref and returns 0 when the command concludes such a merge; returns 1 otherwise.
+ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository directory (default .)
+  local cmd="$1" d="${2:-.}" mh def sha rest m
+  ps_commit_in_chain "$cmd" || return 1
+  mh="$(git -C "$d" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null)" || return 1
+  [ -f "$mh" ] || return 1
+  def="$(cd "$d" 2>/dev/null && ps__default_ref)" || return 1
+  [ -n "$def" ] || return 1
+  while read -r sha rest; do
+    [ -n "$sha" ] || continue
+    m="$(git -C "$d" merge-base "$def" "$sha" 2>/dev/null)" || continue
+    [ -n "$m" ] || continue
+    git -C "$d" merge-base --is-ancestor "$m" HEAD 2>/dev/null && continue
+    printf '%s' "$def"
+    return 0
+  done < "$mh"
+  return 1
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then
