@@ -122,7 +122,9 @@ never answers a question, and a subagent has no picker to ask with. (That build 
 call after a commit with its question by the command's text, which the rtk hook rewrites before
 the call runs: the payload after carried `rtk git commit ...`. Nothing here reads a call after.)
 A commit adding a line Dan has not approved is still asked about (#2989); its question says a yes
-approves nothing and how he approves the line. One whose every added line he approved passes.
+approves nothing and how he approves the line. One whose every added line he approved passes, once
+the record holds them all: a line his picker covers that the record could not take is asked about,
+saying why (#3058).
 The record is held like the list: a shell command naming it (its path holds the list's name) and an
 Edit, Write or MultiEdit under it (is_list_record) are asked about.
 WHAT THE RECORD CANNOT SEE: a line approved once stays approved for that list in that clone, so one
