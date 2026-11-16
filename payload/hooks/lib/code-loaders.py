@@ -382,6 +382,10 @@ def make(shell_bang, assign, marker, unknown_dir, max_depth, runs_refused):
             text = text.decode("utf-8", "replace")
             try:
                 self.next_script, self.next_on_disk = word, True
+                # Its $0, as any script's (script_body, #2913): the word that ran it, or for a file
+                # that is sourced the script that ran. Left unset, a cd built from $0 was not followed,
+                # and what the file sourced after it was read from another folder (claude-config#3020).
+                self.next_zero = self.shell.get("zero") if sourced else word
                 self.next_cwd_known = self.sh_cwd(d) != unknown_dir
                 self.next_program = prog
                 inner = self.line(text, d, depth + 1, text)

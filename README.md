@@ -187,6 +187,18 @@ list through the same reader (#2111). Whatever it cannot tell is refused: the vi
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
 
+Three readings since claude-config#3020. A posted substitution that lists folders (`$(ls ~/apps)`,
+an unquoted glob) is judged by the names it can print, one level deep, so one that would print a
+work checkout's name is refused from a personal checkout too. A trusted name (git, cat, gh and the
+rest) that any shell snapshot in `~/.claude/shell-snapshots` redefines as a function or an alias is
+no longer trusted, since the hook is not told which snapshot is its session's. And a `GH_TOKEN`,
+`GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` assignment whose whole value is
+`$(gh auth token)` with only its account and host options sets the account the command runs as: it
+is left out of what is judged as posted, the account it names included, so the multi account form
+the global rules give passes from a work checkout. That is the one loosening. Which command the
+substitution runs is read by the shared gh reader, and the variable read back into posted text is
+still refused.
+
 The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
 command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
 edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
@@ -3867,6 +3879,19 @@ not check, except inside a script on disk, where what the script does with a fil
 judged where it is handed one. A config file curl is handed with `-K` or `--config` is read as the
 request it describes, and a long option glued with `=` (`node --require=./x.js`, `--import=`) is read
 as the same option with its value as the next word.
+
+Since claude-config#3020 text handed to `eval`, to a shell's `-c` or to a function that evaluates
+its argument, through a variable or a substitution, is read the same way: a value the gate works
+out is judged as a command line, and one file's text (`eval "$(cat cmd.txt)"`, `$(< cmd.txt)`,
+backquotes, straight or through a variable set once from it) as that file. Any other such text, a
+program's output or a variable set nowhere, is refused in the command itself as a call it could not
+check. Inside a script on disk it is left as before, whatever the #2683 switch says: refusing it
+there would refuse 19 more of this repository's 563 shell scripts (measured 2026-11-15), and that is
+Dan's decision. Code written out in quotes is read where it is, as before. The wrapper now sends a
+call to the full rule when it holds the word `eval`, and when a program's name comes right after a
+line break in the command, which before then let `true`, a new line, `bash post` skip the gate.
+A file with a NUL in its first line knows its own `$0`, and a module a test loads only through
+`vi.importActual`, `jest.requireActual` or the mock loaders beside them is followed as an import.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
