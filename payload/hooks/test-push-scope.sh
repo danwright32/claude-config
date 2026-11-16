@@ -1629,17 +1629,19 @@ echo "push-scope: commits a command makes by a route no gate can read (claude-co
 # the two the gates read, git commit and git merge --continue. Measured in throwaway repositories on
 # git 2.51.1: each of these makes at least one commit that did not exist when a gate would have run.
 # It prints the route as the refusal names it.
+# A command of several lines is named on one, its line ends written out, so a FAIL line never goes on
+# at the margin (test-fail-margin.sh).
 route_is() { # route_is <description> <command> <the route it must print>
-  local r rc
+  local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_commit_route "$2")"; rc=$?
-  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$1: $2" ok
-  else check "$1: $2" "exit $rc, printed [$r], wanted [$3]"; fi
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
 }
 no_route() { # no_route <description> <command>
-  local r rc
+  local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_commit_route "$2")"; rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$1: $2" ok
-  else check "$1: $2" "exit $rc, printed [$r]"; fi
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
 }
 # The seven the issue names.
 route_is "#3092 a route no gate reads" "git rebase --continue && git push" "git rebase --continue"
@@ -1670,8 +1672,7 @@ route_is "#3092 however the git is written" "GIT_EDITOR=true git rebase --contin
 route_is "#3092 however the git is written" "git -c core.editor=true rebase --continue && git push" "git rebase --continue"
 route_is "#3092 however the git is written" "/usr/bin/git pull&&git push" "git pull"
 route_is "#3092 however the git is written" "git pull;git push" "git pull"
-route_is "#3092 however the git is written" "git pull
-git push" "git pull"
+route_is "#3092 however the git is written" $'git pull\ngit push' "git pull"
 route_is "#3092 however the git is written" "(git rebase --continue) && git push" "git rebase --continue"
 route_is "#3092 however the git is written" "bash -c 'git pull && git push'" "git pull"
 route_is "#3092 however the git is written" "git fetch origin && git merge origin/main && git push origin HEAD" "git merge"
@@ -1698,12 +1699,8 @@ for c in "git rebase --continue" "git pull" "git merge side" "git push && git pu
 done
 # Words that only name a route, in a message or a heredoc body, run nothing.
 no_route "#3092 control: a route named in a commit message" "git commit -m 'run git pull and then git rebase --continue' && git push"
-no_route "#3092 control: a route named in a heredoc body" "git commit -F - <<'EOF'
-Refuse git pull && git push in one command
-
-git rebase --continue && git push is refused too.
-EOF
-git push"
+no_route "#3092 control: a route named in a heredoc body" \
+  $'git commit -F - <<\'EOF\'\nRefuse git pull && git push in one command\n\ngit rebase --continue && git push is refused too.\nEOF\ngit push'
 no_route "#3092 control: a route named in an echo" "echo git pull && git push"
 # With nothing to read the command, the crude cut still finds the route, so a missing reader refuses
 # rather than letting the command past unread (L42).
