@@ -30,6 +30,9 @@ mkdir -p "$P/-proj-a/s1/subagents/workflows/w1" "$P/-proj-b/s2/subagents"
 #                         message id, so it counts once and the last usage (100) wins.
 #   then a pause of 9 minutes 20 seconds with no command open: NOT running. In the pause sit a
 #   line that is not JSON and a line whose timestamp is a number: two bad lines, never a crash.
+#   At 10:10:00 sit four more lines whose fields are the wrong shape (usage as a list, a token
+#   count in words, a command as a list, and an id, model and folder as lists): four more bad
+#   lines, none of them a request, a model or a label.
 #   10:10:00 to 10:20:00  a second stretch of 600 seconds.
 # Active 640 seconds, 300 output tokens, 2 requests, 40 seconds inside the shell.
 # Set by the fixture, not measured.
@@ -41,6 +44,10 @@ cat > "$P/-proj-a/s1/subagents/agent-a1.jsonl" <<'EOF'
 {"timestamp":"2026-11-10T10:05:00Z", this line is not json
 {"timestamp":1794300000,"message":{"content":[]}}
 {"timestamp":"2026-11-10T10:10:00Z","message":{"id":"m2","model":"model-x","usage":{"output_tokens":200},"content":[]}}
+{"timestamp":"2026-11-10T10:10:00Z","message":{"id":"m7","model":"model-x","usage":[1,2],"content":[]}}
+{"timestamp":"2026-11-10T10:10:00Z","message":{"id":"m8","model":"model-x","usage":{"output_tokens":"many"},"content":[]}}
+{"timestamp":"2026-11-10T10:10:00Z","message":{"content":[{"type":"tool_use","id":"t9","name":"Bash","input":["npm test"]}]}}
+{"timestamp":"2026-11-10T10:10:00Z","cwd":["/work/zeta"],"message":{"id":["m9"],"model":["model-z"],"usage":{"output_tokens":5},"content":[]}}
 {"timestamp":"2026-11-10T10:14:00Z","message":{"content":[]}}
 {"timestamp":"2026-11-10T10:18:00Z","message":{"id":"m3","content":[]}}
 {"timestamp":"2026-11-10T10:20:00Z","message":{"content":[]}}
@@ -102,7 +109,9 @@ check "the window, its length and the cap judged are stated" \
 # 640 + 480 + 240 = 1360 seconds = 0.38 hours. The pause, the day before and the 5 second agent are out.
 # Set by the fixture, not measured.
 check "agent hours count running time only, and what was left out is said" \
-  $'AGENTS\tagents=3\tsessions=2\tagent_hours=0.38\tdropped_short=1\tworkflow_agents=2\tbad_lines=2\tunreadable=0' "$out"
+  $'AGENTS\tagents=3\tsessions=2\tagent_hours=0.38\tdropped_short=1\tworkflow_agents=2\tbad_lines=6\tunreadable=0' "$out"
+absent "a wrongly shaped line names no model" "model-z" "$out"
+absent "and no working folder" "zeta" "$out"
 check "agent hours are given per day" $'BY_DAY\t11-10\t0.38' "$out"
 check "the label is the working folder's name" $'BY_REPO\talpha\t2' "$out"
 check "a second working folder is a second label" $'BY_REPO\tbeta\t1' "$out"

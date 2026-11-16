@@ -142,39 +142,68 @@ def read_agent(job):
             if seg_start is None:
                 seg_start = t
             prev = t
-            cwd = cwd or d.get("cwd")
-            m = d.get("message")
-            if not isinstance(m, dict):
-                continue
-            content = m.get("content")
-            if d.get("isApiErrorMessage"):
-                first = content[0] if isinstance(content, list) and content else None
-                errors.append((t, (first.get("text", "") if isinstance(first, dict) else str(content))[:70]))
-            if m.get("usage") and m.get("id") and m.get("model") != "<synthetic>":
-                usage[m["id"]] = m["usage"]
-                model = m.get("model") or model
-            if not isinstance(content, list):
-                continue
-            for b in content:
-                if not isinstance(b, dict):
+            # The line was written at a real time, so the agent was alive then whatever else it
+            # holds. A field of some other shape than the client writes (usage as a list, a
+            # command that is not text) makes the whole line a bad line, never a crash and never
+            # a request, a model or a label read from half of it.
+            try:
+                m = d.get("message")
+                if not isinstance(m, dict):
+                    if isinstance(d.get("cwd"), str):
+                        cwd = cwd or d["cwd"]
                     continue
-                if b.get("type") == "tool_use":
-                    cmd = (b.get("input") or {}).get("command", "") if b.get("name") == "Bash" else None
-                    open_calls[b.get("id")] = (t, cmd)
-                elif b.get("type") == "tool_result" and b.get("tool_use_id") in open_calls:
-                    t0, cmd = open_calls.pop(b["tool_use_id"])
-                    if cmd is None:
+                content = m.get("content")
+                error = None
+                if d.get("isApiErrorMessage"):
+                    first = content[0] if isinstance(content, list) and content else None
+                    error = (t, str(first.get("text", "") if isinstance(first, dict) else content)[:70])
+                request = None
+                if m.get("usage") and m.get("id") and m.get("model") != "<synthetic>":
+                    out = m["usage"].get("output_tokens", 0) or 0
+                    if not isinstance(m["id"], str) or not isinstance(m.get("model") or "", str) or not isinstance(out, (int, float)):
+                        raise TypeError("usage, id or model of the wrong shape")
+                    request = (m["id"], out, m.get("model"))
+                opened, closed = [], []
+                for b in content if isinstance(content, list) else []:
+                    if not isinstance(b, dict):
                         continue
-                    dur = max(0.0, t - t0)
-                    shell_s += dur
-                    kind = next((k for k, rx in KINDS if rx.search(cmd)), None)
-                    if kind and dur >= HEAVY_CALL_S:
-                        calls.append((t0, dur, kind))
+                    if b.get("type") == "tool_use":
+                        cmd = (b.get("input") or {}).get("command", "") if b.get("name") == "Bash" else None
+                        if not isinstance(b.get("id"), str) or not isinstance(cmd, (str, type(None))):
+                            raise TypeError("tool call id or command of the wrong shape")
+                        opened.append((b["id"], cmd))
+                    elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                        closed.append(b["tool_use_id"])
+                if d.get("cwd") is not None and not isinstance(d["cwd"], str):
+                    raise TypeError("working folder of the wrong shape")
+            except (AttributeError, TypeError):
+                bad += 1
+                continue
+            # Nothing above changed what is kept, so a bad line leaves no half of itself behind.
+            cwd = cwd or d.get("cwd")
+            if error:
+                errors.append(error)
+            if request:
+                usage[request[0]] = request[1]
+                model = request[2] or model
+            for call_id, cmd in opened:
+                open_calls[call_id] = (t, cmd)
+            for call_id in closed:
+                if call_id not in open_calls:
+                    continue
+                t0, cmd = open_calls.pop(call_id)
+                if cmd is None:
+                    continue
+                dur = max(0.0, t - t0)
+                shell_s += dur
+                kind = next((k for k, rx in KINDS if rx.search(cmd)), None)
+                if kind and dur >= HEAVY_CALL_S:
+                    calls.append((t0, dur, kind))
     if prev is None:
         return None
     segs.append((seg_start, prev))
     return {"segs": segs, "start": segs[0][0], "end": prev, "label": label_of(cwd), "model": model or "none",
-            "out": sum(u.get("output_tokens", 0) or 0 for u in usage.values()), "requests": len(usage),
+            "out": sum(usage.values()), "requests": len(usage),
             "shell_s": shell_s, "calls": calls, "errors": errors, "bad": bad}
 
 
