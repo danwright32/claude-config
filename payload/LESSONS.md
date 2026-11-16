@@ -5772,6 +5772,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L856. Anything a page keeps in browser storage about a record must be keyed by the signed
+  in person as well as the record, and cleared at sign out, because browser storage outlives the
+  session and the next person to sign in on that browser is shown the last person's unsaved work.**
+  (calculator#440, 2026-11-16)
+  SHORT: Key browser stored state by the signed in person as well as the record and clear it at sign out, or the next person sees it.
 - **L851. A proxy or relay that marks its own answers with a header, status or content type must
   strip or overwrite that marker on every answer it forwards, because a marker carried in the
   response itself can be set by the service behind it, which then speaks as the proxy.**
