@@ -3183,6 +3183,21 @@ test('#1151: a look edit in the project is still held, however the command names
   expect(w.ran).toEqual([])
 })
 
+// #3021: a command typed whole that mod-kit marks `unread` (eval, a command a value names, an alias)
+// runs what its words do not say, so it is judged by the look files its words name, as a program
+// the reader could not read is. Until then the words were read as an argument list writing nothing.
+test('#3021: a command whose effect cannot be read is held on the look file its words name', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const command of [`eval "printf 'a{}' > app/site.css"`, '$TOOL --write app/site.css', `alias fix='sed -i "" s/a/b/ app/site.css'; fix`, 'builtin eval "cp /tmp/x app/site.css"'])
+    expect({ command, held: refusalOf(await sh(command)) !== '' }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+  // One whose words name no look file passes, as before: nothing it is seen to name is judged.
+  for (const command of ['"$@"', 'eval "$(ssh-agent -s)"', '$TOOL --version', "alias ll='ls -l'"])
+    expect({ command, refusal: refusalOf(await sh(command)) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(4)
+})
+
 // #1191: Slate, 2026-10-14, running /design-rounds for slate#3718. Round one's files were in the
 // session's scratchpad (<scratchpad>/3718/round1/: builder.js, screen.base.css, screen.css, spec.json),
 // and a Bash call embedding the fonts into screen.css and running make-switcher.py was refused twice:
@@ -4614,7 +4629,8 @@ const MC_TEXT = [
   'fi',
   'source "$HERE/catch-all.sh"',
   'repo="${1:-}"',
-  // mod-kit's pipeline splits a test at its ||, reading `"$repo" == --* ]]` as a command (joinTests).
+  // A test holding ||, which mod-kit keeps whole since #3021; before, it split the test there and
+  // read `"$repo" == --* ]]` as a command, a command a value names.
   'if [[ -z "$repo" || "$repo" == --* ]]; then',
   '  echo "Usage: milestone-candidates.sh <owner/name> --like \\"<the idea\'s title>\\"" >&2',
   '  exit 2',

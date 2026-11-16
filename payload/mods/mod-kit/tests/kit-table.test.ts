@@ -199,6 +199,21 @@ const ENTRIES: Entry[] = [
   {"method":"git","input":{"words":["tee",">(cat >> notes.txt)","<","b.txt"]},"want":null},
   {"method":"commands","input":{"command":"bash <<EOF\necho \\$(echo done >> notes.txt)\nEOF"},"want":[["echo","done",">>","notes.txt"],["echo","$(echo done >> notes.txt)"]]},
   {"method":"writes","input":{"command":"bash <<EOF\necho \\$(echo done >> notes.txt)\nEOF","cwd":"/repo","home":""},"want":{"files":[{"word":"notes.txt","path":"/repo/notes.txt"}],"changes":[],"unnamed":[],"stdout":[{"word":"notes.txt","path":"/repo/notes.txt"}]}},
+  {"method":"commands","input":{"command":"eval \"$BUILD_STEP\""},"want":[["eval","$BUILD_STEP"]]},
+  {"method":"git","input":{"words":["eval","$BUILD_STEP"]},"want":null},
+  {"method":"writes","input":{"command":"eval \"$BUILD_STEP\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/repo"}]}},
+  {"method":"commands","input":{"command":"ls src"},"want":[["ls","src"]]},
+  {"method":"git","input":{"words":["ls","src"]},"want":null},
+  {"method":"writes","input":{"command":"ls src","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cd /other && eval \"$BUILD_STEP\""},"want":[["cd","/other"],["eval","$BUILD_STEP"]]},
+  {"method":"git","input":{"words":["cd","/other"]},"want":null},
+  {"method":"writes","input":{"command":"cd /other && eval \"$BUILD_STEP\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/other"}]}},
+  {"method":"commands","input":{"command":"eval \"$BUILD_STEP\" && \"$RUNNER\" --fix"},"want":[["eval","$BUILD_STEP"],["$RUNNER","--fix"]]},
+  {"method":"git","input":{"words":["$RUNNER","--fix"]},"want":null},
+  {"method":"writes","input":{"command":"eval \"$BUILD_STEP\" && \"$RUNNER\" --fix","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read","folder":"/repo"},{"words":["$RUNNER","--fix"],"why":"named by a value the shell expands, so what it runs cannot be read","folder":"/repo"}]}},
+  {"method":"commands","input":{"command":"cd \"$D\" && eval \"$BUILD_STEP\""},"want":[["cd","$D"],["eval","$BUILD_STEP"]]},
+  {"method":"git","input":{"words":["cd","$D"]},"want":null},
+  {"method":"writes","input":{"command":"cd \"$D\" && eval \"$BUILD_STEP\"","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"unread":[{"words":["eval","$BUILD_STEP"],"why":"run as text by eval, so what it runs cannot be read"}]}},
 ]
 
 const ask = (e: Entry): unknown => {
@@ -209,8 +224,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 188 entries', () => {
-    expect(ENTRIES.length).toBe(188)
+  test('holds 203 entries', () => {
+    expect(ENTRIES.length).toBe(203)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

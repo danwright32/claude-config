@@ -369,11 +369,18 @@ export type ModKitCommand = {
   found?: string[]
   /**
    * Marks a command rtk's proxy runs (`rtk proxy gh ...`, #2983), read past the proxy as every
-   * runner is and unfiltered by rtk. `unread`, on one, says why what it runs cannot be read: given
-   * one word, rtk splits that word into the command itself, and a word the shell expands holds what
-   * nobody can read before it runs. Its words are never what runs; sleep mode refuses one.
+   * runner is and unfiltered by rtk.
    */
   proxied?: true
+  /**
+   * Why what the command runs cannot be read from its words (#2983, #3021), on one that cannot:
+   * one word rtk's proxy splits into the command, which the shell expands first; eval; a command
+   * named by a value the shell expands (`"$@"`, `$cmd`, `$(command -v x)`), unless its name is
+   * spelled after the value (`"$HOME/bin/tool"`); a command setting an alias; ssh; and a trap whose
+   * text the shell expands. Its words are never all of what runs, so every guard holds or refuses
+   * one as it does what it cannot read, never judging it by its words alone. A trap's text is read
+   * as the commands it runs, given after the rest of what its shell runs.
+   */
   unread?: string
   language?: ModKitLanguage
   program?: ModKitProgram
@@ -558,6 +565,16 @@ export type ModKitWrites = {
    * log's growth as well as by its output file's.
    */
   stdout?: { word: string; path?: string; folder?: string }[]
+  /**
+   * Each command whose effect cannot be read (#3021), present when there is one: the commands
+   * `pipeline` marks `unread` (eval, a command a value names, an alias, ssh, a trap whose text the
+   * shell expands, one word rtk's proxy splits), each with its words and why. What such a command
+   * changes is unknown, never nothing: a guard holds or refuses a call carrying one as it does a
+   * write it cannot place. Whatever its words still name (a redirect) is in `files` as usual.
+   * `folder` is the absolute folder it runs in, as an unnamed program's is, so the names in its
+   * words can be placed; left out where a cd before it cannot be followed.
+   */
+  unread?: { words: string[]; why: string; folder?: string }[]
 }
 
 /**

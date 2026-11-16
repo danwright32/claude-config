@@ -1707,3 +1707,54 @@ describe('writes: a program whose only unread part is a module it loads by a com
     expect(fed(READS)).toEqual([])
   })
 })
+
+// #3021: the write reader gave nothing for a command whose effect cannot be read (eval, a command a
+// value names, an alias, ssh, a trap whose text the shell expands, a word rtk's proxy splits), so a
+// guard reading only the writes read it as writing nothing. Each is given in `unread`, with why; and
+// a trap's text, now read as the commands it runs, writes what those commands write.
+describe('writes: commands whose effect cannot be read (#3021)', () => {
+  const EVAL = 'run as text by eval, so what it runs cannot be read'
+  const NAMED = 'named by a value the shell expands, so what it runs cannot be read'
+  test('each is given as unread, with its words, why and the folder it runs in, once', () => {
+    expect(read('eval "$x"').unread).toEqual([{ words: ['eval', '$x'], why: EVAL, folder: CWD }])
+    expect(read('"$@"').unread).toEqual([{ words: ['$@'], why: NAMED, folder: CWD }])
+    expect(read('ls; $cmd a > out.txt; eval "$x"; eval "$x"').unread).toEqual([
+      { words: ['$cmd', 'a', '>', 'out.txt'], why: NAMED, folder: CWD },
+      { words: ['eval', '$x'], why: EVAL, folder: CWD },
+    ])
+    expect(read('rtk proxy "$CMD"').unread).toEqual([{ words: ['$CMD'], why: 'split by rtk proxy from one word the shell expands, so what it runs cannot be read', folder: CWD }])
+    expect(read('ssh host rm x').unread?.map(u => u.why)).toEqual(['run by ssh on another machine, so what it does cannot be read'])
+    expect(read(`alias gp='git push'`).unread?.map(u => u.why)).toEqual(['setting an alias, which changes what a later word runs, so that cannot be read'])
+  })
+  // The folder is where a cd before it leaves the shell, as an inline program's is (#1151), so a
+  // guard places the names in its words there; left out where that cd cannot be followed, and the
+  // same words in another folder are another command.
+  test('the folder follows a cd before it, and is left out where the cd cannot be followed', () => {
+    expect(read('cd build && eval "$x"').unread).toEqual([{ words: ['eval', '$x'], why: EVAL, folder: `${CWD}/build` }])
+    expect(read('cd "$D" && eval "$x"').unread).toEqual([{ words: ['eval', '$x'], why: EVAL }])
+    expect(read('eval "$x"; cd build; eval "$x"').unread).toEqual([
+      { words: ['eval', '$x'], why: EVAL, folder: CWD },
+      { words: ['eval', '$x'], why: EVAL, folder: `${CWD}/build` },
+    ])
+    expect(read('cd build; echo "$(eval "$x")"').unread).toEqual([{ words: ['eval', '$x'], why: EVAL }])
+  })
+  test('one inside a substitution or a script a shell is given is given too', () => {
+    expect(read('echo "$(eval "$x")"').unread).toEqual([{ words: ['eval', '$x'], why: EVAL, folder: CWD }])
+    expect(read(`bash -c '"$@"' -- rm x`).unread).toEqual([{ words: ['$@'], why: NAMED, folder: CWD }])
+    expect(read(`bash <<'EOF'\neval "$1"\nEOF`).unread).toEqual([{ words: ['eval', '$1'], why: EVAL, folder: CWD }])
+  })
+  test('a command that can be read gives none, and what an unread one names is still read', () => {
+    expect(read('ls > out.txt').unread).toBeUndefined()
+    expect(read('"$HOME/bin/tool" x').unread).toBeUndefined()
+    expect(read('[[ -z "$r" || "$r" == --* ]] && echo x > out.txt').unread).toBeUndefined()
+    expect(paths('$cmd a > out.txt')).toEqual([`${CWD}/out.txt`])
+  })
+  test("a trap's text writes what its commands write, in the folder the shell that set it ends in", () => {
+    expect(read(`trap 'rm -f out.txt' EXIT; make`).changes).toEqual([{ word: 'out.txt', path: `${CWD}/out.txt`, does: 'remove' }])
+    expect(paths(`trap 'echo done > log.txt' EXIT; cd build; make`)).toEqual([`${CWD}/build/log.txt`])
+    expect(paths(`(cd sub; trap 'echo x > a.txt' EXIT); echo y > b.txt`)).toEqual([`${CWD}/sub/a.txt`, `${CWD}/b.txt`])
+    expect(paths(`trap -- 'echo x > a.txt' EXIT`)).toEqual([`${CWD}/a.txt`])
+    expect(read(`trap 'rm -f out.txt' EXIT`).unread).toBeUndefined()
+    expect(read(`trap "rm -f $tmp" EXIT`).unread?.map(u => u.why)).toEqual(['setting a trap whose text the shell expands, so what it runs later cannot be read'])
+  })
+})

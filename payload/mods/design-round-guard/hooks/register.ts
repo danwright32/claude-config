@@ -65,8 +65,6 @@ import {
   type ScriptReading,
   type RunCommand,
   closedScripts,
-  trapBodies,
-  joinTests,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -586,8 +584,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   for (const x of trees) targets.push(...(await underTargets($, x)))
   // Each script file the command runs that the guard reads (#2847, #2855, scriptsRun below), with
   // what mod-kit's write reader gives of its text, read once here for both uses below. A shell
-  // script's trap bodies are read with its text (#2924, rules.ts trapBodies), since what a trap runs
-  // later is in no command the reader reads.
+  // script's text goes to mod-kit's readers as it is written: they keep a `[[ ]]` test whole and read
+  // a trap's text as the commands it runs (#3021), which this guard did for itself before (#2924).
   const runs = await scriptsRun($, command, at)
   // The command and every script text read for it, for #2991's madeTemp: a variable another script it
   // reads in may set is held to every assignment in any of them, and a TMPDIR the command sets
@@ -601,12 +599,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       readings.set(s, { read: await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd, home: at.home }) })
       continue
     }
-    const own = (await $.modkit.pipeline({ command: joinTests(s.text), cwd, home: at.home })) as readonly RunCommand[]
-    const later = trapBodies(own)
-    const text = later.length ? `${s.text}${s.text.endsWith('\n') ? '' : '\n'}${later.join('\n')}\n` : s.text
-    const read = await $.modkit.writes({ command: text, cwd, home: at.home })
-    const commands = later.length ? ((await $.modkit.pipeline({ command: joinTests(text), cwd, home: at.home })) as readonly RunCommand[]) : own
-    readings.set(s, { read, commands })
+    const commands = (await $.modkit.pipeline({ command: s.text, cwd, home: at.home })) as readonly RunCommand[]
+    readings.set(s, { read: await $.modkit.writes({ command: s.text, cwd, home: at.home }), commands })
   }
   // #2924: a shell script that cannot write what it is handed (rules.ts closedScripts: every file its
   // own commands write named in its own text or a temporary file it made, nothing run later from a
@@ -700,6 +694,13 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         await pace()
       }
   }
+  // #3021: a command mod-kit marks `unread` (eval, a command a value names, an alias, ssh, a trap
+  // whose text the shell expands, a word rtk's proxy splits) runs what its words do not say, so its
+  // words were read as writing nothing: `eval "printf 'a{}' > app/site.css"` ran unasked. Judged as
+  // a program the reader could not read is, by the look and mod hook files its words name, each
+  // placed in the folder mod-kit says it runs in, and held as could not check where that is unknown.
+  // One naming no such file passes as before (`"$@"`, `eval "$(ssh-agent -s)"`).
+  for (const u of w.unread ?? []) targets.push(...(await programGuesses($, u.words.join('\n'), u.folder, at, scratch, command)))
   // A write the words do not name, or a destination the reader could not follow, may be the record
   // when the command names the plugin store at all: refused, failing closed as ask before saving does
   // for lasting memory (lessons review of #991).
@@ -769,7 +770,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   }
   // A quoted pattern read as its one name (#1951) is still one the script may match itself.
   // A script file's own targets (`inScript`) are left out: their store is asked of the script's text above.
-  const unfollowed = w.unnamed.length > 0 || targets.some(t => (!t.path && t.inScript === undefined) || t.quoted)
+  // A command whose effect cannot be read (#3021) is one whose writes the words do not name.
+  const unfollowed = w.unnamed.length > 0 || (w.unread?.length ?? 0) > 0 || targets.some(t => (!t.path && t.inScript === undefined) || t.quoted)
   return { targets, storeMentioned: (unfollowed && mentionsStore(command)) || scriptStore }
 }
 
