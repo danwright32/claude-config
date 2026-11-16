@@ -1660,7 +1660,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // is a spec wherever $D is, so what its heredoc's data names is data (#1151).
       const unknownName = /[$`]/.test(t.word.split('/').pop() ?? '')
       // A variable alone that only ever holds bare `mktemp` or `mktemp -d` output names a new file
-      // outside every screen path (rules.ts freshTemp; Dan, 2026-11-04, #2171).
+      // outside every screen path (mod-kit's scriptvars.ts freshTemp; Dan, 2026-11-04, #2171).
       if (!t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {

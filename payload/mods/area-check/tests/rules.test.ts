@@ -718,7 +718,7 @@ test('a script is fed to the interpreter its run names, or its #! line names, wi
 const SELF = '/w/app/tools/s.sh'
 const turnOf = (text: string) => {
   const prog = scriptProgram({ what: 'a bash script file', path: SELF }, text) as { command: string; delimiter: string }
-  return runsInTurn(pipelineIn(prog.command, SCRIPT_RUN_FROM, '/Users/x'), prog.delimiter, text, SELF)
+  return runsInTurn(pipelineIn(prog.command, SCRIPT_RUN_FROM, '/h'), prog.delimiter, text, SELF)
 }
 const unreadIn = (text: string): string | null => {
   const r = turnOf(text)
@@ -795,7 +795,7 @@ test('a value in an argument, an assignment or arithmetic names no command, and 
 test("a trap's text is read as what it runs: none for a trap that lists, resets or ignores (#2619)", () => {
   const writes = (text: string) => {
     const prog = scriptProgram({ what: 'a bash script file', path: SELF }, text) as { command: string }
-    return commandWrites(prog.command, SCRIPT_RUN_FROM, '/Users/x').files.map(f => f.word)
+    return commandWrites(prog.command, SCRIPT_RUN_FROM, '/h').files.map(f => f.word)
   }
   expect(writes(`trap 'echo x > "$1/big.ts"' EXIT\ngrep trap x\n`)).toEqual(['$1/big.ts'])
   expect(writes(`trap -- 'sed -i "" s/a/b/ "$1/f.ts"' EXIT INT\n`)).toEqual(['$1/f.ts'])
