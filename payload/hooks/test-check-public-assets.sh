@@ -404,6 +404,36 @@ want_code 0 "exit 2 from the detector is the skip"
 want_says "ASSET CHECK SKIPPED: No public/" "and is said"
 want_notice "ASSET CHECK SKIPPED: No public/" "as a systemMessage (#1906)"
 
+# ---- a merge of main does not make the branch answer for main's assets (claude-config#3054) ----
+# A branch pushed once merges main in after main gained a served asset nothing references. From the
+# upstream, that asset was new in the pushed tree, so the branch was refused for a file it never
+# added. The base is now what merging that main commit into the start gives, the shared answer every
+# push gate reads (ps_merged_apart, #3015), which is a TREE id, not a commit, so the detector has to
+# take one as its base; an asset the branch adds after the merge is still the branch's.
+. "$DIR/lib/merged-main-fixture.sh"
+mk_merged(){ mmf_repo "$(mktemp -d "$WORK/merged-$1.XXXXXX")" clean public/unused.svg $'<svg/>\n'; }
+W="$(mk_merged mm1)"
+if mmf_built "$W" public/unused.svg; then ok; else bad "#3054 the fixture did not build: the branch must track origin/feat and hold main's asset through one merge"; fi
+run_hook "$W" "git push"
+want_code 0 "#3054 an asset already on main, arriving only through a merge of main, is not this push's"
+want_says "Checked 1 assets" "#3054 and the asset was still measured, not skipped"
+want_silent_on "no base commit" "#3054 and the merged tree was taken as the base, not dropped as unreadable"
+
+W="$(mk_merged mm2)"
+( cd "$W" && printf '<svg/>\n' > public/mine.svg && git add public/mine.svg && git -c user.name=t -c user.email=t@t commit -qm mine ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#3054 an asset the branch adds after the merge is still the branch's, and refused"
+want_says "public/mine.svg" "#3054 the refusal names the branch's asset"
+want_silent_on "public/unused.svg" "#3054 and not main's asset beside it"
+
+# When the merge cannot be set apart (no default branch known), the range is judged whole as
+# before, never not at all, and the refusal says part of it came in through the merge (L93).
+W="$(mk_merged mm3)"
+git -C "$W" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#3054 with no default branch known the merge is not set apart, so main's asset is judged as before"
+want_says "could not be told from the branch's" "#3054 and the refusal says why the merge was not set apart"
+
 # The real detector on a real repo, driven the same way, still reaches the real arm.
 W="$(mk_repo real)"
 echo more >> "$W/README.md"; commit_all "$W"

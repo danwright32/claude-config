@@ -3,6 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { answerKey } from '../hooks/bedtime.ts'
 import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn, namedItems, notAQuestion, settledKey } from '../hooks/settled.ts'
 import { proposalsIn, type NightQuestion } from '../hooks/wake.ts'
+import { DISTINCT_FIXTURES, NOT_A_QUESTION_FIXTURES } from './night-question-fixtures.ts'
 
 // #3018: on 2026-11-15 a session was told to put four leftover overnight questions to Dan. Two were
 // one build order note recorded twice that said itself it was not a question; two Dan had answered
@@ -21,6 +22,25 @@ describe('notAQuestion: a note that says itself it is no question, with no choic
     expect(notAQuestion(q({ text: 'Round totals up or down?' }))).toBe(false)
     expect(notAQuestion(q({ text: NOTE, options: ['Yes', 'No'] }))).toBe(false)
   })
+})
+
+// The night's report reads the same notes with the same rule (#3056): both are held to one set of
+// cases, which payload/hooks/test-sleep-report.sh runs against the report's Python.
+describe('the shared cases the night report is held to as well (#3056)', () => {
+  test('the case sets are there to run', () => {
+    expect(NOT_A_QUESTION_FIXTURES.length).toBeGreaterThan(8)
+    expect(DISTINCT_FIXTURES.length).toBeGreaterThan(4)
+  })
+  for (const f of NOT_A_QUESTION_FIXTURES) {
+    test(`notAQuestion: ${f.name}`, () => {
+      expect(notAQuestion(q({ text: f.text, options: f.options }))).toBe(f.notAQuestion)
+    })
+  }
+  for (const f of DISTINCT_FIXTURES) {
+    test(`distinctQuestions: ${f.name}`, () => {
+      expect(distinctQuestions(f.questions.map(x => q(x as Partial<NightQuestion> & { text: string })))).toEqual(f.distinct.map(x => q(x as Partial<NightQuestion> & { text: string })))
+    })
+  }
 })
 
 describe('distinctQuestions: the same question recorded twice is one', () => {
