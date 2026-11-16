@@ -55,24 +55,37 @@ export const distinctQuestions = <Q extends NightQuestion>(qs: readonly Q[]): Q[
 export type Named = { repo: string; number: number }
 
 // owner/name#N, or #N standing alone (never glued to a word, as in a short name like ledger#52,
-// whose owner cannot be told); and a link to an issue or pull request on GitHub.
+// whose owner cannot be told).
 const REF = /(?:\b([A-Za-z0-9][\w.-]*\/[\w.-]+)|(?<![\w/.-]))#(\d+)\b/g
-const LINK = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)/g
+// A web address in a question's words, its closing punctuation left off. Which repository it names is
+// mod-kit's one link reader's to say ($.modkit.linkRepo), so register.ts asks it (#961).
+const ADDRESS = /https?:\/\/[^\s<>"')\]]+/g
+const trimmed = (link: string) => link.replace(/[.,;:!?]+$/, '')
+
+/** The web addresses a question's words carry, each once, for register.ts to read with mod-kit's link reader. */
+export const linksIn = (text: string): string[] => [...new Set([...text.matchAll(ADDRESS)].map(m => trimmed(m[0])))]
+
+/** The issue or pull request number an address ends on (`/issues/N` or `/pull/N`), or null. */
+export const linkNumber = (link: string): number | null => {
+  const m = /\/(?:issues|pull)\/(\d+)(?:[/?#]|$)/.exec(link)
+  return m ? Number(m[1]) : null
+}
 
 /**
- * The issues and pull requests a question names: its own issue, and each number in its words, read
- * in the repository written with it or else in `repo` (the question's, resolved from its folder when
- * it named none). A bare number with no repository to read it in names nothing.
+ * The issues and pull requests a question names: its own issue, each item its links name (`links`,
+ * read by register.ts with mod-kit's link reader), and each number in its words, read in the
+ * repository written with it or else in `repo` (the question's, resolved from its folder when it
+ * named none). A bare number with no repository to read it in names nothing.
  */
-export const namedItems = (q: NightQuestion, repo: string | null): Named[] => {
+export const namedItems = (q: NightQuestion, repo: string | null, links: readonly Named[] = []): Named[] => {
   const out: Named[] = []
   const add = (r: string | null | undefined, n: number) => {
     if (!r || !Number.isInteger(n) || n <= 0) return
     if (!out.some(o => repoKey(o.repo) === repoKey(r) && o.number === n)) out.push({ repo: r, number: n })
   }
   if (q.issue !== null) add(q.repo ?? repo, q.issue)
-  for (const m of q.text.matchAll(LINK)) add(m[1], Number(m[2]))
-  for (const m of q.text.replace(LINK, ' ').matchAll(REF)) add(m[1] ?? repo, Number(m[2]))
+  for (const l of links) add(l.repo, l.number)
+  for (const m of q.text.replace(ADDRESS, ' ').matchAll(REF)) add(m[1] ?? repo, Number(m[2]))
   return out
 }
 

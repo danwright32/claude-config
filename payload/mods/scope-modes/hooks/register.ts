@@ -106,7 +106,7 @@ import {
   type ProposedIssue,
 } from './wake.ts'
 import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
-import { answeredIn, distinctQuestions, judgeNamed, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
+import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn as questionLinks, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
@@ -2342,7 +2342,14 @@ const stillOpen = async ($: EngineInterface, qs: readonly NightQuestion[]): Prom
     } catch (err) {
       $.ui.log(`scope-modes: whether "${q.text}" was answered could not be read (${msg(err)}), so it is offered`, { to: 'debug' })
     }
-    const v = judgeNamed(await Promise.all(namedItems(q, repo).map(async item => ({ item, state: await stateOf(item) }))))
+    // A link's repository is mod-kit's one link reader's to say (#961); one it does not read is no item.
+    const links: Named[] = []
+    for (const link of questionLinks(q.text)) {
+      const number = linkNumber(link)
+      const named = number === null ? null : await $.modkit.linkRepo({ link }).catch(() => null)
+      if (named && number !== null) links.push({ repo: named, number })
+    }
+    const v = judgeNamed(await Promise.all(namedItems(q, repo, links).map(async item => ({ item, state: await stateOf(item) }))))
     if (v.settled) {
       $.ui.log(`scope-modes: "${q.text}" is not offered: everything it names is closed or merged`, { to: 'debug' })
       continue

@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { answerKey } from '../hooks/bedtime.ts'
-import { answeredIn, distinctQuestions, judgeNamed, namedItems, notAQuestion, settledKey } from '../hooks/settled.ts'
+import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn, namedItems, notAQuestion, settledKey } from '../hooks/settled.ts'
 import { proposalsIn, type NightQuestion } from '../hooks/wake.ts'
 
 // #3018: on 2026-11-15 a session was told to put four leftover overnight questions to Dan. Two were
@@ -57,7 +57,14 @@ describe('namedItems: the issues and pull requests a question names', () => {
       { repo: 'exampleco/ledger', number: 52 },
       { repo: 'exampleco/atlas', number: 7 },
     ])
-    expect(namedItems(q({ text: 'Merge https://github.com/exampleco/atlas/pull/9 now?' }), null)).toEqual([{ repo: 'exampleco/atlas', number: 9 }])
+    // A link's repository is read by mod-kit's link reader in register.ts, and handed in.
+    expect(namedItems(q({ text: 'Merge https://example.test/exampleco/atlas/pull/9 now? Not #9 of ledger.' }), null, [{ repo: 'exampleco/atlas', number: 9 }])).toEqual([{ repo: 'exampleco/atlas', number: 9 }])
+  })
+  test('the addresses in its words, and the number each ends on', () => {
+    expect(linksIn('See https://example.test/o/r/pull/9, and https://example.test/o/r/issues/12.')).toEqual(['https://example.test/o/r/pull/9', 'https://example.test/o/r/issues/12'])
+    expect(linkNumber('https://example.test/o/r/pull/9')).toBe(9)
+    expect(linkNumber('https://example.test/o/r/issues/12#issuecomment-1')).toBe(12)
+    expect(linkNumber('https://example.test/o/r/blob/main/a.ts')).toBe(null)
   })
   test('a bare number with no repository to read it in, or one glued to a short name, names nothing', () => {
     expect(namedItems(q({ text: 'Merge PR #52?' }), null)).toEqual([])
