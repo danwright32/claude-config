@@ -3641,6 +3641,21 @@ code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unre
 else leaves the import followed, so a real unmocked import stays refused. Only the file's own
 imports are affected.
 
+A JavaScript or TypeScript file that only declares the webhook's variable name is not one that posts
+(#3050), in `lib/data-names.py`. `slack_webhook` is the name projects keep a webhook in, never an
+address, so a file posts through it only by reading what is kept under it. On 2026-11-15 three runs
+of test files by name were refused in a work repository, two of them for a fixture holding the name
+as a key and a module naming it in a type. Two uses read nothing and are left out, in the file read
+as code and as text a runner is handed: the key of an object literal set to `null`, `undefined` or
+one string written out that is no address anyone receives at (plain words, or a URL whose host is
+reserved for tests, such as `.test`, `.example`, `.invalid`, `example.com` and `localhost`), with no
+spread after it in the same literal; and a member of an `interface` or a `type` alias typed only
+`string`, `null`, `undefined`, `unknown` or `never`. Every other use refuses as before: a member read
+(`env.SLACK_WEBHOOK_URL`), a destructuring, a shorthand, a key set to a variable, a flag, a template
+or any other address, the name in a string or assigned to, and a comment, which is still only held
+as data. So the third of those runs, a test whose route reaches the module that reads the name and
+sends, is still refused: a mock counts (#2359) only for a module the test file itself imports.
+
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
 repository was refused whole because its config's imports pass 300, though nothing in it posts, and
