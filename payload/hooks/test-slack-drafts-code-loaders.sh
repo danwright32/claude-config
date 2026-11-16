@@ -1195,6 +1195,15 @@ allowed "#3050 a spread before the key, or inside a value after it, leaves the k
 } > "$MK/rows.ts"
 mk_case c.test.ts 'import { rows } from "./rows.ts";'
 allowed "#3050 a fixture module holding the name in each of 5,000 rows is read in time and passes"
+# And written on one line, as a generated fixture is, where anything read per name back to the start
+# of its line is read 5,000 times over the whole file.
+{
+  printf '%s' 'export const rows = ['
+  for ((i = 0; i < 5000; i++)); do printf '{ id: "t%d", slack_webhook: null, name: "team %d" },' "$i" "$i"; done
+  printf '%s\n' '];'
+} > "$MK/rows-line.ts"
+mk_case c.test.ts 'import { rows } from "./rows-line.ts";'
+allowed "#3050 and the same 5,000 rows on one line"
 printf '%s\n' 'export const last = { id: "t5000", slack_webhook: process.env.HOOK };' >> "$MK/rows.ts"
 mk_case c.test.ts 'import { rows } from "./rows.ts";'
 read_refused "#3050 and one row among them set to something else is still found"

@@ -239,10 +239,12 @@ def js_declared(text, code, quoted, a, b):
     # A member of an interface or a type alias, whose body opens on the header's own line: erased
     # before anything runs, so it reads nothing. Only where the type holds no name that could be a
     # value's, so a brace misread as a type's body still declares nothing that is read.
+    # The header is matched before its line is checked for string text, so a long line that is no
+    # header costs nothing per name.
     line = code.rfind("\n", 0, k) + 1
-    if kinds == {0} and not any(quoted[line:k]) and TYPE_HEAD.fullmatch(code, line, k) \
-            and (before in ("{", ";", ",") or not code[code.rfind("\n", 0, s) + 1:s].strip()) \
-            and TYPE_MEMBER.match(code, e):
+    if kinds == {0} and TYPE_MEMBER.match(code, e) and TYPE_HEAD.fullmatch(code, line, k) \
+            and not any(quoted[line:k]) \
+            and (before in ("{", ";", ",") or not code[code.rfind("\n", 0, s) + 1:s].strip()):
         return True
     # An object literal's key: straight after the { or a comma inside it, and before a colon.
     if before not in ("{", ","):
