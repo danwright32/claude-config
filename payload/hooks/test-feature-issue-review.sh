@@ -907,6 +907,22 @@ case "$ac_u1" in
        || check "#1511 with no area check folder named, a suite's review runs nothing" "it wrote $(ls -A "$AC_HOME/.claude-area-check" 2>/dev/null | tr '\n' ' ')" ;;
 esac
 
+# #3022: a relative CLAUDE_AREA_CHECK_DIR is refused, as the mod refuses it (#2906, prline.ts
+# areaFolder): never resolved against the folder the review runs in, never read, never written. The
+# fixture puts a log where resolving it would find one, so reading it there would show the line.
+AC_RPROJ="$(mktemp -d "$WORK/arearel.XXXXXX")"
+mkdir -p "$AC_RPROJ/area-rel"; ac_log "$AC_RPROJ/area-rel"
+ac_rel="$(cd "$AC_RPROJ" && reason_of "$(CLAUDE_AREA_CHECK_DIR=area-rel CLAUDE_AREA_CHECK_NOW="$AC_T" run_review "$AC_RPROJ")")"
+holds "$ac_rel" "CLAUDE_AREA_CHECK_DIR names area-rel, which is not an absolute path" \
+  && check "#3022 a relative area check folder is refused, saying why" ok \
+  || check "#3022 a relative area check folder is refused, saying why" "reason=${ac_rel:0:400}"
+holds "$ac_rel" "$AC_HEAD" \
+  && check "#3022 and the log it would name is never read" "reason=${ac_rel:0:400}" \
+  || check "#3022 and the log it would name is never read" ok
+[ ! -e "$AC_RPROJ/area-rel/weekly-line.stamp" ] && [ ! -e "$AC_RPROJ/area-rel/rotated" ] \
+  && check "#3022 and nothing is written there" ok \
+  || check "#3022 and nothing is written there" "it wrote $(ls -A "$AC_RPROJ/area-rel" 2>/dev/null | tr '\n' ' ')"
+
 # --- the hook stays quiet when nothing happened ---
 # It fires on Stop, so a chat-only turn must not trigger a review. An absent
 # transcript is the cheapest stand-in for "nothing to review".

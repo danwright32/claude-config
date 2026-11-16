@@ -144,7 +144,18 @@ area_now=""
 if [ $(( now - last )) -ge "$COOLDOWN_SECONDS" ] \
   && { [ -n "${CLAUDE_AREA_CHECK_DIR:-}" ] || { [ -z "${CLAUDE_SUITE_RUN_ID:-}" ] && [ -z "${CLAUDE_ISSUE_SPOOL_DIR:-}" ]; }; }; then
   area_why=""
-  if ! command -v node >/dev/null 2>&1; then
+  # A folder that is not an absolute path is refused, as the mod refuses it (#2906, prline.ts
+  # areaFolder; #3022): never resolved against whatever folder this review runs in, never read and
+  # never written, its stamp included, so the refusal is said at every review past the cooldown.
+  case "$AREA_DIR" in
+    /*) ;;
+    *)
+      area_failed="The area check's weekly line could not be built (CLAUDE_AREA_CHECK_DIR names $AREA_DIR, which is not an absolute path), so this Mac's counts are not shown."
+      ;;
+  esac
+  if [ -n "$area_failed" ]; then
+    :
+  elif ! command -v node >/dev/null 2>&1; then
     area_why="node is not installed"
   else
     area_err="$(mktemp "${TMPDIR:-/tmp}/claude-area-review.XXXXXX" 2>/dev/null)" || area_err="/dev/null"
