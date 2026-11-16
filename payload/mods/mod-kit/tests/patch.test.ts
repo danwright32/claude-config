@@ -75,6 +75,33 @@ test('a hunk that does not add up is said once, and every file after it is still
   expect(readPatch(`--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1 @@\n same\n${next}`).files.map(f => f.to)).toEqual(['b/x.ts', 'b/y.ts'])
 })
 
+// #3036: a hunk that ran past its header's counts swallowed the line that broke the count. Where
+// that line was the next file's `---` line, the file went unnamed and its hunks were read as the
+// file's before it. The line is read again, as a line outside any hunk is.
+test('the line that runs a hunk past its header is read again as the start of the next file', () => {
+  const over = '--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1,2 @@\n+one\n'
+  const next = '--- a/y.ts\n+++ b/y.ts\n@@ -1 +1 @@\n-a\n+b\n'
+  expect(readPatch(over + next)).toEqual({
+    files: [
+      { from: 'a/x.ts', to: 'b/x.ts', hunks: [] },
+      { from: 'a/y.ts', to: 'b/y.ts', hunks: [{ before: 'a', after: 'b' }] },
+    ],
+    unreadable: 'a hunk holds more lines than its header says',
+  })
+  expect(patchedPaths([], true, over + next)).toEqual(['x.ts', 'y.ts'])
+  expect(patchFiles(over + next)).toBeUndefined()
+  // A line that starts nothing is read again and passed over, the reading going on after it.
+  expect(readPatch(`--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,0 @@\n-one\n same\n${next}`)).toEqual({
+    files: [
+      { from: 'a/x.ts', to: 'b/x.ts', hunks: [] },
+      { from: 'a/y.ts', to: 'b/y.ts', hunks: [{ before: 'a', after: 'b' }] },
+    ],
+    unreadable: 'a hunk holds more lines than its header says',
+  })
+  // A hunk that adds up is untouched: a `---` line its counts cover is its own line, as git reads it.
+  expect(readPatch('--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1 @@\n same\n--- a/y.ts\n')).toEqual({ files: [{ from: 'a/x.ts', to: 'b/x.ts', hunks: [{ before: 'same\n-- a/y.ts', after: 'same' }] }] })
+})
+
 // #3021: a quoted name was undone one UTF-16 unit at a time, so a character outside the Basic
 // Multilingual Plane, two units, came back as two replacement characters and named no file.
 test('a quoted name holding a character outside the Basic Multilingual Plane keeps it', () => {

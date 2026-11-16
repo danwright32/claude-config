@@ -3785,6 +3785,39 @@ test('#2855: a shell script writing only files the guard does not judge, a file 
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
 })
 
+// #3036: a command mod-kit marks `unread` (eval, a command a value names, an alias) inside a shell
+// script the call runs was judged by nothing: the script's writes are read from its commands' words,
+// and an unread command's words are not what runs. `bash fix.sh`, with fix.sh holding the eval that
+// #3021 holds when typed whole, ran unasked. It is judged as one typed whole is, by the look files
+// its words name, each placed in the folder the script's command runs in.
+test('#3036: an unread command inside a shell script the call runs is held on the look file its words name', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'eval.sh': `eval "printf 'a{}' > /w/slate/app/site.css"\n`,
+    'tool.sh': '$TOOL --write /w/slate/app/site.css\n',
+    'alias.sh': `alias fix='sed -i "" s/a/b/ /w/slate/app/site.css'\nfix\n`,
+    'builtin.sh': 'set -e\nbuiltin eval "cp /tmp/x /w/slate/app/site.css"\n',
+    // A name placed by the folder the script's own cd puts the command in, and by the one it is run in.
+    'cd.sh': 'cd /w/slate\neval "cp /tmp/x app/site.css"\n',
+    'here.sh': `eval "printf 'a{}' > app/site.css"\n`,
+    // And one in a script that script runs.
+    'outer.sh': `bash ${NOTES}/eval.sh\n`,
+    // One whose words name no look file passes, as one typed whole does.
+    'agent.sh': 'eval "$(ssh-agent -s)"\n"$@"\nalias ll=\'ls -l\'\n$TOOL --version\n',
+    'notes.sh': `eval "printf x > /w/slate/notes.txt"\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const command of [`bash ${NOTES}/eval.sh`, `bash ${NOTES}/tool.sh`, `zsh ${NOTES}/alias.sh`, `bash ${NOTES}/builtin.sh`, `bash ${NOTES}/cd.sh`, `bash ${NOTES}/here.sh`, `source ${NOTES}/eval.sh`, `cd ${NOTES} && ./eval.sh`, `sh ${NOTES}/outer.sh`])
+    expect({ command, held: refusalOf(await sh(command)) !== '' }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+  // Run where the folder cannot be followed, the name it would write there is held as could not check.
+  expect(refusalOf(await sh(`cd "$SOMEWHERE" && bash ${NOTES}/here.sh`))).toContain('could not')
+  expect(w.ran).toEqual([])
+  const passes = [`bash ${NOTES}/agent.sh`, `bash ${NOTES}/notes.sh`]
+  for (const command of passes) expect({ command, refusal: refusalOf(await sh(command)) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(passes.length)
+})
+
 test('#2855: a script named through a variable the command sets is read; one only the environment names is not', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
   for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {

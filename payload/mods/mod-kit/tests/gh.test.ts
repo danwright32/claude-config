@@ -143,6 +143,107 @@ describe('the merge helper, read as the gh pr merge it runs', () => {
   })
 })
 
+// #3036: eval of the merge helper was read, eval of `gh pr merge` itself was not, and a merge behind
+// ssh or in an alias being set was read as running nothing, so a guard asking this reader what a
+// command merges was told nothing. Inside eval's text it is read as gh reads it; behind ssh (another
+// machine's repository) or in an alias (run later, with words nobody has typed yet) it is a merge
+// that cannot be read, its repository null.
+describe('a gh pr merge the words do not run themselves (#3036)', () => {
+  const unsureOnes = (lines: string[]) => lines.map(r => ({ r, h: helpersIn(r) })).filter(x => x.h.length !== 1 || !x.h[0]?.unreadable || x.h[0]?.named !== null || x.h[0]?.act !== 'merge').map(x => x.r)
+  test("inside eval's text it is read as gh reads it, as the helper there is", () => {
+    const runs = [
+      'eval "gh pr merge 12 --squash --repo o/r"',
+      'eval gh pr merge 12 --squash --repo o/r',
+      "eval 'gh pr merge 12 --squash -R o/r'",
+      'builtin eval "gh pr merge 12 --squash --repo o/r"',
+      'eval "cd /w/x && gh pr merge 12 --squash --repo o/r"',
+      'eval "rtk gh pr merge 12 --repo o/r"',
+      'eval "sudo /opt/homebrew/bin/gh pr merge 12 --repo o/r"',
+      'eval "GH_TOKEN=x gh pr merge 12 --repo o/r"',
+      'eval "gh pr view 12 && gh pr merge 12 --repo o/r"',
+      'eval "eval \'gh pr merge 12 --repo o/r\'"',
+      `bash -c 'eval "gh pr merge 12 --repo o/r"'`,
+      'rtk proxy eval "gh pr merge 12 --repo o/r"',
+    ]
+    expect(runs.map(r => ({ r, h: helpersIn(r).map(h => [h.sub, h.act, h.positionals, h.named, h.unreadable]) }))).toEqual(runs.map(r => ({ r, h: [['pr', 'merge', ['12'], 'o/r', false]] })))
+    expect(helperIn('eval "gh pr merge 12 --squash -d"')).toEqual(ghArgs(['gh', 'pr', 'merge', '12', '--squash', '-d']))
+  })
+  test('one eval cannot be read for certain is a merge that cannot be read', () => {
+    expect(
+      unsureOnes([
+        // A flag gh does not know before the subcommand, and a subcommand or action the shell fills in.
+        'eval "gh --frob x pr merge 12"',
+        'eval "gh pr $ACT 12 --repo o/r"',
+        'eval "gh $SUB merge 12"',
+        'eval "$GH pr merge 12"',
+        // Two merges in one text: which repository each reaches is not one answer.
+        'eval "gh pr merge 1 -R a/b; gh pr merge 2 -R c/d"',
+        `eval "gh pr merge 1 -R a/b; bash ${H} 2 -R c/d"`,
+      ]),
+    ).toEqual([])
+  })
+  test('eval of a gh call that is no merge, or of text that only names one, runs none', () => {
+    const none = ['eval "gh pr view 12"', 'eval "gh pr list --search merge"', 'eval "echo gh pr merge 12"', 'eval "git merge main"', "eval 'printf %s \"gh pr merge\" > note.txt'", 'eval', 'builtin eval']
+    expect(none.filter(r => helpersIn(r).length)).toEqual([])
+  })
+  test('behind ssh it is a merge that cannot be read, wherever ssh puts its options', () => {
+    expect(
+      unsureOnes([
+        'ssh host gh pr merge 12 --squash --repo o/r',
+        "ssh host 'gh pr merge 12 --squash'",
+        'ssh -p 2222 -i ~/.ssh/k me@host "cd repo && gh pr merge 12"',
+        'ssh -tt -oStrictHostKeyChecking=no host sudo gh pr merge 12',
+        'ssh host -p 2222 gh pr merge 12',
+        'ssh -- host gh pr merge 12',
+        `ssh host bash ${H} 12 --repo o/r`,
+        `ssh host '${H} 12'`,
+        `ssh host 'eval "gh pr merge 12"'`,
+        '/usr/bin/ssh host gh pr merge 12',
+        'rtk ssh host gh pr merge 12',
+        // What the other machine's shell fills in is a command nobody can read.
+        "ssh host '$TOOL 12'",
+        // An option ssh does not know: where its command starts cannot be told, so every word may start it.
+        'ssh --frob host gh pr merge 12',
+        'ssh -Z x host gh pr merge 12',
+        // xargs adds words from its input after those written.
+        'echo gh pr merge 12 | xargs ssh host',
+      ]),
+    ).toEqual([])
+  })
+  test('ssh running no merge runs none', () => {
+    const none = ['ssh host', 'ssh host ls', 'ssh "$HOST" uptime', 'ssh -p 22 host gh pr view 12', "ssh host 'git status'", `ssh host cat ${H}`, 'ssh host echo gh pr merge 12', 'ssh -i gh host ls', 'ssh -l merge gh ls', 'scp x host:gh', 'ssh-add -l']
+    expect(none.filter(r => helpersIn(r).length)).toEqual([])
+  })
+  test('an alias being set to gh pr merge, or to the start of one, is a merge that cannot be read', () => {
+    expect(
+      unsureOnes([
+        "alias m='gh pr merge 12 --squash --repo o/r'",
+        'alias m="gh pr merge"',
+        "alias -g m='gh pr merge'",
+        "builtin alias m='gh pr merge 12'",
+        "alias a=b m='cd x; gh pr merge 3'",
+        // The words typed after it later finish the command: `g pr merge 12`, `p merge 12`.
+        'alias g=gh',
+        "alias p='gh pr'",
+        "alias g='gh -R o/r'",
+        "alias g='rtk gh'",
+        `alias ship='bash ${H}'`,
+        `alias ship=${H}`,
+        "alias x='$TOOL'",
+      ]),
+    ).toEqual([])
+  })
+  test('an alias set to anything else, or only listed, runs none', () => {
+    const none = ["alias ll='ls -l'", "alias gs='git status'", "alias v='gh pr view'", "alias i='gh issue'", 'alias', 'alias m', 'alias -p', `alias c='cat ${H}'`, 'unalias m']
+    expect(none.filter(r => helpersIn(r).length)).toEqual([])
+  })
+  test('builtin runs the source after it, so the helper it sources is read', () => {
+    expect(helperIn(`builtin source ${H} 12 --repo o/r`).named).toBe('o/r')
+    expect(helperIn(`builtin . ${H} 12 --repo o/r`).named).toBe('o/r')
+    expect(helpersIn('builtin cd /w/x')).toEqual([])
+  })
+})
+
 describe('the repository a gh command names', () => {
   test('-R or --repo first, in every spelling, a dotted owner included', () => {
     expect(gh('gh pr close 5 -R other/x').named).toBe('other/x')

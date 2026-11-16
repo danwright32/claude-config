@@ -173,7 +173,14 @@ export const hasFlag = (a: GhArgs, ...names: string[]): boolean => a.flags.some(
 // shell's script that is a variable, a substitution, a pattern or xargs' input, a shell fed what it
 // cannot read, eval of a variable, inline code that runs a process and names the helper) counts as
 // running it, its reading `unreadable` with a repository that cannot be told (null).
-const MERGE_HELPER = /(?:^|\/)merge-when-ready\.sh$/
+//
+// A merge the command's own words do not run is read here too (#3036), since a mod asking `gh` of
+// those words is told they are no gh command. eval's text is a line of its own: the helper it runs
+// (as before) or the `gh pr merge` it runs, read as gh reads it. Behind ssh the merge is another
+// machine's, in a repository nobody here can name, and in an alias being set it runs later, with
+// words nobody has typed yet (`alias g=gh` is finished by `g pr merge 12`), so each of those is a
+// merge that cannot be read. `builtin` runs the eval, alias, source or `.` after it.
+const MERGE_HELPER =/(?:^|\/)merge-when-ready\.sh$/
 const MERGE_HELPER_NAMED = /merge-when-ready/
 // A word whose value the shell decides: a substitution anywhere, or a variable in its last part
 // (`$VENV/bin/python` is a python whatever $VENV is); for a file a shell runs, a pattern or xargs'
@@ -185,25 +192,100 @@ const RUNNERS = new Set([...SHELLS, 'fish'])
 const SOURCES = new Set(['source', '.'])
 type HelperCommand = Pick<Command, 'words' | 'script' | 'program' | 'xargs' | 'verdict'>
 
-/** The `gh pr merge` a command runs through the merge helper, read as gh reads it; undefined when it runs no helper. */
+/** A merge that may run but cannot be read for certain: `gh pr merge` in a repository that cannot be told. */
+const unsure = (): GhArgs => ({ ...(ghArgs(['gh', 'pr', 'merge']) as GhArgs), named: null, unreadable: true })
+const expands = (w: string): boolean => /[$`]/.test(w)
+
+// Words read as the `gh pr merge` they run: as gh reads them, or one that cannot be read where gh's
+// own flags cannot be, or where the shell fills in the subcommand or the action. With `begun`, for
+// an alias, words that only start one count as well (`gh`, `gh -R o/r`, `gh pr`): what is typed
+// after the alias later finishes them.
+const ghMerge = (words: readonly string[], begun = false): GhArgs | undefined => {
+  const g = ghArgs(words)
+  if (!g) return undefined
+  if (g.unreadable || expands(g.sub) || expands(g.act)) return unsure()
+  if (g.sub === 'pr' && g.act === 'merge') return begun ? unsure() : g
+  return begun && (g.sub === '' || (g.sub === 'pr' && g.act === '')) ? unsure() : undefined
+}
+
+// The merge a line of text runs once a shell reads it (eval's text, the line ssh hands another
+// machine, an alias's text): the helper's or gh's own. More than one is no one answer about which
+// repository is reached, so it cannot be read.
+const mergeIn = (text: string, begun = false): GhArgs | undefined => {
+  const found: GhArgs[] = []
+  for (const inner of pipeline(text)) {
+    const m = mergeHelperArgs(inner) ?? ghMerge(inner.words, begun)
+    if (m) found.push(m)
+  }
+  return found.length > 1 ? unsure() : found[0]
+}
+
+// ssh's options (OpenSSH's ssh(1)): those taking a value, attached or as the next word, and those
+// taking none. It reads them before the host and again after it, and the words left are the line
+// the other machine's shell runs, joined by spaces. Null where an option is none it knows, so where
+// that line starts cannot be told; undefined when it runs no command there.
+const SSH_VALUES = 'BbcDEeFIiJLlmOoPpQRSWw'
+const SSH_FLAGS = '1246AaCfGgKkMNnqsTtVvXxYy'
+const sshLine = (words: readonly string[]): string | null | undefined => {
+  let i = 1
+  let ended = false
+  // Past its options: false at one it does not know. `--` ends them, after the host as well.
+  const options = (): boolean => {
+    for (; i < words.length; i++) {
+      const w = words[i] as string
+      if (w === '--') {
+        i++
+        ended = true
+        return true
+      }
+      if (!w.startsWith('-') || w === '-') return true
+      for (let j = 1; j < w.length; j++) {
+        const letter = w[j] as string
+        if (SSH_VALUES.includes(letter)) {
+          if (j === w.length - 1) i++
+          break
+        }
+        if (!SSH_FLAGS.includes(letter)) return false
+      }
+    }
+    return true
+  }
+  if (!options()) return null
+  i++
+  if (!ended && !options()) return null
+  return i < words.length ? words.slice(i).join(' ') : undefined
+}
+
+/**
+ * The `gh pr merge` a command runs through the merge helper, read as gh reads it; undefined when it
+ * runs no helper. Since #3036 also the `gh pr merge` in eval's text, and one behind ssh or in an
+ * alias being set, which cannot be read.
+ */
 export const mergeHelperArgs = (c: HelperCommand): GhArgs | undefined => {
-  const words = c.words
+  // `builtin` runs the builtin after it: eval, alias, source and `.` are each one.
+  const words = c.words[0] === 'builtin' ? c.words.slice(1) : c.words
   const program = words[0]
   if (program === undefined) return undefined
   const ran = (at: number) => ghArgs(['gh', 'pr', 'merge', ...words.slice(at + 1)]) as GhArgs
-  const unsure = (): GhArgs => ({ ...(ghArgs(['gh', 'pr', 'merge']) as GhArgs), named: null, unreadable: true })
   // xargs adds words from its input after those written, which may name another repository.
   const ranAt = (at: number) => (c.xargs ? unsure() : ran(at))
   if (MERGE_HELPER.test(program)) return ranAt(0)
   if (unknownProgram(program)) return unsure()
   const name = program.split('/').pop() as string
-  if (name === 'eval') {
-    // What eval runs, read as a line of its own.
-    for (const inner of pipeline(words.slice(1).join(' '))) {
-      const h = mergeHelperArgs(inner)
-      if (h) return h
-    }
-    return undefined
+  // What eval runs, read as a line of its own.
+  if (name === 'eval') return mergeIn(words.slice(1).join(' '))
+  if (name === 'ssh') {
+    // xargs adds words from its input after those written, which may be the line it runs.
+    if (c.xargs) return unsure()
+    const line = sshLine(words)
+    // Where the line starts cannot be told: each word may start it.
+    const lines = line === null ? words.slice(1).map((_, k) => words.slice(k + 1).join(' ')) : line === undefined ? [] : [line]
+    return lines.some(l => mergeIn(l)) ? unsure() : undefined
+  }
+  if (name === 'alias') {
+    // Each alias it sets, `name=text`: its text is what a later word runs.
+    const texts = words.slice(1).filter(w => !/^[-+]/.test(w) && w.includes('=')).map(w => w.slice(w.indexOf('=') + 1))
+    return texts.some(t => mergeIn(t, true)) ? unsure() : undefined
   }
   if (RUNNERS.has(name) || SOURCES.has(name)) {
     // The file it runs: the reader's script, else (for source, ., and a shell it does not know) its

@@ -117,6 +117,10 @@ export type ModKit = {
    * that may run it but cannot be read for certain (a program or script that is a variable or a
    * substitution, a shell fed what cannot be read, xargs, eval of a variable, inline code running a
    * process that names it) is `unreadable`, its repository null. Ask it once per command, as `gh` is.
+   * A merge the command's own words do not run is given here too (#3036), since `gh` reads those
+   * words as no gh command: the `gh pr merge` in eval's text, read as gh reads it, and one behind
+   * ssh or in an alias being set (`alias g=gh` included, which later words finish), `unreadable`
+   * with a null repository. `builtin` before eval, alias, source or `.` is looked past.
    */
   mergeHelper: (command: ModKitCommand) => Promise<ModKitGh | undefined>
   /**
