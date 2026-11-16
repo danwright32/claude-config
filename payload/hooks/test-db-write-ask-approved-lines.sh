@@ -601,7 +601,7 @@ fi
 # --- a record key that is not ASCII is refused, never written and never raised on -----------------
 # Every key is a hex digest; anything else is refused before the record is opened, and the failure
 # is kept quiet like any other failure to write it.
-keyed="$(env -u CLAUDE_HOME HOME="$WORK/keyhome" python3 - "$DIR/lib" <<'PY'
+keyed="$(env -u CLAUDE_HOME HOME="$WORK/keyhome" python3 -B - "$DIR/lib" <<'PY'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
 ap = importlib.util.module_from_spec(spec)
