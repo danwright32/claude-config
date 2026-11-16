@@ -280,10 +280,10 @@ export const patchNames = (text: string): string | undefined => {
 /** Whether a text mentions any lasting memory at all, read as `mentioned` reads it. */
 export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -1
 
-// The quotes a path can end at in python code: a mention a quote closes is a string of its own, or one
-// inside python held as text and run (an exec's), so it is a path, never a sentence. A backtick is no
-// quote in python: one closing a mention is markdown in a sentence, or a shell substitution held as
-// text, which a program that runs no process only writes.
+// The quotes a path can end at in python code. Which ending quote closes a path, a string of its own
+// or one inside python held as text and run (an exec's), and which only ends a quoted sentence, is
+// quotedPath's to say (#3082). A backtick is no quote in python: one closing a mention is markdown in
+// a sentence, or a shell substitution held as text, which a program that runs no process only writes.
 const CLOSES = new Set(["'", '"'])
 
 // Where a path starts: at the root, at home, or at a variable.
