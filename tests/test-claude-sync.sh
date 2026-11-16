@@ -9632,7 +9632,9 @@ cat > "$WORK/ps-many" <<'PSEOF'
 PSEOF
 _ps_many="$(_status_with "$WORK/ps-many")"
 check "#33 several watchers are reported"        "grep -qi 'watcher processes the tool left running' <<< \"\$_ps_many\""
-check "#33 and each one's age is given"          "grep -q '03:11:02' <<< \"\$_ps_many\""
+check "#33 and each one's age is given, with its units (#3033)" "grep -q 'pid 501, running 3h 11m' <<< \"\$_ps_many\""
+check "#3033 and never as the bare form ps writes, which reads as hours either way" "! grep -q '03:11:02' <<< \"\$_ps_many\""
+check "#3033 an age under an hour is said in minutes and seconds" "grep -q 'pid 701, running 9m 00s' <<< \"\$_ps_many\""
 check "#33 and the process ids are named"        "grep -q '601' <<< \"\$_ps_many\""
 
 # The case a count CANNOT catch, and the reason this counts roots and depth instead. A run that
@@ -9689,7 +9691,7 @@ check "#832 a status call naming no table reports nothing the machine is running
 # IS what status reports, so the check above can fail and is not passing on a shim nothing calls.
 _ps_ambient_ctl="$(env -u SYNC_PS_FIXTURE PATH="$_PSSHIM:$PATH" CLAUDE_HOME="$PSH" SYNC_REPO="$PSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#832 the control: without the suite's table, the planted machine is reported" \
-  "line_has \"\$_ps_ambient_ctl\" 'pid 901, running 02:00:00' 'test-busy1\.sh'"
+  "line_has \"\$_ps_ambient_ctl\" 'pid 901, running 2h 00m' 'test-busy1\.sh'"
 
 section "== status speaks about a pile of suites, and a scratch size that cannot finish (#444, #466) =="
 # On 2026-09-18 559 of this repo's suite processes had run for up to seven hours at zero CPU on a
@@ -9712,6 +9714,10 @@ check "#444 the shipped age and breadth limits can be read" \
   "case '$_pile_max$_pile_roots' in ''|*[!0-9]*) false ;; *) [ '$_pile_max' -gt 0 ] && [ '$_pile_roots' -gt 0 ] ;; esac"
 _pile_et(){ printf '%02d:%02d:%02d' $(( $1 / 3600 )) $(( $1 % 3600 / 60 )) $(( $1 % 60 )); }
 _pile_old="$(_pile_et $(( ${_pile_max:-3600} * 2 )))"
+# The same age as status says it (#3033), written out here rather than through the library, so a
+# fault in the library's conversion cannot agree with itself (L721). Twice the limit stays under a
+# day for any limit under twelve hours, which the shipped one is.
+_pile_old_said="$(printf '%dh %02dm' $(( ${_pile_max:-3600} * 2 / 3600 )) $(( ${_pile_max:-3600} * 2 % 3600 / 60 )))"
 _pile_young="00:00:04"
 _WT="/Users/x/Apps/claude-config/.claude/worktrees/agent-1/payload/hooks"
 _FX="/var/folders/T/claude-sync-work.runner-test.AAAA/dir-killed"
@@ -9742,19 +9748,21 @@ check "#444 one young run of the runner, and another project's old suite, are no
 _pile_o="$(_pile_status "$WORK/pile-old")"
 check "#444 a suite older than any suite may run is reported" "grep -q 'test suites left running' <<< \"\$_pile_o\""
 check "#444 and the count says how many were past the limit, and how old the oldest is" \
-  "grep -qF '3 of them older than ${_pile_max}s, the longest any suite may run, the oldest running $_pile_old' <<< \"\$_pile_o\""
+  "grep -qF '3 of them older than ${_pile_max}s, the longest any suite may run, the oldest running $_pile_old_said' <<< \"\$_pile_o\""
 check "#444 and it names the command that stops every one past the limit" \
   "[ \"\$(grep -E '^ +kill -9( [0-9]+)+\$' <<< \"\$_pile_o\" | tr ' ' '\\n' | grep -cxE '700|701|702')\" -eq 3 ]"
 check "#444 and never the young suite beside them" \
   "[ \"\$(grep -E '^ +kill -9' <<< \"\$_pile_o\" | tr ' ' '\\n' | grep -cx 703)\" -eq 0 ]"
 check "#444 and the root is listed with its age and command" \
-  "grep -qF \"pid 700, running $_pile_old: bash $_WT/test-run-all-tests.sh\" <<< \"\$_pile_o\""
+  "grep -qF \"pid 700, running $_pile_old_said: bash $_WT/test-run-all-tests.sh\" <<< \"\$_pile_o\""
 
 # Past a day, ps writes an age with a day count in front, and a parser that read only hours, minutes
 # and seconds would call a suite that old a young one (L50).
 printf '  710     1 1-02:03:04 bash %s/test-run-all-tests.sh\n' "$_WT" > "$WORK/pile-days"
 _pile_d="$(_pile_status "$WORK/pile-days")"
-check "#444 an age written in days is read as days" "grep -q 'the oldest running 1-02:03:04' <<< \"\$_pile_d\""
+check "#444 an age written in days is read as days, and said with its units (#3033)" "grep -q 'the oldest running 1d 2h' <<< \"\$_pile_d\""
+check "#3033 and the root's own line says it the same way" "grep -qF 'pid 710, running 1d 2h: bash' <<< \"\$_pile_d\""
+check "#3033 and the bare form ps writes appears nowhere" "! grep -q '1-02:03:04' <<< \"\$_pile_d\""
 
 # Breadth before age: more suites started independently than one whole run ever has going, all of
 # them young. This is how a pile looks in its first hour. The count one past the limit speaks, and

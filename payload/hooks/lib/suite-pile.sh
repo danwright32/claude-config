@@ -34,6 +34,41 @@
 SYNC_SUITE_MAX_AGE="${SYNC_SUITE_MAX_AGE:-3600}"
 SYNC_SUITE_MAX_ROOTS="${SYNC_SUITE_MAX_ROOTS:-8}"
 
+# ps's elapsed time, read and said, in ONE place (claude-config#3033). ps writes it as `ss`, `mm:ss`,
+# `hh:mm:ss` or `d-hh:mm:ss`, so `04:41` is four minutes and `04:41:00` four hours, and a person
+# reading either bare cannot tell which. On 2026-11-15 a session read `running 04:41` in status as
+# four hours, took a live builder's suites for orphans, and nearly had them stopped. So every age
+# status or the notice prints goes through etime_units, which says it with its units: `41s`,
+# `4m 41s`, `2h 05m`, `3d 4h`. etime_secs is the same reading as a number, which the scan compares,
+# so the age judged and the age said cannot be parsed two ways. A value in none of those forms is
+# -1 to etime_secs (never past any limit) and "an unreadable age (<value>)" to etime_units, never
+# passed through as though it were an age (L11, L50).
+#
+# Awk source, prepended to each awk program that needs it, because the scan and the summary are awk
+# and the status lines are bash; etime_in_units is the bash way in.
+SUITE_PILE_AWK_ETIME='
+function etime_secs(et,   d, n, p) {
+  if (et !~ /^(([0-9]+-)?[0-9]+:[0-9]+:[0-9]+|[0-9]+:[0-9]+|[0-9]+)$/) return -1
+  d = 0
+  if (index(et, "-") > 0) { d = substr(et, 1, index(et, "-") - 1); et = substr(et, index(et, "-") + 1) }
+  n = split(et, p, ":")
+  if (n == 3) return d * 86400 + p[1] * 3600 + p[2] * 60 + p[3]
+  if (n == 2) return p[1] * 60 + p[2]
+  return p[1] + 0
+}
+function etime_units(et,   s) {
+  s = etime_secs(et)
+  if (s < 0) return "an unreadable age (" et ")"
+  if (s < 60) return sprintf("%ds", s)
+  if (s < 3600) return sprintf("%dm %02ds", int(s / 60), s % 60)
+  if (s < 86400) return sprintf("%dh %02dm", int(s / 3600), int(s % 3600 / 60))
+  return sprintf("%dd %dh", int(s / 86400), int(s % 86400 / 3600))
+}
+'
+etime_in_units(){   # $1 = an elapsed time as ps writes it  ->  the same age with its units
+  printf '%s\n' "$1" | awk "$SUITE_PILE_AWK_ETIME"'{ print etime_units($1) }'
+}
+
 # The process table as pid, ppid, etime, command, behind one seam: SYNC_PS_FIXTURE holds the same
 # four fields in the same order. Returns non zero when the table could not be read, so a caller can
 # tell "nothing running" from "nothing known" (L215).
@@ -49,16 +84,7 @@ suite_pile_table(){
 #   MORE <how many roots were not listed>             only when there were more than 20
 #   KILL <pid> <pid> ...                              only when some are past the age limit
 suite_pile_scan(){   # $1 = max age in seconds  $2 = max independent starts
-  awk -v maxage="$1" -v maxroots="$2" '
-    function secs(et,   d, n, p, s) {
-      d = 0
-      if (index(et, "-") > 0) { d = substr(et, 1, index(et, "-") - 1); et = substr(et, index(et, "-") + 1) }
-      n = split(et, p, ":"); s = 0
-      if (n == 3) s = p[1] * 3600 + p[2] * 60 + p[3]
-      else if (n == 2) s = p[1] * 60 + p[2]
-      else s = p[1] + 0
-      return d * 86400 + s
-    }
+  awk -v maxage="$1" -v maxroots="$2" "$SUITE_PILE_AWK_ETIME"'
     {
       p = $1; pp = $2; et = $3; cmd = ""
       for (i = 4; i <= NF; i++) cmd = cmd (i > 4 ? " " : "") $i
@@ -74,7 +100,7 @@ suite_pile_scan(){   # $1 = max age in seconds  $2 = max independent starts
       # younger than the age limit. Walked up from each young suite, with a step cap so a table with
       # a parent loop in it cannot hang the scan.
       for (p in suite) {
-        if (secs(age[p]) >= maxage) continue
+        if (etime_secs(age[p]) >= maxage) continue
         a = parent[p]; steps = 0
         while (a != "" && (a in parent) && steps < 1000) {
           if (a in runner) fresh[a] = 1
@@ -85,7 +111,7 @@ suite_pile_scan(){   # $1 = max age in seconds  $2 = max independent starts
       for (p in suite) {
         n++
         if (!(parent[p] in suite)) { roots++; root[p] = 1 }
-        s = secs(age[p])
+        s = etime_secs(age[p])
         if (s >= maxage && !(p in fresh)) { old++; kill = kill " " p; if (s > oldest) { oldest = s; oldest_et = age[p] } }
       }
       if (n == 0 || (old == 0 && roots <= maxroots)) exit
@@ -103,9 +129,9 @@ suite_pile_scan(){   # $1 = max age in seconds  $2 = max independent starts
 # The sentences both callers say about a pile, from the scan's records on stdin, so status and the
 # notice cannot word the same finding two ways (L605).
 suite_pile_summary(){   # $1 = max age in seconds  $2 = max independent starts
-  awk -v maxage="$1" -v maxroots="$2" '$1 == "SUMMARY" {
+  awk -v maxage="$1" -v maxroots="$2" "$SUITE_PILE_AWK_ETIME"'$1 == "SUMMARY" {
     printf "%d suite process(es) from this repo, %d started independently (a whole run of the runner is one, and never has more than %d suites going at once).\n", $2, $3, maxroots
-    if ($4 > 0) printf "%d of them older than %ds, the longest any suite may run, the oldest running %s. Those are waiting on something that will not come.\n", $4, maxage, $5
+    if ($4 > 0) printf "%d of them older than %ds, the longest any suite may run, the oldest running %s. Those are waiting on something that will not come.\n", $4, maxage, etime_units($5)
   }'
 }
 
