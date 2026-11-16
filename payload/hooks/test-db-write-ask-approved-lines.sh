@@ -581,6 +581,46 @@ PY
 )"
 [ "$lazy" = none ] && check "the approval library loads without hashlib or datetime, which a commit check never needs" ok || check "the approval library loads without hashlib or datetime, which a commit check never needs" "loaded: $lazy"
 
+# --- a byte that is not UTF-8 hides no Bash tool_name (claude-config#1885) ------------------------
+# Under a UTF-8 locale bash's =~ stops at such a byte, so a commit whose payload held one before its
+# tool_name was read as no commit at all and passed unasked. The byte rides in a field of its own
+# ahead of tool_name, as a raw byte (json.dumps would escape it). Run only where this machine's
+# UTF-8 locale shows the fault (L411).
+if . "$DIR/lib/test_bad_byte_locale.sh" 2>/dev/null; then
+  if bad_byte_measured regex "#1885 a commit payload holding a byte that is not UTF-8"; then
+    R="$WORK/badbyte"; new_repo "$R" badbyteref00000001
+    stage_line "$R" badbyteref00000001
+    body="$(cd "$WORK" && bash_payload PreToolUse 'git commit -q -m list' "$R" s1 | LC_ALL=C sed "s/^{/{\"note\": \"x$(printf '\377')y\", /" | env -u CLAUDE_HOME LC_ALL="$(bad_byte_locale)" HOME="$HOME_A" bash "$HOOK" 2>/dev/null)"; rc=$?
+    r="$(said "$body" "$rc")"
+    case "$r" in "ask rc=0|"*badbyteref00000001*) check "a commit whose payload holds a byte that is not UTF-8 before its tool_name is still asked about" ok ;; *) check "a commit whose payload holds a byte that is not UTF-8 before its tool_name is still asked about" "${r:0:400}" ;; esac
+  fi
+else
+  check "lib/test_bad_byte_locale.sh is beside this suite" "missing, so the #1885 case has no locale to run under"
+fi
+
+# --- a record key that is not ASCII is refused, never written and never raised on -----------------
+# Every key is a hex digest; anything else is refused before the record is opened, and the failure
+# is kept quiet like any other failure to write it.
+keyed="$(env -u CLAUDE_HOME HOME="$WORK/keyhome" python3 - "$DIR/lib" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
+ap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ap)
+try:
+    ap._put_on_record(["abcé", "\ud800"])
+except Exception as e:
+    print("raised " + type(e).__name__)
+    sys.exit()
+rec = os.path.join(ap._record_dir(), "approved")
+if os.path.exists(rec):
+    print("wrote " + repr(open(rec, "rb").read()))
+    sys.exit()
+ap._put_on_record(["0123abcd"])
+print("ok" if open(rec, "rb").read() == b"0123abcd\n" else "a hex key was not written")
+PY
+)"
+check "a record key that is not ASCII is refused unwritten and not raised on, while a hex key is written" "$keyed"
+
 # --- the settings never run the hook after a tool call --------------------------------------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, sys
