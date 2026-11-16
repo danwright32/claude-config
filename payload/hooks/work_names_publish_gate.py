@@ -37,7 +37,8 @@ checkout it is refused as cannot be told when anything else the command runs cou
 reads first (changes_before): a git checkout or remote set-url, gh pr checkout, a script, a file
 written. Those two refusals apply only in a work checkout (Dan, 2026-11-15, #3016): one whose path
 or git checkout names a work repository (work_checkout, the reading a lookup there is judged by).
-From a directory known to name nothing they post as before #2997; where the command cannot be placed,
+From a directory known to name nothing they are not refused as unread (a program whose output cannot
+be read is still judged by the folder names it can print, below); where the command cannot be placed,
 or a cd or directory option in the substitution takes the program elsewhere, they stay refused.
 
 Three more readings since claude-config#3020. From a directory known to name nothing, a program whose
@@ -1569,6 +1570,8 @@ def profile_redefines():
             try:
                 with open(os.path.join(where, f), encoding="utf-8", errors="replace") as fh:
                     names |= profile_defines(fh.read())
+            except FileNotFoundError:
+                continue  # gone since the folder was listed (its session ended): it redefines nothing
             except OSError as e:
                 why = "the shell snapshot %s could not be read (%s)" % (f, type(e).__name__)
                 break

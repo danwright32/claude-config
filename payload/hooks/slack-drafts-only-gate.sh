@@ -67,7 +67,9 @@ SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)
 # A name counts where no letter, digit or _ stands in front of it, and also right after an escaped
 # newline, return or tab of the payload's JSON (\\[nrt]): the n of `\nbash post` read as a letter in
 # front of bash, so a command on a later line skipped the gate whole (claude-config#3020).
-START='("command"[[:space:]]*:[[:space:]]*"|[;&|(`]|\{[[:space:]]|\\n)[[:space:]]*'
+# White space after a start is real or escaped: `\n\tenv bin/post` put an escaped tab between the line
+# break and the word, and the start was not seen (lessons review at d06d7aa, claude-config#3020).
+START='("command"[[:space:]]*:[[:space:]]*"|[;&|(`]|\{[[:space:]]|\\[nr])([[:space:]]|\\[nrt])*'
 RUNS='(^|[^A-Za-z0-9_]|\\[nrt])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|bunx|npx|pnpx|npm|pnpm|yarn|tsx|ts-node|osascript|uv|source|pytest|py\.test)([^A-Za-z0-9_.]|$)|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)[[:space:]]|\./'
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"

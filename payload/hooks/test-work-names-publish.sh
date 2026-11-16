@@ -1031,6 +1031,15 @@ check "#3020 (control) while a command with no substitution is not asked about t
 rmdir "$SNAPS/snapshot-zsh-1794000000004-unread.sh"
 RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
 check "#3020 (control) and with it gone git passes again: $out" passed
+# A snapshot listed and then gone before it is opened (Claude Code removes one when its session
+# ends) redefines nothing: read as one that could not be read, it left no name trusted and refused
+# a command that was fine (lessons review at d06d7aa). A link to nothing fails the open the same way.
+ln -s "$SNAPS/no-such-file" "$SNAPS/snapshot-zsh-1794000000005-gone.sh"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 a snapshot gone between the listing and the read is passed over: $out" passed
+printf '%s\n' 'git () {' '  echo elsewhere' '}' > "$SNAPS/snapshot-zsh-1794000000006-gitfn.sh"
+RUN_DIR="$CLEANGIT" run "gh issue create --repo danwright-test/public-notes --title \"\$(git rev-parse --show-toplevel)\" --body x"
+check "#3020 and the snapshots after it are still read: one redefining git is refused: $out" refused
 rm -rf "$SNAPS"
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

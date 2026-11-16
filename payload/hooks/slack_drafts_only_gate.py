@@ -566,7 +566,7 @@ JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx"
 # reaching a module that posts only through one of them passed unread. A TypeScript type argument may
 # stand between the name and its call (`vi.importActual<typeof import("./x")>("./x")`).
 JS_RUNNER_LOADS = (r"\b(?:importActual|requireActual|importMock|requireMock|createMockFromModule|genMockFromModule)"
-                   r"(?:\s*<[^\n;{}=]*?>)?\s*\(")
+                   r"(?:\s*<[^()'\"`]*(?:\([^()'\"`]*\)[^()'\"`]*)*>)?\s*\(")
 IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\(|"""
                          + JS_RUNNER_LOADS + r""")\s*(['"`])([^'"`\n]+)\1""")
 # A type only import statement, up to its from: `import type { A, B as C }`, `import type A`,

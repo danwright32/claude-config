@@ -907,6 +907,15 @@ mk_case b.test.ts 'const real = await vi.importActual<typeof Posts>("./posts.ts"
 read_refused "#3020 and with a type argument naming no import"
 mk_case b.test.ts 'const real = await vi.importActual(`./posts.ts`);'
 read_refused "#3020 and with the path in a template"
+# A type argument written as an object type, or over several lines, holds { } = ; and line breaks,
+# which the pattern left out, so the call matched nothing and the module was not followed (lessons
+# review at d06d7aa).
+mk_case b.test.ts 'const real = await vi.importActual<{ send: () => void }>("./posts.ts");'
+read_refused "#3020 and with an object type as the type argument"
+mk_case b.test.ts 'const real = await vi.importActual<{' '  send: (text: string) => Promise<void>;' '}>("./posts.ts");'
+read_refused "#3020 and with one written over several lines"
+mk_case b.test.ts 'const real = await vi.importActual<{ send: () => void }>("./other.ts");'
+allowed "#3020 the control: the same type argument on a module that posts nothing passes"
 mk_case b.test.ts 'const m = await vi.importMock("./posts.ts");'
 read_refused "#3020 and by vi.importMock, which loads the module to mock its shape"
 MK_RUN="./node_modules/.bin/jest"
@@ -1031,6 +1040,23 @@ allowed "#3020 the control: a shell running a quiet file with no extension on a 
 run_e3 "$(printf 'true\nbash post')"
 refused "#3020 a shell running a file with no extension that posts, on a later line, is judged"
 says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+# The same for what the wrapper matches only where a command starts, a file run by a path with a
+# slash in it and a runner the shared reader reads through (env, nohup, time and the rest): an
+# escaped tab or return after the line break stood between the break and the word, so the start was
+# not seen (lessons review at d06d7aa).
+mkdir -p "$E3/bin"
+printf '%s\n' '#!/bin/bash' "$POST" > "$E3/bin/post"
+printf '%s\n' '#!/bin/bash' 'echo quiet' > "$E3/bin/quiet"
+chmod +x "$E3/bin/post" "$E3/bin/quiet"
+run_e3 "$(printf 'true\n\tenv bin/quiet')"
+allowed "#3020 the control: a runner on a later line, after a tab, running a quiet file passes"
+run_e3 "$(printf 'true\n\tbin/post')"
+refused "#3020 a file run by its path on a later line, after a tab, is judged"
+says "#3020 as the post it is" "REFUSED: this command posts to Slack"
+run_e3 "$(printf 'true\n\tenv bin/post')"
+refused "#3020 and behind a runner"
+run_e3 "$(printf 'true\r\n\tnohup bin/post')"
+refused "#3020 and after a return, a line break and a tab"
 
 echo
 
