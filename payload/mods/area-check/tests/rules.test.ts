@@ -37,7 +37,6 @@ import {
   decideProblem,
   holdCard,
   holdRefusal,
-  legacyQuestionKey,
   questionKey,
   reasonProblem,
   restructureQuestion,
@@ -406,11 +405,6 @@ test('a question is kept under a fixed length key, so a held command naming a lo
   expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/other', 'src/a.ts'))
   // A word of a thousand characters gives a key of the same 73, well under the store's 256.
   expect((await questionKey('dan/app', 'x'.repeat(1000))).length).toBe(73)
-  // The key it was kept under before, read for an answer already given; none past the store's limit.
-  expect(legacyQuestionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
-  // "question:dan/app\n" is 17 characters, so a word of 239 makes a key of exactly 256 and 240 one too long.
-  expect(legacyQuestionKey('dan/app', 'x'.repeat(239))).toBe(`question:dan/app\n${'x'.repeat(239)}`)
-  expect(legacyQuestionKey('dan/app', 'x'.repeat(240))).toBeUndefined()
 })
 
 test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
