@@ -10,6 +10,7 @@ import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
+import { settledKey } from '../hooks/settled.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -4434,6 +4435,119 @@ test("an earlier night's question from a session now closed is asked by the next
   const offered = w.prompts.filter(p => p.includes('Round totals up or down?'))
   expect(offered.length).toBe(1)
   expect(offered[0]).toContain('3.1 acme/bidspoke: Round totals up or down?')
+})
+
+// #3018: on 2026-11-15 a session was told to put four leftover overnight questions to Dan. Two were
+// one build order note, recorded once by repository and once by folder, that said itself it was not
+// a question; two Dan had answered the morning after, their pull request merged since.
+const IN_LEDGER: Opts = { remote: 'git@github.com:exampleco/ledger.git', origins: { '/w/ledger': 'git@github.com:exampleco/ledger.git' } }
+const asked3018 = (n: Record<string, unknown>) => JSON.stringify({ v: 1, generation: 'x', at: T0 - 2 * MIN, kind: 'question', by: 's5', ...n })
+const BUILD_NOTE = 'Build order for tonight: the schema change lands before the importer. This is not a question, nothing to answer.'
+const answeredAt = (repo: string | null, issue: number | null, text: string) => `${SLEEP}/answered/${settledKey(repo, { issue, text })}.json`
+const offeredLedger = (w: { prompts: string[] }) => w.prompts.filter(p => p.startsWith('Proposals and questions for exampleco/ledger'))
+
+test("an earlier night's note that says it is no question is never offered, and a question noted twice is offered once (#3018)", withDeps, async ($, on) => {
+  const notes = [
+    asked3018({ repo: 'exampleco/ledger', text: BUILD_NOTE }),
+    asked3018({ cwd: '/w/ledger', questions: [BUILD_NOTE] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Round totals up or down?'] }),
+    asked3018({ cwd: '/w/ledger', questions: ['Round totals up or down?'] }),
+  ]
+  const { w, clock } = world(on, { ...IN_LEDGER, files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Round totals up or down?')
+  expect(offered[0]).not.toContain('3.2 ')
+  expect(offered[0]).not.toContain('Build order for tonight')
+})
+
+test("an earlier night's question whose issue or pull request has closed or merged since is not offered; one still open is (#3018)", withDeps, async ($, on) => {
+  const notes = [
+    asked3018({ repo: 'exampleco/ledger', issue: 41, text: 'Apply the migration in PR #52?', options: ['Apply it', 'Leave it'] }),
+    asked3018({ cwd: '/w/ledger', questions: ['Merge PR #53, the wording change?'] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Keep the export flag named in #60?'] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Merge https://github.com/exampleco/ledger/pull/54 tonight?'] }),
+  ]
+  const { w, clock } = world(on, { ...IN_LEDGER, gh: { pr: null, issues: { 41: 'CLOSED', 52: 'MERGED', 53: 'MERGED', 54: 'MERGED' } }, files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Keep the export flag named in #60?')
+  expect(offered[0]).not.toContain('Apply the migration')
+  expect(offered[0]).not.toContain('Merge PR #53')
+  expect(offered[0]).not.toContain('pull/54')
+})
+
+test("an earlier night's question naming a link mod-kit could not read is offered, saying so, though everything else it names has merged (#3018 review)", withDeps, async ($, on) => {
+  const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight?'] })]
+  const { w, clock } = world(on, { ...IN_LEDGER, gh: { pr: null, issues: { 53: 'MERGED', 54: 'MERGED' } }, linkReaderFailsOn: '/pull/54', files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight? (which repository https://github.com/exampleco/ledger/pull/54 names could not be read')
+})
+
+test("an earlier night's question whose pull request GitHub could not be asked about is offered, saying the check could not be made (#3018)", withDeps, async ($, on) => {
+  const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Apply the migration in PR #52?'] })]
+  const { w, clock } = world(on, { ...IN_LEDGER, issueViewFails: 'HTTP 502', files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Apply the migration in PR #52? (whether exampleco/ledger#52 is still open could not be checked with GitHub: HTTP 502)')
+})
+
+test("an earlier night's question with an answer on record is not offered (#3018)", withDeps, async ($, on) => {
+  const notes = [asked3018({ cwd: '/w/ledger', questions: ['Record the design exception for the totals page?'] }), asked3018({ repo: 'exampleco/ledger', questions: ['Round totals up or down?'] })]
+  const { w, clock } = world(on, {
+    ...IN_LEDGER,
+    files: { [EARLIER]: `${notes.join('\n')}\n`, [answeredAt('exampleco/ledger', null, 'Record the design exception for the totals page?')]: '{"answer":"Record it"}\n' },
+  })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Round totals up or down?')
+  expect(offered[0]).not.toContain('design exception')
+})
+
+test("Dan's answer to a question in this session's morning picker is recorded, so no later morning offers it (#3018)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Keep it', files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${myQuestion}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('3.1 /repo: Keep the old export flag?')
+  expect(m).toMatch(/Begin each picker's question with its number/)
+  await call($ as never, { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question: '3.1 Keep the old export flag?', header: 'Flag', multiSelect: false, options: [{ label: 'Keep it', description: 'x' }, { label: 'Drop it', description: 'y' }] }] } as never)
+  const kept = w.files[answeredAt('o/r', null, 'Keep the old export flag?')]
+  expect(kept).toBeDefined()
+  expect(JSON.parse(kept as string)).toMatchObject({ repo: 'o/r', issue: null, text: 'Keep the old export flag?', answer: 'Keep it', by: 's1' })
+})
+
+test("a morning leaves out this session's own question that was answered or whose issue has closed since (#3018)", withDeps, async ($, on) => {
+  const own = (n: Record<string, unknown>) => proposal({ kind: 'question', by: 's1', ...n })
+  const notes = [own({ cwd: '/repo', questions: ['Keep the old export flag?'] }), own({ repo: 'o/r', issue: 12, text: 'Which copy?', options: ['Short', 'Long'] }), own({ cwd: '/repo', questions: ['Rename the parser?'] })]
+  const { w, clock } = world(on, {
+    gh: { pr: null, issues: { 12: 'CLOSED' } },
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${notes.join('\n')}\n`, [answeredAt('o/r', null, 'Keep the old export flag?')]: '{"answer":"Keep it"}\n' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('3.1 /repo: Rename the parser?')
+  expect(m).not.toContain('Keep the old export flag?')
+  expect(m).not.toContain('Which copy?')
 })
 
 test("an earlier night's notes with a line that cannot be read say so with what is offered (#1286 lessons review)", withDeps, async ($, on) => {

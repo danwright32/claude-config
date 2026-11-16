@@ -115,6 +115,12 @@
 #                                                               strip, folder and hunks their own way).
 #                                                               Ask before saving's cut of every line that
 #                                                               might name a file is another question.
+#   script-vars                                                 tempWord, madeTemp, freshTemp,
+#             reading a script's own variables by hand: a      ownFolderPath and withoutOwnFolder from the
+#             bare mktemp substitution matched by a pattern    copy of hooks/scriptvars.ts kept at
+#             (mktemp(?: -d)?), or its own folder by naming    hooks/mod-kit/scriptvars.ts (#3022: the
+#             BASH_SOURCE                                       design round guard read them itself and
+#                                                               the area check could not read them at all)
 #   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -250,6 +256,9 @@ PARTS=(
   # #2992: a patch read by hand, by the spellings the two copies used: git's diff line, a +++ header
   # as a quoted string, a hunk header matched from a line's start, or git's binary patch line.
   "patch-reader|diff --git|[\"'\`]\\+\\+\\+ |\\^@@|GIT binary patch|readPatch, patchFiles, patchPlacing, placedName and patchedPaths from the copy of hooks/patch.ts kept at hooks/mod-kit/patch.ts"
+  # #3022: a script's own variables read by hand, by the spellings the design round guard used: a bare
+  # mktemp substitution matched by a pattern (mktemp(?: -d)?), or its own folder by naming BASH_SOURCE.
+  "script-vars|mktemp\\(\\?: -d\\)\\?|BASH_SOURCE|tempWord, madeTemp, freshTemp, ownFolderPath and withoutOwnFolder from the copy of hooks/scriptvars.ts kept at hooks/mod-kit/scriptvars.ts"
 )
 
 n=0
