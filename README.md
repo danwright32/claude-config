@@ -1098,7 +1098,9 @@ effort", "deferred
 to", "follow
 up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines.
 A phrase quoted as a word, inside backticks or double quotes closed on the same line and six words
-at most, is a mention and is not judged (#2133). `deferral-edit-check.sh` says the same thing at the
+at most, is a mention and is not judged (#2133). A phrase in Title Case run straight on from another
+capitalised word, outside a markdown heading, ends a proper name (a calendar event type, say) and is
+not judged either (#3019). `deferral-edit-check.sh` says the same thing at the
 moment the text is written.
 
 </td><td>
