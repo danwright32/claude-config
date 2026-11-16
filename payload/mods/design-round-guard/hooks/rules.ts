@@ -1639,6 +1639,80 @@ export type RunCommand = {
   unread?: string
 }
 
+// The words the shell reads as its own grammar where a command begins, which no expansion ever is,
+// so an array whose first element is one runs a command of that name and pasting it would not (#3057).
+const RESERVED = new Set(['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time', 'coproc', '{', '}', '!', '[[', ']]'])
+// An element the shell hands on as written wherever it stands: nothing it expands, quotes, matches
+// against files, splits or reads as an operator (#3057).
+const PLAIN_ELEMENT = /^[A-Za-z0-9_@.,:=+%/-]+$/
+// The builtins and loops that set the variable they name (#3057), as mod-kit's scriptvars.ts reads them.
+const SETS_ARRAY = /^(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let|for|select|set)$/
+
+/**
+ * The arrays a script's text runs commands through whose words it can read (#3057): `G` for a line
+ * `G=(git -c user.name=t -c user.email=t@t)`, alone on its line, every element a plain word
+ * (PLAIN_ELEMENT) and the first no reserved word and no assignment, given as its elements' text.
+ * `"${G[@]}"` then hands on exactly those words, so a command it starts runs `git` with them, as
+ * test-check-duplication.sh's do. Only where nothing else may give the array another value, in
+ * `all`, the command and every script text read for it: no second assignment, append or element,
+ * no `${G:=x}`, no builtin or loop naming it or one of its elements, no nameref (`declare -n`), no
+ * eval, and no use of it before the line in `text`. Any of these, and it is not given.
+ */
+export const literalArrays = (text: string, all: string): Map<string, string> => {
+  const out = new Map<string, string>()
+  if (/(?:^|[\s;&|(])eval(?=[\s;&|)]|$)/.test(all) || /(?:^|[\s;&|(])(?:declare|typeset|local)\s+-[A-Za-z]*n/.test(all)) return out
+  for (const m of text.matchAll(/^([A-Za-z_]\w*)=\(([^()\n]*)\)[ \t]*$/gm)) {
+    const name = m[1] as string
+    const elements = (m[2] as string).trim().split(/[ \t]+/).filter(Boolean)
+    const first = elements[0]
+    if (first === undefined || RESERVED.has(first) || first.includes('=') || !elements.every(e => PLAIN_ELEMENT.test(e))) continue
+    if ([...all.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(?:\\[[^\\]]*\\])?\\+?=`, 'g'))].length !== 1) continue
+    if (new RegExp(`\\$\\{${name}:?=`).test(all)) continue
+    const named = all.split(/[;&|\n()]/).some(part => {
+      const words = part.trim().split(/\s+/)
+      let i = 0
+      while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i] as string)) i++
+      return SETS_ARRAY.test(words[i] ?? '') && words.slice(i + 1).some(w => w.replace(/["']/g, '') === name || w.replace(/["']/g, '').startsWith(`${name}[`) || w.replace(/["']/g, '').startsWith(`${name}=`))
+    })
+    if (named) continue
+    const used = text.indexOf(`\${${name}[@]}`)
+    if (used >= 0 && used < (m.index ?? 0)) continue
+    out.set(name, elements.join(' '))
+  }
+  return out
+}
+
+/**
+ * `text` with each `"${G[@]}"` that starts a command written as the array's elements (#3057),
+ * `arrays` as literalArrays gives them. Only a whole word where a command begins: after a line's
+ * start, a `;`, `&`, `|`, `(`, `{` or `!`, or then, do or else. A caller reads both texts with
+ * mod-kit's pipeline and keeps this one only where spelledOnly finds nothing else changed.
+ */
+export const spellArrays = (text: string, arrays: ReadonlyMap<string, string>): string => {
+  let out = text
+  for (const [name, words] of arrays)
+    out = out.replace(new RegExp(`(?<=(?:^|[;&|({!]|\\b(?:then|do|else))[ \\t]*)"\\$\\{${name}\\[@\\]\\}"(?=[ \\t;&|)]|$)`, 'gm'), () => words)
+  return out
+}
+
+/**
+ * Whether reading a script spelt by spellArrays changed only what the arrays stood for (#3057): the
+ * same number of commands, each with the same words and heredocs, but for one whose first word was
+ * `${G[@]}`, which now has the array's elements in its place and the same words after. Anything
+ * else (a heredoc's body or a quoted string the spelling reached) and the spelt text is not used.
+ */
+export const spelledOnly = (before: readonly RunCommand[], after: readonly RunCommand[], arrays: ReadonlyMap<string, string>): boolean => {
+  if (before.length !== after.length) return false
+  return before.every((b, i) => {
+    const a = after[i] as RunCommand
+    if (JSON.stringify(b.heredocs ?? []) !== JSON.stringify(a.heredocs ?? [])) return false
+    if (b.words.join('\0') === a.words.join('\0')) return true
+    const name = /^\$\{([A-Za-z_]\w*)\[@\]\}$/.exec(b.words[0] ?? '')?.[1]
+    const words = name === undefined ? undefined : arrays.get(name)
+    return words !== undefined && [...words.split(' '), ...b.words.slice(1)].join('\0') === a.words.join('\0')
+  })
+}
+
 /**
  * The folder a script's code is read in where the folder it runs in cannot be followed (#2847), so a
  * relative name its code writes comes back under it and is told apart as one that cannot be placed.

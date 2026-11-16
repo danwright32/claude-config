@@ -3237,6 +3237,15 @@ on main is not this push's, and is not reported anywhere else either. The duplic
 assets gates still read the whole range from the upstream. Each suite builds its case with
 `lib/merged-main-fixture.sh`.
 
+A merge of main can only be set apart once it is committed. In `git commit --no-edit && git push`
+with the merge still in progress, the merge commit does not exist when the gates run, so each of
+them reads the commit the command is about to make as the branch's own work, every line main
+brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
+to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+Reading the pending merge as a merge of its second parent was the other option, and was not taken:
+each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
+added later would miss it without a word.
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
@@ -3640,6 +3649,21 @@ code or in a string; use `vi` and `jest` only as members (`vi.fn`) or in an unre
 `vitest` or `@jest/globals`; and reach no member by a computed name or run a string as code. Anything
 else leaves the import followed, so a real unmocked import stays refused. Only the file's own
 imports are affected.
+
+A JavaScript or TypeScript file that only declares the webhook's variable name is not one that posts
+(#3050), in `lib/data-names.py`. `slack_webhook` is the name projects keep a webhook in, never an
+address, so a file posts through it only by reading what is kept under it. On 2026-11-15 three runs
+of test files by name were refused in a work repository, two of them for a fixture holding the name
+as a key and a module naming it in a type. Two uses read nothing and are left out, in the file read
+as code and as text a runner is handed: the key of an object literal set to `null`, `undefined` or
+one string written out that is no address anyone receives at (plain words, or a URL whose host is
+reserved for tests, such as `.test`, `.example`, `.invalid`, `example.com` and `localhost`), with no
+spread after it in the same literal; and a member of an `interface` or a `type` alias typed only
+`string`, `null`, `undefined`, `unknown` or `never`. Every other use refuses as before: a member read
+(`env.SLACK_WEBHOOK_URL`), a destructuring, a shorthand, a key set to a variable, a flag, a template
+or any other address, the name in a string or assigned to, and a comment, which is still only held
+as data. So the third of those runs, a test whose route reaches the module that reads the name and
+sends, is still refused: a mock counts (#2359) only for a module the test file itself imports.
 
 Past 300 the gate reads on when the script is inside a repository and every module it reaches is
 too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
@@ -4191,7 +4215,7 @@ commits the line or runs a file on that project, so later sessions and every wor
 do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
 MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
 (#2989), the question naming up to eight of them and how he approves one; a commit whose every added
-line he approved passes.
+line he approved passes, and says so when the record could not take one (below).
 - Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
   after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
   to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
@@ -4204,6 +4228,14 @@ line he approved passes.
 - A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
   session's transcript (both captured the same day), so it passes on Dan's picker in that session,
   and the record is written by a call of the main session.
+- When the record cannot be written, the hook says so, and his picker still counts for that call (#3058).
+  Before, the failure was swallowed: his picker let the main session's call through, nothing was
+  kept, and the next session asked him to approve the same line again with no reason given. Now
+  that call, a write or a commit adding the line, still goes through on his picker (Dan chose on
+  2026-11-16 to keep that trust, answering the picker `Keep #3041's old trust`), and the hook says
+  beside it, in a notice and never as a question, which line could not be saved, the record's path
+  and the error, and that a later session will ask him again until the record can be written.
+  Nothing is kept until then; once it can be written, the same picker is saved by the next call.
 - What changes for a list that already exists: its lines are approved by nobody yet, so each write
   on its project is asked about, the question saying how Dan approves the line. One picker a line
   is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
@@ -8101,8 +8133,7 @@ One narrowing (#2254): a findings note to the installed helper,
 else, another subcommand, a substitution inside the note and everything else in the same command
 are judged as before. A question is kept in the store under a
 SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
-character key limit; an answer kept under the earlier key form is still read for its week (#2256
-removes that read).
+character key limit.
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
 session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
@@ -8306,8 +8337,8 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A shell write is read for the files it writes: a copy of one code file is judged
 by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
 into a folder passes. git failing to say which repository a self posting file is in, or a file
-that cannot be read, holds the call as could not check, which trying again may get past. git or
-gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
+that cannot be read, holds the call as could not check, which trying again may get past. git
+killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
 told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
 tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
 A call the guard has judged and passed on in its tool.call hook is replayed as it settled beneath
@@ -8321,27 +8352,24 @@ before) is refused with an instruction to call `mcp__slack-alert-guard__choose` 
 id and the message as Slack will post it, checked as the question's `rendered` is. The choice is
 kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
 a `wording` note, and the call sent again goes through; a choice lets wording through only while
-sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
-merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
-chosen wording is refused; a merge that cannot be read, a command whose effect cannot be read at all
-(mod-kit's `unread`, #3021: `eval "gh pr merge 12"`, the same through `ssh` or an alias), or a diff
-gh cannot give, is held as could not check, and a diff gh did not give within its time as a timeout
-(#2792).
+sleep mode is on. A choice waiting on Dan holds no merge, in any repository (#3030; Dan,
+2026-11-16: "I'd actually prefer it didn't hold merges anywhere. It's more of a nice to have but it
+shouldn't hold up progress"), so no merge is read for it.
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata
 `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
-unanswered for three days expires: said once in each such session, held from merging, and no longer
-letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
-overnight). In any mode, taking away wording that origin's copy of the file on its default branch
-(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
-live; no default branch, or git failing to say, holds as before.
+unanswered for three days expires: said once in each such session, still unapproved, and no longer
+letting wording through. In any mode, taking away wording that origin's copy of the file on its
+default branch (named by mod-kit's branch reader, then one `git show`) does not hold passes, since
+it was never live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833,
+#3030
 
 </td></tr>
 </tbody>
