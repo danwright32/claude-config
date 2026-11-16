@@ -99,6 +99,26 @@ check "the table has at least one Mac" "$([ -n "$(printf '%s' "$table" | tr -d '
 check "the table names the work MacBook" "$(grep -q -x -F 'Dans-MacBook-Pro 7' <<< "$table" && echo ok || echo "table: $table")"
 check "every table row is a short hostname and a whole number" "$([ -z "$bad_rows" ] && echo ok || echo "bad rows: $bad_rows")"
 
+# The reason beside each number (claude-config#2552): every Mac in the table has one REVIEWED line
+# in the hook carrying the SAME number, the date it was last judged and the issue holding the
+# reading. A cap changed without a new review then fails here, instead of going on wearing the
+# reason measured for the old number (L244).
+unreviewed_in() { # unreviewed_in <hook file>: every "mac=cap" of its table with no matching REVIEWED line
+  local mac cap out=""
+  while read -r mac cap; do
+    [ -n "$mac" ] || continue
+    grep -q -E "^# REVIEWED $mac $cap [0-9]{4}-[0-9]{2}-[0-9]{2} claude-config#[0-9]+\$" "$1" || out="$out $mac=$cap"
+  done <<< "$(bash "$1" --table 2>&1)"
+  printf '%s' "$out"
+}
+unreviewed="$(unreviewed_in "$HOOK")"
+check "every Mac's cap carries the review it was last judged in" "$([ -z "$unreviewed" ] && echo ok || echo "no REVIEWED line matching:$unreviewed")"
+# Seen failing on a planted copy whose number moved while its review line stayed.
+sed 's/^Dans-MacBook-Pro 7$/Dans-MacBook-Pro 9/' "$HOOK" > "$fixture_dir/cap-moved.sh"
+check "the planted copy really has a moved number" "$(grep -q -x -F 'Dans-MacBook-Pro 9' "$fixture_dir/cap-moved.sh" && echo ok || echo "the sed matched nothing")"
+moved="$(unreviewed_in "$fixture_dir/cap-moved.sh")"
+check "a cap changed without a new review is caught" "$([ "$moved" = " Dans-MacBook-Pro=9" ] && echo ok || echo "found: '$moved'")"
+
 # ---- 2. one short line, every request ----
 for out in "$work" "$personal" "$unread"; do
   lines="$(printf '%s\n' "$out" | grep -c .)"

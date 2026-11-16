@@ -14,13 +14,33 @@
 import { answerKey, sameText } from './bedtime.ts'
 import { repoKey, type NightQuestion } from './wake.ts'
 
-// Words a note uses to say it asks nothing. Read only for a note with no choices to pick from, since
-// a question with answers to pick is a question whatever else it says.
-const SAYS_NO_QUESTION =
-  /\b(?:not (?:really )?a question|no (?:answer|reply|decision|action) (?:is )?(?:needed|required|wanted)|nothing to (?:answer|decide)|nothing (?:is )?needed from (?:you|dan)|for (?:your )?information only|fyi)\b/i
+// #3056: which note is no question is decided twice, here for the morning pickers and in the night's
+// report (payload/hooks/lib/sleep-report.py, not_a_question and distinct_questions), and both are
+// held to one set of cases, tests/night-question-fixtures.ts. Change one and the other with it.
+//
+// A note is no question only when its words as a whole say so: it carries no choices to pick from
+// (a question with answers to pick is a question whatever else it says), it asks nothing, and one of
+// its parts says, whole, that it asks nothing. The words once matched anywhere in it, so "Merge #5
+// now? No decision needed on the rename." was dropped unoffered (#3056). A doubt keeps it offered:
+// a note offered that asked nothing costs Dan a skip, one hidden that asked something is never
+// answered (L648).
 
-/** A note that carries no choices and says itself it is not a question. */
-export const notAQuestion = (q: { text: string; options?: readonly string[] }): boolean => (q.options?.length ?? 0) < 2 && SAYS_NO_QUESTION.test(q.text)
+// A part of a note: what lies between sentence and clause marks.
+const parts = (text: string) => text.split(/[.,;:!?\n]+/).map(p => p.split(/\s+/).filter(Boolean).join(' ')).filter(Boolean)
+// It asks when a sentence ends on a question mark (one inside a web address, as in ?page=2, is not
+// one), or when a part opens as a question does, its question mark left off.
+const ASKS_MARK = /\?(?=\s|$)/
+const ASKS_OPENING = /^(?:should|shall|can|could|would|will|do|does|did|is|are|was|were|may|might|which|what|when|where|who|whom|whose|why|how)\b/i
+// A part that says, whole, that the note asks nothing.
+const SAYS_NOTHING_ASKED =
+  /^(?:(?:this|it) is )?(?:just )?(?:not (?:really )?a question|no (?:answer|reply|decision|action) (?:is )?(?:needed|required|wanted)|nothing to (?:answer|decide)|nothing (?:is )?needed from (?:you|dan)|for (?:your )?information(?: only)?|fyi)$/i
+
+/** A note that carries no choices, asks nothing, and says itself, whole, that it is not a question. */
+export const notAQuestion = (q: { text: string; options?: readonly string[] }): boolean => {
+  if ((q.options?.length ?? 0) >= 2 || ASKS_MARK.test(q.text)) return false
+  const ps = parts(q.text)
+  return !ps.some(p => ASKS_OPENING.test(p)) && ps.some(p => SAYS_NOTHING_ASKED.test(p))
+}
 
 // Two notes are one question when their words match and nothing they name differs: a repository or
 // issue only one of them gives is no difference (the same note written by repository and by folder).

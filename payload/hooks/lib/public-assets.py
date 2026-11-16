@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The detector behind check-public-assets.sh: unreferenced served assets and oversized images.
 
-    public-assets.py --repo <dir> [--head <rev>] [--base <rev>] [--cap-bytes <n>]
+    public-assets.py --repo <dir> [--head <rev>] [--base <rev or tree>] [--cap-bytes <n>]
                      [--allowlist <path relative to the repo>] [--verbose]
 
 Reads COMMITTED trees through git, never the working tree, because a push carries commits: an
@@ -15,7 +15,8 @@ repo root, whichever exist):
    asset's path relative to its directory (`brand/x.svg`, which is how Next serves `public/brand/x.svg`
    at `/brand/x.svg`) or its bare basename (`x.svg`), as a whole token: the character before it may not
    be part of a filename and the character after it may not continue one. The verdict is a comparison
-   with the merge-base tree, not a stored baseline: an asset that is unreferenced at HEAD FAILS only
+   with the base tree, not a stored baseline (the merge-base, or the tree git merge-tree gives
+   for it with the default branch merged in, claude-config#3054): an asset that is unreferenced at HEAD FAILS only
    when this push introduced that state, either by adding the asset or by removing the last reference
    to it. An asset that was already unreferenced at the base is counted and left alone, so a repo's
    existing dead assets never block a push (Slate deletes its own in slate#2561).
@@ -276,10 +277,14 @@ def run(repo, head, base, cap, allow_rel, verbose):
               f"root of this repo, so there were no assets to judge.")
         return 2
 
+    # The base is any tree-ish, not only a commit: once a branch merges main in, the hook passes the
+    # tree git merge-tree writes for the start with main merged into it (claude-config#3054), and
+    # asking for a commit there dropped the base and counted every asset as added. A commit peels to
+    # its tree, and everything below (ls-tree, diff, <base>:<path>) reads a tree id the same way.
     have_base = False
     if base:
         try:
-            git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+            git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{tree}}")
             have_base = True
         except Measure:
             have_base = False

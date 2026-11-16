@@ -3311,7 +3311,7 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L857. An error or refusal that quotes the input it rejects must cap how much it quotes and
   how many items it lists, because an answer that grows with the input can be far larger than
   the input, and the error path then fails with no reason shown.**
-  (bidspoke#3810, 2026-11-16)
+  (bidspoke#3786, 2026-11-16)
   SHORT: An error that quotes the input it rejects must cap what it quotes and lists, or the answer outgrows the input and the error path fails silently.
 
 - **L855. Any code that reads text a person can paste or upload (a script, a template, a setting, a file) gets a limit on that text's length before the first reading, and a test that the reading's work grows in step with the length. Without both, one long or oddly shaped input exhausts the process with no message, and no ordinary test ever feeds it one.** (bidspoke#3734, 2026-11-14)
@@ -5777,6 +5777,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L858. An answer sent to a caller outside the system carries a fixed failure message and a
+  trace id, never the text of the error that was thrown.** A thrown message names vendors,
+  fields and sometimes data that nobody chose to disclose, and it changes with every new
+  failure, so no review ever sees what it will say.
+  (bidspoke#3818, 2026-11-16)
+  SHORT: An answer to an outside caller carries a fixed failure message and a trace id, never the thrown error's text, which names vendors, fields and data.
 - **L856. Anything a page keeps in browser storage about a record must be keyed by the signed
   in person as well as the record, and cleared at sign out, because browser storage outlives the
   session and the next person to sign in on that browser is shown the last person's unsaved work.**
