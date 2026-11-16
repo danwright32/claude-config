@@ -63,6 +63,11 @@
 # Since claude-config#3092 it refuses a push whose command first runs a git rebase, cherry-pick,
 # revert, am, merge of a named branch or pull: the commits those make do not exist when the gates
 # run and no gate reads them, so they went out unjudged. The remedy is the same, two commands.
+#
+# Since claude-config#3098 it refuses a push whose command first moves the branch without making a
+# commit (a git checkout or switch of another branch, a git reset to another commit, a rebase
+# abandoned), or changes the index by a route other than git add and then commits (git stash pop,
+# git apply --index, git rm, a path taken from another commit). The remedy is the same again.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -179,6 +184,30 @@ unread_route_check() {
   exit 2
 }
 
+# A git command before the push that makes no commit and still changes what the push sends
+# (claude-config#3098). One kind MOVES the branch: a checkout or switch of another branch, a reset
+# to another commit, a sequence abandoned back to where it began. The push then sends commits that
+# were never in the range a gate read, or leaves out ones that were. The other kind changes the
+# INDEX by a route other than git add (a stash put back, a patch applied with --index, a path taken
+# from another commit, a git rm) ahead of a commit: the gates fold that pending commit in from the
+# index as it was before the command ran. Which spellings, what was measured and what is let
+# through live with the question, ps_unread_move_or_stage in lib/push-scope.sh. Each kind has its
+# own sentence and remedy (L11). No override, as for the routes above: the remedy is one more
+# command.
+unread_move_check() {
+  local found kind route
+  found="$(ps_unread_move_or_stage "$cmd")" || return 0
+  kind="${found%% *}"; route="${found#* }"
+  if [ "$kind" = move ]; then
+    printf 'PUSH REFUSED: this command runs %s before it pushes. That can put the branch on commits it was not on when the push gates ran, or take it off ones it was on, so what the push would send is not what the push gates read (tests, style, deferrals, scanners and the rest), and it would go out with none of them having judged it (claude-config#3098). Run everything before the push as a command of its own, then push as a command of its own, and the gates will read the branch where it then stands.\n' \
+      "$route" >&2
+  else
+    printf 'PUSH REFUSED: this command runs %s, then commits and pushes. What that puts into the index or takes out of it is not in the index when the push gates run, so the commit this command makes would not hold what the gates read for it (tests, style, deferrals, scanners and the rest), and it would be pushed with none of them having judged it (claude-config#3098). Run everything before the commit as a command of its own, then commit and push, and the gates will read what is staged.\n' \
+      "$route" >&2
+  fi
+  exit 2
+}
+
 # Asked through ps_repo_dirs, the list ps_repo_dir is built on, so the two causes of a gate standing
 # down get their own sentence and their own remedy (L11, L111): a directory that could not be
 # resolved (exit 2), or pushes into MORE THAN ONE repository (claude-config#1062), each of which
@@ -190,7 +219,7 @@ dirs="$out"; err="$out"
 # rc 1 (no repository named and none at the session directory) is a push git itself will refuse, and
 # a single repository is a push the gates do judge.
 if [ "$rc" -eq 0 ]; then
-  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; exit 0 ;; esac
+  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; unread_move_check; exit 0 ;; esac
   printf 'PUSH REFUSED: this command pushes from more than one repository (%s), and every push gate (tests, style, scanners, docs and the rest) judges one repository per command, so the pushes after the first would go out with no gate having looked at them (claude-config#1062). Run each repository'"'"'s push as a command of its own.\n' \
     "$(printf '%s' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')" >&2
   exit 2
