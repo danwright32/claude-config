@@ -17,7 +17,8 @@
 #     file, to add a new file, or to plant an ignored one is caught.
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git, lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that sets no value, with its texts as the checkout left the default branch with them.
+#     command that sets no value and runs nothing but a change of folder before it, with its texts
+#     as the checkout left the default branch with them.
 #     Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 #     with the run is still judged.
 # What it cannot prove, said so it is never claimed (L460): what the real claude command, the real
@@ -124,13 +125,17 @@ mkmod(){   # $1 = mods dir  $2 = name
   printf 'export {}\n' > "$1/$2/tests/a.test.ts"
   printf '{ "extends": "./.claude-plugin/types/tsconfig.json" }\n' > "$1/$2/tsconfig.json"
 }
+# The pin, the pinned types and the record of known type errors the script reads: every file under
+# tools/typescript that git tracks or would track, so never the ignored node_modules there.
+DATA="$(bash "$ROOT/payload/hooks/lib/repo-files.sh" "$ROOT" tools/typescript)" && [ -n "$DATA" ] \
+  && check "the data the script reads under tools/typescript is listed" ok || check "the data the script reads under tools/typescript is listed" "repo-files.sh gave: $DATA"
 # A checkout holding the real script and libraries at their paths, the data they read, the real
 # ignore rules, and four mods: one fine, one leaning on it, one validate refuses, one whose tests fail.
 # $2, when given, is a sed program changing the copy of the script, for the controls.
 make_repo(){   # $1 = folder  $2 = sed program for the script, or empty
   local repo="$1" t f
   mkdir -p "$repo"
-  for t in $TEXTS tools/sec-default-bypassed-hooks.tsv .gitignore $(git -C "$ROOT" ls-files tools/typescript); do
+  for t in $TEXTS tools/sec-default-bypassed-hooks.tsv .gitignore $DATA; do
     mkdir -p "$repo/$(dirname "$t")"
     cp "$ROOT/$t" "$repo/$t" || return 1
   done
@@ -162,8 +167,15 @@ tracked(){   # $1 = checkout
   done)
 }
 status(){ git -C "$1" status --porcelain --untracked-files=all 2>&1; }
-# What changed between two listings, a few lines of it.
-changed(){ diff <(printf '%s\n' "$1") <(printf '%s\n' "$2") | grep '^[<>]' | head -n 6 | paste -sd';' -; }
+# Every line that differs between two listings. Through files, and read to its end, since a reader
+# that stops early or a process substitution inside a captured function can lose lines on bash 3.2,
+# and a lost line here would read as nothing having changed.
+differing(){   # $1 = listing before  $2 = listing after
+  printf '%s\n' "$1" > "$TMP/listing.before"; printf '%s\n' "$2" > "$TMP/listing.after"
+  diff "$TMP/listing.before" "$TMP/listing.after" | grep '^[<>]'
+}
+# What changed between two listings, the first few lines of it on one line.
+changed(){ differing "$1" "$2" | sed -n '1,6p' | paste -sd';' -; }
 
 CLAUDE="$TMP/claude"; CALLS="$TMP/claude-calls"
 cat > "$CLAUDE" <<'STUB'
@@ -234,7 +246,10 @@ tracked_after="$(tracked "$REPO")"
 [ "$tracked_after" = "$tracked_before" ] && check "every file git tracks or would track is byte for byte as it was, and none is new" ok \
   || check "every file git tracks or would track is byte for byte as it was, and none is new" "$(changed "$tracked_before" "$tracked_after")"
 [ "$(status "$REPO")" = "$status_before" ] && check "git status is as it was" ok || check "git status is as it was" "now: $(status "$REPO")"
-new="$(diff <(printf '%s\n' "$whole_before") <(whole "$REPO") | grep '^[<>]' | grep -v '^> [^ ]* \./tools/typescript/node_modules\(/\| \|$\)' | grep -v '^> link \./tools/typescript/node_modules/' | head -n 6 | paste -sd';' -)"
+whole_now="$(whole "$REPO")"
+installed="$(differing "$whole_before" "$whole_now" | grep -c '^> [^ ]* \./tools/typescript/node_modules\(/\| \|$\)')"
+[ "$installed" -ge 2 ] && check "the listing sees what the install put in the checkout" ok || check "the listing sees what the install put in the checkout" "$installed new paths under tools/typescript/node_modules"
+new="$(differing "$whole_before" "$whole_now" | grep -v '^> [^ ]* \./tools/typescript/node_modules\(/\| \|$\)' | sed -n '1,6p' | paste -sd';' -)"
 [ -z "$new" ] && check "and everything new in the checkout is under the ignored tools/typescript/node_modules" ok \
   || check "and everything new in the checkout is under the ignored tools/typescript/node_modules" "$new"
 git -C "$REPO" check-ignore -q tools/typescript/node_modules && check "which the repository's own ignore rules cover" ok \
@@ -270,11 +285,12 @@ import { appendFileSync, existsSync, mkdirSync, copyFileSync, statSync } from 'n
 import { dirname } from 'node:path'
 const [namedPath, writesPath, rulesPath, repo] = process.argv.slice(2)
 const { CHECK_MODS, namedReaders } = await import(namedPath)
-const { commandWrites } = await import(writesPath)
+const { commandWrites, pipelineIn } = await import(writesPath)
 const { shellTargets } = await import(rulesPath)
 const HOME = '/Users/dan'
 const git = (...args) => spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { encoding: 'utf8' })
-const facts = github => ({
+const facts = (github, cwd) => ({
+  commands: async command => pipelineIn(command, cwd, HOME),
   checkout: async path => {
     const r = spawnSync('git', ['-C', dirname(path), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' })
     return r.status === 0 ? { root: r.stdout.trim(), github, defaultBranch: 'main' } : { unread: 'it is in no checkout' }
@@ -285,7 +301,7 @@ const facts = github => ({
 const say = (name, ok, evidence) => console.log(ok ? `PASS\t${name}` : `FAIL\t${name}\t${evidence}`)
 // What the area check goes on to judge for a command, and what the rule decided for each named run.
 const read = async (command, cwd = repo, github = CHECK_MODS.repo) => {
-  const r = await namedReaders(command, commandWrites(command, cwd, HOME), facts(github))
+  const r = await namedReaders(command, commandWrites(command, cwd, HOME), facts(github, cwd))
   return { judged: shellTargets(r.writes, HOME).map(t => t.path ?? t.word), named: r.named }
 }
 const through = async (name, command, cwd) => {
@@ -314,6 +330,13 @@ await judged('a script of that name in no checkout is judged', 'bash /nowhere/to
 await judged('handed two folders, both are judged', 'bash tools/check-mods.sh payload/mods payload/hooks', [MODS, `${repo}/payload/hooks`], 'more than the one folder')
 await judged('with a value set in front of it, it is judged', 'TMPDIR=payload/mods bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
 await judged('with a value exported before it, it is judged', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
+// A value set with no equals sign, by a command that runs first: only a change of folder may.
+const BEFORE = 'runs before it in the same command'
+await judged('after a value read and exported, it is judged', 'read TMPDIR <<< payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
+await judged('after a value printed into a variable and exported, it is judged', 'printf -v TMPDIR %s payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
+await judged('after a sourced file, it is judged', '. ./env.sh; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
+await judged('inside a loop that names a variable, it is judged', 'for TMPDIR in payload/mods; do export TMPDIR; bash tools/check-mods.sh payload/mods; done', [MODS], BEFORE)
+await judged('run twice with a value exported between, both are judged', 'bash tools/check-mods.sh payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('run by another shell, it is judged', 'sh tools/check-mods.sh payload/mods', [MODS])
 await judged('handed a file, the file is judged', 'bash tools/check-mods.sh payload/mods/fine/hooks/register.ts', [`${MODS}/fine/hooks/register.ts`], 'is no folder on the disk')
 await judged('handed a name built as the command runs, it is judged', 'bash tools/check-mods.sh "$MODS"', ['$MODS'], 'cannot be read as the one folder')
@@ -350,7 +373,7 @@ await through('every library put back, the run is let through again', RUN)
 git('update-ref', '-d', 'refs/remotes/origin/main')
 await judged('with no origin/main to compare with, it is judged', RUN, [MODS], 'git could not compare its text')
 JS
-EXPECTED=27
+EXPECTED=32
 ruled="$(node --experimental-strip-types --no-warnings "$TMP/rule.mjs" "$NAMED" "$ROOT/payload/mods/mod-kit/hooks/writes.ts" "$ROOT/payload/mods/area-check/hooks/rules.ts" "$REPO" 2>&1)" || {
   check "the rule runs on the real reader" "$ruled"
   finish

@@ -8116,7 +8116,8 @@ only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a
 danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
 writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
 the checkout is a clone of that repository, it is handed one folder that is on the disk, the
-command sets no value (it holds no equals sign, since the script takes the programs it runs and
+command sets no value (it holds no equals sign, and nothing but `cd` runs before the script in it,
+since the script takes the programs it runs and
 where it keeps its copies and logs from the environment), and neither the script nor a library it
 sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
 Anything else is judged as before: a script of that name in another repository or elsewhere in the

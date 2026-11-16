@@ -42,6 +42,8 @@ export const unchangedArgs = (defaultBranch: string): string[] => ['diff', '--qu
 
 /** What the rule asks of the machine, handed in so the rule itself is plain to test. */
 export type NamedFacts = {
+  /** The commands a Bash call runs, in the order it runs them, as mod-kit reads them. */
+  commands: (command: string) => Promise<readonly { words: readonly string[] }[]>
   /** The checkout a path is in, the GitHub repository it is a clone of, and its default branch. */
   checkout: (path: string) => Promise<{ root: string; github: string | null; defaultBranch: string | null } | { unread: string }>
   isFolder: (path: string) => Promise<boolean>
@@ -63,6 +65,14 @@ const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<strin
   // environment (CLAUDE_BIN, TSC_BIN, TMPDIR, CHECK_MODS_FAILURE_OUTPUT), and mod-kit's reading of a
   // command does not carry a value set in front of it, so the text of the command is asked.
   if (command.includes('=')) return 'the command sets a value (it holds an equals sign), and the script takes the programs it runs and where it keeps its copies from the environment'
+  // A value can be set with no equals sign too (`read TMPDIR <<< src; export TMPDIR`, `printf -v`, a
+  // sourced file), by any command that runs first. So only a change of folder may come before it:
+  // before the last command naming the script, since which of them this run is cannot be told.
+  const run = await facts.commands(command)
+  const last = run.map(c => c.words.includes(r.script)).lastIndexOf(true)
+  if (last < 0) return 'the run cannot be found among the commands, so what runs before it cannot be read'
+  const earlier = run.slice(0, last).find(c => c.words[0] !== 'cd')
+  if (earlier) return `${earlier.words.join(' ')} runs before it in the same command, and what that leaves in the environment cannot be read`
   const at = await facts.checkout(r.path as string)
   if ('unread' in at) return `its checkout cannot be read (${at.unread})`
   if (r.path !== `${at.root}/${CHECK_MODS.script}`) return `it is not ${CHECK_MODS.script} at the root of its checkout`
@@ -78,8 +88,8 @@ const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<strin
 /**
  * What a command writes, without the folder a named script only reads. A run is let through when it
  * is the named script itself: run by bash or directly, at its path from the root of a checkout of its
- * repository, handed one folder that is on the disk, in a command that sets no value, with its texts
- * unchanged. Then the run is taken out of `runs`, so the folder is no write of that run's. Every other
+ * repository, handed one folder that is on the disk, in a command that sets no value and runs nothing
+ * but a change of folder before it, with its texts unchanged. Then the run is taken out of `runs`, so the folder is no write of that run's. Every other
  * run, every other write in the command (a redirect, a command chained with it, another script handed
  * the same folder) and every run that is not let through stay as mod-kit read them, judged as before.
  * A fact that cannot be had lets nothing through (fail closed). `named` is every run of a script of
@@ -116,6 +126,7 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
  */
 export function engineFacts($: EngineInterface): NamedFacts {
   return {
+    commands: async command => $.modkit.pipeline({ command, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' }),
     checkout: async path => {
       const b = await $.modkit.branch({ path })
       if (!b) return { unread: 'it is in no checkout' }
