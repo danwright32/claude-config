@@ -6219,7 +6219,12 @@ live both ask; only a command that runs it counts, as the program or the script 
 `cat` or `grep`, which Dan approved on 2026-10-16 as a narrowing of the overnight merge ban; one
 that may run it but cannot be read for certain, a variable or substitution as the program or script,
 a shell fed what cannot be read, xargs, `eval` of a variable, or inline code running a process that
-names it, is `unreadable` with a repository that cannot be told, so overnight it is refused), of the
+names it, is `unreadable` with a repository that cannot be told, so overnight it is refused; and
+since #3036 a merge the command's own words do not run, which `gh` reads as no gh command: the `gh
+pr merge` in `eval`'s text, read as `gh` reads it, as the helper there already was, and one behind
+`ssh`, another machine's, or in an alias being set, run later with words nobody has typed yet, so
+`alias g=gh` counts, each `unreadable` with a repository that cannot be told; `builtin` before
+`eval`, `alias`, `source` or `.` is looked past), of the
 git checkout a path sits in (`$.modkit.workingTree({ path })`, found by its `.git` entry on the
 disk), of where that checkout stands (`$.modkit.branch({ path })`, #978: its main working tree,
 branch, default branch, whether it is on it, and the issues the branch names, each part of it
@@ -6323,7 +6328,8 @@ words); the scan fails a mod undoing YAML's `''` by hand, matching a single quot
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
 each name on both sides with git's quoting undone, a character outside the Basic Multilingual Plane
 taken whole, each hunk walked by its header's counts, one that does not add up left out with its
-reason kept while the files after it are still named, #3021, and how
+reason kept while the files after it are still named, #3021, the line that ran it past its counts
+read again as the next file's first line, #3036, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
 and the Slack alert guard each kept their own, and each read wrong a case the other read right);
