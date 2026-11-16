@@ -223,8 +223,8 @@ case "$(copies_in)" in "$REPO/payload/mods/check-mod-shared-parts."*) check "wit
   *) check "with TMPDIR set to the folder, the script's copies are made inside the folder" "strip-hooks was handed: $(copies_in); out=$out" ;; esac
 
 # ---- The rule, on the real reader and real git ----
-# 33 checks: 31 of the run's shape and its text, one for the program, and one for the other script
-# let through by name.
+# How many checks must run is set here, not measured: 31 of the run's shape and its text, one for
+# the program, and one for the other script let through by name.
 named_rule SHARED_PARTS "$REPO" payload/mods/mod-kit/hooks/card.ts 33
 
 finish
