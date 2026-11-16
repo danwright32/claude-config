@@ -783,22 +783,31 @@ const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; i
   if (!u.inputs.length) return undefined
   const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
   if (texts.length !== u.inputs.length) return undefined
-  const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
-  const run = commands.find(c => JSON.stringify(c.words) === JSON.stringify(u.words))
-  if (!run || run.folder === null) return undefined
-  const folder = run.folder ?? at.cwd
-  const g = await $.modkit.git({ words: [...u.words] })
-  const git = g?.sub === 'apply' || g?.sub === 'am'
-  let base = folder
-  if (git) {
-    const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
-    base = (await $.modkit.workingTree({ path: dir })) ?? dir
+  let git = false
+  let args: readonly string[] = u.words.slice(1)
+  let base = at.cwd
+  // A folder or checkout mod-kit or the disk cannot answer for is judged as before (lessons review).
+  try {
+    const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
+    const run = commands.find(c => JSON.stringify(c.words) === JSON.stringify(u.words))
+    if (!run || run.folder === null) return undefined
+    const folder = run.folder ?? at.cwd
+    const g = await $.modkit.git({ words: [...u.words] })
+    base = folder
+    if (g?.sub === 'apply' || g?.sub === 'am') {
+      git = true
+      args = g.args
+      const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
+      base = (await $.modkit.workingTree({ path: dir })) ?? dir
+    }
+  } catch {
+    return undefined
   }
   const out: Target[] = []
   for (const text of texts) {
     const read = readPatch(text)
     if (read.unreadable || !read.files.length) return undefined
-    for (const p of patchedPaths(git ? g.args : u.words.slice(1), git, text)) out.push({ path: resolvePath(p, base, at.home), word: p })
+    for (const p of patchedPaths(args, git, text)) out.push({ path: resolvePath(p, base, at.home), word: p })
   }
   return out
 }

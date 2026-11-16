@@ -4843,6 +4843,9 @@ test('#3022: a patch is judged by the files it changes, never by a name its text
     expect({ command, named: (await why(command)).includes('app/page.tsx') }).toEqual({ command, named: true })
   // A patch whose hunk does not add up is read for every name it mentions, as before.
   expect((await why('git apply broken.patch')).includes('app/page.tsx')).toBe(true)
+  // A checkout the disk cannot answer for: read for every name it mentions, as before.
+  w.files['/w/locked/repo/mentions.patch'] = mentions
+  expect((await why('cd /w/locked/repo && git apply mentions.patch')).includes('app/page.tsx')).toBe(true)
   expect(w.ran.length).toBe(3)
 })
 
