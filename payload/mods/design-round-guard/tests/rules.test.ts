@@ -485,6 +485,24 @@ test('#2991: a python program binds a variable to one of its arguments only by a
   expect(inScriptTemp(plainBraces, '/app/index.html', plainBraces, ['python3', '-', '$CH'], script)).toBe(false)
   const braces = 'open("${CH}/app/index.html", "w")\n'
   expect(inScriptTemp(braces, '/app/index.html', braces, ['python3', '-', '$CH'], script)).toBe(false)
+  // #3022: the temporary folder's variable must start the path written; one added after another
+  // value (`root + ch + ...`, `f"{root}{ch}..."`, `f"/w/slate{ch}..."`) lands under that value.
+  for (const line of [
+    'open(root + ch + "/app/index.html", "w")',
+    'open(root+ch+"/app/index.html", "w")',
+    'open("/w/slate" + ch + "/app/index.html", "w")',
+    'open(f"/w/slate{ch}/app/index.html", "w")',
+    'open(f"{root}{ch}/app/index.html", "w")',
+    'open(os.path.join(root, ch + "/app/index.html"), "w")',
+    'p = root + \\\n  ch + "/app/index.html"',
+  ]) {
+    const text = `import sys\nch = sys.argv[1]\nroot = "/w/slate"\n${line}\n`
+    expect([line, inScriptTemp(text, '/app/index.html', text, ['python3', '-', '$CH'], script)]).toEqual([line, false])
+  }
+  for (const line of ['p = ch + "/app/index.html"', 'open( ch + "/app/index.html", "w")', 'return ch + "/app/index.html"', 'Path(f"{ch}/app/index.html").write_text(x)']) {
+    const text = `import sys\nch = sys.argv[1]\n${line}\n`
+    expect([line, inScriptTemp(text, '/app/index.html', text, ['python3', '-', '$CH'], script)]).toEqual([line, true])
+  }
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

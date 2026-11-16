@@ -279,17 +279,21 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       const under = rel ? `${args[1]}/${rel}/` : `${args[1]}/`
       return ok(Object.keys(files).filter(f => f.startsWith(under)).map(f => `${f.slice(String(args[1]).length + 1)}\0`).join(''))
     }
-    // Whether git tracks a file (#1933): `git -C <tree> ls-files -z -- :(literal,icase)<path>`, which
-    // names it when it is tracked and prints nothing when it is not.
-    if (cmd === 'git' && args[0] === '-C' && args[2] === 'ls-files' && args.length === 6) {
+    // Whether git tracks files (#1933): `git -C <tree> ls-files -z -- :(literal,icase)<path>...`, one
+    // pathspec per file (#3022 asks for every file in one run), which names each tracked one and
+    // nothing for any other.
+    if (cmd === 'git' && args[0] === '-C' && args[2] === 'ls-files' && args[3] === '-z' && args[4] === '--' && args.length >= 6) {
       gitRuns.push(e.argv.join(' '))
       if (ctl.lsFilesFails) throw new Error('spawn git ENOENT')
-      const rel = String(args[5]).replace(/^:\(literal,icase\)/, '')
-      const path = `${args[1]}/${rel}`.toLowerCase()
-      // A path a test never put on the disk is tracked too (#2991): git's index answers for a file
-      // whatever the disk holds, and a test naming a project file means one the project has.
-      const tracked = !(ctl.untracked ?? []).some(f => f.toLowerCase() === path)
-      return ok(tracked ? `${rel}\0` : '')
+      let out = ''
+      for (const spec of args.slice(5)) {
+        const rel = String(spec).replace(/^:\(literal,icase\)/, '')
+        const path = `${args[1]}/${rel}`.toLowerCase()
+        // A path a test never put on the disk is tracked too (#2991): git's index answers for a file
+        // whatever the disk holds, and a test naming a project file means one the project has.
+        if (!(ctl.untracked ?? []).some(f => f.toLowerCase() === path)) out += `${rel}\0`
+      }
+      return ok(out)
     }
     // Taking away a file a shell write made (#1296): `rm -f -- <path>`.
     if (cmd === 'rm'&& args[0] === '-f' && args[1] === '--' && args.length === 3) {
@@ -3261,7 +3265,8 @@ test("#1191: a folder shaped like the session's scratchpad anywhere but Claude C
 // against any such read, so one attempted fails at once rather than at the hang ceiling. A patch fed
 // on standard input is the heredoc, read in the command itself; a patch file is still read.
 test('a patch read from /dev/stdin, /dev/fd/0 or a fifo is never opened, and settles with the right verdict; a patch file is still read (#1765)', withKit, async ($, on) => {
-  const w = world($, on, { fifos: ['/w/slate/ui.fifo'], files: { '/w/slate/ui.patch': '--- app/page.tsx\n+++ app/page.tsx\n@@ -1 +1 @@\n-x\n+y\n' } })
+  // The patch file carries git's a/ and b/, which git apply strips (#3022 judges it by where git puts it).
+  const w = world($, on, { fifos: ['/w/slate/ui.fifo'], files: { '/w/slate/ui.patch': '--- a/app/page.tsx\n+++ b/app/page.tsx\n@@ -1 +1 @@\n-x\n+y\n' } })
   const settles = async (command: string) => Promise.race([awaitAtEnd(call($, { tool: 'Bash', command })).then(r => ({ settled: r })), w.readAttempted])
   for (const source of ['/dev/stdin', '/dev/fd/0', 'ui.fifo']) {
     const page = await settles(`git apply ${source} <<'EOF'\n--- app/page.tsx\n+++ app/page.tsx\n@@ -1 +1 @@\n-x\n+y\nEOF`)
@@ -4801,6 +4806,29 @@ test('#3017: beside a sibling no reader can follow, a mod registering a band, a 
   expect(w.ran).toEqual([])
 })
 
+// #3027: #3017's drawsNothing read every file in the folders inside a mod's hooks folder on every
+// judgement of a hook .ts change, used or not. They are read only when the judgement needs them (a
+// sibling no reader can follow), once per mod for the call; a comment only edit, or any edit in a mod
+// read whole, reads none of them.
+test('#3027: the folders inside a mod hooks folder are read only when the draws nothing check needs them, once per mod for the call', withKit, async ($, on) => {
+  const HOLD = `${DRG}/hooks/mod-kit/hold.ts`
+  const w = world($, on, {
+    files: { ...DRG_FILES, [`${DRG}/hooks/rules.ts`]: DRG_RULES_OURS },
+    blobs: { [`/w/slate :2:${DRG_REL}/register.ts`]: DRG_REGISTER, [`/w/slate :2:${DRG_REL}/rules.ts`]: DRG_RULES_OURS },
+  })
+  const holdReads = () => w.reads.filter(p => p === HOLD).length
+  // Read whole: a logic edit and a comment only edit read nothing inside.
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: `${DRG}/hooks/register.ts`, old_string: DRG_LOG, new_string: `  // say so\n${DRG_LOG}` }))).toBe('')
+  expect(holdReads()).toBe(0)
+  // A sibling no reader can follow: needed, and read once for the call however many files it judges.
+  w.files[`${DRG}/hooks/rules.ts`] = DRG_RULES_CONFLICT
+  expect(refusalOf(await call($, DRG_LOGIC))).toBe('')
+  expect(holdReads()).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${DRG_REL}/register.ts ${DRG_REL}/rules.ts` }))).toBe('')
+  expect(holdReads()).toBe(2)
+})
+
 test('#3017: an untracked scratch copy of a rendering mod file is judged as #2991 left it: written, held; taken away, run', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate-wt', files: { ...ONEMOD_FILES, [`${SCRATCH}/.keep`]: '' } })
   w.ctl.untracked = Object.keys(ONEMOD_FILES)
@@ -4808,5 +4836,54 @@ test('#3017: an untracked scratch copy of a rendering mod file is judged as #299
   expect(refusalOf(await call($, write))).toContain(SKIP_QUESTION)
   expect(w.ran).toEqual([])
   expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+// #3022: a git apply was judged by every look changing name its patch's text mentions, not only the
+// files it changes: measured 2026-11-14 on a patch adding captured pages under docs/design, whose
+// added lines named stylesheets and pages the patch never touched. A patch is now read through
+// mod-kit's patch reader (hooks/mod-kit/patch.ts) and judged by the files it changes, placed as git
+// apply and patch place them. A patch the reader cannot read whole, and a command whose folder cannot
+// be followed, are judged by every name they mention, as before (failing closed).
+test('#3022: a patch is judged by the files it changes, never by a name its text only mentions', withKit, async ($, on) => {
+  const mentions = '--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n x\n+see app/page.tsx and app/globals.css\n'
+  const changes = '--- a/app/page.tsx\n+++ b/app/page.tsx\n@@ -1 +1 @@\n-x\n+y\n'
+  const broken = '--- a/README.md\n+++ b/README.md\n@@ -1 +1,5 @@\n x\n+see app/page.tsx\n'
+  const w = world($, on, { files: { '/w/slate/mentions.patch': mentions, '/w/slate/changes.patch': changes, '/w/slate/broken.patch': broken, '/w/slate/docs/.keep': '' } })
+  const why = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  // Changes only README.md: runs, for git apply and patch alike.
+  for (const command of ['git apply mentions.patch', 'patch -p1 < mentions.patch', 'git apply --index /w/slate/mentions.patch'])
+    expect({ command, why: await why(command) }).toEqual({ command, why: '' })
+  // Changes app/page.tsx: held, from the top of the checkout and from a folder inside it, and in reverse.
+  for (const command of ['git apply changes.patch', 'cd /w/slate/docs && git apply ../changes.patch', 'git apply -R changes.patch', 'patch -p1 < changes.patch'])
+    expect({ command, named: (await why(command)).includes('app/page.tsx') }).toEqual({ command, named: true })
+  // A patch whose hunk does not add up is read for every name it mentions, as before.
+  expect((await why('git apply broken.patch')).includes('app/page.tsx')).toBe(true)
+  // A checkout the disk cannot answer for: read for every name it mentions, as before.
+  w.files['/w/locked/repo/mentions.patch'] = mentions
+  expect((await why('cd /w/locked/repo && git apply mentions.patch')).includes('app/page.tsx')).toBe(true)
+  expect(w.ran.length).toBe(3)
+})
+
+// #3022: the untracked removal pass (#1933, #2991) ran one git ls-files per file, so rm -rf of a large
+// screen folder spawned hundreds of git calls. Git is now asked once per checkout for the whole set,
+// and answers for each file as before: an untracked folder taken away runs, one with a tracked file in
+// it stays held, and one git cannot answer for stays held.
+test('#3022: taking away a folder of untracked screen files asks git once for the whole set', withKit, async ($, on) => {
+  const big = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`${ONEMOD}/screens/s${i}/page.tsx`, 'export default () => <main />\n']))
+  const w = world($, on, { cwd: '/w/slate-wt', files: { ...big, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.untracked = Object.keys(big)
+  const lsFiles = () => w.gitRuns.filter(r => / ls-files -z -- /.test(r)).length
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toBe('')
+  expect(lsFiles()).toBe(1)
+  expect(w.ran.length).toBe(1)
+  // One of them tracked: held, naming it, still in one run.
+  w.ctl.untracked = Object.keys(big).filter(f => !f.includes('/s7/'))
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm -rf ${ONEMOD}` }))).toContain('s7/page.tsx')
+  expect(lsFiles()).toBe(2)
+  // Git cannot answer: held.
+  w.ctl.untracked = Object.keys(big)
+  w.ctl.lsFilesFails = true
+  expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${ONEMOD}/screens/s3/page.tsx ${ONEMOD}/screens/s4/page.tsx` }))).toContain('page.tsx')
   expect(w.ran.length).toBe(1)
 })

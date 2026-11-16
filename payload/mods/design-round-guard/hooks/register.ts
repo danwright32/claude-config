@@ -48,6 +48,9 @@ import {
   drawnParts,
   drawsNothing,
   modHookTsChange,
+  modHookTsChangeUnread,
+  BEYOND_UNREAD,
+  type HookChange,
   messageWords,
   type Worded,
   isOwnRecord,
@@ -132,6 +135,7 @@ import {
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { patchedPaths, readPatch } from './mod-kit/patch.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
@@ -665,6 +669,15 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       targets.push(...(await programGuesses($, read, u.folder, at, scratch, command)))
       continue
     }
+    // A patch git apply, git am or patch reads from files is judged by the files it changes (#3022,
+    // patchTargets), never by every name its text mentions.
+    if (u.what === 'a patch') {
+      const changed = await patchTargets($, u, command, at)
+      if (changed) {
+        targets.push(...changed)
+        continue
+      }
+    }
     // Otherwise what the command, and any patch or script file it reads, mentions is the guess. One it
     // reads from a device or a fifo is never opened (#1765), as a missing one never was: the read
     // waits for ever, and one fed on standard input is the heredoc, already in the command.
@@ -744,9 +757,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // #2991: a name the program only adds onto a folder in its own variable (`ch +
       // "/app/index.html"`, read here as `/app/index.html`) passes only where that variable is shown to
       // hold a temporary folder the script made itself (rules.ts inScriptTemp: bound to sys.argv[N],
-      // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder), as
-      // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, a value the guard
-      // cannot read) it is judged where guessAt places it, as before.
+      // handed `$X` there, X assigned only from `mktemp -d` or a name inside such a folder, and since
+      // #3022 the variable or its f-string starting the path, rules.ts startsPath), as
+      // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, `root + ch + ...`,
+      // a value the guard cannot read) it is judged where guessAt places it, as before.
       for (const m of (await namesInPieces(text, mentionedLookFiles, pauseTurn($))).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t?.path && !inScriptTemp(text, m, u.program ?? text, u.words, scriptsText)) targets.push({ ...t, inScript: s.word })
@@ -759,6 +773,46 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A command whose effect cannot be read (#3021) is one whose writes the words do not name.
   const unfollowed = w.unnamed.length > 0 || (w.unread?.length ?? 0) > 0 || targets.some(t => (!t.path && t.inScript === undefined) || t.quoted)
   return { targets, storeMentioned: (unfollowed && mentionsStore(command)) || scriptStore }
+}
+
+// The files a patch command changes (#3022), read through mod-kit's patch reader and placed as the
+// command places them: git apply and git am from the top of the checkout they run in (its -C folder,
+// else the folder the command runs in), patch in the folder it runs in, each below the command's own
+// folder argument. Undefined, so every name the patch's text mentions is judged as before, wherever
+// that cannot be told whole: a patch on standard input (the heredoc, read in the command), a patch
+// file that is missing or no ordinary file, one the reader cannot read whole (a hunk that does not
+// add up, no file named), or a command whose folder cannot be followed.
+const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; inputs: readonly string[] }, command: string, at: Where): Promise<Target[] | undefined> => {
+  if (!u.inputs.length) return undefined
+  const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
+  if (texts.length !== u.inputs.length) return undefined
+  let git = false
+  let args: readonly string[] = u.words.slice(1)
+  let base = at.cwd
+  // A folder or checkout mod-kit or the disk cannot answer for is judged as before (lessons review).
+  try {
+    const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
+    const run = commands.find(c => JSON.stringify(c.words) === JSON.stringify(u.words))
+    if (!run || run.folder === null) return undefined
+    const folder = run.folder ?? at.cwd
+    const g = await $.modkit.git({ words: [...u.words] })
+    base = folder
+    if (g?.sub === 'apply' || g?.sub === 'am') {
+      git = true
+      args = g.args
+      const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
+      base = (await $.modkit.workingTree({ path: dir })) ?? dir
+    }
+  } catch {
+    return undefined
+  }
+  const out: Target[] = []
+  for (const text of texts) {
+    const read = readPatch(text)
+    if (read.unreadable || !read.files.length) return undefined
+    for (const p of patchedPaths(args, git, text)) out.push({ path: resolvePath(p, base, at.home), word: p })
+  }
+  return out
 }
 
 // The look changing and mod hook files a program's text names (#1151, #2847), each as guessAt places
@@ -937,18 +991,41 @@ const putBackOrOurs = async ($: EngineInterface, path: string, tree: string, fro
   return 'text' in ours ? { text: back.text, ours: ours.text } : back
 }
 
-// #1933: whether git has never tracked the file at `path` in the checkout `tree`, by its own index
+// #1933: which of the files at `paths` in the checkout `tree` git has never tracked, by its own index
 // (`git ls-files`, which names a tracked file, a staged one included, and prints nothing for any
 // other). Matched literally, so a name holding a pattern's characters is no pattern, and in any case,
 // as this Mac's disk finds a file. Anything git cannot answer counts as tracked, so the removal is
 // judged as before rather than passed.
-const neverTracked = async ($: EngineInterface, path: string, tree: string): Promise<boolean> => {
-  try {
-    const r = await $.process.run(['git', '-C', tree, 'ls-files', '-z', '--', `:(literal,icase)${relTo(path, tree)}`], { timeoutMs: 5000 })
-    return r.exitCode === 0 && !r.isStdoutTruncated && r.stdout === ''
-  } catch {
-    return false
+// Since #3022 git is asked once for every file in one checkout (a pathspec each, as many as fit one
+// run's words, ARGS_CHARS), never once per file: rm -rf of a large screen folder spawned hundreds of
+// git calls. A file is tracked when git names it or a file inside it (a pathspec matches a folder's
+// files too). Each path's answer is the same as asking for it alone.
+const ARGS_CHARS = 128 * 1024
+const neverTracked = async ($: EngineInterface, paths: readonly string[], tree: string): Promise<Set<string>> => {
+  const out = new Set<string>()
+  const rels = paths.map(p => relTo(p, tree))
+  for (let i = 0; i < rels.length; ) {
+    const batch: number[] = []
+    for (let size = 0; i < rels.length && (batch.length === 0 || size + (rels[i] as string).length < ARGS_CHARS); i++) {
+      batch.push(i)
+      size += (rels[i] as string).length + 20
+    }
+    let tracked: Set<string>
+    try {
+      const r = await $.process.run(['git', '-C', tree, 'ls-files', '-z', '--', ...batch.map(k => `:(literal,icase)${rels[k]}`)], { timeoutMs: 5000 })
+      if (r.exitCode !== 0 || r.isStdoutTruncated) continue
+      tracked = new Set<string>()
+      for (const name of r.stdout.split('\0')) {
+        if (!name) continue
+        const parts = name.toLowerCase().split('/')
+        for (let k = 1; k <= parts.length; k++) tracked.add(parts.slice(0, k).join('/'))
+      }
+    } catch {
+      continue
+    }
+    for (const k of batch) if (!tracked.has((rels[k] as string).toLowerCase())) out.add(paths[k] as string)
   }
+  return out
 }
 
 // Why what git puts back cannot be read before a shell call runs, or undefined when it can (lessons
@@ -1123,6 +1200,7 @@ const drawingChange = async (
   input: Record<string, unknown>,
   notAlone: string | undefined,
   watch: Watched[],
+  beyondOf: (dir: string) => Promise<ModFile[] | null>,
 ): Promise<'held' | 'pass' | { unread: string } | { words: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
@@ -1134,7 +1212,11 @@ const drawingChange = async (
   } catch {
     return 'held'
   }
-  const beyond = await hooksBeyond($, dir)
+  // What modHookTsChange answers, the folders inside the hooks folder read only where it needs them (#3027).
+  const changeOf = async (before: string | undefined, after: string | undefined): Promise<HookChange | undefined> => {
+    const first = modHookTsChangeUnread(files, name, before, after)
+    return first === BEYOND_UNREAD ? modHookTsChange(files, name, before, after, await beyondOf(dir)) : first
+  }
   let now = files.find(f => f.name === name)?.text
   let after: string | undefined
   if (t.from !== undefined) {
@@ -1150,9 +1232,12 @@ const drawingChange = async (
     // Held where the file draws now. One that only sends a message passes (#2845), unrecorded: what
     // the call would change in it cannot be read, so no words can be named.
     if (tool !== 'Bash') {
-      const change = modHookTsChange(files, name, undefined, now, beyond)
+      const change = await changeOf(undefined, now)
       return change && 'look' in change ? 'held' : 'pass'
     }
+    // A shell write is judged once it ran, against the folders inside the hooks folder as they stood
+    // before it, so they are read now, whatever the judgement after needs.
+    const beyond = await beyondOf(dir)
     // A file whose drawing cannot be read now could not be judged after either: held, unless its
     // mod draws nothing (#3017), when what the command leaves is judged as an edit there would be.
     if (drawnParts(files, name) === null && !drawsNothing(files, name, now, now, beyond)) return 'held'
@@ -1178,13 +1263,13 @@ const drawingChange = async (
       }
       if (nowOpen && was !== undefined) return 'pass'
     } else if (nowOpen && was !== undefined) {
-      const change = modHookTsChange(files, name, was, after, beyond)
+      const change = await changeOf(was, after)
       if (change && 'look' in change) return 'held'
       midEdits.delete(t.path)
       return change ?? 'pass'
     }
   }
-  const change = modHookTsChange(files, name, now, after, beyond)
+  const change = await changeOf(now, after)
   return !change ? 'pass' : 'look' in change ? 'held' : change
 }
 
@@ -1412,6 +1497,17 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
+  // The files in the folders inside each mod's hooks folder (hooksBeyond), read the first time this
+  // call's judging needs them and kept for the rest of the call (#3027).
+  const beyondRead = new Map<string, Promise<ModFile[] | null>>()
+  const beyondOf = (dir: string): Promise<ModFile[] | null> => {
+    let got = beyondRead.get(dir)
+    if (!got) {
+      got = hooksBeyond($, dir)
+      beyondRead.set(dir, got)
+    }
+    return got
+  }
   // The mod hook files the call changes only in a message's words (#2845), by path, with their
   // checkout and the words: never held, and recorded where their issue has no answer from Dan.
   const wordedIn = new Map<string, { tree: string; words: string }>()
@@ -1455,6 +1551,18 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const notFollowed = (said: string) => {
     if (!why) unfollowed = true
     why ||= said
+  }
+  // Which files taken away git has never tracked (#1933, #2991), asked once per checkout for every
+  // file the call takes away there (#3022), the first time a removal in it needs the answer.
+  const removed = [...new Set(targets.flatMap(t => (t.removes && t.path !== undefined ? [t.path] : [])))]
+  const untrackedAsked = new Map<string, Promise<Set<string>>>()
+  const untrackedIn = (tree: string): Promise<Set<string>> => {
+    let got = untrackedAsked.get(tree)
+    if (!got) {
+      got = neverTracked($, removed.filter(p => p.startsWith(`${tree}/`)), tree)
+      untrackedAsked.set(tree, got)
+    }
+    return got
   }
   for (const t of targets) {
     // A file or folder taken away in the session's scratchpad or the session notes folder (#2792)
@@ -1586,7 +1694,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // throwaway copy of the mods folder a builder made in its worktree to check one mod, is no screen
     // of the product, so taking it away (rm, or the source mv moves) passes. What the same command
     // writes, the destination of that mv included, is a target of its own, judged as ever.
-    if (t.removes && (await neverTracked($, t.path, tree))) continue
+    if (t.removes && (await untrackedIn(tree)).has(t.path)) continue
     // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
     // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
     // the product, and the design it holds was settled on the issue it came from. Any other text there,
@@ -1637,7 +1745,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null)
       notFirst = await restoreAlone($, String(input.command ?? ''), true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])))
     if (modTs) {
-      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch)
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch, beyondOf)
       if (drawn === 'pass') continue
       if (drawn !== 'held' && 'words' in drawn) {
         wordedIn.set(t.path, { tree, words: drawn.words })
