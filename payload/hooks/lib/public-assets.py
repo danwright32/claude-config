@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The detector behind check-public-assets.sh: unreferenced served assets and oversized images.
 
-    public-assets.py --repo <dir> [--head <rev>] [--base <rev>] [--cap-bytes <n>]
+    public-assets.py --repo <dir> [--head <rev>] [--base <rev or tree>] [--cap-bytes <n>]
                      [--allowlist <path relative to the repo>] [--verbose]
 
 Reads COMMITTED trees through git, never the working tree, because a push carries commits: an
@@ -276,10 +276,14 @@ def run(repo, head, base, cap, allow_rel, verbose):
               f"root of this repo, so there were no assets to judge.")
         return 2
 
+    # The base is any tree-ish, not only a commit: once a branch merges main in, the hook passes the
+    # tree git merge-tree writes for the start with main merged into it (claude-config#3054), and
+    # asking for a commit there dropped the base and counted every asset as added. A commit peels to
+    # its tree, and everything below (ls-tree, diff, <base>:<path>) reads a tree id the same way.
     have_base = False
     if base:
         try:
-            git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+            git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{tree}}")
             have_base = True
         except Measure:
             have_base = False

@@ -96,7 +96,23 @@ command -v python3 >/dev/null 2>&1 || did_not_run "python3 not found"
 base="$(ps_base_ref || true)"
 mb="$(ps_merge_base "$base")"
 
-out="$(python3 "$SCANNER" --repo "$repo_dir" --head HEAD --base "$mb" 2>&1)"
+# An asset is this push's only when the branch itself adds it (claude-config#3054). After a branch
+# pushed once merges main in, its upstream lacks every asset main gained since, so this gate refused
+# branches for files already on main that they never added. So the base is what merging that main
+# commit into the start gives, the shared answer the other push gates read (ps_merged_apart,
+# #3015), a tree id the detector takes as its base. When it cannot be set apart the start is the
+# base as before, and the refusal says why.
+from="$mb"
+merge_unsplit=""
+if [ -n "$mb" ]; then
+  apart="$(ps_merged_apart "$mb")"
+  case "$apart" in
+    "apart "*) apart="${apart#apart }"; from="${apart%% *}" ;;
+    "whole "*) merge_unsplit="${apart#whole }" ;;
+  esac
+fi
+
+out="$(python3 "$SCANNER" --repo "$repo_dir" --head HEAD --base "$from" 2>&1)"
 rc=$?
 
 # A judged run always ends with the detector's "Checked ..." summary. Python exits 1 on an uncaught
@@ -141,6 +157,12 @@ done <<< "$out"
   echo ""
   printf '%s\n' "$out"
   echo ""
+  if [ -n "$merge_unsplit" ]; then
+    echo "These commits merge the default branch in, and what that merge brought could not be"
+    echo "set apart, so a file above may already be on the default branch rather than this"
+    echo "branch's own: $merge_unsplit."
+    echo ""
+  fi
   echo "What to do:"
   if [ "$unref" -eq 1 ]; then
     echo "  - An asset nothing references: delete it, or reference it from the code that should load"
