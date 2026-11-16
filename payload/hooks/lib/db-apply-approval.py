@@ -568,7 +568,8 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
 
 def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
     """(the lines of added, as _list_additions gives them for a commit in folder, that Dan has not
-    approved; what the question says of them, reading after "which"). One his picker in this
+    approved; what the question says of them, reading after "which"; whether a new picker would
+    approve any of them, so the question says how he gives one). One his picker in this
     session covers is put on the record unless the call is a subagent's. Fails closed: when the
     clone, the record or the top of the checkout cannot be read, every line is unapproved, and the
     question says what could not be read, as it does of a transcript (L11); and when the record
@@ -579,7 +580,7 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
     r, top_why = _git(folder, ["rev-parse", "--show-toplevel"], deadline)
     if why is not None or record_why is not None or r is None or r.returncode != 0:
         unread = why or record_why or top_why or "git rev-parse failed (exit " + str(r.returncode) + ")"
-        return added, "could not be checked against the lines Dan approved: " + unread
+        return added, "could not be checked against the lines Dan approved: " + unread, True
     top_dir = r.stdout.decode("utf-8", "surrogateescape").rstrip("\n")
     dan, unread, left, keys = None, None, [], []
     for p, line, top in added:
@@ -601,9 +602,11 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
             else "this Mac's record of the lines Dan approved does not hold" + _unlooked(unread))
     failed = _put_on_record([k for k, _ in keys]) if keys and not agent else None
     if failed is None:
-        return left, said
+        return left, said, True
     unkept = "Dan approved in a picker in this session, but " + failed + UNKEPT
-    return left + [a for _, a in keys], (said + ", or which " + unkept if left else unkept)
+    # A new picker helps only a line he has not approved: one the record could not take needs the
+    # record fixed, and the picker he gave then counts.
+    return left + [a for _, a in keys], (said + ", or which " + unkept if left else unkept), bool(left)
 
 
 def on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True):
@@ -859,8 +862,8 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
                     + TEST_LIST + " could not be told: " + why)
         if added:
             # Each line once, though the index and the working tree may both hold it.
-            added, unapproved = _not_approved(folder, list(dict.fromkeys(added)), deadline, session_id,
-                                              transcript_path, agent)
+            added, unapproved, picker = _not_approved(folder, list(dict.fromkeys(added)), deadline,
+                                                      session_id, transcript_path, agent)
         if added:
             shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120)
                               for p, l, _ in added[:LINES_SHOWN])
@@ -868,7 +871,8 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
                     + (", and more" if len(added) > LINES_SHOWN else "")
                     + ", which " + unapproved + ". A project on a committed " + TEST_LIST + " has its "
                     "supabase db query -f runs pass without asking only once he has approved its line, so "
-                    "answering yes here approves nothing: the line will mark no project as test. " + HOW_TO_TRUST)
+                    "answering yes here approves nothing: the line will mark no project as test."
+                    + (" " + HOW_TO_TRUST if picker else ""))
         if lists:
             for t, unread in before:
                 # cd, a reader, or a git add, rm or read, writing nothing by a redirection or option.

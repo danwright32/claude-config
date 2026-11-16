@@ -431,6 +431,7 @@ else
   r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R")"
   case "$r" in
     "ask rc=0|"*"in no picker"*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it claims he approved the line in no picker: ${r:0:500}" ;;
+    "ask rc=0|"*AskUserQuestion*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "it asks for a new picker, though the one given counts once the record can be written: ${r:0:900}" ;;
     "ask rc=0|"*nowriteref00000001*"approved in a picker"*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" ok ;;
     *) check "a commit of a line Dan approved, whose record cannot be written, is asked about, saying why" "${r:0:900}" ;;
   esac
@@ -449,7 +450,7 @@ else
   trust "$R2" nowritemixref00001
   r="$(HOME_USED="$HOME_B" before 'git commit -q -m list' "$R2")"
   case "$r" in
-    "ask rc=0|"*nowritemixref0000*nowritemixref0000*"in no picker, or which Dan approved in a picker"*"could not be written"*3058*) check "a commit adding a line with a picker and one without, whose record cannot be written, says both reasons" ok ;;
+    "ask rc=0|"*nowritemixref0000*nowritemixref0000*"in no picker, or which Dan approved in a picker"*"could not be written"*3058*AskUserQuestion*) check "a commit adding a line with a picker and one without, whose record cannot be written, says both reasons" ok ;;
     *) check "a commit adding a line with a picker and one without, whose record cannot be written, says both reasons" "${r:0:900}" ;;
   esac
   chmod 700 "$REC_B"
