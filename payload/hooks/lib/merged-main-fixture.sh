@@ -108,5 +108,10 @@ mmf_pending() {  # <work> <main path>
   git -C "$1" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 || return 1
   [ "$(git -C "$1" rev-list --merges --count '@{u}..HEAD' 2>/dev/null)" = 0 ] || return 1
   [ -z "$(git -C "$1" diff --name-only --diff-filter=U 2>/dev/null)" ] || return 1
-  git -C "$1" diff --cached --name-only 2>/dev/null | grep -qxF "$2"
+  # Read into a variable first, never piped into a quiet grep, which can end the producer early and
+  # fail the pipeline under pipefail on a fixture that is right (L183).
+  local staged
+  staged="$(git -C "$1" diff --cached --name-only 2>/dev/null)" || return 1
+  case $'\n'"$staged"$'\n' in *$'\n'"$2"$'\n'*) return 0 ;; esac
+  return 1
 }

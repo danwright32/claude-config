@@ -1544,8 +1544,9 @@ ps_pending_merge_of_default "git push" "$PW" >/dev/null \
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
 ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
   && check "#3062 once the merge is committed nothing is pending" "said it is" || check "#3062 once the merge is committed nothing is pending" ok
-# Left in progress again, with no default branch known: nothing can say what came from main, and the
-# gates judge the range whole as ps_merged_apart does, so this does not answer yes.
+# A clean merge of main left in progress again, first with origin/main known (the control: it is
+# pending), then with no default branch known, where nothing can say what came from main and the
+# gates judge the range whole as ps_merged_apart does, so it does not answer yes.
 git -C "$PW" checkout -q main >/dev/null 2>&1
 printf 'again\n' > "$PW/again.txt"; git -C "$PW" add again.txt >/dev/null 2>&1
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm again >/dev/null 2>&1
