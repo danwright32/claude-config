@@ -36,7 +36,7 @@ test("this repository's own tools/check-mods.sh handed a folder holding held fil
   expect((await bash($ as never, w, 'bash tools/check-mods.sh src/')).result).toBe('done')
   expect((await bash($ as never, w, './tools/check-mods.sh src/', {}, 'b2')).result).toBe('done')
   expect((await bash($ as never, w, `bash ${APP}/tools/check-mods.sh ${APP}/src 2>&1 | tail -n 40`, {}, 'b3')).result).toBe('done')
-  expect((await bash($ as never, w, 'cd src && bash ../tools/check-mods.sh lib && echo checked', {}, 'b4')).result).toBe('done')
+  expect((await bash($ as never, w, 'cd src && bash ../tools/check-mods.sh lib 2>&1 | grep -v ok | tail -n 40', {}, 'b4')).result).toBe('done')
   expect(w.judged().length).toBe(0)
   // Each run let through is in the log, so a rule that lets everything through shows there (L551).
   expect(named(w)).toMatchObject([
@@ -83,6 +83,8 @@ const SHAPES: [string, string][] = [
   ['after a file is sourced', '. ./env.sh; bash tools/check-mods.sh src/'],
   ['after any other command', 'git fetch origin && bash tools/check-mods.sh src/'],
   ['run twice, a value exported between the two', 'bash tools/check-mods.sh src/; export TMPDIR; bash tools/check-mods.sh src/'],
+  ['in a loop that reads and exports a value after it', 'for i in 1 2; do bash tools/check-mods.sh src/; read TMPDIR <<< src; export TMPDIR; done'],
+  ['in a function called after a value is read and exported', 'f() { bash tools/check-mods.sh src/; }; read TMPDIR <<< src; export TMPDIR; f'],
   ['run by another shell', 'sh tools/check-mods.sh src/'],
   ['handed a file', 'bash tools/check-mods.sh src/big.ts'],
   ['handed a name built as the command runs', 'bash tools/check-mods.sh "$MODS"'],
@@ -129,7 +131,7 @@ const read = (command: string, f: NamedFacts) => namedReaders(command, commandWr
 
 test('a run let through is taken out of what the command is read as writing, and nothing else is (#3022)', async () => {
   const asked: string[] = []
-  const r = await read(`${RUN} && sed -i '' 's/a/b/' src/big.ts`, facts({}, asked))
+  const r = await read(`${RUN} > src/big.ts`, facts({}, asked))
   expect(r.writes.runs ?? []).toEqual([])
   expect(r.writes.files.map(f => f.path)).toEqual([`${APP}/src/big.ts`])
   expect(r.named).toEqual([{ script: `${APP}/tools/check-mods.sh`, word: 'src/', folder: `${APP}/src`, passed: true }])
@@ -150,8 +152,11 @@ const REFUSED: [string, Partial<NamedFacts>, string][] = [
   ['in a checkout whose origin names no default branch', { checkout: async () => ({ root: APP, github: REPO, defaultBranch: null }) }, 'origin names no default branch, so its text cannot be compared with the one the suite proved'],
   ['handed something that is no folder', { isFolder: async () => false }, 'src/ is no folder on the disk'],
   ['in a command whose commands cannot be read', { commands: async () => Promise.reject(new Error('the pipeline could not be read')) }, 'it could not be checked (the pipeline could not be read)'],
-  ['in a command the run cannot be found in', { commands: async () => [{ words: ['bash', 'other.sh', 'src/'] }] }, 'the run cannot be found among the commands, so what runs before it cannot be read'],
-  ['after a command that is no change of folder', { commands: async () => [{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'export TMPDIR runs before it in the same command, and what that leaves in the environment cannot be read'],
+  ['in a command the run cannot be found in', { commands: async () => [{ words: ['bash', 'other.sh', 'src/'] }] }, 'the run cannot be found among the commands, so what else runs with it cannot be read'],
+  ['after a command that is no change of folder', { commands: async () => [{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'export TMPDIR runs in the same command, and what that leaves in the environment cannot be read'],
+  // Written after it, a command still runs before it the second time round a loop, or once a function is called.
+  ['before a command that is no reader of its output', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }] }, 'export TMPDIR runs in the same command, and what that leaves in the environment cannot be read'],
+  ['run twice in the command', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'the script is run more than once in the command, and what runs between cannot be read'],
   ['whose checkout cannot be asked about', { checkout: async () => Promise.reject(new Error('git could not be asked')) }, 'it could not be checked (git could not be asked)'],
   ['whose folder cannot be looked at', { isFolder: async () => Promise.reject(new Error('EACCES')) }, 'it could not be checked (EACCES)'],
   ['whose text git cannot be started to compare', { git: async () => Promise.reject(new Error('git timed out')) }, 'it could not be checked (git timed out)'],

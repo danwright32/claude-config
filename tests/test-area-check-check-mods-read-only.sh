@@ -331,12 +331,16 @@ await judged('handed two folders, both are judged', 'bash tools/check-mods.sh pa
 await judged('with a value set in front of it, it is judged', 'TMPDIR=payload/mods bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
 await judged('with a value exported before it, it is judged', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
 // A value set with no equals sign, by a command that runs first: only a change of folder may.
-const BEFORE = 'runs before it in the same command'
+const BEFORE = 'runs in the same command'
+// Written after it, a command still runs before it the second time round a loop, or once a function is called.
+await judged('in a loop that reads and exports a value after it, it is judged', 'for i in 1 2; do bash tools/check-mods.sh payload/mods; read TMPDIR <<< payload/mods; export TMPDIR; done', [MODS], BEFORE)
+await judged('in a function called after a value is read and exported, it is judged', 'f() { bash tools/check-mods.sh payload/mods; }; read TMPDIR <<< payload/mods; export TMPDIR; f', [MODS], BEFORE)
+await through('its output piped through two readers is let through', 'cd payload && bash ../tools/check-mods.sh mods 2>&1 | grep -v ok | tail -n 40')
 await judged('after a value read and exported, it is judged', 'read TMPDIR <<< payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('after a value printed into a variable and exported, it is judged', 'printf -v TMPDIR %s payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('after a sourced file, it is judged', '. ./env.sh; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('inside a loop that names a variable, it is judged', 'for TMPDIR in payload/mods; do export TMPDIR; bash tools/check-mods.sh payload/mods; done', [MODS], BEFORE)
-await judged('run twice with a value exported between, both are judged', 'bash tools/check-mods.sh payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
+await judged('run twice with a value exported between, both are judged', 'bash tools/check-mods.sh payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], 'run more than once')
 await judged('run by another shell, it is judged', 'sh tools/check-mods.sh payload/mods', [MODS])
 await judged('handed a file, the file is judged', 'bash tools/check-mods.sh payload/mods/fine/hooks/register.ts', [`${MODS}/fine/hooks/register.ts`], 'is no folder on the disk')
 await judged('handed a name built as the command runs, it is judged', 'bash tools/check-mods.sh "$MODS"', ['$MODS'], 'cannot be read as the one folder')
@@ -347,11 +351,11 @@ await judged('handed a pattern, it is judged', 'bash tools/check-mods.sh payload
 }
 {
   const r = await read(`${RUN} && sed -i '' 's/a/b/' payload/mods/fine/hooks/register.ts`)
-  say('an edit chained after it is still judged', r.judged.length === 1 && r.judged[0] === `${MODS}/fine/hooks/register.ts` && r.named[0].passed === true, JSON.stringify(r))
+  say('chained with an edit, the edit and the folder are both judged', r.judged.includes(`${MODS}/fine/hooks/register.ts`) && r.judged.includes(MODS) && !r.named[0].passed, JSON.stringify(r))
 }
 {
   const r = await read(`${RUN} && bash copy/tools/check-mods.sh payload/mods`)
-  say('another script handed the same folder in the same command keeps the folder judged', r.judged.includes(MODS) && r.named.filter(n => n.passed).length === 1, JSON.stringify(r))
+  say('another script handed the same folder in the same command keeps the folder judged', r.judged.includes(MODS) && r.named.every(n => !n.passed), JSON.stringify(r))
 }
 
 // A changed text is not the text the suite proved: an edit not committed, one committed on the
@@ -373,7 +377,7 @@ await through('every library put back, the run is let through again', RUN)
 git('update-ref', '-d', 'refs/remotes/origin/main')
 await judged('with no origin/main to compare with, it is judged', RUN, [MODS], 'git could not compare its text')
 JS
-EXPECTED=32
+EXPECTED=35
 ruled="$(node --experimental-strip-types --no-warnings "$TMP/rule.mjs" "$NAMED" "$ROOT/payload/mods/mod-kit/hooks/writes.ts" "$ROOT/payload/mods/area-check/hooks/rules.ts" "$REPO" 2>&1)" || {
   check "the rule runs on the real reader" "$ruled"
   finish
