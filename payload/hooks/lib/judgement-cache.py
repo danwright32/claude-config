@@ -145,6 +145,9 @@ OPS = {
     "find_spec": (_util.find_spec, _spec_form),
     "pathfinder": (lambda name, dirs: _machinery.PathFinder.find_spec(name, list(dirs)), _spec_form),
     "read": (_read_hash, None), "env": (_os.environ.get, None),
+    # A user's home by name, as ~name gives it (os.path.expanduser): read from the password database,
+    # which no key holds, so a judgement that reads one is kept only while it is the same.
+    "home": (lambda name: _os.path.expanduser("~" + name), None),
 }
 
 
@@ -388,7 +391,7 @@ class _Environ:
 
 
 PATH_PURE = ("join", "dirname", "basename", "normpath", "isabs", "splitext", "split", "commonpath",
-             "commonprefix", "normcase", "abspath", "relpath", "expanduser", "splitdrive", "splitroot", "sep",
+             "commonprefix", "normcase", "abspath", "relpath", "splitdrive", "splitroot", "sep",
              "pathsep", "curdir", "pardir", "extsep", "altsep", "devnull", "defpath")
 PATH_ASKED = ("isfile", "isdir", "exists", "lexists", "islink", "realpath", "getsize")
 OS_PURE = ("sep", "pathsep", "curdir", "pardir", "extsep", "altsep", "linesep", "devnull", "name", "fspath",
@@ -397,8 +400,26 @@ OS_PURE = ("sep", "pathsep", "curdir", "pardir", "extsep", "altsep", "linesep", 
 
 def stand_ins(recorder):
     """{name: the stand in} for every name install() replaces."""
-    path = _StandIn(_os.path, recorder, "os.path", PATH_PURE,
-                    {n: recorder.path_asked(n, "os.path." + n) for n in PATH_ASKED})
+    def expanduser(p):
+        # ~ and ~/ are HOME's, which the key holds. ~name is the password database's, which it does
+        # not: the home is asked as a recorded question, so a kept judgement that read one is a miss
+        # once that user's home has moved (claude-config#2918, the lessons review of PR #3029). The
+        # rest is posixpath.expanduser's own arithmetic on that home.
+        if not isinstance(p, str):
+            recorder.taint(f"os.path.expanduser({p!r})")
+            return _os.path.expanduser(p)
+        if not p.startswith("~") or p == "~" or p.startswith("~/"):
+            return _os.path.expanduser(p)
+        cut = p.find("/", 1)
+        cut = len(p) if cut < 0 else cut
+        home = recorder.asked("home", p[1:cut])
+        if home == p[:cut]:
+            return p  # no such user
+        return (home.rstrip("/") + p[cut:]) or "/"
+
+    asked = {n: recorder.path_asked(n, "os.path." + n) for n in PATH_ASKED}
+    asked["expanduser"] = expanduser
+    path = _StandIn(_os.path, recorder, "os.path", PATH_PURE, asked)
     environ = _Environ(recorder)
 
     def access(p, mode, **kw):
