@@ -3252,6 +3252,29 @@ Reading the pending merge as a merge of its second parent was the other option, 
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
 
+A commit written inside brackets is read like any other (#3091): `(git commit -m x) && git push`
+and `x=$(git merge --continue) && git push` were read as no commit, because the pattern that finds
+where a git starts left out the opener of a subshell and of a command substitution, so the pending
+commit went out with no gate having read it.
+
+Six other git commands put commits on the branch that no gate can read before the command runs:
+`git rebase`, `git cherry-pick`, `git revert`, `git am`, a `git merge` of a named branch and
+`git pull`. Chained before a push, `git cherry-pick abc123 && git push`, every gate judged the range
+as it stood and said nothing of what was about to join it. `push-scope-notice.sh` refuses that
+command too, naming the route, with the same remedy: run it on its own, then push, and the commits
+are in the range the gates read (#3092). Each was measured in a throwaway repository on git 2.51.1
+to make at least one commit a push would send, the forms that continue one in progress and the forms
+that start one alike; a merge that only fast forwards makes none and still puts another branch's
+commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
+refused as well, since a `git commit` later in the command would take what they staged. Only
+`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
+which the gates read. A route counts only when a push follows it in the command, and only in command
+position, so a commit message that names one is not one. `git pull && git push` is refused whole,
+though a pull that only fast forwards sends nothing unread, because which it will be is not known
+before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
+that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
+route (`git apply --index`, `git stash pop`).
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
