@@ -255,11 +255,14 @@ hang_wait '[ -s "$WORK/model.port" ]'
 [ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port within the hang ceiling, ${HANG_S}s"; finish; }
 PORT="$(cat "$WORK/model.port")"
 
-# What the real home holds, so the end can say nothing there changed.
+# What the real home holds, so the end can say nothing there changed. Only a change THIS run made
+# counts: another session in sleep mode writes to the real folder too, and reading every newer file as
+# ours turned a full run red for a write it never made (claude-config#3059). The helper attributes a
+# change by the session ids, night stamps and demo repository this run invented, read from what it
+# wrote into the scratch home.
 touch "$WORK/started"
 real_changed() {
-  { find "$REAL_HOME/.claude/state/sleep" -mindepth 1 -newer "$WORK/started" 2>/dev/null
-    find "$REAL_HOME/Downloads" -maxdepth 1 -iname '*sleep report*' -newer "$WORK/started" 2>/dev/null; } | sort
+  python3 -I "$DIR/sleep-real-engine-leaks.py" "$REAL_HOME" "$WORK/home" "$WORK/started" "$WORK" 2>&1
 }
 
 # One headless session: OUT DEADLINE RESULTS SESSION_ID [claude args...] -- MESSAGE...

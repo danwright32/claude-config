@@ -63,6 +63,11 @@
 #       its permissionDecisionReason, which puts the call in front of the person, plus <notice> as
 #       a systemMessage when one is given. For a hook that asks and has something else to say on
 #       the same call (db-write-ask.sh, claude-config#2521).
+#   hook_allow_json <reason> [<notice>]
+#       print a PreToolUse allow: hookSpecificOutput with permissionDecision "allow", <reason> as
+#       its permissionDecisionReason unless it is empty, plus <notice> as a systemMessage when one
+#       is given. For a hook that lets a call through and has something to say beside it
+#       (db-write-ask.sh, claude-config#3058).
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
@@ -155,24 +160,36 @@ print(json.dumps(out))' 2>/dev/null && return 0
   printf '{"hookSpecificOutput": {"hookEventName": "%s", "additionalContext": "%s"}}\n' "$event" "$inside"
 }
 
-hook_ask_json() {
-  local reason="$1" notice="${2:-}"
+# _hn_decision_json <ask|allow> <reason> [<notice>]: a PreToolUse decision with its reason, plus
+# <notice> as a systemMessage when one is given. An allow with no reason carries none; an ask
+# always carries its reason, empty or not.
+_hn_decision_json() {
+  local decision="$1" reason="$2" notice="${3:-}" inside=""
   if command -v python3 >/dev/null 2>&1; then
-    HN_REASON="$reason" HN_TEXT="$notice" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
-out = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
-                              "permissionDecisionReason": cut(os.environb[b"HN_REASON"])}}
+    HN_DECISION="$decision" HN_REASON="$reason" HN_TEXT="$notice" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
+h = {"hookEventName": "PreToolUse", "permissionDecision": os.environ["HN_DECISION"]}
+if os.environb[b"HN_REASON"] or h["permissionDecision"] == "ask":
+    h["permissionDecisionReason"] = cut(os.environb[b"HN_REASON"])
+out = {"hookSpecificOutput": h}
 if os.environb[b"HN_TEXT"]:
     out["systemMessage"] = cut(os.environb[b"HN_TEXT"])
 print(json.dumps(out))' 2>/dev/null && return 0
   fi
+  if [ -n "$reason" ] || [ "$decision" = ask ]; then
+    inside=", \"permissionDecisionReason\": \"$(_hn_string "$reason")\""
+  fi
   if [ -n "$notice" ]; then
-    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s"}, "systemMessage": "%s"}\n' \
-      "$(_hn_string "$reason")" "$(_hn_string "$notice")"
+    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "%s"%s}, "systemMessage": "%s"}\n' \
+      "$decision" "$inside" "$(_hn_string "$notice")"
   else
-    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s"}}\n' \
-      "$(_hn_string "$reason")"
+    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "%s"%s}}\n' \
+      "$decision" "$inside"
   fi
 }
+
+hook_ask_json() { _hn_decision_json ask "$1" "${2:-}"; }
+
+hook_allow_json() { _hn_decision_json allow "$1" "${2:-}"; }
 
 hook_allow_notice() {
   printf '%s\n' "$1" >&2
