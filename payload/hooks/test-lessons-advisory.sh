@@ -220,6 +220,12 @@ assert_contains "control: a heredoc handed to bash still fires" 'destructive dat
 R=$(make_repo fixtureheredocpipe $'cat <<EOF | sh\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
 out=$(run_hook "git push" "$R")
 assert_contains "control: a heredoc piped into sh still fires" 'destructive data operation' "$out"
+# Only ADDED lines reach the trigger, so a heredoc whose closing line is unchanged never closes in
+# them. Measured on claude-config #2334: a test's cleanup loop a hunk below such a heredoc read as
+# its body and went unjudged. A heredoc never seen to close is no evidence, and what follows fires.
+R=$(make_repo fixtureunclosed $'mknounmod "$M" helper <<\'TS\'\nconst x = 1\n  for m in a b; do rm -rf "$DATA/$m"; done' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal after a heredoc never seen to close still fires" 'destructive data operation' "$out"
 R=$(make_repo fixturesource $'run_gate \'rm -rf /var/data/customers\'' scripts/gate.sh)
 out=$(run_hook "git push" "$R")
 assert_contains "control: the same quoted argument outside a test file still fires" 'destructive data operation' "$out"

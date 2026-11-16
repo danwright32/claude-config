@@ -455,29 +455,40 @@ trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the pat
       for (k = 1; k <= n; k++) { w = W[k]; sub(/^.*\//, "", w); if (w ~ ("^(" runners ")$")) return 1 }
       return 0
     }
-    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); hd = "" }
+    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); hd = ""; n = 0 }
     # The first file is the code text, one line for each added line.
     FILENAME == ARGV[1] { code[FNR] = $0; next }
     {
+      n = FNR
+      # What the line is as code, kept for the fallback at the END.
+      ascode[n] = (tolower(code[n]) ~ re) ? 1 : 0
       if (hd != "") {
         t = $0
         if (hdtab) sub(/^\t+/, "", t)
-        if (t == hd) { hd = ""; print 0; next }
+        if (t == hd) { hd = ""; flag[n] = 0; next }
         # A body handed to something that runs it is that program, read as it stands.
-        print ((hdrun && tolower($0) ~ re) ? 1 : 0)
+        flag[n] = (hdrun && tolower($0) ~ re) ? 1 : 0
         next
       }
-      c = code[FNR]
-      print ((tolower(c) ~ re) ? 1 : 0)
+      flag[n] = ascode[n]
       # A heredoc opens here when its << is in the code text (so not inside a string), never <<<.
-      if (match(c, /<<-?/) && substr(c, RSTART, 3) != "<<<" && match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+      if (match(code[n], /<<-?/) && substr(code[n], RSTART, 3) != "<<<" && match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
         h = substr($0, RSTART, RLENGTH); hdtab = (h ~ /^<<-/)
-        sub(/^<<-?[ \t]*["\047]?/, "", h); hd = h
+        sub(/^<<-?[ \t]*["\047]?/, "", h); hd = h; opened = n
         pre = substr($0, 1, RSTART - 1); sub(/.*[|;&(`]/, "", pre)
         post = substr($0, RSTART + RLENGTH)
         hdrun = runs(pre)
         if (!hdrun && index(post, "|")) { sub(/^[^|]*\|/, "", post); hdrun = runs(post) }
       }
+    }
+    END {
+      # Only ADDED lines arrive, so a heredoc whose closing line is unchanged never closes here, and
+      # every added line after it, in later hunks too, would read as its body. Measured on a real
+      # push (claude-config#2334): a cleanup loop 100 lines below such a heredoc went unjudged. So a
+      # heredoc never seen to close is no evidence: every line after its opening is judged as code,
+      # as it was before claude-config#3071, which fires on any fixture text in that body.
+      if (hd != "") for (k = opened + 1; k <= n; k++) flag[k] = ascode[k]
+      for (k = 1; k <= n; k++) print flag[k]
     }' <(fh_code_only "$as" < "$1") "$1"
 }
 
