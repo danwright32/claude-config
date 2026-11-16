@@ -24,7 +24,11 @@ export const notAQuestion = (q: { text: string; options?: readonly string[] }): 
 
 // Two notes are one question when their words match and nothing they name differs: a repository or
 // issue only one of them gives is no difference (the same note written by repository and by folder).
+// Where the repository does not settle it, two different folders are two places, so two questions:
+// offering one twice is harmless, where merging would hide the second repository's question.
 const same = (a: string | null, b: string | null, key: (x: string) => string) => a === null || b === null || key(a) === key(b)
+const samePlace = (a: NightQuestion, b: NightQuestion) =>
+  same(a.repo, b.repo, repoKey) && ((a.repo !== null && b.repo !== null) || same(a.cwd, b.cwd, c => c))
 
 /**
  * Each question once, in the order first noted. A second noting of the same words, about no other
@@ -34,7 +38,7 @@ export const distinctQuestions = <Q extends NightQuestion>(qs: readonly Q[]): Q[
   const out: Q[] = []
   for (const q of qs) {
     const words = sameText(q.text)
-    const k = out.findIndex(o => sameText(o.text) === words && same(o.repo, q.repo, repoKey) && (o.issue === null || q.issue === null || o.issue === q.issue))
+    const k = out.findIndex(o => sameText(o.text) === words && samePlace(o, q) && (o.issue === null || q.issue === null || o.issue === q.issue))
     if (k === -1) {
       out.push({ ...q, text: words })
       continue

@@ -32,6 +32,12 @@ describe('distinctQuestions: the same question recorded twice is one', () => {
     expect(distinctQuestions([q({ repo: 'exampleco/ledger', text: 'Keep it?' }), q({ repo: 'exampleco/atlas', text: 'Keep it?' })]).length).toBe(2)
     expect(distinctQuestions([q({ repo: 'exampleco/ledger', issue: 3, text: 'Keep it?' }), q({ repo: 'exampleco/ledger', issue: 4, text: 'Keep it?' })]).length).toBe(2)
   })
+  test('the same words from two folders, neither naming its repository, stay two questions (#3018 review)', () => {
+    expect(distinctQuestions([q({ cwd: '/w/ledger', text: 'Keep it?' }), q({ cwd: '/w/atlas', text: 'Keep it?' })]).length).toBe(2)
+  })
+  test('the same repository noted from two folders, such as a worktree, is one question', () => {
+    expect(distinctQuestions([q({ repo: 'exampleco/ledger', cwd: '/w/ledger', text: 'Keep it?' }), q({ repo: 'exampleco/ledger', cwd: '/w/ledger-wt', text: 'Keep it?' })]).length).toBe(1)
+  })
 })
 
 describe("proposalsIn leaves out notes that are no question, and reads a question twice as once (#3018)", () => {
