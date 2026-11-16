@@ -135,13 +135,19 @@ pull, or committed before #3023, is on no record: its write is asked about, the 
 Dan approves it. And a script that writes the record under a name built at run time is not seen,
 nor is one that writes a picker into the transcript, which the Apply shares.
 
-  on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True)
+  on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True, unkept=None)
       (True, the ref) or (False, why the run's project is not one its checkout marks as test).
-      agent is whether the call is a subagent's, which writes nothing on the record.
+      agent is whether the call is a subagent's, which writes nothing on the record. A call that
+      is not gives unkept, a list: it gets why Dan's picker for the line could not be saved on the
+      record, when it could not, for the caller to say beside the run it lets through (#3058).
+      Without a list such a call is refused (TypeError) before the record is written.
   is_test_list(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is a checkout's TEST_LIST, else None.
-  list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True)
+  list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True,
+                    unkept=None)
       None, or why a Bash command may write a TEST_LIST or commit a line added to one (#2989).
+      agent and unkept are as for on_test_project: a commit of lines his picker covers passes
+      (None) though the record could not take them, and unkept then holds why.
   is_list_record(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is under the record of approved lines.
 """
