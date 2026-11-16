@@ -5916,9 +5916,23 @@ fallback for a session where no line arrived.
   production audit workflow cannot run a shell, so the skill passes the number as `args.agentCap`;
   without a usable one the workflow falls back to the hook's default and logs that it did.
 - **The plan council and plan lite panels** are exempt, as the global `CLAUDE.md` says.
+- **Each number carries the review it was last judged in** (#2552): a `REVIEWED <hostname> <cap>
+  <date> claude-config#<issue>` line beside the table, with the measured reason under it. The suite
+  fails when a number moves and its line does not. The measurement is `tools/agent-cap-report.py`,
+  run on the Mac in question over the days since its cap last changed:
+
+      python3 tools/agent-cap-report.py --since 2026-11-09T22:14:00-05:00 --until 2026-11-16T10:54:00-05:00 --cap 7
+
+  It reads the subagent transcripts and prints how long sessions sat at exactly the cap (`AT_CAP`),
+  how many agents ran at once across the Mac, where agent time went, how many heavy commands
+  overlapped, and the days a usage limit reached an agent. It prints counts and working folder
+  names only, never command text, and refuses with a named reason (exit 1) rather than print an
+  empty report. `AT_CAP` is an upper bound on what the cap cost: a session at the cap with nothing
+  queued reads the same as one with work waiting.
 - Tests: `hooks/test-agent-cap.sh`, which also scans the payload's documents and fails on one that
-  writes a cap out by hand (seen failing on planted copies first), and
-  `skills/production-ready/test-production-audit.sh` for the workflow's ceiling.
+  writes a cap out by hand (seen failing on planted copies first),
+  `skills/production-ready/test-production-audit.sh` for the workflow's ceiling, and
+  `tools/test-agent-cap-report.sh` for the measurement.
 
 ## The context line and the long session nudge
 
@@ -8307,8 +8321,8 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A shell write is read for the files it writes: a copy of one code file is judged
 by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
 into a folder passes. git failing to say which repository a self posting file is in, or a file
-that cannot be read, holds the call as could not check, which trying again may get past. git or
-gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
+that cannot be read, holds the call as could not check, which trying again may get past. git
+killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
 told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
 tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
 A call the guard has judged and passed on in its tool.call hook is replayed as it settled beneath
@@ -8322,27 +8336,24 @@ before) is refused with an instruction to call `mcp__slack-alert-guard__choose` 
 id and the message as Slack will post it, checked as the question's `rendered` is. The choice is
 kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
 a `wording` note, and the call sent again goes through; a choice lets wording through only while
-sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
-merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
-chosen wording is refused; a merge that cannot be read, a command whose effect cannot be read at all
-(mod-kit's `unread`, #3021: `eval "gh pr merge 12"`, the same through `ssh` or an alias), or a diff
-gh cannot give, is held as could not check, and a diff gh did not give within its time as a timeout
-(#2792).
+sleep mode is on. A choice waiting on Dan holds no merge, in any repository (#3030; Dan,
+2026-11-16: "I'd actually prefer it didn't hold merges anywhere. It's more of a nice to have but it
+shouldn't hold up progress"), so no merge is read for it.
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata
 `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
-unanswered for three days expires: said once in each such session, held from merging, and no longer
-letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
-overnight). In any mode, taking away wording that origin's copy of the file on its default branch
-(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
-live; no default branch, or git failing to say, holds as before.
+unanswered for three days expires: said once in each such session, still unapproved, and no longer
+letting wording through. In any mode, taking away wording that origin's copy of the file on its
+default branch (named by mod-kit's branch reader, then one `git show`) does not hold passes, since
+it was never live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833,
+#3030
 
 </td></tr>
 </tbody>

@@ -938,6 +938,38 @@ R=$(make_repo badbytedestroy "$(printf '# caf\xff note\nrm -rf /var/data/custome
 out=$(run_hook "git push" "$R" LC_ALL="$BAD_BYTE_LOCALE")
 assert_contains "and still raises the destructive operation lesson" 'L5' "$out"
 
+# --- A merge of main does not make the branch answer for main's lines (claude-config#3054) -----
+# A branch pushed once merges main in after main gained a line a pattern matches. From the
+# upstream, the scanned range held everything main gained since, so the advice was about lines the
+# branch never wrote. What the merge brought in is set apart by the shared answer every push gate
+# reads (ps_merged_apart, #3015); a line the conflict resolution adds is still the branch's.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/merged-main-fixture.sh"
+DESTROY_LINE='rm -rf /var/data/customers'
+mk_merged() {  # mk_merged <name> <clean|conflict> [line the resolution adds]
+  mmf_repo "$WORK/merged-$1" "$2" scripts/clean.sh "$DESTROY_LINE
+" scripts/shared.sh "${3:-}${3:+
+}"
+}
+M="$(mk_merged mm1 clean)"
+if mmf_built "$M" scripts/clean.sh; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FAIL: #3054 the fixture did not build"; fi
+out=$(run_hook "git push" "$M")
+assert_silent "#3054 a line already on main, arriving only through a merge of main, raises nothing" "$out"
+
+M="$(mk_merged mm2 conflict "$DESTROY_LINE")"
+if mmf_built "$M" scripts/clean.sh && grep -q "as the branch has it" "$M/scripts/shared.sh"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FAIL: #3054 the conflict fixture did not build"; fi
+out=$(run_hook "git push" "$M")
+assert_contains "#3054 a line the conflict resolution adds is still the branch's, and raises its lesson" 'L5' "$out"
+assert_contains "#3054 and names the file the resolution added it to" 'scripts/shared.sh' "$out"
+assert_absent "#3054 and not main's file beside it" 'scripts/clean.sh' "$out"
+
+# When the merge cannot be set apart (no default branch known), the range is scanned whole as
+# before, never not at all, and the advice says part of it came in through the merge (L93).
+M="$(mk_merged mm3 clean)"
+git -C "$M" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+out=$(run_hook "git push" "$M")
+assert_contains "#3054 with no default branch known main's line is scanned as before" 'L5' "$out"
+assert_contains "#3054 and the advice says why the merge was not set apart" "could not be told from the branch's" "$out"
+
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
