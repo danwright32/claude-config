@@ -2720,7 +2720,12 @@ and the band question is removed rather than kept beside it (L29). Three defects
     mention in a comment, or in a plain string that goes on past it, is text, and is not read as a
     target. A mention a quote closes is still a path, whether a string of its own
     (`open('~/.claude/CLAUDE.md', 'a')`) or one inside code held as text (an `exec`'s, a shell line
-    written out), and so is any mention in an f-string, whose braces hold code. The program is found
+    written out), and so is any mention in an f-string, whose braces hold code. A quote closes a
+    path only when it ends the string holding the mention, or when the same quote opened a stretch
+    inside that string that is the mention itself or starts where a path starts (`/`, `~/`, `$`).
+    A quote that only ends a quoted sentence inside a longer string closes no path (#3082: a
+    measuring script's `{"C": "could move to LESSONS.md"}`, held in a `'''` string, was read as
+    naming the lessons file, and an edit of the script was held). The program is found
     in the command as written and the mentions blanked there; one that cannot be found as written
     is read whole, as before.
   - Only a program the shell cannot have changed: on standard input from a quoted heredoc, or one

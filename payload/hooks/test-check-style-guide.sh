@@ -284,6 +284,21 @@ W="$(mk_pending_repo "$BAD" "$CLEAN" baseline)"
 run_style_hook "$E2E" "cd $W && git add app/copy.ts && git commit -qm copy && git push"
 want_style_code 2 "a file the add DOES name must still block"
 
+# 2b. The remedy the refusal gives matches the global rule (claude-config#3082): text that
+#     must name the character writes it as an escape, and the override is a visible last
+#     resort explained to the user, never the way to name the character. The refusal used to
+#     send exactly that case to SKIP_STYLE_CHECK, which the rule says never to do.
+want_says 'write it as an escape' "#3082: the refusal gives the escape advice"
+want_says '\u2014' "#3082: the refusal shows the em dash escape"
+want_says 'LAST RESORT' "#3082: the override is named as the last resort"
+want_says 'SKIP_STYLE_CHECK=1 <your original git push command>' "#3082: the override is still shown"
+want_says 'Never override silently' "#3082: the override must still be explained to the user"
+want_silent_on 'reference the literal character' "#3082: the override is no longer the way to name the character"
+case "${STYLE_MSG%%SKIP_STYLE_CHECK=1*}" in
+  *'write it as an escape'*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: #3082: the escape advice must come before the override, said: $STYLE_MSG" ;;
+esac
+
 # 3. The same fault on a TRACKED file: modified, not named, so the commit will not take
 #    it. The incident showed only the untracked half; this is the other half (L30).
 W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
