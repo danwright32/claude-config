@@ -116,6 +116,75 @@ for shape in "cd $W/target && git push; cd $W/other && git push" \
   done
 done
 
+echo "push scope notice: one command concluding a merge of main and pushing (claude-config#3062)"
+
+# PreToolUse runs before the command, so in `git commit --no-edit && git push` with a merge of main
+# in progress the merge commit does not exist yet. Every push gate folds the commit the command is
+# about to make in as a change against HEAD, the branch's last commit, so every line main brought in
+# reads as the branch's own, and ps_merged_apart, which sets a COMMITTED merge of main apart, has
+# nothing to set apart. Reproduced first with the real style gate, then refused here, once.
+. "$DIR/lib/merged-main-fixture.sh"
+MAIN_LINE="# Old script $(printf '\342\200\224') a note main already carries"
+PW="$(mmf_repo "$W/pending" pending guide/old.md "$MAIN_LINE"$'\n' src/shared.ts "the branch's own resolution line")"
+mmf_pending "$PW" guide/old.md && check "#3062 the fixture leaves a merge of main in progress, main's file staged" ok \
+  || check "#3062 the fixture leaves a merge of main in progress, main's file staged" "it does not, so every case below would pass for the wrong reason"
+combined="git commit --no-edit && git push"
+python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
+  "$combined" "$PW" | bash "$DIR/check-style-guide.sh" >/dev/null 2>"$W/gate.err"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*guide/old.md*) check "#3062 the fault: the style gate reads main's line as this commit's own in the combined form" ok ;;
+  *) check "#3062 the fault: the style gate reads main's line as this commit's own in the combined form" "exit $grc [${gerr:0:200}]: if a gate now sets the pending merge apart, this refusal may no longer be needed" ;;
+esac
+out="$(run "$combined" "$PW")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "#3062 committing a merge of main and pushing in one command is refused" ok \
+  || check "#3062 committing a merge of main and pushing in one command is refused" "exit $rc [${err:0:200}]"
+says "#3062 and names the branch whose merge is in progress" "$err" "origin/main"
+says "#3062 and says another gate's finding may already be on it" "$err" "do not edit"
+says "#3062 and says how to push so the gates can tell the lines apart" "$err" "as a command of its own, then push"
+out="$(run "git add src/shared.ts && git commit --no-edit && git push" "$PW")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3062 an add before the commit changes nothing" ok || check "#3062 an add before the commit changes nothing" "exit $rc"
+out="$(run "cd $PW && git commit -m merged && git push origin HEAD" "$W/session")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3062 nor does a cd into the repository" ok || check "#3062 nor does a cd into the repository" "exit $rc"
+pending_allowed() { # pending_allowed <description> <command> <cwd>
+  local out rc
+  out="$(run "$2" "$3")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -s "$W/err" ]; then check "$1" ok
+  else check "$1" "exit $rc, stdout [${out:0:200}], stderr [$(head -c 200 "$W/err")]"; fi
+}
+# A push alone does not carry the pending merge, only what is already committed.
+pending_allowed "#3062 a push alone while the merge is in progress is let through" "git push" "$PW"
+pending_allowed "#3062 a commit with no push is not this hook's" "git commit --no-edit" "$PW"
+# Once the merge is committed, the push is the one ps_merged_apart sets apart, so it goes.
+git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
+pending_allowed "#3062 once the merge is committed, a push is let through" "git push" "$PW"
+pending_allowed "#3062 and so is a later commit and push in one command" "git commit -am more && git push" "$PW"
+# A merge of a branch that brings nothing new from main: every line it carries is the push's own and
+# was never judged, and the combined form already reads it so.
+git -C "$PW" checkout -qb side >/dev/null 2>&1
+printf 'side work\n' > "$PW/notes/side.txt"
+git -C "$PW" add notes/side.txt >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm side >/dev/null 2>&1
+git -C "$PW" checkout -q feat >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t merge -q --no-commit --no-ff side >/dev/null 2>&1
+git -C "$PW" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+  && pending_allowed "#3062 a pending merge of another branch, committed and pushed in one command, is let through" "$combined" "$PW" \
+  || check "#3062 a pending merge of another branch, committed and pushed in one command, is let through" "the side merge was not left in progress"
+git -C "$PW" merge --abort >/dev/null 2>&1
+# A merge of main left in progress with no conflict at all is the same case: the commit is what is
+# missing, not a conflict.
+git -C "$PW" checkout -q main >/dev/null 2>&1
+printf 'more from main\n' > "$PW/main-more.txt"
+git -C "$PW" add main-more.txt >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm "main again" >/dev/null 2>&1
+git -C "$PW" push -q origin main >/dev/null 2>&1
+git -C "$PW" checkout -q feat >/dev/null 2>&1
+git -C "$PW" -c user.name=t -c user.email=t@t.t merge -q --no-commit --no-ff origin/main >/dev/null 2>&1
+out="$(run "$combined" "$PW")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3062 a clean merge of main left uncommitted, committed and pushed in one command, is refused" ok \
+  || check "#3062 a clean merge of main left uncommitted, committed and pushed in one command, is refused" "exit $rc"
+
 echo "push scope notice: silent where there is nothing to announce"
 
 # Since #589 the hook refuses with exit 2 and speaks on STDERR, so "silent" means all three: exit 0,
