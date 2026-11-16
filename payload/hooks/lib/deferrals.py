@@ -26,7 +26,9 @@ A judged line is a FINDING when it carries a phrase from lib/deferral-phrases.tx
 insensitive, on word boundaries) and no ISSUE REFERENCE, `#NNNN` or a GitHub issue URL, sits on the
 line itself or on the two lines either side of it in the NEW text. A phrase QUOTED as a word, inside
 a short span of backticks or double quotes closed on the same line, is a mention and is not looked
-at (strip_mentions, below, carries the exact limits, #2133). In a diff, removed lines are not
+at (strip_mentions, below, carries the exact limits, #2133). A phrase in Title Case run straight on
+from another capitalised word ends a proper name and is not a finding either (is_name, below, #3019).
+In a diff, removed lines are not
 part of the new text and cannot clear a finding; context lines can, which is why the push hook asks
 git for at least two lines of context.
 
@@ -156,6 +158,43 @@ def strip_mentions(text):
     return MENTION_RE.sub(blank, text)
 
 
+# A phrase written as the END of a proper name is a name, not a deferral (claude-config#3019): a
+# table of booking counts named calendar event types ending in Follow Up and was refused three
+# times, though nothing on those lines put work off. Kept as narrow as it can be, because every
+# match it skips is a phrase this check no longer reads:
+#   - every word of the match in Title Case, a capital then lower case letters only, so the lower
+#     case phrase in a sentence, a half capitalised one, and TODO or FIXME in capitals still count;
+#   - run straight on, by spaces or tabs alone, from a capitalised word of two letters or more, so
+#     a sentence starting with the phrase, a full stop between, and "A" or "I" before it still count;
+#   - never on a markdown heading line, which is Title Case by style, so the capital says nothing;
+#   - only that match is skipped, so a deferral elsewhere on the same line is still a finding.
+# Measured on the personal MacBook's transcripts, 2026-11-16, before it shipped: of 90 findings in
+# 31,546 Write and Edit payloads and 5,400 in 103,769 prose blocks judged as markdown, it skipped
+# none. 54 of those findings were in Title Case, and every one had no capitalised word before it.
+# Re-measure with the script named in the pull request for #3019 before widening it.
+NAME_WORD_RE = re.compile(r"[A-Z][a-z]+")
+NAME_BEFORE_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9]+[ \t]+$")
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
+def is_name(text, m, heading):
+    """True when match m in text is the Title Case end of a proper name (see above)."""
+    if heading:
+        return False
+    if not all(NAME_WORD_RE.fullmatch(w) for w in re.split(r"[\s-]+", m.group(0))):
+        return False
+    return bool(NAME_BEFORE_RE.search(text, 0, m.start()))
+
+
+def find_deferral(text, phrase_re, kind):
+    """The first phrase match in text that is not part of a name, or None."""
+    heading = kind == "text" and bool(HEADING_RE.match(text))
+    for m in phrase_re.finditer(text):
+        if not is_name(text, m, heading):
+            return m
+    return None
+
+
 def load_phrases(path):
     phrases = []
     with open(path, encoding="utf-8", errors="replace") as fh:
@@ -255,7 +294,7 @@ def judge(path, new_lines, judged_numbers, phrase_re, reset_at=None):
         comment = reader.comment_text(text)
         if n not in judged_numbers or comment is None:
             continue
-        m = phrase_re.search(strip_mentions(comment))
+        m = find_deferral(strip_mentions(comment), phrase_re, reader.kind)
         if not m:
             continue
         lo, hi = max(0, idx - WINDOW), min(len(texts), idx + WINDOW + 1)
