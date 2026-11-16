@@ -56,6 +56,8 @@
 # branch that is still in progress, `git commit --no-edit && git push`: before that commit exists no
 # gate can tell main's lines from the branch's, and every one reads them all as the branch's own. The
 # remedy is the same push as two commands, which the gates already set apart (ps_merged_apart).
+# Since claude-config#3081 `git merge --continue && git push` is that command too: the library
+# question this asks now reads a merge --continue as the commit it makes.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -140,18 +142,19 @@ hooks_folder_check() {   # $1 = the one repository directory the push runs in
   exit 2
 }
 
-# A merge of the default branch still in progress, concluded by this command before it pushes
-# (claude-config#3062). The merge commit does not exist yet, so every gate reads the commit this
-# command is about to make against the branch's last commit, and judges every line main brought in as
-# the branch's own; run as two commands, the merge is committed when the push is judged and the gates
-# set it apart (ps_merged_apart). The rule and why it is a refusal rather than a second reading live
+# A merge of the default branch still in progress, concluded by this command before it pushes, with
+# a git commit (claude-config#3062) or a git merge --continue (#3081). The merge commit does not
+# exist yet, so every gate reads the commit this command is about to make against the branch's last
+# commit, and judges every line main brought in as the branch's own; run as two commands, the merge
+# is committed when the push is judged and the gates set it apart (ps_merged_apart). The rule and
+# why it is a refusal rather than a second reading live
 # with the question, ps_pending_merge_of_default in lib/push-scope.sh. The gates still run beside this
 # hook and may report main's lines, so the refusal says not to edit them. No override: the remedy is
 # one more command, and every gate would judge the same lines wrongly under one.
 pending_merge_check() {   # $1 = the one repository directory the push runs in
   local def
   def="$(ps_pending_merge_of_default "$cmd" "$1")" || return 0
-  printf 'PUSH REFUSED: this command concludes a merge of %s that is still in progress and pushes in the same breath. The merge commit does not exist yet when the push gates run, so every gate (tests, style, deferrals, scanners and the rest) reads the commit this command is about to make as this branch'"'"'s own work and judges every line %s brought in as if this branch wrote it (claude-config#3062). A finding another gate reports for this command may be a line %s already holds: do not edit it. Run everything before the push (the git add and the git commit) as a command of its own, then push as a command of its own, and the gates will set the merge apart.\n' \
+  printf 'PUSH REFUSED: this command concludes a merge of %s that is still in progress and pushes in the same breath. The merge commit does not exist yet when the push gates run, so every gate (tests, style, deferrals, scanners and the rest) reads the commit this command is about to make as this branch'"'"'s own work and judges every line %s brought in as if this branch wrote it (claude-config#3062). A finding another gate reports for this command may be a line %s already holds: do not edit it. Run everything before the push (the git add, and the git commit or git merge --continue) as a command of its own, then push as a command of its own, and the gates will set the merge apart.\n' \
     "$def" "$def" "$def" >&2
   exit 2
 }

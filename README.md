@@ -3242,6 +3242,12 @@ with the merge still in progress, the merge commit does not exist when the gates
 them reads the commit the command is about to make as the branch's own work, every line main
 brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
 to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+`git merge --continue && git push` is the same command and is refused the same way (#3081): a
+`git merge --continue` is read as the commit it makes, by every push gate, through
+`ps_commit_in_chain`. Read as no commit, as it was, nothing folded the pending merge commit in, so a
+conflict resolution went out with no gate having read it. With a merge of any other branch in
+progress the gates now read that pending commit, as they do for `git commit`. It is the only
+spelling of `git merge` that concludes a merge in progress (measured on git 2.51.1).
 Reading the pending merge as a merge of its second parent was the other option, and was not taken:
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
