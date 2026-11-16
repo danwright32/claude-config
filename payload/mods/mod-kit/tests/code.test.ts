@@ -308,23 +308,54 @@ describe("mod-kit's awk reader (#2974)", () => {
   // Each name was checked for print, printf or return by handing a regular expression the whole
   // output built so far, so a long inline program took time growing with its length squared: about
   // 1.5 s for 92,000 characters, against 0.1 s for 23,000 (four times the text, about fifteen times as
-  // long). Judged by growth between two sizes, the median of seven rounds, as #2948's test is.
-  test('reads four times the program in under six times as long', () => {
-    const timed = (n: number) => {
-      const program = `{ ${'total = total + value; '.repeat(n)}print "a -> b" }`
+  // long).
+  //
+  // This test first timed one reading of a program against one of a program a quarter its length,
+  // and wanted the median of seven rounds of that ratio under 6. With nothing broken it failed in 12
+  // of the 18 mod-kit failures kept from 2026-11-14 to 16, once at 11.5 at load 17 on 12 cores
+  // (claude-config#2857, L290, L656): the short reading fits in one turn on a core, and the long one
+  // is the one a busy Mac interrupts, so the ratio measured the Mac. Its readings cannot be counted
+  // from here instead: Claude Code's test runner freezes RegExp.prototype, so nothing can spy on what
+  // the reader hands its regular expressions, and a counter in code.ts would change the copies kept
+  // in mods outside this change. So the two sides are made the SAME work when the reader is linear:
+  // one reading of a program against sixteen readings of one a sixteenth its length. Read linearly
+  // they take about as long as each other; read in time growing with the length squared, as before
+  // #2974, the one reading takes several times as long. Each side is timed nine times, the order
+  // alternating, and judged by its FASTEST time: a busy Mac only ever adds time, so the fastest of
+  // nine is the one it interrupted least, and the two fastest must be within three times of each
+  // other. A ratio per round does not do: measured on 2026-11-16 at load 13 to 18 on 12 cores, one
+  // round's ratio ran from 0.12 to 10 with nothing broken, and the median of nine reached 1.81,
+  // while the fastest times gave 0.87 to 1.07 in four runs. With the check of the whole output put
+  // back they gave 7.0 and 7.15 (not sixteen, since the rest of codeVerdict reads in linear time).
+  test('one reading of a program takes about as long as sixteen readings of one a sixteenth its length', () => {
+    const program = (n: number) => `{ ${'total = total + value; '.repeat(n)}print "a -> b" }`
+    const short = program(250)
+    const long = program(4000)
+    expect([codeVerdict('awk', short), codeVerdict('awk', long)]).toEqual([undefined, undefined])
+    const timed = (read: () => void) => {
       const start = performance.now()
-      expect(codeVerdict('awk', program)).toBeUndefined()
+      read()
       return performance.now() - start
     }
-    timed(100)
-    const ratios: number[] = []
-    for (let round = 0; round < 7; round++) {
-      const small = timed(1000)
-      const large = timed(4000)
-      ratios.push(large / Math.max(small, 0.05))
+    const sixteenShort = () => {
+      for (let k = 0; k < 16; k++) codeVerdict('awk', short)
     }
-    const middle = [...ratios].sort((a, b) => a - b)[3] ?? Infinity
-    expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+    const oneLong = () => {
+      codeVerdict('awk', long)
+    }
+    const longs: number[] = []
+    const shorts: number[] = []
+    for (let round = 0; round < 9; round++) {
+      if (round % 2) {
+        longs.push(timed(oneLong))
+        shorts.push(timed(sixteenShort))
+      } else {
+        shorts.push(timed(sixteenShort))
+        longs.push(timed(oneLong))
+      }
+    }
+    const ratio = Math.min(...longs) / Math.max(Math.min(...shorts), 0.05)
+    expect({ ratio: Math.round(ratio * 100) / 100, under: ratio < 3 }).toEqual({ ratio: expect.any(Number), under: true })
   })
 })
 
