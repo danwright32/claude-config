@@ -8270,8 +8270,8 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A shell write is read for the files it writes: a copy of one code file is judged
 by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
 into a folder passes. git failing to say which repository a self posting file is in, or a file
-that cannot be read, holds the call as could not check, which trying again may get past. git or
-gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
+that cannot be read, holds the call as could not check, which trying again may get past. git
+killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
 told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
 tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
 A call the guard has judged and passed on in its tool.call hook is replayed as it settled beneath
