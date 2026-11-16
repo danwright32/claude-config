@@ -1495,6 +1495,8 @@ _data_names = load_lib("data_names", "data-names.py")
 DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 # Three shapes the walk of a script's variables follows: a for loop over words written out, NAME=value
 # for one command in a function, and a function that evaluates its argument (claude-config#2912).
+# It also reads text handed to eval, to a shell's -c or to such a function through a variable or a
+# substitution (handed_text_reason, claude-config#3020), for which it is given SH_UNKNOWN_DIR.
 ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, SH_UNKNOWN_DIR)
 # The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
 _js_mocks = load_lib("js_mocks", "js-mocks.py")

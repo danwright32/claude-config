@@ -895,6 +895,23 @@ run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ec
 check "#3020 (control) and a glob matching names that name nothing: $out" passed
 run "gh issue create --repo danwright-test/private-notes --title x --body \"\$(ls ~/apps)\""
 check "#3020 (control) and a private repository is not asked what a listing holds: $out" passed
+# Only the word's own characters make it a pattern. A [, * or ? in the directory the command runs in
+# is that directory's name: read as a pattern it matched nothing, so the folder was never listed and
+# the names in it were never judged (lessons review at d95ea72).
+BR="$HOMEDIR/br[1]"
+mkdir -p "$BR/apps/acme-widgets" "$BR/apps/garden" "$BR/notes"
+git -C "$BR/notes" init -q
+git -C "$BR/notes" remote add origin https://github.com/danwright-test/public-notes.git
+RUN_DIR="$BR/notes" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls)\""
+check "#3020 (control) a bare listing from a checkout under a folder with a bracket in its name passes: $out" passed
+RUN_DIR="$BR/notes" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ../apps)\""
+check "#3020 a listing by a plain word, run under a folder with a bracket in its name, is still read: $out" refused
+check "#3020 naming the work checkout it holds: $out" has "$out" "acme-widgets"
+RUN_DIR="$BR/notes" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../apps/*)\""
+check "#3020 and so is a glob in the word itself: $out" refused
+check "#3020 naming the work checkout it matches: $out" has "$out" "acme-widgets"
+RUN_DIR="$BR/notes" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(echo ../apps/g*)\""
+check "#3020 (control) and a glob there matching names that name nothing passes: $out" passed
 RUN_DIR="$WORKCO" run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(ls ~/garden)\""
 check "#3020 (control) from a work checkout a listing stays refused as output this check cannot read: $out" refused_unread
 

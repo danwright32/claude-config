@@ -119,6 +119,7 @@ to read.
 Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
 read by lib/work-names.py;
 WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45);
+WN_SHELL_SNAPSHOTS, the folder of shell snapshots profile_redefines reads (snapshots_dir);
 WN_SCRIPTS_NOTICE_DIR and WN_SESSION_ENV_DIR, read by check-work-names-publish.sh for the notice.
 """
 import glob
@@ -1851,12 +1852,18 @@ LIST_LIMIT = 20000
 WORD_VAR = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 
 
-def _folder_path(word, place):
+def _folder_path(word, place, pattern=False):
     """The path one word of a program names where it runs, or None for a word that names none this
     check can list (an option, a word holding a variable whose value is not known here, which is
     refused on its own as an expansion). A leading ~ is the home directory, ~+ and ~- the directory
     and the one before it, and each $NAME is its value. Raises CannotTell for a word a substitution
-    builds or another user's home, which this check cannot work out."""
+    builds or another user's home, which this check cannot work out.
+
+    With pattern, the same path as a glob pattern, or None where the word holds no *, ? or [ of its
+    own. The directory the command runs in and the home a tilde stands for are escaped in it: the
+    shell matches neither as a pattern, and a [ in one, read as one, matched nothing, so the folder
+    the word names was never listed (lessons review at d95ea72)."""
+    esc = glob.escape if pattern else (lambda s: s)
     if "$(" in word or "`" in word:
         raise CannotTell("is handed %s, a word built by another substitution, so the folder it may list "
                          "cannot be worked out" % word[:80])
@@ -1867,15 +1874,15 @@ def _folder_path(word, place):
     if missing or "$" in WORD_VAR.sub("", word):
         return None
     word = WORD_VAR.sub(lambda m: known[m.group(1) or m.group(2)], word)
-    if word.startswith("-") or not word:
+    if word.startswith("-") or not word or (pattern and not GLOB.search(word)):
         return None
     head, sep, tail = word.partition("/")
     if head.startswith("~"):
         base = {"~": known.get("HOME"), "~+": place.cwd, "~-": place.previous}.get(head)
         if not base:
             raise CannotTell("is handed %s, a home or directory this check cannot work out" % word[:80])
-        word = base + sep + tail
-    return os.path.normpath(os.path.join(place.cwd, word))
+        word = esc(base) + sep + tail
+    return os.path.normpath(os.path.join(esc(place.cwd), word))
 
 
 def listed_names(command, place, trusted):
@@ -1890,8 +1897,9 @@ def listed_names(command, place, trusted):
         path = _folder_path(word, place)
         if path is None:
             continue
-        found = glob.glob(path) if GLOB.search(path) else [path]
-        if GLOB.search(path):
+        globbed = _folder_path(word, place, pattern=True)
+        found = glob.glob(globbed) if globbed else [path]
+        if globbed:
             names += found
         if not own_words:
             folders += [p for p in found if os.path.isdir(p)]
@@ -1981,10 +1989,11 @@ def variables_posted(text, place):
                        % (type(e).__name__, e))]
     # A program whose output cannot be read, and a lookup or cat beside something that can change what
     # it reads, are refused only where the command may run from a work checkout (Dan, 2026-11-15,
-    # #3016). From a directory known to name nothing (work_checkout False) they post as they did before
-    # #2997; where the command cannot be placed, and for a program a cd or directory option in its
-    # substitution takes elsewhere, they stay refused. Raises CannotTell, refused by the caller, when the
-    # names cannot be read.
+    # #3016). From a directory known to name nothing (work_checkout False) they are no longer refused
+    # as unread, but a program whose output cannot be read is still judged by the folder names it can
+    # print (listed_names, #3020), and refused for a name among them; where the command cannot be
+    # placed, and for a program a cd or directory option in its substitution takes elsewhere, they
+    # stay refused. Raises CannotTell, refused by the caller, when the names cannot be read.
     personal = False
     if changer or any(p == UNREAD and not m for _c, p, m in runs):
         personal = work_checkout(place) is False
