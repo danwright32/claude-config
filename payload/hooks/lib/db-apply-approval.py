@@ -511,7 +511,7 @@ def _put_on_record(keys):
 
 def _keep(keys, refs, unkept):
     """Put keys, of the lines of refs Dan approved in a picker, on the record, for a call that is
-    not a subagent's. When the record cannot take them, the call passes on his picker all the same
+    not a subagent's. When the record cannot take them, his picker counts for the call all the same
     (his answer of 2026-11-16, module docstring), and why is put on unkept, the caller's list of
     notices, to be said beside the call and never as a question (claude-config#3058). A caller
     giving no list is refused before the write, so the omission shows on its first call and not on
@@ -525,8 +525,8 @@ def _keep(keys, refs, unkept):
     unkept.append("Dan approved the test project " + ("line " if one else "lines ")
                   + ", ".join(_shown(r, 80) for r in refs[:LINES_SHOWN]) + (", and more" if len(refs) > LINES_SHOWN else "")
                   + " in a picker in this session, but " + ("that approval" if one else "those approvals")
-                  + " could not be saved: " + why + ". This call goes through on his picker. "
-                  + ("The line is" if one else "The lines are") + " on no record, so a later session will ask him "
+                  + " could not be saved: " + why + ". His picker still counts for this call, but "
+                  + ("the line is" if one else "the lines are") + " on no record, so a later session will ask him "
                   "to approve " + ("it" if one else "them") + " again until that record can be written "
                   "(claude-config#3058).")
 

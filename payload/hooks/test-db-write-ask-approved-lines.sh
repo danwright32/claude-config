@@ -481,7 +481,8 @@ else
       esac
       case "$mix_notice" in
         *nowritemixref00002*) check "and the notice beside that question says the save of the line his picker covers failed" "the notice names the line with no picker: ${mix_notice:0:700}" ;;
-        *nowritemixref00001*"$REC_B/approved"*"could not be written"*PermissionError*3058*) check "and the notice beside that question says the save of the line his picker covers failed" ok ;;
+        *"goes through"*) check "and the notice beside that question says the save of the line his picker covers failed" "the notice says the call goes through, beside a question about it (L11): ${mix_notice:0:700}" ;;
+        *nowritemixref00001*"$REC_B/approved"*"could not be written"*PermissionError*"still counts for this call"*3058*) check "and the notice beside that question says the save of the line his picker covers failed" ok ;;
         *) check "and the notice beside that question says the save of the line his picker covers failed" "${mix_notice:0:700}" ;;
       esac ;;
     *) check "a commit adding a line with a picker and one without, whose record cannot be written, is asked about for the one without only" "${r:0:900}" ;;
