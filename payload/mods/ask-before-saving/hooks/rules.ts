@@ -286,6 +286,23 @@ export const mentionsAny = (text: string): boolean => text.search(MENTION) !== -
 // text, which a program that runs no process only writes.
 const CLOSES = new Set(["'", '"'])
 
+// Where a path starts: at the root, at home, or at a variable.
+const PATH_START = /^(?:\/|~\/|\$)/
+
+// Whether a quote ending a mention inside text closes a path (#3082): it is the closing quote of the
+// string holding the mention (a string of its own), or the same quote opened a stretch inside that
+// string which is the mention itself or starts where a path starts (code held as text, an exec's or a
+// shell line's). A quote that only ends a quoted sentence inside a longer string, as in
+// `{"C": "could move to LESSONS.md"}` held in a ''' string, closes no path: what the program writes
+// is decided by where it writes, never by a file its text names in a sentence.
+const quotedPath = (code: string, at: number, end: number, span: PythonText): boolean => {
+  const q = code[end] ?? ''
+  if (!CLOSES.has(q)) return false
+  if (end === span.to) return true
+  const open = code.lastIndexOf(q, at - 1)
+  return open >= span.from && (open === at - 1 || PATH_START.test(code.slice(open + 1, end)))
+}
+
 /**
  * Where a python program holds text, as mod-kit's one scanner of its comments and strings gives it
  * ($.modkit.pythonText, #1171): plain data, since only plain data crosses between mods. `formatted`
@@ -298,7 +315,8 @@ export type PythonText = { kind: 'comment' | 'string' | 'formatted'; from: numbe
  * (#940: a heredoc writing a test script was asked about as a save to the global CLAUDE.md, which a
  * comment it added named in a sentence). A mention is text when it is in a comment, or in a plain
  * string that goes on past it; one a quote closes is a path (a string of its own, or one inside code
- * held as text, such as an exec's or a shell line's), and one in an f-string is code. `spans` is
+ * held as text, such as an exec's or a shell line's, quotedPath), and one in an f-string is code. A
+ * quote that only ends a quoted sentence inside a longer string closes no path (#3082). `spans` is
  * where the program holds text, read by mod-kit (#1171: this mod scanned it itself before). Only the
  * mention's characters change, so the program can be put back where it was read. It reads the text,
  * not what the program does with it: a path cut out of a longer string at run time is not seen.
@@ -307,8 +325,8 @@ export const withoutPythonText = (code: string, spans: readonly PythonText[]): s
   const text = spans.filter(s => s.kind !== 'formatted')
   return code.replace(MENTION, (m: string, at: number) => {
     const end = at + m.length
-    const inText = text.some(s => at >= s.from && end <= s.to)
-    return inText && !CLOSES.has(code[end] ?? '') ? ' '.repeat(m.length) : m
+    const span = text.find(s => at >= s.from && end <= s.to)
+    return span && !quotedPath(code, at, end, span) ? ' '.repeat(m.length) : m
   })
 }
 

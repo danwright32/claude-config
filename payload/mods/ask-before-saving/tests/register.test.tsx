@@ -2277,3 +2277,51 @@ test('a shell write to a covered index that is not read as a plain append says s
   const edit = refusalOf(await call($, { tool: 'Edit', file_path: INDEX, old_string: INDEX_SECOND, new_string: `${INDEX_SECOND}\n${indexLine('next.md')}\n- [Notes](notes.md)` }))
   expect(edit.startsWith('Not saved yet: ')).toBe(true)
 })
+
+// #3082: a builder's heredoc edited a measuring script in the session notes folder, and the script's
+// text named the lessons file in a quoted sentence inside a ''' string. The quote ending that sentence
+// was read as one closing a path, so the program, and the whole command through the substitution it
+// hands its script, were taken to mention LESSONS.md, and the edit was held. The command from that
+// session, cut to what matters: what decides is where the write lands, never what its text names.
+const ISSUE_3082 = [
+  `W=${HOME}/.claude/state/session-notes/p/s/2575-trim; python3 - "$W/measure.py" <<'EOF'`,
+  'import sys',
+  'p = sys.argv[1]',
+  's = open(p, encoding="utf-8").read()',
+  "md = '''",
+  'names = {"C": "(c) Incident narratives that could move to LESSONS.md"}',
+  'print(names, sys.argv[3])',
+  "'''",
+  "s = s.replace('\\nprint(rows)', md + '\\nprint(rows)')",
+  'open(p, "w", encoding="utf-8").write(s)',
+  'EOF',
+  `R=${HOME}/Apps/claude-config; python3 -I $W/measure.py $W/claude-main.txt --md "$(git -C $R log -1 --format='%h, %cs' origin/main)" > $W/candidates.md; head -20 $W/candidates.md`,
+].join('\n')
+test('a heredoc editing a script whose text names lasting memory in a quoted sentence goes straight through; one whose target is lasting memory is asked (#3082)', withKit, async ($, on) => {
+  const w = world($, on)
+  expect(ISSUE_3082).toContain('LESSONS.md"}')
+  expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_3082 }))).toBe('')
+  expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_3082])
+  quietOnMain(w)
+  // The same command whose write lands on lasting memory, each route still asked about (L1): the
+  // program handed the lessons file, the program opening it by its own path, the output redirected
+  // onto it, a copy and a move onto it, an in place edit, and a program whose target cannot be read
+  // naming it as a path.
+  const real = [
+    ISSUE_3082.replace('python3 - "$W/measure.py"', 'python3 - ~/.claude/LESSONS.md'),
+    ISSUE_3082.replace('open(p, "w"', `open("${HOME}/.claude/LESSONS.md", "w"`),
+    ISSUE_3082.replace('> $W/candidates.md', '> ~/.claude/LESSONS.md'),
+    `${ISSUE_3082}; cp $W/candidates.md ~/.claude/LESSONS.md`,
+    `${ISSUE_3082}; mv $W/candidates.md ${CWD}/CLAUDE.md`,
+    `${ISSUE_3082}; sed -i '' 's/a/b/' ~/.claude/LESSONS.md`,
+    ISSUE_3082.replace('"$W/measure.py"', '"$(pick)"').replace('print(names, sys.argv[3])', "print(names, sys.argv[3], '~/.claude/LESSONS.md')"),
+  ]
+  for (const command of real) {
+    expect(command).not.toBe(ISSUE_3082)
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+  }
+  // And a Write or Edit of the file itself.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${HOME}/.claude/LESSONS.md`, content: '- rule\n' }))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
