@@ -149,6 +149,15 @@ describe('the Chrome tools, one by one', () => {
     expect(refuse('browser_batch', { actions: [{ name: 'tabs_close_mcp', input: { tabId: 12 } }, { name: 'tabs_close_mcp', input: { tabId: 3 } }] }, opened({ 7: 'localhost' }, ['12']))).toBe(`use ${C}tabs_close_mcp on tab 3, ${NOT}`)
     expect(refuse('tabs_close_mcp', {}, opened({ 7: 'localhost' }, ['12']))).toMatch(/without naming a tab this session created/)
   })
+  // L11: a record that could not be read closes what an empty one does, and says so instead.
+  test('with the record of opened tabs unreadable, no such tab is closed, said as not known; a created tab still is', () => {
+    const why = 'the record of the tabs its own action opened could not be read (state store unavailable)'
+    const unread: Browser = { tabs: tabs({ 7: 'localhost' }), listed: [], opened: { unreadable: why } }
+    expect(refuse('tabs_close_mcp', { tabId: 12 }, unread)).toBe(`use ${C}tabs_close_mcp on tab 12, which this session did not create, and whether its own action opened it is not known, because ${why}`)
+    expect(refuse('browser_batch', { actions: [{ name: 'tabs_close_mcp', input: { tabId: 12 } }] }, unread)).toMatch(/on tab 12, which this session did not create, and whether its own action opened it is not known, because/)
+    expect(refuse('tabs_close_mcp', { tabId: 7 }, unread)).toBeUndefined()
+    expect(refuse('read_page', { tabId: 7 }, unread)).toBeUndefined()
+  })
   test('a tab its click opened can be closed and nothing else: no navigate, no read, no click, no typing', () => {
     const b = opened({ 7: 'localhost' }, ['12'])
     expect(refuse('navigate', { tabId: 12, url: 'localhost:3000' }, b)).toBe(`use ${C}navigate on tab 12, which this session did not create (a tab made with tabs_create_mcp can be used on a test host)`)

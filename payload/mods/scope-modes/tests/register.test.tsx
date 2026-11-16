@@ -2786,6 +2786,54 @@ test("asleep, a tab the session's own click opened can be closed and nothing mor
   expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'o13' } as never)).toMatch(NEVER)
   expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}computer`, `${CHROME}tabs_context_mcp`, `${CHROME}tabs_context_mcp`, `${CHROME}tabs_close_mcp`])
 })
+// The failure paths of that record (#3099): both end with the tab not closable, never closable by default.
+const ownGroup = (also: string[] = []) => `Tab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 7: "App" ("http://localhost:3000/")${also.map(t => `\n  • tabId ${t}: "Docs" ("https://docs.example.com/")`).join('')}`
+const NOT_OPENED = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create and did not see appear in its tab group after its own action/
+const clickOpensTab12 = async ($: $T, w: { files: Record<string, string> }) => {
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'f1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f1', `Created new tab. Tab ID: 7\n${ownGroup()}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'f2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f2', `Navigated to http://localhost:3000\n${ownGroup()}`)
+  expect(await call($ as never, { tool: `${CHROME}computer`, tabId: 7, action: 'left_click', coordinate: [1, 2], tool_use_id: 'f3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f3', `Clicked\n${ownGroup(['12'])}`)
+}
+test('asleep, a record of the tabs its click opened that cannot be read closes none of them, and closes them again once it can (#3099)', withDeps, async ($, on) => {
+  const unreadable = { on: false }
+  on('state.get', async ($, e, next) => (unreadable.on && (e as { key?: string }).key === 'browserGroup' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clickOpensTab12($ as never, w)
+  unreadable.on = true
+  // Said as not known, with why, never as a tab it did not open (L11).
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f4' } as never)).toContain(
+    'did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create, and whether its own action opened it is not known, because the record of the tabs its own action opened could not be read (state store unavailable)',
+  )
+  // The tabs it created are a record of their own, read as before.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'f5' } as never)).toBe('ran')
+  // A result that arrives meanwhile cannot be recorded, which is logged with why, never dropped silently.
+  await chromeResult($ as never, 'f5', `text\n${ownGroup(['12'])}`)
+  expect(w.logs.filter(l => l.includes('the record of Chrome tabs could not be updated') && l.includes('state store unavailable')).length).toBe(1)
+  unreadable.on = false
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f6' } as never)).toBe('ran')
+})
+test('asleep, a record of opened tabs that keeps changing underneath its write is logged and opens nothing, while the created tabs are still recorded (#3099)', withDeps, async ($, on) => {
+  const writes = { n: 0 }
+  on('state.set', async ($, e, next) => {
+    if ((e as { key?: string }).key !== 'browserGroup') return next(e)
+    writes.n++
+    return { value: { isSet: false } } as never
+  })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clickOpensTab12($ as never, w)
+  // Three results, each tried five times and each logged.
+  expect(writes.n).toBe(15)
+  expect(w.logs.filter(l => l.includes("the record of Chrome tabs could not be updated: the record of the tabs this session's own action opened kept changing underneath five writes in a row")).length).toBe(3)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f4' } as never)).toMatch(NOT_OPENED)
+  // Tab 7 was recorded as created and on localhost by the first record, written before this one.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'f5' } as never)).toBe('ran')
+})
 test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.md lists it, never the working copy (#2064)', withDeps, async ($, on) => {
   const LISTED = 'Sleep mode test hosts: qa.example.dev\n'
   // The working copy lists the host throughout; only what the default branch says decides.

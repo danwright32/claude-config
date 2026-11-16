@@ -42,10 +42,16 @@ export type TestHosts = readonly string[] | { unreadable: string }
  */
 export type BrowserGroup = { seen: string[]; opened: string[]; watching: boolean }
 /**
- * What a Chrome call is judged against: the record of tabs, the project's listed test hosts, and
- * the tabs the session's own action opened (none when not given), which it may close.
+ * The tabs the session's own action opened, which it may close, or why that record could not be
+ * read. Unreadable closes none of them, as an empty list does, but is said as not known, never as a
+ * tab the session did not open (L11).
  */
-export type Browser = { tabs: BrowserTabs; listed: TestHosts; opened?: readonly string[] }
+export type OpenedTabs = readonly string[] | { unreadable: string }
+/**
+ * What a Chrome call is judged against: the record of tabs, the project's listed test hosts, and
+ * the tabs the session's own action opened (none when not given).
+ */
+export type Browser = { tabs: BrowserTabs; listed: TestHosts; opened?: OpenedTabs }
 
 const HOW_TO_LIST =
   "a test host is localhost, 127.0.0.1, [::1] or a name ending .localhost or .test, or a hosted one the project's CLAUDE.md on its default branch lists on a line reading Sleep mode test hosts: followed by the hosts"
@@ -129,9 +135,12 @@ const moves = (name: string, input: Record<string, unknown>) => name === 'naviga
 const notCreated = (tool: string, tab: string) =>
   `use ${tool} on tab ${tab}, which this session did not create (a tab made with tabs_create_mcp can be used on a test host)`
 const unnamed = (tool: string) => `use ${tool} without naming a tab this session created`
-// A close reaches one tab more than the rest (#3099), so its refusal says both ways a tab is closable.
-const notItsToClose = (tool: string, tab: string) =>
-  `use ${tool} on tab ${tab}, which this session did not create and did not see appear in its tab group after its own action (it can close a tab made with tabs_create_mcp, or one first listed in its tab group after its own click, typing, form fill or script in a tab it created)`
+// A close reaches one tab more than the rest (#3099), so its refusal says both ways a tab is
+// closable, or that whether the session's own action opened it could not be read.
+const notItsToClose = (tool: string, tab: string, opened: OpenedTabs) =>
+  'unreadable' in opened
+    ? `use ${tool} on tab ${tab}, which this session did not create, and whether its own action opened it is not known, because ${opened.unreadable}`
+    : `use ${tool} on tab ${tab}, which this session did not create and did not see appear in its tab group after its own action (it can close a tab made with tabs_create_mcp, or one first listed in its tab group after its own click, typing, form fill or script in a tab it created)`
 
 const navigateRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts) => {
   const tab = tabOf(input)
@@ -155,7 +164,7 @@ const onPageRefusal = (tool: string, input: Record<string, unknown>, tabs: Brows
   return undefined
 }
 
-const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts, opened: readonly string[]): string | undefined => {
+const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts, opened: OpenedTabs): string | undefined => {
   const tool = `${C}${name}`
   if (FREE.has(name)) return undefined
   if (name === 'navigate') return navigateRefusal(tool, input, tabs, listed)
@@ -163,7 +172,7 @@ const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserT
     const tab = tabOf(input)
     if (!tab) return unnamed(tool)
     // The one call an opened tab is good for (#3099): every other rule here reads tabs alone.
-    return tabs[tab] || opened.includes(tab) ? undefined : notItsToClose(tool, tab)
+    return tabs[tab] || (!('unreadable' in opened) && opened.includes(tab)) ? undefined : notItsToClose(tool, tab, opened)
   }
   if (ON_PAGE.has(name)) return onPageRefusal(tool, input, tabs, listed)
   return `use ${tool}, which reaches past the tabs this session created (sleep mode lets the browser be used only in its own tabs on a test host)`

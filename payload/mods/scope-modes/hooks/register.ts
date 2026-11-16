@@ -1386,12 +1386,13 @@ const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> =>
     const now = await $.clock.now()
     for (const [id, c] of chromeCalls) if (id !== self && now - c.at < PENDING_MS) tabs = tabsAfter(tabs, c.tool, c.input, [])
   }
-  // The tabs its own action opened (#3099), which it may close: none when the record cannot be read.
-  let opened: string[] = []
+  // The tabs its own action opened (#3099), which it may close. A record that cannot be read closes
+  // none of them, and is said as unreadable with why, never as a tab it did not open (L11).
+  let opened: Browser['opened']
   try {
     opened = (await $.state.get({ plugin: 'scope-modes', key: 'browserGroup' })).value?.opened ?? []
-  } catch {
-    opened = []
+  } catch (err) {
+    opened = { unreadable: `the record of the tabs its own action opened could not be read (${msg(err)})` }
   }
   return { tabs, listed: await committedTestHosts($), opened }
 }
