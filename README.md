@@ -3242,6 +3242,12 @@ with the merge still in progress, the merge commit does not exist when the gates
 them reads the commit the command is about to make as the branch's own work, every line main
 brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
 to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+`git merge --continue && git push` is the same command and is refused the same way (#3081): a
+`git merge --continue` is read as the commit it makes, by every push gate, through
+`ps_commit_in_chain`. Read as no commit, as it was, nothing folded the pending merge commit in, so a
+conflict resolution went out with no gate having read it. With a merge of any other branch in
+progress the gates now read that pending commit, as they do for `git commit`. It is the only
+spelling of `git merge` that concludes a merge in progress (measured on git 2.51.1).
 Reading the pending merge as a merge of its second parent was the other option, and was not taken:
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
@@ -3885,10 +3891,15 @@ an object's key is not read as running or writing anything. A package is still r
 imported or required.
 
 Since claude-config#2865 the first word npx, bunx, pnpx, npm exec, pnpm dlx or yarn dlx is handed is
-read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`)
-naming no file on disk and none an earlier command wrote: before, `@scope/name@1` was read as a path
-to a script. A package counts as able to post, as an imported one does, so it is refused when it is
-handed an endpoint or a file whose text names one. `claude mcp add` and the other `claude mcp`
+read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`):
+before, `@scope/name@1` was read as a path to a script. A package counts as able to post, as an
+imported one does, so it is refused when it is handed an endpoint or a file whose text names one.
+Since claude-config#3069 that holds whatever is on disk: a folder or a file of the package's name in
+the directory used to make the word a path, and a path holding no `/` is read as nothing, so beside a
+folder named `vitest` the test file `npx vitest run posts.test.ts` names was never opened. Where a
+file of that name is on disk, or an earlier command wrote one, the word is read as that file as well,
+and the call is refused where either reading refuses. A word that can only be a path (`./x.js`,
+`dir/x.js`) is read as the file alone. `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
