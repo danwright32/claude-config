@@ -71,10 +71,14 @@ def main(argv):
         try:
             if os.stat(path).st_mtime_ns <= started:
                 continue
+        except OSError:
+            continue
+        # A file that cannot be read is still judged by its path: a leak must not hide behind it.
+        try:
             with open(path, "rb") as fh:
                 text = fh.read(READ_LIMIT).decode("utf-8", "replace")
         except OSError:
-            continue
+            text = ""
         haystack = path + "\n" + text
         if any(m in haystack for m in markers):
             leaked.append(path)

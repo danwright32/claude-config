@@ -19,6 +19,11 @@ ROOT="$(cd "$DIR/.." && pwd)"
   exit 1
 }
 suite_deadline_arm || exit $?
+. "$ROOT/payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 
 pass=0
 fail=0
@@ -39,8 +44,8 @@ SCRATCH="$WORK/scratch"
 REAL="$WORK/real"
 mkdir -p "$SCRATCH/.claude/state/sleep/notes" "$SCRATCH/Downloads" "$REAL/.claude/state/sleep/notes" "$REAL/.claude/state/sleep/driver" "$REAL/Downloads"
 printf '{"session":"%s"}\n' "$SID_RUN" > "$SCRATCH/.claude/state/sleep/notes/1794849057498-$SID_RUN.jsonl"
-touch "$WORK/started"
-sleep 1.1
+# The start marker is dated in the past, so every file made below is newer than it with no wait.
+touch -t 202001010000 "$WORK/started"
 
 leaks() { python3 -I "$LEAKS" "$REAL" "$SCRATCH" "$WORK/started" "$WORK/scratch-work"; }
 
@@ -77,8 +82,9 @@ printf 'x\n' > "$REAL/Downloads/2026-11-16 sleepdemo sleep report.md"
   || check "a sleep report in the real Downloads naming the demo repository is reported as a leak" "reported: $(leaks)"
 
 python3 -I "$LEAKS" >/dev/null 2>&1
-[ $? -eq 2 ] && check "the helper refuses to run with no arguments rather than reporting nothing" ok \
-  || check "the helper refuses to run with no arguments rather than reporting nothing" "exit $?"
+NOARGS_EXIT=$?
+[ "$NOARGS_EXIT" -eq 2 ] && check "the helper refuses to run with no arguments rather than reporting nothing" ok \
+  || check "the helper refuses to run with no arguments rather than reporting nothing" "exit $NOARGS_EXIT"
 
 # ---- part 2: the whole engine suite, with another session writing to the "real" folder mid run ----
 engine_unmeasured() {
@@ -96,34 +102,35 @@ SCRATCH_TMP="$WORK/tmp"
 mkdir -p "$FAKE/.claude/state/sleep/notes" "$FAKE/Downloads" "$SCRATCH_TMP"
 HOME="$FAKE" TMPDIR="$SCRATCH_TMP" bash "$ROOT/tests/test-sleep-real-engine.sh" > "$WORK/engine.out" 2>&1 &
 RUN_PID=$!
-STARTED_FILE=""
-for _ in $(seq 1 600); do
-  STARTED_FILE="$(find "$SCRATCH_TMP" -maxdepth 2 -name started -print -quit 2>/dev/null)"
-  [ -n "$STARTED_FILE" ] && break
-  kill -0 "$RUN_PID" 2>/dev/null || break
-  sleep 0.2
-done
+hang_wait '[ -n "$(find "$SCRATCH_TMP" -maxdepth 2 -name started -print -quit 2>/dev/null)" ] || ! kill -0 "$RUN_PID" 2>/dev/null' 0.2
+STARTED_FILE="$(find "$SCRATCH_TMP" -maxdepth 2 -name started -print -quit 2>/dev/null)"
 if [ -z "$STARTED_FILE" ]; then
-  check "the engine suite got as far as its start marker" "never wrote one: $(tail -5 "$WORK/engine.out" 2>/dev/null | tr '\n' ' ')"
+  ENGINE_TAIL="$(tail -n 5 "$WORK/engine.out" 2>/dev/null)"
+  check "the engine suite got as far as its start marker" "never wrote one: ${ENGINE_TAIL//$'\n'/ }"
   wait "$RUN_PID" 2>/dev/null; RUN_PID=""
   printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
   exit 1
 fi
-sleep 1.1
 # Another session's night: a note, an ended record, and a report, none naming anything this run made.
+# Their times are set a day ahead, so each is newer than the suite's start marker however fast this
+# runs, with no wait for the clock to move.
 OTHER=22222222-bbbb-4bbb-8bbb-222222222222
+FUTURE="$(date -v+1d +%Y%m%d%H%M)"
 printf '{"session":"%s","note":"another night"}\n' "$OTHER" > "$FAKE/.claude/state/sleep/notes/1794000000001-$OTHER.jsonl"
 printf '{"state":"on"}\n' > "$FAKE/.claude/state/sleep/current.json"
 : > "$FAKE/Downloads/2026-11-16 $OTHER sleep report.md"
+touch -t "$FUTURE" "$FAKE/.claude/state/sleep/notes/1794000000001-$OTHER.jsonl" "$FAKE/.claude/state/sleep/current.json" "$FAKE/Downloads/2026-11-16 $OTHER sleep report.md"
 wait "$RUN_PID"
 ENGINE_EXIT=$?
 RUN_PID=""
 [ "$ENGINE_EXIT" -eq 0 ] \
   && check "the engine suite passes while another session writes to the real sleep folder" ok \
-  || check "the engine suite passes while another session writes to the real sleep folder" "exit $ENGINE_EXIT: $(grep -a '^FAIL' "$WORK/engine.out" | head -3 | tr '\n' ' ')"
-grep -aq '^ok: the real ~/.claude/state/sleep and ~/Downloads gained nothing' "$WORK/engine.out" \
-  && check "and its own check that the real folders gained nothing still ran and passed" ok \
-  || check "and its own check that the real folders gained nothing still ran and passed" "$(grep -a 'gained nothing' "$WORK/engine.out" | head -2 | tr '\n' ' ')"
+  || check "the engine suite passes while another session writes to the real sleep folder" "exit $ENGINE_EXIT: $(grep -a '^FAIL' "$WORK/engine.out")"
+ENGINE_OUT="$(cat "$WORK/engine.out")"
+case "$ENGINE_OUT" in
+  *$'\nok: the real ~/.claude/state/sleep and ~/Downloads gained nothing'*) check "and its own check that the real folders gained nothing still ran and passed" ok ;;
+  *) check "and its own check that the real folders gained nothing still ran and passed" "no such ok line in the engine suite's output" ;;
+esac
 [ -f "$FAKE/.claude/state/sleep/notes/1794000000001-$OTHER.jsonl" ] && [ -f "$FAKE/.claude/state/sleep/current.json" ] \
   && check "the other session's files were left as they were" ok \
   || check "the other session's files were left as they were" "a foreign file is gone"
