@@ -385,11 +385,18 @@ trig_retry_or_failure_handling(){   # $1 = a file holding the added lines  $2 = 
 # which is how an advisory stops being read (L36). A removal counts as cleanup only when EVERY
 # target is a variable the same added lines assigned from mktemp, optionally with a path below it;
 # anything else on the line, and every other destructive pattern, fires exactly as before (L104).
-trig_destructive_data_op(){   # $1 = a file holding the added lines
+#
+# Less, too, a FIXTURE a shell test hands to the code under test (claude-config#3071). This suite's
+# own `make_repo x "$(printf '...rm -rf /var/data/customers...')"` raised L5, L7 and L9 on every push
+# touching it: data the test feeds the gate, not a removal that runs. trig_destructive_judged says
+# which lines are judged at all; the cleanup rule above still decides each one it passes.
+trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the path
   # The pattern travels in the ENVIRONMENT: `awk -v` processes backslash escapes, so `fs\.rm\(`
   # would arrive as the invalid `fs.rm(` (L434). ENVIRON is read verbatim.
   TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk '
     BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); fire = 0 }
+    # The first file is one flag per added line, 1 where the line is judged and 0 where it is data.
+    FILENAME == ARGV[1] { judged[FNR] = $0; next }
     # Each line is judged AS IT IS READ, against the variables whose latest assignment so far is a
     # mktemp: reassigned to anything else, a variable is no longer temp (found by the PR lessons
     # review of #579). One pass, so a large pushed file costs one read.
@@ -399,7 +406,8 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines
         rhs = substr($0, RSTART + RLENGTH)
         if (rhs ~ /^[[:space:]]*"?\$\([[:space:]]*mktemp/) tmp[a] = 1; else delete tmp[a]
       }
-      if (fire || tolower($0) !~ re) next
+      # A line with no flag is judged: a reader that failed must not make every line read as data.
+      if (fire || ((FNR in judged) && judged[FNR] == 0) || tolower($0) !~ re) next
       if ($0 !~ /rm[[:space:]]+-rf/ || $0 ~ /(DROP|TRUNCATE|DELETE[[:space:]]+FROM|unlinkSync|fs\.rm\(|\.drop\()/) { fire = 1; next }
       # EVERY rm on the line is judged, not only the last, and a target climbing out with .. is
       # not the temp directory (both found by the PR lessons review of #579).
@@ -420,7 +428,57 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines
       }
       if (other > 0 || own == 0) fire = 1
     }
-    END { exit !fire }' "$1"
+    END { exit !fire }' <(trig_destructive_judged "$1" "$2") "$1"
+}
+
+# One flag per added line for the trigger above: 1 where the line is judged, 0 where it is data.
+# Outside a shell TEST file every line is judged, exactly as before: a script in source that writes
+# a command out with printf and runs it later is the case that must still fire, and a SQL statement
+# in a string is how most code issues one. In a shell test file a line is judged on its CODE text,
+# read by the stripper the other triggers use (lib/failure-handling.sh, L370), so a quoted argument
+# handed to an ordinary command (make_repo, printf, a gate under test) is data, while one handed to
+# something that runs it (bash -c, ssh, trap) stays code. A heredoc's body is data unless the
+# command it is handed to, or a pipe after it, runs it (bash <<EOF, cat <<EOF | sh), judged by the
+# same list of runners (FH_RUNNER_WORDS). What this reads as data although it runs: a SQL client
+# handed a statement in a test (psql -c "DROP ...", sqlite3 db <<EOF), whose target in a test is a
+# throwaway database, and a script a test writes out and then runs itself.
+trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the path
+  local as
+  as="$(trig_read_as "$2")"
+  if ! is_test "$2" || [ "$(fh_lang "$as")" != shell ]; then
+    awk '{ print 1 }' "$1"
+    return
+  fi
+  TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" awk -v runners="$FH_RUNNER_WORDS" '
+    function runs(text,   n, W, k, w) {
+      n = split(text, W, /[ \t]+/)
+      for (k = 1; k <= n; k++) { w = W[k]; sub(/^.*\//, "", w); if (w ~ ("^(" runners ")$")) return 1 }
+      return 0
+    }
+    BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); hd = "" }
+    # The first file is the code text, one line for each added line.
+    FILENAME == ARGV[1] { code[FNR] = $0; next }
+    {
+      if (hd != "") {
+        t = $0
+        if (hdtab) sub(/^\t+/, "", t)
+        if (t == hd) { hd = ""; print 0; next }
+        # A body handed to something that runs it is that program, read as it stands.
+        print ((hdrun && tolower($0) ~ re) ? 1 : 0)
+        next
+      }
+      c = code[FNR]
+      print ((tolower(c) ~ re) ? 1 : 0)
+      # A heredoc opens here when its << is in the code text (so not inside a string), never <<<.
+      if (match(c, /<<-?/) && substr(c, RSTART, 3) != "<<<" && match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*/)) {
+        h = substr($0, RSTART, RLENGTH); hdtab = (h ~ /^<<-/)
+        sub(/^<<-?[ \t]*["\047]?/, "", h); hd = h
+        pre = substr($0, 1, RSTART - 1); sub(/.*[|;&(`]/, "", pre)
+        post = substr($0, RSTART + RLENGTH)
+        hdrun = runs(pre)
+        if (!hdrun && index(post, "|")) { sub(/^[^|]*\|/, "", post); hdrun = runs(post) }
+      }
+    }' <(fh_code_only "$as" < "$1") "$1"
 }
 
 # A workflow job added with no `timeout-minutes` (L313). The platform default is six hours, and a
