@@ -56,8 +56,9 @@ WHERE DAN'S ANSWER IS READ. From the session transcript Claude Code writes (tran
 hook payload): the picker's input on the assistant entry holding its tool_use, and his choice in
 toolUseResult.answers on the user entry carrying its tool_result, keyed by the question's text.
 That shape was read from this Mac's transcripts on 2026-11-11, metadata included. Nothing here
-writes a record of its own, so there is no record file a command could forge or leave behind; a
-transcript that cannot be read covers nothing.
+writes a record of an Apply, so there is no record file a command could forge or leave behind for
+one; a transcript that cannot be read covers nothing. (The one record this file writes is of the
+test project lines Dan approved, under A LINE COUNTS ONLY WHEN DAN HIMSELF APPROVED IT, below.)
 
 WHAT IT CANNOT SEE: the database itself. The pending list is what the dry run printed before the
 picker; a change on the database between that dry run and the push is not reflected in it. Nor a
@@ -80,7 +81,8 @@ directory's .claude/supabase-test-projects. It needs no Apply, and covers no pus
 statement. Fails closed: a list missing, unreadable, not text, or holding any line that is neither a
 ref nor a comment marks nothing, so the run is asked about as before. What it cannot see: whether a
 ref on the list really is a test project. The list is the checkout's own word, so a ref written
-into it by mistake, or by a session, is trusted like any other.
+into it by mistake is trusted like any other once Dan has approved its line (A LINE COUNTS ONLY
+WHEN DAN HIMSELF APPROVED IT, below); one a session wrote is not, until he has.
 
 The list is trusted only as git has committed it (the coordinator's review of #2643): its bytes must
 be what `git show HEAD:<it>` gives, so an uncommitted or untracked edit, a live ref added by any shell
@@ -106,7 +108,12 @@ Dan, and whatever route carried a line to HEAD, one he has not approved marks no
     another clone does not), the list's path in it and the ref; no ref is written out. A hook run
     that reads Dan's picker for a line writes it there (at a write on its project, or at a commit
     adding it), unless the call is a subagent's (the payload carries agent_id): a subagent's call
-    passes on his picker and writes nothing.
+    passes on his picker and writes nothing. When the record cannot take a line, the main
+    session's call still passes on his picker (Dan's picker answer of 2026-11-16, `Keep #3041's
+    old trust`: a line he approved in a picker is trusted for that call even when the record
+    cannot be written), and the failed save is said beside it, naming the line, the record and
+    the error (claude-config#3058), since a line the record did not keep is asked about again in
+    the next session. Once the record can be written, the same picker is kept.
 WHY NOT THE HOOK'S OWN QUESTION. The first build of #3023 took a commit that ran after the hook's
 question as Dan's yes. What answers that question was measured on Claude Code 2.1.325 (2026-11-15):
 with nobody there, in auto mode, under a permission rule allowing the commit, and from a subagent,
@@ -117,7 +124,9 @@ never answers a question, and a subagent has no picker to ask with. (That build 
 call after a commit with its question by the command's text, which the rtk hook rewrites before
 the call runs: the payload after carried `rtk git commit ...`. Nothing here reads a call after.)
 A commit adding a line Dan has not approved is still asked about (#2989); its question says a yes
-approves nothing and how he approves the line. One whose every added line he approved passes.
+approves nothing and how he approves the line. One whose every added line he approved passes; a
+line his picker covers that the record could not take passes too, the failed save said beside the
+call (#3058).
 The record is held like the list: a shell command naming it (its path holds the list's name) and an
 Edit, Write or MultiEdit under it (is_list_record) are asked about.
 WHAT THE RECORD CANNOT SEE: a line approved once stays approved for that list in that clone, so one
@@ -126,13 +135,19 @@ pull, or committed before #3023, is on no record: its write is asked about, the 
 Dan approves it. And a script that writes the record under a name built at run time is not seen,
 nor is one that writes a picker into the transcript, which the Apply shares.
 
-  on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True)
+  on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True, unkept=None)
       (True, the ref) or (False, why the run's project is not one its checkout marks as test).
-      agent is whether the call is a subagent's, which writes nothing on the record.
+      agent is whether the call is a subagent's, which writes nothing on the record. A call that
+      is not gives unkept, a list: it gets why Dan's picker for the line could not be saved on the
+      record, when it could not, for the caller to say beside the run it lets through (#3058).
+      Without a list such a call is refused (TypeError) before the record is written.
   is_test_list(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is a checkout's TEST_LIST, else None.
-  list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True)
+  list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True,
+                    unkept=None)
       None, or why a Bash command may write a TEST_LIST or commit a line added to one (#2989).
+      agent and unkept are as for on_test_project: a commit of lines his picker covers passes
+      (None) though the record could not take them, and unkept then holds why.
   is_list_record(tool, tool_input)
       The path an Edit, Write or MultiEdit writes when it is under the record of approved lines.
 """
@@ -417,7 +432,8 @@ def _uncommitted(path, raw, deadline):
 # Where it sits under the Claude home, in parts. Its last part is the list's own file name, so any
 # shell command naming the record names the list, and is asked about by list_shell_change.
 RECORD_PARTS = ("state", TEST_LIST.split(os.sep)[-1])
-# How many added lines one question about a commit names. Only those are approved by its answer.
+# How many added lines one question about a commit names. Its answer approves none of them: only
+# Dan's picker approves a line (HOW_TO_TRUST).
 LINES_SHOWN = 8
 
 
@@ -461,21 +477,58 @@ def _on_record():
 
 
 def _put_on_record(keys):
-    """Add lines Dan approved in a picker to the record. Its failing is not said: his picker still
-    covers this session, and the next one asks again, naming how."""
+    """Add lines Dan approved in a picker to the record: None once they are on it, else why not,
+    which is said beside the call his picker still lets through (_keep,
+    claude-config#3058). Before, the failure was swallowed: his picker let the call through,
+    nothing was kept, and the next session asked him to approve the same line again with no
+    reason given."""
     folder = _record_dir()
+    record = os.path.join(folder, "approved")
     try:
         # A key is a hex digest, so strict is the decision: a key holding anything else is refused
-        # before the record is opened, and never written as a line that would trust nothing.
-        data = ("\n".join(keys) + "\n").encode("ascii", "strict")
+        # before the record is opened, and never written as a line that would trust nothing. The
+        # leading newline ends any fragment an earlier short write left, so the first key here is
+        # never fused onto it; the record is read by whitespace, so a blank line costs nothing.
+        data = ("\n" + "\n".join(keys) + "\n").encode("ascii", "strict")
+    except UnicodeError as e:
+        return ("the record of the lines Dan approved, " + record + ", was not written: a key for it was not "
+                "a hex digest (" + type(e).__name__ + ")")
+    try:
         os.makedirs(folder, mode=0o700, exist_ok=True)
-        fd = os.open(os.path.join(folder, "approved"), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        fd = os.open(record, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
-            os.write(fd, data)
+            written = os.write(fd, data)
         finally:
             os.close(fd)
-    except (OSError, UnicodeError):
-        pass
+    except OSError as e:
+        return ("the record of the lines Dan approved, " + record + ", could not be written ("
+                + type(e).__name__ + (": " + e.strerror if e.strerror else "") + ")")
+    if written != len(data):
+        return ("the record of the lines Dan approved, " + record + ", took only " + str(written) + " of the "
+                + str(len(data)) + " bytes written to it")
+    return None
+
+
+def _keep(keys, refs, unkept):
+    """Put keys, of the lines of refs Dan approved in a picker, on the record, for a call that is
+    not a subagent's. When the record cannot take them, his picker counts for the call all the same
+    (his answer of 2026-11-16, module docstring), and why is put on unkept, the caller's list of
+    notices, to be said beside the call and never as a question (claude-config#3058). A caller
+    giving no list is refused before the write, so the omission shows on its first call and not on
+    the first save that fails."""
+    if unkept is None:
+        raise TypeError("a call that writes the record of approved lines gave no list for what could not be saved")
+    why = _put_on_record(keys)
+    if why is None:
+        return
+    one = len(refs) == 1
+    unkept.append("Dan approved the test project " + ("line " if one else "lines ")
+                  + ", ".join(_shown(r, 80) for r in refs[:LINES_SHOWN]) + (", and more" if len(refs) > LINES_SHOWN else "")
+                  + " in a picker in this session, but " + ("that approval" if one else "those approvals")
+                  + " could not be saved: " + why + ". His picker still counts for this call, but "
+                  + ("the line is" if one else "the lines are") + " on no record, so a later session will ask him "
+                  "to approve " + ("it" if one else "them") + " again until that record can be written "
+                  "(claude-config#3058).")
 
 
 def _trusted_by_dan(session_id, transcript_path):
@@ -511,11 +564,12 @@ HOW_TO_TRUST = ("To have it trusted, the main session asks Dan with an AskUserQu
 LIST_PATH = "/".join(TEST_LIST.split(os.sep))
 
 
-def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, agent=True):
+def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, agent=True, unkept=None):
     """None when Dan approved ref's line of workdir's TEST_LIST: it is on this Mac's record, or this
     session's transcript holds his picker for it, which is then put on the record unless the call
     is a subagent's (agent). Else why the line is not trusted. Fails closed: a clone git cannot
-    name and a record that cannot be read approve nothing."""
+    name and a record that cannot be read approve nothing. A record that cannot take his picker
+    still leaves the line approved for this call, and unkept, the caller's list, gets why (_keep)."""
     clone, prefix, why = _clone(workdir, deadline)
     if why is not None:
         return "whether Dan approved that line could not be told: " + why
@@ -528,7 +582,7 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
     dan, unread = _trusted_by_dan(session_id, transcript_path)
     if (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref) in dan:
         if not agent:
-            _put_on_record([key])
+            _keep([key], [ref], unkept)
         return None
     if unread is not None:
         return ("that line is not on this Mac's record of the lines Dan approved" + _unlooked(unread)
@@ -538,12 +592,14 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
             "only once he has, whatever commit, merge, pull, rebase or cherry pick carried it to HEAD. " + HOW_TO_TRUST)
 
 
-def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
+def _not_approved(folder, added, deadline, session_id, transcript_path, agent, unkept=None):
     """(the lines of added, as _list_additions gives them for a commit in folder, that Dan has not
     approved; what the question says of them, reading after "which"). One his picker in this
     session covers is put on the record unless the call is a subagent's. Fails closed: when the
     clone, the record or the top of the checkout cannot be read, every line is unapproved, and the
-    question says what could not be read, as it does of a transcript (L11)."""
+    question says what could not be read, as it does of a transcript (L11). When the record cannot
+    take the lines his picker covers, they are approved for this commit all the same, and unkept,
+    the caller's list, gets why (_keep, claude-config#3058)."""
     clone, prefix, why = _clone(folder, deadline)
     approved, record_why = _on_record()
     r, top_why = _git(folder, ["rev-parse", "--show-toplevel"], deadline)
@@ -564,22 +620,24 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent):
         if dan is None:
             dan, unread = _trusted_by_dan(session_id, transcript_path)
         if (os.path.realpath(os.path.join(top_dir, rel)), line) in dan:
-            keys.append(key)
+            keys.append((key, line))
         else:
             left.append((p, line, top))
     if keys and not agent:
-        _put_on_record(keys)
+        _keep([k for k, _ in keys], [line for _, line in keys], unkept)
     return left, ("Dan has approved in no picker" if unread is None
                   else "this Mac's record of the lines Dan approved does not hold" + _unlooked(unread))
 
 
-def on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True):
+def on_test_project(workdir, flags, session_id=None, transcript_path=None, agent=True, unkept=None):
     """(True, the ref) when a `supabase db query -f` run in workdir with flags goes to a project its
     checkout marks as test (TEST_LIST, claude-config#2643), else (False, why not). Fails closed: a
     list missing, unreadable, not text, larger than TEST_LIST_BYTES, other than what git has committed
     for it, or holding any line that is not a ref or a comment marks nothing, and nor does a line
     Dan has not approved in a picker (_unapproved, claude-config#3023), read from this Mac's record
-    or from the transcript of session_id; agent is whether the call is a subagent's."""
+    or from the transcript of session_id; agent is whether the call is a subagent's, and unkept
+    the list of a call that is not, which gets why his picker for the line could not be saved on
+    the record when it could not: the run passes on his picker all the same (_keep)."""
     why = _flags_why_not(flags, QUERY_FLAGS, "a test project's list covers only a run")
     if why is not None:
         return False, why
@@ -615,7 +673,7 @@ def on_test_project(workdir, flags, session_id=None, transcript_path=None, agent
         return False, "project " + ref + " is not marked as test in " + TEST_LIST
     # In HEAD is not enough: the line counts only when Dan himself approved it, whatever route
     # carried it here (claude-config#3023).
-    why = _unapproved(workdir, ref, deadline, session_id, transcript_path, agent)
+    why = _unapproved(workdir, ref, deadline, session_id, transcript_path, agent, unkept)
     if why is not None:
         return False, "project " + ref + " is on " + TEST_LIST + " as committed, but is not trusted as test: " + why
     return True, ref
@@ -758,7 +816,7 @@ def _named_thing(text):
     return TEST_LIST + ", the list of the test Supabase projects of a checkout,"
 
 
-def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True):
+def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=None, agent=True, unkept=None):
     """None when a Bash command neither writes a checkout's TEST_LIST nor commits a line added to
     one (claude-config#2989), else why it may. Before this, an `echo <ref> >>` into the list and
     then `git commit` made the project trusted with no question.
@@ -776,10 +834,12 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
     Dan approved it in a picker (_unapproved). So a commit is asked about only for the added lines
     he has not approved (_not_approved, reading the record and the transcript of session_id), the
     question naming up to LINES_SHOWN of them and how he approves one; agent is whether the call is
-    a subagent's, which writes nothing on the record. A list one of these commands cannot see being
-    committed (a script, a name built at run time, an alias, `git commit-tree`, a merge, a cherry
-    pick, a pull) is not a gap any more: its lines reach HEAD with no question, are approved by
-    nobody, and so mark nothing. sw is lib/shell-words.py and strip
+    a subagent's, which writes nothing on the record, and unkept the list of a call that is not,
+    which gets why the lines his picker covers could not be saved on the record when they could
+    not: the commit is not asked about for those (_keep, claude-config#3058). A list one of these
+    commands cannot see being committed (a script, a name built at run time, an alias, `git
+    commit-tree`, a merge, a cherry pick, a pull) is not a gap any more: its lines reach HEAD with
+    no question, are approved by nobody, and so mark nothing. sw is lib/shell-words.py and strip
     db-write-calls' strip_redirects, which with found lists the redirections it took out."""
     name = _list_name()
     named = name in command.lower()
@@ -826,7 +886,7 @@ def list_shell_change(command, cwd, sw, strip, session_id=None, transcript_path=
         if added:
             # Each line once, though the index and the working tree may both hold it.
             added, unapproved = _not_approved(folder, list(dict.fromkeys(added)), deadline, session_id,
-                                              transcript_path, agent)
+                                              transcript_path, agent, unkept)
         if added:
             shown = ", ".join("the line " + _shown(l, 80) + " added to " + _shown(p, 120)
                               for p, l, _ in added[:LINES_SHOWN])

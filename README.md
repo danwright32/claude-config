@@ -3237,6 +3237,15 @@ on main is not this push's, and is not reported anywhere else either. The duplic
 assets gates still read the whole range from the upstream. Each suite builds its case with
 `lib/merged-main-fixture.sh`.
 
+A merge of main can only be set apart once it is committed. In `git commit --no-edit && git push`
+with the merge still in progress, the merge commit does not exist when the gates run, so each of
+them reads the commit the command is about to make as the branch's own work, every line main
+brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
+to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+Reading the pending merge as a merge of its second parent was the other option, and was not taken:
+each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
+added later would miss it without a word.
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
@@ -4206,7 +4215,7 @@ commits the line or runs a file on that project, so later sessions and every wor
 do not ask again. The record is held like the list: a shell write naming it and an Edit, Write or
 MultiEdit under it are asked about. A commit adding a line he has not approved is still asked about
 (#2989), the question naming up to eight of them and how he approves one; a commit whose every added
-line he approved passes.
+line he approved passes, and says so when the record could not take one (below).
 - Why the hook's own question approves nothing: the first build of #3023 took a commit that ran
   after the question as Dan's yes. Measured on Claude Code 2.1.325 on 2026-11-15, with nobody there
   to answer, the question was refused in auto mode (the same commit ran when no hook asked), under a
@@ -4219,6 +4228,14 @@ line he approved passes.
 - A subagent's call writes nothing on the record. Its payload carries `agent_id` and the main
   session's transcript (both captured the same day), so it passes on Dan's picker in that session,
   and the record is written by a call of the main session.
+- When the record cannot be written, the hook says so, and his picker still counts for that call (#3058).
+  Before, the failure was swallowed: his picker let the main session's call through, nothing was
+  kept, and the next session asked him to approve the same line again with no reason given. Now
+  that call, a write or a commit adding the line, still goes through on his picker (Dan chose on
+  2026-11-16 to keep that trust, answering the picker `Keep #3041's old trust`), and the hook says
+  beside it, in a notice and never as a question, which line could not be saved, the record's path
+  and the error, and that a later session will ask him again until the record can be written.
+  Nothing is kept until then; once it can be written, the same picker is saved by the next call.
 - What changes for a list that already exists: its lines are approved by nobody yet, so each write
   on its project is asked about, the question saying how Dan approves the line. One picker a line
   is all it takes; no commit is needed. The same holds for a line that arrives by a pull, for a
@@ -8128,8 +8145,7 @@ One narrowing (#2254): a findings note to the installed helper,
 else, another subcommand, a substitution inside the note and everything else in the same command
 are judged as before. A question is kept in the store under a
 SHA-256 of its repository and word (#2246), since a held command's word can pass the store's 256
-character key limit; an answer kept under the earlier key form is still read for its week (#2256
-removes that read).
+character key limit.
 Every judgement, decision and answer is one JSON line in
 `~/.claude-area-check/log.jsonl` on this Mac, a `loaded` line per session start. A live test
 session keeps its records out of that log by starting Claude Code with `CLAUDE_AREA_CHECK_DIR` set
