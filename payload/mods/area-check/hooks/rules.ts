@@ -103,6 +103,39 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  */
 export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string; runs?: ShellRun[] }
 
+/**
+ * Whether a word opens a `$(`, `${`, `$[` or backtick it never closes (#3082): the shell refuses such
+ * a line or reads on past it, so it is no value the command builds and hands a script, and it never
+ * carries `runs`, staying held as unread. A bracket inside an open one is counted as nesting, so a
+ * quoted lone `(` inside `$(...)` reads as never closed: the side that holds rather than passes.
+ */
+export const neverClosed = (word: string): boolean => {
+  const want: string[] = []
+  const closer: Record<string, string> = { '(': ')', '{': '}', '[': ']' }
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i] as string
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (c === '`') {
+      if (want.at(-1) === '`') want.pop()
+      else want.push('`')
+      continue
+    }
+    const opens = word[i + 1]
+    if (c === '$' && opens !== undefined && closer[opens]) {
+      want.push(closer[opens] as string)
+      i++
+      continue
+    }
+    if (!want.length) continue
+    if (c === '(') want.push(')')
+    else if (c === want.at(-1)) want.pop()
+  }
+  return want.length > 0
+}
+
 const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
 // A name whose extension is written out and is no source one is never judged, whatever its folder is.
 const mayBeSource = (word: string) => {
@@ -441,7 +474,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
       else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
-      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs`, runs: [run] })
+      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs`, ...(neverClosed(a.word) ? {} : { runs: [run] }) })
     }
   }
   for (const u of w.unnamed) {
