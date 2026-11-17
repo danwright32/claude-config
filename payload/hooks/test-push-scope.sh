@@ -1963,7 +1963,7 @@ moves_or_stages "#3098 wherever the command stands" "git checkout main || exit 1
 moves_or_stages "#3098 a target worked out by another command is still a target" 'git reset --hard "$(git merge-base HEAD origin/main)" && git push -f' "move git reset"
 # A file written by git apply with no --index, --cached or --3way is a file written, as by any
 # program: the index is as the gates read it (measured), so this question lets it through. What a
-# later git add or commit -a takes of it is the wider gap this change does not close.
+# later git add or commit -a takes of it is the wider gap ps_unread_write closes (claude-config#3113).
 neither "#3098 control: a patch applied to the files only" "git apply fix.patch && git commit -m x && git push"
 # A staging route with no commit after it changes nothing the push sends: the push carries commits,
 # and none was made. Nor does one that comes after the commit.

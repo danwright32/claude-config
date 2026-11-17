@@ -38,6 +38,14 @@
 #                      (checkout, switch, reset), or one that changes the index by a route other
 #                      than git add ahead of a commit (stash pop, apply --index, rm), which
 #                      push-scope-notice.sh refuses the same way (claude-config#3098)
+#   ps_unread_write:   does the command run something that may write a file, then stage, commit
+#                      and push, so that what it writes goes out with no gate having read it, which
+#                      push-scope-notice.sh refuses the same way (claude-config#3113)
+#   ps_unread_push_source: does a push name, as what it sends, something other than the branch
+#                      checked out that the gates did not read (commits neither this branch nor
+#                      the remote has, a name that cannot be resolved, or one the command moves
+#                      first), which push-scope-notice.sh refuses, each kind with its own sentence
+#                      (claude-config#3112)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -510,9 +518,9 @@ ps__read() {   # $1 = command
     # The last field takes read's trailing newline. Each is tested before anything is removed: a
     # pattern removal that matches nowhere tries every position, and bash 3.2 measures the rest of
     # the string at each, so on a field as long as the command (a commit's words hold its whole
-    # message) the cost grew with the square of the length: 2 seconds at 79 KB, 5 at 159 KB, 19 at
-    # 319 KB, and a 1.6 MB command was not read inside 60 (claude-config#3111). A case reads the
-    # field once.
+    # message) the cost grew with the square of the length: measured on 2026-11-16 on the personal
+    # MacBook, 2 seconds at 79 KB, 5 at 159 KB, 19 at 319 KB, and a 1.6 MB command was not read
+    # inside 60 (claude-config#3111). A case reads the field once.
     case "$wrap" in *$'\n') wrap="${wrap%$'\n'}" ;; esac
     case "$tool" in *$'\n') tool="${tool%$'\n'}" ;; esac
     case "$assigns" in *$'\n') assigns="${assigns%$'\n'}" ;; esac

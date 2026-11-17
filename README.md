@@ -3339,7 +3339,8 @@ out when a push ran is not in the transcripts: asked of each surviving checkout'
 Reading a command for these costs time in step with its length. `ps__read` took a trailing newline
 off three fields of every record by pattern removal where only the last holds one, and on bash 3.2
 a pattern removal that matches nowhere measures the rest of the string at every position, so a
-commit message of 319 KB took 19 seconds to read and one of 1.6 MB was not read inside 60. The fields are
+commit message of 319 KB took 19 seconds to read and one of 1.6 MB was not read inside 60
+(measured on the personal MacBook on 2026-11-16). The fields are
 now tested before anything is removed, and the trim that takes a closing bracket off a word
 (`ps__word_end`) splits a long word by `read` instead; the suite asks each question of a 1.6 MB
 command inside a bound.
