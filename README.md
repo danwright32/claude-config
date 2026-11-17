@@ -3286,14 +3286,37 @@ are in the range the gates read (#3092). Each was measured in a throwaway reposi
 to make at least one commit a push would send, the forms that continue one in progress and the forms
 that start one alike; a merge that only fast forwards makes none and still puts another branch's
 commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
-refused as well, since a `git commit` later in the command would take what they staged. Only
-`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
-which the gates read. A route counts only when a push follows it in the command, and only in command
+refused as well, since a `git commit` later in the command would take what they staged.
+`--abort` and `--quit` make no commit and are not among these routes, and nor is
+`git merge --continue`, which the gates read. A route counts only when a push follows it in the command, and only in command
 position, so a commit message that names one is not one. `git pull && git push` is refused whole,
 though a pull that only fast forwards sends nothing unread, because which it will be is not known
-before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
-that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
-route (`git apply --index`, `git stash pop`).
+before it fetches.
+
+Two more kinds of git command change what a push in the same command sends without making a commit,
+and `push-scope-notice.sh` refuses those too, each with its own sentence (#3098). One kind moves the
+branch: `git checkout` or `git switch` of another branch or commit, `git reset` to another commit,
+`git update-ref`, `git symbolic-ref` with a target, `git bisect`, `git filter-branch`,
+`git stash branch`, and `--abort` of a rebase, cherry-pick, revert or am, which puts HEAD back where
+the sequence began. After it the push sends commits that were never in the range a gate read, or
+leaves out ones that were, so it is refused with any push after it. The other kind changes the
+index by a route other than `git add`: `git stash` and `git stash pop` or `apply`,
+`git apply --index`, `--cached` or `--3way`, `git rm`, `git mv`, `git restore --staged`,
+`git checkout <commit> -- <path>`, `git reset` with no commit (which unstages), `git read-tree`,
+`git update-index` and `git merge --abort`. The gates fold a pending commit in from the index as it
+was before the command ran, so this kind is refused only when a commit follows it and a push follows
+that. Each spelling was measured in a throwaway repository on git 2.51.1, comparing HEAD, the tree
+the index holds and the files before and after. What was measured to change neither HEAD nor the
+index is let through: a branch made where HEAD already is (`git checkout -b new`,
+`git switch -c new`), files written back from the index (`git checkout -- <path>`, `git restore
+<path>`), dry runs, the forms that only look (`git stash list`, `git symbolic-ref --short HEAD`,
+`git update-index --refresh`), `git branch -f` and `-m`, and `--quit`. Where the words cannot say
+which it is, the worse case is taken: `git checkout x` is read as a move though `x` may be a file.
+On the personal MacBook, in the transcripts of the 45 days to 2026-11-16, 1 Bash call of about
+4,064 that pushed ran any of these first. Not covered, by this or by any gate: files a command
+writes before a `git add` or a `git commit -a` in the same command, whether by `git apply` with no
+`--index` or by any other program, since the gates read the files as they stand before the command
+runs; and `git submodule add`, which was not measured.
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two

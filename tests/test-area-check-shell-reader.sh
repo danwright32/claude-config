@@ -93,13 +93,15 @@ const HELPER = { what: 'a bash script file', path: '/Users/dan/.claude/hooks/lib
 is('a copy of the spool helper in a checkout is judged as any script', `bash payload/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`, [
   { word: 'note', path: '/w/app/note', runs: [COPY] },
   { word: '.', path: '/w/app', runs: [COPY] },
-  { word: F, unread: `a bash script file is handed ${F}, built as the command runs` },
+  // A word built as the command runs, handed only to scripts, carries them (#3082), so the area check
+  // can read whether they write it; it stays unread wherever they cannot be read.
+  { word: F, unread: `a bash script file is handed ${F}, built as the command runs`, runs: [COPY] },
   { word: 'builder 2254', path: '/w/app/builder 2254', runs: [COPY] },
 ])
 // #2636: the project folder a subcommand reads a spool key from is no write; its other words still are.
 is("the spool helper's other subcommands are judged as before, but for the project folder they read a key from", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
   { word: 'append', path: '/w/app/append', runs: [HELPER] },
-  { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
+  { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs', runs: [HELPER] },
 ])
 is("the end of turn review's clear line judges its transcript and stamp, never the project folder", 'bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app /Users/dan/s1.jsonl /tmp/review.s1.manifest', [
   { word: 'clear', path: '/w/app/clear', runs: [HELPER] },
