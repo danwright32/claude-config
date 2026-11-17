@@ -87,7 +87,7 @@ import {
 } from './rules.ts'
 import { currentText } from './mod-kit/inputs.ts'
 import { withoutOwnFolder } from './mod-kit/scriptvars.ts'
-import { engineFacts, namedReaders } from './named.ts'
+import { declinedNote, engineFacts, namedReaders, type Named } from './named.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
@@ -462,7 +462,7 @@ type Verdict = typeof PASS | { held: Held }
 // The two answers of Dan's that release the file; Fold in leaves it for the session to fold.
 const RELEASING: readonly string[] = ['Restructure first', 'Proceed anyway']
 
-const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null): Promise<Verdict> => {
+const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null, declined?: string): Promise<Verdict> => {
   const started = await $.clock.now()
   const d: Deadline = { at: started + DEADLINE_MS }
   const session = await $.session.id()
@@ -562,6 +562,7 @@ const judgeEdit = async ($: EngineInterface, tool: string, id: string, path: str
     growth,
     branch: b.branch,
     mergeBase,
+    ...(declined ? { declined } : {}),
   }
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
   await record({ decision: 'held' })
@@ -579,10 +580,10 @@ const card = async ($: EngineInterface, toolUseId: string, c: { reason: string; 
 
 // One edit's verdict as the call meets it: refused with the facts and how to decide, or let through.
 // Its own failure lets the edit through, said (fail loud about the check, never about the edit).
-const gate = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null): Promise<{ deny: string } | typeof PASS> => {
+const gate = async ($: EngineInterface, tool: string, id: string, path: string, agent: string | null, declined?: string): Promise<{ deny: string } | typeof PASS> => {
   try {
     if (!(await $.fs.exists(path))) return PASS
-    const v = await judgeEdit($, tool, id, path, agent)
+    const v = await judgeEdit($, tool, id, path, agent, declined)
     if ('pass' in v) return PASS
     await card($, id, holdCard(v.held))
     return { deny: holdRefusal(v.held) }
@@ -600,7 +601,7 @@ const gate = async ($: EngineInterface, tool: string, id: string, path: string, 
 // folder): it passes where there is no checkout on GitHub or nothing there could hold a file, and is
 // otherwise held, claimed by its command once decided, so only that unchanged command then runs.
 
-const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { unread: string }>, command: string, agent: string | null): Promise<Verdict> => {
+const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { unread: string }>, command: string, agent: string | null, declined?: string): Promise<Verdict> => {
   const started = await $.clock.now()
   const d: Deadline = { at: started + DEADLINE_MS }
   const key = `${await shellKey(command)}\n${agent ?? ''}`
@@ -637,6 +638,7 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
     issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
     growth: { unread: 'no file is named, so no growth is read' },
     unread: { why: t.unread, key },
+    ...(declined ? { declined } : {}),
   }
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
   await record('held')
@@ -813,8 +815,8 @@ const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: 
 // by one, or a path that may be a folder but cannot be read, comes back as a write that cannot be
 // named, held as one (fail closed: one decision lets it through, where letting it pass would let a
 // write into a held file go unasked). A judging that throws passes, said, as gate's own does.
-const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread> => {
-  const v = await gate($, 'Bash', id, t.path, agent)
+const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null, declined?: string): Promise<{ deny: string } | typeof PASS | Unread> => {
+  const v = await gate($, 'Bash', id, t.path, agent, declined)
   if ('deny' in v) return v
   let at = plain(t.path)
   if (!t.tree) {
@@ -836,7 +838,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     // whether they passed, so a reading that lets everything through, or one that never places
     // anything, shows in the log rather than as quiet (L551).
     const placed = t.runs?.length ? await allPlaced($, t.runs, at) : null
-    if (t.runs && placed) return judgePlaced($, id, t.word, t.runs, placed, agent, at)
+    if (t.runs && placed) return judgePlaced($, id, t.word, t.runs, placed, agent, at, declined)
   }
   let under: Awaited<ReturnType<typeof underTree>>
   try {
@@ -846,7 +848,7 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     return PASS
   }
   if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
-  return gateFolder($, id, t.word, under.paths, agent)
+  return gateFolder($, id, t.word, under.paths, agent, declined)
 }
 
 // The placed writes of the scripts a word was handed to (#2407, #2565, #3082), each judged where it
@@ -854,13 +856,13 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
 // naming it. Each reading is logged with how many writes were placed and whether they passed, so a
 // reading that lets everything through, or one that never places anything, shows in the log rather
 // than as quiet (L551). `at` is where a failure to log is said to be.
-const judgePlaced = async ($: EngineInterface, id: string, word: string, runs: readonly ShellRun[], placed: readonly ScriptPlaced[][], agent: string | null, at: string): Promise<{ deny: string } | typeof PASS | Unread> => {
+const judgePlaced = async ($: EngineInterface, id: string, word: string, runs: readonly ShellRun[], placed: readonly ScriptPlaced[][], agent: string | null, at: string, declined?: string): Promise<{ deny: string } | typeof PASS | Unread> => {
   let verdict: Awaited<ReturnType<typeof gatePath>> = PASS
   const judged = new Set<string>()
   for (const p of placed.flat()) {
     if (judged.has(p.path)) continue
     judged.add(p.path)
-    verdict = await gatePath($, id, { word: p.word, path: p.path, ...(p.tree ? { tree: true as const } : {}) }, agent)
+    verdict = await gatePath($, id, { word: p.word, path: p.path, ...(p.tree ? { tree: true as const } : {}) }, agent, declined)
     if (!('pass' in verdict)) break
   }
   const decision = 'pass' in verdict ? 'passed' : 'held'
@@ -875,11 +877,11 @@ const judgePlaced = async ($: EngineInterface, id: string, word: string, runs: r
 // whichever of its words the name was built on. Null, for the word to be judged as one that cannot
 // be named, wherever a script cannot be read, a write cannot be placed, or the reading throws (fail
 // closed).
-const gateHanded = async ($: EngineInterface, id: string, t: Unread & { runs: readonly ShellRun[] }, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread | null> => {
+const gateHanded = async ($: EngineInterface, id: string, t: Unread & { runs: readonly ShellRun[] }, agent: string | null, declined?: string): Promise<{ deny: string } | typeof PASS | Unread | null> => {
   try {
     const placed = await allPlaced($, t.runs, SCRIPT_RUN_FROM)
     if (!placed || placed.flat().some(p => p.handed)) return null
-    return await judgePlaced($, id, t.word, t.runs, placed, agent, await $.session.cwd())
+    return await judgePlaced($, id, t.word, t.runs, placed, agent, await $.session.cwd(), declined)
   } catch (err) {
     await failed($, t.word, err, 'handed')
     return null
@@ -890,7 +892,7 @@ const gateHanded = async ($: EngineInterface, id: string, t: Unread & { runs: re
 // for the folder (#2920): every held file named in one refusal under the call's id, and one decision
 // taken for them all, where each was held in turn, one decision and resend per file. A file whose
 // judging throws passes, said, as gate's own does, and the rest are still judged.
-const gateFolder = async ($: EngineInterface, id: string, word: string, paths: readonly string[], agent: string | null): Promise<{ deny: string } | typeof PASS> => {
+const gateFolder = async ($: EngineInterface, id: string, word: string, paths: readonly string[], agent: string | null, declined?: string): Promise<{ deny: string } | typeof PASS> => {
   const held: Held[] = []
   for (const p of paths) {
     try {
@@ -903,7 +905,7 @@ const gateFolder = async ($: EngineInterface, id: string, word: string, paths: r
   }
   const [lead, ...more] = held
   if (!lead) return PASS
-  const h: Held = more.length ? { ...lead, more, under: word } : lead
+  const h: Held = { ...(more.length ? { ...lead, more, under: word } : lead), ...(declined ? { declined } : {}) }
   // Each judging kept its own entry under this id, each replacing the last; the one hold replaces them.
   await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
   await card($, id, holdCard(h))
@@ -915,6 +917,7 @@ const gateFolder = async ($: EngineInterface, id: string, word: string, paths: r
 const gateShell = async ($: EngineInterface, id: string, command: string, agent: string | null): Promise<{ deny: string } | typeof PASS> => {
   let cwd = ''
   let targets: ShellTarget[]
+  let named: readonly Named[] = []
   try {
     cwd = await $.session.cwd()
     const home = await homeOf($)
@@ -922,6 +925,7 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
     // each such run logged with what was decided, so one let through shows in the log (L551).
     const read = await namedReaders(command, await $.modkit.writes({ command, cwd, home }), engineFacts($))
     for (const n of read.named) await logged($, n.script, { v: 1, kind: 'named-reader', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, script: n.script, word: n.word, ...('passed' in n ? { decision: 'passed' } : { decision: 'judged', why: n.why }) })
+    named = read.named
     targets = shellTargets(read.writes, home)
   } catch (err) {
     await failed($, cwd, err, 'shell')
@@ -929,13 +933,15 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   }
   for (const target of targets) {
     let t: Unread
-    const r = 'path' in target ? await gatePath($, id, target, agent) : target.runs ? await gateHanded($, id, { ...target, runs: target.runs }, agent) : null
+    // A hold on what a named script that was not let through reaches says why it was not (#3162).
+    const declined = declinedNote(named, (target.runs ?? []).map(r => r.path))
+    const r = 'path' in target ? await gatePath($, id, target, agent, declined) : target.runs ? await gateHanded($, id, { ...target, runs: target.runs }, agent, declined) : null
     if (r === null) t = target as Unread
     else if ('deny' in r) return r
     else if ('pass' in r) continue
     else t = r
     try {
-      const v = await judgeUnread($, id, t, command, agent)
+      const v = await judgeUnread($, id, t, command, agent, declined)
       if ('pass' in v) continue
       await card($, id, holdCard(v.held))
       return { deny: holdRefusal(v.held) }

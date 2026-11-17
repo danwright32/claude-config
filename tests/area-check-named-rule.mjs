@@ -5,7 +5,8 @@
 // <file> a file under payload/mods there, from the root.
 //
 // It lets through only that script at its path from the root of a checkout of its repository, handed
-// one folder, in a command that gives it no setting and runs the script once, behind no runner, with
+// one folder, in a command that gives it no setting, names none of the variables its programs are
+// named by before it (byValue, #3154, even with no equals sign) and runs the script once, behind no runner, with
 // nothing but a change of folder before it (one folder written from /, ./, ../ or ~, which is on
 // the disk) and readers its output is piped into after it, with its texts as the checkout left the
 // default branch with them.
@@ -92,13 +93,19 @@ const BEFORE = 'runs in the same command'
 // #3093: a setting the script, its shell or the programs it runs may read holds the run wherever the
 // command gives it. For the loosened script the reason names it, never its value.
 await judged('with a value set in front of it, it is judged', `TMPDIR=payload/mods bash ${S} payload/mods`, [MODS], equals('it is run with TMPDIR set'))
-await judged('with a value given to it by env, it is judged', `env CLAUDE_BIN=/tmp/x bash ${S} payload/mods`, [MODS], equals('it is run with CLAUDE_BIN set'))
+await judged('with a value given to it by env, it is judged', `env TMPDIR=/tmp/x bash ${S} payload/mods`, [MODS], equals('it is run with TMPDIR set'))
 await judged("with the shell's startup file named, it is judged", `BASH_ENV=./env.sh bash ${S} payload/mods`, [MODS], equals('it is run with BASH_ENV set'))
 await judged('with a name only the programs it runs may read, it is judged', `NODE_OPTIONS=--require=/tmp/x.js bash ${S} payload/mods`, [MODS], equals('it is run with NODE_OPTIONS set'))
 await judged('with a value set in front of the change of folder before it, it is judged', `TMPDIR=mods cd ./payload && bash ../${S} mods`, [MODS], equals('the change of folder before it is run with TMPDIR set'))
 await judged('after a value set on its own, it is judged', `TMPDIR=payload/mods; bash ${S} payload/mods`, [MODS], equals('the command sets TMPDIR on its own'))
 await judged('after a value set on its own inside braces, it is judged', `{ PATH=/tmp/bin; bash ${S} payload/mods; }`, [MODS], equals('the command sets PATH on its own'))
-await judged('with a value exported before it, it is judged', `export CLAUDE_BIN=/tmp/x; bash ${S} payload/mods`, [MODS], equals(`export ${BEFORE}`))
+await judged('with a value exported before it, it is judged', `export TMPDIR=/tmp/x; bash ${S} payload/mods`, [MODS], equals(`export ${BEFORE}`))
+// #3154: a variable naming a program the script runs (its byValue), named before it, holds the run
+// by that name, with or without an equals sign. Only check-mods.sh lists any.
+if (ME.byValue) {
+  await judged('with claude named before it by env, it is judged by that name', `env CLAUDE_BIN=/tmp/x bash ${S} payload/mods`, [MODS], 'the command names CLAUDE_BIN before it')
+  await judged('after the compiler is unset, with no equals sign, it is judged by that name', `unset TSC_BIN; bash ${S} payload/mods`, [MODS], 'the command names TSC_BIN before it')
+}
 await judged('chained after a command holding an equals sign, it is judged', `git log --format=%s && bash ${S} payload/mods`, [MODS], equals(`git ${BEFORE}`))
 await judged('handed its folder as the value of an option, it is judged', `bash ${S} --mods=payload/mods`, [MODS], equals('holds an equals sign in its words'))
 await inReader('an option written with an equals sign on a reader of its output is', `bash ${S} payload/mods 2>&1 | tail --lines=40`)
