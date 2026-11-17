@@ -8997,6 +8997,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L859. A check that reads a platform straight after writing to it must read again for a bounded time before it fails, through an injected sleep, because the platform's read path can lag its write path, and a single read turns that lag into a failed step that leaves the system half updated.**
+  (pivot#1591, 2026-11-17)
+  SHORT: A check reading a platform straight after writing to it must read again for a bounded time before failing: the read path can lag the write.
 - **L845. When the reason behind queued work is withdrawn, any step that can retry or restart that work must check the reason still holds at the moment it acts, because a cancel that only stops work still running leaves finished but retryable work to go ahead later.**
   (slate#4546, 2026-11-04)
   SHORT: A retry must recheck that the work's reason still holds when it acts; a cancel that stops only running work lets retryable work go ahead.
