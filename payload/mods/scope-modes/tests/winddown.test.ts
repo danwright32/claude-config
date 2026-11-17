@@ -554,7 +554,7 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(patchedPaths([], true, 'not a patch')).toEqual([])
     // A removed line reading "-- x" inside a hunk is no header.
     expect(patchedPaths([], true, '--- a/k.ts\n+++ b/k.ts\n@@ -1,2 +1 @@\n--- a/not/a/path\n-x\n')).toEqual(['k.ts'])
-    // #2992: mod-kit's one patch reader walks each hunk by its header, as the Slack alert guard's did,
+    // #2992: mod-kit's one patch reader walks each hunk by its header, as a since retired guard's did,
     // so a removed line reading "-- x" over an added one reading "++ y" is content, never a header;
     // and a name git quotes is read as git wrote it, its escapes undone.
     expect(patchedPaths([], true, '--- a/k.ts\n+++ b/k.ts\n@@ -1 +1 @@\n--- a/x\n+++ b/y\n')).toEqual(['k.ts'])

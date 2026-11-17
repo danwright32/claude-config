@@ -347,7 +347,7 @@ DOCS_ONLY_CONTEXT=1000000
 # A mod's copy of a mod-kit helper, tested by mod-kit's own tests (claude-config#2258). Every mod
 # keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/<name>, and
 # tools/check-mod-shared-parts.sh fails when one differs from payload/mods/mod-kit/hooks/<name>, yet
-# this gate refused a new mod for the copies alone: on 2026-11-04 the slack-alert-guard push was
+# this gate refused a new mod for the copies alone: on 2026-11-04 a new guard's first push was
 # refused for hold.ts and skew.ts, and got through only once mod-kit's tests were copied into the
 # mod with their imports repointed. A copy counts as tested, and is left out of the source judged,
 # only when ALL of these hold in the tree the push delivers (pc_push_tree), never in a list or in
