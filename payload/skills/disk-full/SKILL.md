@@ -56,7 +56,9 @@ It adds a reading to that history and says how much is left, then either the rat
 until zero, or why it states no rate yet (the first reading, readings too close together, a fall
 that has not yet lasted 30 minutes, free space having gone back up, or not falling at all). It
 projects only space that has stayed gone for 30 minutes, because a build or pre push check takes a
-few GB and gives it back within minutes (#1754). Judge it by the exit code, not the wording:
+few GB and gives it back within minutes (#1754), and after free space goes back up it measures from
+the level the rise held for 30 minutes, so a short spike up is never read as a fall (#3153). Judge
+it by the exit code, not the wording:
 0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the floor (FREE_SPACE_FLOOR_GB, 20 GiB, which the warning writes in decimal units as 21.5 GB), 4 falling fast
 enough to reach zero within six hours, 5 that the disk has room but swap is nearly full of its own
 total (memory being held, which step 3 below covers, #2559), and 2 that it could not measure, which

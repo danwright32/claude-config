@@ -251,8 +251,9 @@ done <<EOF
 $(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
 EOF
 
-# The other end of the span is the start of the current segment: the oldest reading when nothing
-# recovered, the reading the disk recovered TO when something did.
+# The other end of the span starts as the start of the current segment: the oldest reading when
+# nothing recovered, the reading the disk recovered TO when something did. After a recovery the rate
+# below then moves it to the level that recovery held for FREE_SPACE_PERSIST_MIN minutes (#3153).
 # Why no rate is stated, kept for --report, which owes the reader the reason (L540: an absent
 # answer carries a measured reason, never membership by failing to match the good case).
 no_rate_clause=""
@@ -282,8 +283,9 @@ fi
 # FREE_SPACE_PERSIST_MIN minutes (default 30, longer than both bursts measured that morning took to
 # fill and give back): the level the disk has stayed at or below for that long, which is the least
 # space the disk has been USING over it. A dip that comes back inside the window never lowers it; a
-# fall that lasts lowers it, a window late. The rate runs from the start of the segment to the
-# reading that set that level, and zero is projected from that level, less the time since it.
+# fall that lasts lowers it, a window late. The rate runs from the start of the segment (after a
+# recovery, the least free space in the window from it, #3153) to the reading that set that level,
+# and zero is projected from that level, less the time since it.
 #
 # WHAT THIS COSTS, said rather than hidden (L93): a real fall is not projected until readings span
 # the window, so a fast fill starting from nothing is reported up to 30 minutes later than before,
@@ -312,9 +314,34 @@ if [ -n "$oldest_t" ]; then
 $seg_lines
 EOF
     [ -n "$held_b" ] || { held_b="$free_bytes"; held_t="$now"; }
+    # A RISE THAT DOES NOT LAST IS NOT A BASELINE EITHER (claude-config#3153). After a recovery the
+    # older end was the reading the disk recovered TO, which nothing required to last. On
+    # 2026-11-16 free space jumped from 62 GB to 196 GB for about three minutes and settled at
+    # 105 to 106 GB, and the 90 GB between the spike and the flat level was projected as "204.5 GB
+    # per hour ... zero in under an hour" for half an hour while nothing moved. So after a recovery
+    # the older end is the LEAST free space seen in the PERSIST_MIN minutes from it: the level the
+    # recovery held for that long, as the newer end is the level a fall has held. Ties go to the
+    # later reading. The window from the recovery has always passed by here, because a span shorter
+    # than PERSIST_MIN was refused above. WHAT THIS COSTS (L93): a fall that begins right as a
+    # recovery ends is projected up to PERSIST_MIN minutes later than before, about 70 minutes after
+    # the recovery rather than 40. A series with no recovery keeps its oldest reading, unchanged,
+    # and 0 turns this off with the rest of the window.
+    if [ "$recovered" -eq 1 ] && [ "$PERSIST_MIN" -gt 0 ]; then
+      _rec_t="$oldest_t"
+      while IFS=' ' read -r _t _b; do
+        is_number "${_t:-}" || continue
+        is_number "${_b:-}" || continue
+        [ "$_t" -le $((_rec_t + PERSIST_MIN * 60)) ] || continue
+        if [ "$_b" -le "$oldest_b" ]; then oldest_b="$_b"; oldest_t="$_t"; fi
+      done <<EOF
+$seg_lines
+EOF
+    fi
     fall=$((oldest_b - held_b))
     span=$((held_t - oldest_t))
-    if [ "$fall" -le 0 ]; then
+    if [ "$fall" -le 0 ] && [ "$recovered" -eq 1 ] && [ "$PERSIST_MIN" -gt 0 ]; then
+      no_rate_clause=" It is not falling: free space went back up $(((now - _rec_t) / 60)) minute(s) ago, and the most seen in the last $PERSIST_MIN minutes is as much as the least it held in the $PERSIST_MIN minutes after that, or more, so a rise that did not last is not counted as space lost since."
+    elif [ "$fall" -le 0 ]; then
       if [ "$PERSIST_MIN" -gt 0 ]; then
         no_rate_clause=" It is not falling: the most free space seen in the last $PERSIST_MIN minutes is as much as there was $(((now - oldest_t) / 60)) minute(s) ago, or more, so any drop since has not lasted."
       else
