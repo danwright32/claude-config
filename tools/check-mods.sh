@@ -95,7 +95,7 @@ n=${#mods[@]}
 # A run that checks no mod is not a pass (#3105, L98): handed one mod's subfolder, or any folder with
 # no mod in it, "0 mods checked" and exit 0 read as a type check that passed.
 if [ "$n" -eq 0 ]; then
-  echo "check-mods: no mods in $dir, so nothing was checked. A mod is a folder holding .claude-plugin/plugin.json, and neither $dir nor any folder directly inside it holds one. To check one mod, hand it the mod's own folder (bash tools/check-mods.sh payload/mods/<mod>), or a folder of links to it and to each mod its plugin.json depends on." >&2
+  echo "check-mods: no mods in $dir, so nothing was checked. A mod is a folder holding .claude-plugin/plugin.json, and neither $dir nor any folder directly inside it holds one. To check one mod, hand it the mod's own folder (for example: bash tools/check-mods.sh payload/mods/<mod>), or a folder of links to it and to each mod its plugin.json depends on." >&2
   exit 5
 fi
 scope="${scope:-$n mods checked in $dir}"

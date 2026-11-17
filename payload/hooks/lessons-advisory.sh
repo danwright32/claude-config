@@ -471,8 +471,16 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 # in a string or a comment, none a removal the test ran; replayed with this rule, none of the 51
 # fires. What this reads as data although it runs: a statement or command built on one line and run
 # on another (a variable, a list of statements a loop executes), and one handed to a helper of the
-# suite's own that runs it. A test in any other language is judged whole, as before: the measurement
-# covered none.
+# suite's own that runs it.
+#
+# A Swift TEST file is read the same way (claude-config#3104), with sqlite3_exec, sqlite3_prepare and
+# a Process's arguments or Process.run added to the calls that run a string. Measured on 2026-11-16
+# over the main line of every local Swift repository (Overture, Ovation, backstage, Downbeat,
+# PostRoll, playeditapp, Intonation; 4163 commits): the trigger fired on a Swift test file 21 times,
+# in 17 commits, 18 of them on words held only in a comment (16) or a string (2), none a removal the
+# test ran; replayed with this rule, none of the 18 fires. The other 3 are calls to Swift's own drop
+# method (drop while a character is a space), in code, which this does not change. Go and Ruby tests are judged whole, as before: no local
+# repository holds one, so there was nothing to measure.
 trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the path
   local as lines kind
   as="$(trig_read_as "$2")"
@@ -480,7 +488,7 @@ trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the pat
   if is_test "$2"; then
     case "$(fh_lang "$as"):$as" in
       shell:*) kind=shell ;;
-      python:*|slash:*.ts|slash:*.tsx|slash:*.mts|slash:*.cts|slash:*.js|slash:*.jsx|slash:*.mjs|slash:*.cjs) kind=strings ;;
+      python:*|slash:*.ts|slash:*.tsx|slash:*.mts|slash:*.cts|slash:*.js|slash:*.jsx|slash:*.mjs|slash:*.cjs|slash:*.swift) kind=strings ;;
     esac
   fi
   if [ "$kind" = whole ]; then
