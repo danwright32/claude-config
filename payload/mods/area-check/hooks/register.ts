@@ -87,6 +87,7 @@ import {
 } from './rules.ts'
 import { currentText } from './mod-kit/inputs.ts'
 import { withoutOwnFolder } from './mod-kit/scriptvars.ts'
+import { engineFacts, namedReaders } from './named.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
@@ -887,7 +888,11 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   try {
     cwd = await $.session.cwd()
     const home = await homeOf($)
-    targets = shellTargets(await $.modkit.writes({ command, cwd, home }), home)
+    // A script known by name to only read the folder it is handed is taken out first (#3022, named.ts),
+    // each such run logged with what was decided, so one let through shows in the log (L551).
+    const read = await namedReaders(command, await $.modkit.writes({ command, cwd, home }), engineFacts($))
+    for (const n of read.named) await logged($, n.script, { v: 1, kind: 'named-reader', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, script: n.script, word: n.word, ...('passed' in n ? { decision: 'passed' } : { decision: 'judged', why: n.why }) })
+    targets = shellTargets(read.writes, home)
   } catch (err) {
     await failed($, cwd, err, 'shell')
     return PASS

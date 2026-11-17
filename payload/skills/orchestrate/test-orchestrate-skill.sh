@@ -127,6 +127,18 @@ check "#3028 a hold the brief does not cover is reported, not decided" "$(has "$
 check "#3028 every brief, a reviewer's included, starts with the agent rules" "$(has "$SKILL" '1. `Read ~/.claude/skills/orchestrate/agent-rules.md before anything else and follow it.`')"
 check "#3028 the brief parts apply to a reviewer's brief too" "$(has "$SKILL" 'Every brief has exactly these parts')"
 
+# claude-config#3095: measured on 2026-11-16, the Chrome navigate tool refuses about:blank, so a
+# tab cannot be blanked before it is closed, and a clicked link can open a new tab inside the
+# session's shared tab group, where the agent can act on it and has to close it. A brief written
+# that day got both wrong, so the rules every browser agent reads say both.
+check "#3095 agent rules say navigate refuses about:blank" "$(has "$RULES" '`navigate` refuses `about:blank`')"
+check "#3095 agent rules say tabs_close_mcp alone finishes a tab" "$(has "$RULES" '`tabs_close_mcp` alone finishes a tab')"
+check "#3095 agent rules say a clicked link can open a tab in the shared group" "$(has "$RULES" 'A link you click can open a new tab, and that tab lands in the shared tab group')"
+check "#3095 agent rules say to list tabs before and after a click that may open one" "$(has "$RULES" 'call `tabs_context_mcp` just before any click that may open a tab and again just after it')"
+check "#3095 agent rules say to close every tab the agent did not mean to open" "$(has "$RULES" 'close with `tabs_close_mcp` every tab that appeared between the two lists that you did not mean to open')"
+check "#3095 agent rules say to finish by closing every tab the agent opened" "$(has "$RULES" 'close every tab you opened')"
+check "#3095 the tabs_context_mcp prohibition carries the one exception" "$(has "$RULES" 'except to close a tab your own click opened')"
+
 # claude-config#2563: the merge command written in the skill and in the global rules must carry
 # every argument the helper's usage marks required, say it runs from inside a checkout, and say how
 # the merge method is chosen. Required is read from the helper's own usage line: a token outside [].

@@ -1541,6 +1541,34 @@ r="$(cd "$PW" && ps_pending_merge_of_default "git commit --no-edit && git push")
 [ "$rc" -eq 0 ] && check "#3062 the directory defaults to where it is asked" ok || check "#3062 the directory defaults to where it is asked" "exit $rc"
 ps_pending_merge_of_default "git push" "$PW" >/dev/null \
   && check "#3062 a push alone does not conclude it" "said it does" || check "#3062 a push alone does not conclude it" ok
+# git merge --continue concludes the same merge and makes the same commit, so it is a commit in the
+# chain, for every gate and for this question (claude-config#3081). It used to be read as no commit
+# at all, so no gate folded the pending merge commit in and a conflict resolution went out unread.
+# Measured on git 2.51.1 with a merge in progress: --continue is the only spelling of git merge that
+# concludes it. A git merge with anything else, or with nothing, is refused there ("You have not
+# concluded your merge"), and --continue beside any other argument is refused too.
+for c in "git merge --continue && git push" "git merge --continue; git push" "git merge --continue;git push" \
+         "GIT_EDITOR=true git merge --continue && git push" "git -c core.editor=true merge --continue && git push" \
+         "rtk git merge --continue && git push" "cd $PW && git merge --continue && git push origin HEAD" \
+         "bash -c 'git merge --continue' && git push" "eval \"git merge --continue\" && git push" \
+         "/usr/bin/git merge --continue&&git push"; do
+  ps_commit_in_chain "$c" && check "#3081 concluding a merge is a commit in the chain: $c" ok \
+    || check "#3081 concluding a merge is a commit in the chain: $c" "not seen"
+done
+# What does not conclude a merge is not one. A git merge naming a branch starts a merge: nothing of
+# it is in the index when the gates run, so there is no pending commit to fold in.
+for c in "git push" "git merge --abort && git push" "git merge --quit; git push" \
+         "git merge --no-edit origin/main && git push" "git merge-base --is-ancestor a b && git push" \
+         "git merge --continued && git push"; do
+  ps_commit_in_chain "$c" && check "#3081 control: no commit in the chain: $c" "seen as a commit" \
+    || check "#3081 control: no commit in the chain: $c" ok
+done
+r="$(ps_pending_merge_of_default "git merge --continue && git push" "$PW")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = origin/main ] && check "#3081 git merge --continue and a push in one command concludes the merge of main" ok \
+  || check "#3081 git merge --continue and a push in one command concludes the merge of main" "exit $rc, printed [$r]"
+ps_pending_merge_of_default "git merge --abort && git push" "$PW" >/dev/null \
+  && check "#3081 abandoning the merge and pushing does not conclude it" "said it does" \
+  || check "#3081 abandoning the merge and pushing does not conclude it" ok
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
 ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
   && check "#3062 once the merge is committed nothing is pending" "said it is" || check "#3062 once the merge is committed nothing is pending" ok

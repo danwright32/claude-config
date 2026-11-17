@@ -159,6 +159,13 @@ declare module 'claude-code' {
       firstMet: string[]
       /** The Chrome tabs this session created, by tab id, with the host each one's page was last seen on (#2064). */
       browserTabs: Record<string, { host: string | null }>
+      /**
+       * What this session has read of its Chrome tab group beyond the tabs it created (#3099): every
+       * tab id a result's list of the group has named, the ones first named after its own action in a
+       * tab it created (which it may close while asleep, and nothing more), and whether the next list
+       * read is still the one following such an action. Null until a list has been read.
+       */
+      browserGroup: { seen: string[]; opened: string[]; watching: boolean } | null
       /** The nights whose reminder to end sleep mode this session pinned on its card (#1283), by generation, across a reload (#1703). */
       pinnedHere: string[]
       /** The nights whose reminder this session took off its card (#1283), by generation, across a reload (#1703). */
