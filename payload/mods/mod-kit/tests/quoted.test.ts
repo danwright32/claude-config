@@ -3,8 +3,8 @@ import { test } from './hang-ceiling.ts'
 import { quotedEnd, yamlFlowList, yamlScalar } from '../hooks/quoted.ts'
 
 // The one reader of quoted strings that are not shell, and of YAML flow lists (#2467): the design
-// round guard reads a TypeScript or JSX string with it, and the Slack alert guard a GitLab script's
-// flow list, each from a byte for byte copy at hooks/mod-kit/quoted.ts.
+// round guard reads a TypeScript or JSX string with it, from a byte for byte copy at
+// hooks/mod-kit/quoted.ts.
 
 test('a code string closes at its own quote, a backslash escaping the next character', () => {
   expect(quotedEnd(`'a\\'b' + x`, 0, 'code')).toBe(5)

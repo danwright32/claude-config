@@ -3593,7 +3593,8 @@ identical to the branch's own commit.
 
 Dan, 2026-11-12, choosing "any words": added, reworded or removed message text in a mod passes the
 guard with nothing asked, kept on record as an automatic pass; only a change to how something looks
-stops. Alert and Slack wording stay with the Slack alert guard.
+stops. A Slack alert's wording follows the `slack-alerts` skill and its checker since #3160, which
+retired the guard that once held it.
 
 - **Words pass, named.** rules.ts `modHookTsChange` (which replaces `modHookTsHold`) returns
   `{ look }` or `{ words }`, and `messageWords` names the words a `.tsx` or `.jsx` edit changes.

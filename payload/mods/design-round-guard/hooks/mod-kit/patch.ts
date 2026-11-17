@@ -1,6 +1,6 @@
 // The one reader of a patch every mod uses (#2992, L613): the files a unified diff changes, by the
 // names on each side, its hunks, and how a patch command places those names. Scope modes (which
-// files a git apply changed, #1123) and the Slack alert guard (what a patch does to a file that
+// files a git apply changed, #1123) and a since retired guard (what a patch does to a file that
 // posts, #2971) each kept their own, and each got right a case the other got wrong: a hunk's
 // removed line reading "-- x" over an added one reading "++ y" was a header to one, and git's own
 // diff line naming a rename with no text changed was nothing to the other. A mod keeps a byte for

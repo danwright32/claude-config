@@ -6493,8 +6493,7 @@ log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #
 `unread` since #3021, each command `pipeline` marks unread, with its words, why and the folder it
 runs in, since what it changes is unknown, never nothing: sleep mode refuses it overnight, the
 design round guard judges it by the look files its words name, ask before saving asks about the
-lasting memory its words name, the collision guard puts it to its judge, and the Slack alert guard
-holds it while a choice waits or where it names the plugin store), of whether a
+lasting memory its words name, and the collision guard puts it to its judge), of whether a
 prompt is Dan's own words (`$.modkit.isDans({ origin })`, #1135: only what he types, at the Mac or
 from his phone through Remote Control, never a handoff's opening prompt or any other plugin's, asked
 by every mod that needs it), of what Dan and Claude are told when he types an answer to a mod's
@@ -6621,7 +6620,7 @@ EBADF for a link to `/dev/stdin`). The write reader never names a device as an i
 fails a mod looping over `.inputs` by hand. A quoted string that is not shell (a TypeScript string,
 a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through `quotedEnd`,
 `yamlScalar` and `yamlFlowList` in `hooks/quoted.ts`, kept by each mod that reads one at
-`hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
+`hooks/mod-kit/quoted.ts` (#2467: the design round guard and a since retired guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
 pattern, or walking a string to the quote it opened with. A patch (the files a unified diff changes,
@@ -6631,7 +6630,7 @@ reason kept while the files after it are still named, #3021, the line that ran i
 read again as the next file's first line, #3036, and how
 git apply or patch places the names by -p, folder, a named file and -R) is read only through
 `hooks/patch.ts`, kept by each mod that reads one at `hooks/mod-kit/patch.ts` (#2992: scope modes
-and the Slack alert guard each kept their own, and each read wrong a case the other read right);
+and a since retired guard each kept their own, and each read wrong a case the other read right);
 the scan fails a mod reading git's diff line, a quoted `+++ ` header, a hunk header or a binary
 patch by hand. What a shell script's own variables hold (a temporary file or folder it made with
 bare `mktemp`, by `madeTemp`, `freshTemp` and `tempWord`; its own folder by the `BASH_SOURCE`
@@ -6643,9 +6642,9 @@ with a pattern, or naming `BASH_SOURCE`, by hand. `hooks/quoted.ts` holds `pytho
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
-in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
-Slack alert guard kept its own lists of module names, and asks inside a search too short for an
-engine call per file). It counts a name only where the file imports or calls it, never in a string,
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: a
+since retired guard kept its own lists of module names; no mod keeps a copy today). It counts a
+name only where the file imports or calls it, never in a string,
 a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
 `whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
 The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
@@ -7534,8 +7533,9 @@ held: a drawing call, JSX, a line builder, a colour or frame, and the words insi
 draws (a band row, a pane, a card's text), which are drawing. This reverses the wording holds of
 #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's narrowing now decides which
 words are named rather than which are held. The reading of what counts as a message's words above is
-unchanged and decides what the record names. Alert and Slack wording stays with the Slack alert
-guard. Answers kept in the mod's store on this Mac. A patch it reads from a device or a fifo is
+unchanged and decides what the record names. A Slack alert's wording follows the `slack-alerts`
+skill and passes its checker (#3160), so nothing here holds it. Answers kept in the mod's store on
+this Mac. A patch it reads from a device or a fifo is
 never opened, through mod-kit's `inputTexts` (#1765): the read waited for ever, so the call never
 ran; one fed on standard input is the heredoc, read in the command. Nor is a look file a call
 writes, or what a `cp` copies onto a settled design, when it is no ordinary file (a fifo,

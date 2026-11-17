@@ -3,10 +3,10 @@
 // $.modkit.pipeline, and errs toward refusing, so a process word anywhere counts there, a string
 // included. A file read for what it does is judged here instead, by what it imports or calls: a
 // program's or a module's name in a string, a pattern, a comment or a template's text is data (a
-// gate's list of what it refuses), and never counts. The Slack alert guard asked its own lists this
-// (#2662) and now asks this, synchronously inside its search, from a byte for byte copy at
+// gate's list of what it refuses), and never counts. A mod asks it from a byte for byte copy at
 // hooks/mod-kit/reaches.ts (tools/check-mod-shared-parts.sh holds the copy to this one), since a mod
-// cannot import another mod's files. Pure.
+// cannot import another mod's files. The guard it was written for (#2662) is retired, so no mod
+// keeps a copy today. Pure.
 //
 // It reads the text, not a parse of it. Each list is wide on purpose: a module that only can reach
 // out (socket, ssl, asyncio) counts as one that does. What it cannot see: a module bound to another
