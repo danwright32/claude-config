@@ -451,7 +451,7 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 }
 
 # One flag per added line for the trigger above: 1 where the line is judged, 0 where it is data.
-# Outside a shell TEST file every line is judged, exactly as before: a script in source that writes
+# Outside a TEST file every line is judged, exactly as before: a script in source that writes
 # a command out with printf and runs it later is the case that must still fire, and a SQL statement
 # in a string is how most code issues one. In a shell test file a line is judged on its CODE text,
 # read by the stripper the other triggers use (lib/failure-handling.sh, L370), so a quoted argument
@@ -461,10 +461,29 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 # same list of runners (FH_RUNNER_WORDS). What this reads as data although it runs: a SQL client
 # handed a statement in a test (psql -c "DROP ...", sqlite3 db <<EOF), whose target in a test is a
 # throwaway database, and a script a test writes out and then runs itself.
+#
+# A Python, JavaScript or TypeScript TEST file is read the same way (claude-config#3083): a line is
+# judged where the pattern is in its code text (fs.rm, unlinkSync and .drop called by the test), or
+# where the line hands a string to a call that runs it (FH_RUNNER_CALLS: execSync, subprocess.run,
+# os.system, a SQL client's execute or query, a tagged sql template). Any other string, and every
+# comment, is data. Measured before choosing, on 2026-11-16, over all 3168 commits on claude-config's
+# main line: the trigger fired on such a file 51 times, in 35 commits, and all 51 were words held only
+# in a string or a comment, none a removal the test ran; replayed with this rule, none of the 51
+# fires. What this reads as data although it runs: a statement or command built on one line and run
+# on another (a variable, a list of statements a loop executes), and one handed to a helper of the
+# suite's own that runs it. A test in any other language is judged whole, as before: the measurement
+# covered none.
 trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the path
-  local as lines
+  local as lines kind
   as="$(trig_read_as "$2")"
-  if ! is_test "$2" || [ "$(fh_lang "$as")" != shell ]; then
+  kind=whole
+  if is_test "$2"; then
+    case "$(fh_lang "$as"):$as" in
+      shell:*) kind=shell ;;
+      python:*|slash:*.ts|slash:*.tsx|slash:*.mts|slash:*.cts|slash:*.js|slash:*.jsx|slash:*.mjs|slash:*.cjs) kind=strings ;;
+    esac
+  fi
+  if [ "$kind" = whole ]; then
     awk '{ print 1 }' "$1"
     return
   fi
@@ -473,6 +492,14 @@ trig_destructive_judged(){   # $1 = a file holding the added lines  $2 = the pat
   lines="$(awk 'END { print NR }' "$1")"
   if ! fh_code_only "$as" < "$1" > "$1.code" || [ "$(awk 'END { print NR }' "$1.code")" != "$lines" ]; then
     awk '{ print 1 }' "$1"
+    return
+  fi
+  if [ "$kind" = strings ]; then
+    # Both patterns travel in the environment, read verbatim (L434).
+    TRIG_DESTRUCTIVE_RE="${TRIG_RE1[3]}" TRIG_RUNNER_CALLS="$FH_RUNNER_CALLS" awk '
+      BEGIN { re = tolower(ENVIRON["TRIG_DESTRUCTIVE_RE"]); calls = ENVIRON["TRIG_RUNNER_CALLS"] }
+      FILENAME == ARGV[1] { code[FNR] = $0; next }
+      { print ((tolower(code[FNR]) ~ re || (code[FNR] ~ calls && tolower($0) ~ re)) ? 1 : 0) }' "$1.code" "$1"
     return
   fi
   # Where each heredoc opens and the word that ends it, from the one reading of a marker
