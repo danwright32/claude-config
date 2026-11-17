@@ -73,9 +73,8 @@ read_fixture(){
 fact(){ printf '%s\n' "$out" | sed -n "s/^$1	//p"; }
 
 # ---- Quoted text is no run ----
-FREE=()
 free(){   # $1 = name  $2 = body: nothing counted, nothing refused
-  fixture "$2"; FREE+=("$ID")
+  fixture "$2"
   read_fixture "$READER" "$ID"
   [ "$(fact RUNS)" = 0 ] && [ "$(fact LINES)" = 0 ] && [ -z "$(fact PROBLEM)" ] && check "$1 counts nothing" ok \
     || check "$1 counts nothing" "$(printf '%s\n' "$out" | grep -v -e '^SCRIPT' -e '^TEXT' | paste -sd';' -)"
@@ -100,7 +99,7 @@ UN='unlisted.sh'
 held 'a plain run' 'bash tools/unlisted.sh' "$UN"
 held 'a run after ;' 'true; bash tools/unlisted.sh' "$UN"
 held 'a run after &&' 'true && bash tools/unlisted.sh' "$UN"
-held 'a run fed by |' 'echo x | bash tools/unlisted.sh' "$UN"
+held 'a run fed by a pipe' 'echo x | bash tools/unlisted.sh' "$UN"
 held 'a run in $(...)' 'y="$(bash tools/unlisted.sh)"' "$UN"
 held 'a run in backticks' 'y=`bash tools/unlisted.sh`' "$UN"
 held 'a run in $(...) over several lines' "$(printf 'y="$(\n  bash tools/unlisted.sh\n)"')" "$UN"

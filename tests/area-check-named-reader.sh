@@ -69,7 +69,7 @@ named_texts(){   # $1 = what named.ts exports the script by
   TEXTS="$(printf '%s\n' "$listed" | sed -n 's/^TEXT	//p')"
   SCRIPT="$(printf '%s\n' "$listed" | sed -n 's/^SCRIPT	//p')"
 }
-# One fact of that reading: LINES, RUNS, or every PROBLEM.
+# One fact of that reading: LINES, RUNS, RAN, BYVALUE, or every PROBLEM.
 named_fact(){ printf '%s\n' "$listed" | sed -n "s/^$1	//p"; }
 
 # named_rule <NAME> <checkout> <file> <count>: the rule itself for that script, on mod-kit's real
