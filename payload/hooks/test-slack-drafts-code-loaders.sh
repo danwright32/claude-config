@@ -2042,11 +2042,15 @@ if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'; t
 else
   echo "SUITE-PART-UNMEASURED enum binds builtins as bltns only on Python 3.12 and later, and this is $(python3 -V 2>&1)"
 fi
+ALIASES51="$(grep '^alias ' "$D51/aliases.txt")"
 while read -r _ module attr real; do
+  [ -n "$module" ] || continue  # a here document of nothing found is one empty line
   w51 "alias-$module-$attr.py" "import $module, sys" "$module.$attr.x(sys.argv[1])"
   run_51 "python3 alias-$module-$attr.py msg.json"
   read_refused "#3151 a script reading through $module.$attr, which is the $real module, is refused"
-done < <(grep '^alias ' "$D51/aliases.txt")
+done <<EOF
+$ALIASES51
+EOF
 # The controls: enum and sys used as they ordinarily are, sys under another name for anything but
 # its path, a path that is a field or os.path, and a field named sys, read and handed on, which is
 # a field like any other the gate does not follow (PR #3161).
