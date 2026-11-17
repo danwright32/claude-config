@@ -3721,8 +3721,9 @@ test('/sleep typed mid turn whose turn ends before the driver reaches a Stop sta
   await clock.settle()
   expect(w.prompts.length).toBe(1)
   // This mod's own prompt passes none of its own prompt hooks, so the held notes open its words.
-  expect(w.prompts[0].startsWith(`${ackOn('sleep')}\n\n`)).toBe(true)
-  expect(w.prompts[0].slice(ackOn('sleep').length + 2)).toMatch(NIGHT_START)
+  const [prompt = ''] = w.prompts
+  expect(prompt.startsWith(`${ackOn('sleep')}\n\n`)).toBe(true)
+  expect(prompt.slice(ackOn('sleep').length + 2)).toMatch(NIGHT_START)
   // Started once: another turn's end starts nothing more.
   await turnStart($, 't2')
   await turnEnd($, 't2')
