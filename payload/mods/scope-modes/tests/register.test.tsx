@@ -3672,6 +3672,92 @@ test('a start for a session with no goal, or not a worker, or from the model sta
   expect(w.prompts).toEqual([])
 })
 
+// #3136: the session /sleep runs in is a worker too, and nothing started it. Claude Code records a
+// command's notes for the model but starts no turn with them (an idle /sleep sat until some other
+// prompt came), and a /sleep typed mid turn prints its answer only when that turn ends and drops its
+// notes, so a turn whose Stop came before the record was in place ended with nothing to drive it.
+const NIGHT_START = /^Sleep mode is on and Dan is asleep: start the night's work now\. Overnight rules \(sleep mode\)/
+
+test('/sleep typed while its session is idle starts that session on its night in a turn of its own (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.context).toEqual([ackOn('sleep')])
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toMatch(NIGHT_START)
+})
+
+test('/sleep typed mid turn leaves the turn running, hands its notes to the next tool result, and the driver takes the turn on at its Stop (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  const r = await command($ as never, 'sleep')
+  // Claude Code drops a mid turn command's notes, so they are held, never left in the answer to be lost.
+  expect(r.context).toBeUndefined()
+  expect(w.toasts).toContain(`${r.text?.split('. ')[0]}. Its full answer shows when this turn ends.`)
+  // A subagent's call is not the main conversation's: the notes wait.
+  const fromAgent = (await ($ as unknown as $T).tool.call({ ...(bash('ls', 'a') as object), agentId: 'a1' } as never)) as { context?: string[] }
+  expect(fromAgent.context ?? []).not.toContain(ackOn('sleep'))
+  const next = (await ($ as unknown as $T).tool.call(bash('ls', 'c2'))) as { context?: string[] }
+  expect(next.context).toContain(ackOn('sleep'))
+  const again = (await ($ as unknown as $T).tool.call(bash('ls', 'c3'))) as { context?: string[] }
+  expect(again.context ?? []).not.toContain(ackOn('sleep'))
+  // The record was in place at the Stop, so the overnight driver decided it: no second start.
+  await stop($ as never)
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+})
+
+test('/sleep typed mid turn whose turn ends before the driver reaches a Stop starts the session once the turn is over, its notes with it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  await turnEnd($, 't1', 'interrupted')
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+  // This mod's own prompt passes none of its own prompt hooks, so the held notes open its words.
+  expect(w.prompts[0].startsWith(`${ackOn('sleep')}\n\n`)).toBe(true)
+  expect(w.prompts[0].slice(ackOn('sleep').length + 2)).toMatch(NIGHT_START)
+  // Started once: another turn's end starts nothing more.
+  await turnStart($, 't2')
+  await turnEnd($, 't2')
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+})
+
+test('a /sleep mid turn that started no night, and one in a session with no goal, start nothing (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { goals: { s1: null }, ask: NO_GOAL })
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  await turnEnd($, 't1')
+  await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+})
+
+test('a scope mode switched mid turn says so in a toast, and its notes reach the model at the next prompt when no tool result came first (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  const r = await command($ as never, 'nobuild')
+  expect(r.text).toBe('No build is on.')
+  expect(r.context).toBeUndefined()
+  expect(w.toasts).toContain('No build is on. Its full answer shows when this turn ends.')
+  await turnEnd($, 't1')
+  const typed = await say($ as never, 'what next')
+  expect(typed.context?.join('\n')).toContain(ackOn('NO BUILD'))
+  // Read once.
+  expect((await say($ as never, 'and then')).context?.join('\n') ?? '').not.toContain(ackOn('NO BUILD'))
+  // Idle, a switch keeps its notes in its answer, as Claude Code records them there.
+  expect((await command($ as never, 'build')).context).toEqual([expect.stringContaining('Dan turned no build off')])
+})
+
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { reportFails: { start: `the report could not be written to ${'/Users'}/x/Downloads/Sleep report 1969-12-31.md (Permission denied)` } })
   await start($ as never, clock)

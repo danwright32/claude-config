@@ -85,6 +85,7 @@ import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } fr
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
 import { patchedPaths } from './mod-kit/patch.ts'
+import { answerMidTurn, drivenStop, midTurn, midTurnToast, resetMidTurn, startNight, takeNotes, turnEnded } from './midturn.ts'
 import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, readSleepEnds, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -3311,6 +3312,71 @@ const enrolledNow = async ($: EngineInterface, seen?: SleepReading): Promise<Enr
   return { record: reading.record, self, home: p.home, dir: p.dir, current: p.current, now: await $.clock.now() }
 }
 
+// What this session's commands did while a turn ran, and the night start /sleep owes it (#3136).
+const mid = midTurn()
+
+// Starts this session on the night's work in a turn of its own, as the driver starts one after a wait:
+// for a start /sleep sent it from another session (#1242), and for the session /sleep ran in (#3136).
+// Started only when the record names it a worker with a goal, read here, and, given `generation`, only
+// for that night still. The turn starts once the calling hook is done, never from inside it. `lead` is
+// notes for the model that open the prompt: this mod's own prompt passes none of its prompt.submit
+// hooks, so held notes ride in its words, and go back to be held when it does not go in.
+const startOwnNight = async ($: EngineInterface, generation?: string, lead: string[] = []): Promise<'started' | 'not a worker' | 'no goal' | 'another night'> => {
+  const en = await enrolledNow($)
+  if (!en) return 'not a worker'
+  if (generation !== undefined && en.record.generation !== generation) return 'another night'
+  const goal = goalOf(en.record, en.self)
+  if (goal === null) return 'no goal'
+  const where = await repoOf($)
+  const text = [...lead, startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)].join('\n\n')
+  $.clock.after(0, () =>
+    void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => {
+      mid.notes.unshift(...lead)
+      $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)
+    }),
+  )
+  return 'started'
+}
+
+// A scope mode command typed while a turn runs (#3136): its answer is said at once in a toast, since
+// Claude Code prints it only when the turn ends, and its notes are held in `mid` for the model's next
+// tool result or prompt. Idle, the answer goes back as it was.
+const commandAnswer = <R extends { text?: string; context?: readonly string[] }>($: EngineInterface, r: R): R => {
+  if (mid.live && r.text) {
+    try {
+      $.ui.toast(midTurnToast(r.text))
+    } catch (err) {
+      $.ui.log(`scope-modes: a command's answer could not be said in a toast mid turn: ${msg(err)}`, { to: 'debug' })
+    }
+  }
+  return answerMidTurn(mid, r)
+}
+// /sleep began a night: this session is started on it too (#3136), at once when no turn runs, else
+// once its turn ends, unless the driver takes that turn on at a Stop first. A start that could not be
+// made is said in the answer, with how Dan starts it himself.
+const startHere = async ($: EngineInterface): Promise<string> => {
+  try {
+    const reading = await sleepNow($)
+    if (reading.state !== 'asleep' || startNight(mid, reading.record.generation) === 'owed') return ''
+    await startOwnNight($, reading.record.generation)
+    return ''
+  } catch (err) {
+    return ` This session could not be started on the night's work (${msg(err)}): type "start the night's work" here to start it.`
+  }
+}
+// The night owed to this session at its turn's end (#3136), started then; a failure is said in a toast.
+const startOwed = async ($: EngineInterface) => {
+  const owed = turnEnded(mid)
+  if (owed === undefined) return
+  const lead = takeNotes(mid)
+  try {
+    if ((await startOwnNight($, owed, lead)) !== 'started') mid.notes.unshift(...lead)
+  } catch (err) {
+    mid.notes.unshift(...lead)
+    $.ui.toast(`Sleep mode is on, but this session could not be started on the night's work (${msg(err)}). Type "start the night's work" here to start it.`)
+  }
+}
+
 const queueScript = (home: string) => `${home}/.claude/hooks/lib/sleep-queue.sh`
 
 const loadDriver = async ($: EngineInterface, en: Enrolled): Promise<DriverReading> => {
@@ -5248,6 +5314,7 @@ export const register: Register = on => {
     pinnedHere.clear()
     takenOffHere.clear()
     firstMetHere.clear()
+    resetMidTurn(mid)
     askedUpHere = undefined
     placeUnreadSaid = false
     // A switch made before this session started is not taken (#2099): it starts at home, as before.
@@ -5388,17 +5455,17 @@ export const register: Register = on => {
   // Each switch tells Claude to open its reply with what the mode now does (#1055).
   on('command.run', { command: 'nobuild' }, async $ => {
     const was = await setScope($, 'NO BUILD')
-    return { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] }
+    return commandAnswer($, { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] })
   })
   on('command.run', { command: 'winddown' }, async $ => {
     const was = await setScope($, 'WINDING DOWN')
-    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] }
+    return commandAnswer($, { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] })
   })
   on('command.run', { command: 'build' }, async $ => {
     const scope = await scopeOf($)
-    if (!scope) return { text: 'No scope mode was on.' }
+    if (!scope) return commandAnswer($, { text: 'No scope mode was on.' })
     await setScope($, null)
-    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
+    return commandAnswer($, { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] })
   })
   // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
   on('command.run', { command: 'sleep' }, async ($, e, next) => {
@@ -5409,12 +5476,13 @@ export const register: Register = on => {
     const context = [ackOn('sleep', began.unstarted ? { first: `Sleep mode is on. ${began.unstarted}` } : {}), ...(began.sendItself ? [began.sendItself] : [])]
     // The morning reminder (#1107), only for a night this call began, and never once the command was
     // abandoned, since every call is then refused (#1677).
-    if (began.is && text === interruptedSaid(true)) return { text, context }
-    return began.is ? { text: `${text}${await pinMorning($)}`, context } : { text }
+    if (began.is && text === interruptedSaid(true)) return commandAnswer($, { text, context })
+    if (!began.is) return commandAnswer($, { text })
+    return commandAnswer($, { text: `${text}${await pinMorning($)}${await startHere($)}`, context })
   })
   on('command.run', { command: 'wake' }, async ($, e) => {
     const woke = await wake($, e.origin.kind === 'bridge')
-    if (!woke) return { text: 'Sleep mode was not on.' }
+    if (!woke) return commandAnswer($, { text: 'Sleep mode was not on.' })
     // The morning turn starts once the command is done: from inside command.run the prompt would
     // wait on the turn this hook holds (as /handoff found).
     const morning = woke.morning
@@ -5436,10 +5504,10 @@ export const register: Register = on => {
           // A mark that fails is said by morningDone itself (#1383); this is anything else that threw.
           .catch(err => $.ui.log(`scope-modes: /wake's morning turn could not be settled (${msg(err)})`, { to: 'debug' }))
       })
-    return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
+    return commandAnswer($, woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said })
   })
-  on('command.run', { command: 'away' }, async ($, e) => switchPlace($, 'away', e.origin))
-  on('command.run', { command: 'home' }, async ($, e) => switchPlace($, 'home', e.origin))
+  on('command.run', { command: 'away' }, async ($, e) => commandAnswer($, await switchPlace($, 'away', e.origin)))
+  on('command.run', { command: 'home' }, async ($, e) => commandAnswer($, await switchPlace($, 'home', e.origin)))
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
   // message typed while a turn runs fires here too, at Enter, with that turn's id, as the engine's
@@ -5562,10 +5630,15 @@ export const register: Register = on => {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)
     }
+    // Notes a command left mid turn that no tool result carried (#3136), with whatever prompt comes next.
+    const heldNotes = takeNotes(mid)
+    notes.push(...heldNotes)
     let entered: Awaited<ReturnType<typeof next>>
     try {
       entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
     } catch (err) {
+      // Not entered, so held for the next.
+      mid.notes.unshift(...heldNotes)
       // "I'm up" carried this session's morning (#1285) and what it held (#1284): a turn that did not
       // go in keeps them for the minute. Only this turn's own morning settles it, never another
       // prompt (lessons review of #1284).
@@ -5589,6 +5662,7 @@ export const register: Register = on => {
   // turn "I'm up" started, or the one the minute submitted. Only the main loop raises turn.start.
   // It also ends a rest on background work, whose report is what starts the turn (#2511).
   on('turn.start', async ($, e, next) => {
+    mid.live = true
     const r = await next(e)
     if (morningPickers && morningPickers.turnId === undefined) morningPickers.turnId = e.turnId
     try {
@@ -5601,6 +5675,8 @@ export const register: Register = on => {
 
   // A message from the phone while home: one line at the end of the reply (picker, 2026-10-04).
   on('turn.complete', async ($, e, next) => {
+    // The main conversation's turn is over: a night /sleep owed this session starts now (#3136).
+    if (e.agentId === undefined) await startOwed($)
     const r = await next(e)
     // This session's morning turn (#1285): a picker unanswered, or a turn ended other than by
     // answering while it had pickers to ask, leaves them to be asked again with his next message.
@@ -5623,13 +5699,9 @@ export const register: Register = on => {
     // names it a worker with a goal, read here, so a forged start can do no more than /sleep would;
     // the turn is started once this delivery is done, as the driver starts one after a wait.
     if (origin.plugin === MOD && e.text === SLEEP_START) {
-      const en = await enrolledNow($)
-      if (!en) return { consumed: 'scope-modes: a start for the night arrived, but this session is not a worker tonight' }
-      const goal = goalOf(en.record, en.self)
-      if (goal === null) return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
-      const where = await repoOf($)
-      const text = startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)
-      $.clock.after(0, () => void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
+      const started = await startOwnNight($)
+      if (started === 'not a worker') return { consumed: 'scope-modes: a start for the night arrived, but this session is not a worker tonight' }
+      if (started === 'no goal') return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
       return { consumed: "scope-modes: started the night's work toward this session's goal" }
     }
     return next(e)
@@ -5748,7 +5820,10 @@ export const register: Register = on => {
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
-      return r
+      // Notes a scope mode command left mid turn (#3136) reach the model with the main conversation's
+      // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
+      if (input.agentId !== undefined || r.deny || !mid.notes.length) return r
+      return { ...r, context: [...(r.context ?? []), ...takeNotes(mid)] } as typeof r
     }
 
     const scope = await scopeOf($)
@@ -5955,7 +6030,11 @@ export const register: Register = on => {
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     hear(e)
     const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
-    if (driven !== 'not-driven') return driven ?? {}
+    if (driven !== 'not-driven') {
+      // The driver has this turn now, so the start /sleep owed it at the turn's end is not (#3136).
+      drivenStop(mid)
+      return driven ?? {}
+    }
     // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
     // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
     const c = await check($, true, (e as { background_tasks?: unknown }).background_tasks)
