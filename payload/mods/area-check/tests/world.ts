@@ -131,6 +131,9 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // inside the pull request check, the other before it, so the hook itself fails.
     pipelineThrows?: boolean
     cwdThrows?: boolean
+    // The session's folder failing on its Nth ask only (#3126), and how many times it has been asked.
+    cwdThrowsOn?: number
+    cwdAsked: number
     numstat?: string
     sha: string
     goal: string | null
@@ -167,6 +170,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     github?: string
     namedDiff?: number
   } = {
+    cwdAsked: 0,
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
     links: {},
@@ -185,7 +189,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_AREA_CHECK_DIR' ? init.areaDir : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => {
-    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    ctl.cwdAsked += 1
+    if (ctl.cwdThrows || ctl.cwdAsked === ctl.cwdThrowsOn) throw new Error('the session folder could not be read')
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
