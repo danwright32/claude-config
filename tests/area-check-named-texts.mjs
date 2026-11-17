@@ -8,6 +8,9 @@
 //   TEXT <path>       each listed text
 //   LINES <n>         how many lines sourcing a file were found, across the listed texts
 //   RUNS <n>          how many lines running a program file were found
+//   RAN <where>       each of those lines, as text:line and the line itself, so a count the suite
+//                     did not expect names what it counted. The reading is by spelling, so a
+//                     message quoting a run after a bracket, `(bash x.sh)`, counts as one too.
 //   PROBLEM <what>    a file sourced or run that the list lacks, a listed text nothing sources or
 //                     runs, one that cannot be read, or a line whose file cannot be named
 // The suite states how many LINES and RUNS it expects, since a reading gone blind finds none and
@@ -25,6 +28,7 @@ const used = new Set()
 const problems = []
 let lines = 0
 let runs = 0
+const ranAt = []
 // Where a command starts on a line.
 const START = String.raw`(?:^|[;&|{(]|\b(?:if|then|else|elif|do|while|until)\b|!)\s*`
 // A line that sources a file: `. x` or `source x` at the start of a command.
@@ -66,7 +70,10 @@ for (const text of named.texts) {
     const word = sourced ? sourced[1] : ran ? programWord(ran[1]) : null
     if (word === null) continue
     if (sourced) lines++
-    else runs++
+    else {
+      runs++
+      ranAt.push(`${text}:${i + 1} ${line.trim()}`)
+    }
     const verb = sourced ? 'sources' : 'runs'
     const name = nameOf(word, body)
     if (!name) problems.push(`${text}:${i + 1} ${verb} a file this suite cannot name: ${line.trim()}`)
@@ -78,6 +85,7 @@ for (const text of named.texts) if (text !== named.script && !used.has(base(text
 if (named.texts[0] !== named.script) problems.push(`the list does not start with ${named.script}`)
 console.log(`LINES\t${lines}`)
 console.log(`RUNS\t${runs}`)
+for (const r of ranAt) console.log(`RAN\t${r}`)
 console.log(`SCRIPT\t${named.script}`)
 for (const t of named.texts) console.log(`TEXT\t${t}`)
 for (const p of problems) console.log(`PROBLEM\t${p}`)

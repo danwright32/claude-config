@@ -72,8 +72,9 @@ lines="$(named_fact LINES)"
 # reading of them has gone blind, which would pass every check below it (L98).
 [ "${lines:-0}" -ge 5 ] && check "the lines that source a file are found" ok || check "the lines that source a file are found" "found ${lines:-none}: $listed"
 # It runs no program file: its perl is given on the command line, so a run found here is a text the
-# list would need.
-[ "$(named_fact RUNS)" = 0 ] && check "and it runs no program file the list would have to name" ok || check "and it runs no program file the list would have to name" "$listed"
+# list would need. The reading is by spelling, so a message quoting a run after a bracket counts too:
+# the script's own message once did (#3115), and is worded so it does not.
+[ "$(named_fact RUNS)" = 0 ] && check "and it runs no program file the list would have to name" ok || check "and it runs no program file the list would have to name" "$(named_fact RAN | paste -sd';' -)"
 problems="$(named_fact PROBLEM)"
 [ -z "$problems" ] && check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" ok \
   || check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" "$problems"
