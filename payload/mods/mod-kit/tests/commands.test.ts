@@ -674,7 +674,8 @@ describe('pipeline: the text a command substitution puts in a word (#2141)', () 
       ['gh pr create --body "$(cat <<<x; echo y)"', 4],
       ['gh pr create --body "$(cat <<<x | tr a b)"', 4],
       ['diff <(cat <<<x) b', 1],
-      ['echo $((1 + 2))', 1],
+      // Arithmetic of a variable; a sum of whole numbers is worked out since #3088.
+      ['echo $((N + 2))', 1],
       ["echo $(cat <<<'a b')", 1],
     ]
     for (const [cmd, at] of cases) expect(`${cmd} => ${unresolved(cmd, at)}`).toBe(`${cmd} => unresolved`)
@@ -940,8 +941,8 @@ describe('pipeline: old arithmetic, $[...] (#3070)', () => {
   test('a word the reader does not work out, or holding any other expansion, is given none', () => {
     // A name, a number bash reads as octal and zsh as ten, a division, a bracket inside, a
     // substitution, another expansion beside it, one never closed, an empty one, two signs, a sum
-    // past what a shell counts to, one in single quotes or escaped, and the newer spelling.
-    for (const word of ['"$[N + 1]"', '"$[010 + 1]"', '"$[7 / 2]"', '"$[1 + [2]]"', '"$[ $(echo 4) + 1 ]"', '"$N$[1]"', '"$[1]$(x)"', '"$[1"', '"$[]"', '"$[1 - -2]"', '"$[9223372036854775807 + 1]"', `'$[1]'`, '"\\$[1]"', '$((1+2))'])
+    // past what a shell counts to, and one in single quotes or escaped.
+    for (const word of ['"$[N + 1]"', '"$[010 + 1]"', '"$[7 / 2]"', '"$[1 + [2]]"', '"$[ $(echo 4) + 1 ]"', '"$N$[1]"', '"$[1]$(x)"', '"$[1"', '"$[]"', '"$[1 - -2]"', '"$[9223372036854775807 + 1]"', `'$[1]'`, '"\\$[1]"'])
       expect({ word, worked: worked(`python3 s.py ${word}`) }).toEqual({ word, worked: undefined })
   })
   test('it is never left as written, and its text is derived as arithmetic is', () => {
@@ -958,6 +959,63 @@ describe('pipeline: old arithmetic, $[...] (#3070)', () => {
   test('outside quotes one holding a blank or a redirect is read word by word, as dash and ksh run it', () => {
     expect(commands('echo $[1 > 2]')).toEqual([['echo', '$[1', '>', '2]']])
     expect(worked('echo $[1 + 2]')).toBeUndefined()
+  })
+})
+
+// #3088: `$((...))` is arithmetic in every shell (measured 2026-11-16 on bash 3.2, zsh 5.9 and macOS
+// sh: `"a|\\$((0-9))"` is handed on as `a|\-9`), so a sum of whole numbers in one is worked out as
+// a `$[...]` one is (#3070). Unlike `$[`, no shell hands it on as typed.
+describe('pipeline: arithmetic, $((...)) (#3088)', () => {
+  const last = (cmd: string) => pipeline(cmd).filter(c => !c.substitution).pop()
+  const worked = (cmd: string) => last(cmd)?.worked
+  test('a word whose only expansions are sums of whole numbers is given as the shell hands it on', () => {
+    expect(worked(String.raw`python3 s.py "a|\\$((0-9)),[0-9]{3}|b" "x$(( 1 + 2 ))y" $((2*3)) "$[1]$((1))"`)).toEqual([null, null, String.raw`a|\-9,[0-9]{3}|b`, 'x3y', '6', '11'])
+    expect(last(String.raw`python3 s.py "a|\\$((0-9))"`)?.words).toEqual(['python3', 's.py', String.raw`a|\$((0-9))`])
+    expect(last('echo "x$((1+1))"')?.derived).toEqual([null, { text: 'x2', commands: [] }])
+  })
+  test('one the reader does not work out, or holding any other expansion, is given none, and read as before', () => {
+    for (const word of ['"$((N + 1))"', '"$((010 + 1))"', '"$((7 / 2))"', '"$(( (1) + 2 ))"', '"$(( $(echo 4) + 1 ))"', '"$N$((1))"', '"$((1"', '"$(())"', `'$((1))'`, '"\\$((1))"', '$((1 << 2))'])
+      expect({ word, worked: worked(`python3 s.py ${word}`) }).toEqual({ word, worked: undefined })
+    expect(last('echo "$((N+1))"')?.derived?.[1]).toEqual({ unresolved: 'it is arithmetic, which this reader does not work out', commands: [] })
+    const all = pipeline('echo "$(( $(git push) + 1 ))"')
+    expect(all[0]).toMatchObject({ words: ['git', 'push'], substitution: true })
+    // A command substitution opening a subshell is still one: what it runs is read.
+    expect(commands('echo $( (git push) )')).toContainEqual(['git', 'push'])
+  })
+})
+
+// #3093: a setting written in front of a command (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`)
+// was dropped, so no guard could see the environment a command gives a script it runs. Each command
+// carries them as `env`, in the order written, and a shell's script inherits its shell's.
+describe('pipeline: the settings written in front of a command (#3093)', () => {
+  const envs = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.env])
+  test('an assignment before the command, or given to env, sudo or another runner, is carried', () => {
+    expect(envs('TMPDIR=payload/mods bash tools/check-mods.sh payload/mods')).toEqual([['bash', ['TMPDIR=payload/mods']]])
+    expect(envs('env TMPDIR=x bash tools/check-mods.sh payload/mods')).toEqual([['bash', ['TMPDIR=x']]])
+    expect(envs('A=1 env -i B=2 C=3 bash s.sh')).toEqual([['bash', ['A=1', 'B=2', 'C=3']]])
+    expect(envs('sudo -u dan FOO=1 make')).toEqual([['make', ['FOO=1']]])
+    expect(envs(`env -S 'FOO=1 git push'`)).toEqual([['git', ['FOO=1']]])
+    expect(envs('X=1 nohup timeout 5 make')).toEqual([['make', ['X=1']]])
+  })
+  test("a shell's script, and what xargs or a find -exec runs, inherit it", () => {
+    expect(envs(`X=1 bash -c 'Y=2 make; ls'`)).toEqual([['make', ['X=1', 'Y=2']], ['ls', ['X=1']]])
+    expect(envs('FOO=1 xargs rm < list')).toEqual([['rm', ['FOO=1']]])
+    expect(envs('FOO=1 find . -exec rm {} \\;')).toEqual([['find', ['FOO=1']], ['rm', ['FOO=1']]])
+  })
+  test('a command given none carries none: an argument, another command of the line, a substitution', () => {
+    expect(envs('bash s.sh x=1')).toEqual([['bash', undefined]])
+    expect(envs('git log --format=%s')).toEqual([['git', undefined]])
+    expect(envs('F=x; bash s.sh')).toEqual([['bash', undefined]])
+    expect(envs('FOO=1 ls | wc -l; make')).toEqual([['ls', ['FOO=1']], ['wc', undefined], ['make', undefined]])
+    expect(envs('FOO=1 echo $(git status)')).toEqual([['git', undefined], ['echo', ['FOO=1']]])
+    // A double quoted script's substitution is run by the shell reading the line, before bash starts;
+    // the reader also reads it as bash's script holds it, so it is given both ways.
+    expect(envs('FOO=1 bash -c "echo $(git status)"')).toEqual([['git', undefined], ['git', ['FOO=1']], ['echo', ['FOO=1']]])
+    // In a shell's own script the substitution is run by that shell, so it has the shell's settings.
+    expect(envs(`FOO=1 bash -c 'echo $(git status)'`)).toEqual([['git', ['FOO=1']], ['echo', ['FOO=1']]])
+  })
+  test('the commands only setting variables are given as before, carrying none', () => {
+    expect(pipeline('F=x; bash s.sh', { assignments: true }).map(c => [c.words, c.env])).toEqual([[['F=x'], undefined], [['bash', 's.sh'], undefined]])
   })
 })
 

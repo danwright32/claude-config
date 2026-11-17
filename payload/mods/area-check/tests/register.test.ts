@@ -772,6 +772,25 @@ test('a word built as the command runs is still held when the command also write
   expect(w.records().filter(x => x.kind === 'script-reads' && x.decision === 'passed')).toEqual([])
 })
 
+// A word the reader cannot close (a `$(`, `${`, `$[` or backtick it opens and never closes) is no word
+// the shell builds and hands on: the shell refuses the line, or reads on past it, so what the command
+// runs is not what was read. It is outside #3082's exemption, and is held even where the only script
+// it is handed reads as writing nothing.
+test('a word the reader cannot close, handed only to a script that writes nothing, is still held (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  const commands = [
+    'python3 measure.py notes.txt "$(',
+    'python3 measure.py notes.txt "$(git log -1 --format=%h"',
+    'python3 measure.py notes.txt "${STAMP"',
+    'python3 measure.py notes.txt "`git log -1"',
+  ]
+  for (const [i, c] of commands.entries()) {
+    expect([c, refusal(await bash($ as never, w, c, {}, `b${i + 1}`)).includes('cannot be read')]).toEqual([c, true])
+  }
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
 test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
   const w = world($, on, { issues: [] })
   expect((await bash($ as never, w, "perl -pi -e 's/a/b/' /tmp/x/*.ts")).result).toBe('done')

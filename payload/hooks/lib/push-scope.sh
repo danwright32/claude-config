@@ -15,7 +15,9 @@
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
 #                      runs BEFORE the command, so a `git add … && git commit … &&
 #                      git push` has nothing in history yet and the pending work
-#                      must be folded in.
+#                      must be folded in. A `git merge --continue` is a commit too
+#                      (claude-config#3081), and either may be written straight after a
+#                      bracket or a backquote (claude-config#3091).
 #   ps_add_scope / ps_pending_files: what that pending commit will take beyond
 #                      the index, as a scope word or as the files themselves
 #   ps_add_takes_all: does a git add in the command take more than it names
@@ -27,6 +29,15 @@
 #   ps_pending_merge_of_default: does the command's commit conclude a merge of the default branch
 #                      still in progress, which nothing can set apart before that commit exists, so
 #                      push-scope-notice.sh refuses the push for every gate (claude-config#3062)
+#   ps_unread_commit_route: does the command run, before a push, a git command that makes commits
+#                      no gate can read before it runs (rebase, cherry-pick, revert, am, a merge of
+#                      a named branch, pull), which push-scope-notice.sh refuses the same way
+#                      (claude-config#3092)
+#   ps_unread_move_or_stage: does the command run, before a push, a git command that makes no
+#                      commit and still changes what the push sends: one that moves the branch
+#                      (checkout, switch, reset), or one that changes the index by a route other
+#                      than git add ahead of a commit (stash pop, apply --index, rm), which
+#                      push-scope-notice.sh refuses the same way (claude-config#3098)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -1009,7 +1020,24 @@ ps_has_override() {
 
 ps_commit_in_chain() {
   # A quote may stand either side, since the commit may be a string a shell or eval runs (#1478).
-  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]"'"'"']|$)' <<< "$1"
+  #
+  # git merge --continue commits too (claude-config#3081): with a merge in progress it makes the
+  # merge commit, exactly as git commit does there. Read as no commit, no gate folded that pending
+  # commit in, so a conflict resolution went out unread, and ps_pending_merge_of_default, which asks
+  # this, let a merge of main concluded that way through. It is the one spelling of git merge that
+  # concludes a merge (measured on git 2.51.1 with MERGE_HEAD present: a git merge with anything
+  # else, or nothing, is refused, and --continue takes no other argument). A git merge naming a
+  # branch STARTS a merge, of which nothing is in the index when a gate runs, so it is not one.
+  # One pattern with one reading of where a git starts, so the two spellings cannot come apart.
+  #
+  # A git may start straight after the opener of a subshell or of a command substitution, a bracket
+  # or a backquote, as ps__git_add_in_chain has read an add since #2203 (claude-config#3091). Without
+  # them `(git commit -m x) && git push` and `x=$(git merge --continue) && git push` were read as no
+  # commit, so no gate folded the pending commit in and it went out unread. Either spelling may be
+  # the last word of its command, so what closes the brackets, or a separator, may follow it with no
+  # space between: `(git commit)`, `git commit;git push`.
+  local runs_git='(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+'
+  grep -Eq "$runs_git"'(commit|merge[[:space:]]+--continue)([[:space:];&|"'"'"')`]|$)' <<< "$1"
 }
 
 # Does the command stage with a git add, and does its commit stage for itself with -a? Two
@@ -1560,12 +1588,16 @@ ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answe
 # push-scope-notice.sh refuses it, once, for every push gate, on this question.
 #
 # Asked with ps_commit_in_chain, the very question each gate asks before folding the pending commit
-# in, so it is true exactly where the gates would misread: a git merge --continue is not read as a
-# commit by them, nor here. Only a merge bringing in default branch commits HEAD lacks counts: a
-# merge of any other branch brings lines the gates never judged, which are the push's own and are
-# read right already. With no default branch known nothing can say what came from main, and the
-# gates judge the range whole as ps_merged_apart says; this answers no there rather than refusing a
-# push the separated form would judge no differently.
+# in, so it is true exactly where the gates would misread. That question counts a git merge
+# --continue as a commit since claude-config#3081, so `git merge --continue && git push` is refused
+# here like the commit form; before, it was read as no commit by the gates and by this, and went out
+# with nothing having read the merge commit.
+#
+# Only a merge bringing in default branch commits HEAD lacks counts: a merge of any other branch
+# brings lines the gates never judged, which are the push's own and are read right already. With no
+# default branch known nothing can say what came from main, and the gates judge the range whole as
+# ps_merged_apart says; this answers no there rather than refusing a push the separated form would
+# judge no differently.
 #
 # Every commit MERGE_HEAD names is read (an octopus merge names several). Prints the default branch
 # ref and returns 0 when the command concludes such a merge; returns 1 otherwise.
@@ -1585,6 +1617,333 @@ ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository direct
     return 0
   done < "$mh"
   return 1
+}
+
+# ---- commits a command makes by a route no gate can read, then pushes (claude-config#3092) ----
+# A gate folds in the commit a command is about to make only for the two spellings
+# ps_commit_in_chain reads, git commit and git merge --continue, whose content is in the index when
+# the gate runs. Six other git commands put commits on the branch, and what they will make exists
+# nowhere a gate can read before the command runs: rebase, cherry-pick, revert, am, a merge of a
+# named branch, and pull. Chained before a push, `git cherry-pick abc123 && git push`, every gate
+# judged the range as it stood and said nothing of what was about to join it.
+#
+# Measured in throwaway repositories on git 2.51.1, one fresh repository per spelling, counting the
+# commits a push would send afterwards that were not on HEAD when a gate would have run:
+#   rebase       --continue 2, --skip 1, onto a branch 2
+#   cherry-pick  --continue 1, of a named commit 1
+#   revert       --continue 1, of a named commit 1
+#   am           --continue 1, of a patch 1
+#   merge        of a named branch 2 (1 when it only fast forwards, which makes no commit and still
+#                puts the other branch's commits on this one, --ff-only and --no-commit included)
+#   pull         1 when the branches have diverged (the merge commit, or with --rebase this branch's
+#                commit replayed), 2 from a local branch; 0 when it only fast forwards to what the
+#                remote already holds or finds nothing new
+#   --abort and --quit of each: none, and nothing staged
+# -n and --no-commit on cherry-pick and revert, and --squash and --no-commit on a merge that is not
+# a fast forward, make no commit but STAGE the change, for a `git commit` later in the command, which
+# the gates would fold in from an index that does not hold it yet. So they are routes too.
+#
+# So the rule is by command, never by spelling (L247): any of the six, unless it is abandoned or
+# left (--abort, --quit), or is the git merge --continue the gates already read. A pull is refused
+# whole, though one that only fast forwards sends nothing unread: which it will be is not known
+# until it has fetched, and telling a pull of the branch's own remote from a pull of anything else
+# would be one more reading to keep right. The cost is small where it was counted: on the personal
+# MacBook, in the transcripts of the 45 days to 2026-11-16, about 4,067 Bash calls ran a push, and
+# 2 of them (one command, a rebase onto main before a first push) ran any of the six before it; none
+# ran a pull. That is a count by a pattern written beside this code, never by this function, so it
+# sizes the cost and proves nothing about what this function matches (L107). The work MacBook is
+# not counted.
+#
+# It refuses, like ps_pending_merge_of_default and for its reason: reading these commits before
+# they exist would be a second reading in every gate, and run as two commands they are in the range
+# when the push is judged, which every gate already reads.
+#
+# Read from the command's own words in command position (ps__read), so a commit message or a heredoc
+# that only names a route is not one. Only a route with a push AFTER it in the command counts: what
+# a route makes after the push is not carried by it. That is by the order the commands are written
+# in, so a push in a function or a loop written before the route and run after it is not seen.
+# With nothing to read the command, the crude cut answers, which can only see more routes (L42).
+#
+# Not read here: what moves HEAD onto commits that already exist without making one (git checkout
+# or switch to another branch, git reset, and --abort, which makes no commit and still puts HEAD
+# back where the sequence began), and what stages by another route (git apply --index, git stash
+# pop, git rm). Those are ps_unread_move_or_stage's, below (claude-config#3098).
+#
+# Prints the route as written, `git rebase --continue`, `git merge`, and returns 0; returns 1
+# otherwise.
+ps_unread_commit_route() {   # $1 = the command
+  local cmd="$1" rc i end seg sub found="" loop_input
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *rebase*|*cherry-pick*|*revert*|*merge*|*pull*|*am*) ;; *) return 1 ;; esac
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      # ps_runs_at leaves the subcommand this record does run, and its words, for ps__commit_route.
+      if ps_runs_at git "$i" push; then
+        [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+      elif [ -z "$found" ] && ps__commit_route; then
+        found="$PS__ROUTE"
+      fi
+      i=$((i + 1))
+    done
+    return 1
+  fi
+  loop_input="$(ps__crude_cut "$cmd")" || true
+  while IFS= read -r seg; do
+    if [ -n "$found" ]; then
+      case "$seg" in *push*) ps_runs_git "$seg" push && { printf '%s' "$found"; return 0; } ;; esac
+      continue
+    fi
+    for sub in rebase cherry-pick revert am merge pull; do
+      case "$seg" in *"$sub"*) ;; *) continue ;; esac
+      if ps_runs_git "$seg" "$sub" && ps__commit_route; then found="$PS__ROUTE"; break; fi
+    done
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  return 1
+}
+
+# Is the git command ps_runs_at or ps_runs_git last read (PS_RUN_SUB, PS_RUN_ARGS) one of the routes
+# above? Sets PS__ROUTE to it as written and returns 0; returns 1 for any other command, for one
+# abandoned or left, and for the git merge --continue ps_commit_in_chain reads.
+PS__ROUTE=""
+ps__commit_route() {
+  local a word=""
+  PS__ROUTE=""
+  case "$PS_RUN_SUB" in rebase|cherry-pick|revert|am|merge|pull) ;; *) return 1 ;; esac
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # What closes a subshell or ends the command is the crude cut's, never the word's.
+    a="${a%%[)\};]*}"
+    case "$a" in
+      --abort|--quit) return 1 ;;
+      --continue) [ "$PS_RUN_SUB" = merge ] && return 1; word=" --continue" ;;
+      --skip) word=" --skip" ;;
+    esac
+  done
+  PS__ROUTE="git $PS_RUN_SUB$word"
+}
+
+# ---- a branch moved, or a commit staged, by a route no gate reads, then pushed (claude-config#3098) ----
+# The six commands above MAKE commits. Two more kinds of git command change what a push in the same
+# command sends, after every gate has read HEAD and the index, without making one:
+#
+#   move   HEAD names another commit afterwards. The push then sends commits that already existed
+#          and were never in the range a gate read (a checkout of another branch), or leaves out
+#          ones a gate read as part of it (a reset to an earlier commit), and either way the tree it
+#          sends is not the one judged.
+#   stage  the index changes by a route other than git add, so a git commit later in the command
+#          takes something other than what the gates folded in, which is the index as it was before
+#          the command ran.
+#
+# Measured in throwaway repositories on git 2.51.1, one fresh repository per spelling, comparing
+# HEAD, the tree the index holds and the files before and after (130 spellings):
+#   checkout, switch   of a branch, a commit, `-`, --detach, --orphan, or -b/-c/-B/-C with a start
+#                      point: HEAD moves. -b/-c/-B/-C with a name alone: nothing changes.
+#                      `<tree> -- <paths>`: the index takes them. `-- <paths>`, `.`: files only.
+#   reset              to anything but HEAD: HEAD moves. With no commit or HEAD (with or without
+#                      paths, --hard or not): the index is emptied of what was staged. --soft with
+#                      no commit: nothing.
+#   update-ref         of HEAD or the branch: HEAD moves. symbolic-ref with a target: HEAD moves;
+#                      reading it: nothing.
+#   bisect start, reset; filter-branch; stash branch (onto the commit the stash was made on): HEAD moves.
+#   rebase, cherry-pick, revert, am --abort   HEAD goes back to where the sequence began, off the
+#                      commit it stood on when the gates ran. --quit of each: nothing.
+#   merge --abort      the index goes back to HEAD. merge --quit: nothing.
+#   apply              --index, --cached, --3way: the index takes the patch. Alone: files only.
+#                      --check, --stat: nothing.
+#   rm, mv             the index takes the removal or the rename. -n: nothing.
+#   restore            --staged (-S): the index. Without it: files only.
+#   stash              push, save, or bare: the index is emptied. pop, apply: the index takes what
+#                      the stash held staged, a new file among it. list, show, drop, create: nothing.
+#   read-tree          the index. update-index: the index, except --refresh, which changes nothing.
+#   branch -f, -m, -M  nothing here: git refuses to force the current branch, and a rename keeps
+#                      its commit.
+#
+# So the rule is by command (L247), with only the spellings measured to change nothing let through:
+# a branch made where HEAD already is, paths written back from the index, the dry runs and the
+# forms that only look. What cannot be told from the words is read as the worse case: `git checkout
+# x` is a move though x may be a file, and `git reset x` too.
+#
+# A move counts with any push after it. A staging route counts only with a commit after it AND a
+# push after that: with no commit the push carries what HEAD already held, which the gates read.
+#
+# The cost is small where it was counted: on the personal MacBook, in the transcripts of the 45
+# days to 2026-11-16, of about 4,064 Bash calls that ran a push, 1 ran any of these first (a script
+# in a heredoc), by a pattern written beside this code, which sizes the cost and proves nothing
+# about what this function matches (L107). The same commands as the 4,067 counted above for #3092:
+# each count used its own pattern for what a push is, and they differ by 3 calls. The work MacBook
+# is not counted.
+#
+# It refuses, like ps_unread_commit_route and for its reason: the remedy is one more command, after
+# which the branch and the index are what the gates read.
+#
+# Read as ps_unread_commit_route reads: in command position, by the order the commands are written
+# in, and with nothing to read the command, by the crude cut, which can only see more (L42).
+#
+# Not read here, and no gate reads them either: files a command writes before a git add or a commit
+# -a in the same command (git apply with no --index, git checkout -- <path>, or any program), and
+# git submodule add, which could not be measured.
+#
+# Prints `move` or `stage`, a space, and the route as written (`move git checkout`, `stage git stash
+# pop`) and returns 0; returns 1 otherwise. A move is named ahead of a staging route.
+ps_unread_move_or_stage() {   # $1 = the command
+  local cmd="$1" rc i end seg sub move="" stage="" taken=0 loop_input
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in
+    *checkout*|*switch*|*reset*|*update-ref*|*symbolic-ref*|*bisect*|*filter-branch*|*--abort*) ;;
+    *stash*|*apply*|*[[:space:]]rm*|*[[:space:]]mv*|*restore*|*read-tree*|*update-index*) ;;
+    *) return 1 ;;
+  esac
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      # ps_runs_at leaves the subcommand this record does run, and its words, for the two readers.
+      if ps_runs_at git "$i" push; then
+        [ -n "$move" ] && { printf 'move %s' "$move"; return 0; }
+        [ "$taken" = 1 ] && { printf 'stage %s' "$stage"; return 0; }
+      elif ps__commits_here; then
+        [ -n "$stage" ] && taken=1
+      elif ps__move_or_stage; then
+        case "$PS__ROUTE_KIND" in
+          move) [ -n "$move" ] || move="$PS__ROUTE" ;;
+          *) [ -n "$stage" ] || stage="$PS__ROUTE" ;;
+        esac
+      fi
+      i=$((i + 1))
+    done
+    return 1
+  fi
+  loop_input="$(ps__crude_cut "$cmd")" || true
+  while IFS= read -r seg; do
+    case "$seg" in
+      *push*) if ps_runs_git "$seg" push; then
+          [ -n "$move" ] && { printf 'move %s' "$move"; return 0; }
+          [ "$taken" = 1 ] && { printf 'stage %s' "$stage"; return 0; }
+          continue
+        fi ;;
+    esac
+    for sub in commit merge checkout switch reset update-ref symbolic-ref bisect filter-branch rebase cherry-pick revert am stash apply rm mv restore read-tree update-index; do
+      case "$seg" in *"$sub"*) ;; *) continue ;; esac
+      ps_runs_git "$seg" "$sub" || continue
+      # The crude reading takes any word of the segment for the subcommand, so a branch named merge
+      # is asked about as a merge first: only an answer ends the asking.
+      if ps__commits_here; then
+        [ -n "$stage" ] && taken=1
+        break
+      elif ps__move_or_stage; then
+        case "$PS__ROUTE_KIND" in
+          move) [ -n "$move" ] || move="$PS__ROUTE" ;;
+          *) [ -n "$stage" ] || stage="$PS__ROUTE" ;;
+        esac
+        break
+      fi
+    done
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  return 1
+}
+
+# Is the git command last read (PS_RUN_SUB, PS_RUN_ARGS) one of the two ps_commit_in_chain reads as a
+# commit, git commit or git merge --continue?
+ps__commits_here() {
+  local a
+  [ "$PS_RUN_SUB" = commit ] && return 0
+  [ "$PS_RUN_SUB" = merge ] || return 1
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    [ "${a%%[)\};]*}" = --continue ] && return 0
+  done
+  return 1
+}
+
+# Is the git command last read (PS_RUN_SUB, PS_RUN_ARGS) one that moves the branch or changes the
+# index, by the table above? Sets PS__ROUTE to it as written and PS__ROUTE_KIND to move or stage, and
+# returns 0; returns 1 for any other command and for a spelling measured to change neither.
+PS__ROUTE_KIND=""
+ps__move_or_stage() {
+  local a word="" kind="" first="" n=0 opts=0 dashes=0 before=0 after=0 creates=0 flag="" file=0
+  PS__ROUTE=""; PS__ROUTE_KIND=""
+  case "$PS_RUN_SUB" in
+    checkout|switch|reset|update-ref|symbolic-ref|bisect|filter-branch|rebase|cherry-pick|revert|am|merge) ;;
+    stash|apply|rm|mv|restore|read-tree|update-index) ;;
+    *) return 1 ;;
+  esac
+  # One pass over the words: the first that is no option, how many are no option before and after a
+  # `--`, how many options are anything but -q, and the flags each command's rule turns on.
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # What closes a subshell or ends the command is the crude cut's, never the word's.
+    a="${a%%[)\};]*}"
+    [ -n "$a" ] || continue
+    # A redirection is among the words read and is none of git's: `git checkout -b new 2>&1` names
+    # one word, new. Written apart from its file (`> out.txt`), the file is the next word.
+    if [ "$file" = 1 ]; then file=0; continue; fi
+    case "$a" in
+      [0-9]\>*|[0-9]\<*|\>*|\<*|\&\>*)
+        case "$a" in *[\<\>\|]) file=1 ;; esac
+        continue ;;
+    esac
+    if [ "$a" = -- ] && [ "$dashes" = 0 ]; then dashes=1; continue; fi
+    if [ "$dashes" = 1 ]; then after=$((after + 1)); continue; fi
+    case "$a" in
+      -q|--quiet) ;;
+      -b|-B|-c|-C|--create|--force-create) creates=$((creates + 1)) ;;
+      --abort|--soft|--staged|--index|--cached|--3way|-3|-n|--dry-run|--refresh|--really-refresh)
+        flag="$flag $a "; opts=$((opts + 1)) ;;
+      -S*|-[!-]*S*) [ "$PS_RUN_SUB" = restore ] && flag="$flag --staged "; opts=$((opts + 1)) ;;
+      -*) opts=$((opts + 1)) ;;
+      *) before=$((before + 1)); [ -n "$first" ] || first="$a" ;;
+    esac
+  done
+  n=$((before + after))
+  case "$PS_RUN_SUB" in
+    checkout|switch)
+      if [ "$dashes" = 1 ]; then
+        # `<tree> -- <paths>` stages them; `<branch> --` is the branch; `-- <paths>` writes files only.
+        if [ "$before" -gt 0 ]; then
+          if [ "$after" -gt 0 ]; then kind=stage; else kind=move; fi
+        fi
+      elif [ "$opts" = 0 ] && [ "$creates" = 1 ] && [ "$before" = 1 ]; then :   # a branch made at HEAD
+      else
+        # Nothing named at all, or only the dot (every file, written back from the index), is no
+        # move. The dot is matched as a pattern: written as a word after a test's `=`, the helper
+        # install reads the line as one that sources a file.
+        case "$opts$creates$before:$first" in
+          000:|001:[.]) ;;
+          *) kind=move ;;
+        esac
+      fi ;;
+    reset)
+      case "$first" in
+        ""|HEAD|@) case "$flag" in *" --soft "*) ;; *) kind=stage ;; esac ;;
+        *) kind=move ;;
+      esac ;;
+    update-ref|bisect|filter-branch) kind=move ;;
+    symbolic-ref) [ "$n" -ge 2 ] && kind=move ;;
+    rebase|cherry-pick|revert|am) case "$flag" in *" --abort "*) kind=move; word=" --abort" ;; esac ;;
+    merge) case "$flag" in *" --abort "*) kind=stage; word=" --abort" ;; esac ;;
+    stash)
+      case "$first" in
+        list|show|drop|clear|create|store) ;;
+        branch) kind=move; word=" branch" ;;
+        pop|apply) kind=stage; word=" $first" ;;
+        *) kind=stage ;;
+      esac ;;
+    apply)
+      case "$flag" in
+        *" --index "*|*" --cached "*|*" --3way "*|*" -3 "*) kind=stage ;;
+      esac ;;
+    rm|mv) case "$flag" in *" -n "*|*" --dry-run "*) ;; *) kind=stage ;; esac ;;
+    restore) case "$flag" in *" --staged "*) kind=stage ;; esac ;;
+    read-tree) kind=stage ;;
+    update-index)
+      # Only a refresh, alone or with -q, was measured to change nothing.
+      case "$flag" in *" --refresh "*|*" --really-refresh "*) [ "$opts" = 1 ] && [ "$n" = 0 ] || kind=stage ;; *) kind=stage ;; esac ;;
+  esac
+  [ -n "$kind" ] || return 1
+  PS__ROUTE="git $PS_RUN_SUB$word"; PS__ROUTE_KIND="$kind"
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then

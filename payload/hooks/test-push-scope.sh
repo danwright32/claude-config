@@ -1541,6 +1541,34 @@ r="$(cd "$PW" && ps_pending_merge_of_default "git commit --no-edit && git push")
 [ "$rc" -eq 0 ] && check "#3062 the directory defaults to where it is asked" ok || check "#3062 the directory defaults to where it is asked" "exit $rc"
 ps_pending_merge_of_default "git push" "$PW" >/dev/null \
   && check "#3062 a push alone does not conclude it" "said it does" || check "#3062 a push alone does not conclude it" ok
+# git merge --continue concludes the same merge and makes the same commit, so it is a commit in the
+# chain, for every gate and for this question (claude-config#3081). It used to be read as no commit
+# at all, so no gate folded the pending merge commit in and a conflict resolution went out unread.
+# Measured on git 2.51.1 with a merge in progress: --continue is the only spelling of git merge that
+# concludes it. A git merge with anything else, or with nothing, is refused there ("You have not
+# concluded your merge"), and --continue beside any other argument is refused too.
+for c in "git merge --continue && git push" "git merge --continue; git push" "git merge --continue;git push" \
+         "GIT_EDITOR=true git merge --continue && git push" "git -c core.editor=true merge --continue && git push" \
+         "rtk git merge --continue && git push" "cd $PW && git merge --continue && git push origin HEAD" \
+         "bash -c 'git merge --continue' && git push" "eval \"git merge --continue\" && git push" \
+         "/usr/bin/git merge --continue&&git push"; do
+  ps_commit_in_chain "$c" && check "#3081 concluding a merge is a commit in the chain: $c" ok \
+    || check "#3081 concluding a merge is a commit in the chain: $c" "not seen"
+done
+# What does not conclude a merge is not one. A git merge naming a branch starts a merge: nothing of
+# it is in the index when the gates run, so there is no pending commit to fold in.
+for c in "git push" "git merge --abort && git push" "git merge --quit; git push" \
+         "git merge --no-edit origin/main && git push" "git merge-base --is-ancestor a b && git push" \
+         "git merge --continued && git push"; do
+  ps_commit_in_chain "$c" && check "#3081 control: no commit in the chain: $c" "seen as a commit" \
+    || check "#3081 control: no commit in the chain: $c" ok
+done
+r="$(ps_pending_merge_of_default "git merge --continue && git push" "$PW")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = origin/main ] && check "#3081 git merge --continue and a push in one command concludes the merge of main" ok \
+  || check "#3081 git merge --continue and a push in one command concludes the merge of main" "exit $rc, printed [$r]"
+ps_pending_merge_of_default "git merge --abort && git push" "$PW" >/dev/null \
+  && check "#3081 abandoning the merge and pushing does not conclude it" "said it does" \
+  || check "#3081 abandoning the merge and pushing does not conclude it" ok
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
 ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
   && check "#3062 once the merge is committed nothing is pending" "said it is" || check "#3062 once the merge is committed nothing is pending" ok
@@ -1562,6 +1590,354 @@ ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null 
   && check "#3062 with no default branch known it does not answer yes" "said yes" \
   || check "#3062 with no default branch known it does not answer yes" ok
 rm -rf "$WP"
+
+echo "push-scope: a commit written straight after a bracket or a backquote (claude-config#3091)"
+
+# ps_commit_in_chain read where a git starts from a list of characters that left out the opener of a
+# subshell and of a command substitution, so `(git commit -m x) && git push` was read as no commit:
+# no gate folded the pending commit in, and it went out unread. ps__git_add_in_chain has accepted
+# those openers since #2203; the commit question now reads them the same way, for both spellings it
+# knows (git commit, and git merge --continue since #3081). The word that ends the spelling may be
+# closed the same way, `(git commit)`, or be followed by a separator with no space between.
+for c in "(git commit -m x) && git push" "(git merge --continue) && git push" \
+         "x=\$(git commit -m x) && git push" "x=\$(git merge --continue) && git push" \
+         "echo \"\$(git commit -m x)\" && git push" "x=\`git commit -m x\` && git push" \
+         "x=\`git merge --continue\` && git push" "(git commit) && git push" \
+         "(rtk git commit -m x) && git push" "(/usr/bin/git commit -m x) && git push" \
+         "(git -c core.editor=true merge --continue); git push" \
+         "git commit;git push" "git commit&&git push" "git commit|cat; git push"; do
+  ps_commit_in_chain "$c" && check "#3091 a commit after an opener is a commit in the chain: $c" ok \
+    || check "#3091 a commit after an opener is a commit in the chain: $c" "not seen"
+done
+# What an opener starts but is no commit stays none, and the shapes read before are read still.
+for c in "(git commit-graph write) && git push" "(git committed) && git push" "(git log) && git push" \
+         "(legit commit -m x) && git push" "(git merge --abort) && git push" \
+         "x=\$(git merge-base a b) && git push" "(git merge --continued) && git push" \
+         "x=\$(git rev-parse HEAD) && git push"; do
+  ps_commit_in_chain "$c" && check "#3091 control: no commit in the chain: $c" "seen as a commit" \
+    || check "#3091 control: no commit in the chain: $c" ok
+done
+for c in "git commit -m x && git push" "(cd sub && git commit -m x) && git push" "{ git commit -m x; } && git push"; do
+  ps_commit_in_chain "$c" && check "#3091 control: read before, and still: $c" ok \
+    || check "#3091 control: read before, and still: $c" "not seen"
+done
+
+echo "push-scope: commits a command makes by a route no gate can read (claude-config#3092)"
+
+# ps_unread_commit_route answers whether a command runs, before a push, a git command that puts
+# commits on the branch (or stages changes for a commit later in the command) by a route other than
+# the two the gates read, git commit and git merge --continue. Measured in throwaway repositories on
+# git 2.51.1: each of these makes at least one commit that did not exist when a gate would have run.
+# It prints the route as the refusal names it.
+# A command of several lines is named on one, its line ends written out, so a FAIL line never goes on
+# at the margin (test-fail-margin.sh).
+route_is() { # route_is <description> <command> <the route it must print>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_commit_route "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
+}
+no_route() { # no_route <description> <command>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_commit_route "$2")"; rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
+}
+# The seven the issue names.
+route_is "#3092 a route no gate reads" "git rebase --continue && git push" "git rebase --continue"
+route_is "#3092 a route no gate reads" "git cherry-pick --continue && git push" "git cherry-pick --continue"
+route_is "#3092 a route no gate reads" "git revert --continue && git push" "git revert --continue"
+route_is "#3092 a route no gate reads" "git am --continue && git push" "git am --continue"
+route_is "#3092 a route no gate reads" "git merge --no-edit side && git push" "git merge"
+route_is "#3092 a route no gate reads" "git cherry-pick abc123 && git push" "git cherry-pick"
+route_is "#3092 a route no gate reads" "git pull --no-edit && git push" "git pull"
+# The same six commands spelled another way make commits too (measured beside the seven): a rebase
+# onto a branch, a revert or an am that starts, a --skip that replays the rest, a merge that only
+# fast forwards (it makes no commit, and still puts commits on the branch that were not there), and
+# the forms that stage for a commit later in the command.
+route_is "#3092 the same command, started rather than continued" "git rebase origin/main && git push --force-with-lease" "git rebase"
+route_is "#3092 the same command, started rather than continued" "git revert --no-edit HEAD && git push" "git revert"
+route_is "#3092 the same command, started rather than continued" "git am fix.patch && git push" "git am"
+route_is "#3092 a skip replays the commits after it" "git rebase --skip; git push -f" "git rebase --skip"
+route_is "#3092 a skip replays the commits after it" "git cherry-pick --skip && git push" "git cherry-pick --skip"
+route_is "#3092 a fast forward puts commits on the branch too" "git merge --ff-only side && git push" "git merge"
+route_is "#3092 a pull that rebases replays this branch's commits" "git pull --rebase && git push" "git pull"
+route_is "#3092 staged for a commit later in the command" "git merge --squash side && git commit -m x && git push" "git merge"
+route_is "#3092 staged for a commit later in the command" "git cherry-pick -n abc123 && git commit -m x && git push" "git cherry-pick"
+route_is "#3092 staged for a commit later in the command" "git merge --no-commit side && git commit -m x && git push" "git merge"
+# However the git is written, as every other question here reads one.
+route_is "#3092 however the git is written" "rtk git pull && rtk git push" "git pull"
+route_is "#3092 however the git is written" "git -C /tmp/x pull && git -C /tmp/x push" "git pull"
+route_is "#3092 however the git is written" "GIT_EDITOR=true git rebase --continue && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "git -c core.editor=true rebase --continue && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "/usr/bin/git pull&&git push" "git pull"
+route_is "#3092 however the git is written" "git pull;git push" "git pull"
+route_is "#3092 however the git is written" $'git pull\ngit push' "git pull"
+route_is "#3092 however the git is written" "(git rebase --continue) && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "bash -c 'git pull && git push'" "git pull"
+route_is "#3092 however the git is written" "git fetch origin && git merge origin/main && git push origin HEAD" "git merge"
+route_is "#3092 the first route is the one named" "git pull && git rebase --continue && git push" "git pull"
+route_is "#3092 a route after one that makes nothing is still found" "git merge --abort; git merge side && git push" "git merge"
+# What makes no commit and stages nothing is no route: measured, --abort and --quit of each. A git
+# merge --continue is the commit ps_commit_in_chain reads, so the gates read it and it is not one.
+for c in "git push" "git commit -m x && git push" "git add -A && git commit -m x && git push" \
+         "git merge --continue && git push" "git merge --abort && git push" "git merge --quit; git push" \
+         "git rebase --abort && git push" "git rebase --quit && git push" \
+         "git cherry-pick --abort && git push" "git cherry-pick --quit; git push" \
+         "git revert --abort && git push" "git revert --quit && git push" \
+         "git am --abort && git push" "git am --quit && git push" \
+         "git merge-base --is-ancestor a b && git push" "git fetch origin && git push" \
+         "git log --grep=rebase && git push" "git branch -d merge && git push" \
+         "git status && git push origin pull"; do
+  no_route "#3092 control: no route in the command" "$c"
+done
+# A route nothing pushes after is not this question's: with no push, or with the push before it,
+# what it makes is not carried by a push in this command.
+for c in "git rebase --continue" "git pull" "git merge side" "git push && git pull" \
+         "git push origin feat; git checkout main && git pull" "git push -u origin feat && git merge --no-edit side"; do
+  no_route "#3092 control: nothing pushes what it makes" "$c"
+done
+# Words that only name a route, in a message or a heredoc body, run nothing.
+no_route "#3092 control: a route named in a commit message" "git commit -m 'run git pull and then git rebase --continue' && git push"
+no_route "#3092 control: a route named in a heredoc body" \
+  $'git commit -F - <<\'EOF\'\nRefuse git pull && git push in one command\n\ngit rebase --continue && git push is refused too.\nEOF\ngit push'
+no_route "#3092 control: a route named in an echo" "echo git pull && git push"
+# With nothing to read the command, the crude cut still finds the route, so a missing reader refuses
+# rather than letting the command past unread (L42).
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "git pull && git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "git pull" ] && check "#3092 with no reader the route is still found" ok \
+  || check "#3092 with no reader the route is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "GIT_EDITOR=true git rebase --continue; git push -f")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "git rebase --continue" ] && check "#3092 with no reader a continued rebase is still found" ok \
+  || check "#3092 with no reader a continued rebase is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "git merge --abort && git push")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3092 with no reader an abandoned merge is still no route" ok \
+  || check "#3092 with no reader an abandoned merge is still no route" "exit $rc, printed [$r]"
+
+echo "push-scope: a branch moved or a commit staged by a route no gate reads (claude-config#3098)"
+
+# ps_unread_move_or_stage answers whether a command runs, before a push, a git command that changes
+# what the push sends without making a commit: one that MOVES the branch onto commits that already
+# exist (or off ones a gate read), or one that changes the INDEX by a route other than git add ahead
+# of a commit and a push. It prints `move` or `stage`, a space, and the route as the refusal names
+# it. Each spelling below was measured first in a throwaway repository on git 2.51.1 (HEAD, the tree
+# the index holds and the files compared before and after), and the controls are the spellings
+# measured to change neither HEAD nor the index.
+moves_or_stages() { # moves_or_stages <description> <command> <what it must print>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_move_or_stage "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
+}
+neither() { # neither <description> <command>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_move_or_stage "$2")"; rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
+}
+# The branch moves: HEAD names another commit afterwards, so the push sends commits no gate read, or
+# leaves out ones a gate read as part of it.
+while IFS='|' read -r c want; do
+  [ -n "$c" ] || continue
+  moves_or_stages "#3098 the branch is moved before the push" "$c" "move $want"
+done <<'MOVES'
+git checkout main && git push|git checkout
+git switch main && git push|git switch
+git checkout -b new origin/main && git push -u origin new|git checkout
+git switch -c new side && git push -u origin new|git switch
+git checkout -B feat side && git push -f|git checkout
+git checkout --detach side && git push origin HEAD:refs/heads/x|git checkout
+git switch --detach side && git push origin HEAD:refs/heads/x|git switch
+git checkout - && git push|git checkout
+git checkout --orphan fresh && git commit -m x && git push -u origin fresh|git checkout
+git checkout -b new --track origin/main && git push|git checkout
+git checkout --track origin/other && git push|git checkout
+git checkout -f -b new && git push|git checkout
+git checkout side -- && git push|git checkout
+git reset --hard origin/main && git push -f|git reset
+git reset --hard side && git push|git reset
+git reset --soft HEAD~1 && git commit -m x && git push -f|git reset
+git reset HEAD~1; git push -f|git reset
+git reset --keep side && git push|git reset
+git reset --hard @{u} && git push|git reset
+git update-ref refs/heads/feat side && git push|git update-ref
+git update-ref HEAD side && git push|git update-ref
+git symbolic-ref HEAD refs/heads/side && git push|git symbolic-ref
+git bisect reset && git push|git bisect
+git bisect start HEAD main && git push|git bisect
+git filter-branch -f --msg-filter cat HEAD~1..HEAD && git push -f|git filter-branch
+git stash branch fromstash && git push -u origin fromstash|git stash branch
+git rebase --abort && git push|git rebase --abort
+git cherry-pick --abort && git push|git cherry-pick --abort
+git revert --abort && git push|git revert --abort
+git am --abort && git push|git am --abort
+MOVES
+# The index changes by a route other than git add, and a commit later in the command takes it: the
+# gates fold in the index as it was before the command ran.
+while IFS='|' read -r c want; do
+  [ -n "$c" ] || continue
+  moves_or_stages "#3098 staged by another route for a commit the command then pushes" "$c" "stage $want"
+done <<'STAGES'
+git apply --index fix.patch && git commit -m x && git push|git apply
+git apply --cached fix.patch && git commit -m x && git push|git apply
+git apply --3way fix.patch && git commit -m x && git push|git apply
+git apply -3 fix.patch && git commit -m x && git push|git apply
+git stash pop && git commit -m x && git push|git stash pop
+git stash pop --index && git commit -m x && git push|git stash pop
+git stash apply && git add -A && git commit -m x && git push|git stash apply
+git stash; git commit --allow-empty -m x; git push|git stash
+git stash push -u -m aside; git commit --allow-empty -m x; git push|git stash
+git stash -k; git commit -m x; git push|git stash
+git rm old.txt && git commit -m x && git push|git rm
+git rm --cached old.txt && git commit -m x && git push|git rm
+git mv old.txt older.txt && git commit -m x && git push|git mv
+git checkout side -- notes.txt && git commit -m x && git push|git checkout
+git checkout origin/main -- a.txt b.txt && git commit -m x && git push|git checkout
+git checkout HEAD -- a.txt && git commit -m x && git push|git checkout
+git restore --staged a.txt && git commit -m x && git push|git restore
+git restore -S a.txt && git commit -m x && git push|git restore
+git restore -s side -SW a.txt && git commit -m x && git push|git restore
+git restore --source=side --staged a.txt && git commit -m x && git push|git restore
+git reset && git add a.txt && git commit -m x && git push|git reset
+git reset -q && git commit -m x && git push|git reset
+git reset HEAD && git commit -m x && git push|git reset
+git reset -- a.txt && git commit -m x && git push|git reset
+git reset HEAD -- a.txt && git commit -m x && git push|git reset
+git reset --hard && git commit --allow-empty -m x && git push|git reset
+git reset --hard HEAD && git commit --allow-empty -m x && git push|git reset
+git read-tree side && git commit -m x && git push|git read-tree
+git update-index --add hand.txt && git commit -m x && git push|git update-index
+git update-index --force-remove old.txt && git commit -m x && git push|git update-index
+git update-index --chmod=+x old.txt && git commit -m x && git push|git update-index
+git merge --abort && git commit -m x && git push|git merge --abort
+git checkout side -- notes.txt && git merge --continue && git push|git checkout
+STAGES
+# A move is named ahead of a staging route, wherever each stands: it is refused whatever follows it.
+moves_or_stages "#3098 a move is named ahead of a staging route" "git rm old.txt && git checkout main && git push" "move git checkout"
+moves_or_stages "#3098 a move is named ahead of a staging route" "git stash && git checkout main && git commit -m x && git push" "move git checkout"
+moves_or_stages "#3098 the first staging route is the one named" "git rm old.txt && git mv a b && git commit -m x && git push" "stage git rm"
+moves_or_stages "#3098 a route after one that changes nothing is still found" "git checkout -b new && git reset --hard side && git push" "move git reset"
+# However the git is written, as every other question here reads one.
+moves_or_stages "#3098 however the git is written" "rtk git checkout main && rtk git push" "move git checkout"
+moves_or_stages "#3098 however the git is written" "git -C /tmp/x reset --hard origin/main && git -C /tmp/x push -f" "move git reset"
+moves_or_stages "#3098 however the git is written" "GIT_TRACE=0 git switch main && git push" "move git switch"
+moves_or_stages "#3098 however the git is written" "git -c advice.detachedHead=false checkout side && git push" "move git checkout"
+moves_or_stages "#3098 however the git is written" "/usr/bin/git checkout main&&git push" "move git checkout"
+moves_or_stages "#3098 however the git is written" "git checkout main;git push" "move git checkout"
+moves_or_stages "#3098 however the git is written" $'git checkout main\ngit push' "move git checkout"
+moves_or_stages "#3098 however the git is written" "(git checkout main) && git push" "move git checkout"
+moves_or_stages "#3098 however the git is written" "bash -c 'git checkout main && git push'" "move git checkout"
+moves_or_stages "#3098 however the git is written" "(git stash pop) && git commit -m x && git push" "stage git stash pop"
+moves_or_stages "#3098 however the git is written" "git stash pop;git commit -m x;git push" "stage git stash pop"
+moves_or_stages "#3098 however the git is written" "git fetch origin && git checkout origin/main -- a.txt && git commit -m x && git push origin HEAD" "stage git checkout"
+# Measured to change neither HEAD nor the index: a branch made where HEAD already is, files written
+# back from the index, the forms that only look, and a sequence left where it stands.
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  neither "#3098 control: neither HEAD nor the index changes" "$c"
+done <<'HARMLESS'
+git push
+git commit -m x && git push
+git add -A && git commit -m x && git push
+git checkout -b new && git add a.txt && git commit -m x && git push -u origin new
+git checkout -q -b new && git push -u origin new
+git checkout -B new && git push -u origin new
+git switch -c new && git commit -am x && git push -u origin new
+git switch --create new && git push -u origin new
+git switch -C new && git push -u origin new
+git checkout -- README.md && git commit -am x && git push
+git checkout . && git commit -am x && git push
+git checkout && git push
+git restore README.md && git commit -am x && git push
+git restore --source=side a.txt && git commit -m x && git push
+git reset --soft && git commit -m x && git push
+git reset --soft HEAD && git commit -m x && git push
+git apply --check fix.patch && git commit -m x && git push
+git apply --stat fix.patch && git commit -m x && git push
+git rm -n old.txt && git commit -m x && git push
+git rm --dry-run old.txt && git commit -m x && git push
+git mv -n old.txt older.txt && git commit -m x && git push
+git stash list && git commit -m x && git push
+git stash show && git commit -m x && git push
+git stash drop && git commit -m x && git push
+git update-index --refresh; git commit -m x && git push
+git update-index -q --refresh && git commit -m x && git push
+git symbolic-ref --short HEAD && git push
+git symbolic-ref -q refs/remotes/origin/HEAD; git push
+git branch -f other side && git push
+git branch -m renamed && git push -u origin renamed
+git rebase --quit && git push
+git cherry-pick --quit; git push
+git am --quit && git push
+git merge --quit && git commit -m x && git push
+git fetch origin && git push
+git log --grep=checkout && git push
+git branch -d reset && git push
+git status && git push origin checkout
+git checkout -b new 2>&1 && git push -u origin new
+git checkout -b new >/dev/null 2>&1 && git push -u origin new
+git checkout -b new > out.txt && git push -u origin new
+git symbolic-ref --short HEAD 2>/dev/null; git push
+git symbolic-ref HEAD > branch.txt; git push
+git reset --soft 2>&1; git commit -m x; git push
+git update-index --refresh >/dev/null; git commit -m x && git push
+git stash list | wc -l; git commit -m x && git push
+x=$(git symbolic-ref --short HEAD) && git push origin "$x"
+HARMLESS
+# A redirection is among the words the reader hands over and is none of git's own, so a branch made
+# at HEAD with its output sent away is still that, and a move with its output sent away still a move.
+moves_or_stages "#3098 a redirection is not one of git's words" "git checkout main 2>&1 | tail -1; git push" "move git checkout"
+moves_or_stages "#3098 a redirection is not one of git's words" "git checkout -b new origin/main >/dev/null 2>&1 && git push -u origin new" "move git checkout"
+moves_or_stages "#3098 a redirection is not one of git's words" "git reset 2>/dev/null; git commit -m x; git push" "stage git reset"
+moves_or_stages "#3098 a redirection is not one of git's words" "git apply --index < fix.patch && git commit -m x && git push" "stage git apply"
+# A move inside a loop, a condition or a list is one too.
+moves_or_stages "#3098 wherever the command stands" "for b in a b; do git checkout \$b && git push; done" "move git checkout"
+moves_or_stages "#3098 wherever the command stands" "if git checkout main; then git push; fi" "move git checkout"
+moves_or_stages "#3098 wherever the command stands" "git checkout main || exit 1; git push" "move git checkout"
+moves_or_stages "#3098 a target worked out by another command is still a target" 'git reset --hard "$(git merge-base HEAD origin/main)" && git push -f' "move git reset"
+# A file written by git apply with no --index, --cached or --3way is a file written, as by any
+# program: the index is as the gates read it (measured), so this question lets it through. What a
+# later git add or commit -a takes of it is the wider gap this change does not close.
+neither "#3098 control: a patch applied to the files only" "git apply fix.patch && git commit -m x && git push"
+# A staging route with no commit after it changes nothing the push sends: the push carries commits,
+# and none was made. Nor does one that comes after the commit.
+for c in "git stash pop && git push" "git stash && git push" "git rm --cached a.txt && git push" \
+         "git merge --abort && git push" "git apply --index fix.patch && git push" "git reset && git push" \
+         "git restore --staged a.txt; git push" "git commit -m x && git stash pop && git push" \
+         "git commit -m x && git rm old.txt && git push"; do
+  neither "#3098 control: nothing commits what it staged before the push" "$c"
+done
+# Nothing pushes after it: with no push, or with the push before it.
+for c in "git checkout main" "git reset --hard origin/main" "git push && git checkout main" \
+         "git push origin feat; git checkout main && git pull" "git stash pop && git commit -m x" \
+         "git push -u origin feat && git rm old.txt && git commit -m x"; do
+  neither "#3098 control: nothing pushes afterwards" "$c"
+done
+# Words that only name a route, in a message or a heredoc body, run nothing.
+neither "#3098 control: a route named in a commit message" "git commit -m 'git checkout main and git reset --hard, then git push' && git push"
+neither "#3098 control: a route named in a heredoc body" \
+  $'git commit -F - <<\'EOF\'\nRefuse git checkout main && git push in one command\n\ngit stash pop && git commit -m x && git push is refused too.\nEOF\ngit push'
+neither "#3098 control: a route named in an echo" "echo git checkout main && git push"
+# The question #3092 asks is left as it was: an abandoned sequence makes no commit, so it is not one
+# of ITS routes, and is this question's.
+no_route "#3098 an abandoned rebase is still no commit making route" "git rebase --abort && git push"
+# With nothing to read the command, the crude cut still finds the route, so a missing reader refuses
+# rather than letting the command past unread (L42).
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git checkout main && git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "move git checkout" ] && check "#3098 with no reader a checkout is still found" ok \
+  || check "#3098 with no reader a checkout is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git stash pop && git commit -m x; git push -f")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "stage git stash pop" ] && check "#3098 with no reader a staging route is still found" ok \
+  || check "#3098 with no reader a staging route is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "(git reset --hard origin/main) && git push -f")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "move git reset" ] && check "#3098 with no reader a reset inside brackets is still found" ok \
+  || check "#3098 with no reader a reset inside brackets is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git checkout -b new && git push -u origin new")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3098 with no reader a branch made at HEAD is still neither" ok \
+  || check "#3098 with no reader a branch made at HEAD is still neither" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git stash pop && git push")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3098 with no reader a staging route nothing commits is still neither" ok \
+  || check "#3098 with no reader a staging route nothing commits is still neither" "exit $rc, printed [$r]"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
