@@ -101,6 +101,7 @@ named_texts SHARED_PARTS || finish
 runs="$(named_fact RUNS)"
 [ "${runs:-0}" -ge 4 ] && check "the lines that run a program file are found" ok || check "the lines that run a program file are found" "found ${runs:-none}: $listed"
 [ "$(named_fact LINES)" = 0 ] && check "and the script sources no file" ok || check "and the script sources no file" "$listed"
+[ -z "$(named_fact BYVALUE)" ] && check "and it runs no command a variable names" ok || check "and it runs no command a variable names" "$(named_fact BYVALUE | paste -sd';' -)"
 problems="$(named_fact PROBLEM)"
 [ -z "$problems" ] && check "SHARED_PARTS.texts is the script and exactly the program files it runs" ok \
   || check "SHARED_PARTS.texts is the script and exactly the program files it runs" "$problems"

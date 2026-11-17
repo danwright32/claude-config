@@ -61,14 +61,15 @@ changed(){ differing "$1" "$2" | sed -n '1,6p' | paste -sd';' -; }
 # -> sets listed (every line it printed), SCRIPT and TEXTS. Returns 1, having failed a check, when
 # the list could not be read at all.
 named_texts(){   # $1 = what named.ts exports the script by
-  listed="$(node --experimental-strip-types --no-warnings "$ROOT/tests/area-check-named-texts.mjs" "$ROOT/payload/mods/area-check/hooks/named.ts" "$ROOT" "$1" 2>&1)" || {
+  listed="$(node --experimental-strip-types --no-warnings "$ROOT/tests/area-check-named-texts.mjs" "$ROOT/payload/mods/area-check/hooks/named.ts" "$ROOT" "$1" \
+    "$ROOT/payload/mods/mod-kit/hooks/commands.ts" 2>&1)" || {
     check "named.ts's $1 is read" "$listed"
     return 1
   }
   TEXTS="$(printf '%s\n' "$listed" | sed -n 's/^TEXT	//p')"
   SCRIPT="$(printf '%s\n' "$listed" | sed -n 's/^SCRIPT	//p')"
 }
-# One fact of that reading: LINES, RUNS, or every PROBLEM.
+# One fact of that reading: LINES, RUNS, RAN, BYVALUE, or every PROBLEM.
 named_fact(){ printf '%s\n' "$listed" | sed -n "s/^$1	//p"; }
 
 # named_rule <NAME> <checkout> <file> <count>: the rule itself for that script, on mod-kit's real

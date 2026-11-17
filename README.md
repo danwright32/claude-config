@@ -8369,7 +8369,11 @@ and its control shows a copy of the script without `-I` loading it. Each script 
 let through for itself alone, so the two chained in one command are both judged. What the two
 suites share (the guarded temporary folder, the listings of a checkout, the reader of the list and
 the rule's checks on mod-kit's real reader) is in `tests/area-check-named-reader.sh`,
-`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. The rule's checks run
+`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. The reader of the list
+reads each script with mod-kit's reader of shell commands, so a message quoting a run counts
+nothing, and refuses whatever it cannot read (eval of built text, a variable set to a shell, a line
+that reads as a run on its own), never skipping it; `tests/test-area-check-named-texts.sh` holds
+both, with controls that make it too lenient (#3134). The rule's checks run
 once for each script, and the ones about an equals sign are chosen by script there, by hand: a
 reader's own option is let through for `tools/check-mods.sh` and must be judged for the other, so
 the loosening reaching a script it was not signed off for turns that script's suite red. A third
