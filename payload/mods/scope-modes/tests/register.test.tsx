@@ -5529,7 +5529,8 @@ const asker: { name: string; register: Register } = {
       }
       if (String(e.tool) === 'SleepEnds') {
         try {
-          const r = await $.scopeModes.sleepEnds()
+          // Gone since #3160, so asked of the noun as a mod still calling it would.
+          const r = await ($.scopeModes as unknown as { sleepEnds: () => Promise<unknown> }).sleepEnds()
           return { result: r, text: JSON.stringify(r) } as never
         } catch (err) {
           return { result: 'threw', text: `threw: ${String((err as Error)?.message ?? err)}` } as never
@@ -5566,16 +5567,15 @@ test('a note the noun cannot write throws, so the caller can say so (#841)', { p
   expect(await call($ as never, { tool: 'NoteIt', tool_use_id: 'n' } as never)).toBe('threw: sh: notes: Permission denied')
 })
 
-// #2993: another mod reads when each sleep ended through the noun, from the records moved aside
-// and a record past its end (every case of the reading is in sleepends.test.ts); a folder that
-// cannot be listed throws, so the caller can say so.
-test('another mod reads when each sleep ended through the noun (#2993)', { plugins: [deps, isItLive, asker] }, async ($, on) => {
-  const { w, clock } = world(on, { files: { [`${SLEEP}/ended/${T0 - 5000}-woke-s1.json`]: '{}', [CURRENT]: asleepRecord({ until: T0 - 1000 }) } })
+// #3160: the noun saying when each sleep ended (#2993) had one reader, the guard that put Slack
+// wording chosen overnight to Dan, and that guard is retired, so the noun is gone with it: a call
+// to it is a member the noun does not have, even with ended records on disk to read.
+test('scope modes no longer says when each sleep ended, its one reader retired (#3160)', { plugins: [deps, isItLive, asker] }, async ($, on) => {
+  const { clock } = world(on, { files: { [`${SLEEP}/ended/${T0 - 5000}-woke-s1.json`]: '{}', [CURRENT]: asleepRecord({ until: T0 - 1000 }) } })
   await start($ as never, clock)
-  const ends = () => call($ as never, { tool: 'SleepEnds', tool_use_id: 'e' } as never)
-  expect(await ends()).toBe(JSON.stringify([T0 - 5000, T0 - 1000]))
-  w.o.listFails = [`${SLEEP}/ended`]
-  expect(await ends()).toBe(`threw: scope-modes: $.fs.list: EACCES: permission denied, scandir '${SLEEP}/ended'`)
+  const ends = String(await call($ as never, { tool: 'SleepEnds', tool_use_id: 'e' } as never))
+  expect(ends).toMatch(/^threw: /)
+  expect(ends).toContain('sleepEnds')
 })
 
 // ---- Sleep mode phase 7 (#843): per repository merge and deploy lists that fail closed ----

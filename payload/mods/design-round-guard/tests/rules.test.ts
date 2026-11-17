@@ -2670,7 +2670,7 @@ test("#2726: a call whose hook the worker lost is passed on as the hook would pa
   expect(sent).toEqual(['main write', 'agent question', 'agent grep'])
 })
 
-// #2788: on 2026-11-10 and 11 an edit to the Slack alert guard's register.ts (#2709) was held twice
+// #2788: on 2026-11-10 and 11 an edit to a since retired guard's register.ts (#2709) was held twice
 // as a wording change, quoting a message the edit never touched. It wrapped a verdict in a helper
 // that hands it straight back (`return await askUntraced(path, await broughtIn(path))`) and added a
 // comment, and changed no string: measured on the real files, the message reading stopped following

@@ -39,8 +39,8 @@
 #             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked);
 #                                                               a file's text by what it imports or calls:
 #                                                               fileReach from the copy of hooks/reaches.ts
-#                                                               kept at hooks/mod-kit/reaches.ts (#2710: the
-#                                                               Slack alert guard kept its own lists)
+#                                                               kept at hooks/mod-kit/reaches.ts (#2710: a
+#                                                               since retired guard kept its own lists)
 #   remote-reader                                               use $.modkit.repo({ root, remote }), whose
 #             reading a git remote's address by hand (a         github and name are the two questions the
 #             pattern taking a trailing .git off, or matching   copies asked (#951: four copies drifted on
@@ -105,13 +105,13 @@
 #             reading a quoted string that is not shell, or     the copy of hooks/quoted.ts kept at
 #             a YAML flow list, by hand (YAML's '' undone by    hooks/mod-kit/quoted.ts (#2467: the design
 #             /''/g, a pattern matching '(?:'' for a single     round guard read TypeScript strings its own
-#             quoted scalar, or a walk to `] === q)`)            way and the Slack alert guard GitLab's flow
+#             quoted scalar, or a walk to `] === q)`)            way and a since retired guard GitLab's flow
 #                                                               lists; $.modkit.commands reads shell only)
 #   patch-reader                                                readPatch, patchFiles, patchPlacing,
 #             reading a patch by hand: git's diff line, a       placedName and patchedPaths from the copy
 #             +++ header in quotes, a hunk header (^@@), or     of hooks/patch.ts kept at
 #             a binary patch                                    hooks/mod-kit/patch.ts (#2992: scope modes
-#                                                               and the Slack alert guard each read names,
+#                                                               and a since retired guard each read names,
 #                                                               strip, folder and hunks their own way).
 #                                                               Ask before saving's cut of every line that
 #                                                               might name a file is another question.

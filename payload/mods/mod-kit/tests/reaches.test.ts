@@ -4,8 +4,7 @@ import { fileReach } from '../hooks/reaches.ts'
 
 // The one reader of what a FILE's text reaches beyond itself (#2710): a program it starts, a web
 // request it makes, or a module it loads by a name given at run time, counted only where the file
-// imports or calls one. The Slack alert guard reads each file it searches with it, from a byte for
-// byte copy at hooks/mod-kit/reaches.ts, in place of its own lists of module names.
+// imports or calls one. A mod reads with it from a byte for byte copy at hooks/mod-kit/reaches.ts.
 
 const py = (text: string) => fileReach('python', text)
 const node = (text: string) => fileReach('node', text)
