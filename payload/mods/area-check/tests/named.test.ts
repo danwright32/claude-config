@@ -9,9 +9,11 @@ import { APP, HOME, KIT, NAMED_TEXTS, bash, refusal, world } from './world.ts'
 // handed and write no file git tracks there. Its own text cannot be read to say so (values named by
 // variables, the claude command from the environment, libraries that keep logs and install the
 // compiler), so it was held on every run. Only that script, at that path, in that repository, handed
-// one folder, in a command that sets no value and runs the script once, with nothing but a change of
-// folder before it and readers its output is piped into after it,
+// one folder, in a command that gives it no setting and runs the script once, with nothing but a
+// change of folder before it and readers its output is piped into after it,
 // with the text its checkout left the default branch with; everything else is judged as before. tests/test-area-check-check-mods-read-only.sh runs the real script and the real reader.
+// Since #3093 an equals sign holds the run only where it may set a value for the script: anywhere
+// but in a reader its output is piped into, or a comment.
 
 const REPO = 'danwright32/claude-config'
 // A script the reader cannot place the writes of, as the real one's are not: a copy named by a
@@ -37,7 +39,7 @@ test("this repository's own tools/check-mods.sh handed a folder holding held fil
   expect((await bash($ as never, w, 'bash tools/check-mods.sh src/')).result).toBe('done')
   expect((await bash($ as never, w, './tools/check-mods.sh src/', {}, 'b2')).result).toBe('done')
   expect((await bash($ as never, w, `bash ${APP}/tools/check-mods.sh ${APP}/src 2>&1 | tail -n 40`, {}, 'b3')).result).toBe('done')
-  expect((await bash($ as never, w, 'cd src && bash ../tools/check-mods.sh lib 2>&1 | grep -v ok | tail -n 40', {}, 'b4')).result).toBe('done')
+  expect((await bash($ as never, w, 'cd ./src && bash ../tools/check-mods.sh lib 2>&1 | grep -v ok | tail -n 40', {}, 'b4')).result).toBe('done')
   expect(w.judged().length).toBe(0)
   // Each run let through is in the log, so a rule that lets everything through shows there (L551).
   expect(named(w)).toMatchObject([
@@ -111,8 +113,8 @@ test('the named script in any other shape, and every command chained with it, is
 const RUN = 'bash tools/check-mods.sh src/'
 const facts = (over: Partial<NamedFacts> = {}, asked: string[] = []): NamedFacts => ({
   commands: async command => {
-    asked.push('commands')
-    return pipelineIn(command, APP, HOME)
+    asked.push(`commands ${command}`)
+    return pipelineIn(command, APP, HOME, { assignments: true })
   },
   checkout: async path => {
     asked.push(`checkout ${path}`)
@@ -129,6 +131,10 @@ const facts = (over: Partial<NamedFacts> = {}, asked: string[] = []): NamedFacts
   ...over,
 })
 const read = (command: string, f: NamedFacts) => namedReaders(command, commandWrites(command, APP, HOME), f)
+// The line the rule asks the reader about before it takes its word for anything else (#3093).
+const KNOWN = 'A=1; B=2 env true'
+// A reader that answers the known line as mod-kit's does, and every other command with these commands.
+const only = (commands: Awaited<ReturnType<NamedFacts['commands']>>): NamedFacts['commands'] => async command => (command === KNOWN ? pipelineIn(command, APP, HOME, { assignments: true }) : commands)
 
 test('a run let through is taken out of what the command is read as writing, and nothing else is (#3022)', async () => {
   const asked: string[] = []
@@ -136,7 +142,7 @@ test('a run let through is taken out of what the command is read as writing, and
   expect(r.writes.runs ?? []).toEqual([])
   expect(r.writes.files.map(f => f.path)).toEqual([`${APP}/src/big.ts`])
   expect(r.named).toEqual([{ script: `${APP}/tools/check-mods.sh`, word: 'src/', folder: `${APP}/src`, passed: true }])
-  expect(asked).toEqual(['commands', `checkout ${APP}/tools/check-mods.sh`, `folder ${APP}/src`, `git ${APP} diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`])
+  expect(asked).toEqual([`commands ${KNOWN}`, `commands ${RUN} > src/big.ts`, `checkout ${APP}/tools/check-mods.sh`, `folder ${APP}/src`, `git ${APP} diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`])
 })
 
 test('a command naming no such script is read as it was, asking nothing (#3022)', async () => {
@@ -153,14 +159,14 @@ const REFUSED: [string, Partial<NamedFacts>, string][] = [
   ['in a checkout whose origin names no default branch', { checkout: async () => ({ root: APP, github: REPO, defaultBranch: null }) }, 'origin names no default branch, so its text cannot be compared with the one the suite proved'],
   ['handed something that is no folder', { isFolder: async () => false }, 'src/ is no folder on the disk'],
   ['in a command whose commands cannot be read', { commands: async () => Promise.reject(new Error('the pipeline could not be read')) }, 'it could not be checked (the pipeline could not be read)'],
-  ['in a command the run cannot be found in', { commands: async () => [{ words: ['bash', 'other.sh', 'src/'] }] }, 'the run cannot be found among the commands, so what else runs with it cannot be read'],
-  ['after a command that is no change of folder', { commands: async () => [{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
+  ['in a command the run cannot be found in', { commands: only([{ words: ['bash', 'other.sh', 'src/'] }]) }, 'the run cannot be found among the commands, so what else runs with it cannot be read'],
+  ['after a command that is no change of folder', { commands: only([{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
   // Written after it, a command still runs before it the second time round a loop, or once a function is called.
-  ['before a command that is no reader of its output', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }] }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
+  ['before a command that is no reader of its output', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
   // The reason is written to the area check's log, so it names only the program, never its arguments,
   // which can carry a credential.
-  ['beside a command whose arguments carry a credential', { commands: async () => [{ words: ['curl', '-H', 'Authorization: Bearer not-a-real-token', 'x'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'curl runs in the same command, and what that leaves in the environment cannot be read'],
-  ['run twice in the command', { commands: async () => [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }] }, 'the script is run more than once in the command, and what runs between cannot be read'],
+  ['beside a command whose arguments carry a credential', { commands: only([{ words: ['curl', '-H', 'Authorization: Bearer not-a-real-token', 'x'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'curl runs in the same command, and what that leaves in the environment cannot be read'],
+  ['run twice in the command', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'the script is run more than once in the command, and what runs between cannot be read'],
   ['whose checkout cannot be asked about', { checkout: async () => Promise.reject(new Error('git could not be asked')) }, 'it could not be checked (git could not be asked)'],
   ['whose folder cannot be looked at', { isFolder: async () => Promise.reject(new Error('EACCES')) }, 'it could not be checked (EACCES)'],
   ['whose text git cannot be started to compare', { git: async () => Promise.reject(new Error('git timed out')) }, 'it could not be checked (git timed out)'],
@@ -177,4 +183,200 @@ test('a fact that cannot be had, or that is wrong, leaves the run to be judged a
 test('the repository is matched whatever case GitHub spells it in (#3022)', async () => {
   const r = await read(RUN, facts({ checkout: async () => ({ root: APP, github: 'DanWright32/Claude-Config', defaultBranch: 'main' }) }))
   expect(r.named).toMatchObject([{ passed: true }])
+})
+
+// #3093: mod-kit's reader dropped a setting written in front of a command, so the rule asked the
+// command's text and held any run whose command held an equals sign, a reader's option included
+// (`| tail --lines=40`). The reader carries the settings now, so an equals sign holds the run only
+// where it may set a value for the script: on the run itself, on the change of folder before it, on
+// its own before it, or in the words of either. A loosening, signed off by Dan (2026-11-16).
+const READS = 'and the script, the shell that runs it and the programs it runs take what they run and where they keep their files from the environment'
+const given = (names: string) => `it is run with ${names} set, ${READS}`
+const setAlone = (names: string) => `the command sets ${names} on its own, ${READS}`
+const BESIDE = 'runs in the same command, and what that leaves in the environment cannot be read'
+const OWN_WORDS = 'holds an equals sign in its words or in a heredoc fed to it, which the shell may read as setting a value'
+const OLD_READER = 'the reader of commands loaded in this session does not say what a command is run with or behind (#3093), so the run cannot be shown to be the plain one'
+const behindIt = (names: string) => `it is run behind ${names}, which can change the folder or the environment it runs in`
+
+const NO_SETTING: [string, string][] = [
+  ['an option written with an equals sign on a reader of its output', 'bash tools/check-mods.sh src/ 2>&1 | tail --lines=40'],
+  ['a pattern holding an equals sign on a reader of its output', 'bash tools/check-mods.sh src/ 2>&1 | grep -c "ok=1"'],
+  ['two such readers after a change of folder', 'cd ./src && bash ../tools/check-mods.sh lib 2>&1 | grep -v "skip=" | tail --lines=40'],
+  ['a setting given to a reader of its output', 'bash tools/check-mods.sh src/ | LC_ALL=C sort'],
+  ['a comment holding an equals sign', 'bash tools/check-mods.sh src/ # compare with ok=1'],
+]
+
+test('an equals sign that gives the script no setting no longer holds the run (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const ran: string[] = []
+  for (const [i, [what, command]] of NO_SETTING.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `ran: ${what}` : `${what}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(NO_SETTING.map(([what]) => `ran: ${what}`))
+  expect(w.judged().length).toBe(0)
+  expect(named(w).map(x => x.decision)).toEqual(NO_SETTING.map(() => 'passed'))
+})
+
+// Each is held as before, and the log says why by the name set, never by its value.
+const SETTING: [string, string, string][] = [
+  ['with a value set in front of it', 'TMPDIR=src bash tools/check-mods.sh src/', given('TMPDIR')],
+  ['with a value given to it by env', 'env TMPDIR=src bash tools/check-mods.sh src/', given('TMPDIR')],
+  ['with the programs it runs named in front of it', 'CLAUDE_BIN=/tmp/claude TSC_BIN=/tmp/tsc bash tools/check-mods.sh src/', given('CLAUDE_BIN, TSC_BIN')],
+  ['with where it keeps its logs moved', 'CHECK_MODS_FAILURE_OUTPUT=src bash tools/check-mods.sh src/', given('CHECK_MODS_FAILURE_OUTPUT')],
+  ["with the shell's own startup file named", 'BASH_ENV=./env.sh bash tools/check-mods.sh src/', given('BASH_ENV')],
+  ['with the folders its programs are found in changed', 'PATH=/tmp/bin:$PATH bash tools/check-mods.sh src/', given('PATH')],
+  ['with a name the script does not read itself, which the programs it runs may', 'NODE_OPTIONS=--require=/tmp/x.js bash tools/check-mods.sh src/', given('NODE_OPTIONS')],
+  ['with a value that is a credential, which the log never holds', 'TOKEN=not-a-real-token bash tools/check-mods.sh src/', given('TOKEN')],
+  ['with a value set for the shell whose script runs it', "TMPDIR=src bash -c 'bash tools/check-mods.sh src/'", given('TMPDIR')],
+  ['with a value set in front of the change of folder before it', 'TMPDIR=src cd ./src && bash ../tools/check-mods.sh lib', 'the change of folder before it is run with TMPDIR set, and no value set before the script is let through'],
+  ['after a value set on its own', 'TMPDIR=src; bash tools/check-mods.sh src/', setAlone('TMPDIR')],
+  ['after two values set on their own', 'CLAUDE_BIN=/tmp/claude TOKEN=not-a-real-token; bash tools/check-mods.sh src/', setAlone('CLAUDE_BIN, TOKEN')],
+  ['after a value set on its own inside braces', '{ PATH=/tmp/bin; bash tools/check-mods.sh src/; }', setAlone('PATH')],
+  ['before a value set on its own, which a loop runs before it the second time round', 'while bash tools/check-mods.sh src/ | grep -q x; do PATH=/tmp/bin; done', setAlone('PATH')],
+  ['after a value added to', 'PATH+=:/tmp/not-a-real-token; bash tools/check-mods.sh src/', `a word holding an equals sign ${BESIDE}`],
+  ['after a value exported', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh src/', `export ${BESIDE}`],
+  ['chained after a command holding an equals sign', 'git log --format=%s && bash tools/check-mods.sh src/', `git ${BESIDE}`],
+  ['handed its folder as the value of an option', 'bash tools/check-mods.sh --mods=src/', `it ${OWN_WORDS}`],
+  ['fed a heredoc holding an equals sign', 'bash tools/check-mods.sh src/ <<EOF\nPATH=/tmp/bin\nEOF', `it ${OWN_WORDS}`],
+  ['after a change of folder whose path holds an equals sign', 'cd ./a=b/.. && bash tools/check-mods.sh src/', `the change of folder before it ${OWN_WORDS}`],
+]
+
+test('a setting the script may read, wherever the command gives it, still holds the run, and the log names it without its value (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of SETTING.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(SETTING.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(SETTING.map(([, , why]) => ['judged', why]))
+  expect(JSON.stringify(w.records())).not.toContain('not-a-real-token')
+})
+
+test('a change of folder whose path sets a value as the shell reads it leaves the run unplaced, so it is held as any script is (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  expect(refusal(await bash($ as never, w, 'cd "./${TMPDIR:=src}/.." && bash tools/check-mods.sh src/'))).toContain('The area check held this Bash command')
+  expect(named(w)).toEqual([])
+})
+
+// A copy of mod-kit loaded before #3093 answers the same calls with no setting, no command that only
+// sets a value and no runner, and says nothing. With it a run given a setting, or standing behind a
+// runner, reads exactly as the plain run, so nothing is let through until the reader shows it carries them.
+test('a reader of commands loaded before #3093 says nothing of settings or runners, so no run is let through (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  w.ctl.oldReader = true
+  const commands = ['TMPDIR=src bash tools/check-mods.sh src/', 'TMPDIR=src; bash tools/check-mods.sh src/', 'env -C copy bash tools/check-mods.sh src/', 'bash tools/check-mods.sh src/ 2>&1 | tail --lines=40', 'bash tools/check-mods.sh src/']
+  for (const [i, command] of commands.entries()) expect([command, refusal(await bash($ as never, w, command, {}, `b${i + 1}`)).includes(HELD)]).toEqual([command, true])
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(commands.map(() => ['judged', OLD_READER]))
+})
+
+const LINES = `${RUN} 2>&1 | tail --lines=40`
+// What a reader loaded before #3093 answers: the same commands, no setting or runner carried, none that only sets a value.
+const before3093: NamedFacts['commands'] = async command => pipelineIn(command, APP, HOME).map(({ env: _env, behind: _behind, ...c }) => c)
+
+test('the rule asks the reader a line it knows the answer for before it takes its word for any command (#3093)', async () => {
+  const asked: string[] = []
+  expect((await read(LINES, facts({}, asked))).named).toMatchObject([{ passed: true }])
+  expect(asked).toEqual([`commands ${KNOWN}`, `commands ${LINES}`, `checkout ${APP}/tools/check-mods.sh`, `folder ${APP}/src`, `git ${APP} diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`])
+  const old: string[] = []
+  const r = await read(RUN, facts({ commands: async c => (old.push(c), before3093(c)) }))
+  expect(r.named).toMatchObject([{ why: OLD_READER }])
+  expect(old).toEqual([KNOWN])
+})
+
+// Each of the three facts the rule rests on is asked for by the known line, so a reader lacking any one is not trusted.
+const PARTIAL: [string, NamedFacts['commands']][] = [
+  ['the commands that only set a value', async command => pipelineIn(command, APP, HOME)],
+  ['the settings a command is run with', async command => pipelineIn(command, APP, HOME, { assignments: true }).map(({ env: _env, ...c }) => c)],
+  ['what a command is run behind', async command => pipelineIn(command, APP, HOME, { assignments: true }).map(({ behind: _behind, ...c }) => c)],
+]
+
+test('a reader that leaves out any one of the settings, the commands that only set a value and the runners is not trusted (#3093)', async () => {
+  const got: [string, unknown][] = []
+  for (const [what, commands] of PARTIAL) got.push([what, (await read(RUN, facts({ commands }))).named.map(n => ('why' in n ? n.why : 'passed'))])
+  expect(got).toEqual(PARTIAL.map(([what]) => [what, [OLD_READER]]))
+})
+
+// The gap was on main since #3022: the reader looks past a runner, so `env -C copy bash
+// tools/check-mods.sh src/` was read as the plain run, though the script that runs is the one under
+// copy/, and `env -i`, `env -u` and `sudo` change the environment the script reads with no equals
+// sign. The reader says what a command is run behind now, and a run behind anything is held.
+const BEHIND: [string, string, string][] = [
+  ['behind env changing the folder', 'env -C copy bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env changing the folder, spelled long', 'env --chdir=copy bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env clearing the environment', 'env -i bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env clearing the environment, spelled long', 'env --ignore-environment bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env unsetting a name', 'env -u TMPDIR bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env unsetting a name, spelled long', 'env --unset=TMPDIR bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env splitting a string into the run', "env -S 'bash tools/check-mods.sh src/'", behindIt('env')],
+  ['behind env searching other folders for bash', 'env -P /tmp/bin bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind env with any other option', 'env -0 bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind a bare env', 'env bash tools/check-mods.sh src/', behindIt('env')],
+  ['behind sudo', 'sudo bash tools/check-mods.sh src/', behindIt('sudo')],
+  ['behind nohup', 'nohup bash tools/check-mods.sh src/', behindIt('nohup')],
+  ['behind nice and timeout', 'nice -n 5 timeout 600 bash tools/check-mods.sh src/', behindIt('nice, timeout')],
+  ['behind exec', 'exec bash tools/check-mods.sh src/', behindIt('exec')],
+  ['behind command', 'command bash tools/check-mods.sh src/', behindIt('command')],
+  ['behind time', 'time bash tools/check-mods.sh src/', behindIt('time')],
+  ['behind xargs', 'xargs bash tools/check-mods.sh src/ < /dev/null', behindIt('xargs')],
+  ['behind rtk', 'rtk bash tools/check-mods.sh src/', behindIt('rtk')],
+  ["in a shell's own script", "bash -c 'bash tools/check-mods.sh src/'", behindIt('bash')],
+  ["in a login shell's script", "zsh -lc 'bash tools/check-mods.sh src/'", behindIt('zsh')],
+  ['in a script a shell reads from a heredoc', "bash <<'EOF'\nbash tools/check-mods.sh src/\nEOF", behindIt('bash')],
+  ['after a change of folder run behind sudo, which changes no folder', 'sudo cd ./src && bash ../tools/check-mods.sh lib', 'the change of folder before it is run behind sudo, which can change the folder or the environment it runs in'],
+]
+const NOT_PLAIN_CD = 'the change of folder before it is not a cd to one folder written from /, ./, ../ or ~, so the folder the script runs in cannot be shown'
+const FOLDER: [string, string, string][] = [
+  ['after a change of folder by a bare name, which is looked up along CDPATH', 'cd src && bash ../tools/check-mods.sh lib', NOT_PLAIN_CD],
+  ['after a change of folder with an option', 'cd -P ./src && bash ../tools/check-mods.sh lib', NOT_PLAIN_CD],
+  ['after a change of folder handed two words', 'cd ./src lib && bash ../tools/check-mods.sh lib', NOT_PLAIN_CD],
+  ['after a pushd', 'pushd ./src && bash ../tools/check-mods.sh lib', `pushd ${BESIDE}`],
+]
+
+test('a run behind a runner, in a shell\'s script, or after a change of folder the reader cannot show, is held (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const all = [...BEHIND, ...FOLDER]
+  const held: string[] = []
+  for (const [i, [what, command]] of all.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(all.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(all.map(([, , why]) => ['judged', why]))
+})
+
+test('a change of folder the reader cannot follow leaves the run unplaced, so it is held as any script is (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  for (const [i, command] of ['cd - && bash tools/check-mods.sh src/', 'cd "$WT" && bash tools/check-mods.sh src/', 'cd ./sr* && bash ../tools/check-mods.sh lib'].entries())
+    expect([command, refusal(await bash($ as never, w, command, {}, `b${i + 1}`)).includes('The area check held this Bash command')]).toEqual([command, true])
+  expect(named(w)).toEqual([])
+})
+
+const PLAIN: [string, string][] = [
+  ['from the folder it is in', 'bash tools/check-mods.sh src/'],
+  ['after a change of folder written from the current one', 'cd ./src && bash ../tools/check-mods.sh lib'],
+  ['after a change of folder written from the root', `cd ${APP}/src && bash ../tools/check-mods.sh lib`],
+  ['after a change of folder written from the one above', 'cd ../app/src && bash ../tools/check-mods.sh lib'],
+  ['after two changes of folder', 'cd ./src && cd ./lib && bash ../../tools/check-mods.sh .'],
+  ['with its outcome turned round', '! bash tools/check-mods.sh src/'],
+]
+
+test('the plain run, and one after a change of folder written from a place the shell does not look up, still runs unjudged (#3093)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const ran: string[] = []
+  for (const [i, [what, command]] of PLAIN.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `ran: ${what}` : `${what}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(PLAIN.map(([what]) => `ran: ${what}`))
+  expect(named(w).map(x => x.decision)).toEqual(PLAIN.map(() => 'passed'))
+})
+
+test('a setting the write reader carries on the run holds it though the commands show none (#3093)', async () => {
+  const command = `TMPDIR=src ${RUN}`
+  const bare: NamedFacts['commands'] = async c => (c === command ? [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }] : pipelineIn(c, APP, HOME, { assignments: true }))
+  expect((await read(command, facts({ commands: bare }))).named).toMatchObject([{ why: given('TMPDIR') }])
 })

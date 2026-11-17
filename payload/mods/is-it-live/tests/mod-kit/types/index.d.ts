@@ -188,8 +188,15 @@ export type ModKit = {
    * `writes` reads one (relative and home folders, a variable the command set, a subshell's cd ending
    * with it), or null where that cannot be followed (a variable it did not set, cd -, a popd). A mod
    * asking about what a command acts on in its folder asks this, never the session's folder (L237).
+   *
+   * Given `assignments: true`, a command that only sets a value (`T=x;`, `A=1 B=2`) is given too
+   * (#3093), in its place, as a command whose words are its assignments. It runs nothing, so it is
+   * otherwise left out, and a guard that must know every value a line sets before a script it runs
+   * asks for it. A copy of mod-kit loaded before #3093 takes no such option and leaves them out
+   * without saying so, as it gives no `env` and no `behind`, so a guard relying on any of the three
+   * first asks about a line it knows the answer for (`A=1; B=2 env true`).
    */
-  pipeline: (input: { command: string; cwd?: string; home?: string }) => Promise<ModKitCommand[]>
+  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean }) => Promise<ModKitCommand[]>
   /**
    * Where a python program holds text rather than code (#1171): each comment after its `#`, and
    * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
@@ -375,6 +382,17 @@ export type ModKitCommand = {
    * in it, and a command that only sets variables (`F=x;`) gives none to the commands after it.
    */
   env?: string[]
+  /**
+   * What the command is run behind (#3093), by name and in order: each word the reader looked past
+   * because it only runs the command after it (`env -C copy bash s.sh` is `['env']`, `sudo nice
+   * make` is `['sudo', 'nice']`), the shell whose script it stands in (`bash -c 'make'` is
+   * `['bash']`), and find for what its -exec runs, after what that shell or find is itself behind;
+   * absent for a command typed as it runs. Each can change the folder or the environment the
+   * command runs in with no setting written (`env -C`, `env -i`, `env -u`, sudo, a login shell),
+   * and the options that do it are not given, so a guard that knows a script only by its plain run
+   * takes a command behind anything as not that run.
+   */
+  behind?: string[]
   pipedFrom?: string[]
   heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   xargs?: true

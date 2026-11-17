@@ -6288,7 +6288,14 @@ every guard holds or refuses it rather than judging its words alone), and `env` 
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
 it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a
 shell's script, also given on each script run the write reader lists in `runs`, so a guard can see
-what a script reads from its environment, of which files a command
+what a script reads from its environment, and `behind` (#3093), what a command is run behind, by
+name: each runner the reader looked past (`env -C copy bash s.sh` is `env`, `sudo nice make` is
+`sudo` and `nice`), the shell whose script it stands in (`bash -c 'make'` is `bash`) and find for
+what its -exec runs, since each can change the folder or the environment with no setting written
+and the options that do it are not given, and with `assignments: true` each command that only sets
+a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
+on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
+loaded before #3093 answers with none of them and says nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -8173,11 +8180,36 @@ only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a
 danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
 writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
 the checkout is a clone of that repository, it is handed one folder that is on the disk, the
-command sets no value (it holds no equals sign, and it runs the script once with nothing else but
+command gives it no setting (it runs the script once with nothing else but
 a `cd` before it and readers its output is piped into, such as `2>&1 | tail -n 40`,
 since the script takes the programs it runs and
 where it keeps its copies and logs from the environment), and neither the script nor a library it
 sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
+Until #3093 any equals sign in the command held the run, because mod-kit's reader dropped a setting
+written in front of a command, so a reader's own option did too (`| tail --lines=40`). Since #3093
+(a loosening, signed off by Dan, 2026-11-16) the reader carries the settings and an equals sign
+holds the run only where it may set a value for the script: a setting on the run itself, whatever
+its name (`TMPDIR=x bash tools/check-mods.sh ...`, `env CLAUDE_BIN=x bash ...`, `BASH_ENV=`,
+`PATH=`, and `NODE_OPTIONS=`, since the programs the script runs are handed the whole
+environment), one on the `cd` before it, a command that only sets a value (`TMPDIR=x;`) anywhere in
+the command, and an equals sign in the words of the run or of the `cd`, or in a heredoc fed to
+either, where the shell sets a value as it reads `${NAME:=value}` or `$((NAME=1))`. One in a
+reader the output is piped into (an option, a pattern, a setting of the reader's own) or in a
+comment no longer holds it. The log names a setting by its name, never its value.
+The same change closes a gap that was on main since #3022 (a tightening): the reader looked past a
+runner and said nothing, so `env -C copy bash tools/check-mods.sh ...`, which runs the copy under
+`copy/`, and `env -i`, `env -u NAME` and `sudo`, which change the environment with no equals sign,
+each read as the plain run. The reader now says what a command is run behind, and a run behind
+anything is held: `env` with or without an option, `sudo`, `nohup`, `nice`, `timeout`, `time`,
+`exec`, `command`, `xargs`, `rtk`, and a shell's own script (`bash -c '...'`, `zsh -lc '...'`, a
+script a shell reads from a heredoc). The `cd` before the run is let through only as `cd` and one
+folder written from `/`, `./`, `../` or `~`, holding nothing the shell expands or matches, behind
+no runner. A bare name is held (`cd payload && bash ../tools/check-mods.sh mods`, which #3022 let
+through), since bash looks it up along `CDPATH` first; write `cd ./payload`. So is `cd` with an
+option or a second word, and `pushd`.
+A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
+asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
+lacks the setting, the runner or the command that only sets a value, no run is let through.
 Anything else is judged as before: a script of that name in another repository or elsewhere in the
 checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
 shell, the file its output is redirected into, and the script chained with any other command, in a

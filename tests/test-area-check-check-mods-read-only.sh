@@ -17,9 +17,12 @@
 #     file, to add a new file, or to plant an ignored one is caught.
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git, lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that sets no value and runs the script once, with nothing but a change of folder
+#     command that gives it no setting and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts
-#     as the checkout left the default branch with them.
+#     as the checkout left the default branch with them. Since #3093 an equals sign holds the run
+#     only where it may set a value for the script, so one in a reader of its output does not, and
+#     a run behind a runner (env, sudo, timeout, a shell's own script) or after a change of folder
+#     that is not one folder written from /, ./, ../ or ~ is judged.
 #     Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 #     with the run is still judged.
 # What it cannot prove, said so it is never claimed (L460): what the real claude command, the real
@@ -303,7 +306,8 @@ const { shellTargets } = await import(rulesPath)
 const HOME = '/Users/dan'
 const git = (...args) => spawnSync('git', ['-C', repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { encoding: 'utf8' })
 const facts = (github, cwd) => ({
-  commands: async command => pipelineIn(command, cwd, HOME),
+  // Asked as the area check asks mod-kit: with the commands that only set a value (#3093).
+  commands: async command => pipelineIn(command, cwd, HOME, { assignments: true }),
   checkout: async path => {
     const r = spawnSync('git', ['-C', dirname(path), 'rev-parse', '--show-toplevel'], { encoding: 'utf8' })
     return r.status === 0 ? { root: r.stdout.trim(), github, defaultBranch: 'main' } : { unread: 'it is in no checkout' }
@@ -332,7 +336,7 @@ const RUN = 'bash tools/check-mods.sh payload/mods'
 await through('the run from the root of the checkout is let through, judging nothing', RUN)
 await through('run directly, by its path from the root', './tools/check-mods.sh payload/mods')
 await through('by its whole path, its output piped to a reader', `bash ${repo}/tools/check-mods.sh ${MODS} 2>&1 | tail -n 40`)
-await through('from a folder inside the checkout', 'cd payload && bash ../tools/check-mods.sh mods')
+await through('from a folder inside the checkout', 'cd ./payload && bash ../tools/check-mods.sh mods')
 
 await judged('the same path in a clone of another repository is judged', RUN, [MODS], 'never danwright32/claude-config', 'someone/else')
 await judged('in a checkout of no GitHub repository it is judged', RUN, [MODS], 'no GitHub repository', null)
@@ -341,14 +345,42 @@ copyFileSync(`${repo}/tools/check-mods.sh`, `${repo}/copy/tools/check-mods.sh`)
 await judged('a copy elsewhere in the checkout is judged', 'bash copy/tools/check-mods.sh payload/mods', [MODS], 'not tools/check-mods.sh at the root')
 await judged('a script of that name in no checkout is judged', 'bash /nowhere/tools/check-mods.sh payload/mods', [MODS], 'its checkout cannot be read')
 await judged('handed two folders, both are judged', 'bash tools/check-mods.sh payload/mods payload/hooks', [MODS, `${repo}/payload/hooks`], 'more than the one folder')
-await judged('with a value set in front of it, it is judged', 'TMPDIR=payload/mods bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
-await judged('with a value exported before it, it is judged', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh payload/mods', [MODS], 'sets a value')
 // A value set with no equals sign, by a command that runs first: only a change of folder may.
 const BEFORE = 'runs in the same command'
+// #3093: a setting the script, its shell or the programs it runs may read holds the run wherever the
+// command gives it, and the reason names it, never its value.
+await judged('with a value set in front of it, it is judged', 'TMPDIR=payload/mods bash tools/check-mods.sh payload/mods', [MODS], 'it is run with TMPDIR set')
+await judged('with a value given to it by env, it is judged', 'env CLAUDE_BIN=/tmp/x bash tools/check-mods.sh payload/mods', [MODS], 'it is run with CLAUDE_BIN set')
+await judged("with the shell's startup file named, it is judged", 'BASH_ENV=./env.sh bash tools/check-mods.sh payload/mods', [MODS], 'it is run with BASH_ENV set')
+await judged('with a name only the programs it runs may read, it is judged', 'NODE_OPTIONS=--require=/tmp/x.js bash tools/check-mods.sh payload/mods', [MODS], 'it is run with NODE_OPTIONS set')
+await judged('with a value set in front of the change of folder before it, it is judged', 'TMPDIR=mods cd ./payload && bash ../tools/check-mods.sh mods', [MODS], 'the change of folder before it is run with TMPDIR set')
+await judged('after a value set on its own, it is judged', 'TMPDIR=payload/mods; bash tools/check-mods.sh payload/mods', [MODS], 'the command sets TMPDIR on its own')
+await judged('after a value set on its own inside braces, it is judged', '{ PATH=/tmp/bin; bash tools/check-mods.sh payload/mods; }', [MODS], 'the command sets PATH on its own')
+await judged('with a value exported before it, it is judged', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh payload/mods', [MODS], `export ${BEFORE}`)
+await judged('chained after a command holding an equals sign, it is judged', 'git log --format=%s && bash tools/check-mods.sh payload/mods', [MODS], `git ${BEFORE}`)
+await judged('handed its folder as the value of an option, it is judged', 'bash tools/check-mods.sh --mods=payload/mods', [MODS], 'holds an equals sign in its words')
+await through('an option written with an equals sign on a reader of its output is let through', 'bash tools/check-mods.sh payload/mods 2>&1 | tail --lines=40')
+await through('a pattern holding an equals sign, and a setting, on readers of its output are let through', 'cd ./payload && bash ../tools/check-mods.sh mods 2>&1 | grep -v "skip=" | LC_ALL=C sort')
+// #3093: a run behind a runner the reader looks past, or in a shell's own script, is judged whatever
+// the runner is. `env -C copy` runs the copy under copy/, and `env -i`, `env -u` and sudo change the
+// environment with no equals sign written. On main since #3022 each of these read as the plain run.
+const BEHIND = 'which can change the folder or the environment it runs in'
+await judged('behind env changing the folder, it is judged', 'env -C copy bash tools/check-mods.sh payload/mods', [MODS], `it is run behind env, ${BEHIND}`)
+await judged('behind env clearing the environment, it is judged', 'env -i bash tools/check-mods.sh payload/mods', [MODS], `it is run behind env, ${BEHIND}`)
+await judged('behind env unsetting a name, it is judged', 'env -u TMPDIR bash tools/check-mods.sh payload/mods', [MODS], `it is run behind env, ${BEHIND}`)
+await judged('behind sudo, it is judged', 'sudo bash tools/check-mods.sh payload/mods', [MODS], `it is run behind sudo, ${BEHIND}`)
+await judged('behind nice and timeout, it is judged', 'nice -n 5 timeout 600 bash tools/check-mods.sh payload/mods', [MODS], `it is run behind nice, timeout, ${BEHIND}`)
+await judged("in a shell's own script, it is judged", "bash -c 'bash tools/check-mods.sh payload/mods'", [MODS], `it is run behind bash, ${BEHIND}`)
+// A change of folder before it is let through only where the folder the shell goes to can be shown:
+// one folder written from /, ./, ../ or ~. A bare name is looked up along CDPATH first.
+const NOT_PLAIN_CD = 'the change of folder before it is not a cd to one folder written from /, ./, ../ or ~'
+await judged('after a change of folder by a bare name, it is judged', 'cd payload && bash ../tools/check-mods.sh mods', [MODS], NOT_PLAIN_CD)
+await judged('after a change of folder with an option, it is judged', 'cd -P ./payload && bash ../tools/check-mods.sh mods', [MODS], NOT_PLAIN_CD)
+await through('after a change of folder written from the root, it is let through', `cd ${repo}/payload && bash ../tools/check-mods.sh mods`)
 // Written after it, a command still runs before it the second time round a loop, or once a function is called.
 await judged('in a loop that reads and exports a value after it, it is judged', 'for i in 1 2; do bash tools/check-mods.sh payload/mods; read TMPDIR <<< payload/mods; export TMPDIR; done', [MODS], BEFORE)
 await judged('in a function called after a value is read and exported, it is judged', 'f() { bash tools/check-mods.sh payload/mods; }; read TMPDIR <<< payload/mods; export TMPDIR; f', [MODS], BEFORE)
-await through('its output piped through two readers is let through', 'cd payload && bash ../tools/check-mods.sh mods 2>&1 | grep -v ok | tail -n 40')
+await through('its output piped through two readers is let through', 'cd ./payload && bash ../tools/check-mods.sh mods 2>&1 | grep -v ok | tail -n 40')
 await judged('after a value read and exported, it is judged', 'read TMPDIR <<< payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('after a value printed into a variable and exported, it is judged', 'printf -v TMPDIR %s payload/mods; export TMPDIR; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
 await judged('after a sourced file, it is judged', '. ./env.sh; bash tools/check-mods.sh payload/mods', [MODS], BEFORE)
@@ -390,7 +422,7 @@ await through('every library put back, the run is let through again', RUN)
 git('update-ref', '-d', 'refs/remotes/origin/main')
 await judged('with no origin/main to compare with, it is judged', RUN, [MODS], 'git could not compare its text')
 JS
-EXPECTED=35
+EXPECTED=54
 ruled="$(node --experimental-strip-types --no-warnings "$TMP/rule.mjs" "$NAMED" "$ROOT/payload/mods/mod-kit/hooks/writes.ts" "$ROOT/payload/mods/area-check/hooks/rules.ts" "$REPO" 2>&1)" || {
   check "the rule runs on the real reader" "$ruled"
   finish
