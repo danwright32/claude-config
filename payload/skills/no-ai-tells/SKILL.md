@@ -59,6 +59,7 @@ For every sentence, ask:
 - Does it address the reader with "let's explore" or "you will notice"?
 - Does it vary synonyms for a key term for no reason (elegant variation)?
 - Does the opening recap the writer's own work (what was checked, what matched, what passed)? See "A reply that reports checking or work" below.
+- Is the draft a reply in a thread? Then run the four steps of "A reply in a thread" below, after these questions.
 - Does it match any other sign the page lists?
 
 If yes to any of these, it is a finding.
@@ -81,6 +82,31 @@ Before: "I checked all five against the staging records and they match your note
 After: "Thanks, all five check out in staging, and so does the fix."
 
 In the list of changes after the draft, name this one "recap of the writer's own work".
+
+When the reply asks nothing, the verdict sentence is the whole opening, and every sentence after it is held to step 1 below.
+
+---
+
+## A reply in a thread
+
+A model writes for a reader who shares no context. The reader of a thread reply wrote the thread, or has read it. The questions above go sentence by sentence, and a sentence that tells the reader what they already know reads fine alone, so it passes them.
+
+These steps need the thread the draft answers. When this session has not read it, read the thread first. Then run the four steps in order.
+
+1. **Cut what the thread already gave the reader.** Each sentence gives the reader something they do not have from the thread. A sentence that tells back what the reader wrote, restates what was already agreed, or walks through how the writer reached a conclusion is cut, wherever it sits in the message. Keep the reasoning that would change whether the reader agrees or what they do: usually one fact they lack, and any name or link they need to act.
+2. **Shape the first line and each ask.** The first line stands alone, because it is all a notification shows: it holds the verdict or the ask, never only a greeting or a thanks. Each numbered item opens with what is asked, as a question or an instruction, and its reason follows in one or two sentences.
+3. **Match the writer's earlier messages.** Read the messages in the thread from the person this draft will be sent as. When there are two or more, they decide what the sign list and these steps leave open: how a message opens, how a request is worded, how long sentences run, whether asks are numbered, and the words used for the things under discussion. A sign on the list is still a finding when their earlier messages show it too, since a session may have drafted those. A mention of the person the draft addresses stays where the draft has it.
+4. **Put back any fact an ask needs.** Compare the result with the draft as it came in, and list every fact, name, number and date the cuts removed. A fact goes back when an ask in the message cannot be acted on without it, or points at it ("those two", "that case"). It goes back beside that ask, in a clause, never as a recap. The rest stay out. In the list of changes after the draft, name each fact put back and each left out, so the session and Dan can see what the message no longer says.
+
+Before, one item of a reply to someone who had posted their test results:
+
+"2. Archive flag. You mentioned the archive job keeps the flag on rows it moves, and in your run row 4 kept it as expected. I looked at the job's code and the flag is copied in `moveRow`. One thing I noticed is that a row moved twice loses it. Could you check that case?"
+
+After:
+
+"2. Could you check a row that is moved twice? `moveRow` copies the flag on the first move only."
+
+Steps 1 and 4 are adapted from the blader/humanizer skill (MIT licence): its section on re-explaining what the reader knows, and its check that a rewrite dropped no fact. Step 2 follows the Slack plugin's messaging skill and "Writing for Busy Readers" (Rogers and Lasky-Fink), whose last principle is to make responding easy.
 
 ---
 
