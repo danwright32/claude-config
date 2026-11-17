@@ -58,9 +58,29 @@ For every sentence, ask:
 - Does it hold an em dash or en dash at all? Dan's writing rules allow none, so each one is a finding.
 - Does it address the reader with "let's explore" or "you will notice"?
 - Does it vary synonyms for a key term for no reason (elegant variation)?
+- Does the opening recap the writer's own work (what was checked, what matched, what passed)? See "A reply that reports checking or work" below.
 - Does it match any other sign the page lists?
 
 If yes to any of these, it is a finding.
+
+---
+
+## A reply that reports checking or work
+
+The Wikipedia list is about articles, so it has no sign for a reply that recaps the writer's own work. Its nearest entries are the comment signs (claims of effort, "carefully reviewed") and the edit summary signs (canned assurances, and procedural statements such as "ensured" and "verified"). A draft can pass every sign on the page and still open like a machine's status report.
+
+When the draft answers someone after the writer checked, reviewed, tested or built something, its opening is two things:
+
+1. The verdict, in one sentence of fifteen words or fewer, in the words the reader would use: "Thanks, all five check out in staging, and so does the fix."
+2. The first thing asked of the reader: what they have to do, answer or decide.
+
+Everything before the first thing asked of the reader, other than that one verdict sentence, is the recap. It is a finding, and it is cut from the message, never moved further down. The recap is: the list of what was checked, how it was checked, what matched, pass counts, deploy and run times, the names of the tests that cover a case, and what the reader wrote, told back to them. The reader did the work being reported on, or asked for it, and wants to know whether it is right and what is left.
+
+Before: "I checked all five against the staging records and they match your notes: the totals, the flags, the archived rows and the export. The fix is in the build deployed at 10:21, and the test suite passes on it (69 of 69). Two cases weren't in your run, but `archive_keepsFlag` and `export_skipsEmpty` cover them, which is enough for me."
+
+After: "Thanks, all five check out in staging, and so does the fix."
+
+In the list of changes after the draft, name this one "recap of the writer's own work".
 
 ---
 
