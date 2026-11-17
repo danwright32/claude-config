@@ -558,7 +558,7 @@ def written_files(text):
         toks = _sw.shell_tokens(text)
     except Exception:
         return None
-    return [toks[k + 1] for k in range(len(toks) - 1) if re.fullmatch(r"[0-9&]*>[>|]?", toks[k])]
+    return [toks[k + 1] for k in range(len(toks) - 1) if re.fullmatch(r"[0-9&]*>[>|&]?", toks[k])]
 
 def printed_as_text(cmd):
     """cmd with the single quoted arguments of each plain printf or echo blanked, line breaks kept,
