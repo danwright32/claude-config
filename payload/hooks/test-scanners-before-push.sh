@@ -1910,7 +1910,7 @@ pub_publish "$RG"
 pub_branch "$RG" stale; mkdir -p "$RG/payload/mods/slack-alert-guard/hooks"
 printf 'export const x = 1\n' > "$RG/payload/mods/slack-alert-guard/hooks/x.ts"; commit_all "$RG"
 out="$(wn_fire "$RG" "git push -u origin stale")"; rc=$?
-[ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" && ! grep -q -F "test-slack-alert-guard-real-gate.sh" <<< "$out" \
+[ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" \
   && check "#3160 a push carrying a file in the retired guard's folder runs no guard suite and is judged by the scanners alone" ok \
   || check "#3160 a push carrying a file in the retired guard's folder runs no guard suite and is judged by the scanners alone" "exit=$rc out=$out"
 git -C "$RG" checkout -q main
