@@ -186,6 +186,55 @@ R=$(make_repo spacerm $'cleanup() {\n  rm -rf "$HOME/.claude/state"\n}' scripts/
 out=$(run_hook "git push" "$R")
 assert_contains "control: the same line indented with spaces fires" 'destructive data operation' "$out"
 
+# --- 5d. A fixture a TEST hands to the code under test is data, not a removal (claude-config#3071)
+# This suite's own fixture, rm -rf /var/data/customers inside a printf handed to make_repo, raised
+# L5, L7 and L9 on every push touching it. In a shell test file the trigger now reads the line as
+# code: a quoted argument handed to an ordinary command, and a heredoc body handed to one (cat
+# writing a script out), are data. Each control runs the same text, and fires.
+# Written to a file first, never $(cat <<...): the bash the Mac ships rewrites a dollar quote inside a
+# heredoc held in a command substitution, so the fixture would not arrive as written.
+cat > "$WORK/fixtures.sh" <<'FIX'
+R=$(make_repo x "$(printf '# note\nrm -rf /var/data/customers\n')" scripts/clean.sh)
+run_gate 'rm -rf /var/data/customers'
+fix=$'trap \'rm -rf "$W"\' EXIT\nrm -rf /var/data/customers\nDROP TABLE users;'
+cat > "$W/clean.sh" <<'EOF'
+rm -rf /var/data/customers
+EOF
+cat > "$W/drop.sql" <<EOF
+DROP TABLE users;
+EOF
+FIX
+FIXTURES=$(cat "$WORK/fixtures.sh")
+R=$(make_repo fixturerm "$FIXTURES" tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_absent "a removal held only in a test's fixtures is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixturerun $'cd "$W"\nrm -rf /var/data/customers' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same removal run as a command in the test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturebash $'bash -c \'rm -rf /var/data/customers\'' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the removal handed to bash -c still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureheredocbash $'bash <<\'EOF\'\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc handed to bash still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureheredocpipe $'cat <<EOF | sh\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc piped into sh still fires" 'destructive data operation' "$out"
+# The & of a redirection separates no command, so 2>&1 before the heredoc still leaves bash as
+# the command it is handed to (found by the lessons review of this change).
+R=$(make_repo fixtureheredocredirect $'bash -s 2>&1 <<\'EOF\'\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc handed to bash past a 2>&1 still fires" 'destructive data operation' "$out"
+# Only ADDED lines reach the trigger, so a heredoc whose closing line is unchanged never closes in
+# them. Measured on claude-config #2334: a test's cleanup loop a hunk below such a heredoc read as
+# its body and went unjudged. A heredoc never seen to close is no evidence, and what follows fires.
+R=$(make_repo fixtureunclosed $'mknounmod "$M" helper <<\'TS\'\nconst x = 1\n  for m in a b; do rm -rf "$DATA/$m"; done' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal after a heredoc never seen to close still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturesource $'run_gate \'rm -rf /var/data/customers\'' scripts/gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same quoted argument outside a test file still fires" 'destructive data operation' "$out"
+
 # --- 6. Silence where there is nothing to say --------------------------------
 R=$(make_repo docs 'Some prose about the feature.' docs/notes.md)
 out=$(run_hook "git push" "$R")
