@@ -1329,7 +1329,11 @@ L313
 </table>
 
 The background work, fixed wait and failure triggers read the added lines as code, with string
-contents and comments removed, so a word in a fixture argument or a comment does not fire. A file
+contents and comments removed, so a word in a fixture argument or a comment does not fire. The
+destructive operation trigger reads every line of source as it stands, and in a shell, Python,
+JavaScript or TypeScript test file reads a string as data unless the line hands it to something
+that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a Python or
+TypeScript test file 51 times, every one a string or a comment). A file
 the repository marks generated in `.gitattributes` is still scanned but its matches raise no
 lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
 never read, because they quote the very words the triggers look for. The same finding in the same
@@ -3807,7 +3811,13 @@ source, which the gate does not follow. None that refused now passes. A Python s
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
-`sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
+`sys.modules`, `sys.path`, a module reached through another, a file opened to write). Since
+claude-config#3085 `os` may be imported too, read use by use: the names that read a file, a path or
+the environment (`os.getcwd`, `os.listdir`, `os.stat`, `os.walk`, `os.environ`, `os.path`,
+`OS_READS`) pass, and any other use (`os.system`, `os.remove`, `os` handed on or renamed) refuses
+as before. Before it, any script importing `os` and handed the global rules file, which names
+`chat.postMessage` in its own Slack rule, was refused whatever it did; Dan chose on 2026-11-16 to
+trust a program the gate reads end to end, and nothing it cannot follow. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
@@ -3921,8 +3931,12 @@ Since claude-config#3069 that holds whatever is on disk: a folder or a file of t
 the directory used to make the word a path, and a path holding no `/` is read as nothing, so beside a
 folder named `vitest` the test file `npx vitest run posts.test.ts` names was never opened. Where a
 file of that name is on disk, or an earlier command wrote one, the word is read as that file as well,
-and the call is refused where either reading refuses. A word that can only be a path (`./x.js`,
-`dir/x.js`) is read as the file alone. `claude mcp add` and the other `claude mcp`
+and the call is refused where either reading refuses. A word that is no package spec (`./x.js`,
+`dir/x.js`) is read as the file alone only where it names a script on disk or one an earlier command
+writes. Since claude-config#3083 any other such word is read as a package run as well: a local
+package folder (`npx ./vitest run posts.test.ts`, which #3069 read as a path naming no script, so
+the test file was never opened), the folder the launcher runs in (`npx .`), a path naming nothing
+yet, an archive (`./pkg.tgz`) and a repository shorthand (`owner/repo`). `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
