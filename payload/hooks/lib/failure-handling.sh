@@ -84,14 +84,26 @@ fh_lang() {   # $1 = path
 # travels through awk -v unchanged.
 FH_RUNNER_WORDS='awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch'
 
-# The same question for Python, JavaScript and TypeScript, asked of a line's CODE text (strings and
-# comments gone): a call that RUNS a string it is handed, as a command (child_process, subprocess,
-# os.system) or as SQL (a client's execute or query, a tagged sql template). The lessons advisory
-# reads a test file's string as code only on a line holding one (claude-config#3083). Bare run( and
-# call( are left out on purpose: they are what a suite names its own helpers, and of the 150 added
-# lines measured for #3083 on 2026-11-16 they were the commonest call a fixture string was handed to. No backslash
-# in it, so it travels through the environment into awk unchanged.
-FH_RUNNER_CALLS='(^|[^A-Za-z0-9_$])(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|check_call|check_output|getoutput|getstatusoutput)[[:space:]]*[(]|subprocess[.](run|call)[[:space:]]*[(]|[.](execute|executemany|executescript|query|unsafe|raw|rpc)[[:space:]]*[(]|(^|[^A-Za-z0-9_$])(sql|SQL)[[:space:]]*[`]'
+# The same question for Python, JavaScript, TypeScript and Swift, asked of a line's CODE text (strings and
+# comments gone): a call that RUNS a string it is handed. As a command: child_process's exec and
+# spawn, subprocess, os.system, popen, and a Swift Process given its arguments or started with
+# Process.run. As SQL: a client method called execute, executemany, executescript, query, prepare
+# (better-sqlite3's db.prepare(...).run()), unsafe, raw, rpc or exec_driver_sql (SQLAlchemy); sql on
+# a receiver whose name starts lower case, or on a call's result (pyspark's spark.sql, DuckDB's
+# con.sql, getOrCreate().sql), never on a type or an implicit member, since Overture's Swift tests
+# throw Failure.sql("open failed"); Prisma's $executeRaw, $executeRawUnsafe, $queryRaw and
+# $queryRawUnsafe, called or used as a tagged template; a tagged sql template; and SQLite's C calls
+# sqlite3_exec and sqlite3_prepare. The lessons advisory reads a test file's string as code only on
+# a line holding one (claude-config#3083; Swift's, #3104; prepare, the lessons review of #3104;
+# Prisma, sql and exec_driver_sql, #3122). Prisma's dollar sign is written [$], a literal in a
+# bracket, and a dot must come before it, so a name like fake$executeRaw( is not Prisma. Prisma's
+# $queryRaw is here beside $executeRaw because a DELETE ... RETURNING is run through it. Bare run(
+# and call( are left out on purpose: they are what a suite names its own helpers, and of the 150
+# added lines measured for #3083 on 2026-11-16 they were the commonest call a fixture string was
+# handed to. No backslash in it, so it travels through the environment into awk unchanged. The
+# arguments match is an assignment only: a == or === comparison is a test asserting, and runs
+# nothing.
+FH_RUNNER_CALLS='(^|[^A-Za-z0-9_$])(exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|Popen|check_call|check_output|getoutput|getstatusoutput)[[:space:]]*[(]|subprocess[.](run|call)[[:space:]]*[(]|[.](execute|executemany|executescript|query|prepare|unsafe|raw|rpc|exec_driver_sql)[[:space:]]*[(]|(^|[^A-Za-z0-9_$])[a-z_][A-Za-z0-9_]*[.]sql[[:space:]]*[(]|[)][.]sql[[:space:]]*[(]|[.][$](executeRaw|queryRaw)(Unsafe)?[[:space:]]*[(`]|(^|[^A-Za-z0-9_$])(sql|SQL)[[:space:]]*[`]|sqlite3_(exec|prepare[_a-z0-9]*)[[:space:]]*[(]|Process[.](run|launchedProcess)[[:space:]]*[(]|[.]arguments[[:space:]]*=([^=]|$)'
 
 # The awk that does the work. `want` is code (print the normalized lines), catch, retry or any (exit
 # 0 when the construct is present, 1 when not). One pass, so a large pushed file costs one read.
