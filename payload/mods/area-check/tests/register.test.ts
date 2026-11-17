@@ -271,20 +271,20 @@ test("Dan's answer stands for a week for the same issues, so a later first edit 
   expect(w.cards).toEqual([])
 })
 
-test("Dan's answer kept under the key questions had before #2246 still stands for its week", KIT, async ($, on) => {
+test("an answer kept under the key questions had before #2246 is no longer read, so the edit is held again (#2256)", KIT, async ($, on) => {
   const w = world($, on)
   w.store[OLD_QKEY] = { state: 'answered', answer: 'Proceed anyway', at: T0 - 1000, issues: [41] }
-  expect((await edit($ as never, w, SLACK)).result).toBe('done')
-  expect(w.judged()[0]).toMatchObject({ decision: 'held', applied: 'Proceed anyway' })
-  expect(w.cards).toEqual([])
+  expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
+  expect(w.judged()[0]).toMatchObject({ decision: 'held' })
+  expect(w.judged()[0]).not.toHaveProperty('applied')
 })
 
-test('a question waiting under the key before #2246 is cleared once its held call is decided', KIT, async ($, on) => {
+test('a question waiting under the key before #2246 is left alone when its held call is decided (#2256)', KIT, async ($, on) => {
   const w = world($, on)
   expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
   w.store[OLD_QKEY] = { state: 'pending', at: T0, issues: [41], session: 's1', call: 'c1', agent: null }
   await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })
-  expect(w.store[OLD_QKEY]).toBeUndefined()
+  expect(w.store[OLD_QKEY]).toMatchObject({ state: 'pending', call: 'c1' })
 })
 
 test("Dan's answer past its week, or for another set of issues, asks again", KIT, async ($, on) => {

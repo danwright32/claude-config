@@ -10,7 +10,9 @@
 # that evaluates its argument. And lib/js-mocks.py (#2359): a test file's import of a module the same
 # file replaces with vi.mock or jest.mock and a factory is not followed. And lib/data-names.py again
 # (#3050): the webhook's variable name where a JavaScript or TypeScript file only declares it, told
-# from where it is read. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# from where it is read. And lib/program-runs.py's package_run beside a folder or a file of the
+# package's name (#3069), kept here beside the other `npx vitest` cases. Every other judgement of
+# the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -1060,6 +1062,95 @@ refused "#3020 and behind a runner"
 run_e3 "$(printf 'true\r\n\tnohup bin/post')"
 refused "#3020 and after a return, a line break and a tab"
 
+echo "slack drafts only: a launcher's package run is read as one beside a folder or a file of the same name (claude-config#3069)"
+
+# Found by the #3050 builder on 2026-11-16: package_run (lib/program-runs.py) answered "not a package"
+# for a spec naming anything on disk, so beside a folder named vitest `npx vitest run posts.test.ts`
+# was read as a path. A path holding no / is read as nothing at all (a bare name is no file the shell
+# or a launcher runs from the directory), so the test file the package was handed was never opened,
+# and an endpoint in its arguments was not seen either. No launcher reads such a word as a file: npm
+# takes a word for a path only where it starts with . / or ~, or holds a / outside a scope. So a
+# package spec is always read as the package, and as the file of that name as well where there is
+# one, the call refused where either reading refuses. A word that can only be a path (./x) is read as
+# the file alone. Measured through this wrapper on main at 2963c2b: every command in the first list
+# below passed but `npx @acme/tool --method chat.postMessage`, which was refused as a path run with an
+# endpoint in its arguments, and every command in the list with no folder was refused.
+PB="$T/p3069/beside"; PN="$T/p3069/alone"
+mkdir -p "$PB/vitest" "$PB/tool" "$PB/@acme/tool" "$PN"
+for side in "$PB" "$PN"; do
+  printf '%s\n' 'import { it } from "vitest";' 'it("adds", () => {});' > "$side/quiet.test.ts"
+  printf '%s\n' 'import { it } from "vitest";' 'it("posts", () => fetch("https://slack.com/api/chat.postMessage"));' > "$side/posts.test.ts"
+  printf '%s\n' 'import { it } from "vitest";' 'import { post } from "./poster";' 'it("posts", () => post("hi"));' > "$side/imports-poster.test.ts"
+  printf '%s\n' 'export const post = (t: string) => fetch("https://slack.com/api/chat.postMessage", { body: t });' > "$side/poster.ts"
+  printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$side/msg.json"
+  printf '%s\n' '{"text": "hi"}' > "$side/quiet.json"
+done
+: > "$PB/filetool"  # a file of the package's name, as the folders vitest, tool and @acme/tool are
+printf '%s\n' '#!/bin/sh' 'echo quiet' > "$PB/@acme/quietdisk"
+printf '%s\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > "$PB/@acme/ondisk"
+printf '%s\n' '#!/bin/sh' 'echo quiet' > "$PB/runner"
+printf '%s\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > "$PB/poster"
+run_pb() { run_raw "$(payload Bash "$(bash_input "$1")" "$PB")"; }
+run_pn() { run_raw "$(payload Bash "$(bash_input "$1")" "$PN")"; }
+# Beside a folder, or a file, of the package's name: the package is handed a test file naming an
+# endpoint, one importing a module that posts, a data file naming one, or an endpoint itself.
+for runs in "npx vitest run posts.test.ts" "npx vitest run imports-poster.test.ts" "npx -y vitest run posts.test.ts" \
+  "npm exec -- vitest run posts.test.ts" "npm x vitest run posts.test.ts" "pnpm dlx vitest run posts.test.ts" \
+  "yarn dlx vitest run posts.test.ts" "bunx vitest run posts.test.ts" "pnpx vitest run posts.test.ts" \
+  "npx tool msg.json" "npx tool --url https://hooks.slack.com/services/T0/B0/x" "npx @acme/tool msg.json" \
+  "npx @acme/tool --method chat.postMessage" "npx filetool msg.json" "npx @acme/quietdisk msg.json" \
+  "printf '%s\\n' 'quiet' > made && npx made msg.json"; do
+  run_pb "$runs"
+  read_refused "#3069 a package run beside a folder or a file of its name is still read as the package: $runs"
+done
+run_pb "npx vitest run posts.test.ts"
+says "#3069 beside a folder of its name the refusal names the package" "the package vitest, run by npx,"
+says "#3069 beside a folder of its name the refusal names the test file it was handed" "posts.test.ts"
+BESIDE_SAYS="${ERR//"$PB"/}"
+run_pb "npx vitest run imports-poster.test.ts"
+says "#3069 beside a folder of its name a test file's imports are followed to the module that posts" "poster"
+# The folder decides nothing: with none there the same commands are refused, in the same words.
+for runs in "npx vitest run posts.test.ts" "npx vitest run imports-poster.test.ts" "npm exec -- vitest run posts.test.ts" \
+  "npx tool msg.json" "npx tool --url https://hooks.slack.com/services/T0/B0/x" "npx @acme/tool msg.json"; do
+  run_pn "$runs"
+  read_refused "#3069 the same package run with no folder of its name is refused (the control): $runs"
+done
+run_pn "npx vitest run posts.test.ts"
+if [ "${ERR//"$PN"/}" = "$BESIDE_SAYS" ]; then check "#3069 the refusal reads the same with a folder of the package's name and with none" ok
+else check "#3069 the refusal reads the same with a folder of the package's name and with none" "beside: ${BESIDE_SAYS:0:200}, alone: ${ERR:0:200}"; fi
+# And it refuses nothing more than the package reading does: handed nothing naming an endpoint, the
+# run passes on both sides.
+for runs in "npx vitest run quiet.test.ts" "npx vitest --version" "npm exec -- vitest run quiet.test.ts" \
+  "pnpm dlx vitest run quiet.test.ts" "npx tool quiet.json" "npx @acme/tool quiet.json"; do
+  run_pb "$runs"
+  allowed "#3069 a package run beside a folder of its name, handed nothing naming an endpoint, passes: $runs"
+  run_pn "$runs"
+  allowed "#3069 the same package run with no folder of its name passes (the control): $runs"
+done
+run_pb "npx filetool quiet.json"
+allowed "#3069 a package run beside a file of its name, handed nothing naming an endpoint, passes"
+# The file of that name is still read as well, as before #3069: a script on disk that posts, or one
+# this command wrote, is refused as that script even where the package is handed nothing.
+for runs in "npx @acme/ondisk quiet.json" \
+  "printf '%s\\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > @acme/made && npx @acme/made quiet.json"; do
+  run_pb "$runs"
+  read_refused "#3069 a package shaped word naming a script that posts is still read as that script too: $runs"
+done
+run_pb "npx @acme/ondisk quiet.json"
+says "#3069 and the refusal is the script's, in the words it had before" "the script @acme/ondisk runs a command that posts"
+# A word that can only be a path is read as the file alone, where the path reading is the right one:
+# the gate reads the script, so a quiet one handed a data file naming an endpoint passes, which a
+# package (code the gate cannot read) handed the same file does not, and one that posts is refused as
+# the script it is.
+run_pb "npx ./runner msg.json"
+allowed "#3069 a path run through a launcher is read as the script there, not as a package: a quiet script handed a data file"
+run_pb "npx runner msg.json"
+read_refused "#3069 the same word with no ./ is a package, whatever file has its name"
+run_pb "npx ./poster"
+read_refused "#3069 a path naming a script that posts, run through a launcher, is refused as that script"
+case "$ERR" in *"the package"*) check "#3069 a path's refusal does not call the script a package" "stderr: ${ERR:0:300}" ;;
+  *) check "#3069 a path's refusal does not call the script a package" ok ;; esac
+
 echo
 echo "slack drafts only: a file that only declares the webhook's name is not one that posts (claude-config#3050)"
 
@@ -1100,8 +1191,8 @@ allowed "#3050 a test file importing a module that names it only in an interface
 printf '%s\n' 'import { DEFAULTS } from "./env.ts";' 'console.log(DEFAULTS);' > "$MK/d.test.ts"
 run_mk "./node_modules/.bin/vitest run c.test.ts d.test.ts"
 allowed "#3050 and with several test files named in one run"
-# Handed to the runner by a launcher, as the three runs of the issue were. In $D9, which holds no
-# folder named vitest: beside one, the gate reads `npx vitest` as that path and none of the files.
+# Handed to the runner by a launcher, as the three runs of the issue were, in $D9. Since #3069 the
+# gate reads `npx vitest` as the package run even beside a folder named vitest.
 cp "$MK/env.ts" "$MK/hook.ts" "$D9/src/"
 printf '%s\n' 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env";' \
   'const team = { id: "t1", slack_webhook: null };' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));' > "$D9/src/declares.test.ts"

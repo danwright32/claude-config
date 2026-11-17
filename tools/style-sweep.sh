@@ -56,7 +56,9 @@ def why_skipped(path, rel):
         # They have to NAME the characters in order to refuse them. That is the gate working, not
         # a violation of it.
         return "it is the gate that refuses these characters, so it has to name them"
-    if base == "no-ai-tells-detect.py" or rel.startswith("skills/no-ai-tells/"):
+    if base == "no-ai-tells-detect.py":
+        # The no-ai-tells SKILL folder is read since claude-config#3071: its own suite refuses a dash
+        # in it (#3060), so it no longer has to name one. The detector still does.
         return "it detects these characters, so it has to name them"
     if rel.startswith("skills/reel-plan/"):
         # The star is a decision the skill states outright: "it is the ONLY symbol allowed", marking
