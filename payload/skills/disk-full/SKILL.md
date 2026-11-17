@@ -65,6 +65,13 @@ total (memory being held, which step 3 below covers, #2559), and 2 that it could
 is not the same as fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.
 
+The six hours of readings roll on, so on a 3 or 4 the check also keeps a copy of the readings behind
+the warning, one per warning episode, for 14 days (`FREE_SPACE_WARNING_KEEP_DAYS`), and then deletes
+it (#3157). `--report` names the newest one for the volume, under
+`~/.claude/state/free-space-warnings`. A warning from last night can still be checked from it: its
+first lines hold the verdict, the exit code and the settings it was judged by, and each line after
+them is one reading, epoch seconds then free bytes, oldest first.
+
 ### 3. Swap, which no folder size reaches
 
 On 2026-10-26 the disk on Daniels-MacBook-Pro-2 reached 1.1 GB free and the cause was 95 GB of

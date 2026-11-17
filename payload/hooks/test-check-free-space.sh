@@ -359,6 +359,169 @@ done
 check "a fall that lasts after that same spike still fires" \
   "$([ "$PROBE_RC" -eq 4 ] && grep -qi 'per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
+# ---- A WARNING'S READINGS ARE KEPT PAST THE SIX HOUR WINDOW (claude-config#3157) ----
+# The readings file holds only FREE_SPACE_WINDOW_HOURS of history, so by the morning after a warning
+# the readings behind it are gone; the 2026-11-16 night replayed above survived only because a
+# session printed the file into its transcript (L202). So an exit 3 or 4 keeps a copy of the
+# readings in the window, with the verdict line and its exit code, one copy per warning episode,
+# kept FREE_SPACE_WARNING_KEEP_DAYS (Dan's decision on #3157: 14 days, then deleted automatically).
+# Every case names its own state folder, so the copies land beside it (the default when the
+# readings are moved) unless a case names a folder for them.
+kept_copies(){ # kept_copies <folder>: the copies the check named there, one per line
+  ls -1 "$1" 2>/dev/null | grep -E '^free-space-warning-[A-Za-z0-9_]+-[0-9]+-exit[34]\.readings$' || true
+}
+count_copies(){ kept_copies "$1" | grep -c . || true; }
+
+# A warning writes one copy, holding the verdict line, its exit code and the readings.
+S_K1="$TMPROOT/state-keep-one"; mkdir -p "$S_K1"
+probe "$((7 * GB))" "$T0" "$S_K1"; k1_msg="$PROBE_MSG"
+check "a warning keeps one copy of its readings" \
+  "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && echo ok || echo "copies: $(ls -1 "$S_K1/warnings" 2>&1 | tr '\n' ' ')")"
+k1_file="$S_K1/warnings/$(kept_copies "$S_K1/warnings" | head -1)"
+check "the copy is named for the volume, the instant and the exit code" \
+  "$([ "$(kept_copies "$S_K1/warnings")" = "free-space-warning-_fixture-$T0-exit3.readings" ] && echo ok || echo "named: $(kept_copies "$S_K1/warnings")")"
+check "the copy holds the verdict line the warning printed" \
+  "$(grep -qF "$(head -1 <<< "$k1_msg")" "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+check "the copy holds the exit code" \
+  "$(grep -qE '^# exit 3$' "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+check "the copy holds the reading itself" \
+  "$(grep -qxF "$T0 $((7 * GB))" "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+check "the warning still says nothing about the copy when it was kept" \
+  "$(! grep -qi 'copy' <<< "$k1_msg" && echo ok || echo "said: $k1_msg")"
+
+# A continuing warning does not write another: the check runs on every prompt of every session.
+probe "$((7 * GB))" "$((T0 + 60))" "$S_K1"
+probe "$((6 * GB))" "$((T0 + 600))" "$S_K1"
+check "a warning that carries on writes no second copy" \
+  "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' ')")"
+
+# A disk with room ends the episode, and the next warning is a new one.
+probe "$((200 * GB))" "$((T0 + 900))" "$S_K1"
+probe "$((7 * GB))" "$((T0 + 1200))" "$S_K1"
+check "a warning after the disk had room again keeps a copy of its own" \
+  "$([ "$(count_copies "$S_K1/warnings")" = 2 ] && [ -f "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" ] && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' ')")"
+check "the second copy holds every reading still in the window, the one with room included" \
+  "$(grep -qxF "$((T0 + 900)) $((200 * GB))" "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" 2>/dev/null && grep -qxF "$T0 $((7 * GB))" "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" && echo ok || echo "copy: $(cat "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" 2>&1)")"
+
+# A warning that lasts longer than the window keeps a fresh copy once the last one's readings have
+# all left the window, so no reading of a long episode is lost, and never more often than that.
+S_KLONG="$TMPROOT/state-keep-long"; mkdir -p "$S_KLONG"
+_t="$T0"; _i=0
+while [ "$_i" -lt 14 ]; do probe "$((7 * GB))" "$_t" "$S_KLONG"; _t=$((_t + 1800)); _i=$((_i + 1)); done
+# 14 readings half an hour apart span six and a half hours: one copy at T0, one at T0 + 6 hours.
+check "a warning lasting past the window keeps one more copy per window, no more" \
+  "$([ "$(count_copies "$S_KLONG/warnings")" = 2 ] && [ -f "$S_KLONG/warnings/free-space-warning-_fixture-$((T0 + 21600))-exit3.readings" ] && echo ok || echo "copies: $(kept_copies "$S_KLONG/warnings" | tr '\n' ' ')")"
+
+# A disk with room keeps nothing and makes no folder for copies.
+S_KFINE="$TMPROOT/state-keep-fine"; mkdir -p "$S_KFINE"
+probe "$((200 * GB))" "$T0" "$S_KFINE"
+check "a disk with room keeps no copy and makes no folder for them" \
+  "$([ ! -e "$S_KFINE/warnings" ] && echo ok || echo "found: $(ls -1 "$S_KFINE/warnings" 2>&1 | tr '\n' ' ')")"
+
+# The copy replays: its readings, fed back through the check one at a time as the 2026-11-16 night
+# is above, give the same verdict. This is the falling half, exit 4, from that same real night and
+# the fixture's lasting fall after it.
+S_KREP="$TMPROOT/state-keep-replay"; mkdir -p "$S_KREP"
+while read -r _t _b; do probe "$_b" "$_t" "$S_KREP"; done <<< "$SPIKE_NIGHT"
+_t=1794889062; _b=106140241920; _i=0
+while [ "$_i" -lt 18 ]; do _t=$((_t + 300)); _b=$((_b - 3 * GB)); _i=$((_i + 1)); probe "$_b" "$_t" "$S_KREP"; done
+rep_file="$S_KREP/warnings/$(kept_copies "$S_KREP/warnings" | head -1)"
+check "a falling warning keeps a copy too, named for exit 4" \
+  "$(kept_copies "$S_KREP/warnings" | grep -q -- '-exit4\.readings$' && echo ok || echo "copies: $(ls -1 "$S_KREP/warnings" 2>&1 | tr '\n' ' ')")"
+S_KREP2="$TMPROOT/state-keep-replayed"; mkdir -p "$S_KREP2"; rep_rc=""
+while read -r _t _b; do probe "$_b" "$_t" "$S_KREP2"; rep_rc="$PROBE_RC"; done < <(grep -v '^#' "$rep_file" 2>/dev/null)
+check "the copy's readings replayed through the check give the same exit 4" \
+  "$([ "$rep_rc" = 4 ] && echo ok || echo "replayed to exit '${rep_rc:-<no readings>}' from $(cat "$rep_file" 2>&1 | head -5)")"
+rep_size="$(wc -c < "$rep_file" 2>/dev/null | tr -d ' ')"
+check "a copy of a busy night's readings stays small (under 8 KB)" \
+  "$([ -n "$rep_size" ] && [ "$rep_size" -lt 8192 ] && echo ok || echo "size: ${rep_size:-unread} bytes")"
+
+# Copies older than the keep are deleted, younger ones kept, on any run, a disk with room included,
+# so copies do not outlive Dan's 14 days just because no warning came along to sweep them.
+S_KAGE="$TMPROOT/state-keep-age"; mkdir -p "$S_KAGE/warnings"
+old_copy="$S_KAGE/warnings/free-space-warning-_fixture-$((T0 - 15 * 86400))-exit3.readings"
+young_copy="$S_KAGE/warnings/free-space-warning-_fixture-$((T0 - 13 * 86400))-exit4.readings"
+other_vol="$S_KAGE/warnings/free-space-warning-_System_Volumes_Data-$((T0 - 15 * 86400))-exit3.readings"
+printf '# exit 3\n' > "$old_copy"; printf '# exit 4\n' > "$young_copy"; printf '# exit 3\n' > "$other_vol"
+# Files the check never named, old enough that a looser rule would take them. None may go.
+for _f in notes.txt "free-space-warning-_fixture-$((T0 - 20 * 86400))-exit3.readings.bak" \
+          "free-space-warning-_fixture-$((T0 - 20 * 86400))-exit3.txt" \
+          "xfree-space-warning-_fixture-$((T0 - 20 * 86400))-exit3.readings" \
+          "free-space-warning-_fixture-abc-exit3.readings" \
+          "free-space-warning-_fixture-$((T0 - 20 * 86400))-exit5.readings" \
+          "free-space-warning-_fixture-$((T0 - 20 * 86400))-exit3.readings.$$"; do
+  printf 'not the check'"'"'s\n' > "$S_KAGE/warnings/$_f"
+done
+mkdir -p "$S_KAGE/warnings/free-space-warning-_fixture-$((T0 - 20 * 86400))-exit3.readings.d"
+probe "$((200 * GB))" "$T0" "$S_KAGE"
+check "a copy older than 14 days is deleted, on a run where the disk has room" \
+  "$([ ! -e "$old_copy" ] && echo ok || echo "still there: $old_copy")"
+check "a copy older than 14 days is deleted whichever volume it was for" \
+  "$([ ! -e "$other_vol" ] && echo ok || echo "still there: $other_vol")"
+check "a copy younger than 14 days is kept" \
+  "$([ -f "$young_copy" ] && echo ok || echo "deleted: $young_copy")"
+check "no file the check did not name is ever deleted from that folder" \
+  "$([ "$(ls -1 "$S_KAGE/warnings" | grep -vxF "$(basename "$young_copy")" | grep -c .)" = 8 ] && echo ok || echo "left: $(ls -1 "$S_KAGE/warnings" | tr '\n' ' ')")"
+# The sweep is a loop over the folder, so it runs at most once an hour (--report aside): a copy
+# that expires a minute after a sweep is still there a minute later, and gone an hour on.
+late_copy="$S_KAGE/warnings/free-space-warning-_fixture-$((T0 - 14 * 86400 + 30))-exit3.readings"
+printf '# exit 3\n' > "$late_copy"
+probe "$((200 * GB))" "$((T0 + 60))" "$S_KAGE"
+check "the sweep does not run again within the hour" \
+  "$([ -f "$late_copy" ] && echo ok || echo "swept a minute after the last sweep: $late_copy")"
+probe "$((200 * GB))" "$((T0 + 3600))" "$S_KAGE"
+check "and does an hour after the last one, so a copy is gone within an hour of its 14 days" \
+  "$([ ! -e "$late_copy" ] && [ -f "$young_copy" ] && echo ok || echo "left: $(ls -1 "$S_KAGE/warnings" | tr '\n' ' ')")"
+# The keep is a setting, in the script's naming style, and a bad one is refused rather than read as 0.
+FREE_SPACE_WARNING_KEEP_DAYS=7 probe "$((200 * GB))" "$((T0 + 7200))" "$S_KAGE"
+check "FREE_SPACE_WARNING_KEEP_DAYS shortens the keep" \
+  "$([ ! -e "$young_copy" ] && echo ok || echo "a 13 day old copy survived a 7 day keep")"
+FREE_SPACE_WARNING_KEEP_DAYS=abc probe "$((200 * GB))" "$((T0 + 7260))" "$S_KAGE"
+check "a FREE_SPACE_WARNING_KEEP_DAYS that is not a number is refused by name" \
+  "$([ "$PROBE_RC" -eq 2 ] && grep -q 'FREE_SPACE_WARNING_KEEP_DAYS' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# The copy cannot be written (a full disk is exactly when this runs): the warning still prints and
+# keeps its exit code, the failure is said in one line, and nothing else spills out.
+S_KRO="$TMPROOT/state-keep-readonly"; mkdir -p "$S_KRO/warnings"; chmod 555 "$S_KRO/warnings"
+probe "$((7 * GB))" "$T0" "$S_KRO"; ro_msg="$PROBE_MSG"; ro_rc="$PROBE_RC"
+check "a copy that cannot be written leaves the warning's exit code alone" \
+  "$([ "$ro_rc" -eq 3 ] && echo ok || echo "exit $ro_rc")"
+check "a copy that cannot be written leaves the warning itself printed" \
+  "$(grep -q 'under the .* floor' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+check "a copy that cannot be written is said, in exactly one line" \
+  "$([ "$(grep -ci 'could not keep a copy' <<< "$ro_msg")" = 1 ] && echo ok || echo "said: $ro_msg")"
+check "and the shell's own error does not spill into the warning" \
+  "$(! grep -qi 'permission denied\|no such file' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+# Once it can be written again, the same episode keeps its copy: a failed copy is retried.
+chmod 755 "$S_KRO/warnings"
+probe "$((7 * GB))" "$((T0 + 60))" "$S_KRO"
+check "a copy that failed is kept on the next warning once it can be written" \
+  "$([ "$(count_copies "$S_KRO/warnings")" = 1 ] && ! grep -qi 'could not keep a copy' <<< "$PROBE_MSG" && echo ok || echo "copies: $(kept_copies "$S_KRO/warnings" | tr '\n' ' '), said: $PROBE_MSG")"
+# A folder that cannot even be made (a file stands where it would go).
+S_KFILE="$TMPROOT/state-keep-file"; mkdir -p "$S_KFILE"; printf 'x\n' > "$S_KFILE/warnings"
+probe "$((7 * GB))" "$T0" "$S_KFILE"
+check "a folder for copies that cannot be made is said in one line, with the warning intact" \
+  "$([ "$PROBE_RC" -eq 3 ] && [ "$(grep -ci 'could not keep a copy' <<< "$PROBE_MSG")" = 1 ] && ! grep -qi 'not a directory\|file exists' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# Where the copies go. Named outright, they go there; otherwise beside the readings when those were
+# moved (every suite moves them, so no suite writes into the real folder), else per Mac under
+# ~/.claude/state, never the temporary folder, which macOS empties at every restart.
+S_KNAMED="$TMPROOT/state-keep-named"; mkdir -p "$S_KNAMED"
+FREE_SPACE_WARNINGS_DIR="$TMPROOT/named-warnings" probe "$((7 * GB))" "$T0" "$S_KNAMED"
+check "FREE_SPACE_WARNINGS_DIR names where the copies go" \
+  "$([ "$(count_copies "$TMPROOT/named-warnings")" = 1 ] && [ ! -e "$S_KNAMED/warnings" ] && echo ok || echo "named folder: $(ls -1 "$TMPROOT/named-warnings" 2>&1 | tr '\n' ' ')")"
+K_HOME="$TMPROOT/keep-home"; mkdir -p "$K_HOME" "$TMPROOT/keep-tmpdir"
+env -u FREE_SPACE_STATE_DIR -u FREE_SPACE_WARNINGS_DIR HOME="$K_HOME" TMPDIR="$TMPROOT/keep-tmpdir/" \
+  FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_PATH=/fixture bash "$CHECK" > /dev/null 2>&1
+check "with nothing named, the copies are kept per Mac under ~/.claude/state, not in the temporary folder" \
+  "$([ "$(count_copies "$K_HOME/.claude/state/free-space-warnings")" = 1 ] && echo ok || echo "home: $(ls -R "$K_HOME" 2>&1 | tr '\n' ' ')")"
+
+# --report on a warning says where its copy is, so a person triaging can find it (L546).
+S_KREPORT="$TMPROOT/state-keep-report"; mkdir -p "$S_KREPORT"
+rprobe "$((7 * GB))" "$T0" "$S_KREPORT"
+check "--report on a warning names the copy of its readings and how long it is kept" \
+  "$(grep -qF "$S_KREPORT/warnings/free-space-warning-_fixture-$T0-exit3.readings" <<< "$PROBE_MSG" && grep -q '14 days' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
+
 # ---- falling fast, while still above the floor ----
 # 240 GB now, 300 GB three hours ago: 20 GB an hour, so zero is twelve hours out. That is outside
 # the six hour horizon, so it must NOT fire: a warning that fires on any fall at all is the noise

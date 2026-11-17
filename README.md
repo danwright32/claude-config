@@ -5626,6 +5626,24 @@ free space jumped to 196 GB for about three minutes and settled at 105 to 106 GB
 projected that settling as 204.5 GB an hour for half an hour while nothing moved. The cost is that a
 fall beginning just as a recovery ends is projected up to 30 minutes later again.
 
+A warning's readings outlive that six hour window (claude-config#3157). On an exit 3 or 4 the check
+keeps a copy of the readings in the window, headed by the verdict line, its exit code and the
+settings it was judged by, as `free-space-warning-<volume>-<epoch>-exit<code>.readings` in
+`~/.claude/state/free-space-warnings` (`FREE_SPACE_WARNINGS_DIR`; beside the readings when
+`FREE_SPACE_STATE_DIR` moves them, as every suite does). Not `$TMPDIR`, which macOS empties at every
+restart. One copy per warning episode, never one per prompt: the first warning after a verdict with
+room keeps one, a warning that carries on keeps none, and one lasting longer than the window keeps
+one more each time the last copy's readings have all left it, so no reading is lost and a long
+episode writes at most four a day. Each copy is kept 14 days (`FREE_SPACE_WARNING_KEEP_DAYS`, Dan's
+decision on #3157) and then deleted by a run of the check, healthy or not, within an hour, since the
+sweep runs at most hourly; only a regular file whose whole name is that pattern is ever deleted. A
+copy is small: one made from this Mac's real window on 2026-11-17, 25 readings, was 1,405 bytes. A
+copy that cannot be written (a full disk is when this runs) leaves the warning and its exit code as
+they were and says so in one line, and the next warning tries again. `--report` on a warning names
+the newest copy. To replay one, run the check once per reading line, oldest first, with that line as
+`FREE_SPACE_NOW` and `FREE_SPACE_BYTES`, the copy's settings and a `FREE_SPACE_STATE_DIR` of its
+own, as the #3153 tests replay 2026-11-16.
+
 When the verdict is 3 or 4 it names what it can. Swap first (claude-config#1770): swap lives on
 `/System/Volumes/VM`, which shares the disk and which no folder size reaches, and on 2026-10-26 95
 GB of it, held by two leaking processes, filled Daniels-MacBook-Pro-2. When `sysctl vm.swapusage`
