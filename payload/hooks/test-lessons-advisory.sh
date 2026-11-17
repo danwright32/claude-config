@@ -345,6 +345,15 @@ assert_contains "control: SQL handed to execute in a Swift test still fires" 'de
 R=$(make_repo fixtureswiftproc $'func wipe() throws {\n    let p = Process()\n    p.arguments = ["-c", "rm -rf /var/data/customers"]\n    try p.run()\n}' mac/AppTests/PurgeTests.swift)
 out=$(run_hook "git push" "$R")
 assert_contains "control: a removal handed to a Process's arguments in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargseq $'func testArgs() {\n    #expect(p.arguments == ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with == does not fire" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargsne $'func testArgs() {\n    #expect(p.arguments != ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with != does not fire" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargseq3 $'func testArgs() {\n    XCTAssertTrue(p.arguments === ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with === does not fire" 'destructive data operation' "$out"
 R=$(make_repo fixtureswiftprocrun $'func wipe() throws {\n    try Process.run(sh, arguments: ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
 out=$(run_hook "git push" "$R")
 assert_contains "control: a removal handed to Process.run in a Swift test still fires" 'destructive data operation' "$out"
