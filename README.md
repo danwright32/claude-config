@@ -432,7 +432,8 @@ and `claude-sync release` ends it early. A marker nothing can read is cleared an
 words, never treated as a hold and never treated as absent.
 Either part may be left out: a first word that is not a number is the start of the label, `hold
 --help` (or `-h`, or `help`) prints the hold and release usage and takes no hold, and any other word
-beginning with a dash is refused, so a mistyped flag pauses nothing (#3152).
+beginning with a dash is refused, so a mistyped flag pauses nothing (#3152). A label that begins
+with a dash goes after `--` (`hold -- "-fix"`), as `release` takes one.
 
 A hold says it is in force only once it is (#1854). `hold` writes its record under a temporary name
 and renames it into place, reads it back the way the watcher will, and only then prints "Watcher held

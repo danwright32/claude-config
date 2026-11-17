@@ -12019,6 +12019,8 @@ do_hold(){   # [--extend]  $1 = minutes, --help, or the label's first word (opti
   # not know is refused rather than taken as a label, so a mistyped flag pauses nothing.
   case "${1:-}" in
     -h|--help|help) hold_usage; return 0 ;;
+    # A label beginning with a dash goes after --, as release takes one: the default length.
+    --) shift; set -- "" "$@" ;;
     -*) die "no hold was taken: '$1' is not an option hold knows, so the watcher is NOT held. Usage:
 $(hold_usage)" ;;
     *[!0-9]*) set -- "" "$@" ;;

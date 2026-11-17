@@ -19196,6 +19196,11 @@ check "#3152 an unknown option fails" "[ '$rc_52ho' != 0 ]"
 check "#3152 and takes no hold" "[ ! -e '$H52H_HOLD' ]"
 check "#3152 and names the option and the usage" "line_has \"\$out_52ho\" 'no hold was taken' '--hepl'"
 
+# A label beginning with a dash goes after --, as release takes one.
+out_52hd=""; rc_52hd=0
+out_52hd="$(h52h_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold -- "-fix" 2>&1)" || rc_52hd=$?
+check "#3152 hold -- with a dash label holds under that label" "[ '$rc_52hd' = 0 ] && line_has \"\$out_52hd\" 'held off for 45 minutes' '[(]-fix[)]'"
+h52h_env bash "$SCRIPT" release -- "-fix" >/dev/null 2>&1 || true
 # A label with no length is that label, at the default length.
 out_52hl=""; rc_52hl=0
 out_52hl="$(h52h_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold "fixing the gate" 2>&1)" || rc_52hl=$?
