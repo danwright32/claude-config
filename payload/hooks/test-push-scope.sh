@@ -1591,6 +1591,129 @@ ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null 
   || check "#3062 with no default branch known it does not answer yes" ok
 rm -rf "$WP"
 
+echo "push-scope: a commit written straight after a bracket or a backquote (claude-config#3091)"
+
+# ps_commit_in_chain read where a git starts from a list of characters that left out the opener of a
+# subshell and of a command substitution, so `(git commit -m x) && git push` was read as no commit:
+# no gate folded the pending commit in, and it went out unread. ps__git_add_in_chain has accepted
+# those openers since #2203; the commit question now reads them the same way, for both spellings it
+# knows (git commit, and git merge --continue since #3081). The word that ends the spelling may be
+# closed the same way, `(git commit)`, or be followed by a separator with no space between.
+for c in "(git commit -m x) && git push" "(git merge --continue) && git push" \
+         "x=\$(git commit -m x) && git push" "x=\$(git merge --continue) && git push" \
+         "echo \"\$(git commit -m x)\" && git push" "x=\`git commit -m x\` && git push" \
+         "x=\`git merge --continue\` && git push" "(git commit) && git push" \
+         "(rtk git commit -m x) && git push" "(/usr/bin/git commit -m x) && git push" \
+         "(git -c core.editor=true merge --continue); git push" \
+         "git commit;git push" "git commit&&git push" "git commit|cat; git push"; do
+  ps_commit_in_chain "$c" && check "#3091 a commit after an opener is a commit in the chain: $c" ok \
+    || check "#3091 a commit after an opener is a commit in the chain: $c" "not seen"
+done
+# What an opener starts but is no commit stays none, and the shapes read before are read still.
+for c in "(git commit-graph write) && git push" "(git committed) && git push" "(git log) && git push" \
+         "(legit commit -m x) && git push" "(git merge --abort) && git push" \
+         "x=\$(git merge-base a b) && git push" "(git merge --continued) && git push" \
+         "x=\$(git rev-parse HEAD) && git push"; do
+  ps_commit_in_chain "$c" && check "#3091 control: no commit in the chain: $c" "seen as a commit" \
+    || check "#3091 control: no commit in the chain: $c" ok
+done
+for c in "git commit -m x && git push" "(cd sub && git commit -m x) && git push" "{ git commit -m x; } && git push"; do
+  ps_commit_in_chain "$c" && check "#3091 control: read before, and still: $c" ok \
+    || check "#3091 control: read before, and still: $c" "not seen"
+done
+
+echo "push-scope: commits a command makes by a route no gate can read (claude-config#3092)"
+
+# ps_unread_commit_route answers whether a command runs, before a push, a git command that puts
+# commits on the branch (or stages changes for a commit later in the command) by a route other than
+# the two the gates read, git commit and git merge --continue. Measured in throwaway repositories on
+# git 2.51.1: each of these makes at least one commit that did not exist when a gate would have run.
+# It prints the route as the refusal names it.
+# A command of several lines is named on one, its line ends written out, so a FAIL line never goes on
+# at the margin (test-fail-margin.sh).
+route_is() { # route_is <description> <command> <the route it must print>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_commit_route "$2")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$r" = "$3" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r], wanted [$3]"; fi
+}
+no_route() { # no_route <description> <command>
+  local r rc name="$1: ${2//$'\n'/\\n}"
+  r="$(ps_unread_commit_route "$2")"; rc=$?
+  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  else check "$name" "exit $rc, printed [$r]"; fi
+}
+# The seven the issue names.
+route_is "#3092 a route no gate reads" "git rebase --continue && git push" "git rebase --continue"
+route_is "#3092 a route no gate reads" "git cherry-pick --continue && git push" "git cherry-pick --continue"
+route_is "#3092 a route no gate reads" "git revert --continue && git push" "git revert --continue"
+route_is "#3092 a route no gate reads" "git am --continue && git push" "git am --continue"
+route_is "#3092 a route no gate reads" "git merge --no-edit side && git push" "git merge"
+route_is "#3092 a route no gate reads" "git cherry-pick abc123 && git push" "git cherry-pick"
+route_is "#3092 a route no gate reads" "git pull --no-edit && git push" "git pull"
+# The same six commands spelled another way make commits too (measured beside the seven): a rebase
+# onto a branch, a revert or an am that starts, a --skip that replays the rest, a merge that only
+# fast forwards (it makes no commit, and still puts commits on the branch that were not there), and
+# the forms that stage for a commit later in the command.
+route_is "#3092 the same command, started rather than continued" "git rebase origin/main && git push --force-with-lease" "git rebase"
+route_is "#3092 the same command, started rather than continued" "git revert --no-edit HEAD && git push" "git revert"
+route_is "#3092 the same command, started rather than continued" "git am fix.patch && git push" "git am"
+route_is "#3092 a skip replays the commits after it" "git rebase --skip; git push -f" "git rebase --skip"
+route_is "#3092 a skip replays the commits after it" "git cherry-pick --skip && git push" "git cherry-pick --skip"
+route_is "#3092 a fast forward puts commits on the branch too" "git merge --ff-only side && git push" "git merge"
+route_is "#3092 a pull that rebases replays this branch's commits" "git pull --rebase && git push" "git pull"
+route_is "#3092 staged for a commit later in the command" "git merge --squash side && git commit -m x && git push" "git merge"
+route_is "#3092 staged for a commit later in the command" "git cherry-pick -n abc123 && git commit -m x && git push" "git cherry-pick"
+route_is "#3092 staged for a commit later in the command" "git merge --no-commit side && git commit -m x && git push" "git merge"
+# However the git is written, as every other question here reads one.
+route_is "#3092 however the git is written" "rtk git pull && rtk git push" "git pull"
+route_is "#3092 however the git is written" "git -C /tmp/x pull && git -C /tmp/x push" "git pull"
+route_is "#3092 however the git is written" "GIT_EDITOR=true git rebase --continue && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "git -c core.editor=true rebase --continue && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "/usr/bin/git pull&&git push" "git pull"
+route_is "#3092 however the git is written" "git pull;git push" "git pull"
+route_is "#3092 however the git is written" $'git pull\ngit push' "git pull"
+route_is "#3092 however the git is written" "(git rebase --continue) && git push" "git rebase --continue"
+route_is "#3092 however the git is written" "bash -c 'git pull && git push'" "git pull"
+route_is "#3092 however the git is written" "git fetch origin && git merge origin/main && git push origin HEAD" "git merge"
+route_is "#3092 the first route is the one named" "git pull && git rebase --continue && git push" "git pull"
+route_is "#3092 a route after one that makes nothing is still found" "git merge --abort; git merge side && git push" "git merge"
+# What makes no commit and stages nothing is no route: measured, --abort and --quit of each. A git
+# merge --continue is the commit ps_commit_in_chain reads, so the gates read it and it is not one.
+for c in "git push" "git commit -m x && git push" "git add -A && git commit -m x && git push" \
+         "git merge --continue && git push" "git merge --abort && git push" "git merge --quit; git push" \
+         "git rebase --abort && git push" "git rebase --quit && git push" \
+         "git cherry-pick --abort && git push" "git cherry-pick --quit; git push" \
+         "git revert --abort && git push" "git revert --quit && git push" \
+         "git am --abort && git push" "git am --quit && git push" \
+         "git merge-base --is-ancestor a b && git push" "git fetch origin && git push" \
+         "git log --grep=rebase && git push" "git branch -d merge && git push" \
+         "git status && git push origin pull"; do
+  no_route "#3092 control: no route in the command" "$c"
+done
+# A route nothing pushes after is not this question's: with no push, or with the push before it,
+# what it makes is not carried by a push in this command.
+for c in "git rebase --continue" "git pull" "git merge side" "git push && git pull" \
+         "git push origin feat; git checkout main && git pull" "git push -u origin feat && git merge --no-edit side"; do
+  no_route "#3092 control: nothing pushes what it makes" "$c"
+done
+# Words that only name a route, in a message or a heredoc body, run nothing.
+no_route "#3092 control: a route named in a commit message" "git commit -m 'run git pull and then git rebase --continue' && git push"
+no_route "#3092 control: a route named in a heredoc body" \
+  $'git commit -F - <<\'EOF\'\nRefuse git pull && git push in one command\n\ngit rebase --continue && git push is refused too.\nEOF\ngit push'
+no_route "#3092 control: a route named in an echo" "echo git pull && git push"
+# With nothing to read the command, the crude cut still finds the route, so a missing reader refuses
+# rather than letting the command past unread (L42).
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "git pull && git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "git pull" ] && check "#3092 with no reader the route is still found" ok \
+  || check "#3092 with no reader the route is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "GIT_EDITOR=true git rebase --continue; git push -f")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "git rebase --continue" ] && check "#3092 with no reader a continued rebase is still found" ok \
+  || check "#3092 with no reader a continued rebase is still found" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "git merge --abort && git push")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3092 with no reader an abandoned merge is still no route" ok \
+  || check "#3092 with no reader an abandoned merge is still no route" "exit $rc, printed [$r]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

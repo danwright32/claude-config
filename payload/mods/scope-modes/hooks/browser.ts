@@ -13,7 +13,8 @@
  *   appends the real one after any page text, so page text cannot forge it). A call that may move
  *   the page (a navigate, a click, typing, a form fill, a script) leaves its tab on no known host
  *   until a result says where it is. Inside one browser_batch, where no result arrives between
- *   items, nothing more runs on that tab after such an action until a navigate to a test host.
+ *   items, nothing more runs on that tab after such an action until a navigate to a test host,
+ *   except closing it, which reaches no host (#3107).
  * - A link clicked in the session's own tab can open a second tab in its group, which the session
  *   has to close (#3099). A second record holds the tabs every list of the group has named, and
  *   the ones first named after the session's own action in a tab it created (groupAfter). Such a
@@ -192,7 +193,9 @@ const batchRefusal = (input: Record<string, unknown>, b: Browser): string | unde
     // After a call that may have moved the page, the tab's host is unknown, so every later action on
     // it (typing and every other screen action included) waits for a navigate to a test host, which
     // reads the host again (Dan, 2026-11-03). Across calls, a result's Tab Context reads it instead.
-    if (tab && moved.has(tab) && name !== 'navigate')
+    // A close is the one other item let through (#3107): it reaches no host, wherever the page is.
+    // It is still judged below as a close alone is, and it reads no host, so the tab stays held.
+    if (tab && moved.has(tab) && name !== 'navigate' && name !== 'tabs_close_mcp')
       return `use ${C}${name} on tab ${tab} after an action in the same batch that may have left the test host`
     const why = oneRefusal(name, args, tabs, b.listed, b.opened ?? [])
     if (why) return why

@@ -653,9 +653,12 @@ const groupSpellings = (name: string, bars = true): string[] | null => {
  * one never closed. Its names are whatever the command prints (`$(git ls-files src)` is every file
  * under src), which cannot be read before it runs. A substitution in the folder alone
  * (`$(git rev-parse --show-toplevel)/notes.md`) leaves the name as the word spells it, and a variable
- * is no command's output. Read from the word as mod-kit gives it, its quotes taken off.
+ * is no command's output. Read from the word as mod-kit gives it, its quotes taken off. An arithmetic
+ * expansion, `$((...))`, is no command's output (#3088): its value is read as a variable's is,
+ * unless a command substitution or a backtick inside it fills that in (arithmeticMarked).
  */
-export const nameFromOutput = (word: string): boolean => {
+export const nameFromOutput = (given: string): boolean => {
+  const word = arithmeticMarked(given)
   let depth = 0
   let tick = false
   let name = 0
@@ -673,6 +676,39 @@ export const nameFromOutput = (word: string): boolean => {
   return depth > 0 || tick || last.includes('$(') || last.includes('`')
 }
 
+/**
+ * A word with each arithmetic expansion in it, `$((` to the `))` closing it (#3088), put as one mark:
+ * `$(x)` where a command substitution or a backtick inside it fills in its value, which is a
+ * command's output, and `$[x]` otherwise, the shell's value of a sum of numbers and variables, read
+ * as a variable's value is. The mark holds no slash and no parenthesis of the sum's, so a division
+ * or a grouping inside it ends no part of a name and opens no substitution. Until #3088 its two
+ * parentheses were read as a command substitution, so `\\$((0-9))` beside a page name was held as a
+ * command's output. One never closed is left as typed, read as a substitution, as before.
+ */
+export const arithmeticMarked = (word: string): string => {
+  let out = ''
+  for (let i = 0; i < word.length; i++) {
+    if (word.startsWith('$((', i)) {
+      let depth = 2
+      let end: number | undefined
+      for (let j = i + 3; j < word.length; j++) {
+        if (word[j] === '(') depth++
+        else if (word[j] === ')' && --depth === 0) {
+          if (word[j - 1] === ')') end = j
+          break
+        }
+      }
+      if (end !== undefined) {
+        out += /\$\(|`/.test(word.slice(i + 3, end - 1)) ? '$(x)' : '$[x]'
+        i = end
+        continue
+      }
+    }
+    out += word[i]
+  }
+  return out
+}
+
 // The variables that name a folder, never a file in it: the shell's own, and home.
 const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDIR)(?![\w]))$/
 
@@ -685,9 +721,11 @@ const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDI
  * cannot read before it runs. A variable naming a folder alone (`$PWD`, `$HOME`) names no file. A
  * for loop over plain words mod-kit gives as each word, with a path. A word whose every `$` is in
  * single quotes or after a backslash mod-kit marks `unexpanded`, which the caller reads first; one
- * holding any other `$` is read so here. Read from the word as mod-kit gives it.
+ * holding any other `$` is read so here. Read from the word as mod-kit gives it. An arithmetic
+ * expansion, `$((...))`, in the last part is a value the shell fills in too (#3088, arithmeticMarked).
  */
-export const nameFromVariable = (word: string): boolean => {
+export const nameFromVariable = (given: string): boolean => {
+  const word = arithmeticMarked(given)
   let depth = 0
   let tick = false
   let last = ''
@@ -718,7 +756,9 @@ const IN_TMPDIR = /^\$(?:\{TMPDIR\}|TMPDIR(?![\w]))(?:(?!.*\/\.\.(?:\/|$))\/[^$`
  * name `app` is no look changing one, yet it may hold every screen. Read from the word as mod-kit
  * gives it, its quotes taken off; a word whose every $ the shell leaves as written mod-kit places.
  */
-export const removalFilledIn = (word: string): 'output' | 'variable' | null => {
+export const removalFilledIn = (given: string): 'output' | 'variable' | null => {
+  // An arithmetic expansion is a value, unless a substitution inside it fills it in (#3088).
+  const word = arithmeticMarked(given)
   if (word.includes('$(') || word.includes('`')) return 'output'
   if (!/\$[^\s'"(]/.test(word)) return null
   return IN_TMPDIR.test(word) ? null : 'variable'
