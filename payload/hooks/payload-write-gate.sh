@@ -576,7 +576,7 @@ def printed_as_text(cmd):
         text = cmd[p["start"]:p["end"]]
         if p["scope"] != (0,) or p["inner"] or p["openers"] or not PRINTER.match(text):
             continue
-        if any(f in text for f in UNREAD_FORMS) or re.match(r"\s*printf\s.*(?:^|\s)-v", text, re.S):
+        if any(f in text for f in UNREAD_FORMS) or re.match(r"\s*printf(?:\s.*)?\s-v", text, re.S):
             continue
         spans, files = single_quoted(text), written_files(text)
         if not spans or files is None:
