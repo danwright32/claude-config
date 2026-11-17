@@ -1331,9 +1331,11 @@ L313
 The background work, fixed wait and failure triggers read the added lines as code, with string
 contents and comments removed, so a word in a fixture argument or a comment does not fire. The
 destructive operation trigger reads every line of source as it stands, and in a shell, Python,
-JavaScript or TypeScript test file reads a string as data unless the line hands it to something
-that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a Python or
-TypeScript test file 51 times, every one a string or a comment). A file
+JavaScript, TypeScript or Swift test file reads a string as data unless the line hands it to
+something that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a
+Python or TypeScript test file 51 times, every one a string or a comment; #3104: on 4163 commits of
+the local Swift repositories it had fired on a Swift test file 21 times, 18 of them a string or a
+comment). Go and Ruby tests are still judged whole, since no local repository holds one. A file
 the repository marks generated in `.gitattributes` is still scanned but its matches raise no
 lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
 never read, because they quote the very words the triggers look for. The same finding in the same
@@ -3723,6 +3725,18 @@ or the same call after some other file changed, is spared reading it: for the cl
 is its 1.8 MB and claude-sync's 1 MB, about a fifth of the judgement. A parse is keyed on the text's
 whole contents, the reader's code, the directory and HOME, never a path or a time, so a changed file
 is read afresh; it is signed with the same key, and given back exactly or not at all.
+
+The gate judges at user initiated priority (`lib/gate-qos.py`, #2918, Dan's decision of 2026-11-16).
+Claude Code starts it at the legacy level (kernel base priority 31), where every other session's
+suites run, so on a busy Mac it was moved to an efficiency core and a cold judgement ran 11.2 to
+11.8 s, past its 11 s budget, against 4.2 to 4.5 s on a performance core. Asking for user initiated
+alone does nothing for a command line process (XNU squashes it to legacy for a task with no
+application role), so the gate first takes the default application role, then asks: base priority
+37. The level is read back from the kernel and traced (`SLACK_GATE_CACHE_TRACE`); under a QoS clamp
+(`taskpolicy -c`, a ceiling nothing inside a process can lift) the trace says it was not raised, and
+a refusal for running out of time names the level it ran at. When the level cannot be read back, the
+trace and the refusal say exactly that, never that the raise failed. `test-slack-drafts-gate-qos.sh`
+holds it.
 
 The suite's cost checks (`test-slack-drafts-only-gate.sh`) hold the gate's processor time in units of
 a fixed workload that shares nothing with the gate (0.095 s each on the personal MacBook), the least
@@ -6392,7 +6406,14 @@ every guard holds or refuses it rather than judging its words alone), and `env` 
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
 it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a
 shell's script, also given on each script run the write reader lists in `runs`, so a guard can see
-what a script reads from its environment, of which files a command
+what a script reads from its environment, and `behind` (#3093), what a command is run behind, by
+name: each runner the reader looked past (`env -C copy bash s.sh` is `env`, `sudo nice make` is
+`sudo` and `nice`), the shell whose script it stands in (`bash -c 'make'` is `bash`) and find for
+what its -exec runs, since each can change the folder or the environment with no setting written
+and the options that do it are not given, and with `assignments: true` each command that only sets
+a value (`T=x;`, which runs nothing and is otherwise left out) as its assignments (a guard relying
+on any of the three first asks about a line it knows the answer for, since a copy of mod-kit
+loaded before #3093 answers with none of them and says nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -7790,7 +7811,9 @@ staging or qa before its last label), the page readers included, every action in
 after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
 which reaches no host and is judged as a close alone is; since #3121 a tab a batch closed is no
 longer the session's once the batch's result lists its tab group without it, as after a close
-alone), and every Chrome tool reaching past those
+alone; since #3132 so is a created tab that left the group any other way, closed by hand or lost
+to a restart of Chrome, at the first result listing the group without it, and its number listed
+again later does not bring it back), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
@@ -7879,7 +7902,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585, #3099, #3107, #3121
+#1765, #1812, #2064, #2261, #2585, #3099, #3107, #3121, #3132
 
 </td></tr>
 <tr><td>
@@ -8280,11 +8303,46 @@ only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a
 danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
 writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
 the checkout is a clone of that repository, it is handed one folder that is on the disk, the
-command sets no value (it holds no equals sign, and it runs the script once with nothing else but
+command gives it no setting (it runs the script once with nothing else but
 a `cd` before it and readers its output is piped into, such as `2>&1 | tail -n 40`,
 since the script takes the programs it runs and
 where it keeps its copies and logs from the environment), and neither the script nor a library it
 sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
+Until #3093 any equals sign in the command held the run, because mod-kit's reader dropped a setting
+written in front of a command, so a reader's own option did too (`| tail --lines=40`). Since #3093
+(a loosening, signed off by Dan, 2026-11-16) the reader carries the settings and an equals sign
+holds the run only where it may set a value for the script: a setting on the run itself, whatever
+its name (`TMPDIR=x bash tools/check-mods.sh ...`, `env CLAUDE_BIN=x bash ...`, `BASH_ENV=`,
+`PATH=`, and `NODE_OPTIONS=`, since the programs the script runs are handed the whole
+environment), one on the `cd` before it, a command that only sets a value (`TMPDIR=x;`) anywhere in
+the command, and an equals sign in the words of the run or of the `cd`, or in a heredoc fed to
+either, where the shell sets a value as it reads `${NAME:=value}` or `$((NAME=1))`. One in a
+reader the output is piped into (an option, a pattern, a setting of the reader's own) or in a
+comment no longer holds it. The log names a setting by its name, never its value.
+The same change closes a gap that was on main since #3022 (a tightening): the reader looked past a
+runner and said nothing, so `env -C copy bash tools/check-mods.sh ...`, which runs the copy under
+`copy/`, and `env -i`, `env -u NAME` and `sudo`, which change the environment with no equals sign,
+each read as the plain run. The reader now says what a command is run behind, and a run behind
+anything is held: `env` with or without an option, `sudo`, `nohup`, `nice`, `timeout`, `time`,
+`exec`, `command`, `xargs`, `rtk`, and a shell's own script (`bash -c '...'`, `zsh -lc '...'`, a
+script a shell reads from a heredoc). The `cd` before the run is let through only as `cd` and one
+folder written from `/`, `./`, `../` or `~`, holding nothing the shell expands or matches, behind
+no runner. A bare name is held (`cd payload && bash ../tools/check-mods.sh mods`, which #3022 let
+through), since bash looks it up along `CDPATH` first; write `cd ./payload`. So is `cd` with an
+option or a second word, and `pushd`. The folder the `cd` leads to must be on the disk too (found
+by the lessons review of #3131; let through since #3022): a `cd` that fails leaves the shell where
+it was, and joined by `;` or `||` the script still runs, from there, so
+`cd ./nowhere; bash ../tools/check-mods.sh /abs/payload/mods` read as the script at the root of
+the checkout and ran the file one folder above it. The reader does not say what joins two
+commands, so the check is on the folder and holds a `cd ./nowhere && ...` as well. A `cd` that
+fails on a folder that is there (one the shell may not enter) is not caught. And a `cd` whose path
+backs out of a folder it names, a `..` after a named part (`./a/../b`, `../a/../b`, `~/a/..`), is
+held whatever is on the disk: the reader follows it from the text alone, so
+`cd ./nowhere/../payload` is placed in a folder that is there, while bash and zsh refuse it and
+stay where they were. A path that only starts with `..` (`../`, `../../x`) is followed as before.
+A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
+asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
+lacks the setting, the runner or the command that only sets a value, no run is let through.
 Anything else is judged as before: a script of that name in another repository or elsewhere in the
 checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
 shell, the file its output is redirected into, and the script chained with any other command, in a
@@ -8296,6 +8354,42 @@ ignore (the pinned compiler's links under the ignored `tools/typescript/node_mod
 adds), and red when the script sources a file the list
 in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
 not proved there, as it is not judged when `claude plugin test` is typed directly.
+A second script is let through the same way (#3082, signed off by Dan, 2026-11-16, for this script
+only): `bash tools/check-mod-shared-parts.sh <mods folder>`, by the same rule, with texts
+of its own: the script and `tools/lib/ts_source.py`, the python program it runs. One condition
+differs. The #3093 loosening was signed off for `tools/check-mods.sh` alone, and this script was
+signed off with "the command holds no equals sign", so any equals sign in the command still holds
+it, one in a reader of its output or in a comment included
+(`bash tools/check-mod-shared-parts.sh payload/mods 2>&1 | tail --lines=40` is held; write
+`tail -n 40`). Loosening that for this script is Dan's to sign off. What #3093 tightened holds it
+as it holds the first: a run behind a runner, and a `cd` before it that is not one folder written
+from `/`, `./`, `../` or `~`. The script's own
+commands read as writing nothing, the `cp` lines it prints included, which were first taken for
+the write. What kept the hold is that program, run through a variable
+(`python3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"`): it really writes, each mod's hooks with
+the comments taken out, into a folder the script makes under `TMPDIR` and removes as it ends, at a
+path python builds from its arguments, which no reader places. A command that sets a value is
+judged for this script too, since `TMPDIR` set to the folder puts those copies inside it.
+`tests/test-area-check-shared-parts-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout over mod-kit and the area check and is red when a run changes any path there or
+adds one, an ignored one included, when a copy of the script or of the program changed to write
+into the folder is not caught, and when the script sources a file or runs a program the list in
+`named.ts` lacks. A file left beside the program under the name of a python module it imports
+(`tools/lib/re.py`) is one git is not asked about while untracked, so the script runs the program
+isolated (`python3 -I`), which never loads it; the suite plants one and is red if a run loads it,
+and its control shows a copy of the script without `-I` loading it. Each script is
+let through for itself alone, so the two chained in one command are both judged. What the two
+suites share (the guarded temporary folder, the listings of a checkout, the reader of the list and
+the rule's checks on mod-kit's real reader) is in `tests/area-check-named-reader.sh`,
+`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. The reader of the list
+reads each script with mod-kit's reader of shell commands, so a message quoting a run counts
+nothing, and refuses whatever it cannot read (eval of built text, a variable set to a shell, a line
+that reads as a run on its own), never skipping it; `tests/test-area-check-named-texts.sh` holds
+both, with controls that make it too lenient (#3134). The rule's checks run
+once for each script, and the ones about an equals sign are chosen by script there, by hand: a
+reader's own option is let through for `tools/check-mods.sh` and must be judged for the other, so
+the loosening reaching a script it was not signed off for turns that script's suite red. A third
+name is a third exemption, which is Dan's to sign off.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one

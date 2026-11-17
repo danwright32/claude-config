@@ -438,10 +438,11 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     // One path reached twice is judged by what both routes may do, so a merge only ever narrows the
     // exemption (#2426 lessons review): a path the command also writes itself is that write, not only a
     // word a script is handed (#2407); a path handed to two scripts keeps both, each to be read; and a
-    // write reaching the whole folder keeps that reach. A word that cannot be named is merged the same
-    // way (#3082): one the command also writes itself is that write, never only a word scripts are handed.
+    // write reaching the whole folder keeps that reach. The key starts with p for a path and u for a word
+    // that cannot be named, so two targets sharing a key always share a variant; the same rules merge a
+    // word that cannot be named (#3082): one the command also writes itself is that write, never only a
+    // word scripts are handed.
     if (had) {
-      if (('path' in had) !== ('path' in t)) return
       if ('path' in had && 'path' in t && t.tree) had.tree = true
       if (!had.runs || !t.runs) delete had.runs
       else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
