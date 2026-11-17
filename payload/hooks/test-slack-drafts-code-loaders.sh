@@ -1851,8 +1851,9 @@ echo "slack drafts only: three more routes to os in a Python script are followed
 # 2026-11-17 by the cases below, exit 0 and nothing said, handed a data file naming an endpoint):
 # a string naming attributes, read by string.Formatter; an attribute chain that starts at a call's
 # result, a parameter or any other value the gate does not follow; and a module one of the script's
-# own modules binds under another name. Where the gate cannot follow a value to say it is no
-# module, the script now counts as able to act.
+# own modules binds under another name. Each now counts as able to act: Formatter wherever it is
+# named, os read off a value the gate does not follow (any other attribute of one is read as a
+# field, as the controls at the end show), and os bound under another name where that name is read.
 D19="$T/d3119"
 mkdir -p "$D19"
 cp "$D02/msg.json" "$D19/msg.json"
