@@ -4133,6 +4133,9 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
       ok) cost="the slowed gate read within $cold_ceiling, so this limit passes a gate that slow: $(grep '^suite-slowed' "$T/cost.log")" ;;
     esac
     check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "$cost"
+  else
+    # With a claude-sync to judge the copy is always made above, so its absence is a fault, not a skip.
+    check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "the slowed copy of the gate was not made at $T/slow-gate, so this limit was not seen to fail"
   fi
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
