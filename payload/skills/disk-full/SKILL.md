@@ -66,11 +66,13 @@ is not the same as fine. When it says no rate yet, take the next reading on a la
 rather than waiting inside a command.
 
 The six hours of readings roll on, so on a 3 or 4 the check also keeps a copy of the readings behind
-the warning, one per warning episode, for 14 days (`FREE_SPACE_WARNING_KEEP_DAYS`), and then deletes
-it (#3157). `--report` names the newest one for the volume, under
+the warning, for 14 days (`FREE_SPACE_WARNING_KEEP_DAYS`), and then deletes it (#3157). A new file
+starts at most once every six hours per volume (four a day, 57 in 14 days, however often the disk
+dips); later warnings add their readings to the newest file. `--report` names it, under
 `~/.claude/state/free-space-warnings`. A warning from last night can still be checked from it: its
-first lines hold the verdict, the exit code and the settings it was judged by, and each line after
-them is one reading, epoch seconds then free bytes, oldest first.
+first lines hold the first verdict, the exit code and the settings it was judged by, and each line
+after them is one reading, epoch seconds then free bytes, oldest first, with a `# exit N at <epoch>`
+line where a later warning began.
 
 ### 3. Swap, which no folder size reaches
 

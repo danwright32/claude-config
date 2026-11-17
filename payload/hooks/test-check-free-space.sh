@@ -391,19 +391,37 @@ check "the copy holds the reading itself" \
 check "the warning still says nothing about the copy when it was kept" \
   "$(! grep -qi 'copy' <<< "$k1_msg" && echo ok || echo "said: $k1_msg")"
 
-# A continuing warning does not write another: the check runs on every prompt of every session.
+# A continuing warning does not write another: the check runs on every prompt of every session. Its
+# readings are added to the copy it has, so the readings behind every later verdict are kept too.
 probe "$((7 * GB))" "$((T0 + 60))" "$S_K1"
 probe "$((6 * GB))" "$((T0 + 600))" "$S_K1"
 check "a warning that carries on writes no second copy" \
   "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' ')")"
+check "and its later readings are added to the copy it has" \
+  "$(grep -qxF "$((T0 + 600)) $((6 * GB))" "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
 
-# A disk with room ends the episode, and the next warning is a new one.
+# A warning after the disk had room again, inside the same window, is added to the same copy rather
+# than starting a file of its own: a disk hovering at the floor dips on every build, and a file per
+# dip had no bound (the lessons review at baed01d). The readings with room between are added too,
+# since they are behind the new verdict, and so is that verdict, because it is a new one.
 probe "$((200 * GB))" "$((T0 + 900))" "$S_K1"
 probe "$((7 * GB))" "$((T0 + 1200))" "$S_K1"
-check "a warning after the disk had room again keeps a copy of its own" \
-  "$([ "$(count_copies "$S_K1/warnings")" = 2 ] && [ -f "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" ] && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' ')")"
-check "the second copy holds every reading still in the window, the one with room included" \
-  "$(grep -qxF "$((T0 + 900)) $((200 * GB))" "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" 2>/dev/null && grep -qxF "$T0 $((7 * GB))" "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" && echo ok || echo "copy: $(cat "$S_K1/warnings/free-space-warning-_fixture-$((T0 + 1200))-exit3.readings" 2>&1)")"
+check "a warning after the disk had room again, inside the window, writes no new copy" \
+  "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' ')")"
+check "the copy then holds every reading behind that warning, the one with room included" \
+  "$(grep -qxF "$((T0 + 900)) $((200 * GB))" "$k1_file" 2>/dev/null && grep -qxF "$((T0 + 1200)) $((7 * GB))" "$k1_file" && grep -qxF "$T0 $((7 * GB))" "$k1_file" && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+check "and the new warning's verdict, with its time" \
+  "$(grep -qE "^# exit 3 at $((T0 + 1200)): claude-sync: only " "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+check "but a warning that carries on adds no verdict line of its own" \
+  "$(! grep -qE "^# exit 3 at $((T0 + 60)):" "$k1_file" 2>/dev/null && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
+# A restart empties the temporary folder, and the episode record with it. The copy in its own
+# folder is still found, so a restart does not start a new file inside the window either.
+rm -f "$S_K1/_fixture.warning-copy"
+probe "$((7 * GB))" "$((T0 + 1500))" "$S_K1"
+check "a warning after the episode record was lost still adds to the copy inside the window" \
+  "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && grep -qxF "$((T0 + 1500)) $((7 * GB))" "$k1_file" && echo ok || echo "copies: $(kept_copies "$S_K1/warnings" | tr '\n' ' '), copy: $(cat "$k1_file" 2>&1)")"
+check "without adding a reading it already held a second time" \
+  "$([ "$(grep -cxF "$((T0 + 1200)) $((7 * GB))" "$k1_file")" = 1 ] && echo ok || echo "copy: $(cat "$k1_file" 2>&1)")"
 
 # A warning that lasts longer than the window keeps a fresh copy once the last one's readings have
 # all left the window, so no reading of a long episode is lost, and never more often than that.
@@ -414,6 +432,38 @@ while [ "$_i" -lt 14 ]; do probe "$((7 * GB))" "$_t" "$S_KLONG"; _t=$((_t + 1800
 # one copy at T0, one at T0 + 6 hours.
 check "a warning lasting past the window keeps one more copy per window, no more" \
   "$([ "$(count_copies "$S_KLONG/warnings")" = 2 ] && [ -f "$S_KLONG/warnings/free-space-warning-_fixture-$((T0 + 21600))-exit3.readings" ] && echo ok || echo "copies: $(kept_copies "$S_KLONG/warnings" | tr '\n' ' ')")"
+
+# A DISK FLAPPING AT THE FLOOR STILL HAS A BOUND. A day of readings ten minutes apart (the
+# fixture's, set here, not measured) that cross the floor every 10 to 20 minutes, as a disk does
+# when every build takes a few GB just under it and gives them back. A new file starts at most once
+# a window, so a day holds at most four, however often it dips; and every reading up to the last
+# warning is in the copies taken together, so the bound costs no reading.
+S_KFLAP="$TMPROOT/state-keep-flap"; mkdir -p "$S_KFLAP"
+flap_all=""; flap_last_warn=""; _t="$T0"; _i=0
+while [ "$_i" -lt 144 ]; do
+  case $((_i % 5)) in 0|3) _b=$((7 * GB)) ;; *) _b=$((30 * GB)) ;; esac
+  probe "$_b" "$_t" "$S_KFLAP"
+  flap_all="$flap_all$_t $_b
+"
+  case "$PROBE_RC" in 3|4) flap_last_warn="$_t" ;; esac
+  _t=$((_t + 600)); _i=$((_i + 1))
+done
+flap_n="$(count_copies "$S_KFLAP/warnings")"
+check "a day flapping across the floor every 10 to 20 minutes keeps at most four copies" \
+  "$([ -n "$flap_last_warn" ] && [ "$flap_n" -ge 1 ] && [ "$flap_n" -le 4 ] && echo ok || echo "copies: $flap_n, last warning at ${flap_last_warn:-never}")"
+flap_union="$(cat "$S_KFLAP"/warnings/free-space-warning-* 2>/dev/null || true)"
+flap_missing=""
+while read -r _t _b; do
+  [ -n "$_t" ] || continue
+  [ "$_t" -le "${flap_last_warn:-0}" ] || continue
+  grep -qxF "$_t $_b" <<< "$flap_union" || flap_missing="$flap_missing $_t"
+done <<EOF
+$flap_all
+EOF
+check "and every reading of that day up to its last warning is in them" \
+  "$([ -n "$flap_last_warn" ] && [ -z "$flap_missing" ] && echo ok || echo "missing:$flap_missing")"
+flap_bytes="$(cat "$S_KFLAP"/warnings/free-space-warning-* 2>/dev/null | wc -c | tr -d ' ')"
+echo "test-check-free-space: a flapping day kept $flap_n copies, $flap_bytes bytes in all (measured by this run)."
 
 # A disk with room keeps nothing and makes no folder for copies.
 S_KFINE="$TMPROOT/state-keep-fine"; mkdir -p "$S_KFINE"

@@ -216,13 +216,19 @@ tmp="$STATE.$$"
 # window, with the verdict line, its exit code and the settings it was judged by, so it can be
 # replayed one reading at a time the way the #3153 tests replay that night.
 #
-# ONE COPY PER EPISODE, NOT PER PROMPT. This runs on every prompt of every session, so a copy on
-# every warning would write dozens of near identical files an hour. A copy starts an episode, and
-# `<readings>.warning-copy` beside the readings records when. While it is there, a warning writes no
-# copy; the first verdict with room (0 or 5) removes it, so the next warning is a new episode and
-# keeps its own. An episode lasting longer than the window keeps one more copy each time the last
-# one's readings have all left the window, so no reading of a long episode is lost, and never more
-# often than one copy a window (4 a day at the default).
+# AT MOST ONE NEW FILE A WINDOW, WHATEVER THE DISK DOES. This runs on every prompt of every
+# session, so a file per warning would write dozens of near identical files an hour, and a file per
+# episode had no bound either: a disk hovering at the floor dips on every build, and a day crossing
+# it every 10 to 20 minutes wrote 58 files (the lessons review at baed01d, measured by the suite).
+# So a warning starts a new file only when the newest one for the volume began a whole window ago
+# or more (FREE_SPACE_WINDOW_HOURS, at least an hour): at most 4 a day and 57 in 14 days at the
+# default 6 hours. Every other warning ADDS to the newest file, appending the readings taken since
+# its last one (those with room between dips included, since they are behind the new verdict) and,
+# when the verdict is new rather than carrying on, a `# exit N at <epoch>: <verdict>` line. So no
+# reading behind any warning is lost: a file holds its first window and every reading after it, up
+# to its last warning. `<readings>.warning-copy` beside the readings records the file's start, its
+# first exit code, its last reading and the last verdict (0 once the disk has room); a restart
+# empties it with the readings, and the newest file in the folder is then found and added to.
 #
 # KEPT PER MAC, NOT IN THE TEMPORARY FOLDER. The readings live in TMPDIR, which macOS empties at
 # every restart (measured 2026-11-17: nothing in it older than the last boot), and a copy has to
@@ -234,9 +240,9 @@ tmp="$STATE.$$"
 # warning came to sweep it. Only a file this check named is ever deleted: a regular file in its own
 # folder whose WHOLE name is the pattern it writes, the instant read from the name rather than from
 # the file. A file of any other name, a link or a folder is never touched. Hourly, not every run,
-# because the sweep is a bash loop over the folder: with 56 copies in it (the most 14 days can hold
-# for one volume) it added about 5 ms to a 50 ms run, measured 2026-11-17, where reading when it
-# last ran adds nothing measurable. `<readings>.warnings-swept` records when; --report always sweeps,
+# because the sweep is a bash loop over the folder: with 56 copies in it (57 is the most 14 days can
+# hold for one volume) it added about 5 ms to a 50 ms run, measured 2026-11-17, where reading when
+# it last ran adds nothing measurable. `<readings>.warnings-swept` records when; --report always sweeps,
 # since it names the newest copy.
 #
 # A COPY THAT CANNOT BE WRITTEN NEVER COSTS THE WARNING. A full disk is exactly when this runs: the
@@ -274,17 +280,76 @@ if [ "$REPORT" -eq 1 ] || ! is_number "$_swept" || [ "$_swept" -gt "$now" ] || [
   [ -n "$WARN_DIR" ] && [ -d "$WARN_DIR" ] && printf '%s\n' "$now" 2>/dev/null > "$SWEPT"
 fi
 
-end_episode(){ [ -f "$EPISODE" ] && rm -f "$EPISODE" 2>/dev/null; return 0; }
+# A new file at most once this long, and never more often than hourly, so a window set to 0 cannot
+# turn the bound off.
+COPY_PERIOD=$((WINDOW_HOURS * 3600)); [ "$COPY_PERIOD" -ge 3600 ] || COPY_PERIOD=3600
+
+# The episode record: "<file start> <its first exit code> <its last reading> <last verdict>".
+# Anything else in it (a write cut short, an older shape) reads as no record.
+read_episode(){
+  EP_S=""; EP_R0=""; EP_L=""; EP_LR=""
+  [ -s "$EPISODE" ] || return 1
+  read -r EP_S EP_R0 EP_L EP_LR _ep_rest 2>/dev/null < "$EPISODE" || true
+  is_number "$EP_S" && is_number "$EP_L" && is_number "${EP_LR:-x}" || return 1
+  case "$EP_R0" in 3|4) return 0 ;; *) return 1 ;; esac
+}
+write_episode(){ printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" 2>/dev/null > "$EPISODE"; }
+
+# The disk has room: the next warning is a new verdict, so it gets its verdict line. One write, and
+# only on the change, so a healthy prompt pays a read of the record at most.
+end_episode(){
+  read_episode || return 0
+  [ "$EP_LR" = 0 ] || write_episode "$EP_S" "$EP_R0" "$EP_L" 0
+  return 0
+}
+
+# With no record (a restart emptied it), the newest file for this volume that began less than a
+# period ago is the one to add to, and its last reading is read from it. Runs only on a warning
+# with no record, so its loops cost nothing on an ordinary prompt.
+adopt_copy(){
+  [ -n "$WARN_DIR" ] && [ -d "$WARN_DIR" ] || return 1
+  local f name t best="" best_t=-1 r0="" a b
+  for f in "$WARN_DIR"/free-space-warning-"$key"-*.readings; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $COPY_RE ]] && [ -z "${BASH_REMATCH[2]}" ] || continue
+    t="${BASH_REMATCH[1]}"
+    [ "$t" -le "$now" ] && [ $((now - t)) -lt "$COPY_PERIOD" ] && [ "$t" -gt "$best_t" ] || continue
+    best="$f"; best_t="$t"; r0="${name##*-exit}"; r0="${r0%%.*}"
+  done
+  [ -n "$best" ] || return 1
+  EP_S="$best_t"; EP_R0="$r0"; EP_L="$best_t"; EP_LR=""
+  while read -r a b _rest; do
+    is_number "${a:-}" && is_number "${b:-}" && [ "$a" -gt "$EP_L" ] && EP_L="$a"
+  done < "$best"
+  return 0
+}
 
 keep_copy(){ # keep_copy <exit code> <verdict line>
-  local rc="$1" line="$2" last="" name tmp why="" at
-  if [ -f "$EPISODE" ]; then
-    read -r last 2>/dev/null < "$EPISODE" || true
-    if is_number "$last" && [ "$last" -le "$now" ] && { [ "$WINDOW_HOURS" -eq 0 ] || [ $((now - last)) -lt $((WINDOW_HOURS * 3600)) ]; }; then
-      keep_copy_note; return 0
-    fi
-    rm -f "$EPISODE" 2>/dev/null
+  local rc="$1" line="$2" name tmp why="" at add="" _t _b
+  # The newest file, from the record or else the folder, if it began less than a period ago.
+  if ! { read_episode && [ "$EP_S" -le "$now" ] && [ $((now - EP_S)) -lt "$COPY_PERIOD" ] \
+         && [ -f "$WARN_DIR/free-space-warning-$key-$EP_S-exit$EP_R0.readings" ]; }; then
+    adopt_copy || EP_S=""
   fi
+  if [ -n "$EP_S" ]; then
+    name="$WARN_DIR/free-space-warning-$key-$EP_S-exit$EP_R0.readings"
+    while IFS=' ' read -r _t _b; do
+      is_number "${_t:-}" && [ "$_t" -gt "$EP_L" ] && add="$add$_t $_b
+"
+    done <<EOF
+$series
+EOF
+    # Appended rather than rewritten: a few lines, so a cut short write loses only them, and the
+    # record is moved on only once they are in, so a failed append is tried again next time.
+    if { printf '%s' "$add"; [ "$EP_LR" = "$rc" ] || echo "# exit $rc at $now: $line"; } 2>/dev/null >> "$name"; then
+      write_episode "$EP_S" "$EP_R0" "$now" "$rc"
+      LATEST_COPY="$name"; keep_copy_note; return 0
+    fi
+    echo "claude-sync: could not add the readings behind this warning to $name, so the ones since its last are gone once they are $WINDOW_HOURS hour(s) old."
+    return 0
+  fi
+  rm -f "$EPISODE" 2>/dev/null
   # Claimed with noclobber, so two sessions warning in the same instant keep one copy between them.
   # A claim that fails because the other got there first stops here; one that fails because nothing
   # can be written goes on and tries the copy anyway, since that is the copy that matters. Only a
@@ -292,7 +357,7 @@ keep_copy(){ # keep_copy <exit code> <verdict line>
   # whose write failed (a disk too full for one line), and stopping there kept no copy, silently, on
   # every warning while the disk stayed full. Another session caught between creating its record and
   # writing it also reads as empty, which costs at most a second copy of the same readings.
-  if ! ( set -C; printf '%s\n' "$now" > "$EPISODE" ) 2>/dev/null; then
+  if ! ( set -C; printf '%s %s %s %s\n' "$now" "$rc" "$now" "$rc" > "$EPISODE" ) 2>/dev/null; then
     [ -s "$EPISODE" ] && { keep_copy_note; return 0; }
   fi
   if [ -z "$WARN_DIR" ]; then
@@ -313,7 +378,7 @@ keep_copy(){ # keep_copy <exit code> <verdict line>
          printf '%s\n' "$series"
        } 2>/dev/null > "$tmp" && mv -f "$tmp" "$name" 2>/dev/null; then
       # The claim's own write may have failed (above); record the episode now the copy is kept.
-      [ -s "$EPISODE" ] || printf '%s\n' "$now" 2>/dev/null > "$EPISODE"
+      [ -s "$EPISODE" ] || write_episode "$now" "$rc" "$now" "$rc"
       LATEST_COPY="$name"; keep_copy_note; return 0
     fi
     rm -f "$tmp" 2>/dev/null
@@ -827,7 +892,7 @@ scan_note(){
 # always had, so a notice on every prompt does not grow a clause nobody asked for.
 [ "$REPORT" -eq 1 ] || no_rate_clause=""
 
-# The disk has room (whatever swap says), so any warning episode is over (claude-config#3157).
+# The disk has room (whatever swap says), so the next warning is a new verdict (claude-config#3157).
 if [ "$free_gb" -ge "$FLOOR_GB" ] && [ "$falling_fast" -ne 1 ]; then end_episode; fi
 
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
