@@ -15,7 +15,8 @@
 #   claude-sync stuck             # whether sending or receiving is stuck, lock free, one record per line
 #   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
 #   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
-#   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
+#   claude-sync hold 30 "why"     # stop the watcher committing for 30 minutes, so you can commit (length and label optional)
+#   claude-sync hold --help       # these hold and release lines, taking no hold
 #   claude-sync hold --extend 30 "why" # renew your own hold of that label (a second plain one is refused, #2468)
 #   claude-sync release           # lift your own hold now rather than waiting for it to run out
 #   claude-sync release "why"     # lift only the hold you took with that label (#2452)
@@ -12009,9 +12010,25 @@ hold_live_left(){
 # there is none to renew, since then the hold it meant to keep has already run out or been lifted.
 # A renewal never SHORTENS the hold; asking for less than it already has keeps the longer one and
 # says so.
-do_hold(){   # [--extend]  $1 = minutes (optional)  $2.. = why (optional)
+# The hold and release lines of the usage block at the top of this file, so `hold --help` says
+# exactly what `help` says about holding and cannot drift from it.
+hold_usage(){
+  awk 'NR > 1 && /^# *Env overrides/ { exit } NR > 1 && /^#   claude-sync (hold|release)/' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+do_hold(){   # [--extend]  $1 = minutes, --help, or the label's first word (optional)  $2.. = why (optional)
   local extend=0
   if [ "${1:-}" = --extend ]; then extend=1; shift; fi
+  # The first word is a length, a request for the usage, or the start of the label (#3152). Read
+  # as "no length given" whenever it was not a number, `hold --help` took a 30 minute hold, and
+  # `hold "a label"` held under the default label with the typed one dropped. An option hold does
+  # not know is refused rather than taken as a label, so a mistyped flag pauses nothing.
+  case "${1:-}" in
+    -h|--help|help) hold_usage; return 0 ;;
+    -*) die "no hold was taken: '$1' is not an option hold knows, so the watcher is NOT held. Usage:
+$(hold_usage)" ;;
+    *[!0-9]*) set -- "" "$@" ;;
+  esac
   local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows after rc=0 own_left st ends taken host o w
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
   # Taking a hold rewrites every session's line in the record, which needs the reader (#1886).
