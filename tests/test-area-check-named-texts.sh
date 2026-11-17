@@ -153,8 +153,12 @@ missed_by(){
       [ "${entry##*|}" = "$name" ] || continue
       found=yes
       read_fixture "$LENIENT" "$id"
-      fact PROBLEM | grep -qF -- "$what" && check "without $copy, $name is missed" "it was still held: $(fact PROBLEM | paste -sd';' -)" \
-        || check "without $copy, $name is missed" ok
+      # A copy that crashed prints no PROBLEM either, so the miss counts only from a copy that read
+      # the list to its end: its SCRIPT line is the last but the problems.
+      if [ "$(fact SCRIPT)" != "tools/$id.sh" ]; then check "without $copy, $name is missed" "the copy did not run to its end: $(printf '%s\n' "$out" | sed -n '1,3p' | paste -sd';' -)"
+      elif fact PROBLEM | grep -qF -- "$what"; then check "without $copy, $name is missed" "it was still held: $(fact PROBLEM | paste -sd';' -)"
+      else check "without $copy, $name is missed" ok
+      fi
     done
     [ "$found" = yes ] || check "the control names a case: $name" "no held case is named so"
   done
