@@ -42,7 +42,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
+import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -1334,13 +1334,16 @@ const resultTexts = (content: unknown): string[] =>
       : []
 // Written by version, so two results landing at once both count (assume it runs twice). The tabs
 // the session's own action opened (#3099) are a second record, written after the first and judged
-// against it as just written, so a tab this same result created is never also one it opened.
+// against it as just written, so a tab this same result created is never also one it opened, and
+// against the record that write replaced, the tabs the session had when the call ran, so a batch
+// that clicked in its own tab and then closed it still acted in a tab of its own (#3121).
 const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
-  let tabs: BrowserTabs | undefined
+  let tabs: TabsAcross | undefined
   for (let i = 0; i < 5 && !tabs; i++) {
     const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
-    const next = tabsAfter(held.value ?? {}, tool, input, texts)
-    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) tabs = next
+    const before: BrowserTabs = held.value ?? {}
+    const after = tabsAfter(before, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, after, { ifVersion: held.version })).isSet) tabs = { before, after }
   }
   if (!tabs) throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
   for (let i = 0; i < 5; i++) {

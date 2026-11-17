@@ -96,9 +96,45 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * `runs` is every script a path was handed to, present only when that is the command's one way of
  * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every write
  * of every one of them is placed, each then judged where it lands in the folder's stead (scriptProgram,
- * scriptReach; #2426 lessons review, #2565).
+ * scriptReach; #2426 lessons review, #2565). On a write whose file cannot be named, `runs` is every
+ * script a word built as the command runs was handed to, present only when being handed to them is
+ * the command's one way of reaching it (#3082): such a word is no write of theirs where every write of
+ * every one is placed and none is built on what it is handed, and those writes are judged in its stead.
  */
-export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string }
+export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string; runs?: ShellRun[] }
+
+/**
+ * Whether a word opens a `$(`, `${`, `$[` or backtick it never closes (#3082): the shell refuses such
+ * a line or reads on past it, so it is no value the command builds and hands a script, and it never
+ * carries `runs`, staying held as unread. A bracket inside an open one is counted as nesting, so a
+ * quoted lone `(` inside `$(...)` reads as never closed: the side that holds rather than passes.
+ */
+export const neverClosed = (word: string): boolean => {
+  const want: string[] = []
+  const closer: Record<string, string> = { '(': ')', '{': '}', '[': ']' }
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i] as string
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (c === '`') {
+      if (want.at(-1) === '`') want.pop()
+      else want.push('`')
+      continue
+    }
+    const opens = word[i + 1]
+    if (c === '$' && opens !== undefined && closer[opens]) {
+      want.push(closer[opens] as string)
+      i++
+      continue
+    }
+    if (!want.length) continue
+    if (c === '(') want.push(')')
+    else if (c === want.at(-1)) want.pop()
+  }
+  return want.length > 0
+}
 
 const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
 // A name whose extension is written out and is no source one is never judged, whatever its folder is.
@@ -402,10 +438,11 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     // One path reached twice is judged by what both routes may do, so a merge only ever narrows the
     // exemption (#2426 lessons review): a path the command also writes itself is that write, not only a
     // word a script is handed (#2407); a path handed to two scripts keeps both, each to be read; and a
-    // write reaching the whole folder keeps that reach.
+    // write reaching the whole folder keeps that reach. A word that cannot be named is merged the same
+    // way (#3082): one the command also writes itself is that write, never only a word scripts are handed.
     if (had) {
-      if (!('path' in had) || !('path' in t)) return
-      if (t.tree) had.tree = true
+      if (('path' in had) !== ('path' in t)) return
+      if ('path' in had && 'path' in t && t.tree) had.tree = true
       if (!had.runs || !t.runs) delete had.runs
       else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
       return
@@ -437,7 +474,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
       else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
-      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })
+      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs`, ...(neverClosed(a.word) ? {} : { runs: [run] }) })
     }
   }
   for (const u of w.unnamed) {
