@@ -701,6 +701,96 @@ test('a script handed a word whose every dollar sign the shell leaves as text is
   expect((await bash($ as never, w, 'python3 probe.py "src/big.ts$"', {}, 'b2')).result).toBe('done')
 })
 
+// #3082: `python3 -I measure.py notes.txt --md "$(git log -1 --format='%h, %cs' origin/main)"` was
+// held as writing a file named by the git log output, which is only a value the script is handed.
+// A word built as the command runs, handed only to scripts whose own text is read and each of whose
+// writes is placed with none built on what they are handed, is no write of theirs: those writes are
+// judged where they land, as for a folder handed to such a script (#2407, #2565).
+const STAMP = `"$(git log -1 --format='%h, %cs' origin/main)"`
+const MEASURE_PY = "import sys\nrows = open(sys.argv[1]).read().splitlines()\nprint('Measured on ' + sys.argv[3])\nprint(len(rows))\n"
+const MEASURE_SH = '#!/bin/bash\nwc -l "$1"\necho "Measured on $3"\n'
+
+test('a word built as the command runs, handed only to a script that writes nothing, runs judging no file (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  w.files[`${APP}/measure.sh`] = MEASURE_SH
+  expect((await bash($ as never, w, `python3 -I measure.py notes.txt --md ${STAMP} > candidates.md`)).result).toBe('done')
+  expect((await bash($ as never, w, `bash measure.sh notes.txt --md ${STAMP}`, {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  // Each pass is on record, naming the word and the script read for it (L551).
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([
+    { word: STAMP.slice(1, -1), script: `${APP}/measure.py`, decision: 'passed', placed: 0 },
+    { word: STAMP.slice(1, -1), script: `${APP}/measure.sh`, decision: 'passed', placed: 0 },
+  ])
+})
+
+// What a script handed such a word may do that keeps the command held: write a file named by what it
+// is handed, or by something no word names, write a held file itself, run another script, or be no
+// file that can be read.
+const HANDED_HELD: [string, string, string | undefined][] = [
+  ['writes the file it is handed, in python', "import sys\nopen(sys.argv[2], 'w').write('x')\n", undefined],
+  ['writes the file it is handed, in bash', '#!/bin/bash\necho x > "$2"\n', undefined],
+  ['writes under the folder it is handed', '#!/bin/bash\necho x > "$2/gen.ts"\n', undefined],
+  ['writes a held file by its full path', `#!/bin/bash\necho x >> ${APP}/src/big.ts\n`, 'src/big.ts'],
+  ['writes a file relative to wherever it is run from', '#!/bin/bash\necho x >> src/big.ts\n', undefined],
+  ['runs another script', '#!/bin/bash\npython3 tools/fix.py "$2"\n', undefined],
+]
+
+test('a word built as the command runs, handed to a script that may write it or writes a held file, is still held (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text, file]] of HANDED_HELD.entries()) {
+    w.files[`${APP}/stamp.sh`] = text
+    const run = text.startsWith('#!') ? 'bash' : 'python3'
+    const why = refusal(await bash($ as never, w, `${run} stamp.sh notes.txt ${STAMP}`, {}, `b${i + 1}`))
+    const ok = file === undefined ? why.includes('cannot be read') && why.includes('$(git log') : why.includes(`The area check held this Bash command, which writes ${file}.`)
+    held.push(ok ? `held: one that ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(HANDED_HELD.map(([what]) => `held: one that ${what}`))
+  // A script that is not there cannot be read, so the word is still held.
+  expect(refusal(await bash($ as never, w, `python3 gone.py ${STAMP}`, {}, 'b9'))).toContain('cannot be read')
+})
+
+test('a word built as the command runs is still held when the command also writes it, or the reader fails reading the script (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  // The same word is also where the command writes, before or after the read only script is handed it.
+  // And a word handed to the read only script and to one that writes it is held, whichever runs first.
+  w.files[`${APP}/stamp.sh`] = '#!/bin/bash\necho x > "$1"\n'
+  const commands = [
+    `python3 measure.py ${STAMP} > ${STAMP}`,
+    `echo x > ${STAMP}; python3 measure.py ${STAMP}`,
+    `python3 measure.py ${STAMP} && bash stamp.sh ${STAMP}`,
+    `bash stamp.sh ${STAMP} && python3 measure.py ${STAMP}`,
+  ]
+  for (const [i, c] of commands.entries()) {
+    expect([c, refusal(await bash($ as never, w, c, {}, `b${i + 1}`)).includes('cannot be read')]).toEqual([c, true])
+  }
+  w.ctl.pipelineThrows = true
+  expect(refusal(await bash($ as never, w, `python3 measure.py ${STAMP}`, {}, 'b9'))).toContain('cannot be read')
+  expect(w.records().filter(x => x.kind === 'script-reads' && x.decision === 'passed')).toEqual([])
+})
+
+// A word the reader cannot close (a `$(`, `${`, `$[` or backtick it opens and never closes) is no word
+// the shell builds and hands on: the shell refuses the line, or reads on past it, so what the command
+// runs is not what was read. It is outside #3082's exemption, and is held even where the only script
+// it is handed reads as writing nothing.
+test('a word the reader cannot close, handed only to a script that writes nothing, is still held (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  const commands = [
+    'python3 measure.py notes.txt "$(',
+    'python3 measure.py notes.txt "$(git log -1 --format=%h"',
+    'python3 measure.py notes.txt "${STAMP"',
+    'python3 measure.py notes.txt "`git log -1"',
+  ]
+  for (const [i, c] of commands.entries()) {
+    expect([c, refusal(await bash($ as never, w, c, {}, `b${i + 1}`)).includes('cannot be read')]).toEqual([c, true])
+  }
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
 test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
   const w = world($, on, { issues: [] })
   expect((await bash($ as never, w, "perl -pi -e 's/a/b/' /tmp/x/*.ts")).result).toBe('done')

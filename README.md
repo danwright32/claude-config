@@ -1329,7 +1329,11 @@ L313
 </table>
 
 The background work, fixed wait and failure triggers read the added lines as code, with string
-contents and comments removed, so a word in a fixture argument or a comment does not fire. A file
+contents and comments removed, so a word in a fixture argument or a comment does not fire. The
+destructive operation trigger reads every line of source as it stands, and in a shell, Python,
+JavaScript or TypeScript test file reads a string as data unless the line hands it to something
+that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a Python or
+TypeScript test file 51 times, every one a string or a comment). A file
 the repository marks generated in `.gitattributes` is still scanned but its matches raise no
 lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
 never read, because they quote the very words the triggers look for. The same finding in the same
@@ -2032,6 +2036,22 @@ and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks
 each move of the line. A wait still ends: only a run started with `--first` (below) can join a line
 ahead of a run, so it can move only as many times as there were pull requests ahead plus those sent to
 the front, and the line standing still for three hours ends it.
+A pull request stacked on another branch waits for that branch to merge (claude-config#3118). The
+helper merged into whatever base a pull request had, so on 2026-11-16 six queued pull requests based
+on other feature branches reached their turn before their bases had merged, and each would have been
+squash merged into its base branch rather than main: its change would then reach main only inside
+the base's squash, and its `Closes` lines would never fire, because GitHub closes issues only from
+the default branch. They were stopped by hand. Now, at each look, a pull request whose base is not
+the repository's default branch (as GitHub names it, read with the permission the helper already
+asks for, never assumed to be main) waits for the open pull request of its base branch, naming it,
+and takes no place in line meanwhile, so the run holding the turn is never kept waiting by it. When
+that base merges, the run that merged it (or GitHub, deleting the branch) moves the stacked pull
+request onto the default branch, and at its next look it joins the line as any run does. The wait
+grows to three minutes between looks, as the wait on checks does, and is bounded by the time in line
+(`MWR_LINE_SECONDS`), ending in exit 3. A base nothing will merge stops it at once, exit 1, naming
+the base pull request and saying to set the base by hand (`gh pr edit <pr> --base main`): a base
+branch with no pull request, one closed without merging, or one that merged while this pull request
+stayed on its branch past `MWR_HEAD_LAG_SECONDS`.
 A pull request the others in line need merged first goes to the front with `--first`
 (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests
 ahead of it needed to pass CI, and each of them would have held the line for about 50 minutes of mostly
@@ -3266,14 +3286,37 @@ are in the range the gates read (#3092). Each was measured in a throwaway reposi
 to make at least one commit a push would send, the forms that continue one in progress and the forms
 that start one alike; a merge that only fast forwards makes none and still puts another branch's
 commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
-refused as well, since a `git commit` later in the command would take what they staged. Only
-`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
-which the gates read. A route counts only when a push follows it in the command, and only in command
+refused as well, since a `git commit` later in the command would take what they staged.
+`--abort` and `--quit` make no commit and are not among these routes, and nor is
+`git merge --continue`, which the gates read. A route counts only when a push follows it in the command, and only in command
 position, so a commit message that names one is not one. `git pull && git push` is refused whole,
 though a pull that only fast forwards sends nothing unread, because which it will be is not known
-before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
-that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
-route (`git apply --index`, `git stash pop`).
+before it fetches.
+
+Two more kinds of git command change what a push in the same command sends without making a commit,
+and `push-scope-notice.sh` refuses those too, each with its own sentence (#3098). One kind moves the
+branch: `git checkout` or `git switch` of another branch or commit, `git reset` to another commit,
+`git update-ref`, `git symbolic-ref` with a target, `git bisect`, `git filter-branch`,
+`git stash branch`, and `--abort` of a rebase, cherry-pick, revert or am, which puts HEAD back where
+the sequence began. After it the push sends commits that were never in the range a gate read, or
+leaves out ones that were, so it is refused with any push after it. The other kind changes the
+index by a route other than `git add`: `git stash` and `git stash pop` or `apply`,
+`git apply --index`, `--cached` or `--3way`, `git rm`, `git mv`, `git restore --staged`,
+`git checkout <commit> -- <path>`, `git reset` with no commit (which unstages), `git read-tree`,
+`git update-index` and `git merge --abort`. The gates fold a pending commit in from the index as it
+was before the command ran, so this kind is refused only when a commit follows it and a push follows
+that. Each spelling was measured in a throwaway repository on git 2.51.1, comparing HEAD, the tree
+the index holds and the files before and after. What was measured to change neither HEAD nor the
+index is let through: a branch made where HEAD already is (`git checkout -b new`,
+`git switch -c new`), files written back from the index (`git checkout -- <path>`, `git restore
+<path>`), dry runs, the forms that only look (`git stash list`, `git symbolic-ref --short HEAD`,
+`git update-index --refresh`), `git branch -f` and `-m`, and `--quit`. Where the words cannot say
+which it is, the worse case is taken: `git checkout x` is read as a move though `x` may be a file.
+On the personal MacBook, in the transcripts of the 45 days to 2026-11-16, 1 Bash call of about
+4,064 that pushed ran any of these first. Not covered, by this or by any gate: files a command
+writes before a `git add` or a `git commit -a` in the same command, whether by `git apply` with no
+`--index` or by any other program, since the gates read the files as they stand before the command
+runs; and `git submodule add`, which was not measured.
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
@@ -3807,7 +3850,13 @@ source, which the gate does not follow. None that refused now passes. A Python s
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
-`sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
+`sys.modules`, `sys.path`, a module reached through another, a file opened to write). Since
+claude-config#3085 `os` may be imported too, read use by use: the names that read a file, a path or
+the environment (`os.getcwd`, `os.listdir`, `os.stat`, `os.walk`, `os.environ`, `os.path`,
+`OS_READS`) pass, and any other use (`os.system`, `os.remove`, `os` handed on or renamed) refuses
+as before. Before it, any script importing `os` and handed the global rules file, which names
+`chat.postMessage` in its own Slack rule, was refused whatever it did; Dan chose on 2026-11-16 to
+trust a program the gate reads end to end, and nothing it cannot follow. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
@@ -3921,8 +3970,12 @@ Since claude-config#3069 that holds whatever is on disk: a folder or a file of t
 the directory used to make the word a path, and a path holding no `/` is read as nothing, so beside a
 folder named `vitest` the test file `npx vitest run posts.test.ts` names was never opened. Where a
 file of that name is on disk, or an earlier command wrote one, the word is read as that file as well,
-and the call is refused where either reading refuses. A word that can only be a path (`./x.js`,
-`dir/x.js`) is read as the file alone. `claude mcp add` and the other `claude mcp`
+and the call is refused where either reading refuses. A word that is no package spec (`./x.js`,
+`dir/x.js`) is read as the file alone only where it names a script on disk or one an earlier command
+writes. Since claude-config#3083 any other such word is read as a package run as well: a local
+package folder (`npx ./vitest run posts.test.ts`, which #3069 read as a path naming no script, so
+the test file was never opened), the folder the launcher runs in (`npx .`), a path naming nothing
+yet, an archive (`./pkg.tgz`) and a repository shorthand (`owner/repo`). `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
