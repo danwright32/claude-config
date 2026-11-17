@@ -363,8 +363,10 @@ check "a fall that lasts after that same spike still fires" \
 # The readings file holds only FREE_SPACE_WINDOW_HOURS of history, so by the morning after a warning
 # the readings behind it are gone; the 2026-11-16 night replayed above survived only because a
 # session printed the file into its transcript (L202). So an exit 3 or 4 keeps a copy of the
-# readings in the window, with the verdict line and its exit code, one copy per warning episode,
-# kept FREE_SPACE_WARNING_KEEP_DAYS (Dan's decision on #3157: 14 days, then deleted automatically).
+# readings in the window, with the verdict line and its exit code. A new file starts at most once a
+# window per volume; every other warning appends its new readings (and a new verdict's line) to the
+# newest file. Each is kept FREE_SPACE_WARNING_KEEP_DAYS (Dan's decision on #3157: 14 days, then
+# deleted automatically).
 # Every case names its own state folder, so the copies land beside it (the default when the
 # readings are moved) unless a case names a folder for them.
 kept_copies(){ # kept_copies <folder>: the copies the check named there, one per line
@@ -585,6 +587,22 @@ check "a claim left empty by a failed write is not read as another session's cop
 probe "$((7 * GB))" "$((T0 + 60))" "$S_KEMPTY"
 check "and once that copy is kept, the warning carrying on writes no second one" \
   "$([ "$(count_copies "$S_KEMPTY/warnings")" = 1 ] && echo ok || echo "copies: $(kept_copies "$S_KEMPTY/warnings" | tr '\n' ' ')")"
+# An append whose readings cannot be written (a full disk, after the file was opened) must not be
+# read as done because the verdict line after it had nothing to add: that moved the record past
+# readings the copy never got (the lessons review at 5e796fc). The write is made to fail here by a
+# printf that refuses only the text holding this run's reading, which only the append prints.
+S_KAPPEND="$TMPROOT/state-keep-append-fails"; mkdir -p "$S_KAPPEND"
+probe "$((7 * GB))" "$T0" "$S_KAPPEND"
+FAIL_READING="$((T0 + 60)) $((7 * GB))"; export FAIL_READING
+printf(){ if [[ "${2:-}" == *"$FAIL_READING"* ]]; then return 1; fi; builtin printf "$@"; }
+export -f printf
+probe "$((7 * GB))" "$((T0 + 60))" "$S_KAPPEND"
+unset -f printf; unset FAIL_READING
+check "an append whose readings could not be written is said, with the warning intact" \
+  "$([ "$PROBE_RC" -eq 3 ] && [ "$(grep -ci 'could not add the readings' <<< "$PROBE_MSG")" = 1 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+probe "$((7 * GB))" "$((T0 + 120))" "$S_KAPPEND"
+check "and the readings it could not add are added by the next warning" \
+  "$(grep -qxF "$((T0 + 60)) $((7 * GB))" "$S_KAPPEND/warnings/$(first_copy "$S_KAPPEND/warnings")" 2>/dev/null && echo ok || echo "copy: $(cat "$S_KAPPEND/warnings/$(first_copy "$S_KAPPEND/warnings")" 2>&1)")"
 
 # Where the copies go. Named outright, they go there; otherwise beside the readings when those were
 # moved (every suite moves them, so no suite writes into the real folder), else per Mac under

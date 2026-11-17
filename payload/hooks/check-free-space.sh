@@ -341,8 +341,10 @@ keep_copy(){ # keep_copy <exit code> <verdict line>
 $series
 EOF
     # Appended rather than rewritten: a few lines, so a cut short write loses only them, and the
-    # record is moved on only once they are in, so a failed append is tried again next time.
-    if { printf '%s' "$add"; [ "$EP_LR" = "$rc" ] || echo "# exit $rc at $now: $line"; } 2>/dev/null >> "$name"; then
+    # record is moved on only once they are in, so a failed append is tried again next time. Joined
+    # with &&, so the group fails when the readings did, not only when the verdict line did: the
+    # verdict line is skipped on a warning that carries on, and that skip is a success.
+    if { printf '%s' "$add" && { [ "$EP_LR" = "$rc" ] || echo "# exit $rc at $now: $line"; }; } 2>/dev/null >> "$name"; then
       write_episode "$EP_S" "$EP_R0" "$now" "$rc"
       LATEST_COPY="$name"; keep_copy_note; return 0
     fi
