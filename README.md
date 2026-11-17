@@ -8131,11 +8131,33 @@ it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$
 trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
 arithmetic names no command. So
-`bash tools/check-mods.sh payload/mods` is still held, though no longer for copying into a folder
+the text of `tools/check-mods.sh` still cannot be read as writing nothing in the folder it is
+handed, though no longer for copying into a folder
 of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test
 "$d"`, `"$tsc"`), makes its folder from a template under `TMPDIR`, names each copy through another
 variable, runs inline perl whose writes its words do not name, and sources one file by a command's
 output, each of which keeps the hold on its own (measured 2026-11-16).
+One script is let through by name instead (#3022, signed off by Dan, 2026-11-16, for this script
+only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a checkout of
+danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
+writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
+the checkout is a clone of that repository, it is handed one folder that is on the disk, the
+command sets no value (it holds no equals sign, and it runs the script once with nothing else but
+a `cd` before it and readers its output is piped into, such as `2>&1 | tail -n 40`,
+since the script takes the programs it runs and
+where it keeps its copies and logs from the environment), and neither the script nor a library it
+sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
+Anything else is judged as before: a script of that name in another repository or elsewhere in the
+checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
+shell, the file its output is redirected into, and the script chained with any other command, in a
+loop or in a function, which is judged with that command as before. Each such run is one
+`named-reader` line in the log, `passed` or `judged` with why.
+`tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
+ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
+adds), and red when the script sources a file the list
+in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
+not proved there, as it is not judged when `claude plugin test` is typed directly.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
