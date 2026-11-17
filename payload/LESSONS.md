@@ -8108,6 +8108,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L860. When an AI review of a piece of work returns safe with nothing blocking, merge it and file the optional suggestions as issues, because sending them back as a build round brings another review, and a fresh reviewer always finds more: across five pieces 21 of 36 reviews said safe, every one was followed by another round, and the optional items per review never fell.**
+  (slate#3007, 2026-11-17)
+  SHORT: A review that says safe means merge and file its optional items as issues; a build round for them brings another review that finds more.
+- **L861. A review suggestion that proposes a new mechanism (a guard, a scanner, a shared library) is a new piece of work with its own issue and its own stated purpose, never a fix round of the piece that suggested it, because the new mechanism becomes a fresh surface for every later review to attack: 17 of the 34 blocking findings after round one sat in helpers that did not exist at round one.**
+  (slate#3007, 2026-11-17)
+  SHORT: A review suggestion proposing a new guard, scanner or library is a new piece with its own issue, never a fix round of the piece reviewed.
+- **L862. Before building or reviewing a guard that reads source text, write down whether it defends against an honest mistake or deliberate concealment, and give that sentence to every reviewer, because a reviewer with no stated adversary hunts a new disguise each round and the rounds never end: 35 of 43 blocking findings were holes no code in the tree used.**
+  (slate#3007, 2026-11-17)
+  SHORT: State whether a source reading guard stops honest mistakes or deliberate hiding, and tell every reviewer, or each round hunts a new disguise.
+- **L863. Keep the blocking bar the same for every review round of one piece and state it in each review brief, and after the second review let an item block only when code in the tree today, or a named planned change, can reach it, because a bar raised midway turns earlier optional items into blockers and reads as the work getting worse: rounds three to eight gave 30 blocking findings, none reachable.**
+  (slate#3007, 2026-11-17)
+  SHORT: One blocking bar for every review round of a piece; after round two an item blocks only if today's code or a named planned change reaches it.
 - **L832. Put a prompt cache point at the end of the text that is identical across the requests meant to share it, never after per request content, and before adding one confirm from real traffic that the text is reread within the cache's lifetime, because a cache write costs more than sending the text uncached and is pure loss when nothing reads it.**
   (pivot#403, 2026-10-30)
   SHORT: Put a prompt cache point where shared text ends, and confirm real traffic rereads it within its lifetime: a write nobody reads costs extra.
