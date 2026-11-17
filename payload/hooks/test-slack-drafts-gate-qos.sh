@@ -93,7 +93,7 @@ printf '%s\n' 'echo hi' > "$T/run.sh"
 # sync watcher is a launchd agent the kernel holds at base priority 20 under a ceiling of 20 (measured
 # 2026-11-17, where a session's shell reads 31 under 63), and the send gate runs this suite from it.
 # A raise lands above the legacy level, 31, so under a ceiling at or below that none can be seen and
-# every check that needs one is said unmeasured at the end, never failed: red there held this suite
+# the two checks that need one are said unmeasured at the end, never failed: red there held this suite
 # back from 227 sends in one day while every hand run was green. The ceiling is the kernel's own
 # reading, never the base priority alone, which a lowered thread with no ceiling shares and can leave.
 start="unread"; ceiling="unread"; CLAMPED=0
@@ -221,10 +221,11 @@ esac
 
 # The suite itself started under a clamp (claude-config#3175): the sync watcher is a launchd agent the
 # kernel holds at base priority 20 with a ceiling of 20 (measured 2026-11-17), and the send gate runs
-# this suite from it. There no raise can be seen at all, so the three checks that need one are said
-# unmeasured, never failed (L411): red there held this suite back from 227 sends in one day while
-# every hand run was green. Run once more under a utility clamp, unless this run is that one, or is
-# clamped already and so is the case itself.
+# this suite from it. There no raise can be seen at all, so of the three checks that failed there, the
+# two that need a raise are said unmeasured, never failed (L411), and the helper's own is turned round
+# to require that it says it could not raise. Red there held this suite back from 227 sends in one day
+# while every hand run was green. Run once more under a utility clamp, unless this run is that one, or
+# is clamped already and so is the case itself.
 if [ -z "${SLACK_GATE_QOS_NESTED:-}" ] && [ "$CLAMPED" -eq 0 ]; then
   nested="$(SLACK_GATE_QOS_NESTED=1 taskpolicy -c utility bash "${BASH_SOURCE[0]}" 2>&1)"; nested_rc=$?
   if [ "$nested_rc" -eq 0 ]; then
