@@ -91,7 +91,7 @@ printf '%s\n' 'echo hi' > "$T/run.sh"
 # raise touches nothing else: on macOS it must report raised, off macOS that there is nothing to
 # raise. The state is judged by the platform alone, since the module never consults taskpolicy.
 QOS_LIB="$DIR/lib/gate-qos.py"
-lib_state="$(python3 - "$QOS_LIB" 2>&1 <<'PY'
+lib_state="$(python3 -B - "$QOS_LIB" 2>&1 <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("gate_qos", sys.argv[1])
 mod = importlib.util.module_from_spec(spec)
