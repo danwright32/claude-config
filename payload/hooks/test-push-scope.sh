@@ -2287,6 +2287,10 @@ git push -f origin other|other other
 git push --force-with-lease origin other|other other
 git push -q origin other 2>&1 | tail -1|other other
 git push -o ci.skip origin other|other other
+git push -odeploy origin other|other other
+git push -onotify origin other|other other
+git push -fo ci.skip origin other|other other
+git push -fonotify origin other|other other
 git push origin feat other|other other
 git push origin HEAD other:x|other other
 git push origin onother|other onother

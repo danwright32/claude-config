@@ -2533,11 +2533,16 @@ ps__push_sources() {   # $1 = the repository directory
       --*) ;;
       -?*)
         # git push's short options are f, u, q, v, 4, 6, n (dry run), d (delete) and o, whose
-        # value is the next word when o ends the cluster.
+        # value is the rest of the word, or the next word when o ends the cluster. Only the letters
+        # before the o are options: an n or a d in its value (-onotify, -odeploy) is neither a dry
+        # run nor a deletion, and read as one it let the push through unjudged.
         c="${a#-}"
+        case "$c" in
+          *o) skip=1; c="${c%%o*}" ;;
+          *o*) c="${c%%o*}" ;;
+        esac
         case "$c" in *n*) dry=1 ;; esac
-        case "$c" in *d*) del=1 ;; esac
-        case "$c" in *o) skip=1 ;; esac ;;
+        case "$c" in *d*) del=1 ;; esac ;;
       *) if [ "$n" = 0 ]; then remote="$a"; else specs+=("$a"); fi; n=$((n + 1)) ;;
     esac
   done
