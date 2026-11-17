@@ -4023,6 +4023,34 @@ test('#3051 control: a pattern or name holding a dollar the shell expands is sti
     expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' }).toEqual({ command, held: true })
 })
 
+// #3088: the newer arithmetic spelling, `\\$((0-9))`, beside a page name elsewhere in the command,
+// was held as a name a command's output fills in: its two parentheses were read as a command
+// substitution. Every shell works out a sum of whole numbers in one (`\-9`), so the script is handed
+// that one text and runs. A sum of a variable, one spelling a screen file, and a real command
+// substitution in a page name stay held.
+test('#3088: a search pattern holding an arithmetic sum, handed to a script, runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const commands = [PATTERN_3051('\\\\$((0-9)),[0-9]{3}'), PATTERN_3051('\\\\$(( 1 + 2 ))'), 'python3 s.py "a|\\\\$((0-9)),[0-9]{3}|b"']
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+test('#3088 control: arithmetic of a variable, a sum spelling a screen file, and a command substitution in a page name are still held', withKit, async ($, on) => {
+  world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    PATTERN_3051('\\\\$((N-9)),[0-9]{3}'),
+    'python3 /tmp/x.py "app/page$((1+1)).tsx"',
+    'python3 /tmp/x.py "app/page$((N)).tsx"',
+    'python3 /tmp/x.py "app/page$(( $(cat n) )).tsx"',
+    'python3 /tmp/x.py "app/$(git ls-files app)"',
+    'python3 /tmp/x.py "app/page$(cat n).tsx"',
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' }).toEqual({ command, held: true })
+  // Arithmetic of a variable is held as a value the shell fills in, never as a command's output.
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'python3 /tmp/x.py "app/page$((N)).tsx"' }))
+  expect({ output: why.includes("its name is a command's output"), variable: why.includes("its name is a shell variable's value") }).toEqual({ output: false, variable: true })
+})
+
 test('#1951 control: a glob the shell expands, or a quoted one that may still name a screen file, is still held', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
   for (const command of [

@@ -3256,6 +3256,29 @@ Reading the pending merge as a merge of its second parent was the other option, 
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
 
+A commit written inside brackets is read like any other (#3091): `(git commit -m x) && git push`
+and `x=$(git merge --continue) && git push` were read as no commit, because the pattern that finds
+where a git starts left out the opener of a subshell and of a command substitution, so the pending
+commit went out with no gate having read it.
+
+Six other git commands put commits on the branch that no gate can read before the command runs:
+`git rebase`, `git cherry-pick`, `git revert`, `git am`, a `git merge` of a named branch and
+`git pull`. Chained before a push, `git cherry-pick abc123 && git push`, every gate judged the range
+as it stood and said nothing of what was about to join it. `push-scope-notice.sh` refuses that
+command too, naming the route, with the same remedy: run it on its own, then push, and the commits
+are in the range the gates read (#3092). Each was measured in a throwaway repository on git 2.51.1
+to make at least one commit a push would send, the forms that continue one in progress and the forms
+that start one alike; a merge that only fast forwards makes none and still puts another branch's
+commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
+refused as well, since a `git commit` later in the command would take what they staged. Only
+`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
+which the gates read. A route counts only when a push follows it in the command, and only in command
+position, so a commit message that names one is not one. `git pull && git push` is refused whole,
+though a pull that only fast forwards sends nothing unread, because which it will be is not known
+before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
+that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
+route (`git apply --index`, `git stash pop`).
+
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
 later pushes, and the gate refused both as untested. Now every test file the branch changed since
@@ -6275,7 +6298,11 @@ else `unresolved` with why, never empty and never safe; and `unread` (#2983, #30
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
 `$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
-every guard holds or refuses it rather than judging its words alone), of which files a command
+every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
+settings a command is run with, each `NAME=value` written in front of it or given to a runner before
+it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a
+shell's script, also given on each script run the write reader lists in `runs`, so a guard can see
+what a script reads from its environment, of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -7384,7 +7411,11 @@ whole and as each piece a split would make) as each of its words, and marks an a
 which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
 arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
 as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
-each judged as the name it spells; a sum mod-kit does not work out is still held. Over this Mac's
+each judged as the name it spells; a sum mod-kit does not work out is still held. Since #3088 a
+sum in the newer spelling (`"a|\\$((0-9))"`), which every shell works out, is given as that one
+text, and the guard reads `$((...))` as arithmetic, never as a command substitution
+(rules.ts `arithmeticMarked`): one holding a variable is held as a variable's value, and one holding
+a command substitution as a command's output. Over this Mac's
 distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
@@ -7666,7 +7697,8 @@ page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
-after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
+which reaches no host and is judged as a close alone is), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
@@ -7755,7 +7787,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585, #3099
+#1765, #1812, #2064, #2261, #2585, #3099, #3107
 
 </td></tr>
 <tr><td>
