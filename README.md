@@ -8321,7 +8321,11 @@ it was, and joined by `;` or `||` the script still runs, from there, so
 `cd ./nowhere; bash ../tools/check-mods.sh /abs/payload/mods` read as the script at the root of
 the checkout and ran the file one folder above it. The reader does not say what joins two
 commands, so the check is on the folder and holds a `cd ./nowhere && ...` as well. A `cd` that
-fails on a folder that is there (one the shell may not enter) is not caught.
+fails on a folder that is there (one the shell may not enter) is not caught. And a `cd` whose path
+backs out of a folder it names, a `..` after a named part (`./a/../b`, `../a/../b`, `~/a/..`), is
+held whatever is on the disk: the reader follows it from the text alone, so
+`cd ./nowhere/../payload` is placed in a folder that is there, while bash and zsh refuse it and
+stay where they were. A path that only starts with `..` (`../`, `../../x`) is followed as before.
 A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
 asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
 lacks the setting, the runner or the command that only sets a value, no run is let through.

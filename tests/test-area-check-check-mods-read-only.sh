@@ -221,10 +221,10 @@ mkdir -p tools/typescript/node_modules; : > tools/typescript/node_modules/plante
 " whole "tools/typescript/node_modules/planted"
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 53 of the run's shape and its text (31 before
+# How many checks must run is set here, not measured: 56 of the run's shape and its text (31 before
 # #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
-# than the rule asks, and two of a change of folder that leads nowhere), one for each of the four
-# libraries, and one for the other script let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 58
+# than the rule asks, two of a change of folder that leads nowhere, and three of one written with
+# `..`), one for each of the four libraries, and one for the other script let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 61
 
 finish

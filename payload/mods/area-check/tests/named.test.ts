@@ -534,6 +534,34 @@ test('a change of folder the reader gives no folder for holds the run, and one t
   expect(asked).toContain(`folder ${APP}/src`)
 })
 
+// Lessons review of #3131 at 90dfc12: the reader works out where a change of folder ends from its
+// text, collapsing `..`, so `cd ./nowhere/../src` is placed in src, which is there, while the shell
+// refuses it and stays where it was. A `..` after a named part therefore holds the run, whether or
+// not the folders are there. A path that only starts with `..` is still followed (PLAIN, above).
+const BACKS_OUT = 'the change of folder before it backs out of a folder it names (a .. after a named part), which the shell refuses when that folder is not there while the reader follows it, so the folder the script runs in cannot be shown'
+const BACKED_OUT: [string, string][] = [
+  ['through a folder that is not there, joined by a semicolon', `cd ./nowhere/../src; bash ../tools/check-mods.sh ${APP}/src/`],
+  ['through a folder that is there', 'cd ./src/../src && bash ../tools/check-mods.sh lib'],
+  ['from the folder above, then back out of a folder it names', 'cd ../app/../app/src && bash ../tools/check-mods.sh lib'],
+  ['written from the root', `cd ${APP}/nowhere/../src; bash ../tools/check-mods.sh ${APP}/src/`],
+  ['written from the home folder', `cd ~/nowhere/..; bash ${APP}/tools/check-mods.sh ${APP}/src/`],
+  ['ending in the folder above the one it names', `cd ./src/lib/.. && bash ../tools/check-mods.sh lib`],
+  ['the scan, through a folder that is not there', `cd ./nowhere/../src; bash ../${SCAN} ${APP}/src/`],
+  ['the scan, through a folder that is there', `cd ./src/../src && bash ../${SCAN} lib`],
+]
+
+test('a run after a change of folder that backs out of a folder it names is held, whether or not the folder is there (#3131 lessons review)', KIT, async ($, on) => {
+  const w = both($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of BACKED_OUT.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(BACKED_OUT.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(BACKED_OUT.map(() => ['judged', BACKS_OUT]))
+})
+
 test('a setting the write reader carries on the run holds it though the commands show none (#3093)', async () => {
   const command = `TMPDIR=src ${RUN}`
   const bare: NamedFacts['commands'] = async c => (c === command ? [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }] : pipelineIn(c, APP, HOME, { assignments: true }))

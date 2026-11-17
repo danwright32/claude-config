@@ -123,6 +123,24 @@ const saysHowRun = async (facts: NamedFacts): Promise<boolean> => {
 const FROM_A_FIXED_PLACE = /^(?:\/|\.{1,2}(?:\/|$)|~(?:\/|$))[^$`*?[\]{}()]*$/
 const plainCd = (c: Read): boolean => c.words.length === 2 && FROM_A_FIXED_PLACE.test(c.words[1] as string)
 
+// A path that backs out of a folder it names: a `..` after a named part (`./a/../b`, `../a/../b`,
+// `~/a/..`, `/a/..`). The reader works out where such a change of folder ends from the text alone,
+// so `cd ./nowhere/../src` is placed in src, while bash and zsh refuse it when `nowhere` is not
+// there (measured 2026-11-17) and stay where they were. Where the named part is a link, where the
+// shell lands also depends on whether it is set to follow links, which the reader cannot know.
+// Nobody needs one to run a named script, so any holds the run, whatever is on the disk. A
+// path that only starts with `..` (`../`, `../../x`) names nothing before it backs out, and is
+// followed as before. The home folder counts as named.
+const backsOut = (path: string): boolean => {
+  let named = false
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue
+    if (part !== '..') named = true
+    else if (named) return true
+  }
+  return false
+}
+
 // Why an equals sign in a command holding one may set a value the script reads, or null when none
 // does (#3093). `run` is the command's commands and `at` the script's own among them, with nothing
 // before it but changes of folder and nothing after it but readers of its output. A null here lets
@@ -198,14 +216,16 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   const behind = run.slice(0, own + 1).findIndex(c => c.behind?.length)
   if (behind >= 0) return `${behind === own ? 'it is' : 'the change of folder before it is'} run behind ${(run[behind]?.behind ?? []).join(', ')}, which can change the folder or the environment it runs in`
   if (!run.slice(0, own).every(plainCd)) return 'the change of folder before it is not a cd to one folder written from /, ./, ../ or ~, so the folder the script runs in cannot be shown'
+  if (run.slice(0, own).some(c => backsOut(c.words[1] as string))) return 'the change of folder before it backs out of a folder it names (a .. after a named part), which the shell refuses when that folder is not there while the reader follows it, so the folder the script runs in cannot be shown'
   // A change of folder that fails leaves the shell where it was, and joined by `;`, `||` or a new
   // line the script still runs, from there: `cd ./nowhere; bash ../tools/check-mods.sh /w/app/src`
   // was read as the script at the root of the checkout, and what runs is the file one folder above
   // it, which nobody compared (let through since #3022; the lessons review of #3131 at 2a15886).
   // The reader does not say what joins two commands, so every change of folder, an `&&` one too,
-  // must lead to a folder on the disk: the folder the reader places the next command in. What this
-  // cannot show is a cd that fails on a folder that is there (one the shell may not enter, or one
-  // removed between this check and the run).
+  // must lead to a folder on the disk: the folder the reader places the next command in, which is
+  // where the shell goes once no path backs out of a folder it names (backsOut, above; the lessons
+  // review at 90dfc12). What this cannot show is a cd that fails on a folder that is there (one
+  // the shell may not enter, or one removed between this check and the run).
   for (let i = 0; i < own; i++) {
     const to = run[i + 1]?.folder
     if (!to || !(await facts.isFolder(to))) return `the change of folder before it leads to ${to ? 'no folder on the disk' : 'a folder the reader cannot place'}, so the script may run from another folder than the one it was read in`
@@ -230,9 +250,9 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
  * comment; for every other named script the command holds no equals sign at all), runs it behind no
  * runner (`env`, `sudo`, `timeout`, a shell's `-c` script, anything the reader gives as `behind`)
  * and runs nothing else but a change of folder before it (plainCd: `cd` and one folder written from
- * /, ./, ../ or ~, behind no runner, leading to a folder on the disk, since one that fails leaves
- * the script running from where the shell was) and readers of its output after it, with its texts
- * unchanged.
+ * /, ./, ../ or ~, behind no runner, with no `..` after a named part, leading to a folder on the
+ * disk, since one that fails leaves the script running from where the shell was) and readers of its
+ * output after it, with its texts unchanged.
  * Then the run is taken out of `runs`, so the folder is no write of that run's. Every other write in
  * the command (a redirect of its output) stays as mod-kit read it, and a run that is not let through,
  * as one chained with any other command is not, is judged as before.

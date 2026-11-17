@@ -23,7 +23,7 @@
 // which holds the count to the number its suite states. The checkout is left changed: run it last.
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, copyFileSync, statSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 const [namedPath, writesPath, rulesPath, repo, entry, file] = process.argv.slice(2)
 const { NAMED, namedReaders, ...exported } = await import(namedPath)
 const { commandWrites, pipelineIn } = await import(writesPath)
@@ -126,6 +126,14 @@ await through('after a change of folder written from the root, it is let through
 const NOWHERE = 'the change of folder before it leads to no folder on the disk'
 await judged('after a change of folder to no folder on the disk, joined by a semicolon, it is judged', `cd ./nowhere; bash ../${S} ${MODS}`, [MODS], NOWHERE)
 await judged('run only if a change of folder to no folder on the disk fails, it is judged', `cd ./nowhere || bash ../${S} ${MODS}`, [MODS], NOWHERE)
+// The reader works out where a change of folder ends from its text, collapsing `..`, and the shell
+// refuses one written through a folder that is not there (bash and zsh, measured 2026-11-17). So a
+// `..` after a named part holds the run, whether or not the folders are there, and a path that
+// only starts with `..` is still followed (lessons review at 90dfc12).
+const BACKS_OUT = 'the change of folder before it backs out of a folder it names'
+await judged('after a change of folder written through a folder that is not there and back out, it is judged', `cd ./nowhere/../payload; bash ../${S} ${MODS}`, [MODS], BACKS_OUT)
+await judged('after a change of folder written through a folder that is there and back out, it is judged', `cd ./payload/../payload && bash ../${S} mods`, [MODS], BACKS_OUT)
+await through('after a change of folder that starts from the folder above, it is let through', `cd ../${basename(repo)}/payload && bash ../${S} mods`)
 // Written after it, a command still runs before it the second time round a loop, or once a function is called.
 await judged('in a loop that reads and exports a value after it, it is judged', `for i in 1 2; do bash ${S} payload/mods; read TMPDIR <<< payload/mods; export TMPDIR; done`, [MODS], BEFORE)
 await judged('in a function called after a value is read and exported, it is judged', `f() { bash ${S} payload/mods; }; read TMPDIR <<< payload/mods; export TMPDIR; f`, [MODS], BEFORE)
