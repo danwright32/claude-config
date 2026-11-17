@@ -24,7 +24,11 @@ Two routes are judged:
     judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
     judged the same way (claude-config#2318); an import written in a JavaScript or TypeScript comment
-    is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
+    is an example, not one (claude-config#2397). The variable name projects keep a webhook in is a name
+    and no address, so a JavaScript or TypeScript file that only declares it (an object literal's key
+    set to null, undefined or a string that is no address anyone receives at, or a member of an
+    interface or a type alias) is not one that posts, and a file that reads it still is
+    (lib/data-names.py, claude-config#3050). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
     path with the interpreter its #! names (claude-config#2400), or is code given inline (python3 -c,
@@ -32,7 +36,8 @@ Two routes are judged:
     which word is the script, is read from each program family's own options (OPTIONS), never one
     table for all of them (claude-config#2439). A script counts as able to send a
     request, run code or write a file unless it is seen to be unable to: a Python script imports only
-    modules known to be unable to (PY_INERT) and uses no builtin that runs code; a JavaScript one
+    modules known to be unable to (PY_INERT), uses os only for the names that read (OS_READS,
+    claude-config#3085) and uses no builtin that runs code; a JavaScript one
     imports only node builtins known to be unable to (JS_INERT) and names no global that sends or runs
     code and no fs method that writes; a shell script hands its arguments only to programs known to
     be unable to send or run code (SH_INERT), to its own functions, or to scripts seen unable to act
@@ -102,9 +107,13 @@ def unworked_paths_refused():
     return REFUSE_UNWORKED_PATHS or os.environ.get("SLACK_GATE_UNWORKED_PATHS") == "refuse"
 
 # The endpoints and names that post: Slack's Web API methods that put a message in front of people,
-# an incoming webhook's host, and the variable name projects keep a webhook in.
-MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessage)|hooks\.slack\.com|slack_webhook",
-                    re.I)
+# an incoming webhook's host, and the variable name projects keep a webhook in. That last one is a
+# name and no address, so a JavaScript or TypeScript file that only declares it, reading nothing
+# kept under it, is not one that posts (lib/data-names.py, claude-config#3050). The group called name
+# is how that reading tells it from the addresses. It is written only here, inside the pattern: as a
+# string of its own it would make this file one the gate refuses to run, its suites with it.
+MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessage)|hooks\.slack\.com|"
+                    r"(?P<name>slack_webhook)", re.I)
 SEND_TOOLS = {"slack_send_message", "slack_schedule_message", "slack_post_message", "slack_reply_to_thread"}
 
 SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
@@ -1134,16 +1143,26 @@ POSITIONAL_ZERO = r"\$\{?[0-9@*]"
 # writing a file is not counted in that code: issue-spool.sh's own heredocs import os and write, and
 # its clear line is handed a transcript every turn. So inline Python may also import PY_FILES, and os
 # for the names in OS_FILES alone (its file, path and environment calls: none starts a program).
+#
+# A script file, and code given inline, may use os too, for the names in OS_READS alone
+# (claude-config#3085): the ones that read a file, a path or the environment, none of which starts
+# a program, sends anything or writes a file. Before, os was no module the gate knew to be inert,
+# so any script importing it and handed a file naming an endpoint (the rules file names one in its
+# own Slack rule) was refused, whatever it did with os. Dan chose on 2026-11-16 to trust a program
+# the gate reads end to end: py_acts reads every use of the name os is imported by, and any use
+# that is not os.<one of these> (os.system, os.remove, os handed on or given another name) counts
+# as acting, as before. OS_FILES is these and the names that write, so it can only hold more.
 PY_FILES = frozenset({"errno", "io", "stat", "tempfile"})
-OS_FILES = frozenset({
-    "DirEntry", "F_OK", "O_APPEND", "O_CLOEXEC", "O_CREAT", "O_EXCL", "O_NOFOLLOW", "O_RDONLY", "O_RDWR",
-    "O_TRUNC", "O_WRONLY", "PathLike", "R_OK", "W_OK", "X_OK", "access", "altsep", "chmod", "close",
-    "cpu_count", "curdir", "devnull", "environ", "environb", "error", "extsep", "fdopen", "fsdecode",
-    "fsencode", "fspath", "fstat", "fsync", "get_terminal_size", "getcwd", "getegid", "getenv", "geteuid",
-    "getgid", "getloadavg", "getlogin", "getpid", "getppid", "getuid", "isatty", "linesep", "link",
-    "listdir", "lstat", "makedirs", "mkdir", "name", "open", "pardir", "path", "pathsep", "read",
-    "readlink", "remove", "rename", "replace", "rmdir", "scandir", "sep", "stat", "stat_result",
-    "strerror", "symlink", "truncate", "umask", "uname", "unlink", "urandom", "utime", "walk", "write"})
+OS_READS = frozenset({
+    "DirEntry", "F_OK", "PathLike", "R_OK", "W_OK", "X_OK", "access", "altsep", "cpu_count", "curdir",
+    "devnull", "environ", "environb", "error", "extsep", "fsdecode", "fsencode", "fspath", "fstat",
+    "get_terminal_size", "getcwd", "getegid", "getenv", "geteuid", "getgid", "getloadavg", "getlogin",
+    "getpid", "getppid", "getuid", "isatty", "linesep", "listdir", "lstat", "name", "pardir", "path",
+    "pathsep", "readlink", "scandir", "sep", "stat", "stat_result", "strerror", "uname", "urandom", "walk"})
+OS_FILES = OS_READS | frozenset({
+    "O_APPEND", "O_CLOEXEC", "O_CREAT", "O_EXCL", "O_NOFOLLOW", "O_RDONLY", "O_RDWR", "O_TRUNC", "O_WRONLY",
+    "chmod", "close", "fdopen", "fsync", "link", "makedirs", "mkdir", "open", "read", "remove", "rename",
+    "replace", "rmdir", "symlink", "truncate", "umask", "unlink", "utime", "write"})
 # What a pipe can feed that reads it in commands of its own: a loop, a block, an if, or read.
 SH_BLOCK = re.compile(r"\s*(?:while|until|for|if|select|case|time|!|\{)(?=\s|$)|\s*(?:\S+=\S*\s+)*read(?=\s|$)")
 # A pipe in a script's text, `||` apart.
@@ -5683,7 +5702,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
                 return self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
             return None
-        if name in ("source", "."):
+        # A launcher handed `.` runs the package in the folder it is in, never the shell's builtin (#3083).
+        if name in ("source", ".") and not (launcher and name == "."):
             if len(words) < 2:
                 return None
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
@@ -6029,8 +6049,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 try:
                     # Read whole, comments and docstrings included: a script handed it as data can
                     # read its text and post to an address it finds there (py_marker is only for
-                    # a file run as Python, lessons review at d05bf8b).
-                    hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
+                    # a file run as Python, lessons review at d05bf8b). The webhook's name where a
+                    # JavaScript or TypeScript file only declares it is no address to find (#3050).
+                    hit = self.named_in(self.content(path).decode("utf-8", "replace"), self.own_language(path))
                 except OSError:
                     continue  # unreadable to us is unreadable to the script that would read it
                 if not hit:
@@ -6356,8 +6377,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
         writes is False for code a shell script writes inline (claude-config#2446): writing a file is
         not counted there, so PY_WRITES and open()'s mode are not read, PY_FILES may be imported, and
-        so may os, held to OS_FILES: each use of the name it is imported by must be os.<one of them>,
-        and any other use (os.system, os passed on or given another name) counts as acting. ran is
+        os is held to OS_FILES where everywhere else it is held to OS_READS (claude-config#3085): each
+        use of the name it is imported by must be os.<one of them>, and any other use (os.system, os
+        passed on or given another name, and os.remove where writing counts) counts as acting. ran is
         the NAMEs whose code py_env_code put in front of text, so exec(os.environ[NAME]) for one of
         them is that code running, which is read here; any other exec counts as it always did.
 
@@ -6390,7 +6412,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         unknown = "a module the gate does not know to be unable to send a request or run code"
         bound = set()  # each name an import binds, whose attributes are another module's namespace
         restricted = set()  # (a, b) for `import a.b` where only a.b is inert, so a.<other> acts
-        os_names = set()  # the names os is imported by, where writes are not counted
+        os_names = set()  # the names os is imported by, each use of which is held to os_may
+        os_may = OS_READS if writes else OS_FILES
         for node in nodes:
             if isinstance(node, ast.Import):
                 for a in node.names:
@@ -6398,7 +6421,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     bound.add(a.asname or top)
                     if self.resolve_py(0, a.name, (), cur_dir, root, inserts) != []:
                         continue  # local (followed by modules()) or placed nowhere (refused there)
-                    if not writes and a.name == "os":
+                    # `import os.path` binds os as `import os` does, so it is held the same way.
+                    if a.name == "os" or (a.name == "os.path" and not a.asname):
                         os_names.add(a.asname or "os")
                         continue
                     if not writes and a.name in PY_FILES:
@@ -6420,7 +6444,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     continue
                 if module == "sys" and "path" in names:
                     return "changes where Python finds modules (sys.path)"
-                if not writes and (module in PY_FILES or (module == "os" and all(n in OS_FILES for n in names))):
+                if (not writes and module in PY_FILES) or (module == "os" and all(n in os_may for n in names)):
                     continue
                 if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
                         not all(f"{module}.{n}" in PY_INERT for n in names) and not self.py_inert_unless(module, text):
@@ -6435,16 +6459,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     (node.value.id, node.attr) in restricted:
                 cleared.add(id(node.value))
         restricted_names = {top for top, _ in restricted}
-        # Each use of os as os.<one of OS_FILES>, and each exec that runs code already in this text.
-        os_ok = {id(n.value) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-                 and n.value.id in os_names and n.attr in OS_FILES}
+        # Each use of os as os.<a name>, by the name used, and each exec that runs code already in this text.
+        os_used = {id(n.value): n.attr for n in nodes if isinstance(n, ast.Attribute)
+                   and isinstance(n.value, ast.Name) and n.value.id in os_names}
+        os_ok = {i for i, attr in os_used.items() if attr in os_may}
         ran_here = {id(n.func) for n in nodes if ran and self.py_env_exec(n, os_names) in ran}
         for node in nodes:
             if isinstance(node, ast.Name):
                 if node.id in PY_RUNS and id(node) not in ran_here:
                     return f"can run code or reach past what the gate reads ({node.id})"
                 if node.id in os_names and id(node) not in os_ok:
-                    return f"uses {node.id} for more than its file, path and environment calls"
+                    if not writes:
+                        return f"uses {node.id} for more than its file, path and environment calls"
+                    used = f"{node.id}.{os_used[id(node)]}" if id(node) in os_used else f"{node.id}, handed on or renamed"
+                    return f"uses {node.id} for more than reading files, paths and the environment ({used})"
                 if node.id in PY_REACH - {"modules"}:
                     return f"can evaluate a string as code ({node.id})"
                 if node.id in restricted_names and id(node) not in cleared:
@@ -6464,7 +6492,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # os.stat is os's own call, not the stat module: one of OS_FILES straight off os.
                 if isinstance(base, ast.Name) and base.id in bound and base.id != "sys" and a in stdlib \
                         and a not in PY_INERT and (base.id, a) not in restricted \
-                        and not (base.id in os_names and node.value is base and a in OS_FILES):
+                        and not (base.id in os_names and node.value is base and a in os_may):
                     return f"reaches the {a} module through {base.id}"
             elif isinstance(node, ast.Call) and writes:
                 f = node.func

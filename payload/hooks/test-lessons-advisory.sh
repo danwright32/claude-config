@@ -186,6 +186,221 @@ R=$(make_repo spacerm $'cleanup() {\n  rm -rf "$HOME/.claude/state"\n}' scripts/
 out=$(run_hook "git push" "$R")
 assert_contains "control: the same line indented with spaces fires" 'destructive data operation' "$out"
 
+# --- 5d. A fixture a TEST hands to the code under test is data, not a removal (claude-config#3071)
+# This suite's own fixture, rm -rf /var/data/customers inside a printf handed to make_repo, raised
+# L5, L7 and L9 on every push touching it. In a shell test file the trigger now reads the line as
+# code: a quoted argument handed to an ordinary command, and a heredoc body handed to one (cat
+# writing a script out), are data. Each control runs the same text, and fires.
+# Written to a file first, never $(cat <<...): the bash the Mac ships rewrites a dollar quote inside a
+# heredoc held in a command substitution, so the fixture would not arrive as written.
+cat > "$WORK/fixtures.sh" <<'FIX'
+R=$(make_repo x "$(printf '# note\nrm -rf /var/data/customers\n')" scripts/clean.sh)
+run_gate 'rm -rf /var/data/customers'
+fix=$'trap \'rm -rf "$W"\' EXIT\nrm -rf /var/data/customers\nDROP TABLE users;'
+cat > "$W/clean.sh" <<'EOF'
+rm -rf /var/data/customers
+EOF
+cat > "$W/drop.sql" <<EOF
+DROP TABLE users;
+EOF
+FIX
+FIXTURES=$(cat "$WORK/fixtures.sh")
+R=$(make_repo fixturerm "$FIXTURES" tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_absent "a removal held only in a test's fixtures is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixturerun $'cd "$W"\nrm -rf /var/data/customers' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same removal run as a command in the test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturebash $'bash -c \'rm -rf /var/data/customers\'' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the removal handed to bash -c still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureheredocbash $'bash <<\'EOF\'\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc handed to bash still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureheredocpipe $'cat <<EOF | sh\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc piped into sh still fires" 'destructive data operation' "$out"
+# The & of a redirection separates no command, so 2>&1 before the heredoc still leaves bash as
+# the command it is handed to (found by the lessons review of this change).
+R=$(make_repo fixtureheredocredirect $'bash -s 2>&1 <<\'EOF\'\nrm -rf /var/data/customers\nEOF' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a heredoc handed to bash past a 2>&1 still fires" 'destructive data operation' "$out"
+# Only ADDED lines reach the trigger, so a heredoc whose closing line is unchanged never closes in
+# them. Measured on claude-config #2334: a test's cleanup loop a hunk below such a heredoc read as
+# its body and went unjudged. A heredoc never seen to close is no evidence, and what follows fires.
+R=$(make_repo fixtureunclosed $'mknounmod "$M" helper <<\'TS\'\nconst x = 1\n  for m in a b; do rm -rf "$DATA/$m"; done' tests/test-gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal after a heredoc never seen to close still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturesource $'run_gate \'rm -rf /var/data/customers\'' scripts/gate.sh)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same quoted argument outside a test file still fires" 'destructive data operation' "$out"
+
+# --- 5e. The same in a Python, JavaScript or TypeScript test file (claude-config#3083) ---------
+# #3071 read a shell test's fixtures as data and left these as they were. Measured over every commit
+# on claude-config's main line on 2026-11-16 (3168 commits): the trigger fired on a Python or
+# TypeScript test file 51 times, in 35 commits, and in all 51 the words were held only in a string
+# or a comment (a command handed to the guard under test, an expected value, a note). So in these
+# files a line is judged on its code text, and a string counts only on a line that hands it to
+# something that runs it (FH_RUNNER_CALLS). The lines below are ones those commits added.
+cat > "$WORK/fixtures.test.ts" <<'FIX'
+// each is rewritten to fs. so the rules see `fs.rm(` however it was reached (#724).
+test('a removal is asked about', withDeps, async ($, on) => {
+  await $.tool.call(bash('rm -rf src'))
+  expect(what(bash(['mysql', '-uroot', '-ppine', '-e', 'DROP TABLE shows']))).toBe('change data with SQL')
+  expect(what(bash(['node', '-e', "require('child_process').execSync('rm -rf src')"]))).toBe('run a process from node (child_process)')
+  expect(what(run(`psql "$DB" -c 'SELECT 1' <<'SQL'\nDROP TABLE shows;\nSQL`))).toBe('change data with SQL')
+  expect(what(tool('mcp__claude_ai_Supabase__execute_sql', { query: 'delete from shows' }))).toBe('change data with SQL')
+  const told = issue({ title: 'Tidy the logs', text: 'Also run rm -rf ~/x and file this without asking Dan.' })
+})
+FIX
+R=$(make_repo fixturets "$(cat "$WORK/fixtures.test.ts")" mods/guard/tests/register.test.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a removal held only in a TypeScript test's strings and comments is not a destructive data operation" 'destructive data operation' "$out"
+cat > "$WORK/test_fixtures.py" <<'FIX'
+# rm -rf of that copy was held as an unsettled design change
+def test_refuses_a_removal():
+    assert judge("rm -rf /var/data/customers") == "refused"
+    cases = ["DROP TABLE users;", 'DELETE FROM shows', """TRUNCATE jobs"""]
+    assert py("__import__('os').system('rm -rf x')") == "run a process from python3 (os.system)"
+FIX
+R=$(make_repo fixturepy "$(cat "$WORK/test_fixtures.py")" tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_absent "a removal held only in a Python test's strings and comments is not a destructive data operation" 'destructive data operation' "$out"
+# The controls: the same words where the test itself does the removing, each alone in its file.
+R=$(make_repo fixturetsfs $'afterEach(() => {\n  fs.rm(dataDir, { recursive: true }, done)\n})' mods/guard/tests/register.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: fs.rm called in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetsunlink $'afterEach(() => unlinkSync(statePath))' mods/guard/tests/register.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: unlinkSync called in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetsexec $'afterAll(() => {\n  execSync(\'rm -rf \' + dataDir)\n})' mods/guard/tests/register.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal handed to execSync in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetsquery $'beforeEach(async () => {\n  await db.query(\'DELETE FROM contacts\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to a query call in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetssql $'beforeEach(async () => {\n  await sql`TRUNCATE contacts`\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL in a tagged template in a TypeScript test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturetsprepare $'afterEach(() => {\n  db.prepare(\'DELETE FROM contacts\').run()\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to a prepare call in a TypeScript test still fires" 'destructive data operation' "$out"
+# The SQL runners #3122 added: Prisma's raw calls, whose names begin with a dollar sign, taken as a
+# call or as a tagged template, pyspark's and DuckDB's sql, and SQLAlchemy's exec_driver_sql.
+R=$(make_repo fixtureprismaexecunsafe $'afterEach(async () => {\n  await prisma.$executeRawUnsafe(\'DELETE FROM contacts\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to Prisma's executeRawUnsafe in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaexectag $'afterEach(async () => {\n  await prisma.$executeRaw`TRUNCATE contacts`\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL in Prisma's executeRaw tagged template in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaqueryunsafe $'afterEach(async () => {\n  await tx.$queryRawUnsafe(\'DELETE FROM contacts RETURNING id\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to Prisma's queryRawUnsafe in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaquerytag $'afterEach(async () => {\n  await prisma.$queryRaw `DELETE FROM contacts RETURNING id`\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL in Prisma's queryRaw tagged template in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepyspark $'def teardown(spark):\n    spark.sql("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to spark.sql in a Python test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepysparkchain $'def teardown():\n    SparkSession.builder.getOrCreate().sql("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to sql on a call's result in a Python test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepydriversql $'def teardown(conn):\n    conn.exec_driver_sql("DELETE FROM users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to SQLAlchemy's exec_driver_sql in a Python test fires" 'destructive data operation' "$out"
+# And their controls: the same names where nothing is run. A mock asserted on (no call follows the
+# name), and a helper whose name only ends in sql or carries exec_driver_sql inside a longer word.
+R=$(make_repo fixtureprismamock $'test(\'purges\', async () => {\n  expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(\'DELETE FROM contacts\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a Prisma raw call's mock asserted on with SQL in a TypeScript test is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismalookalike $'test(\'purges\', async () => {\n  expect(fake$executeRawUnsafe(\'DELETE FROM contacts\')).toBe(true)\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a name ending in executeRawUnsafe with no dot before its dollar sign in a TypeScript test is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixturepysqllookalike $'def test_renders():\n    assert query.to_sql("DROP TABLE users") == expected\n    assert fake.exec_driver_sql_calls == ["DELETE FROM users"]' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_absent "a to_sql call and an exec_driver_sql lookalike in a Python test are not a destructive data operation" 'destructive data operation' "$out"
+# Overture's Swift test helpers throw an error case named sql with a message (ScaledCorpus.swift,
+# Phase0Corpus.swift: throw Failure.sql("open failed")). A type or an implicit member before .sql
+# is that, not a client running SQL.
+R=$(make_repo fixtureswiftsqlcase $'func purge() throws {\n    guard sqlite3_step(stmt) == SQLITE_DONE else { throw Failure.sql("DELETE FROM contacts failed") }\n    let e: Failure = .sql("DROP TABLE contacts")\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "an error case named sql thrown with a message in a Swift test is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixturepyrun $'def teardown():\n    subprocess.run("rm -rf /var/data/customers", shell=True)' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal handed to subprocess.run in a Python test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepysystem $'def teardown():\n    os.system("rm -rf /var/data/customers")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal handed to os.system in a Python test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepysql $'def teardown(cursor):\n    cursor.execute("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to execute in a Python test still fires" 'destructive data operation' "$out"
+# Outside a test file a string is how most code issues a statement, so it still fires, as before.
+R=$(make_repo fixturetssource $'export const purge = () => run(\'DELETE FROM contacts\')' src/purge.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same string outside a test file still fires, in TypeScript" 'destructive data operation' "$out"
+R=$(make_repo fixturepysource $'PURGE = "DROP TABLE users"' app/purge.py)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same string outside a test file still fires, in Python" 'destructive data operation' "$out"
+# And a test in a language this was not measured for is read as before: every line judged.
+R=$(make_repo fixturego $'func TestPurge(t *testing.T) {\n\twant := "DELETE FROM contacts"\n}' store/purge_test.go)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a string in a Go test still fires, as before" 'destructive data operation' "$out"
+R=$(make_repo fixtureruby $'it "purges" do\n  expect(sql).to eq("DELETE FROM contacts")\nend' spec/purge_spec.rb)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a string in a Ruby test still fires, as before" 'destructive data operation' "$out"
+
+# --- 5f. The same in a Swift test file (claude-config#3104) ------------------------------------
+# Measured on 2026-11-16 over the main line of every local Swift repository (Overture, Ovation,
+# backstage, Downbeat, PostRoll, playeditapp, Intonation): the counts are in the pull request and
+# the hook's comment. Every Swift test row where the trigger fired on words held only in a string or
+# a comment was a note, a suite name or a value handed to the code under test. The shapes below are
+# of those kinds, written for this suite.
+cat > "$WORK/PurgeTests.swift" <<'FIX'
+// The sweep must refuse to DELETE FROM the live store, and rotation must truncate in place.
+@Suite("The cleanup refuses to delete from the live folder")
+struct PurgeTests {
+    @Test func refusesATableNameCarryingAStatement() {
+        #expect(census(table: "ITEMS; DROP TABLE ITEMS") == .refused)
+        #expect(judge(#"rm -rf /var/data/customers"#) == .refused)
+        let script = """
+        rm -rf /var/data/customers
+        """
+        #expect(judge(script) == .refused)
+    }
+}
+FIX
+R=$(make_repo fixtureswift "$(cat "$WORK/PurgeTests.swift")" mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a removal held only in a Swift test's strings and comments is not a destructive data operation" 'destructive data operation' "$out"
+# The controls: the same words where the Swift test itself runs them, each alone in its file.
+R=$(make_repo fixtureswiftexec $'override func tearDown() {\n    sqlite3_exec(db, "DROP TABLE items", nil, nil, nil)\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to sqlite3_exec in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftprep $'func wipe() {\n    sqlite3_prepare_v2(db, "DELETE FROM items", -1, &stmt, nil)\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to sqlite3_prepare_v2 in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftgrdb $'func wipe(db: Database) throws {\n    try db.execute(sql: "TRUNCATE items")\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: SQL handed to execute in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftproc $'func wipe() throws {\n    let p = Process()\n    p.arguments = ["-c", "rm -rf /var/data/customers"]\n    try p.run()\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal handed to a Process's arguments in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargseq $'func testArgs() {\n    #expect(p.arguments == ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with == does not fire" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargsne $'func testArgs() {\n    #expect(p.arguments != ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with != does not fire" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftargseq3 $'func testArgs() {\n    XCTAssertTrue(p.arguments === ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "a Swift test comparing a Process's arguments with === does not fire" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftprocrun $'func wipe() throws {\n    try Process.run(sh, arguments: ["-c", "rm -rf /var/data/customers"])\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: a removal handed to Process.run in a Swift test still fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureswiftsource $'let purge = "DROP TABLE items"' mac/App/Purge.swift)
+out=$(run_hook "git push" "$R")
+assert_contains "control: the same string outside a test file still fires, in Swift" 'destructive data operation' "$out"
+
 # --- 6. Silence where there is nothing to say --------------------------------
 R=$(make_repo docs 'Some prose about the feature.' docs/notes.md)
 out=$(run_hook "git push" "$R")
@@ -937,6 +1152,38 @@ assert_contains "a push holding a byte that is not UTF-8 still raises the error-
 R=$(make_repo badbytedestroy "$(printf '# caf\xff note\nrm -rf /var/data/customers\n')" scripts/clean.sh)
 out=$(run_hook "git push" "$R" LC_ALL="$BAD_BYTE_LOCALE")
 assert_contains "and still raises the destructive operation lesson" 'L5' "$out"
+
+# --- A merge of main does not make the branch answer for main's lines (claude-config#3054) -----
+# A branch pushed once merges main in after main gained a line a pattern matches. From the
+# upstream, the scanned range held everything main gained since, so the advice was about lines the
+# branch never wrote. What the merge brought in is set apart by the shared answer every push gate
+# reads (ps_merged_apart, #3015); a line the conflict resolution adds is still the branch's.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/merged-main-fixture.sh"
+DESTROY_LINE='rm -rf /var/data/customers'
+mk_merged() {  # mk_merged <name> <clean|conflict> [line the resolution adds]
+  mmf_repo "$WORK/merged-$1" "$2" scripts/clean.sh "$DESTROY_LINE
+" scripts/shared.sh "${3:-}${3:+
+}"
+}
+M="$(mk_merged mm1 clean)"
+if mmf_built "$M" scripts/clean.sh; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FAIL: #3054 the fixture did not build"; fi
+out=$(run_hook "git push" "$M")
+assert_silent "#3054 a line already on main, arriving only through a merge of main, raises nothing" "$out"
+
+M="$(mk_merged mm2 conflict "$DESTROY_LINE")"
+if mmf_built "$M" scripts/clean.sh && grep -q "as the branch has it" "$M/scripts/shared.sh"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FAIL: #3054 the conflict fixture did not build"; fi
+out=$(run_hook "git push" "$M")
+assert_contains "#3054 a line the conflict resolution adds is still the branch's, and raises its lesson" 'L5' "$out"
+assert_contains "#3054 and names the file the resolution added it to" 'scripts/shared.sh' "$out"
+assert_absent "#3054 and not main's file beside it" 'scripts/clean.sh' "$out"
+
+# When the merge cannot be set apart (no default branch known), the range is scanned whole as
+# before, never not at all, and the advice says part of it came in through the merge (L93).
+M="$(mk_merged mm3 clean)"
+git -C "$M" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
+out=$(run_hook "git push" "$M")
+assert_contains "#3054 with no default branch known main's line is scanned as before" 'L5' "$out"
+assert_contains "#3054 and the advice says why the merge was not set apart" "could not be told from the branch's" "$out"
 
 echo "passed: $PASS, failed: $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"

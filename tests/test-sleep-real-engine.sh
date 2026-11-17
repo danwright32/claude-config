@@ -41,8 +41,12 @@
 # GitHub looking origin is rewritten to a local bare repository; `gh` first on PATH records every
 # call and fails; the queue reads its one issue from a stand-in source (SLEEP_QUEUE_SOURCE, the
 # seam test-sleep-queue.sh uses); `pmset` answers AC power; and the notifier, sound, open and
-# osascript record and do nothing. The end of the run checks that the real ~/.claude/state/sleep
-# and ~/Downloads gained nothing (L322).
+# osascript record and do nothing. The sleep tools find their folder through HOME, and the steps
+# below find the record, the caffeinate hold and the notes in the scratch one, which is where the
+# writes are measured to land (L322). The end of the run checks that no new file in the real
+# ~/.claude/state/sleep or ~/Downloads carries anything this run made, and names any new file there
+# carrying nothing of this run's as unmeasured, since another session's write and a leak with nothing
+# of this run's in it read alike (tests/sleep-real-engine-leaks.py, #3059, #3080).
 #
 # What a headless run cannot show, said rather than passed:
 #   - /sleep enrols interactive sessions only, and a `claude -p` run is never one (by design,
@@ -255,11 +259,15 @@ hang_wait '[ -s "$WORK/model.port" ]'
 [ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port within the hang ceiling, ${HANG_S}s"; finish; }
 PORT="$(cat "$WORK/model.port")"
 
-# What the real home holds, so the end can say nothing there changed.
+# What the real home holds, so the end can say whether this run leaked into it. Only a change THIS
+# run made counts: another session in sleep mode writes to the real folder too, and reading every newer
+# file as ours turned a full run red for a write it never made (claude-config#3059). The helper
+# attributes a change by the session ids, night stamps and demo repository this run invented, read
+# from what it wrote into the scratch home, and says a new file carrying none of them as unattributed
+# (#3080).
 touch "$WORK/started"
 real_changed() {
-  { find "$REAL_HOME/.claude/state/sleep" -mindepth 1 -newer "$WORK/started" 2>/dev/null
-    find "$REAL_HOME/Downloads" -maxdepth 1 -iname '*sleep report*' -newer "$WORK/started" 2>/dev/null; } | sort
+  python3 -I "$DIR/sleep-real-engine-leaks.py" "$REAL_HOME" "$WORK/home" "$WORK/started" "$WORK" 2>&1
 }
 
 # One headless session: OUT DEADLINE RESULTS SESSION_ID [claude args...] -- MESSAGE...
@@ -614,7 +622,18 @@ grep -q '1.1 danwright32/sleepdemo: Add goodbye.txt' <<<"$MORNING" \
   || check "and it offers the worker's proposed issue for the morning picker" "$(head -c 400 <<<"$MORNING")"
 
 # ---- nothing outside the scratch Mac was touched ----
-CHANGED="$(real_changed)"
-[ -z "$CHANGED" ] && check "the real ~/.claude/state/sleep and ~/Downloads gained nothing" ok || check "the real ~/.claude/state/sleep and ~/Downloads gained nothing" "changed: $CHANGED"
+CHANGED="$(real_changed)"; CHANGED_RC=$?
+LEAKED="$(sed -n 's/^leak	//p' <<<"$CHANGED")"
+UNATTRIBUTED="$(sed -n 's/^unattributed	//p' <<<"$CHANGED")"
+UNREAD="$(grep -v -e '^leak	' -e '^unattributed	' -e '^$' <<<"$CHANGED")"
+if [ "$CHANGED_RC" -ne 0 ] || [ -n "$UNREAD" ]; then
+  check "no new file in the real ~/.claude/state/sleep or ~/Downloads carries anything this run made" "the leak check could not run (exit $CHANGED_RC): $(clip "$CHANGED" 300)"
+elif [ -n "$LEAKED" ]; then
+  check "no new file in the real ~/.claude/state/sleep or ~/Downloads carries anything this run made" "leaked: $(tr '\n' ' ' <<<"$LEAKED")"
+else
+  check "no new file in the real ~/.claude/state/sleep or ~/Downloads carries anything this run made" ok
+  # A new file carrying nothing of this run's is said, never passed over as nobody's (#3080).
+  [ -n "$UNATTRIBUTED" ] && unmeasured_parts+=("whether $(grep -c . <<<"$UNATTRIBUTED") new file(s) in the real ~/.claude/state/sleep and ~/Downloads are this run's: each carries nothing this run made, so another session's write and a leak with nothing of this run's in it read alike: $(tr '\n' ';' <<<"$UNATTRIBUTED")")
+fi
 [ ! -s "$WORK/screen-called" ] && check "nothing was opened, sounded or notified on the screen" ok || check "nothing was opened, sounded or notified on the screen" "$(cat "$WORK/screen-called")"
 finish

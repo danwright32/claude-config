@@ -3,6 +3,7 @@
 import type { DesignRoundSubject } from '../types/index.d.ts'
 import { quotedEnd } from './mod-kit/quoted.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
+import { leadingVariable, madeTemp, ownFolderPath, tempWord } from './mod-kit/scriptvars.ts'
 
 export const GUARD = 'Design round guard'
 /** The dialog's header chip; Claude Code takes at most 12 characters. */
@@ -652,9 +653,12 @@ const groupSpellings = (name: string, bars = true): string[] | null => {
  * one never closed. Its names are whatever the command prints (`$(git ls-files src)` is every file
  * under src), which cannot be read before it runs. A substitution in the folder alone
  * (`$(git rev-parse --show-toplevel)/notes.md`) leaves the name as the word spells it, and a variable
- * is no command's output. Read from the word as mod-kit gives it, its quotes taken off.
+ * is no command's output. Read from the word as mod-kit gives it, its quotes taken off. An arithmetic
+ * expansion, `$((...))`, is no command's output (#3088): its value is read as a variable's is,
+ * unless a command substitution or a backtick inside it fills that in (arithmeticMarked).
  */
-export const nameFromOutput = (word: string): boolean => {
+export const nameFromOutput = (given: string): boolean => {
+  const word = arithmeticMarked(given)
   let depth = 0
   let tick = false
   let name = 0
@@ -672,6 +676,39 @@ export const nameFromOutput = (word: string): boolean => {
   return depth > 0 || tick || last.includes('$(') || last.includes('`')
 }
 
+/**
+ * A word with each arithmetic expansion in it, `$((` to the `))` closing it (#3088), put as one mark:
+ * `$(x)` where a command substitution or a backtick inside it fills in its value, which is a
+ * command's output, and `$[x]` otherwise, the shell's value of a sum of numbers and variables, read
+ * as a variable's value is. The mark holds no slash and no parenthesis of the sum's, so a division
+ * or a grouping inside it ends no part of a name and opens no substitution. Until #3088 its two
+ * parentheses were read as a command substitution, so `\\$((0-9))` beside a page name was held as a
+ * command's output. One never closed is left as typed, read as a substitution, as before.
+ */
+export const arithmeticMarked = (word: string): string => {
+  let out = ''
+  for (let i = 0; i < word.length; i++) {
+    if (word.startsWith('$((', i)) {
+      let depth = 2
+      let end: number | undefined
+      for (let j = i + 3; j < word.length; j++) {
+        if (word[j] === '(') depth++
+        else if (word[j] === ')' && --depth === 0) {
+          if (word[j - 1] === ')') end = j
+          break
+        }
+      }
+      if (end !== undefined) {
+        out += /\$\(|`/.test(word.slice(i + 3, end - 1)) ? '$(x)' : '$[x]'
+        i = end
+        continue
+      }
+    }
+    out += word[i]
+  }
+  return out
+}
+
 // The variables that name a folder, never a file in it: the shell's own, and home.
 const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDIR)(?![\w]))$/
 
@@ -684,9 +721,11 @@ const FOLDER_VARIABLE = /^\$(\{(PWD|OLDPWD|HOME|TMPDIR)\}|(PWD|OLDPWD|HOME|TMPDI
  * cannot read before it runs. A variable naming a folder alone (`$PWD`, `$HOME`) names no file. A
  * for loop over plain words mod-kit gives as each word, with a path. A word whose every `$` is in
  * single quotes or after a backslash mod-kit marks `unexpanded`, which the caller reads first; one
- * holding any other `$` is read so here. Read from the word as mod-kit gives it.
+ * holding any other `$` is read so here. Read from the word as mod-kit gives it. An arithmetic
+ * expansion, `$((...))`, in the last part is a value the shell fills in too (#3088, arithmeticMarked).
  */
-export const nameFromVariable = (word: string): boolean => {
+export const nameFromVariable = (given: string): boolean => {
+  const word = arithmeticMarked(given)
   let depth = 0
   let tick = false
   let last = ''
@@ -717,24 +756,12 @@ const IN_TMPDIR = /^\$(?:\{TMPDIR\}|TMPDIR(?![\w]))(?:(?!.*\/\.\.(?:\/|$))\/[^$`
  * name `app` is no look changing one, yet it may hold every screen. Read from the word as mod-kit
  * gives it, its quotes taken off; a word whose every $ the shell leaves as written mod-kit places.
  */
-export const removalFilledIn = (word: string): 'output' | 'variable' | null => {
+export const removalFilledIn = (given: string): 'output' | 'variable' | null => {
+  // An arithmetic expansion is a value, unless a substitution inside it fills it in (#3088).
+  const word = arithmeticMarked(given)
   if (word.includes('$(') || word.includes('`')) return 'output'
   if (!/\$[^\s'"(]/.test(word)) return null
   return IN_TMPDIR.test(word) ? null : 'variable'
-}
-
-/**
- * The variable a removal's name starts from where the rest is a plain name inside it (#2960):
- * `$D` for `$D/sub` or `${D}/a/page.tsx`, and for `$D` itself, so a folder the command makes with bare
- * mktemp is read as #2171 reads the variable alone. None where the rest holds another $, backticks,
- * or a `..` that may climb out.
- */
-export const leadingVariable = (word: string): string | undefined => {
-  const m = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))(\/.*)?$/.exec(word)
-  if (!m) return undefined
-  const rest = m[3] ?? ''
-  if (/[$`]/.test(rest) || /(?:^|\/)\.\.(?:\/|$)/.test(rest)) return undefined
-  return `$${m[1] ?? m[2]}`
 }
 
 /**
@@ -769,91 +796,6 @@ export const outputTrusted = (word: string): boolean => {
   // `git rev-parse` alone, or in another checkout named by -C (a folder, a variable allowed, never a
   // substitution), with only plain arguments after it: no redirect, which would write a file.
   return inner.length > 0 && inner.every((cmd) => /^\s*git\s+(-C\s+[^\s;&|`()<>]+\s+)?rev-parse(\s+[^;&|\n`$()<>]*)?\s*$/.test(cmd))
-}
-
-// The two values of a variable Dan trusts to name a new file outside every screen path (#2171).
-const FRESH_TEMP = new Set(['$(mktemp)', '$(mktemp -d)'])
-// A builtin that sets the variable its argument names, so a name built at run time may be any one.
-const SETS_NAMED = /^(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let)$/
-/**
- * Whether a write to a variable alone (`$T`, `${T}`) whose every value mod-kit's reader gives is
- * `$(mktemp)` or `$(mktemp -d)` names a new file outside every screen path (#2171, Dan, 2026-11-04,
- * picker answer: trust bare mktemp the way git rev-parse is trusted). A template, -t, -p, any other
- * flag and backticks are not trusted. Stricter than his rule: nothing is trusted where the command
- * could make mktemp print another name, or give the variable a value the reader did not give. It is
- * read with its quotes and backslashes taken out, as zsh takes `"mktemp"(){` and `m\ktemp(){` for a
- * function named mktemp, and it must not mention TMPDIR or PATH (zsh's `path` array included, set,
- * appended, by element, or named to `typeset`, `read`, `set` or another setting builtin), define any
- * function, name mktemp anywhere but those two values, hash a command, use `$'...'`, hand a setting
- * builtin a name built at run time (`export ${V}DIR=`), or assign the variable anywhere any other
- * value (a prefix assignment, `T=x cmd`, which the reader drops, an append, an element).
- */
-export const freshTemp = (word: string, values: readonly string[], command: string): boolean => {
-  const alone = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(word)
-  if (!alone || values.length === 0 || !values.every((v) => FRESH_TEMP.has(v))) return false
-  if (command.includes("$'")) return false
-  const text = command.replace(/["'\\]/g, '')
-  if (/TMPDIR|\bPATH\b|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\(\s*\)|\bfunctions?\b|\bhash\b|\balias\b/.test(text)) return false
-  if (/mktemp/.test(text.replace(/\$\(mktemp(?: -d)?\)/g, ''))) return false
-  for (const part of text.split(/[;&|\n]/)) {
-    const words = part.trim().split(/\s+/)
-    let i = 0
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++
-    if (!SETS_NAMED.test(words[i] ?? '') && words[i] !== 'set') continue
-    // zsh's path array is PATH: `typeset path`, `read -A path` or `set -A path` may change it.
-    if (words.slice(i + 1).some((w) => w.split(/[=[]/)[0] === 'path')) return false
-    if (words[i] === 'set') continue
-    if (words.slice(i + 1).some((w) => (w.split('=')[0] as string).includes('$'))) return false
-  }
-  const name = (alone[1] ?? alone[2]) as string
-  for (const a of text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
-    if (a[1] || a[2]) return false
-    if (!/^\$\(mktemp(?: -d)?\)(?=$|[\s;&|)])/.test(text.slice((a.index ?? 0) + a[0].length))) return false
-  }
-  return true
-}
-
-/**
- * Whether the shell variable `name` only ever holds a temporary folder the script made itself
- * (#2991): every assignment `script` gives it is `"$(mktemp -d)"` (bare, or in double quotes), or a
- * name inside such a variable (`"$T/chain"`, read by leadingVariable, so with no other expansion and
- * no `..`), and there is at least one. False where anything else may set it: an assignment of any
- * other value, an append or an element, a builtin or loop naming it (`read CH`, `for CH in`, `local
- * CH`), a default expansion assigning it (`${CH:=x}`), or where mktemp itself may be another program
- * or make its folder elsewhere (TMPDIR, PATH or zsh's path set, a function, alias or hash, `$'...'`).
- * `script` is every script text the command was read for, so a script it reads in (`source x.sh`,
- * read by scriptsRunIn) is held to the same; one it sources by a name the guard cannot follow is not seen.
- * With `files` (#2924), for a variable a write goes to itself rather than one a name is joined onto,
- * a temporary file (`"$(mktemp)"`) counts too, and so does an empty value (`closed_file=""`), which
- * names no file at all, so a write to it fails rather than landing anywhere.
- */
-export const madeTemp = (name: string, script: string, seen: ReadonlySet<string> = new Set(), files = false): boolean => {
-  if (seen.has(name) || !/^[A-Za-z_]\w*$/.test(name) || script.includes("$'")) return false
-  const plain = script.replace(/["'\\]/g, '')
-  if (/TMPDIR|\bPATH\+?=|(?:^|[^A-Za-z0-9_$-])path(?:\[[^\]]*\])?\+?=|\bmktemp\s*\(\s*\)|\bfunction\s+mktemp\b|\balias\b|\bhash\b/.test(plain)) return false
-  if (new RegExp(`\\$\\{${name}:?=`).test(script)) return false
-  for (const part of script.split(/[;&|\n]/)) {
-    const words = part.trim().split(/\s+/)
-    let i = 0
-    while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i] as string)) i++
-    if ((SETS_NAMED.test(words[i] ?? '') || words[i] === 'for' || words[i] === 'select') && words.slice(i + 1).includes(name)) return false
-  }
-  let any = false
-  for (const a of script.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))) {
-    if (a[1] || a[2]) return false
-    const rest = script.slice((a.index ?? 0) + a[0].length)
-    const value = /^"([^"]*)"(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^(\$\(mktemp(?: -d)?\))(?=$|[\s;&|)])/.exec(rest)?.[1] ?? /^([^\s;&|()'"`\\]+)(?=$|[\s;&|)])/.exec(rest)?.[1]
-    if (value === undefined) return false
-    if (value === '$(mktemp -d)' || (files && value === '$(mktemp)')) {
-      any = true
-      continue
-    }
-    if (files && value === '') continue
-    const lead = leadingVariable(value)
-    if (lead === undefined || !madeTemp(lead.slice(1), script, new Set([...seen, name]))) return false
-    any = true
-  }
-  return any
 }
 
 /**
@@ -1737,6 +1679,80 @@ export type RunCommand = {
   unread?: string
 }
 
+// The words the shell reads as its own grammar where a command begins, which no expansion ever is,
+// so an array whose first element is one runs a command of that name and pasting it would not (#3057).
+const RESERVED = new Set(['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time', 'coproc', '{', '}', '!', '[[', ']]'])
+// An element the shell hands on as written wherever it stands: nothing it expands, quotes, matches
+// against files, splits or reads as an operator (#3057).
+const PLAIN_ELEMENT = /^[A-Za-z0-9_@.,:=+%/-]+$/
+// The builtins and loops that set the variable they name (#3057), as mod-kit's scriptvars.ts reads them.
+const SETS_ARRAY = /^(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let|for|select|set)$/
+
+/**
+ * The arrays a script's text runs commands through whose words it can read (#3057): `G` for a line
+ * `G=(git -c user.name=t -c user.email=t@t)`, alone on its line, every element a plain word
+ * (PLAIN_ELEMENT) and the first no reserved word and no assignment, given as its elements' text.
+ * `"${G[@]}"` then hands on exactly those words, so a command it starts runs `git` with them, as
+ * test-check-duplication.sh's do. Only where nothing else may give the array another value, in
+ * `all`, the command and every script text read for it: no second assignment, append or element,
+ * no `${G:=x}`, no builtin or loop naming it or one of its elements, no nameref (`declare -n`), no
+ * eval, and no use of it before the line in `text`. Any of these, and it is not given.
+ */
+export const literalArrays = (text: string, all: string): Map<string, string> => {
+  const out = new Map<string, string>()
+  if (/(?:^|[\s;&|(])eval(?=[\s;&|)]|$)/.test(all) || /(?:^|[\s;&|(])(?:declare|typeset|local)\s+-[A-Za-z]*n/.test(all)) return out
+  for (const m of text.matchAll(/^([A-Za-z_]\w*)=\(([^()\n]*)\)[ \t]*$/gm)) {
+    const name = m[1] as string
+    const elements = (m[2] as string).trim().split(/[ \t]+/).filter(Boolean)
+    const first = elements[0]
+    if (first === undefined || RESERVED.has(first) || first.includes('=') || !elements.every(e => PLAIN_ELEMENT.test(e))) continue
+    if ([...all.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(?:\\[[^\\]]*\\])?\\+?=`, 'g'))].length !== 1) continue
+    if (new RegExp(`\\$\\{${name}:?=`).test(all)) continue
+    const named = all.split(/[;&|\n()]/).some(part => {
+      const words = part.trim().split(/\s+/)
+      let i = 0
+      while (i < words.length && /^[A-Za-z_]\w*=/.test(words[i] as string)) i++
+      return SETS_ARRAY.test(words[i] ?? '') && words.slice(i + 1).some(w => w.replace(/["']/g, '') === name || w.replace(/["']/g, '').startsWith(`${name}[`) || w.replace(/["']/g, '').startsWith(`${name}=`))
+    })
+    if (named) continue
+    const used = text.indexOf(`\${${name}[@]}`)
+    if (used >= 0 && used < (m.index ?? 0)) continue
+    out.set(name, elements.join(' '))
+  }
+  return out
+}
+
+/**
+ * `text` with each `"${G[@]}"` that starts a command written as the array's elements (#3057),
+ * `arrays` as literalArrays gives them. Only a whole word where a command begins: after a line's
+ * start, a `;`, `&`, `|`, `(`, `{` or `!`, or then, do or else. A caller reads both texts with
+ * mod-kit's pipeline and keeps this one only where spelledOnly finds nothing else changed.
+ */
+export const spellArrays = (text: string, arrays: ReadonlyMap<string, string>): string => {
+  let out = text
+  for (const [name, words] of arrays)
+    out = out.replace(new RegExp(`(?<=(?:^|[;&|({!]|\\b(?:then|do|else))[ \\t]*)"\\$\\{${name}\\[@\\]\\}"(?=[ \\t;&|)]|$)`, 'gm'), () => words)
+  return out
+}
+
+/**
+ * Whether reading a script spelt by spellArrays changed only what the arrays stood for (#3057): the
+ * same number of commands, each with the same words and heredocs, but for one whose first word was
+ * `${G[@]}`, which now has the array's elements in its place and the same words after. Anything
+ * else (a heredoc's body or a quoted string the spelling reached) and the spelt text is not used.
+ */
+export const spelledOnly = (before: readonly RunCommand[], after: readonly RunCommand[], arrays: ReadonlyMap<string, string>): boolean => {
+  if (before.length !== after.length) return false
+  return before.every((b, i) => {
+    const a = after[i] as RunCommand
+    if (JSON.stringify(b.heredocs ?? []) !== JSON.stringify(a.heredocs ?? [])) return false
+    if (b.words.join('\0') === a.words.join('\0')) return true
+    const name = /^\$\{([A-Za-z_]\w*)\[@\]\}$/.exec(b.words[0] ?? '')?.[1]
+    const words = name === undefined ? undefined : arrays.get(name)
+    return words !== undefined && [...words.split(' '), ...b.words.slice(1)].join('\0') === a.words.join('\0')
+  })
+}
+
 /**
  * The folder a script's code is read in where the folder it runs in cannot be followed (#2847), so a
  * relative name its code writes comes back under it and is told apart as one that cannot be placed.
@@ -1788,8 +1804,9 @@ export const scriptOf = (c: RunCommand): { word: string; shell?: true } | undefi
  * the environment holds) or sets more than one way, a command's output, a pattern, and a relative
  * name where the folder it runs in is not known.
  * Since #2924, where `command` is the text of a script file at `self`, a variable that script sets
- * once to its own folder by the usual idiom (ownFolderVar: `HERE="$(cd "$(dirname
- * "${BASH_SOURCE[0]}")" && pwd)"`) is that file's folder, so a file it sources beside itself is read.
+ * once to its own folder by the usual idiom (`HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`,
+ * read by mod-kit's ownFolderPath, #3022) is that file's folder, so a file it sources beside itself
+ * is read.
  */
 export const scriptPath = (word: string, command: string, folder: string | undefined, home: string, self?: string): string | undefined => {
   let w = word
@@ -1804,7 +1821,7 @@ export const scriptPath = (word: string, command: string, folder: string | undef
     } else {
       if (!rest) return undefined
       const plain = command.replace(new RegExp(`\\$\\{${v}\\}`, 'g'), `$${v}`)
-      const set = shellVarPath(plain, plain, `${v}${rest}`) ?? (self !== undefined && ownFolderVar(v, command) ? `${self.slice(0, self.lastIndexOf('/')) || '/'}${rest}` : undefined)
+      const set = shellVarPath(plain, plain, `${v}${rest}`) ?? (self !== undefined ? ownFolderPath(word, command, self) : undefined)
       if (set === undefined) return undefined
       w = set
     }
@@ -1986,32 +2003,6 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
   return out
 }
 
-/** The usual idiom a script finds its own folder by (#2924), as one value in double quotes. */
-const OWN_FOLDER = /^"\$\(cd (?:-P )?"\$\(dirname "\$(?:\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE)"\)"(?: (?:>|&>) ?\/dev\/null(?: 2>&1)?)? && pwd(?: -P)?\)"$/
-
-/**
- * Whether a script's text sets variable `v` to the script's own folder (#2924): one line that is
- * `v="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"` alone (BASH_SOURCE, never `$0`, which in a
- * sourced file names the script that sourced it), and nothing else setting it: no other assignment,
- * no builtin or loop naming it, no `${v:=x}`, and no cd, pushd or popd anywhere before that line,
- * which would move the folder a relative name of the script is read from.
- */
-export const ownFolderVar = (v: string, text: string): boolean => {
-  if (!/^[A-Za-z_]\w*$/.test(v)) return false
-  const sets = [...text.matchAll(new RegExp(`(?:^|[^A-Za-z0-9_$])${v}(\\[[^\\]]*\\])?(\\+?)=`, 'g'))]
-  const a = sets[0]
-  if (sets.length !== 1 || !a || a[1] || a[2]) return false
-  if (new RegExp(`\\$\\{${v}:?=`).test(text)) return false
-  if (new RegExp(`(?:^|[\\s;&|(])(?:export|declare|typeset|local|readonly|read|printf|getopts|mapfile|readarray|unset|let|for|select)\\b[^\\n;]*\\b${v}\\b`).test(text)) return false
-  const name = (a.index ?? 0) + a[0].length - v.length - 1
-  const line = text.lastIndexOf('\n', name - 1) + 1
-  if (text.slice(line, name).trim() !== '') return false
-  const end = text.indexOf('\n', name)
-  const value = text.slice((a.index ?? 0) + a[0].length, end < 0 ? text.length : end).trim()
-  if (!OWN_FOLDER.test(value)) return false
-  return !/(?:^|[\s;&|(`])(?:cd|pushd|popd)(?=[\s;&|)]|$)/.test(text.slice(0, line))
-}
-
 /**
  * Commands that run text or another command handed to them later (#2924), whose effect mod-kit's
  * write reader does not read: eval, exec, alias, and the runners that take a command as words
@@ -2071,16 +2062,12 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
  * The shell script files a command runs that cannot write a file they are handed (#2924), by path:
  * each read (scriptsRunIn) and found so by argumentUnreached, every file it sources read and found
  * the same. `readingOf` gives a read script's reading and commands; `scriptsText` is the command and
- * every script text read for it, which a temporary file's variable is held to (madeTemp). A python
- * or node script is never among them: what a package it imports does with sys.argv is not read.
+ * every script text read for it, which a temporary file's variable is held to (mod-kit's tempWord).
+ * A python or node script is never among them: what a package it imports does with sys.argv is not
+ * read.
  */
 export const closedScripts = (runs: readonly ScriptRun[], readingOf: (s: ScriptRun) => { read: ScriptReading; commands?: readonly RunCommand[] } | undefined, scriptsText: string, home: string): Set<string> => {
-  const temp = (word: string): boolean => {
-    const alone = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/.exec(word)
-    if (alone) return madeTemp((alone[1] ?? alone[2]) as string, scriptsText, new Set(), true)
-    const lead = leadingVariable(word)
-    return lead !== undefined && madeTemp(lead.slice(1), scriptsText)
-  }
+  const temp = (word: string): boolean => tempWord(word, scriptsText)
   const memo = new Map<string, boolean>()
   const isClosed = (path: string): boolean => {
     const known = memo.get(path)

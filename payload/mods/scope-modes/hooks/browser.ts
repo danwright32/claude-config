@@ -13,7 +13,16 @@
  *   appends the real one after any page text, so page text cannot forge it). A call that may move
  *   the page (a navigate, a click, typing, a form fill, a script) leaves its tab on no known host
  *   until a result says where it is. Inside one browser_batch, where no result arrives between
- *   items, nothing more runs on that tab after such an action until a navigate to a test host.
+ *   items, nothing more runs on that tab after such an action until a navigate to a test host,
+ *   except closing it, which reaches no host (#3107). A tab leaves the record at its own close's
+ *   result, or at the first result whose list of the group no longer names it, whoever closed it:
+ *   a batch (#3121), Dan by hand, or a restart of Chrome (#3132). It never comes back by being
+ *   listed again.
+ * - A link clicked in the session's own tab can open a second tab in its group, which the session
+ *   has to close (#3099). A second record holds the tabs every list of the group has named, and
+ *   the ones first named after the session's own action in a tab it created (groupAfter). Such a
+ *   tab can be closed and nothing more: its page is wherever the link led. A tab that was in the
+ *   group before, or that appears with no action of the session behind it, is never one.
  * - Anything reaching past the session's tabs (recordings saved to disk, local files sent to a page,
  *   saved workflows, another browser) and any tool nobody listed here is refused.
  *
@@ -30,8 +39,23 @@ export type BrowserTabs = Record<string, { host: string | null }>
  * host being unlisted (L11).
  */
 export type TestHosts = readonly string[] | { unreadable: string }
-/** What a Chrome call is judged against: the record of tabs, and the project's listed test hosts. */
-export type Browser = { tabs: BrowserTabs; listed: TestHosts }
+/**
+ * What the session has read of its tab group beyond the tabs it created (#3099): every tab id a
+ * result's list of the group has named, the ones its own action opened, and whether the next list
+ * read is still the one that follows such an action.
+ */
+export type BrowserGroup = { seen: string[]; opened: string[]; watching: boolean }
+/**
+ * The tabs the session's own action opened, which it may close, or why that record could not be
+ * read. Unreadable closes none of them, as an empty list does, but is said as not known, never as a
+ * tab the session did not open (L11).
+ */
+export type OpenedTabs = readonly string[] | { unreadable: string }
+/**
+ * What a Chrome call is judged against: the record of tabs, the project's listed test hosts, and
+ * the tabs the session's own action opened (none when not given).
+ */
+export type Browser = { tabs: BrowserTabs; listed: TestHosts; opened?: OpenedTabs }
 
 const HOW_TO_LIST =
   "a test host is localhost, 127.0.0.1, [::1] or a name ending .localhost or .test, or a hosted one the project's CLAUDE.md on its default branch lists on a line reading Sleep mode test hosts: followed by the hosts"
@@ -107,12 +131,20 @@ const ON_PAGE = new Set(['computer', 'read_page', 'find', 'form_input', 'get_pag
 /** computer actions that cannot move the page; any other, or one nobody listed, may. */
 const STILL = new Set(['screenshot', 'zoom', 'wait', 'scroll', 'scroll_to', 'hover'])
 
-const moves = (name: string, input: Record<string, unknown>) =>
-  name === 'navigate' || name === 'form_input' || name === 'javascript_tool' || (name === 'computer' && !STILL.has(String(input.action ?? '')))
+/** A call that acts on its page (a click, typing, a form fill, a script), and so can make it open a tab. */
+const acts = (name: string, input: Record<string, unknown>) =>
+  name === 'form_input' || name === 'javascript_tool' || (name === 'computer' && !STILL.has(String(input.action ?? '')))
+const moves = (name: string, input: Record<string, unknown>) => name === 'navigate' || acts(name, input)
 
 const notCreated = (tool: string, tab: string) =>
   `use ${tool} on tab ${tab}, which this session did not create (a tab made with tabs_create_mcp can be used on a test host)`
 const unnamed = (tool: string) => `use ${tool} without naming a tab this session created`
+// A close reaches one tab more than the rest (#3099), so its refusal says both ways a tab is
+// closable, or that whether the session's own action opened it could not be read.
+const notItsToClose = (tool: string, tab: string, opened: OpenedTabs) =>
+  'unreadable' in opened
+    ? `use ${tool} on tab ${tab}, which this session did not create, and whether its own action opened it is not known, because ${opened.unreadable}`
+    : `use ${tool} on tab ${tab}, which this session did not create and did not see appear in its tab group after its own action (it can close a tab made with tabs_create_mcp, or one first listed in its tab group after its own click, typing, form fill or script in a tab it created)`
 
 const navigateRefusal = (tool: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts) => {
   const tab = tabOf(input)
@@ -136,14 +168,15 @@ const onPageRefusal = (tool: string, input: Record<string, unknown>, tabs: Brows
   return undefined
 }
 
-const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts): string | undefined => {
+const oneRefusal = (name: string, input: Record<string, unknown>, tabs: BrowserTabs, listed: TestHosts, opened: OpenedTabs): string | undefined => {
   const tool = `${C}${name}`
   if (FREE.has(name)) return undefined
   if (name === 'navigate') return navigateRefusal(tool, input, tabs, listed)
   if (name === 'tabs_close_mcp') {
     const tab = tabOf(input)
     if (!tab) return unnamed(tool)
-    return tabs[tab] ? undefined : notCreated(tool, tab)
+    // The one call an opened tab is good for (#3099): every other rule here reads tabs alone.
+    return tabs[tab] || (!('unreadable' in opened) && opened.includes(tab)) ? undefined : notItsToClose(tool, tab, opened)
   }
   if (ON_PAGE.has(name)) return onPageRefusal(tool, input, tabs, listed)
   return `use ${tool}, which reaches past the tabs this session created (sleep mode lets the browser be used only in its own tabs on a test host)`
@@ -163,9 +196,11 @@ const batchRefusal = (input: Record<string, unknown>, b: Browser): string | unde
     // After a call that may have moved the page, the tab's host is unknown, so every later action on
     // it (typing and every other screen action included) waits for a navigate to a test host, which
     // reads the host again (Dan, 2026-11-03). Across calls, a result's Tab Context reads it instead.
-    if (tab && moved.has(tab) && name !== 'navigate')
+    // A close is the one other item let through (#3107): it reaches no host, wherever the page is.
+    // It is still judged below as a close alone is, and it reads no host, so the tab stays held.
+    if (tab && moved.has(tab) && name !== 'navigate' && name !== 'tabs_close_mcp')
       return `use ${C}${name} on tab ${tab} after an action in the same batch that may have left the test host`
-    const why = oneRefusal(name, args, tabs, b.listed)
+    const why = oneRefusal(name, args, tabs, b.listed, b.opened ?? [])
     if (why) return why
     if (name === 'navigate' && tab) {
       tabs[tab] = { host: navigateHost(String(args.url ?? '')) }
@@ -183,7 +218,7 @@ export const browserRefusal = (tool: string, input: Record<string, unknown>, bro
   const b: Browser = browser ?? { tabs: {}, listed: [] }
   const name = short(tool)
   if (name === 'browser_batch') return batchRefusal(input, b)
-  return oneRefusal(name, input, b.tabs, b.listed)
+  return oneRefusal(name, input, b.tabs, b.listed, b.opened ?? [])
 }
 
 const CREATED = /^Created new tab\. Tab ID: (\d+)/
@@ -191,18 +226,87 @@ const NAVIGATED = /^Navigated to (\S+)/
 const TAB_LINE = /^\s*•\s*tabId (\d+): .*\("([^"]*)"\)\s*$/gm
 
 /**
+ * The group's tabs as a result's LAST Tab Context lists them, each id with its page's address, or
+ * null when the result carries no list (a refused call, or one that failed before the browser).
+ */
+const listedTabs = (textBlocks: string[]): [id: string, url: string][] | null => {
+  const all = textBlocks.join('\n')
+  const at = all.lastIndexOf('Tab Context:')
+  if (at < 0) return null
+  return [...all.slice(at).matchAll(TAB_LINE)].flatMap(([, id, url]) => (id && url !== undefined ? [[id, url] as [string, string]] : []))
+}
+
+/** Whether a call acted on the page of a tab the session created, alone or as an item of a batch. */
+const actedInOwnTab = (name: string, input: Record<string, unknown>, tabs: BrowserTabs): boolean => {
+  if (name !== 'browser_batch') {
+    const tab = tabOf(input)
+    return !!tab && !!tabs[tab] && acts(name, input)
+  }
+  if (!Array.isArray(input.actions)) return false
+  return (input.actions as unknown[]).some(item => {
+    const it = (item && typeof item === 'object' ? item : {}) as { name?: unknown; input?: unknown }
+    const args = (it.input && typeof it.input === 'object' ? it.input : {}) as Record<string, unknown>
+    const inner = short(String(it.name ?? ''))
+    return inner !== 'browser_batch' && actedInOwnTab(inner, args, tabs)
+  })
+}
+
+/**
+ * The tabs the session created, either side of one Chrome call's result: as its record stood when
+ * the call ran, and as tabsAfter leaves it after that result.
+ */
+export type TabsAcross = { before: BrowserTabs; after: BrowserTabs }
+
+/**
+ * The record of the group after a Chrome call's result (#3099), given the tabs the session created
+ * either side of that same result. A tab is opened by the session's own action when all of these
+ * hold, and it may then be closed and nothing more:
+ * - no list read before named it, and an earlier list exists to say so (the first list read is
+ *   only what was already there);
+ * - the session did not create it, by its record after the result, so a tab this same result
+ *   created is never also one it opened;
+ * - it is first named by the list in the result of a call that acted on the page of a tab the
+ *   session created, or by the next list read after that result, since a page can open a tab a
+ *   moment after the click returns. A list after that one opens nothing. Whether the call acted in
+ *   a tab the session created is read from its record before the result, the tabs it had when the
+ *   call ran: a batch can click in its own tab and then close it, and that close takes the tab out
+ *   of the record after (#3121), as a list that no longer names the clicked tab does (#3132). A
+ *   tab a list dropped is not listed, so its leaving opens nothing: the record of opened tabs is
+ *   the one written while such a tab was kept.
+ * A call whose result carries no list never ran in the browser as far as this can tell, so it
+ * starts no watch. An opened tab leaves when a list stops naming it, or when its close's result
+ * carries no list; having been seen, it is never opened again. Always a new record.
+ */
+export const groupAfter = (group: BrowserGroup | null, tabs: TabsAcross, tool: string, input: Record<string, unknown>, textBlocks: string[]): BrowserGroup | null => {
+  const name = short(tool)
+  const listed = listedTabs(textBlocks)
+  const had = (group?.opened ?? []).filter(id => !tabs.after[id])
+  if (!listed) {
+    if (!group) return null
+    const closed = name === 'tabs_close_mcp' ? tabOf(input) : null
+    return { seen: [...group.seen], opened: had.filter(id => id !== closed), watching: group.watching }
+  }
+  const ids = [...new Set(listed.map(([id]) => id))]
+  const watching = actedInOwnTab(name, input, tabs.before)
+  if (!group) return { seen: ids, opened: [], watching }
+  const still = had.filter(id => ids.includes(id))
+  const fresh = watching || group.watching ? ids.filter(id => !group.seen.includes(id) && !tabs.after[id]) : []
+  return { seen: [...new Set([...group.seen, ...ids])], opened: [...still, ...fresh], watching }
+}
+
+/**
  * The record of tabs after a Chrome call's result: a created tab added, a closed one removed, a
  * call that may have moved its page leaving its tab on no known host, then every recorded tab the
- * result's last Tab Context names set to the host it shows. Always a new record.
+ * result's last Tab Context names set to the host it shows, and last every recorded tab that list
+ * does not name removed (#3132). Reading a list never adds a tab: only the first line of a
+ * tabs_create_mcp result does. Always a new record.
  */
 export const tabsAfter = (tabs: BrowserTabs, tool: string, input: Record<string, unknown>, textBlocks: string[]): BrowserTabs => {
   const next: BrowserTabs = Object.fromEntries(Object.entries(tabs).map(([k, v]) => [k, { host: v.host }]))
   const name = short(tool)
   const first = textBlocks[0] ?? ''
-  if (name === 'tabs_create_mcp') {
-    const made = CREATED.exec(first)
-    if (made?.[1]) next[made[1]] = { host: null }
-  }
+  const made = name === 'tabs_create_mcp' ? CREATED.exec(first)?.[1] : undefined
+  if (made) next[made] = { host: null }
   if (name === 'tabs_close_mcp') {
     const tab = tabOf(input)
     if (tab) delete next[tab]
@@ -225,10 +329,17 @@ export const tabsAfter = (tabs: BrowserTabs, tool: string, input: Record<string,
     const went = NAVIGATED.exec(first)
     if (tab && next[tab] && went?.[1]) next[tab] = { host: navigateHost(went[1]) }
   }
-  const all = textBlocks.join('\n')
-  const at = all.lastIndexOf('Tab Context:')
-  if (at >= 0) {
-    for (const [, id, url] of all.slice(at).matchAll(TAB_LINE)) if (id && url !== undefined && next[id]) next[id] = { host: navigateHost(url) }
-  }
+  const listed = listedTabs(textBlocks)
+  if (!listed) return next
+  for (const [id, url] of listed) if (next[id]) next[id] = { host: navigateHost(url) }
+  // A recorded tab the list does not name has left the group, whoever closed it: an item of this
+  // batch (#3121), Dan by hand, a restart of Chrome, or a browser that is not the one the tab was
+  // made in, whose ids are another counter's (#3132). Kept, its id could later name a tab the
+  // session never created. With no list (refused elsewhere, failed before the browser, no browser
+  // connected, still waiting on its result) nothing says a tab is gone, and every tab is kept.
+  // The tab this result's own first line announced is the one exception, recorded as it always
+  // was and judged by the lists after this one: its own list named it in the one result measured.
+  const named = new Set(listed.map(([id]) => id))
+  for (const id of Object.keys(next)) if (!named.has(id) && id !== made) delete next[id]
   return next
 }

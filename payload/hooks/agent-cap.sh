@@ -35,6 +35,17 @@ AGENT_CAP_DEFAULT=4
 
 # One Mac per line: its short hostname, one space, its cap. Dan, 2026-11-09: "raise the session
 # subagent limit to 7 agents each", for the work MacBook.
+#
+# Why each number is what it is: one REVIEWED line per Mac in the table, giving its cap, the day
+# that cap was last judged against a measurement, and the issue holding the reading.
+# test-agent-cap.sh fails when a number in the table moves and its line here does not, so a changed
+# cap needs a new reading, taken with tools/agent-cap-report.py over the days since the change.
+#
+# REVIEWED Dans-MacBook-Pro 7 2026-11-16 claude-config#2552
+#   Kept at seven after its first week (2026-11-09 to 2026-11-16, 500 agent hours). Sessions sat at
+#   exactly seven for 3.2% of the time any agent ran, in stretches of 17 minutes at most, where four
+#   had been in the way 9.4% of the time. 25 hours ran with five to seven agents, which four would
+#   have queued. Not raised: a usage limit or credit message reached agents on 3 of the 7 days.
 agent_cap_table() {
   cat <<'TABLE'
 Dans-MacBook-Pro 7

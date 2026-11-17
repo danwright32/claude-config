@@ -204,6 +204,19 @@ describe('pipelineIn: the folder each command runs in', () => {
     expect(folders('cd - && gh pr merge 12')).toEqual([['cd', CWD], ['gh', null]])
     expect(folders('pushd /w/other && popd && gh pr merge 12')).toEqual([['pushd', CWD], ['popd', '/w/other'], ['gh', null]])
   })
+  // #3093: a command that only sets a value (`T=x;`) runs nothing, so it is left out, and a guard
+  // that must know every value a line sets before a script could not see one. Asked for, it is
+  // given as its assignments, in its place, with the folder it stands in.
+  test('asked for, the commands that only set a value are given too, each in its place with its folder', () => {
+    const asked = (command: string) => pipelineIn(command, CWD, HOME, { assignments: true }).map(c => [c.words, c.env, c.folder])
+    expect(asked('T=x; cd /w/b && U=1 V=2; W=3 bash s.sh d')).toEqual([[['T=x'], undefined, CWD], [['cd', '/w/b'], undefined, CWD], [['U=1', 'V=2'], undefined, '/w/b'], [['bash', 's.sh', 'd'], ['W=3'], '/w/b']])
+    expect(asked('{ PATH=/x; bash s.sh d; }').map(c => c[0])).toEqual([['PATH=/x'], ['bash', 's.sh', 'd'], ['}']])
+    expect(asked(`bash -c 'T=x; make'`).map(c => c[0])).toEqual([['T=x'], ['make']])
+  })
+  test('not asked for, they are left out as before', () => {
+    expect(pipelineIn('T=x; cd /w/b && U=1; bash s.sh d', CWD, HOME).map(c => c.words)).toEqual([['cd', '/w/b'], ['bash', 's.sh', 'd']])
+    expect(pipelineIn('T=x; bash s.sh d', CWD, HOME, {}).map(c => c.words)).toEqual([['bash', 's.sh', 'd']])
+  })
 })
 
 describe('writes: copying, moving and linking', () => {
@@ -1756,5 +1769,64 @@ describe('writes: commands whose effect cannot be read (#3021)', () => {
     expect(paths(`trap -- 'echo x > a.txt' EXIT`)).toEqual([`${CWD}/a.txt`])
     expect(read(`trap 'rm -f out.txt' EXIT`).unread).toBeUndefined()
     expect(read(`trap "rm -f $tmp" EXIT`).unread?.map(u => u.why)).toEqual(['setting a trap whose text the shell expands, so what it runs later cannot be read'])
+  })
+})
+
+// #3022: the copy step of tools/check-mods.sh runs over three lines joined by a backslash. Each
+// backslash and its new line was read as a word, so its rm was given a file named by a new line,
+// placed in the folder the script runs from, whatever the step names.
+describe('writes: a command continued over lines by a backslash (#3022)', () => {
+  test('is read as the same command written on one line', () => {
+    const step = (join: string) => `rm -rf /w/copy/types ${join}&& mkdir -p /w/copy/types ${join}&& cp -R a b /w/copy/types/`
+    expect(read(step('\\\n      '))).toEqual(read(step('')))
+    expect(changes(step('\\\n      '))).toEqual(['remove /w/copy/types tree', 'folder /w/copy/types'])
+    expect(read(`echo x > \\\n  out.txt`).files).toEqual([{ word: 'out.txt', path: `${CWD}/out.txt` }])
+  })
+  test('a redirect on the line after a heredoc opens is a write, never a line of its body', () => {
+    expect(paths('cat <<EOF \\\n  > out.txt\nbody\nEOF')).toEqual([`${CWD}/out.txt`])
+  })
+})
+
+// #3070: a script handed a word holding bash's old arithmetic (`"x\\$[0-9]"`) was given it as a word
+// the shell fills in, which every guard reads as a variable's value. Where the reader works the sum
+// out, the script is handed one of two known texts: the sum worked out (bash, zsh) or the word as
+// typed (dash, ksh), so both are given, each as text.
+describe('writes: a script handed a word holding old arithmetic (#3070)', () => {
+  const runs = (command: string, cwd = CWD) => read(command, cwd).runs ?? []
+  const marked = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.unexpanded === true]))
+  test('each text a shell may hand on is given, as text', () => {
+    expect(marked(String.raw`python3 s.py "wall|\\$[0-9],[0-9]{3}|tilt"`)).toEqual([[[String.raw`wall|\$[0-9],[0-9]{3}|tilt`, true], [String.raw`wall|\-9,[0-9]{3}|tilt`, true]]])
+    expect(runs('python3 s.py "app/page$[1+1].tsx"').map(r => r.args.filter(a => a.path).map(a => [a.path, a.unexpanded === true]))).toEqual([[[`${CWD}/app/page2.tsx`, true]]])
+    expect(marked('npx prettier --write "src/a$[1+1].ts"')).toEqual([[['src/a$[1+1].ts', true], ['src/a2.ts', true]]])
+  })
+  test('one the reader does not work out, or beside another expansion, is still a word the shell fills in', () => {
+    expect(marked('python3 s.py "$[N]" "$P$[1]" "$[010]"')).toEqual([[['$[N]', false], ['$P$[1]', false], ['$[010]', false]]])
+  })
+  test('only a word handed to a run is given both ways: a write the command itself makes is read as before', () => {
+    expect(read('echo x > "out$[1+1].txt"').files).toEqual([{ word: 'out$[1+1].txt' }])
+    expect(read('cp a.txt "out$[1+1].txt"').files.map(f => f.word)).toEqual(['out$[1+1].txt'])
+  })
+  // #3088: every shell works out `$((...))` (bash, zsh, sh, dash and ksh measured 2026-11-16), so a
+  // word holding only such sums is handed on as the one text they make, never as typed.
+  test('a word holding only $((...)) sums is given as the one text every shell hands on', () => {
+    expect(marked(String.raw`python3 s.py "a|\\$((0-9)),[0-9]{3}|b"`)).toEqual([[[String.raw`a|\-9,[0-9]{3}|b`, true]]])
+    expect(marked('python3 s.py "$[1]$((1))"')).toEqual([[['$[1]$((1))', true], ['11', true]]])
+    expect(marked('python3 s.py "$((N+1))"')).toEqual([[['$((N+1))', false]]])
+  })
+})
+
+// #3093: a setting written in front of a run (`TMPDIR=x bash tools/check-mods.sh`) is carried on the
+// run as `env`, so a guard judging a script by what it is handed sees what it reads from its
+// environment too.
+describe('writes: the settings a script is run with (#3093)', () => {
+  const envs = (command: string) => (read(command).runs ?? []).map(r => [r.script, r.env])
+  test('an assignment before the script, or given to env, is carried on its run', () => {
+    expect(envs('TMPDIR=payload/mods bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', ['TMPDIR=payload/mods']]])
+    expect(envs('env TMPDIR=x bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', ['TMPDIR=x']]])
+    expect(envs('A=1 npx prettier --write src/a.ts')).toEqual([['prettier', ['A=1']]])
+  })
+  test('a run given none carries none, whatever else the line sets', () => {
+    expect(envs('bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', undefined]])
+    expect(envs('T=x; bash tools/check-mods.sh payload/mods && git log --format=%s')).toEqual([['tools/check-mods.sh', undefined]])
   })
 })

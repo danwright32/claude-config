@@ -42,7 +42,7 @@ import {
   type Scripts,
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
-import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
+import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
@@ -85,6 +85,7 @@ import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } fr
 import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
 import { patchedPaths } from './mod-kit/patch.ts'
+import { answerMidTurn, drivenStop, midTurn, midTurnToast, resetMidTurn, startNight, takeNotes, turnEnded } from './midturn.ts'
 import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, readSleepEnds, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -106,6 +107,7 @@ import {
   type ProposedIssue,
 } from './wake.ts'
 import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
+import { answeredIn, distinctQuestions, judgeNamed, linkNumber, linksIn as questionLinks, namedItems, settledKey, type ItemState, type Named } from './settled.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
@@ -1331,14 +1333,26 @@ const resultTexts = (content: unknown): string[] =>
     : Array.isArray(content)
       ? content.flatMap(c => (c && typeof c === 'object' && (c as { type?: unknown }).type === 'text' ? [String((c as { text?: unknown }).text ?? '')] : []))
       : []
-// Written by version, so two results landing at once both count (assume it runs twice).
+// Written by version, so two results landing at once both count (assume it runs twice). The tabs
+// the session's own action opened (#3099) are a second record, written after the first and judged
+// against it as just written, so a tab this same result created is never also one it opened, and
+// against the record that write replaced, the tabs the session had when the call ran, so a batch
+// that clicked in its own tab and then closed it still acted in a tab of its own (#3121).
 const recordTabs = async ($: EngineInterface, tool: string, input: Record<string, unknown>, texts: string[]) => {
-  for (let i = 0; i < 5; i++) {
+  let tabs: TabsAcross | undefined
+  for (let i = 0; i < 5 && !tabs; i++) {
     const held = await $.state.get({ plugin: 'scope-modes', key: 'browserTabs' })
-    const next = tabsAfter(held.value ?? {}, tool, input, texts)
-    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, next, { ifVersion: held.version })).isSet) return
+    const before: BrowserTabs = held.value ?? {}
+    const after = tabsAfter(before, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserTabs' }, after, { ifVersion: held.version })).isSet) tabs = { before, after }
   }
-  throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+  if (!tabs) throw new Error('the record of Chrome tabs kept changing underneath five writes in a row')
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get({ plugin: 'scope-modes', key: 'browserGroup' })
+    const next = groupAfter(held.value ?? null, tabs, tool, input, texts)
+    if ((await $.state.set({ plugin: 'scope-modes', key: 'browserGroup' }, next, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error("the record of the tabs this session's own action opened kept changing underneath five writes in a row")
 }
 // The project's hosted test hosts, from CLAUDE.md as the default branch holds it, never the working
 // copy: a session must not add a host by editing the file overnight. The default branch is the one
@@ -1376,7 +1390,15 @@ const browserOf = async ($: EngineInterface, self?: string): Promise<Browser> =>
     const now = await $.clock.now()
     for (const [id, c] of chromeCalls) if (id !== self && now - c.at < PENDING_MS) tabs = tabsAfter(tabs, c.tool, c.input, [])
   }
-  return { tabs, listed: await committedTestHosts($) }
+  // The tabs its own action opened (#3099), which it may close. A record that cannot be read closes
+  // none of them, and is said as unreadable with why, never as a tab it did not open (L11).
+  let opened: Browser['opened']
+  try {
+    opened = (await $.state.get({ plugin: 'scope-modes', key: 'browserGroup' })).value?.opened ?? []
+  } catch (err) {
+    opened = { unreadable: `the record of the tabs its own action opened could not be read (${msg(err)})` }
+  }
+  return { tabs, listed: await committedTestHosts($), opened }
 }
 
 // Why a call is on Dan's overnight list (#834), from the call as a tool call or a permission
@@ -2042,7 +2064,10 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   )
   const issues = sorted.offer
   const lessons = claimed.has(LESSONS_KEY) ? read.lessons : []
-  const questions = [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)]
+  // Only those still open (#3018): not answered on record, and not about closed or merged work.
+  const asked = await stillOpen($, [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)])
+  rememberAsked(asked)
+  const questions = asked.map(a => a.q)
   // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
   // offer, and this session says nothing of them (lessons review).
   const offers = issues.length > 0 || lessons.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0 || sorted.elsewhere > 0 || (night.offers && ![...keys].some(has))
@@ -2292,6 +2317,113 @@ const noteDeclined = async ($: EngineInterface, input: Record<string, unknown>, 
   }
 }
 
+// ---- #3018: an overnight question is offered only while it is still open (decided in settled.ts) ----
+
+// Where a question's answer is kept: the answered folder the before bed round keeps its answers in.
+const answeredQuestionPath = (dir: string, repo: string | null, q: NightQuestion) => `${dir}/answered/${settledKey(repo, q)}.json`
+
+// What GitHub says of one issue or pull request a question names. A pull request's number reads as
+// an issue in gh issue view, and a merged one is closed there. Any failure is a check not made.
+const namedState = async ($: EngineInterface, item: Named): Promise<ItemState> => {
+  const r = await ghAnyAccount($, ['issue', 'view', String(item.number), '--repo', item.repo, '--json', 'state'])
+  if (!('stdout' in r)) return { state: 'unchecked', why: ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun)) }
+  let state: string
+  try {
+    state = String((JSON.parse(r.stdout) as { state?: unknown }).state ?? '').toUpperCase()
+  } catch {
+    return { state: 'unchecked', why: "GitHub's answer was not JSON" }
+  }
+  if (state === 'OPEN') return { state: 'open' }
+  if (state === 'CLOSED' || state === 'MERGED') return { state: 'closed' }
+  return { state: 'unchecked', why: `GitHub gave its state as "${state}"` }
+}
+
+// The questions still open, each once, with the repository each is in (its own, or its folder's),
+// which its answer is kept by. One answered on record, or whose every named issue and pull request
+// is closed or merged, is left out and logged; one GitHub could not be asked about is kept, saying so.
+const stillOpen = async ($: EngineInterface, qs: readonly NightQuestion[]): Promise<{ q: NightQuestion; repo: string | null }[]> => {
+  const dir = (await sleepPaths($)).dir
+  const looked = new Map<string, Promise<ItemState>>()
+  const stateOf = (item: Named) => {
+    const k = `${repoKey(item.repo)}#${item.number}`
+    const had = looked.get(k)
+    if (had) return had
+    const p = namedState($, item)
+    looked.set(k, p)
+    return p
+  }
+  const out: { q: NightQuestion; repo: string | null }[] = []
+  for (const q of distinctQuestions(qs)) {
+    const repo = q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)
+    try {
+      if (await $.fs.exists(answeredQuestionPath(dir, repo, q))) {
+        $.ui.log(`scope-modes: "${q.text}" is not offered: its answer is on record`, { to: 'debug' })
+        continue
+      }
+    } catch (err) {
+      $.ui.log(`scope-modes: whether "${q.text}" was answered could not be read (${msg(err)}), so it is offered`, { to: 'debug' })
+    }
+    // A link's repository is mod-kit's one link reader's to say (#961); one it does not read is no item.
+    // A reader that fails could not say, so the question is offered saying why, never judged settled
+    // on its other items (L11).
+    const links: Named[] = []
+    const unread: string[] = []
+    for (const link of questionLinks(q.text)) {
+      const number = linkNumber(link)
+      if (number === null) continue
+      try {
+        const named = await $.modkit.linkRepo({ link })
+        if (named) links.push({ repo: named, number })
+      } catch (err) {
+        unread.push(`which repository ${link} names could not be read: ${msg(err)}`)
+      }
+    }
+    const v = judgeNamed(await Promise.all(namedItems(q, repo, links).map(async item => ({ item, state: await stateOf(item) }))))
+    if (v.settled && unread.length === 0) {
+      $.ui.log(`scope-modes: "${q.text}" is not offered: everything it names is closed or merged`, { to: 'debug' })
+      continue
+    }
+    const why = [...unread, ...(!v.settled && v.unchecked ? [v.unchecked] : [])].join('; ')
+    out.push({ q: why ? { ...q, unchecked: why } : q, repo })
+  }
+  return out
+}
+
+// The questions this session offered, by the number its prompt gave each (3.n), so the picker Dan
+// answers records each answer (#3018). As with the proposals' numbers (rememberOffered), a number two
+// offers in one session give to different questions is dropped, since an answer cannot say which was
+// meant: a missed record only offers it again, where a wrong one would hide a question for good.
+const askedByNumber = new Map<string, { q: NightQuestion; repo: string | null }>()
+const ambiguousAsked = new Set<string>()
+const rememberAsked = (asked: readonly { q: NightQuestion; repo: string | null }[]) => {
+  asked.forEach((a, k) => {
+    const n = `3.${k + 1}`
+    if (ambiguousAsked.has(n)) return
+    const had = askedByNumber.get(n)
+    if (had !== undefined && (had.q.text !== a.q.text || repoKey(had.repo) !== repoKey(a.repo) || had.q.issue !== a.q.issue)) {
+      ambiguousAsked.add(n)
+      askedByNumber.delete(n)
+    } else askedByNumber.set(n, a)
+  })
+}
+
+// Each question Dan answered in a morning picker, kept in the answered folder, so no later morning
+// offers it. One that cannot be kept is logged: it is offered again, never lost.
+const noteAnswered = async ($: EngineInterface, input: Record<string, unknown>, result: { result?: unknown }) => {
+  if (!askedByNumber.size) return
+  const answers = (result.result as { answers?: unknown } | undefined)?.answers
+  const found = answeredIn(input.questions, answers, new Set(askedByNumber.keys()))
+  if (!found.length) return
+  const dir = (await sleepPaths($)).dir
+  for (const { n, answer } of found) {
+    const a = askedByNumber.get(n)
+    if (!a) continue
+    const record = { repo: a.repo, issue: a.q.issue, text: a.q.text, answer, at: await $.clock.now(), by: await $.session.id() }
+    const failed = await writeWhole($, answeredQuestionPath(dir, a.repo, a.q), `${JSON.stringify(record)}\n`)
+    if (failed) $.ui.log(`scope-modes: Dan's answer to "${a.q.text}" could not be recorded (${failed}), so a later morning may offer it again`, { to: 'debug' })
+  }
+}
+
 // When the night a generation names began (its leading time), or null for one named by no time.
 const nightStart = (generation: string): number | null => {
   const at = Number(/^(\d+)-/.exec(generation)?.[1])
@@ -2405,9 +2537,14 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   // again (#1389: on 2026-10-20 four were offered here that had been filed eleven days before).
   const sorted = await sortProposals($, claimedIssues, since)
   const issues = sorted.offer
-  if (!issues.length && !questions.length && !sorted.filed.length && !sorted.declined.length) return
+  // The questions still open, each once across the nights (#3018: on 2026-11-15 four were offered
+  // here, two a note that asked nothing written twice, two answered the morning after).
+  const asked = await stillOpen($, questions)
+  rememberAsked(asked)
+  const stillAsked = asked.map(a => a.q)
+  if (!issues.length && !stillAsked.length && !sorted.filed.length && !sorted.declined.length) return
   const lead =
-    issues.length || questions.length
+    issues.length || stillAsked.length
       ? `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
       : `Proposals for ${mine} from an earlier night, which no session in it was open to offer, turn out to be filed or declined already.`
   try {
@@ -2417,7 +2554,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
         offers: issues.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0,
         issues,
         lessons: [],
-        questions,
+        questions: stillAsked,
         lead,
         forRepo: mine,
         ...(sorted.filed.length ? { filed: sorted.filed } : {}),
@@ -3173,6 +3310,77 @@ const enrolledNow = async ($: EngineInterface, seen?: SleepReading): Promise<Enr
   if (!Array.isArray(reading.record.workers) || !reading.record.workers.includes(self)) return null
   const p = await sleepPaths($)
   return { record: reading.record, self, home: p.home, dir: p.dir, current: p.current, now: await $.clock.now() }
+}
+
+// What this session's commands did while a turn ran, and the night start /sleep owes it (#3136).
+const mid = midTurn()
+
+// Starts this session on the night's work in a turn of its own, as the driver starts one after a wait:
+// for a start /sleep sent it from another session (#1242), and for the session /sleep ran in (#3136).
+// Started only when the record names it a worker with a goal, read here, and, given `generation`, only
+// for that night still. The turn starts once the calling hook is done, never from inside it. `lead` is
+// notes for the model that open the prompt: this mod's own prompt passes none of its prompt.submit
+// hooks, so held notes ride in its words, and go back to be held when it does not go in.
+const startOwnNight = async ($: EngineInterface, generation?: string, lead: string[] = []): Promise<'started' | 'not a worker' | 'no goal' | 'another night'> => {
+  const en = await enrolledNow($)
+  if (!en) return 'not a worker'
+  if (generation !== undefined && en.record.generation !== generation) return 'another night'
+  const goal = goalOf(en.record, en.self)
+  if (goal === null) return 'no goal'
+  const where = await repoOf($)
+  const text = [...lead, startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)].join('\n\n')
+  $.clock.after(0, () =>
+    void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => {
+      mid.notes.unshift(...lead)
+      $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)
+    }),
+  )
+  return 'started'
+}
+
+// A scope mode command typed while a turn runs (#3136): its answer is said at once in a toast, since
+// Claude Code prints it only when the turn ends, and its notes are held in `mid` for the model's next
+// tool result or prompt. Idle, the answer goes back as it was.
+const commandAnswer = <R extends { text?: string; context?: readonly string[] }>($: EngineInterface, r: R): R => {
+  if (mid.live && r.text) {
+    try {
+      $.ui.toast(midTurnToast(r.text))
+    } catch (err) {
+      $.ui.log(`scope-modes: a command's answer could not be said in a toast mid turn: ${msg(err)}`, { to: 'debug' })
+    }
+  }
+  return answerMidTurn(mid, r)
+}
+// /sleep began a night: this session is started on it too (#3136), at once when no turn runs, else
+// once its turn ends, unless the driver takes that turn on at a Stop first. A start that could not be
+// made is said in the answer, with how Dan starts it himself.
+const startHere = async ($: EngineInterface): Promise<string> => {
+  try {
+    const reading = await sleepNow($)
+    if (reading.state !== 'asleep' || startNight(mid, reading.record.generation) === 'owed') return ''
+    await startOwnNight($, reading.record.generation)
+    return ''
+  } catch (err) {
+    return ` This session could not be started on the night's work (${msg(err)}): type "start the night's work" here to start it.`
+  }
+}
+// The night owed to this session at its turn's end (#3136), started then; a failure is said in a toast,
+// and nothing here throws past the turn's end it runs in (lessons review).
+const startOwed = async ($: EngineInterface) => {
+  const owed = turnEnded(mid)
+  if (owed === undefined) return
+  const lead = takeNotes(mid)
+  try {
+    if ((await startOwnNight($, owed, lead)) !== 'started') mid.notes.unshift(...lead)
+  } catch (err) {
+    mid.notes.unshift(...lead)
+    const said = `Sleep mode is on, but this session could not be started on the night's work (${msg(err)}). Type "start the night's work" here to start it.`
+    try {
+      $.ui.toast(said)
+    } catch (toastErr) {
+      $.ui.log(`scope-modes: ${said} The toast saying so failed too: ${msg(toastErr)}`)
+    }
+  }
 }
 
 const queueScript = (home: string) => `${home}/.claude/hooks/lib/sleep-queue.sh`
@@ -5112,6 +5320,7 @@ export const register: Register = on => {
     pinnedHere.clear()
     takenOffHere.clear()
     firstMetHere.clear()
+    resetMidTurn(mid)
     askedUpHere = undefined
     placeUnreadSaid = false
     // A switch made before this session started is not taken (#2099): it starts at home, as before.
@@ -5252,17 +5461,17 @@ export const register: Register = on => {
   // Each switch tells Claude to open its reply with what the mode now does (#1055).
   on('command.run', { command: 'nobuild' }, async $ => {
     const was = await setScope($, 'NO BUILD')
-    return { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] }
+    return commandAnswer($, { text: 'No build is on.', context: [`Dan turned on no build. ${ackOn('NO BUILD', { replaced: was })}`, SCOPE_NOTE['NO BUILD']] })
   })
   on('command.run', { command: 'winddown' }, async $ => {
     const was = await setScope($, 'WINDING DOWN')
-    return { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] }
+    return commandAnswer($, { text: 'Winding down is on.', context: [`Dan turned on winding down. ${ackOn('WINDING DOWN', { replaced: was })}`, SCOPE_NOTE['WINDING DOWN']] })
   })
   on('command.run', { command: 'build' }, async $ => {
     const scope = await scopeOf($)
-    if (!scope) return { text: 'No scope mode was on.' }
+    if (!scope) return commandAnswer($, { text: 'No scope mode was on.' })
     await setScope($, null)
-    return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
+    return commandAnswer($, { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] })
   })
   // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
   on('command.run', { command: 'sleep' }, async ($, e, next) => {
@@ -5273,12 +5482,13 @@ export const register: Register = on => {
     const context = [ackOn('sleep', began.unstarted ? { first: `Sleep mode is on. ${began.unstarted}` } : {}), ...(began.sendItself ? [began.sendItself] : [])]
     // The morning reminder (#1107), only for a night this call began, and never once the command was
     // abandoned, since every call is then refused (#1677).
-    if (began.is && text === interruptedSaid(true)) return { text, context }
-    return began.is ? { text: `${text}${await pinMorning($)}`, context } : { text }
+    if (began.is && text === interruptedSaid(true)) return commandAnswer($, { text, context })
+    if (!began.is) return commandAnswer($, { text })
+    return commandAnswer($, { text: `${text}${await pinMorning($)}${await startHere($)}`, context })
   })
   on('command.run', { command: 'wake' }, async ($, e) => {
     const woke = await wake($, e.origin.kind === 'bridge')
-    if (!woke) return { text: 'Sleep mode was not on.' }
+    if (!woke) return commandAnswer($, { text: 'Sleep mode was not on.' })
     // The morning turn starts once the command is done: from inside command.run the prompt would
     // wait on the turn this hook holds (as /handoff found).
     const morning = woke.morning
@@ -5300,10 +5510,10 @@ export const register: Register = on => {
           // A mark that fails is said by morningDone itself (#1383); this is anything else that threw.
           .catch(err => $.ui.log(`scope-modes: /wake's morning turn could not be settled (${msg(err)})`, { to: 'debug' }))
       })
-    return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
+    return commandAnswer($, woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said })
   })
-  on('command.run', { command: 'away' }, async ($, e) => switchPlace($, 'away', e.origin))
-  on('command.run', { command: 'home' }, async ($, e) => switchPlace($, 'home', e.origin))
+  on('command.run', { command: 'away' }, async ($, e) => commandAnswer($, await switchPlace($, 'away', e.origin)))
+  on('command.run', { command: 'home' }, async ($, e) => commandAnswer($, await switchPlace($, 'home', e.origin)))
 
   // Dan's own words switch modes; every prompt carries what is on, so Claude never guesses. A
   // message typed while a turn runs fires here too, at Enter, with that turn's id, as the engine's
@@ -5426,10 +5636,15 @@ export const register: Register = on => {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)
     }
+    // Notes a command left mid turn that no tool result carried (#3136), with whatever prompt comes next.
+    const heldNotes = takeNotes(mid)
+    notes.push(...heldNotes)
     let entered: Awaited<ReturnType<typeof next>>
     try {
       entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
     } catch (err) {
+      // Not entered, so held for the next.
+      mid.notes.unshift(...heldNotes)
       // "I'm up" carried this session's morning (#1285) and what it held (#1284): a turn that did not
       // go in keeps them for the minute. Only this turn's own morning settles it, never another
       // prompt (lessons review of #1284).
@@ -5453,6 +5668,7 @@ export const register: Register = on => {
   // turn "I'm up" started, or the one the minute submitted. Only the main loop raises turn.start.
   // It also ends a rest on background work, whose report is what starts the turn (#2511).
   on('turn.start', async ($, e, next) => {
+    mid.live = true
     const r = await next(e)
     if (morningPickers && morningPickers.turnId === undefined) morningPickers.turnId = e.turnId
     try {
@@ -5465,6 +5681,8 @@ export const register: Register = on => {
 
   // A message from the phone while home: one line at the end of the reply (picker, 2026-10-04).
   on('turn.complete', async ($, e, next) => {
+    // The main conversation's turn is over: a night /sleep owed this session starts now (#3136).
+    if (e.agentId === undefined) await startOwed($)
     const r = await next(e)
     // This session's morning turn (#1285): a picker unanswered, or a turn ended other than by
     // answering while it had pickers to ask, leaves them to be asked again with his next message.
@@ -5487,13 +5705,9 @@ export const register: Register = on => {
     // names it a worker with a goal, read here, so a forged start can do no more than /sleep would;
     // the turn is started once this delivery is done, as the driver starts one after a wait.
     if (origin.plugin === MOD && e.text === SLEEP_START) {
-      const en = await enrolledNow($)
-      if (!en) return { consumed: 'scope-modes: a start for the night arrived, but this session is not a worker tonight' }
-      const goal = goalOf(en.record, en.self)
-      if (goal === null) return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
-      const where = await repoOf($)
-      const text = startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)
-      $.clock.after(0, () => void whileHeld(heldBy($, 'night start', "the prompt starting the night's work"), () => $.prompt.submit({ text })).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
+      const started = await startOwnNight($)
+      if (started === 'not a worker') return { consumed: 'scope-modes: a start for the night arrived, but this session is not a worker tonight' }
+      if (started === 'no goal') return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
       return { consumed: "scope-modes: started the night's work toward this session's goal" }
     }
     return next(e)
@@ -5603,12 +5817,19 @@ export const register: Register = on => {
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (filing && !r.deny) await noteProposalFiled($, filing.dir, r)
       // A morning picker of proposals Dan answered: what he left is declined (#1389).
-      if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) await noteDeclined($, input, r)
+      if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) {
+        await noteDeclined($, input, r)
+        // And each overnight question he answered (3.n) is recorded answered (#3018).
+        await noteAnswered($, input, r)
+      }
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
-      return r
+      // Notes a scope mode command left mid turn (#3136) reach the model with the main conversation's
+      // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
+      if (input.agentId !== undefined || r.deny || !mid.notes.length) return r
+      return { ...r, context: [...(r.context ?? []), ...takeNotes(mid)] } as typeof r
     }
 
     const scope = await scopeOf($)
@@ -5815,7 +6036,11 @@ export const register: Register = on => {
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     hear(e)
     const driven = await driveStop($, (e as { background_tasks?: unknown }).background_tasks)
-    if (driven !== 'not-driven') return driven ?? {}
+    if (driven !== 'not-driven') {
+      // The driver has this turn now, so the start /sleep owed it at the turn's end is not (#3136).
+      drivenStop(mid)
+      return driven ?? {}
+    }
     // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
     // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
     const c = await check($, true, (e as { background_tasks?: unknown }).background_tasks)

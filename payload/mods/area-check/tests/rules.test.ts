@@ -37,7 +37,6 @@ import {
   decideProblem,
   holdCard,
   holdRefusal,
-  legacyQuestionKey,
   questionKey,
   reasonProblem,
   restructureQuestion,
@@ -56,10 +55,10 @@ import {
   placedCost,
   FOLDER_JUDGE_MAX,
   SCRIPT_RUN_FROM,
-  trapTexts,
-  unreadPart,
+  runsInTurn,
   type ShellTarget,
 } from '../hooks/rules.ts'
+import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 
 // The area check (#1506, facts #1508, hold #1509): the facts about a file at the moment a session
 // first edits it, computed purely here so each rule is tested on its own. These facts decide a verdict
@@ -406,11 +405,6 @@ test('a question is kept under a fixed length key, so a held command naming a lo
   expect(await questionKey('dan/app', 'src/a.ts')).not.toBe(await questionKey('dan/other', 'src/a.ts'))
   // A word of a thousand characters gives a key of the same 73, well under the store's 256.
   expect((await questionKey('dan/app', 'x'.repeat(1000))).length).toBe(73)
-  // The key it was kept under before, read for an answer already given; none past the store's limit.
-  expect(legacyQuestionKey('dan/app', 'src/a.ts')).toBe('question:dan/app\nsrc/a.ts')
-  // "question:dan/app\n" is 17 characters, so a word of 239 makes a key of exactly 256 and 240 one too long.
-  expect(legacyQuestionKey('dan/app', 'x'.repeat(239))).toBe(`question:dan/app\n${'x'.repeat(239)}`)
-  expect(legacyQuestionKey('dan/app', 'x'.repeat(240))).toBeUndefined()
 })
 
 test('the sweep drops issue lists unread for a week and answers past their week, and keeps a pending question', () => {
@@ -712,53 +706,98 @@ test('a script is fed to the interpreter its run names, or its #! line names, wi
   expect(scriptProgram({ what: 'a script file run directly', path: '/w/app/s' }, '#!\nls\n')).toHaveProperty('unread')
 })
 
+// Why a script's text leaves what it writes unread, or null, as the hook asks it: the text fed to
+// bash as scriptProgram feeds it and read by mod-kit's own reader (#3022: the area check kept its own
+// reading of eval, an alias, a command a value names, arithmetic and a trap's text until then).
+const SELF = '/w/app/tools/s.sh'
+const turnOf = (text: string) => {
+  const prog = scriptProgram({ what: 'a bash script file', path: SELF }, text) as { command: string; delimiter: string }
+  return runsInTurn(pipelineIn(prog.command, SCRIPT_RUN_FROM, '/h'), prog.delimiter, text, SELF)
+}
+const unreadIn = (text: string): string | null => {
+  const r = turnOf(text)
+  return 'unread' in r ? r.unread : null
+}
+const unreadOf = (commands: Parameters<typeof runsInTurn>[0]): string | null => {
+  const r = runsInTurn(commands, 'D')
+  return 'unread' in r ? r.unread : null
+}
+
 test('a program mod-kit did not read, a script run in turn, or one sourced, leaves what the script writes unread', () => {
-  expect(unreadPart([{ words: ['grep', 'x', '$1'] }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['python3', '<<D'], program: { text: 'print(1)', stdin: true } }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['frob', '<<D'] }], 'D')).toContain('frob is no interpreter')
-  expect(unreadPart([{ words: ['python3', 'fix.py'], script: { files: ['fix.py'] } }], 'D')).toContain('fix.py')
-  expect(unreadPart([{ words: ['./tools/fix'] }], 'D')).toContain('./tools/fix')
-  expect(unreadPart([{ words: ['source', 'lib.sh'] }], 'D')).toContain('lib.sh')
+  expect(unreadOf([{ words: ['grep', 'x', '$1'] }])).toBeNull()
+  expect(unreadOf([{ words: ['python3', '<<D'], program: { text: 'print(1)', stdin: true } }])).toBeNull()
+  expect(unreadOf([{ words: ['frob', '<<D'] }])).toContain('frob is no interpreter')
+  expect(unreadOf([{ words: ['python3', 'fix.py'], script: { files: ['fix.py'] } }])).toContain('fix.py')
+  expect(unreadOf([{ words: ['./tools/fix'] }])).toContain('./tools/fix')
+  expect(unreadOf([{ words: ['source', 'lib.sh'] }])).toContain('lib.sh')
+  expect(unreadIn('grep x "$1"\n')).toBeNull()
+  expect(unreadIn('./tools/fix "$1"\n')).toContain('./tools/fix')
+  expect(unreadIn('"$HOME/bin/fix" "$1"\n')).toContain('$HOME/bin/fix')
+  expect(unreadIn('python3 fix.py "$1"\n')).toContain('fix.py')
 })
 
-// #2619: text the reader gives no write for, as the commands it gives for each (measured 2026-11-10).
+// #3022: a library sourced through the variable holding the script's own folder is named, for the
+// hook to read as part of the script; any other sourced file leaves the script unread, as before.
+test("a file sourced beside the script through its own folder's variable is named to be read; any other is unread (#3022)", () => {
+  const own = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+  expect(turnOf(`${own}source "$HERE/lib/note.sh"\n. "\${HERE}/../shared/x.sh"\n`)).toEqual({ sourced: ['/w/app/tools/lib/note.sh', '/w/app/shared/x.sh'] })
+  expect(turnOf('grep x "$1"\n')).toEqual({ sourced: [] })
+  for (const text of [
+    'source lib.sh\n',
+    'source /w/app/tools/lib.sh\n',
+    `${own}source "$HERE/lib/note.sh" "$1"\n`,
+    `${own}source "$HERE/$1.sh"\n`,
+    `${own}source "$HERE"/lib/*.sh\n`,
+    `${own}HERE="$1"\nsource "$HERE/lib/note.sh"\n`,
+    'LIB="$1"\nsource "$LIB/lib.sh"\n',
+    `${own}source "$(cat "$HERE/name")"\n`,
+  ])
+    expect([text, unreadIn(text) !== null]).toEqual([text, true])
+})
+
+// #2619: text the reader gives no write for (measured 2026-11-10), each now marked by mod-kit's reader.
 test('text run through eval or an alias, and a command named by a value, leave what the script writes unread (#2619)', () => {
-  expect(unreadPart([{ words: ['eval', '$FIX'] }], 'D')).toContain('eval')
-  expect(unreadPart([{ words: ['builtin', 'eval', '$FIX'] }], 'D')).toContain('eval')
-  expect(unreadPart([{ words: ['builtin', 'source', 'lib.sh'] }], 'D')).toContain('lib.sh')
-  expect(unreadPart([{ words: ['builtin', 'echo', '$x'] }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['alias', 'fix=sed -i'] }], 'D')).toContain('alias')
+  expect(unreadIn('eval "$FIX"\n')).toContain('eval')
+  expect(unreadIn('builtin eval "$FIX"\n')).toContain('eval')
+  expect(unreadIn('builtin source lib.sh\n')).toContain('lib.sh')
+  expect(unreadIn('builtin echo "$x"\n')).toBeNull()
+  expect(unreadIn("alias fix='sed -i'\n")).toContain('alias')
   // `bash -c "$FIX"` comes back as the command `$FIX`; a substitution or backticks name one the same way.
-  expect(unreadPart([{ words: ['$FIX'] }], 'D')).toContain('$FIX')
-  expect(unreadPart([{ words: ['$TOOL', '--write', '$1'] }], 'D')).toContain('$TOOL')
-  expect(unreadPart([{ words: ['$(command -v fixer)', '$1'] }], 'D')).toContain('$(command -v fixer)')
-  expect(unreadPart([{ words: ['`command -v fixer`', '$1'] }], 'D')).toContain('`command -v fixer`')
-  expect(unreadPart([{ words: ['$@'] }], 'D')).toContain('$@')
+  expect(unreadIn('bash -c "$FIX"\n')).toContain('$FIX')
+  expect(unreadIn('"$TOOL" --write "$1"\n')).toContain('$TOOL')
+  expect(unreadIn('$(command -v fixer) "$1"\n')).toContain('$(command -v fixer)')
+  expect(unreadIn('`command -v fixer` "$1"\n')).toContain('`command -v fixer`')
+  expect(unreadIn('"$@"\n')).toContain('$@')
 })
 
 test('a value in an argument, an assignment or arithmetic names no command, and listing aliases runs no text (#2619)', () => {
-  expect(unreadPart([{ words: ['grep', '-n', '$PATTERN', '$1/*.ts'] }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['alias'] }, { words: ['alias', '-p'] }], 'D')).toBeNull()
-  // An array's element and an append reach the reader as one word, which sets a variable.
-  expect(unreadPart([{ words: ['seen[$f]=1'] }, { words: ['list+=($f)'] }, { words: ['total+= $f'] }], 'D')).toBeNull()
-  // `(( $# < 1 ))` and `(( $a == 0 || $b < 2 ))` come back as two ( commands, their words, and two ).
-  const usage = [{ words: ['('] }, { words: ['('] }, { words: ['$#', '<', '1'] }, { words: [')'] }, { words: [')'] }]
-  expect(unreadPart(usage, 'D', '(( $# < 1 ))')).toBeNull()
-  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['$a', '==', '0'] }, { words: ['$b', '<', '2'] }, { words: [')'] }, { words: [')'] }, { words: ['exit', '0'] }], 'D', '(( $a == 0 || $b < 2 )) && exit 0')).toBeNull()
-  // The same commands from a text holding no `((`, or with no text given, are two subshells running it.
-  expect(unreadPart(usage, 'D', '( ( $# < 1 ) )')).toContain('$#')
-  expect(unreadPart(usage, 'D')).toContain('$#')
+  expect(unreadIn('grep -n "$PATTERN" "$1"/*.ts\n')).toBeNull()
+  expect(unreadIn('alias\nalias -p\n')).toBeNull()
+  // An array's element and an append set a variable.
+  expect(unreadIn('seen[$f]=1\nlist+=("$f")\n')).toBeNull()
+  expect(unreadIn('(( $# < 1 )) && exit 2\n')).toBeNull()
+  expect(unreadIn('(( $a == 0 || $b < 2 )) && exit 0\n')).toBeNull()
   // One subshell, or two that do not close together, is no arithmetic: the value names a command.
-  expect(unreadPart([{ words: ['('] }, { words: ['$TOOL', 'x'] }, { words: [')'] }], 'D', '(( n++ )); ( $TOOL x )')).toContain('$TOOL')
-  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['$TOOL', 'x'] }, { words: [')'] }, { words: ['('] }, { words: ['echo'] }, { words: [')'] }, { words: [')'] }], 'D', '(($TOOL x); (echo))')).toContain('$TOOL')
-  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['n++'] }, { words: [')'] }, { words: [')'] }, { words: ['$TOOL', 'x'] }], 'D', '(( n++ )); $TOOL x')).toContain('$TOOL')
+  expect(unreadIn('( ( $TOOL x ) )\n')).toContain('$TOOL')
+  expect(unreadIn('(( n++ )); ( $TOOL x )\n')).toContain('$TOOL')
+  expect(unreadIn('(($TOOL x); (echo))\n')).toContain('$TOOL')
+  expect(unreadIn('(( n++ )); $TOOL x\n')).toContain('$TOOL')
 })
 
-test("a trap's text is what it runs: none for a trap that lists, resets or ignores (#2619)", () => {
-  expect(trapTexts([{ words: ['trap', 'echo x > "$1/big.ts"', 'EXIT'] }, { words: ['grep', 'trap', 'x'] }])).toEqual(['echo x > "$1/big.ts"'])
-  expect(trapTexts([{ words: ['trap', '--', 'sed -i s/a/b/ f.ts', 'EXIT', 'INT'] }])).toEqual(['sed -i s/a/b/ f.ts'])
-  expect(trapTexts([{ words: ['trap', 'cleanup', 'EXIT'] }, { words: ['trap', 'cleanup', 'INT'] }])).toEqual(['cleanup'])
-  expect(trapTexts([{ words: ['trap'] }, { words: ['trap', '-p'] }, { words: ['trap', '-l'] }, { words: ['trap', '-', 'EXIT'] }, { words: ['trap', '', 'HUP'] }, { words: ['trap', '--', '-', 'INT'] }])).toEqual([])
+// #2619: a trap's text reached the reader as a word, so a write in it was no write. mod-kit's reader
+// gives it as the commands it runs since #3021, and its write reader the writes in them.
+test("a trap's text is read as what it runs: none for a trap that lists, resets or ignores (#2619)", () => {
+  const writes = (text: string) => {
+    const prog = scriptProgram({ what: 'a bash script file', path: SELF }, text) as { command: string }
+    return commandWrites(prog.command, SCRIPT_RUN_FROM, '/h').files.map(f => f.word)
+  }
+  expect(writes(`trap 'echo x > "$1/big.ts"' EXIT\ngrep trap x\n`)).toEqual(['$1/big.ts'])
+  expect(writes(`trap -- 'sed -i "" s/a/b/ "$1/f.ts"' EXIT INT\n`)).toEqual(['$1/f.ts'])
+  expect(unreadIn(`trap 'echo x > "$1/big.ts"' EXIT\n`)).toBeNull()
+  for (const text of ['trap\n', 'trap -p\n', 'trap -l\n', 'trap - EXIT\n', "trap '' HUP\n", 'trap -- - INT\n']) expect([text, writes(text), unreadIn(text)]).toEqual([text, [], null])
+  // A trap whose text the shell expands as it is set runs text nobody reads, and one running eval is unread too.
+  expect(unreadIn('trap "rm -f $1/big.ts" EXIT\n')).toContain('trap')
+  expect(unreadIn(`trap 'eval "$FIX"' EXIT\n`)).toContain('eval')
 })
 
 // #2565: where a script's writes land, read with the folder it is handed. A write whose place is
@@ -783,6 +822,22 @@ test('a script handed a folder places each write it can, and reaches the whole f
     const r = reach(files, more)
     // A placed answer names only where it placed, never the word, so it cannot pass for a reach.
     return 'reaches' in r ? r.reaches : `placed at ${r.placed.map(p => p.path).join(', ')}`
+  }
+  // #3022: a write into a temporary file or folder the script made itself lands in no file of the
+  // checkout, so it is placed nowhere and judged nowhere; with no script text given, or the variable
+  // also holding anything else, it reaches the whole folder as before.
+  const made = 'tmp="$(mktemp -d)"\nout="$(mktemp)"\n'
+  expect(scriptReach({ ...NONE, files: [{ word: '$tmp/scan.ts' }, { word: '$out' }, { word: '${tmp}/a/*.ts', edits: true }] }, F, undefined, made)).toEqual({ placed: [] })
+  expect(whole([{ word: '$tmp/scan.ts' }])).toContain('$tmp/scan.ts')
+  for (const [word, script] of [
+    ['$tmp/scan.ts', `${made}tmp="$1"\n`],
+    ['$tmp/$name.ts', made],
+    ['$tmp/../scan.ts', made],
+    ['$out/scan.ts', made],
+    ['$tmp/scan.ts', 'tmp="$(mktemp -d "$1/x.XXXXXX")"\n'],
+  ] as const) {
+    const r = scriptReach({ ...NONE, files: [{ word }] }, F, undefined, script)
+    expect([word, script, 'reaches' in r]).toEqual([word, script, true])
   }
   expect(whole([{ word: '$1/*.ts', edits: true }])).toContain('$1/*.ts')
   expect(whole([{ word: '$1' }])).toContain('$1')

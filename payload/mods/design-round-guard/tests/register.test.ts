@@ -3992,6 +3992,65 @@ test('#1951: a quoted glob handed to a script, or searched for by grep, runs', w
   expect(w.ran.length).toBe(8)
 })
 
+// #3051: on 2026-11-16 a read only call handing a script a double quoted search pattern holding an
+// escaped dollar (`"wall mount|flush|\$[0-9],[0-9]{3}|price"`) was held as a write whose name the
+// shell fills in, because the command names a page elsewhere. The shell hands that dollar on as
+// written (mod-kit's unexpanded), so the pattern is the name it spells, and that is no look changing
+// file. #3070: the call itself wrote `\\$[0-9]`, where the $ is bare and `$[0-9]` is the shell's old
+// arithmetic expansion. mod-kit works that sum out, so the script is handed one of two known texts
+// (`\-9` from bash and zsh, the word as typed from dash and ksh), neither a variable's value, and it
+// runs too. One mod-kit does not work out, or that spells a screen file, stays held below.
+const PATTERN_3051 = (part: string) => `S=/private/tmp/s; python3 -I "$S/scripts/rt2.py" "$S/tvpages/lg-g6.html" "wall mount|flush|bezel|${part}|price|tilt" | cut -c1-400 | head -50`
+test('#3051: a search pattern holding an escaped dollar, handed to a script, runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const commands = [PATTERN_3051('\\$[0-9],[0-9]{3}'), PATTERN_3051("'\\$'[0-9]"), PATTERN_3051('[0-9],[0-9]{3}'), PATTERN_3051('ends in \\$'), PATTERN_3051('\\\\$[0-9],[0-9]{3}')]
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+test('#3051 control: a pattern or name holding a dollar the shell expands is still held', withKit, async ($, on) => {
+  world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    PATTERN_3051('$N[0-9]'),
+    PATTERN_3051('\\$[0-9]$N'),
+    // #3070: a sum of a variable, a sum beside a variable, and a worked sum spelling a screen file.
+    PATTERN_3051('\\\\$[N-9],[0-9]{3}'),
+    PATTERN_3051('\\\\$[0-9]$N'),
+    'python3 /tmp/x.py "app/page$[1+1].tsx"',
+    'python3 /tmp/x.py "app/$N.tsx"',
+    'python3 /tmp/x.py "app/\\$N.tsx"',
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' }).toEqual({ command, held: true })
+})
+
+// #3088: the newer arithmetic spelling, `\\$((0-9))`, beside a page name elsewhere in the command,
+// was held as a name a command's output fills in: its two parentheses were read as a command
+// substitution. Every shell works out a sum of whole numbers in one (`\-9`), so the script is handed
+// that one text and runs. A sum of a variable, one spelling a screen file, and a real command
+// substitution in a page name stay held.
+test('#3088: a search pattern holding an arithmetic sum, handed to a script, runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const commands = [PATTERN_3051('\\\\$((0-9)),[0-9]{3}'), PATTERN_3051('\\\\$(( 1 + 2 ))'), 'python3 s.py "a|\\\\$((0-9)),[0-9]{3}|b"']
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+test('#3088 control: arithmetic of a variable, a sum spelling a screen file, and a command substitution in a page name are still held', withKit, async ($, on) => {
+  world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    PATTERN_3051('\\\\$((N-9)),[0-9]{3}'),
+    'python3 /tmp/x.py "app/page$((1+1)).tsx"',
+    'python3 /tmp/x.py "app/page$((N)).tsx"',
+    'python3 /tmp/x.py "app/page$(( $(cat n) )).tsx"',
+    'python3 /tmp/x.py "app/$(git ls-files app)"',
+    'python3 /tmp/x.py "app/page$(cat n).tsx"',
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })) !== '' }).toEqual({ command, held: true })
+  // Arithmetic of a variable is held as a value the shell fills in, never as a command's output.
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'python3 /tmp/x.py "app/page$((N)).tsx"' }))
+  expect({ output: why.includes("its name is a command's output"), variable: why.includes("its name is a shell variable's value") }).toEqual({ output: false, variable: true })
+})
+
 test('#1951 control: a glob the shell expands, or a quoted one that may still name a screen file, is still held', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
   for (const command of [
@@ -4604,6 +4663,69 @@ test('#2991: a suite whose programs write only under a folder in a variable runs
   w.files[SUITE_2991_AT] = `${SUITE_2991}python3 - <<PY\nopen("\${APP}/index.html", "w").write("x")\nPY\n`
   expect(refusalOf(await call($, { tool: 'Bash', command: runs[0] }))).toContain(SKIP_QUESTION)
   expect(w.ran.length).toBe(runs.length)
+})
+
+// #3057: on 2026-11-16 a run of payload/hooks/test-check-duplication.sh with a case writing
+// src/feat.tsx inside a throwaway repository under the suite's own mktemp folder was held as a
+// screen change. The suite below is the shape of that one: its folder from mktemp with a template,
+// a repository made under it by a function, and files written after a cd into it.
+const SUITE_3057 = String.raw`
+WORKDIR="$(mktemp -d "${'$'}{TMPDIR:-/tmp}/claude-sync-work.dupcheck-test.XXXXXXXX")" || WORKDIR=""
+trap 'rm -rf "$WORKDIR"' EXIT
+G=(git -c user.name=t -c user.email=t@t)
+mk_repo(){
+  local name="$1"; shift
+  local root="$WORKDIR/repo-$name"
+  mkdir -p "$root"
+  "${'$'}{G[@]}" init -q -b main "$root/work"
+  (
+    cd "$root/work" || exit 1
+    mkdir -p "$(dirname "$1")"; printf '%s\n' "$2" > "$1"; shift 2
+    "${'$'}{G[@]}" add -A; "${'$'}{G[@]}" commit -qm base
+  ) >/dev/null 2>&1
+  printf '%s' "$root/work"
+}
+W="$(mk_repo feat src/clean.ts 'export const clean = 1;')"
+( cd "$W" && printf '%s\n' "x" > src/feat.tsx )
+printf '%s\n' "x" > "$W/src/feat.tsx"
+"${'$'}{G[@]}" -C "$W" add src/feat.tsx >/dev/null 2>&1
+"${'$'}{G[@]}" -C "$W" commit -qm "feat copies a line" >/dev/null 2>&1
+`
+const SUITE_3057_AT = '/w/slate/payload/hooks/test-check-duplication.sh'
+test('#3057: a suite running git through an array of plain words, handed a screen named file in its fixture repository, runs', withKit, async ($, on) => {
+  const w = world($, on, { files: { [SUITE_3057_AT]: SUITE_3057, '/w/slate/src/feat.tsx': 'export const F = () => <main />\n' } })
+  const command = 'bash payload/hooks/test-check-duplication.sh'
+  expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  // Typed whole, the same command runs too.
+  const typed = 'G=(git -c user.name=t)\ncd /w/slate/.claude/fixture && "${G[@]}" add src/feat.tsx'
+  expect({ typed, why: refusalOf(await call($, { tool: 'Bash', command: typed })) }).toEqual({ typed, why: '' })
+  expect(w.ran.length).toBe(2)
+})
+
+test('#3057 control: an array that writes, or whose words the guard cannot be sure of, is judged as before', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/src/feat.tsx': 'export const F = () => <main />\n' } })
+  const use = '"${G[@]}" -C "$W" add src/feat.tsx'
+  for (const text of [
+    // Read as it runs: a copy into the checkout's screen file.
+    'G=(cp /tmp/x)\n"${G[@]}" src/feat.tsx\n',
+    // Another value, or one the guard cannot be sure of, and the words are judged as before.
+    `G=(git -c user.name=t)\nG=(cp /tmp/x)\n${use}\n`,
+    `G=(git -c user.name=t)\nG+=(x)\n${use}\n`,
+    `G=(git -c user.name=t)\nread -a G\n${use}\n`,
+    `G=(git -c "$X")\n${use}\n`,
+    `G=($T -c x)\n${use}\n`,
+    `G=(FOO=1 git)\n${use}\n`,
+    `${use}\nG=(git -c user.name=t)\n`,
+    `G=(git -c user.name=t)\neval "$1"\n${use}\n`,
+    `G=(git -c user.name=t)\ndeclare -n R=G\n${use}\n`,
+    // A heredoc's body the spelling would reach is left as written.
+    `G=(git -c user.name=t)\ncat > /tmp/notes.txt <<'EOF'\n"\${G[@]}" src/feat.tsx\nEOF\n${use}\n`,
+  ]) {
+    w.files[SUITE_3057_AT] = text
+    const why = refusalOf(await call($, { tool: 'Bash', command: 'bash payload/hooks/test-check-duplication.sh' }))
+    expect({ text, held: why.includes(SKIP_QUESTION), named: why.includes('src/feat.tsx') }).toEqual({ text, held: true, named: true })
+  }
+  expect(w.ran).toEqual([])
 })
 
 // #2991: on 2026-11-14 a builder made an untracked copy of the mods folder in its worktree

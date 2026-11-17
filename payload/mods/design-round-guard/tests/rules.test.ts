@@ -54,10 +54,7 @@ import {
   nameFromVariable,
   editWouldNotApply,
   outputTrusted,
-  freshTemp,
-  madeTemp,
   argumentUnreached,
-  ownFolderVar,
   type RunCommand,
   argvStart,
   argvIndex,
@@ -106,6 +103,7 @@ import {
   MODULES_MAX,
 } from '../hooks/rules.ts'
 import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
+import { tempWord } from '../hooks/mod-kit/scriptvars.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
 
@@ -306,6 +304,21 @@ test('#1953: a name a shell variable fills in is known by its last part; a folde
     expect([w, nameFromVariable(w)]).toEqual([w, false])
 })
 
+// #3088: `$((...))` is arithmetic, so its two parentheses open no command substitution: a name it
+// fills in is a value the shell works out from numbers and variables, read as a variable's value is.
+// A command substitution inside one, or beside one, is still a command's output.
+test('#3088: arithmetic in a name is a value, never a command output, unless a substitution sits in it', () => {
+  for (const w of [String.raw`a|\$((0-9)),[0-9]{3}|b`, 'x$((N+1)).css', 'app/$((1+1)).tsx', 'app/$((N/2)).tsx', '$((a)+(b)).md'])
+    expect([w, nameFromOutput(w), nameFromVariable(w)]).toEqual([w, false, true])
+  for (const w of ['x$(( $(cat n) + 1 )).css', 'x$((1+1))$(date).css', 'app/$((`cat n`)).tsx', 'x$((1', '$(git ls-files app)', 'app/$(cat name)'])
+    expect([w, nameFromOutput(w)]).toEqual([w, true])
+  // In the folder alone it fills in no name.
+  expect(nameFromVariable('$((N))/x.css')).toBe(false)
+  expect(nameFromOutput('$((N))/x.css')).toBe(false)
+  for (const [w, filled] of [['app/x$((N))', 'variable'], ['app/$(( $(cat n) ))', 'output'], ['app/x', null]] as const)
+    expect([w, removalFilledIn(w)]).toEqual([w, filled])
+})
+
 // #1954: an Edit or MultiEdit whose text is not in the file, or is there twice without replace_all,
 // would not apply; one Claude Code's Edit may still apply by matching curly quotes to straight ones,
 // one replacing empty text, and any other tool are not read so.
@@ -352,99 +365,6 @@ test('#1832: only a substitution running git rev-parse alone is trusted to name 
     'app/page.tsx',
   ])
     expect([w, outputTrusted(w)]).toEqual([w, false])
-})
-
-// #2171, Dan, 2026-11-04 (picker answer: trust bare mktemp the way git rev-parse is trusted): a write
-// to a variable alone whose every value is `$(mktemp)` or `$(mktemp -d)` names a new file outside every
-// screen path. Nothing else is trusted, and nothing at all where the command could make mktemp print
-// another name or give the variable another value.
-test('#2171: only a variable every assignment gives bare mktemp or mktemp -d names a fresh file', () => {
-  for (const [word, values, command] of [
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx'],
-    ['${T}', ['$(mktemp)'], 'T=$(mktemp); wc -l $(ls app/page.tsx) > ${T}'],
-    ['$D', ['$(mktemp -d)'], 'D=$(mktemp -d); cp app/page.tsx "$D"'],
-    ['$T', ['$(mktemp)'], 'T="$(mktemp)"; git show HEAD:app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp)', '$(mktemp -d)'], 'T=$(mktemp); T=$(mktemp -d); cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp)'], 'export T=$(mktemp); cat app/page.tsx > "$T"'],
-  ] as const)
-    expect([command, freshTemp(word, [...values], command)]).toEqual([command, true])
-  for (const [word, values, command] of [
-    // Any other value, or a flag or template that chooses where the file goes.
-    ['$T', ['$(head -1 list)'], 'ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"'],
-    ['$OUT', ['$(ls app/*.tsx|head -1)'], 'OUT=$(ls app/*.tsx|head -1); echo x > "$OUT"'],
-    ['$T', ['$(mktemp -t x)'], 'T=$(mktemp -t x); cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp app/x.XXXX)'], 'T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp -p app)'], 'T=$(mktemp -p app); cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp)', '$(head -1 list)'], 'T=$(mktemp); T=$(head -1 list); echo x > "$T"'],
-    ['$T', ['`mktemp`'], 'T=`mktemp`; cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp; echo app/page.tsx)'], 'T=$(mktemp; echo app/page.tsx); echo x > "$T"'],
-    // The command can make mktemp print a name in a screen folder.
-    ['$T', ['$(mktemp)'], 'TMPDIR=app T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'export TMPDIR=/w/slate/app; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"'],
-    ['$T', ['$(mktemp)'], 'mktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'function mktemp { echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], "alias mktemp='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
-    ['$T', ['$(mktemp)'], 'hash -p ./bin/fake mktemp; T=$(mktemp); echo x > "$T"'],
-    // zsh takes a quoted or escaped function name, and a function or a name set through its table.
-    ['$T', ['$(mktemp)'], '"mktemp"(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'm\\ktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], "functions[mktemp]='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
-    ['$T', ['$(mktemp)'], 'path=(./bin $path); T=$(mktemp); echo x > "$T"'],
-    // zsh's lowercase path array is PATH, so every way of setting it is held too.
-    ['$T', ['$(mktemp)'], 'path+=(./bin); T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'path[1]=./bin; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'typeset path; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'typeset -a path=(./bin); T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'read -A path < list; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'set -A path ./bin; T=$(mktemp); echo x > "$T"'],
-    // A quoted, escaped or run time name for TMPDIR or PATH.
-    ['$T', ['$(mktemp)'], 'export TMP"DIR"=app; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], "export $'TMP\\x44IR'=app; T=$(mktemp); echo x > \"$T\""],
-    ['$T', ['$(mktemp)'], 'V=TMP; export ${V}DIR=app; T=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'printf -v "$V" app; T=$(mktemp); echo x > "$T"'],
-    // An assignment of the variable the reader did not give, a prefix one dropped before a command.
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); T=app/page.tsx : ; echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=.tsx; echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=$(mktemp); echo x > "$T"'],
-    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=app/page.tsx; echo x > "$T"'],
-    // A word that is more than the variable alone, or no values.
-    ['$T/a', ['$(mktemp)'], 'T=$(mktemp); cat app/page.tsx > "$T/a"'],
-    ['$T', [], 'cat app/page.tsx > "$T"'],
-  ] as const)
-    expect([command, freshTemp(word, [...values], command)]).toEqual([command, false])
-})
-
-test('#2991: a variable holds a temporary folder the script made only where every assignment is mktemp -d or a name inside one', () => {
-  const T = 'T="$(mktemp -d)"\n'
-  for (const [name, script] of [
-    ['T', T],
-    ['T', 'T=$(mktemp -d)\n'],
-    ['CH', `${T}CH="$T/chain"\n`],
-    ['CH', `${T}CH="\${T}/a/b"\nCH="$T/c"\n`],
-    ['X', `${T}CH="$T/chain"\nX="$CH/app"\n`],
-  ] as const)
-    expect([script, madeTemp(name, script)]).toEqual([script, true])
-  for (const [name, script] of [
-    ['CH', 'CH="$(pwd)"\n'],
-    ['CH', 'CH=.\n'],
-    ['CH', `${T}CH="$T/chain"\nCH=/w/slate\n`],
-    ['CH', `${T}CH="$T/../.."\n`],
-    ['CH', `${T}CH="$T/$U"\n`],
-    ['CH', `${T}CH="$T/chain"\nCH+=/x\n`],
-    ['CH', `${T}CH="$T/chain"\nread CH\n`],
-    ['CH', `${T}for CH in /w/slate; do :; done\n`],
-    ['CH', `${T}CH="$T/chain"\n: "\${CH:=/w/slate}"\n`],
-    ['CH', 'CH=\'$(mktemp -d)\'\n'],
-    ['T', 'T="$(mktemp -d -t x)"\n'],
-    ['T', `TMPDIR=/w/slate ${T}`],
-    ['T', `mktemp() { echo /w/slate; }\n${T}`],
-    ['T', `PATH=/w/bin:$PATH\n${T}`],
-    ['T', 'T="$T"\n'],
-    ['CH', ''],
-  ] as const)
-    expect([script, madeTemp(name, script)]).toEqual([script, false])
 })
 
 test('#2991: a python program binds a variable to one of its arguments only by a plain or tuple assignment from sys.argv', () => {
@@ -2951,13 +2871,8 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
 // The script's text goes to mod-kit's readers as it is written (#3021): they keep a `[[ ]]` test
 // whole and read a trap's text as the commands it runs, which this guard did for itself until then
 // (joinTests and trapBodies, each with a case it read wrong: `trap -- text` ran `--`).
-const unreached = (text: string, sourced = true): string | undefined => {
-  const temp = (word: string) => {
-    const v = /^\$(?:\{(\w+)\}|(\w+))$/.exec(word)
-    return v !== null && madeTemp((v[1] ?? v[2]) as string, text, new Set(), true)
-  }
-  return argumentUnreached(commandWrites(text, '/s', '/h'), pipelineIn(text, '/s', '/h') as readonly RunCommand[], temp, () => sourced)
-}
+const unreached = (text: string, sourced = true): string | undefined =>
+  argumentUnreached(commandWrites(text, '/s', '/h'), pipelineIn(text, '/s', '/h') as readonly RunCommand[], word => tempWord(word, text), () => sourced)
 const BASE_2924 = 'like="${2:-}"\nif [[ -z "$like" || "$like" == --* ]]; then exit 2; fi\nwhile [[ $# -gt 0 && -n "$(printf %s "$1")" ]]; do shift; done\ngh_err="$(mktemp)"\ntrap \'rm -f "$gh_err"\' EXIT\nout=""\nout="$(mktemp)"\ngh issue list >"$out" 2>"$gh_err"\nprintf \'%s\' "$like" | python3 -c \'import sys; print(sys.stdin.read(), sys.argv[1])\' "$like"\nprintf x > /s/notes.txt\nsource /s/catch-all.sh\n'
 
 test('#2924: argumentUnreached finds no route to a write in a script writing only its own names and temporary files', () => {
@@ -3015,29 +2930,6 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
   expect(unreached(BASE_2924, false)).toBe('it sources /s/catch-all.sh, which could not be read whole')
   // `command -v` only looks a name up.
   expect(unreached(`${BASE_2924}command -v gh >/dev/null 2>&1\n`)).toBeUndefined()
-})
-
-test('#2924: ownFolderVar reads the one usual idiom for a script\'s own folder, and nothing that may name another', () => {
-  const idiom = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
-  expect(ownFolderVar('HERE', `set -u\n${idiom}\nsource "$HERE/x.sh"\n`)).toBe(true)
-  expect(ownFolderVar('HERE', `  ${idiom.replace('${BASH_SOURCE[0]}', '$BASH_SOURCE').replace('&& pwd', '>/dev/null && pwd -P')}\n`)).toBe(true)
-  for (const text of [
-    `cd /tmp\n${idiom}\n`,
-    `${idiom}\nHERE=/w/slate/app\n`,
-    `${idiom}\nHERE+=/app\n`,
-    `${idiom}\nread HERE\n`,
-    `${idiom}\nfor HERE in a b; do :; done\n`,
-    `${idiom}\n: "\${HERE:=/w}"\n`,
-    idiom.replace('${BASH_SOURCE[0]}', '$0'),
-    `x=1; ${idiom}\n`,
-    'HERE="$(pwd)"\n',
-  ])
-    expect({ text, own: ownFolderVar('HERE', text) }).toEqual({ text, own: false })
-  // A temporary file and an empty value count for a write's own variable, never for a joined folder.
-  expect(madeTemp('f', 'f=""\nf="$(mktemp)"\nf=$(mktemp)\n', new Set(), true)).toBe(true)
-  expect(madeTemp('f', 'f="$(mktemp)"\n')).toBe(false)
-  expect(madeTemp('f', 'f=""\n', new Set(), true)).toBe(false)
-  expect(madeTemp('f', 'f="$(mktemp)"\nf="$1"\n', new Set(), true)).toBe(false)
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were

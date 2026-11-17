@@ -115,6 +115,12 @@
 #                                                               strip, folder and hunks their own way).
 #                                                               Ask before saving's cut of every line that
 #                                                               might name a file is another question.
+#   script-vars                                                 tempWord, madeTemp, freshTemp,
+#             reading a script's own variables by hand: a      ownFolderPath and withoutOwnFolder from the
+#             bare mktemp substitution matched by a pattern    copy of hooks/scriptvars.ts kept at
+#             (mktemp(?: -d)?), or its own folder by naming    hooks/mod-kit/scriptvars.ts (#3022: the
+#             BASH_SOURCE                                       design round guard read them itself and
+#                                                               the area check could not read them at all)
 #   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -206,11 +212,14 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "check-mod-shared-parts: python3 is not installed, so no mod's source was read." >&2
   exit 3
 fi
+# Run isolated (python3 -I) every time: python then leaves the program's own folder off its search
+# path, so a file beside it named for a module it imports (tools/lib/re.py) is never loaded in that
+# module's place, and it ignores PYTHONPATH and the user's site packages (#3082).
 TS_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ts_source.py"
 # Each mod's hooks/ with its comments blanked, line for line, so every match names the real line.
 stripped="$(mktemp -d "${TMPDIR:-/tmp}/check-mod-shared-parts.XXXXXX")" || exit 1
 trap 'rm -rf "$stripped"' EXIT
-if ! python3 "$TS_SOURCE" strip-hooks "$dir" "$stripped"; then
+if ! python3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"; then
   echo "check-mod-shared-parts: a mod's source above could not be read, so it was not checked."
   exit 1
 fi
@@ -250,6 +259,9 @@ PARTS=(
   # #2992: a patch read by hand, by the spellings the two copies used: git's diff line, a +++ header
   # as a quoted string, a hunk header matched from a line's start, or git's binary patch line.
   "patch-reader|diff --git|[\"'\`]\\+\\+\\+ |\\^@@|GIT binary patch|readPatch, patchFiles, patchPlacing, placedName and patchedPaths from the copy of hooks/patch.ts kept at hooks/mod-kit/patch.ts"
+  # #3022: a script's own variables read by hand, by the spellings the design round guard used: a bare
+  # mktemp substitution matched by a pattern (mktemp(?: -d)?), or its own folder by naming BASH_SOURCE.
+  "script-vars|mktemp\\(\\?: -d\\)\\?|BASH_SOURCE|tempWord, madeTemp, freshTemp, ownFolderPath and withoutOwnFolder from the copy of hooks/scriptvars.ts kept at hooks/mod-kit/scriptvars.ts"
 )
 
 n=0
@@ -264,7 +276,7 @@ for d in "$dir"/*/; do
   # under load failed 20 of 20 on 2026-10-23, nothing broken). Any spelling of the import is read:
   # on one line or across lines, renamed, or the whole module; a type alone is not a test.
   # Exit 1 is a file it could not read, named among the lines; any other exit is the reader broken.
-  takers="$(python3 "$TS_SOURCE" kit-test-takers "${d%/}")"; rc=$?
+  takers="$(python3 -I "$TS_SOURCE" kit-test-takers "${d%/}")"; rc=$?
   if [ "$rc" -gt 1 ]; then
     failed=1
     echo "check-mod-shared-parts: $name's source could not be read for where its tests take test from (the reader exited $rc), so it was not checked."
@@ -300,7 +312,7 @@ for d in "$dir"/*/; do
   # judged by how busy the Mac is (L290). Read by ts_source.py real-waits, comments and strings out:
   # a timer past a small floor (a yield to the event loop passes), Bun.sleep, Atomics.wait, or timers
   # from timers/promises. Exit 1 is a file it could not read, named among the lines.
-  waits="$(python3 "$TS_SOURCE" real-waits "${d%/}")"; rc=$?
+  waits="$(python3 -I "$TS_SOURCE" real-waits "${d%/}")"; rc=$?
   if [ "$rc" -gt 1 ]; then
     failed=1
     echo "check-mod-shared-parts: $name's tests could not be read for waits on real time (the reader exited $rc), so they were not checked."
@@ -422,7 +434,7 @@ for d in "$dir"/*/; do
   done <<< "$(grep -rlE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' '<Button\b' "$sd/hooks" 2>/dev/null)"
   # screen (#707, per hook since #732): a tool.call hook answering with a result that never asks
   # mod-kit's screen in its own body.
-  if ! found="$(python3 "$TS_SOURCE" unscreened "$d/hooks")"; then
+  if ! found="$(python3 -I "$TS_SOURCE" unscreened "$d/hooks")"; then
     failed=1
     echo "check-mod-shared-parts: $name's tool.call hooks could not be read, so whether each asks \$.modkit.screen(e) first is not known."
     continue

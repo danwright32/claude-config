@@ -83,6 +83,13 @@ export const SHA = 'a1b2c3'
 
 // 90 days of the app's default branch, newest first: big.ts grew fast; slack.ts barely.
 export const NUMSTAT = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big.ts', '\x1eSmall change', '10\t2\tsrc/lib/slack.ts'].join('\n')
+// The texts a run of tools/check-mods.sh reads (#3022), written out here as git is handed them, never
+// taken from the code under test; tests/test-area-check-check-mods-read-only.sh holds the code's own
+// list to the script.
+export const NAMED_TEXTS = 'tools/check-mods.sh tools/lib/pinned-compiler.sh payload/hooks/lib/kept-output.sh payload/hooks/lib/load-average.sh payload/hooks/lib/whole-number.sh'
+// And the texts a run of tools/check-mod-shared-parts.sh reads (#3082): the script and the python
+// program it runs. tests/test-area-check-shared-parts-read-only.sh holds the code's own list to it.
+export const SCAN_TEXTS = 'tools/check-mod-shared-parts.sh tools/lib/ts_source.py'
 export const TRACKED = ['src/big.ts', 'src/lib/slack.ts', 'src/pay/stripe.ts', 'docs/x.md', 'README.md'].join('\n')
 export type Issue = { number: number; title: string; body: string; labels: { name: string }[] }
 export const ISSUES: Issue[] = [
@@ -127,6 +134,13 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // inside the pull request check, the other before it, so the hook itself fails.
     pipelineThrows?: boolean
     cwdThrows?: boolean
+    // mod-kit's readers as a copy loaded before #3093 gives them: no setting carried on a command or
+    // on a run, nothing said of what a command is run behind, and a command that only sets a value
+    // left out whatever is asked.
+    oldReader?: boolean
+    // The session's folder failing on its Nth ask only (#3126), and how many times it has been asked.
+    cwdThrowsOn?: number
+    cwdAsked: number
     numstat?: string
     sha: string
     goal: string | null
@@ -157,7 +171,16 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     tracked?: string
     // The line counts git grep -c answers on the default branch, in place of big.ts's alone.
     lines?: string
+    // The GitHub repository /w/app is a clone of, in place of dan/app (#3022), and what git exits
+    // with when asked whether a named script's texts changed since the checkout left origin/main
+    // (0 unchanged, 1 changed, anything else git failing). Asked only where `github` is set.
+    // `namedDiff` answers for tools/check-mods.sh's texts and `scanDiff` for
+    // tools/check-mod-shared-parts.sh's (#3082), so one script's change is seen not to hold the other.
+    github?: string
+    namedDiff?: number
+    scanDiff?: number
   } = {
+    cwdAsked: 0,
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
     links: {},
@@ -176,7 +199,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_AREA_CHECK_DIR' ? init.areaDir : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => {
-    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    ctl.cwdAsked += 1
+    if (ctl.cwdThrows || ctl.cwdAsked === ctl.cwdThrowsOn) throw new Error('the session folder could not be read')
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
@@ -260,13 +284,20 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       // mod-kit's command readers, standing in: their byte for byte copies, as is it live keeps.
       if (argv[1] === 'pipeline' && ctl.pipelineThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the pipeline could not be read' })
       if (argv[1] === 'gh' || argv[1] === 'mergeHelper' || argv[1] === 'pipeline') {
-        const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
+        // The commands that only set a value, where asked for, as mod-kit's own handler gives them (#3093).
+        const opts = input.assignments === true && !ctl.oldReader ? { assignments: true } : {}
+        const piped = (): Command[] => {
+          const cs: Command[] = input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '', opts) : pipeline(input.command, opts)
+          return ctl.oldReader ? cs.map(({ env: _env, behind: _behind, ...c }) => c) : cs
+        }
+        const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : piped()
         return answer(ok(read === undefined ? 'null' : JSON.stringify(read)))
       }
       // What a Bash call writes (#2142), from the same copy of mod-kit's reader.
       if (argv[1] === 'writes') {
         if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
-        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home ?? ''))))
+        const w = commandWrites(input.command, input.cwd, input.home ?? '')
+        return answer(ok(JSON.stringify(ctl.oldReader && w.runs ? { ...w, runs: w.runs.map(({ env: _env, ...r }) => r) } : w)))
       }
       if (argv[1] === 'branch') {
         if (ctl.branchThrows) return answer({ exitCode: 1, stdout: '', stderr: 'git could not be asked' })
@@ -275,7 +306,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
         const issues = [...branch.matchAll(/(?:^|[/_.-])(\d+)(?=$|[/_.-])/g)].map(m => Number(m[1]))
         return answer(ok(JSON.stringify({ root: APP, main: APP, branch, defaultBranch: 'main', isDefault: false, issues })))
       }
-      if (argv[1] === 'repo') return answer(ok(JSON.stringify({ github: String(input.remote).includes('github.com') ? 'dan/app' : null, name: 'app' })))
+      if (argv[1] === 'repo') return answer(ok(JSON.stringify({ github: String(input.remote).includes('github.com') ? (ctl.github ?? 'dan/app') : null, name: 'app' })))
       if (argv[1] === 'blocked') {
         cards.push(input)
         return answer(ok('null'))
@@ -350,6 +381,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       const sub = argv.slice(3).join(' ')
       if (sub === 'remote get-url origin') return answer(ok('git@github.com:dan/app.git\n'))
       if (sub === 'rev-parse --verify origin/main^{commit}') return answer(ok(`${ctl.sha}\n`))
+      if (ctl.github && sub === `diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`) return answer({ exitCode: ctl.namedDiff ?? 0, stdout: '', stderr: '' })
+      if (ctl.github && sub === `diff --quiet --merge-base origin/main -- ${SCAN_TEXTS}`) return answer({ exitCode: ctl.scanDiff ?? 0, stdout: '', stderr: '' })
       if (argv[3] === 'merge-base' && argv[5] === 'origin/main') {
         const base = ctl.bases[argv[4] as string]
         return answer(base ? ok(`${base}\n`) : { exitCode: 128, stdout: '', stderr: `fatal: Not a valid object name ${argv[4]}` })
@@ -421,7 +454,8 @@ export const said = (r: R) => [...(r.context ?? []), typeof r.result === 'string
 export const REASON = 'This only renames a local variable inside one function.'
 export const SLACK = `${APP}/src/lib/slack.ts`
 // The question about that file under its fixed length key (#2246): the SHA-256 of "dan/app\nsrc/lib/slack.ts",
-// measured with shasum rather than with the code under test, and the key it was kept under before.
+// measured with shasum rather than with the code under test, and the key it was kept under before
+// (no longer read, #2256: a test fixture for proving that).
 export const QKEY = 'question:41ea88a6f2f85188ac883b6c67f9c59a2728aeddb0cdeb7020eeb21976ac7aee'
 export const OLD_QKEY = 'question:dan/app\nsrc/lib/slack.ts'
 

@@ -85,14 +85,15 @@ import {
   isGroupPattern,
   isPattern,
   isTestPath,
+  literalArrays,
+  spellArrays,
+  spelledOnly,
   patternMayBeLook,
   nameFromOutput,
   nameFromVariable,
   removalFilledIn,
-  leadingVariable,
   findNamesReachNoLook,
   outputTrusted,
-  freshTemp,
   relTo,
   shapeKind,
   shellVarPath,
@@ -136,6 +137,7 @@ import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
+import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
@@ -548,7 +550,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     return { targets: pathsOf(input).map(word => ({ path: resolvePath(word, at.cwd, at.home), word, ...(text === undefined ? {} : { text }) })), storeMentioned: false }
   }
   const command = String(input.command ?? '')
-  const w = await $.modkit.writes({ command, cwd: at.cwd, home: at.home })
+  // #3057: a command running what it names through an array of plain words is read as it runs, as
+  // a script's text is (spelt below).
+  const typedArrays = command.includes('[@]}') ? literalArrays(command, command) : undefined
+  const read = typedArrays?.size ? (await spelt($, command, (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[], at.cwd, command, at.home)).text : command
+  const w = await $.modkit.writes({ command: read, cwd: at.cwd, home: at.home })
   const targets: Target[] = []
   // Whether the command names the session's scratchpad, where a round's files go (#1191).
   const scratch = namesScratchpad(command, at.session, at.temps)
@@ -599,8 +605,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       readings.set(s, { read: await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd, home: at.home }) })
       continue
     }
-    const commands = (await $.modkit.pipeline({ command: s.text, cwd, home: at.home })) as readonly RunCommand[]
-    readings.set(s, { read: await $.modkit.writes({ command: s.text, cwd, home: at.home }), commands })
+    const plain = (await $.modkit.pipeline({ command: s.text, cwd, home: at.home })) as readonly RunCommand[]
+    const { text, commands } = await spelt($, s.text, plain, cwd, scriptsText, at.home)
+    readings.set(s, { read: await $.modkit.writes({ command: text, cwd, home: at.home }), commands })
   }
   // #2924: a shell script that cannot write what it is handed (rules.ts closedScripts: every file its
   // own commands write named in its own text or a temporary file it made, nothing run later from a
@@ -826,6 +833,22 @@ const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; i
     for (const p of patchedPaths(args, git, text)) out.push({ path: resolvePath(p, base, at.home), word: p })
   }
   return out
+}
+
+// #3057: a script's text as its commands run where it names them through an array of plain words
+// (`G=(git -c user.name=t)`, `"${G[@]}" -C "$W" add src/feat.tsx`), which mod-kit marks unread as a
+// command a value names, so its words were judged as look changing names in the folder it runs in:
+// test-check-duplication.sh was held as writing src/feat.tsx into the checkout. Each such array
+// (rules.ts literalArrays, held against `all`) is written out where it starts a command
+// (spellArrays), and the spelt text is used only where mod-kit's pipeline reads it as the same
+// commands with the array's words in place (spelledOnly); otherwise the text as written, and its
+// commands as `plain` gives them.
+const spelt = async ($: EngineInterface, text: string, plain: readonly RunCommand[], cwd: string, all: string, home: string): Promise<{ text: string; commands: readonly RunCommand[] }> => {
+  const arrays = text.includes('[@]}') ? literalArrays(text, all) : new Map<string, string>()
+  const out = arrays.size ? spellArrays(text, arrays) : text
+  if (out === text) return { text, commands: plain }
+  const after = (await $.modkit.pipeline({ command: out, cwd, home })) as readonly RunCommand[]
+  return spelledOnly(plain, after, arrays) ? { text: out, commands: after } : { text, commands: plain }
 }
 
 // The look changing and mod hook files a program's text names (#1151, #2847), each as guessAt places
@@ -1672,9 +1695,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // lasting memory (lessons review of #991). A command naming none runs. Only a name the shell
       // fills in itself (a variable or a command's output in its last part) may be one: `$D/spec.json`
       // is a spec wherever $D is, so what its heredoc's data names is data (#1151).
-      const unknownName = /[$`]/.test(t.word.split('/').pop() ?? '')
+      // One whose every $ and backtick the shell leaves as written (mod-kit's unexpanded: a search
+      // pattern "a|\$[0-9]|b") holds no value, so it is the name it spells (#3051).
+      const unknownName = !t.unexpanded && /[$`]/.test(t.word.split('/').pop() ?? '')
       // A variable alone that only ever holds bare `mktemp` or `mktemp -d` output names a new file
-      // outside every screen path (rules.ts freshTemp; Dan, 2026-11-04, #2171).
+      // outside every screen path (mod-kit's scriptvars.ts freshTemp; Dan, 2026-11-04, #2171).
       if (!t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {

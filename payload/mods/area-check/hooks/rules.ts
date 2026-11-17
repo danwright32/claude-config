@@ -6,6 +6,7 @@
 // (the Held record below) that is refused until the session decides.
 import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
+import { ownFolderPath, tempWord } from './mod-kit/scriptvars.ts'
 
 /** Bumped whenever a rule here changes what a file's facts are, so a cached ranking is never reused across it (L573). */
 export const RULE_VERSION = 2
@@ -95,9 +96,45 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * `runs` is every script a path was handed to, present only when that is the command's one way of
  * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every write
  * of every one of them is placed, each then judged where it lands in the folder's stead (scriptProgram,
- * scriptReach; #2426 lessons review, #2565).
+ * scriptReach; #2426 lessons review, #2565). On a write whose file cannot be named, `runs` is every
+ * script a word built as the command runs was handed to, present only when being handed to them is
+ * the command's one way of reaching it (#3082): such a word is no write of theirs where every write of
+ * every one is placed and none is built on what it is handed, and those writes are judged in its stead.
  */
-export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string }
+export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string; runs?: ShellRun[] }
+
+/**
+ * Whether a word opens a `$(`, `${`, `$[` or backtick it never closes (#3082): the shell refuses such
+ * a line or reads on past it, so it is no value the command builds and hands a script, and it never
+ * carries `runs`, staying held as unread. A bracket inside an open one is counted as nesting, so a
+ * quoted lone `(` inside `$(...)` reads as never closed: the side that holds rather than passes.
+ */
+export const neverClosed = (word: string): boolean => {
+  const want: string[] = []
+  const closer: Record<string, string> = { '(': ')', '{': '}', '[': ']' }
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i] as string
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (c === '`') {
+      if (want.at(-1) === '`') want.pop()
+      else want.push('`')
+      continue
+    }
+    const opens = word[i + 1]
+    if (c === '$' && opens !== undefined && closer[opens]) {
+      want.push(closer[opens] as string)
+      i++
+      continue
+    }
+    if (!want.length) continue
+    if (c === '(') want.push(')')
+    else if (c === want.at(-1)) want.pop()
+  }
+  return want.length > 0
+}
 
 const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
 // A name whose extension is written out and is no source one is never judged, whatever its folder is.
@@ -142,84 +179,51 @@ export const scriptProgram = (run: ShellRun, text: string): { command: string; n
 }
 
 const SOURCES = new Set(['source', '.'])
-// A word that only sets a variable, though the reader gives it as a command: an array's element
-// (`seen[$f]=1`) or an append (`list+=("$f")`), which its own test for an assignment does not match.
-const SETS = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
 
-type ReadCommand = { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }
-
-/**
- * The commands that are the words of an arithmetic command (#2619), by their place: mod-kit's reader
- * gives `(( $# < 1 ))` as two `(` commands, the expression's words as commands (`$#` `<` `1`, split
- * at any `&&` or `||`), and two `)` commands, so a value there reads as a command named by a value
- * though it names none. Only that exact shape counts: two `(` in a row, no parenthesis between, and
- * two `)` in a row closing them, in a text that holds `((` at all. Two subshells with nothing else
- * inside the outer one (`( ( "$TOOL" x ) )`) give the same commands, so in a script that also holds
- * a `((` somewhere they read as arithmetic too, as they read as no write before #2619; any other
- * nesting, and every script holding no `((`, is read as the commands it runs.
- */
-const inArithmetic = (commands: readonly ReadCommand[], text: string): Set<number> => {
-  const is = (i: number, paren: string) => commands[i]?.words.length === 1 && commands[i]?.words[0] === paren
-  const found = new Set<number>()
-  if (!text.includes('((')) return found
-  for (let i = 0; i + 1 < commands.length; i++) {
-    if (!is(i, '(') || !is(i + 1, '(')) continue
-    let j = i + 2
-    while (j < commands.length && !is(j, '(') && !is(j, ')')) j++
-    if (is(j, ')') && is(j + 1, ')')) for (let k = i + 2; k < j; k++) found.add(k)
-  }
-  return found
-}
+type ReadCommand = { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true }; unread?: string }
 
 /**
  * Why the commands mod-kit's pipeline gives for the command scriptProgram built leave what the script
- * writes unread (#2407), or null. A shell's script comes back as the commands it runs, another
- * language's as the command carrying its program's text; a command still holding the heredoc's word
- * with no program text is an interpreter mod-kit does not read. And a script it runs in turn, by an
- * interpreter, by its path or through source, writes what no word names, which mod-kit's writes give
- * only for one handed arguments, so each is named here. A program run by its bare name (make, npm) is
- * read as the area check reads the same command typed on its own.
+ * writes unread (#2407), or the files it sources that the caller must read as part of it. A shell's
+ * script comes back as the commands it runs, another language's as the command carrying its program's
+ * text; a command still holding the heredoc's word with no program text is an interpreter mod-kit does
+ * not read. And a script it runs in turn, by an interpreter or by its path, writes what no word names,
+ * which mod-kit's writes give only for one handed arguments, so each is named here. A program run by
+ * its bare name (make, npm) is read as the area check reads the same command typed on its own.
  *
- * And text the reader does not read as commands (#2619; each measured on 2026-11-10 to give no
- * write, so a script writing through one was read as writing nothing and the folder it was handed
- * went unjudged): what eval runs; what an alias makes a later word run; and a command named by a
- * value (`"$TOOL" --write "$1"`, `$(command -v fixer) "$1"`, `"$@"`, and `bash -c "$FIX"`, which the
- * reader gives as the command `$FIX`). A word that only sets a variable names no command, nor does
- * a value inside arithmetic (inArithmetic, told from `source`, the text the commands were read
- * from; with none given nothing is arithmetic). A trap's text is the caller's to read (trapTexts).
+ * A command mod-kit's reader marks `unread` is unread here (#2619, #3022): what eval runs, what an
+ * alias makes a later word run, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, and
+ * `bash -c "$FIX"`), ssh, and a trap whose text the shell expands. The reader tells a value inside
+ * arithmetic and a word that only sets a variable from a command, and gives a trap's text as the
+ * commands it runs, so none of that is read a second time here (the area check kept its own unreadPart,
+ * inArithmetic and trapTexts until #3022, a second copy of what the reader does).
+ *
+ * A file sourced through the variable that holds the script's own folder (`source "$HERE/lib.sh"`,
+ * mod-kit's ownFolderPath, given the script's `text` and the file it is, `self`) is `sourced`, by its
+ * path: it runs in the script's own shell, so the caller reads its text as it reads the script's, and
+ * holds the script where it cannot. Sourced any other way (a relative name, a full path, a value, a
+ * pattern), or handed words of its own, which become what it is handed, it is unread.
  */
-export const unreadPart = (commands: readonly ReadCommand[], delimiter: string, source = ''): string | null => {
-  const arithmetic = inArithmetic(commands, source)
-  for (const [i, c] of commands.entries()) {
-    // `builtin eval "$FIX"` runs eval: the reader does not look past `builtin`, so it is looked past here.
+export const runsInTurn = (commands: readonly ReadCommand[], delimiter: string, text = '', self?: string): { unread: string } | { sourced: string[] } => {
+  const sourced: string[] = []
+  for (const c of commands) {
+    // `builtin source x` runs source: the reader looks past `builtin` for what it marks, and so is it here.
     const words = c.words[0] === 'builtin' ? c.words.slice(1) : c.words
     const head = words[0] ?? ''
-    const text = typeof c.program === 'object' && c.program !== null && 'text' in c.program
-    if (c.words.some(w => w.includes(delimiter)) && !text) return `${head} is no interpreter whose program mod-kit reads`
-    if (c.script && !c.script.stdin) return `it runs the script ${c.script.files[0] ?? head}, whose writes are not read`
-    if (head.includes('/') || (SOURCES.has(head) && words.length > 1)) return `it runs ${SOURCES.has(head) ? words[1] : head}, whose writes are not read`
-    if (head === 'eval') return 'it runs text through eval, whose writes are not read'
-    if (head === 'alias' && words.some(w => w.includes('='))) return `it sets an alias (${words.find(w => w.includes('='))}), so what a later word runs is not read`
-    if (/[$`]/.test(head) && !SETS.test(head) && !arithmetic.has(i)) return `it runs ${head}, which cannot be named before it runs`
+    const hasText = typeof c.program === 'object' && c.program !== null && 'text' in c.program
+    if (c.words.some(w => w.includes(delimiter)) && !hasText) return { unread: `${head} is no interpreter whose program mod-kit reads` }
+    if (c.unread) return { unread: `it runs ${c.words.join(' ').slice(0, 80)}, ${c.unread}` }
+    if (c.script && !c.script.stdin) return { unread: `it runs the script ${c.script.files[0] ?? head}, whose writes are not read` }
+    if (SOURCES.has(head) && words.length > 1) {
+      const lib = words.length === 2 && self !== undefined ? ownFolderPath(words[1] as string, text, self) : undefined
+      if (lib === undefined) return { unread: `it runs ${words[1]}, whose writes are not read` }
+      const path = joined('/', lib.split('/'))
+      if (!sourced.includes(path)) sourced.push(path)
+      continue
+    }
+    if (head.includes('/')) return { unread: `it runs ${head}, whose writes are not read` }
   }
-  return null
-}
-
-/**
- * The text each trap a script sets would run (#2619), once each: `trap 'echo x > "$1/big.ts"' EXIT`
- * reaches the reader as a trap command whose first word is that text, which it reads as no command,
- * so a write in it was no write. The caller reads each text as the commands it is, with the same
- * reader and the same rules as the script's own. A trap that lists (`trap`, `-p`, `-l`), resets
- * (`trap - EXIT`) or ignores (`trap '' HUP`) runs nothing.
- */
-export const trapTexts = (commands: readonly { words: readonly string[] }[]): string[] => {
-  const texts = new Set<string>()
-  for (const c of commands) {
-    if (c.words[0] !== 'trap') continue
-    const text = c.words[c.words[1] === '--' ? 2 : 1]
-    if (text !== undefined && text.trim() !== '' && !text.startsWith('-')) texts.add(text)
-  }
-  return [...texts]
+  return { sourced }
 }
 
 // The folder a script's text is read as run from (#2565): nowhere, and many folders deep, so a name it
@@ -275,12 +279,16 @@ const handedPlace = (word: string, folder: string): { path: string; tree?: true 
  * a path the reader names (a full path, or one under the home folder), a pattern's folder, and a name
  * built on what the script is handed (`"$1/gen.ts"`, `handed`), read as if the folder were each of
  * them, so every folder a script is handed is judged for the same names and the one it really is gets
- * judged. Anything else `reaches` the whole folder, with why, as #2321 judged it: a script it runs in
+ * judged. A write into a temporary file or folder the script made itself (#3022: `"$scratch/copy"`,
+ * scratch only ever `"$(mktemp -d)"`, by mod-kit's tempWord over `script`, the text of the script and
+ * of every file it sources) lands in no file of the checkout, so it is placed nowhere and judged
+ * nowhere. Anything else `reaches` the whole folder, with why, as #2321 judged it: a script it runs in
  * turn, a name relative to wherever it is run, and any name built from a value the reader cannot
- * follow, a folder made with mktemp among them. Whether what it is handed still holds those values
+ * follow, a folder mktemp made from a template or under a name of the script's choosing among them,
+ * and every such name where no `script` is given. Whether what it is handed still holds those values
  * where the name is built is argsMove's question.
  */
-export const scriptReach = (w: ModKitWrites, folder: string, home?: string): { reaches: string } | { placed: ScriptPlaced[] } => {
+export const scriptReach = (w: ModKitWrites, folder: string, home?: string, script?: string): { reaches: string } | { placed: ScriptPlaced[] } => {
   const run = w.runs?.[0]
   if (run) return { reaches: `it runs ${run.what} (${run.script}), whose writes are not read` }
   const placed: ScriptPlaced[] = []
@@ -300,6 +308,7 @@ export const scriptReach = (w: ModKitWrites, folder: string, home?: string): { r
       placed.push({ word: t.word, path: t.folder, tree: true })
       continue
     }
+    if (script !== undefined && tempWord(t.word, script)) continue
     const at = handedPlace(t.word, folder)
     if (!at) return { reaches: `it writes ${t.word}: ${t.unread}` }
     placed.push({ word: t.word, ...at, handed: true })
@@ -325,10 +334,12 @@ const DEFINES_FUNCTION = /(?:^|[\s;&|({])function[ \t]+[A-Za-z_]|[A-Za-z_][A-Za-
  * name lands where no reading of the command can tell. And what it is handed may be a name relative
  * to the folder it started in (`src/`), so after cd, pushd or popd a name built on it lands under
  * another folder. `shift` only moves along the values the script was handed, which scriptReach
- * already reads every one of, so it changes nothing.
+ * already reads every one of, so it changes nothing. Every cd in the commands given counts, one
+ * inside a command substitution too: the hook asks again, of the text with each whole own folder
+ * idiom taken out, before it lets that idiom's cd count for nothing (#3022).
  */
 export const argsMove = (commands: readonly { words: readonly string[] }[], text: string): string | null => {
-  // `builtin cd` and `command cd` run the same cd, as unreadPart looks past builtin for eval.
+  // `builtin cd` and `command cd` run the same cd.
   const own = commands.map(c => (c.words[0] === 'builtin' || c.words[0] === 'command' ? c.words.slice(1) : c.words))
   const moved = own.find(words => ['cd', 'pushd', 'popd'].includes(words[0] ?? ''))
   if (moved) return `it moves folder (${moved.join(' ')}), and what it is handed may be relative to where it started, so a name built on it cannot be placed`
@@ -427,10 +438,12 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     // One path reached twice is judged by what both routes may do, so a merge only ever narrows the
     // exemption (#2426 lessons review): a path the command also writes itself is that write, not only a
     // word a script is handed (#2407); a path handed to two scripts keeps both, each to be read; and a
-    // write reaching the whole folder keeps that reach.
+    // write reaching the whole folder keeps that reach. The key starts with p for a path and u for a word
+    // that cannot be named, so two targets sharing a key always share a variant; the same rules merge a
+    // word that cannot be named (#3082): one the command also writes itself is that write, never only a
+    // word scripts are handed.
     if (had) {
-      if (!('path' in had) || !('path' in t)) return
-      if (t.tree) had.tree = true
+      if ('path' in had && 'path' in t && t.tree) had.tree = true
       if (!had.runs || !t.runs) delete had.runs
       else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
       return
@@ -462,7 +475,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
       else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
-      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs` })
+      } else if (mayBeSource(a.word) && !a.unexpanded) add({ word: a.word, unread: `${r.what} is handed ${a.word}, built as the command runs`, ...(neverClosed(a.word) ? {} : { runs: [run] }) })
     }
   }
   for (const u of w.unnamed) {
@@ -886,19 +899,6 @@ export type Question =
  * store key over 256 characters, which left such a hold impossible to decide.
  */
 export const questionKey = async (repo: string, rel: string): Promise<string> => `question:${await sha256(`${repo}\n${rel}`)}`
-
-/** The store's own limit on a key, which it refuses past on get, set and delete (#2246). */
-export const STORE_KEY_MAX = 256
-
-/**
- * The key a question had before #2246, read so an answer Dan already gave still stands for its week,
- * and cleared with the call it waits on. Undefined where it would pass the store's limit, since no
- * question was ever kept there. Deleting this read is #2256, once a week has passed since install.
- */
-export const legacyQuestionKey = (repo: string, rel: string): string | undefined => {
-  const k = `question:${repo}\n${rel}`
-  return k.length <= STORE_KEY_MAX ? k : undefined
-}
 
 // A reason that is a stock word, a template's slot or a mark standing alone says nothing (L675).
 const PLACEHOLDER = /^(?:n\/?a|none|nothing|tbd|todo|fixme|reason|because|ok(?:ay)?|fine|yes|no|test|whatever|see above|not needed|no reason|small change|minor change|minor|trivial)$/i

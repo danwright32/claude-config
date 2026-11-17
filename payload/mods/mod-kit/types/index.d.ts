@@ -188,8 +188,15 @@ export type ModKit = {
    * `writes` reads one (relative and home folders, a variable the command set, a subshell's cd ending
    * with it), or null where that cannot be followed (a variable it did not set, cd -, a popd). A mod
    * asking about what a command acts on in its folder asks this, never the session's folder (L237).
+   *
+   * Given `assignments: true`, a command that only sets a value (`T=x;`, `A=1 B=2`) is given too
+   * (#3093), in its place, as a command whose words are its assignments. It runs nothing, so it is
+   * otherwise left out, and a guard that must know every value a line sets before a script it runs
+   * asks for it. A copy of mod-kit loaded before #3093 takes no such option and leaves them out
+   * without saying so, as it gives no `env` and no `behind`, so a guard relying on any of the three
+   * first asks about a line it knows the answer for (`A=1; B=2 env true`).
    */
-  pipeline: (input: { command: string; cwd?: string; home?: string }) => Promise<ModKitCommand[]>
+  pipeline: (input: { command: string; cwd?: string; home?: string; assignments?: boolean }) => Promise<ModKitCommand[]>
   /**
    * Where a python program holds text rather than code (#1171): each comment after its `#`, and
    * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
@@ -367,6 +374,25 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
  */
 export type ModKitCommand = {
   words: string[]
+  /**
+   * The settings the command is run with (#3093), each `NAME=value` as written and in order: those
+   * written in front of it or given to a runner before it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash
+   * s.sh`), after those of the shell running it, for a command in a shell's script or in a
+   * substitution that shell runs; absent where there are none. env's own options (-i, -u) are not
+   * in it, and a command that only sets variables (`F=x;`) gives none to the commands after it.
+   */
+  env?: string[]
+  /**
+   * What the command is run behind (#3093), by name and in order: each word the reader looked past
+   * because it only runs the command after it (`env -C copy bash s.sh` is `['env']`, `sudo nice
+   * make` is `['sudo', 'nice']`), the shell whose script it stands in (`bash -c 'make'` is
+   * `['bash']`), and find for what its -exec runs, after what that shell or find is itself behind;
+   * absent for a command typed as it runs. Each can change the folder or the environment the
+   * command runs in with no setting written (`env -C`, `env -i`, `env -u`, sudo, a login shell),
+   * and the options that do it are not given, so a guard that knows a script only by its plain run
+   * takes a command behind anything as not that run.
+   */
+  behind?: string[]
   pipedFrom?: string[]
   heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   xargs?: true
@@ -406,6 +432,15 @@ export type ModKitCommand = {
    * never empty and never safe.
    */
   derived?: (ModKitDerived | null)[]
+  /**
+   * For each word whose only expansions are old arithmetic (`$[...]`) of whole numbers joined by
+   * + - and * (#3070), the word as bash and zsh hand it on (`"x\\$[0-9]"` is `x\-9`), null for every
+   * other word; absent where no word is one. dash and ksh hand such a word on as typed, so it is one
+   * of two known texts and never a variable's value: a reader that judges it judges both. Since
+   * #3088 a sum in `$((...))` is worked out too, which every shell does: a word holding no `$[` is
+   * the one text, never handed on as typed.
+   */
+  worked?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
@@ -558,8 +593,14 @@ export type ModKitWrites = {
    * a name, brace, bracket or quote can start), wherever the command spells it (#1953: a regex 'x$',
    * prose 'costs $5'; #2320: a regex "bar$"): the shell hands it on as written, so it holds no
    * variable's value, and its `path` is the file it spells (#2402: "src/big.ts$").
+   * A word whose only expansions are old arithmetic the reader works out (#3070: `"x\\$[0-9]"`) is
+   * given twice, each `unexpanded`: as typed, which dash and ksh hand on, and with each sum worked
+   * out, which bash and zsh do. One whose sums are all `$((...))` (#3088), which every shell works
+   * out, is given once, worked out.
+   * `env` is the settings the run is given in front of it (#3093), as `ModKitCommand.env` gives them
+   * (`TMPDIR=x bash s.sh`), absent where there are none.
    */
-  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[]; env?: string[] }[]
   /**
    * The files a redirect sends standard output into (#1976), present when there are any: `>`, `>>`,
    * `>|`, `1>`, `&>`, `&>>` and `>& file`, each also in `files`, its `word`, `path` and `folder` as

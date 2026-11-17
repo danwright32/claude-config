@@ -271,20 +271,20 @@ test("Dan's answer stands for a week for the same issues, so a later first edit 
   expect(w.cards).toEqual([])
 })
 
-test("Dan's answer kept under the key questions had before #2246 still stands for its week", KIT, async ($, on) => {
+test("an answer kept under the key questions had before #2246 is no longer read, so the edit is held again (#2256)", KIT, async ($, on) => {
   const w = world($, on)
   w.store[OLD_QKEY] = { state: 'answered', answer: 'Proceed anyway', at: T0 - 1000, issues: [41] }
-  expect((await edit($ as never, w, SLACK)).result).toBe('done')
-  expect(w.judged()[0]).toMatchObject({ decision: 'held', applied: 'Proceed anyway' })
-  expect(w.cards).toEqual([])
+  expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
+  expect(w.judged()[0]).toMatchObject({ decision: 'held' })
+  expect(w.judged()[0]).not.toHaveProperty('applied')
 })
 
-test('a question waiting under the key before #2246 is cleared once its held call is decided', KIT, async ($, on) => {
+test('a question waiting under the key before #2246 is left alone when its held call is decided (#2256)', KIT, async ($, on) => {
   const w = world($, on)
   expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
   w.store[OLD_QKEY] = { state: 'pending', at: T0, issues: [41], session: 's1', call: 'c1', agent: null }
   await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })
-  expect(w.store[OLD_QKEY]).toBeUndefined()
+  expect(w.store[OLD_QKEY]).toMatchObject({ state: 'pending', call: 'c1' })
 })
 
 test("Dan's answer past its week, or for another set of issues, asks again", KIT, async ($, on) => {
@@ -701,6 +701,122 @@ test('a script handed a word whose every dollar sign the shell leaves as text is
   expect((await bash($ as never, w, 'python3 probe.py "src/big.ts$"', {}, 'b2')).result).toBe('done')
 })
 
+// #3082: `python3 -I measure.py notes.txt --md "$(git log -1 --format='%h, %cs' origin/main)"` was
+// held as writing a file named by the git log output, which is only a value the script is handed.
+// A word built as the command runs, handed only to scripts whose own text is read and each of whose
+// writes is placed with none built on what they are handed, is no write of theirs: those writes are
+// judged where they land, as for a folder handed to such a script (#2407, #2565).
+const STAMP = `"$(git log -1 --format='%h, %cs' origin/main)"`
+const MEASURE_PY = "import sys\nrows = open(sys.argv[1]).read().splitlines()\nprint('Measured on ' + sys.argv[3])\nprint(len(rows))\n"
+const MEASURE_SH = '#!/bin/bash\nwc -l "$1"\necho "Measured on $3"\n'
+
+test('a word built as the command runs, handed only to a script that writes nothing, runs judging no file (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  w.files[`${APP}/measure.sh`] = MEASURE_SH
+  expect((await bash($ as never, w, `python3 -I measure.py notes.txt --md ${STAMP} > candidates.md`)).result).toBe('done')
+  expect((await bash($ as never, w, `bash measure.sh notes.txt --md ${STAMP}`, {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  // Each pass is on record, naming the word and the script read for it (L551).
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([
+    { word: STAMP.slice(1, -1), script: `${APP}/measure.py`, decision: 'passed', placed: 0 },
+    { word: STAMP.slice(1, -1), script: `${APP}/measure.sh`, decision: 'passed', placed: 0 },
+  ])
+})
+
+// What a script handed such a word may do that keeps the command held: write a file named by what it
+// is handed, or by something no word names, write a held file itself, run another script, or be no
+// file that can be read.
+const HANDED_HELD: [string, string, string | undefined][] = [
+  ['writes the file it is handed, in python', "import sys\nopen(sys.argv[2], 'w').write('x')\n", undefined],
+  ['writes the file it is handed, in bash', '#!/bin/bash\necho x > "$2"\n', undefined],
+  ['writes under the folder it is handed', '#!/bin/bash\necho x > "$2/gen.ts"\n', undefined],
+  ['writes a held file by its full path', `#!/bin/bash\necho x >> ${APP}/src/big.ts\n`, 'src/big.ts'],
+  ['writes a file relative to wherever it is run from', '#!/bin/bash\necho x >> src/big.ts\n', undefined],
+  ['runs another script', '#!/bin/bash\npython3 tools/fix.py "$2"\n', undefined],
+]
+
+test('a word built as the command runs, handed to a script that may write it or writes a held file, is still held (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text, file]] of HANDED_HELD.entries()) {
+    w.files[`${APP}/stamp.sh`] = text
+    const run = text.startsWith('#!') ? 'bash' : 'python3'
+    const why = refusal(await bash($ as never, w, `${run} stamp.sh notes.txt ${STAMP}`, {}, `b${i + 1}`))
+    const ok = file === undefined ? why.includes('cannot be read') && why.includes('$(git log') : why.includes(`The area check held this Bash command, which writes ${file}.`)
+    held.push(ok ? `held: one that ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(HANDED_HELD.map(([what]) => `held: one that ${what}`))
+  // A script that is not there cannot be read, so the word is still held.
+  expect(refusal(await bash($ as never, w, `python3 gone.py ${STAMP}`, {}, 'b9'))).toContain('cannot be read')
+})
+
+test('a word built as the command runs is still held when the command also writes it, or the reader fails reading the script (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  // The same word is also where the command writes, before or after the read only script is handed it.
+  // And a word handed to the read only script and to one that writes it is held, whichever runs first.
+  w.files[`${APP}/stamp.sh`] = '#!/bin/bash\necho x > "$1"\n'
+  const commands = [
+    `python3 measure.py ${STAMP} > ${STAMP}`,
+    `echo x > ${STAMP}; python3 measure.py ${STAMP}`,
+    `python3 measure.py ${STAMP} && bash stamp.sh ${STAMP}`,
+    `bash stamp.sh ${STAMP} && python3 measure.py ${STAMP}`,
+  ]
+  for (const [i, c] of commands.entries()) {
+    expect([c, refusal(await bash($ as never, w, c, {}, `b${i + 1}`)).includes('cannot be read')]).toEqual([c, true])
+  }
+  w.ctl.pipelineThrows = true
+  expect(refusal(await bash($ as never, w, `python3 measure.py ${STAMP}`, {}, 'b9'))).toContain('cannot be read')
+  expect(w.records().filter(x => x.kind === 'script-reads' && x.decision === 'passed')).toEqual([])
+})
+
+// Judging the scripts a built word is handed to failing mid way (here the session's folder, asked for
+// as the last step before their writes are judged) is no pass: the word is judged as one that cannot
+// be named, so the command is held (fail closed), and the one line said about it says so, never that
+// the command went ahead.
+test('a failure judging the scripts a built word is handed to holds the command, and says it was held (#3126)', KIT, async ($, on) => {
+  const command = `python3 measure.py ${STAMP}`
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  // A clean run first, to count the times the session's folder is asked for: the last ask of the same
+  // command run again is the one under test.
+  expect((await bash($ as never, w, command)).result).toBe('done')
+  const once = w.ctl.cwdAsked
+  w.ctl.cwdThrowsOn = once * 2
+  const why = refusal(await bash($ as never, w, command, {}, 'b2'))
+  expect(w.ctl.cwdAsked).toBeGreaterThan(once * 2)
+  expect(why).toContain('cannot be read')
+  // The test engine words the failed ask itself, so the error is read back from the record.
+  const error = String(w.records(ERRORS)[0]?.error)
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', path: STAMP.slice(1, -1) })
+  const told = w.logs.filter(l => l.includes('area check'))
+  expect(told).toEqual([`The area check could not finish judging the scripts a word built as the command runs is handed to (${error}), so it judged that word as one it cannot name, which holds the command wherever a file could be held; the error is kept in ~/.claude-area-check/errors.jsonl.`])
+  expect(told.join(' ')).not.toContain('went ahead')
+  // Only the clean run's reading is on record: the failing one logged no pass.
+  expect(w.records().filter(x => x.kind === 'script-reads').length).toBe(1)
+})
+
+// A word the reader cannot close (a `$(`, `${`, `$[` or backtick it opens and never closes) is no word
+// the shell builds and hands on: the shell refuses the line, or reads on past it, so what the command
+// runs is not what was read. It is outside #3082's exemption, and is held even where the only script
+// it is handed reads as writing nothing.
+test('a word the reader cannot close, handed only to a script that writes nothing, is still held (#3082)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  const commands = [
+    'python3 measure.py notes.txt "$(',
+    'python3 measure.py notes.txt "$(git log -1 --format=%h"',
+    'python3 measure.py notes.txt "${STAMP"',
+    'python3 measure.py notes.txt "`git log -1"',
+  ]
+  for (const [i, c] of commands.entries()) {
+    expect([c, refusal(await bash($ as never, w, c, {}, `b${i + 1}`)).includes('cannot be read')]).toEqual([c, true])
+  }
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
 test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
   const w = world($, on, { issues: [] })
   expect((await bash($ as never, w, "perl -pi -e 's/a/b/' /tmp/x/*.ts")).result).toBe('done')
@@ -1014,14 +1130,88 @@ test('a script handed a folder that cannot be read, is not there, or runs under 
 // #2527, Dan's decision (2026-11-09): `bash tools/check-mods.sh <payload/mods>` copies into a folder it
 // makes with mktemp and runs an inline perl program, so its own text writes, and a folder it is handed
 // stays held for the held files under it, as #2321 holds any script's. Since #2565 a write is placed
-// where it can be, but a name built on a folder made with mktemp is not one, so the hold fails closed.
-const CHECK = 'scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
+// where it can be, and since #3022 a plain name in a folder made with bare mktemp is placed there, in
+// no file of the checkout. This check is still held: its copy's name holds a command's output
+// (`$scratch/$(basename "$d")`), and its inline perl program names no file it writes. The script
+// itself, in this repository's own checkouts, is let through by name since Dan's later decision
+// (2026-11-16, named.ts, named.test.ts); a script like it, as here, is read and held as before.
+const CHECK ='scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
 
 test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {
   const w = world($, on)
   w.files[`${APP}/check.sh`] = `#!/bin/bash\n${CHECK}`
   expect(refusal(await bash($ as never, w, 'bash check.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
   expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// #3022, Dan's decision (2026-11-15): a checker handed a folder is read with mod-kit's one reader of
+// what a script's own variables hold, which the design round guard kept until then. A copy into a
+// folder the script made with bare mktemp lands in no file of the checkout; a library sourced through
+// the variable holding the script's own folder is read as part of the script; and the cd inside that
+// idiom, which runs in a shell of its own, moves nothing, so a name built on what the script is handed
+// is still placed. Everything else is held as before (fail closed).
+const OWN = 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+const NOTE_LIB = "note() {\n  printf '%s\\n' \"$*\" >&2\n}\n"
+const CHECKER = `#!/bin/bash\nset -u\n${OWN}source "$HERE/lib/note.sh"\nscratch="$(mktemp -d)"\ntrap 'rm -rf "$scratch"' EXIT\nfor d in "$1"/*/; do\n  cp -RH "$d" "$scratch/copy"\n  note "checked $d"\ndone\n`
+const HELD_BIG = 'The area check held this Bash command, which writes src/big.ts.'
+
+test('a checker copying what it is handed into a folder it made with mktemp, with a library sourced beside itself, runs (#3022)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/tools/lib/note.sh`] = NOTE_LIB
+  w.files[`${APP}/tools/check.sh`] = CHECKER
+  expect((await bash($ as never, w, 'bash tools/check.sh src/')).result).toBe('done')
+  w.files[`${APP}/tools/check.sh`] = 'scratch="$(mktemp -d)"\ncp -RH "$1" "$scratch/copy"\n'
+  expect((await bash($ as never, w, 'bash tools/check.sh src/', {}, 'b2')).result).toBe('done')
+  // Every reading is in the log with what it placed, so one that lets everything through shows (L551).
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([
+    { word: 'src/', script: `${APP}/tools/check.sh`, decision: 'passed', placed: 0 },
+    { word: 'src/', script: `${APP}/tools/check.sh`, decision: 'passed', placed: 0 },
+  ])
+})
+
+test("the cd inside a script's own folder idiom moves nothing, so a name built on what it is handed is placed (#3022)", KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/tools/gen.sh`] = `${OWN}cp "$HERE/template.txt" "$1/gen.ts"\n`
+  expect((await bash($ as never, w, 'bash tools/gen.sh src/')).result).toBe('done')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', decision: 'passed', placed: 1 }])
+  w.files[`${APP}/tools/gen.sh`] = `${OWN}cp "$HERE/template.txt" "$1/big.ts"\n`
+  expect(refusal(await bash($ as never, w, 'bash tools/gen.sh src/', {}, 'b2'))).toContain(HELD_BIG)
+})
+
+// Each one step away from the checker that runs, and still held for the fast growing file under the
+// folder: a write that really lands there, and every write or library whose place cannot be told.
+const MADE = 'scratch="$(mktemp -d)"\n'
+const STILL_HELD: [string, string, Record<string, string>?][] = [
+  ['copies into a folder it made and also appends to the held file', `${MADE}cp -RH "$1" "$scratch/copy"\necho x >> "$1/big.ts"\n`],
+  ['also gives its folder variable what it is handed', `${MADE}scratch="$1"\ncp x.ts "$scratch/big.ts"\n`],
+  ['makes its folder inside what it is handed', 'scratch="$(mktemp -d "$1/x.XXXXXX")"\ncp -RH "$1" "$scratch/copy"\n'],
+  ['makes its folder by a template under TMPDIR', 'scratch="$(mktemp -d "${TMPDIR:-/tmp}/check.XXXXXX")"\ncp -RH "$1" "$scratch/copy"\n'],
+  ['climbs out of the folder it made', `${MADE}cp x.ts "$scratch/../big.ts"\n`],
+  ["names its copy by a command's output", `${MADE}cp -RH "$1" "$scratch/$(basename "$1")"\n`],
+  ['sources a library that writes the held file', `${OWN}source "$HERE/lib/writes.sh"\n`, { 'lib/writes.sh': 'echo x > "$1/big.ts"\n' }],
+  ['sources a library that gives its folder variable what it is handed', `${OWN}${MADE}source "$HERE/lib/sets.sh"\ncp x.ts "$scratch/big.ts"\n`, { 'lib/sets.sh': 'scratch="$1"\n' }],
+  ['sources a library that sources one that is not there', `${OWN}source "$HERE/lib/more.sh"\n${MADE}cp -RH "$1" "$scratch/copy"\n`, { 'lib/more.sh': `${OWN}source "$HERE/gone.sh"\n` }],
+  ['sources a library that is not there', `${OWN}source "$HERE/lib/gone.sh"\n${MADE}cp -RH "$1" "$scratch/copy"\n`],
+  ['sources a library through a variable that is not its own folder', `LIB="$1"\nsource "$LIB/lib.sh"\n${MADE}cp -RH "$1" "$scratch/copy"\n`],
+  ['sources a library by a name relative to wherever it is run', `source lib/note.sh\n${MADE}cp -RH "$1" "$scratch/copy"\n`, { 'lib/note.sh': NOTE_LIB }],
+  ['hands the library it sources its own words', `${OWN}source "$HERE/lib/note.sh" "$1"\n${MADE}cp -RH "$1" "$scratch/copy"\n`, { 'lib/note.sh': NOTE_LIB }],
+  ['moves to its own folder and writes under what it is handed', 'cd "$(dirname "${BASH_SOURCE[0]}")"\necho x > "$1/gen.ts"\n'],
+  ["writes under what it is handed after the cd, inside the idiom's own shell", 'x="$(cd "$(dirname "${BASH_SOURCE[0]}")" && echo x > "$1/gen.ts")"\n'],
+  ['finds its own folder and moves to another before writing under what it is handed', `${OWN}cd lib\necho x > "$1/gen.ts"\n`],
+  ['runs a command a value names beside its copies', `${MADE}cp -RH "$1" "$scratch/copy"\n"$TOOL" check "$1"\n`],
+]
+
+test('a checker one step from the readable one is still held for the held file under what it is handed (#3022)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text, libs]] of STILL_HELD.entries()) {
+    for (const k of Object.keys(w.files)) if (k.startsWith(`${APP}/tools/`)) delete w.files[k]
+    w.files[`${APP}/tools/check.sh`] = text
+    for (const [name, lib] of Object.entries(libs ?? {})) w.files[`${APP}/tools/${name}`] = lib
+    const r = await bash($ as never, w, 'bash tools/check.sh src/', {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: a checker that ${what}` : refusal(r).includes(HELD_BIG) ? `held: a checker that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(STILL_HELD.map(([what]) => `held: a checker that ${what}`))
 })
 
 // #2565: a script handed a folder is judged for the files its own writes can reach there, not every
@@ -1050,7 +1240,9 @@ const UNPLACED: [string, string][] = [
   ['moves to another folder and writes under what it is handed', 'cd lib\necho x > "$1/gen.ts"\n'],
   ['climbs out of a pattern under what it is handed', `sed -i '' 's/a/b/' "$1"/lib/*/../../big.ts\n`],
   ['edits by patterns in two folders under what it is handed, more than are judged one by one', `sed -i '' 's/a/b/' "$1"/lib/*.ts "$1"/pay/*.ts\n`],
-  ['copies into a folder it made', 'scratch="$(mktemp -d)"\ncp -RH "$1" "$scratch/copy"\n'],
+  // Until #3022 a copy into a folder the script made with mktemp stood here; it is placed now, in
+  // no file of the checkout, and one made any other way is held in STILL_HELD above.
+  ['copies into a folder it made by a template', 'scratch="$(mktemp -d /tmp/x.XXXXXX)"\ncp -RH "$1" "$scratch/copy"\n'],
 ]
 
 test('a script whose writes cannot be placed is still held for every file under the folder it is handed (#2565)', KIT, async ($, on) => {

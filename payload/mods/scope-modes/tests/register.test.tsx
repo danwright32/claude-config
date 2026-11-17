@@ -10,6 +10,7 @@ import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
+import { settledKey } from '../hooks/settled.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -425,6 +426,8 @@ type Opts = {
   lsFails?: string
   /** Reading this session's folder throws (#836: after the unanswered list is written). */
   cwdThrows?: boolean
+  /** The folder read throws once a sleep record is in place, so /sleep itself can start (#3136). */
+  cwdThrowsAsleep?: boolean
   /** The session registry's answer as raw text, in place of the usual one (#837). */
   registryAnswer?: string
   /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
@@ -1015,6 +1018,7 @@ const world = (on: On, o: Opts = {}) => {
   })
   on('session.cwd', () => {
     if (o.cwdThrows) throw new Error('the folder could not be read')
+    if (o.cwdThrowsAsleep && Object.keys(w.files).some(f => f.endsWith('/sleep/current.json'))) throw new Error('the folder could not be read')
     return { value: o.cwd ?? '/repo' } as never
   })
   on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: o.remote === undefined ? 'git@github.com:o/r.git' : o.remote, internal: false, name: null } }) as never)
@@ -2748,6 +2752,203 @@ test('asleep, Chrome runs in a tab the session created once its page is on a tes
   expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost', tool_use_id: 'b12' } as never)).toMatch(/on tab 7, which this session did not create/)
   expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}read_page`, `${CHROME}computer`, `${CHROME}tabs_close_mcp`])
 })
+// #3099: a link the session clicks in its own tab can open a second tab in its group, which it has
+// to be able to close. Tab 3 was in the group before the session did anything, tab 12 is first
+// listed in its click's result, and tab 13 turns up later with no action of the session behind it.
+test("asleep, a tab the session's own click opened can be closed and nothing more; a tab it never touched is still refused (#3099)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const group = (also: string[] = []) =>
+    `Tab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")\n  • tabId 7: "App" ("http://localhost:3000/")${also.map(t => `\n  • tabId ${t}: "Docs" ("https://docs.example.com/")`).join('')}`
+  const NEVER = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab \d+, which this session did not create and did not see appear in its tab group after its own action/
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'o1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o1', `Created new tab. Tab ID: 7\n${group()}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'o2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o2', `Navigated to http://localhost:3000\n${group()}`)
+  // Nothing opened yet: neither the tab that was there nor one not yet seen can be closed.
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 3, tool_use_id: 'o3' } as never)).toMatch(NEVER)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'o4' } as never)).toMatch(NEVER)
+  // The click opens tab 12: its result is the first to list it.
+  expect(await call($ as never, { tool: `${CHROME}computer`, tabId: 7, action: 'left_click', coordinate: [1, 2], tool_use_id: 'o5' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o5', `Clicked\n${group(['12'])}`)
+  // It can be closed, and that is all: its page is wherever the link led.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 12, tool_use_id: 'o6' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 12, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 12, url: 'localhost:3000', tool_use_id: 'o7' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 12, which this session did not create/)
+  // The tab that was there before the click is still not the session's to close.
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 3, tool_use_id: 'o8' } as never)).toMatch(NEVER)
+  // Tab 13 appears two lists later, with no click behind it: not the session's either.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'o9' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o9', group(['12']))
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'o10' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o10', group(['12', '13']))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 13, tool_use_id: 'o11' } as never)).toMatch(NEVER)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'o12' } as never)).toBe('ran')
+  await chromeResult($ as never, 'o12', `Closed tab 12\n${group(['13'])}`)
+  // Closed, it is no longer the session's.
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'o13' } as never)).toMatch(NEVER)
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}computer`, `${CHROME}tabs_context_mcp`, `${CHROME}tabs_context_mcp`, `${CHROME}tabs_close_mcp`])
+})
+// #3107: a batch that clicks in the session's own tab and then closes it runs. Closing reaches no
+// host, so the close is the one item the tab still takes after the click; a read after the click,
+// and a close of a tab that is not the session's, still refuse the whole batch.
+test('asleep, a batch that clicks in its own tab and then closes it runs; a read after the click, or a close of a tab it never touched, still refuses the batch (#3107)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'k1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'k1', `Created new tab. Tab ID: 7\n${tabContext(7, 'chrome://newtab/')}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'k2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'k2', `Navigated to http://localhost:3000\n${tabContext(7, 'http://localhost:3000/')}`)
+  const click = { name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }
+  const close = (tabId: number) => ({ name: 'tabs_close_mcp', input: { tabId } })
+  const batch = (id: string, actions: object[]) => call($ as never, { tool: `${CHROME}browser_batch`, actions, tool_use_id: id } as never)
+  expect(await batch('k3', [click, { name: 'get_page_text', input: { tabId: 7 } }, close(7)])).toMatch(/did not use mcp__claude-in-chrome__get_page_text on tab 7 after an action in the same batch that may have left the test host/)
+  expect(await batch('k4', [click, close(7), { name: 'get_page_text', input: { tabId: 7 } }])).toMatch(/did not use mcp__claude-in-chrome__get_page_text on tab 7 after an action in the same batch that may have left the test host/)
+  expect(await batch('k5', [click, close(3)])).toMatch(/did not use mcp__claude-in-chrome__tabs_close_mcp on tab 3, which this session did not create and did not see appear in its tab group after its own action/)
+  expect(await batch('k6', [click, close(7)])).toBe('ran')
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`])
+})
+// #3121: once that batch's result lists the group without the tab it closed, the tab is no longer
+// the session's, as after a close alone. The tab its click opened (12) is still the session's to
+// close, and only to close, so the two records are written from one reading of the tabs it had.
+// The close's own line in a batch result is a guess (no such batch had run); only the list is read.
+const batchGroup = (ids: number[]) => `Tab Context:\n- Executed on tabId: 3\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")${ids.map(t => `\n  • tabId ${t}: "Page" ("${t === 7 ? 'http://localhost:3000/' : 'https://docs.example.com/'}")`).join('')}`
+const batchClosing = async ($: $T, on: Parameters<typeof world>[0], result: string) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'c1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c1', `Created new tab. Tab ID: 7\n${tabContext(7, 'chrome://newtab/')}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'c2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c2', `Navigated to http://localhost:3000\n${tabContext(7, 'http://localhost:3000/')}`)
+  const actions = [{ name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }, { name: 'tabs_close_mcp', input: { tabId: 7 } }]
+  expect(await call($ as never, { tool: `${CHROME}browser_batch`, actions, tool_use_id: 'c3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c3', result)
+  return w
+}
+test("asleep, a tab a batch closed is no longer the session's once its result lists the group without it, and the tab its click opened can still be closed and nothing more (#3121)", withDeps, async ($, on) => {
+  const w = await batchClosing($ as never, on, `[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Closed tab 7.\n\n\n${batchGroup([12])}`)
+  const GONE = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 7, which this session did not create and did not see appear in its tab group after its own action/
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'c4' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 7, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c5' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 7, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c6' } as never)).toMatch(GONE)
+  expect(await call($ as never, { tool: `${CHROME}browser_batch`, actions: [{ name: 'navigate', input: { tabId: 7, url: 'localhost' } }, { name: 'tabs_close_mcp', input: { tabId: 7 } }], tool_use_id: 'c7' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 7, which this session did not create/)
+  // The tab the batch's click opened: closable, and nothing more. The tab that was there: neither.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 12, tool_use_id: 'c8' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 12, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 12, url: 'localhost:3000', tool_use_id: 'c9' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 12, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 3, tool_use_id: 'c10' } as never)).toMatch(/did not use mcp__claude-in-chrome__tabs_close_mcp on tab 3, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'c11' } as never)).toBe('ran')
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}tabs_close_mcp`])
+})
+test("asleep, a batch whose result lists no group leaves the tab it would have closed the session's (#3121)", withDeps, async ($, on) => {
+  // Refused elsewhere, or failed before the browser: nothing says the tab is gone, so it can be closed.
+  const denied = await batchClosing($ as never, on, 'Permission to use the browser was denied')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c4' } as never)).toMatch(/on tab 7, whose page is not on a test host/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c5' } as never)).toBe('ran')
+  expect(denied.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}tabs_close_mcp`])
+})
+test("asleep, a batch whose close did not take leaves the tab the session's, on the host its result's list shows (#3121)", withDeps, async ($, on) => {
+  const w = await batchClosing($ as never, on, `[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Error: could not close\n\n\n${batchGroup([7])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c4' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c5' } as never)).toBe('ran')
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}read_page`, `${CHROME}tabs_close_mcp`])
+})
+// #3132: a created tab that leaves the group with no close of the session's (Dan closes it by hand,
+// Chrome restarts) is no longer the session's once a list of the group stops naming it, and its
+// number listed again later does not bring it back. Tabs 7 and 8 are the session's own.
+test("asleep, a created tab the group no longer lists is no longer the session's, a result with no list drops nothing, and the first list after a restart drops the rest (#3132)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const list = (ids: number[]) => `Tab Context:\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")${ids.map(t => `\n  • tabId ${t}: "App" ("http://localhost:3000/")`).join('')}`
+  const NOT_OWN = (tool: string, tab: number) => new RegExp(`did not use mcp__claude-in-chrome__${tool} on tab ${tab}, which this session did not create`)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'r1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r1', `Created new tab. Tab ID: 7\n${list([7])}`)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'r2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r2', `Created new tab. Tab ID: 8\n${list([7, 8])}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r3', `page\n${list([7, 8])}`)
+  // Dan closes tab 7 by hand. The next result, a read in tab 8, lists the group without it.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r4' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r4', `page\n${list([8])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r5' } as never)).toMatch(NOT_OWN('read_page', 7))
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'r6' } as never)).toMatch(NOT_OWN('navigate', 7))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'r7' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 7))
+  // The number 7 in a later list is some other tab: still not the session's, to use or to close.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r8' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r8', `{"availableTabs":[],"tabGroupId":1}\n\n\n${list([7, 8])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r9' } as never)).toMatch(NOT_OWN('read_page', 7))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'r10' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 7))
+  // Chrome quits: a result with no list says nothing about the tabs, so tab 8 is still the session's.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r11' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r11', 'Browser extension is not connected. Please ensure the Claude browser extension is installed and running (https://claude.ai/chrome)')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r12' } as never)).toBe('ran')
+  // It comes back with a new group of one tab the session did not create: tab 8 is gone with the old one.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r13' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r13', '{"availableTabs":[],"tabGroupId":2}\n\n\nTab Context:\n- Available tabs:\n  • tabId 23: "New Tab" ("chrome://newtab/")')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r14' } as never)).toMatch(NOT_OWN('read_page', 8))
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 23, url: 'localhost:3000', tool_use_id: 'r15' } as never)).toMatch(NOT_OWN('navigate', 23))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 23, tool_use_id: 'r16' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 23))
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([
+    `${CHROME}tabs_create_mcp`,
+    `${CHROME}tabs_create_mcp`,
+    `${CHROME}read_page`,
+    `${CHROME}read_page`,
+    `${CHROME}tabs_context_mcp`,
+    `${CHROME}tabs_context_mcp`,
+    `${CHROME}read_page`,
+    `${CHROME}tabs_context_mcp`,
+  ])
+})
+// The failure paths of that record (#3099): both end with the tab not closable, never closable by default.
+const ownGroup = (also: string[] = []) => `Tab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 7: "App" ("http://localhost:3000/")${also.map(t => `\n  • tabId ${t}: "Docs" ("https://docs.example.com/")`).join('')}`
+const NOT_OPENED = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create and did not see appear in its tab group after its own action/
+const clickOpensTab12 = async ($: $T, w: { files: Record<string, string> }) => {
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'f1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f1', `Created new tab. Tab ID: 7\n${ownGroup()}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'f2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f2', `Navigated to http://localhost:3000\n${ownGroup()}`)
+  expect(await call($ as never, { tool: `${CHROME}computer`, tabId: 7, action: 'left_click', coordinate: [1, 2], tool_use_id: 'f3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'f3', `Clicked\n${ownGroup(['12'])}`)
+}
+test('asleep, a record of the tabs its click opened that cannot be read closes none of them, and closes them again once it can (#3099)', withDeps, async ($, on) => {
+  const unreadable = { on: false }
+  on('state.get', async ($, e, next) => (unreadable.on && (e as { key?: string }).key === 'browserGroup' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clickOpensTab12($ as never, w)
+  unreadable.on = true
+  // Said as not known, with why, never as a tab it did not open (L11).
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f4' } as never)).toContain(
+    'did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create, and whether its own action opened it is not known, because the record of the tabs its own action opened could not be read (state store unavailable)',
+  )
+  // The tabs it created are a record of their own, read as before.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'f5' } as never)).toBe('ran')
+  // A result that arrives meanwhile cannot be recorded, which is logged with why, never dropped silently.
+  await chromeResult($ as never, 'f5', `text\n${ownGroup(['12'])}`)
+  expect(w.logs.filter(l => l.includes('the record of Chrome tabs could not be updated') && l.includes('state store unavailable')).length).toBe(1)
+  unreadable.on = false
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f6' } as never)).toBe('ran')
+})
+test('asleep, a record of opened tabs that keeps changing underneath its write is logged and opens nothing, while the created tabs are still recorded (#3099)', withDeps, async ($, on) => {
+  const writes = { n: 0 }
+  on('state.set', async ($, e, next) => {
+    if ((e as { key?: string }).key !== 'browserGroup') return next(e)
+    writes.n++
+    return { value: { isSet: false } } as never
+  })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clickOpensTab12($ as never, w)
+  // Three results, each tried five times and each logged.
+  expect(writes.n).toBe(15)
+  expect(w.logs.filter(l => l.includes("the record of Chrome tabs could not be updated: the record of the tabs this session's own action opened kept changing underneath five writes in a row")).length).toBe(3)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'f4' } as never)).toMatch(NOT_OPENED)
+  // Tab 7 was recorded as created and on localhost by the first record, written before this one.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'f5' } as never)).toBe('ran')
+})
 test('asleep, a hosted test host counts only when the default branch\'s CLAUDE.md lists it, never the working copy (#2064)', withDeps, async ($, on) => {
   const LISTED = 'Sleep mode test hosts: qa.example.dev\n'
   // The working copy lists the host throughout; only what the default branch says decides.
@@ -3519,6 +3720,131 @@ test('a start for a session with no goal, or not a worker, or from the model sta
   expect((await receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: SLEEP_START })).consumed).toMatch(/not a worker/)
   await clock.settle()
   expect(w.prompts).toEqual([])
+})
+
+// #3136: the session /sleep runs in is a worker too, and nothing started it. Claude Code records a
+// command's notes for the model but starts no turn with them (an idle /sleep sat until some other
+// prompt came), and a /sleep typed mid turn prints its answer only when that turn ends and drops its
+// notes, so a turn whose Stop came before the record was in place ended with nothing to drive it.
+const NIGHT_START = /^Sleep mode is on and Dan is asleep: start the night's work now\. Overnight rules \(sleep mode\)/
+
+test('/sleep typed while its session is idle starts that session on its night in a turn of its own (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.context).toEqual([ackOn('sleep')])
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toMatch(NIGHT_START)
+})
+
+test('/sleep typed mid turn leaves the turn running, hands its notes to the next tool result, and the driver takes the turn on at its Stop (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  const r = await command($ as never, 'sleep')
+  // Claude Code drops a mid turn command's notes, so they are held, never left in the answer to be lost.
+  expect(r.context).toBeUndefined()
+  expect(w.toasts).toContain(`${r.text?.split('. ')[0]}. Its full answer shows when this turn ends.`)
+  // A subagent's call is not the main conversation's: the notes wait.
+  const fromAgent = (await ($ as unknown as $T).tool.call({ ...(bash('ls', 'a') as object), agentId: 'a1' } as never)) as { context?: string[] }
+  expect(fromAgent.context ?? []).not.toContain(ackOn('sleep'))
+  const next = (await ($ as unknown as $T).tool.call(bash('ls', 'c2'))) as { context?: string[] }
+  expect(next.context).toContain(ackOn('sleep'))
+  const again = (await ($ as unknown as $T).tool.call(bash('ls', 'c3'))) as { context?: string[] }
+  expect(again.context ?? []).not.toContain(ackOn('sleep'))
+  // The record was in place at the Stop, so the overnight driver decided it: no second start.
+  await stop($ as never)
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+})
+
+test('/sleep typed mid turn whose turn ends before the driver reaches a Stop starts the session once the turn is over, its notes with it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  await turnEnd($, 't1', 'interrupted')
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+  // This mod's own prompt passes none of its own prompt hooks, so the held notes open its words.
+  const [prompt = ''] = w.prompts
+  expect(prompt.startsWith(`${ackOn('sleep')}\n\n`)).toBe(true)
+  expect(prompt.slice(ackOn('sleep').length + 2)).toMatch(NIGHT_START)
+  // Started once: another turn's end starts nothing more.
+  await turnStart($, 't2')
+  await turnEnd($, 't2')
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+})
+
+test('a night owed at a turn end that cannot be started is said in a toast, with how to start it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  w.o.noRepo = true
+  w.o.cwdThrows = true
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  // The reason is whatever the read threw, as the engine passes it on.
+  expect(w.toasts.filter(t => /^Sleep mode is on, but this session could not be started on the night's work \(.+\)\. Type "start the night's work" here to start it\.$/.test(t)).length).toBe(1)
+})
+
+test('an idle /sleep whose own start cannot be made says so in its answer, with how to start it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { noRepo: true, cwdThrowsAsleep: true })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(r.text).toMatch(/ This session could not be started on the night's work \(.+\): type "start the night's work" here to start it\.$/)
+})
+
+test("a night start whose prompt does not go in keeps the notes it carried for the next prompt, and says why in the log (#3136)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  w.o.promptFails = 1
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  // The reason is whatever the submit threw, as the engine passes it on.
+  expect(w.logs.join('\n')).toContain("scope-modes: the night's work could not be started: ")
+  const typed = await say($ as never, 'still there?')
+  expect(typed.context ?? []).toContain(ackOn('sleep'))
+})
+
+test('a /sleep mid turn that started no night, and one in a session with no goal, start nothing (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { goals: { s1: null }, ask: NO_GOAL })
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  await turnEnd($, 't1')
+  await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+})
+
+test('a scope mode switched mid turn says so in a toast, and its notes reach the model at the next prompt when no tool result came first (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  const r = await command($ as never, 'nobuild')
+  expect(r.text).toBe('No build is on.')
+  expect(r.context).toBeUndefined()
+  expect(w.toasts).toContain('No build is on. Its full answer shows when this turn ends.')
+  await turnEnd($, 't1')
+  const typed = await say($ as never, 'what next')
+  expect(typed.context?.join('\n')).toContain(ackOn('NO BUILD'))
+  // Read once.
+  expect((await say($ as never, 'and then')).context?.join('\n') ?? '').not.toContain(ackOn('NO BUILD'))
+  // Idle, a switch keeps its notes in its answer, as Claude Code records them there.
+  expect((await command($ as never, 'build')).context).toEqual([expect.stringContaining('Dan turned no build off')])
 })
 
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
@@ -4434,6 +4760,119 @@ test("an earlier night's question from a session now closed is asked by the next
   const offered = w.prompts.filter(p => p.includes('Round totals up or down?'))
   expect(offered.length).toBe(1)
   expect(offered[0]).toContain('3.1 acme/bidspoke: Round totals up or down?')
+})
+
+// #3018: on 2026-11-15 a session was told to put four leftover overnight questions to Dan. Two were
+// one build order note, recorded once by repository and once by folder, that said itself it was not
+// a question; two Dan had answered the morning after, their pull request merged since.
+const IN_LEDGER: Opts = { remote: 'git@github.com:exampleco/ledger.git', origins: { '/w/ledger': 'git@github.com:exampleco/ledger.git' } }
+const asked3018 = (n: Record<string, unknown>) => JSON.stringify({ v: 1, generation: 'x', at: T0 - 2 * MIN, kind: 'question', by: 's5', ...n })
+const BUILD_NOTE = 'Build order for tonight: the schema change lands before the importer. This is not a question, nothing to answer.'
+const answeredAt = (repo: string | null, issue: number | null, text: string) => `${SLEEP}/answered/${settledKey(repo, { issue, text })}.json`
+const offeredLedger = (w: { prompts: string[] }) => w.prompts.filter(p => p.startsWith('Proposals and questions for exampleco/ledger'))
+
+test("an earlier night's note that says it is no question is never offered, and a question noted twice is offered once (#3018)", withDeps, async ($, on) => {
+  const notes = [
+    asked3018({ repo: 'exampleco/ledger', text: BUILD_NOTE }),
+    asked3018({ cwd: '/w/ledger', questions: [BUILD_NOTE] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Round totals up or down?'] }),
+    asked3018({ cwd: '/w/ledger', questions: ['Round totals up or down?'] }),
+  ]
+  const { w, clock } = world(on, { ...IN_LEDGER, files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Round totals up or down?')
+  expect(offered[0]).not.toContain('3.2 ')
+  expect(offered[0]).not.toContain('Build order for tonight')
+})
+
+test("an earlier night's question whose issue or pull request has closed or merged since is not offered; one still open is (#3018)", withDeps, async ($, on) => {
+  const notes = [
+    asked3018({ repo: 'exampleco/ledger', issue: 41, text: 'Apply the migration in PR #52?', options: ['Apply it', 'Leave it'] }),
+    asked3018({ cwd: '/w/ledger', questions: ['Merge PR #53, the wording change?'] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Keep the export flag named in #60?'] }),
+    asked3018({ repo: 'exampleco/ledger', questions: ['Merge https://github.com/exampleco/ledger/pull/54 tonight?'] }),
+  ]
+  const { w, clock } = world(on, { ...IN_LEDGER, gh: { pr: null, issues: { 41: 'CLOSED', 52: 'MERGED', 53: 'MERGED', 54: 'MERGED' } }, files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Keep the export flag named in #60?')
+  expect(offered[0]).not.toContain('Apply the migration')
+  expect(offered[0]).not.toContain('Merge PR #53')
+  expect(offered[0]).not.toContain('pull/54')
+})
+
+test("an earlier night's question naming a link mod-kit could not read is offered, saying so, though everything else it names has merged (#3018 review)", withDeps, async ($, on) => {
+  const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight?'] })]
+  const { w, clock } = world(on, { ...IN_LEDGER, gh: { pr: null, issues: { 53: 'MERGED', 54: 'MERGED' } }, linkReaderFailsOn: '/pull/54', files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Merge PR #53 and https://github.com/exampleco/ledger/pull/54 tonight? (which repository https://github.com/exampleco/ledger/pull/54 names could not be read')
+})
+
+test("an earlier night's question whose pull request GitHub could not be asked about is offered, saying the check could not be made (#3018)", withDeps, async ($, on) => {
+  const notes = [asked3018({ repo: 'exampleco/ledger', questions: ['Apply the migration in PR #52?'] })]
+  const { w, clock } = world(on, { ...IN_LEDGER, issueViewFails: 'HTTP 502', files: { [EARLIER]: `${notes.join('\n')}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Apply the migration in PR #52? (whether exampleco/ledger#52 is still open could not be checked with GitHub: HTTP 502)')
+})
+
+test("an earlier night's question with an answer on record is not offered (#3018)", withDeps, async ($, on) => {
+  const notes = [asked3018({ cwd: '/w/ledger', questions: ['Record the design exception for the totals page?'] }), asked3018({ repo: 'exampleco/ledger', questions: ['Round totals up or down?'] })]
+  const { w, clock } = world(on, {
+    ...IN_LEDGER,
+    files: { [EARLIER]: `${notes.join('\n')}\n`, [answeredAt('exampleco/ledger', null, 'Record the design exception for the totals page?')]: '{"answer":"Record it"}\n' },
+  })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = offeredLedger(w)
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 exampleco/ledger: Round totals up or down?')
+  expect(offered[0]).not.toContain('design exception')
+})
+
+test("Dan's answer to a question in this session's morning picker is recorded, so no later morning offers it (#3018)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Keep it', files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${myQuestion}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('3.1 /repo: Keep the old export flag?')
+  expect(m).toMatch(/Begin each picker's question with its number/)
+  await call($ as never, { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question: '3.1 Keep the old export flag?', header: 'Flag', multiSelect: false, options: [{ label: 'Keep it', description: 'x' }, { label: 'Drop it', description: 'y' }] }] } as never)
+  const kept = w.files[answeredAt('o/r', null, 'Keep the old export flag?')]
+  expect(kept).toBeDefined()
+  expect(JSON.parse(kept as string)).toMatchObject({ repo: 'o/r', issue: null, text: 'Keep the old export flag?', answer: 'Keep it', by: 's1' })
+})
+
+test("a morning leaves out this session's own question that was answered or whose issue has closed since (#3018)", withDeps, async ($, on) => {
+  const own = (n: Record<string, unknown>) => proposal({ kind: 'question', by: 's1', ...n })
+  const notes = [own({ cwd: '/repo', questions: ['Keep the old export flag?'] }), own({ repo: 'o/r', issue: 12, text: 'Which copy?', options: ['Short', 'Long'] }), own({ cwd: '/repo', questions: ['Rename the parser?'] })]
+  const { w, clock } = world(on, {
+    gh: { pr: null, issues: { 12: 'CLOSED' } },
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${notes.join('\n')}\n`, [answeredAt('o/r', null, 'Keep the old export flag?')]: '{"answer":"Keep it"}\n' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('3.1 /repo: Rename the parser?')
+  expect(m).not.toContain('Keep the old export flag?')
+  expect(m).not.toContain('Which copy?')
 })
 
 test("an earlier night's notes with a line that cannot be read say so with what is offered (#1286 lessons review)", withDeps, async ($, on) => {
