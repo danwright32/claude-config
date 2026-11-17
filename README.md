@@ -3313,10 +3313,61 @@ index is let through: a branch made where HEAD already is (`git checkout -b new`
 `git update-index --refresh`), `git branch -f` and `-m`, and `--quit`. Where the words cannot say
 which it is, the worse case is taken: `git checkout x` is read as a move though `x` may be a file.
 On the personal MacBook, in the transcripts of the 45 days to 2026-11-16, 1 Bash call of about
-4,064 that pushed ran any of these first. Not covered, by this or by any gate: files a command
-writes before a `git add` or a `git commit -a` in the same command, whether by `git apply` with no
-`--index` or by any other program, since the gates read the files as they stand before the command
-runs; and `git submodule add`, which was not measured.
+4,064 that pushed ran any of these first. `git submodule add` was not measured and is not refused.
+
+Three more ways a command sent what no gate had read are closed together (#3111, #3112, #3113):
+read where the command says what it does, refused once where nothing can be read before it runs.
+
+A commit that names paths, `git commit notes/a.txt -m x && git push`, takes those files as they
+stand with no `git add`. The gates read an add's paths and a `commit -a`, never these, so the edits
+went out with no gate having read them. They are read now, by every gate, exactly as an add's paths
+are (`ps_add_scope`): with `-o` or `-i`, after a `--`, beside an add or a `commit -a`, and a
+directory or a dot as the tracked files under it. Paths listed in a file (`--pathspec-from-file`)
+are not in the command, so the whole working tree is read and the gate says so (#3111).
+
+A command that writes files and then stages, commits and pushes them,
+`cp draft.md notes/a.md && git add notes/a.md && git commit -m x && git push`, sends what it wrote,
+and the gates read the files as they stood before it ran. What a program will write is nowhere to
+be read beforehand, so `push-scope-notice.sh` refuses the command once, naming the step, with no
+override: run everything before the `git add` as a command of its own, then add, commit and push
+(#3113). The rule is by the state reached, never by a list of programs that write: any command
+before the staging step counts unless it is one measured to change no file (`cd`, `echo`, `ls`,
+`cat`, `grep` and their like with no output sent into a file, the git commands that only look, a
+branch made where HEAD already is, and `git add` and `git commit` themselves). It counts only in
+the order write, stage, commit, push, and a commit that takes files itself (`-a`, or paths it
+names) is a staging step. On the personal MacBook, in the transcripts of the 45 days to 2026-11-16,
+11 of about 4,005 Bash calls that pushed staged, committed and pushed in one command, and 2 of
+those ran anything outside that list first.
+
+A push that names what it sends, `git push origin other` from a checkout of another branch, was
+judged as the branch checked out (#3112). What it names is read first, and most of it is what the
+gates judged already: HEAD, the branch checked out by its name, a name the command makes where HEAD
+is, a deletion, a dry run, and anything whose commits are all in HEAD's history or already on the
+remote, asked of git as `git rev-list --count <source> --not HEAD --remotes=<remote>`. What is left
+is refused, each cause with its own sentence. A source holding commits that neither this branch nor
+the remote has is pushed from a checkout of it, and the refusal names the worktree it is checked
+out in when there is one; `--all`, `--branches`, `--mirror` and `--tags` are asked the same of
+everything they send. A source that cannot be resolved before the command runs (a variable, a
+pattern, a name that is no branch, tag or commit here) is named outright instead. A source the
+command makes or moves before the push, or any ref but the branch checked out after a commit in the
+same command, is pushed as a command of its own. Dan chose on 2026-11-16 to ship this refusal
+rather than hold it back. Its cost could not be counted by a pattern, because the branch checked
+out when a push ran is not in the transcripts: asked of each surviving checkout's own reflog, of
+107 pushes naming a branch in those 45 days, 104 named the branch checked out and 3 another, and
+1,915 more ran in worktrees since removed.
+
+Reading a command for these costs time in step with its length. `ps__read` took a trailing newline
+off three fields of every record by pattern removal where only the last holds one, and on bash 3.2
+a pattern removal that matches nowhere measures the rest of the string at every position, so a
+commit message of 319 KB took 19 seconds to read and one of 1.6 MB was not read inside 60
+(measured on the personal MacBook on 2026-11-16). The fields are
+now tested before anything is removed, and the trim that takes a closing bracket off a word
+(`ps__word_end`) splits a long word by `read` instead; the suite asks each question of a 1.6 MB
+command inside a bound.
+
+Not covered, by these or by any gate: a push that names no refspec under `push.default=matching`
+or a `remote.<name>.push` setting, which can send other branches too; a loop or a function that
+runs its commands in another order than they are written; and `git submodule add`.
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
