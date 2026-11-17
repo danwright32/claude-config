@@ -19,7 +19,8 @@
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that gives it no setting and runs the script once, with nothing but a change of folder
+#     command that gives it no setting, names none of the variables its programs are named by
+#     before it (CLAUDE_BIN and the others in byValue, #3154), and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts
 #     as the checkout left the default branch with them. Since #3093 an equals sign holds the run
 #     only where it may set a value for the script, so one in a reader of its output does not, and
@@ -81,11 +82,31 @@ lines="$(named_fact LINES)"
 # PATH lookup, or not at all, so each runs a program the environment
 # or PATH names, never a text of the checkout: the compiler ($tsc, from TSC_BIN or PATH), claude three
 # times ($bin, from CLAUDE_BIN or PATH), pinned-compiler.sh's two test hooks, and load-average.sh's
-# $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at, so the count is
-# exact (#3134).
+# $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at (#3134), and one
+# swapped for another, at the same count, is a program nobody has looked at either, so each is named
+# by file, line and variable, with the variable the environment names its program by (#3154). An
+# edit above one of these lines moves it, and the suite then names the line it is now on.
+KNOWN_BYVALUE='tools/check-mods.sh:470 $tsc TSC_BIN
+tools/check-mods.sh:545 $bin CLAUDE_BIN
+tools/check-mods.sh:580 $bin CLAUDE_BIN
+tools/check-mods.sh:595 $bin CLAUDE_BIN
+tools/lib/pinned-compiler.sh:323 $PINNED_TS_TEST_BEFORE_REMOVE PINNED_TS_TEST_BEFORE_REMOVE
+tools/lib/pinned-compiler.sh:361 $PINNED_TS_TEST_BEFORE_LINK PINNED_TS_TEST_BEFORE_LINK
+payload/hooks/lib/load-average.sh:32 $cmd LOAD_AVERAGE_CMD'
 byvalue="$(named_fact BYVALUE)"
-[ "$(printf '%s\n' "$byvalue" | grep -c .)" = 7 ] && check "the commands named by a value no text sets are the seven known" ok \
-  || check "the commands named by a value no text sets are the seven known" "$(printf '%s\n' "$byvalue" | paste -sd';' -)"
+known="$(printf '%s\n' "$KNOWN_BYVALUE" | cut -d' ' -f1,2)"
+[ "$byvalue" = "$known" ] && check "the commands named by a value no text sets are the seven known, each at its line and by its variable" ok \
+  || check "the commands named by a value no text sets are the seven known, each at its line and by its variable" "$(differing "$known" "$byvalue" | paste -sd';' -)"
+# Each variable is one the text reads from the environment (`${NAME`), and named.ts lists exactly
+# those, so the area check holds a command naming any of them before the script (#3154).
+for entry in $(printf '%s\n' "$KNOWN_BYVALUE" | awk '{ print $1 "|" $3 }'); do
+  at="${entry%%:*}"; name="${entry##*|}"
+  grep -qF "\${$name" "$ROOT/$at" && check "$at reads $name from the environment" ok || check "$at reads $name from the environment" "no \${$name in $at"
+done
+names="$(printf '%s\n' "$KNOWN_BYVALUE" | awk '{ print $3 }' | LC_ALL=C sort -u)"
+listed_names="$(named_fact BYNAME | LC_ALL=C sort)"
+[ "$listed_names" = "$names" ] && check "CHECK_MODS.byValue is exactly the variables those commands are named by" ok \
+  || check "CHECK_MODS.byValue is exactly the variables those commands are named by" "$(differing "$names" "$listed_names" | paste -sd';' -)"
 problems="$(named_fact PROBLEM)"
 [ -z "$problems" ] && check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" ok \
   || check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" "$problems"
@@ -229,10 +250,11 @@ mkdir -p tools/typescript/node_modules; : > tools/typescript/node_modules/plante
 " whole "tools/typescript/node_modules/planted"
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 56 of the run's shape and its text (31 before
+# How many checks must run is set here, not measured: 58 of the run's shape and its text (31 before
 # #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
-# than the rule asks, two of a change of folder that leads nowhere, and three of one written with
-# `..`), one for each of the four libraries, and one for the other script let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 61
+# than the rule asks, two of a change of folder that leads nowhere, three of one written with
+# `..`, and two of a variable naming a program it runs written before it, #3154), one for each of
+# the four libraries, and one for the other script let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 63
 
 finish

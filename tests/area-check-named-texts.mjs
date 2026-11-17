@@ -31,6 +31,8 @@
 //                     shell, interpreter or source, as text:line and the
 //                     word: it runs a program the environment or PATH names, which no list of texts
 //                     can hold
+//   BYNAME <name>     each variable the list says names such a program (its byValue, #3154), which
+//                     the area check holds a command naming before the script
 //   PROBLEM <what>    a file sourced or run that the list lacks, a listed text nothing sources or
 //                     runs, one that cannot be read, a line whose file cannot be named, or a command
 //                     this reading cannot read
@@ -205,6 +207,7 @@ console.log(`LINES\t${lines}`)
 console.log(`RUNS\t${runs}`)
 for (const r of ranAt) console.log(`RAN\t${r}`)
 for (const b of byValue) console.log(`BYVALUE\t${b}`)
+for (const v of named.byValue ?? []) console.log(`BYNAME\t${v}`)
 console.log(`SCRIPT\t${named.script}`)
 for (const t of named.texts) console.log(`TEXT\t${t}`)
 for (const p of problems) console.log(`PROBLEM\t${p}`)

@@ -322,7 +322,7 @@ test('an equals sign that gives the script no setting no longer holds the run (#
 const SETTING: [string, string, string][] = [
   ['with a value set in front of it', 'TMPDIR=src bash tools/check-mods.sh src/', given('TMPDIR')],
   ['with a value given to it by env', 'env TMPDIR=src bash tools/check-mods.sh src/', given('TMPDIR')],
-  ['with the programs it runs named in front of it', 'CLAUDE_BIN=/tmp/claude TSC_BIN=/tmp/tsc bash tools/check-mods.sh src/', given('CLAUDE_BIN, TSC_BIN')],
+  // The programs it runs named in front of it are held by those names since #3154, below.
   ['with where it keeps its logs moved', 'CHECK_MODS_FAILURE_OUTPUT=src bash tools/check-mods.sh src/', given('CHECK_MODS_FAILURE_OUTPUT')],
   ["with the shell's own startup file named", 'BASH_ENV=./env.sh bash tools/check-mods.sh src/', given('BASH_ENV')],
   ['with the folders its programs are found in changed', 'PATH=/tmp/bin:$PATH bash tools/check-mods.sh src/', given('PATH')],
@@ -331,11 +331,11 @@ const SETTING: [string, string, string][] = [
   ['with a value set for the shell whose script runs it', "TMPDIR=src bash -c 'bash tools/check-mods.sh src/'", given('TMPDIR')],
   ['with a value set in front of the change of folder before it', 'TMPDIR=src cd ./src && bash ../tools/check-mods.sh lib', 'the change of folder before it is run with TMPDIR set, and no value set before the script is let through'],
   ['after a value set on its own', 'TMPDIR=src; bash tools/check-mods.sh src/', setAlone('TMPDIR')],
-  ['after two values set on their own', 'CLAUDE_BIN=/tmp/claude TOKEN=not-a-real-token; bash tools/check-mods.sh src/', setAlone('CLAUDE_BIN, TOKEN')],
+  ['after two values set on their own', 'TMPDIR=src TOKEN=not-a-real-token; bash tools/check-mods.sh src/', setAlone('TMPDIR, TOKEN')],
   ['after a value set on its own inside braces', '{ PATH=/tmp/bin; bash tools/check-mods.sh src/; }', setAlone('PATH')],
   ['before a value set on its own, which a loop runs before it the second time round', 'while bash tools/check-mods.sh src/ | grep -q x; do PATH=/tmp/bin; done', setAlone('PATH')],
   ['after a value added to', 'PATH+=:/tmp/not-a-real-token; bash tools/check-mods.sh src/', `a word holding an equals sign ${BESIDE}`],
-  ['after a value exported', 'export CLAUDE_BIN=/tmp/x; bash tools/check-mods.sh src/', `export ${BESIDE}`],
+  ['after a value exported', 'export TMPDIR=/tmp/x; bash tools/check-mods.sh src/', `export ${BESIDE}`],
   ['chained after a command holding an equals sign', 'git log --format=%s && bash tools/check-mods.sh src/', `git ${BESIDE}`],
   ['handed its folder as the value of an option', 'bash tools/check-mods.sh --mods=src/', `it ${OWN_WORDS}`],
   ['fed a heredoc holding an equals sign', 'bash tools/check-mods.sh src/ <<EOF\nPATH=/tmp/bin\nEOF', `it ${OWN_WORDS}`],
@@ -566,4 +566,82 @@ test('a setting the write reader carries on the run holds it though the commands
   const command = `TMPDIR=src ${RUN}`
   const bare: NamedFacts['commands'] = async c => (c === command ? [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }] : pipelineIn(c, APP, HOME, { assignments: true }))
   expect((await read(command, facts({ commands: bare }))).named).toMatchObject([{ why: given('TMPDIR') }])
+})
+
+// #3154: seven commands tools/check-mods.sh and the libraries it sources run are named by a value only
+// the environment sets (the compiler from TSC_BIN, claude three times from CLAUDE_BIN, the load
+// average's command from LOAD_AVERAGE_CMD, and the pinned compiler's two test hooks).
+// tests/test-area-check-check-mods-read-only.sh names each by file, line and variable. A command
+// naming one of those variables before the script is held for it by name, read from the command's
+// own text before the reader of commands is asked, so a reader that leaves a setting out cannot let
+// such a run through. Named after the script, in a reader of its output, it is no setting the script
+// sees, and the loosening of #3093 stands for it.
+const BY_VALUE = ['TSC_BIN', 'CLAUDE_BIN', 'LOAD_AVERAGE_CMD', 'PINNED_TS_TEST_BEFORE_REMOVE', 'PINNED_TS_TEST_BEFORE_LINK']
+const byName = (names: string, one = true) => `the command names ${names} before it, and the script runs the program ${one ? 'that variable names' : 'each of those variables names'}`
+
+test('the variables naming a program tools/check-mods.sh runs are listed with it, and the scan has none (#3154)', async () => {
+  expect(CHECK_MODS.byValue).toEqual(BY_VALUE)
+  expect('byValue' in SHARED_PARTS).toBe(false)
+})
+
+const NAMES_ONE: [string, string, string][] = [
+  ['with the compiler named in front of it', 'TSC_BIN=/tmp/tsc bash tools/check-mods.sh src/', byName('TSC_BIN')],
+  ['with claude and the compiler named in front of it', 'CLAUDE_BIN=/tmp/claude TSC_BIN=/tmp/tsc bash tools/check-mods.sh src/', byName('TSC_BIN, CLAUDE_BIN', false)],
+  ['after the load average command is exported', 'export LOAD_AVERAGE_CMD=/tmp/x; bash tools/check-mods.sh src/', byName('LOAD_AVERAGE_CMD')],
+  ['with a test hook given to it by env', 'env PINNED_TS_TEST_BEFORE_LINK=/tmp/x bash tools/check-mods.sh src/', byName('PINNED_TS_TEST_BEFORE_LINK')],
+  ['with a test hook set after a change of folder', 'cd ./src && PINNED_TS_TEST_BEFORE_REMOVE=/tmp/x bash ../tools/check-mods.sh lib', byName('PINNED_TS_TEST_BEFORE_REMOVE')],
+  ['after claude is unset, with no equals sign', 'unset CLAUDE_BIN; bash tools/check-mods.sh src/', byName('CLAUDE_BIN')],
+  ['after the compiler is read from a string, with no equals sign', 'read -r TSC_BIN <<< /tmp/tsc; bash tools/check-mods.sh src/', byName('TSC_BIN')],
+]
+
+test('a command naming a variable that names a program the script runs is held, and the log says which by name (#3154)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of NAMES_ONE.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(NAMES_ONE.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(NAMES_ONE.map(([, , why]) => ['judged', why]))
+  expect(JSON.stringify(w.records())).not.toContain('/tmp/tsc')
+})
+
+test('a variable naming a program the script runs holds the run though the reader of commands shows no setting (#3154)', async () => {
+  const command = `export TSC_BIN=/tmp/tsc; ${RUN}`
+  const blind = facts({ commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }]) })
+  expect((await read(command, blind)).named).toMatchObject([{ why: byName('TSC_BIN') }])
+})
+
+test('a variable named only after the script, in a reader of its output, still lets it run (#3154)', KIT, async ($, on) => {
+  const w = ours($, on)
+  expect((await bash($ as never, w, 'bash tools/check-mods.sh src/ 2>&1 | grep -c TSC_BIN')).result).toBe('done')
+  expect(named(w).map(x => x.decision)).toEqual(['passed'])
+})
+
+// #3162: a named script the rule did not let through was held naming only the files its run could
+// write, never why the rule declined it, which went only to the log. Measured on 2026-11-17: a run of
+// the scan with `; tail -1 notes.txt` after it was held, and the session could not tell that splitting
+// off the tail would let it through. The hold says the rule's reason beside the files, in the refusal
+// the session reads and on the card; what is held does not change.
+test('a hold on a named script the rule did not let through says why beside the files (#3162)', KIT, async ($, on) => {
+  const w = both($, on)
+  const r = await bash($ as never, w, `bash ${SCAN} src/ > notes.txt 2>&1; tail -1 notes.txt`)
+  const why = `${SCAN} was not let through by name: tail runs in the same command, and what that leaves in the environment cannot be read.`
+  expect(refusal(r)).toContain('The area check held this Bash command')
+  expect(refusal(r)).toContain(why)
+  expect(JSON.stringify(w.cards.at(-1))).toContain(why)
+  expect(named(w)).toMatchObject([{ decision: 'judged', why: 'tail runs in the same command, and what that leaves in the environment cannot be read' }])
+})
+
+test('a hold on a write beside a named script let through, or on a command naming none, says nothing of one (#3162)', KIT, async ($, on) => {
+  const w = both($, on)
+  w.files[`${APP}/rewrite.sh`] = 'sed -i \'\' \'s/a/b/\' "$1"/*.ts\n'
+  const passedBeside = await bash($ as never, w, `bash ${SCAN} src/ > src/big.ts`)
+  expect(refusal(passedBeside)).toContain(HELD)
+  expect(refusal(passedBeside)).not.toContain('let through by name')
+  const none = await bash($ as never, w, 'bash rewrite.sh src/', {}, 'b2')
+  expect(refusal(none)).toContain('The area check held this Bash command')
+  expect(refusal(none)).not.toContain('let through by name')
+  expect(JSON.stringify(w.cards)).not.toContain('let through by name')
 })
