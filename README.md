@@ -3947,8 +3947,16 @@ statistics, zoneinfo). Running a module from its source costs its compile, 15 ms
 against 2 ms from its cached bytecode, once per judgement that asks it.
 Measured 2026-11-16 over this project's session records, with the gate's own reading before and
 after: of 4,133 distinct Python texts (inline code, scripts written, scripts run), 994 passed
-before and the same 994 pass after. Not followed: a module held by one of the script's own
-modules and handed on rather than renamed. The Python
+before and the same 994 pass after. Three more routes are refused since claude-config#3119:
+`string.Formatter`, which reads the attributes a string names (`"0.__globals__[os]"`) and is
+refused wherever it is named; a chain from a value the gate does not follow (a call's result, a
+parameter, an instance) that reads `os`, as in `pathlib.PurePath("x").parser.os`; and `os`
+imported under another name where that name is read from outside (in a class body, or at the top
+level of a module the script imports), with `os` imported out of one of the script's own modules
+held to `os`'s reads. A field named like another module (`args.email`, `e.code`, `self.queue`) is a
+field: such a value gets a module only from a class's attributes, and on Python 3.14.4 those lead
+on to `os` only by its name. Measured 2026-11-17 the same way over 4,210 texts: 1,033 passed before
+and 1,033 after, the same texts. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
