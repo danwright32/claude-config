@@ -77,7 +77,8 @@ lines="$(named_fact LINES)"
 # It runs no program file: its perl is given on the command line, so a run found here is a text the
 # list would need. The reading knows quoting (#3134), so a message quoting a run counts nothing.
 [ "$(named_fact RUNS)" = 0 ] && check "and it runs no program file the list would have to name" ok || check "and it runs no program file the list would have to name" "$(named_fact RAN | paste -sd';' -)"
-# Seven commands are named by a variable these texts never set, so each runs a program the environment
+# Seven commands are named by a variable these texts set only from the environment, an argument or a
+# PATH lookup, or not at all, so each runs a program the environment
 # or PATH names, never a text of the checkout: the compiler ($tsc, from TSC_BIN or PATH), claude three
 # times ($bin, from CLAUDE_BIN or PATH), pinned-compiler.sh's two test hooks, and load-average.sh's
 # $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at, so the count is

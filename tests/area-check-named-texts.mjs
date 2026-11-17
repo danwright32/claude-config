@@ -12,7 +12,8 @@
 //   - eval runs its words as a line, read here as one; eval of text the shell builds is refused
 //   - a command named by a variable: the values this text gives the variable are read, and one
 //     naming a program file is a run of it, one holding a shell, interpreter or source is refused,
-//     and one this text never sets (a program the environment or PATH names) is printed as BYVALUE
+//     and one whose values here name neither (unset here, or set only from the environment, an
+//     argument or a PATH lookup) is printed as BYVALUE
 //   - anything else the reader says it cannot read (ssh, an alias, a shell reading what feeds it)
 // And a second reading, line by line, by the spelling this helper used before #3134: a line that
 // spells a run or a source the whole reading did not find there is read again on its own, and is
@@ -26,7 +27,8 @@
 //   RUNS <n>          how many commands running a program file were found
 //   RAN <where>       each of those runs, as text:line and the line itself, so a count the suite did
 //                     not expect names what it counted
-//   BYVALUE <where>   each command named by a variable this text never sets, as text:line and the
+//   BYVALUE <where>   each command named by a variable whose values here name no program file and no
+//                     shell, interpreter or source, as text:line and the
 //                     word: it runs a program the environment or PATH names, which no list of texts
 //                     can hold
 //   PROBLEM <what>    a file sourced or run that the list lacks, a listed text nothing sources or
