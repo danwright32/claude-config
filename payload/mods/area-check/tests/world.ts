@@ -87,6 +87,9 @@ export const NUMSTAT = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big.ts', 
 // taken from the code under test; tests/test-area-check-check-mods-read-only.sh holds the code's own
 // list to the script.
 export const NAMED_TEXTS = 'tools/check-mods.sh tools/lib/pinned-compiler.sh payload/hooks/lib/kept-output.sh payload/hooks/lib/load-average.sh payload/hooks/lib/whole-number.sh'
+// And the texts a run of tools/check-mod-shared-parts.sh reads (#3082): the script and the python
+// program it runs. tests/test-area-check-shared-parts-read-only.sh holds the code's own list to it.
+export const SCAN_TEXTS = 'tools/check-mod-shared-parts.sh tools/lib/ts_source.py'
 export const TRACKED = ['src/big.ts', 'src/lib/slack.ts', 'src/pay/stripe.ts', 'docs/x.md', 'README.md'].join('\n')
 export type Issue = { number: number; title: string; body: string; labels: { name: string }[] }
 export const ISSUES: Issue[] = [
@@ -131,6 +134,9 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // inside the pull request check, the other before it, so the hook itself fails.
     pipelineThrows?: boolean
     cwdThrows?: boolean
+    // The session's folder failing on its Nth ask only (#3126), and how many times it has been asked.
+    cwdThrowsOn?: number
+    cwdAsked: number
     numstat?: string
     sha: string
     goal: string | null
@@ -164,9 +170,13 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // The GitHub repository /w/app is a clone of, in place of dan/app (#3022), and what git exits
     // with when asked whether a named script's texts changed since the checkout left origin/main
     // (0 unchanged, 1 changed, anything else git failing). Asked only where `github` is set.
+    // `namedDiff` answers for tools/check-mods.sh's texts and `scanDiff` for
+    // tools/check-mod-shared-parts.sh's (#3082), so one script's change is seen not to hold the other.
     github?: string
     namedDiff?: number
+    scanDiff?: number
   } = {
+    cwdAsked: 0,
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
     links: {},
@@ -185,7 +195,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_AREA_CHECK_DIR' ? init.areaDir : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => {
-    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    ctl.cwdAsked += 1
+    if (ctl.cwdThrows || ctl.cwdAsked === ctl.cwdThrowsOn) throw new Error('the session folder could not be read')
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
@@ -360,6 +371,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       if (sub === 'remote get-url origin') return answer(ok('git@github.com:dan/app.git\n'))
       if (sub === 'rev-parse --verify origin/main^{commit}') return answer(ok(`${ctl.sha}\n`))
       if (ctl.github && sub === `diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`) return answer({ exitCode: ctl.namedDiff ?? 0, stdout: '', stderr: '' })
+      if (ctl.github && sub === `diff --quiet --merge-base origin/main -- ${SCAN_TEXTS}`) return answer({ exitCode: ctl.scanDiff ?? 0, stdout: '', stderr: '' })
       if (argv[3] === 'merge-base' && argv[5] === 'origin/main') {
         const base = ctl.bases[argv[4] as string]
         return answer(base ? ok(`${base}\n`) : { exitCode: 128, stdout: '', stderr: `fatal: Not a valid object name ${argv[4]}` })
