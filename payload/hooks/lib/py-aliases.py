@@ -33,8 +33,9 @@ standard library's own folder or in the interpreter itself, and it is read throu
 class's own dictionaries, so no property or descriptor of it runs. What the answer cannot say
 counts as follows: a module of the script's own is a module with attributes that are not read
 (UNREAD), and an attribute of one, or one this Python does not have, is not known to be a module,
-so it is followed through a binding and passes when handed on. That last part is what is not
-covered: a module held by one of the script's own modules, handed on rather than renamed.
+so it is followed through a binding and passes when handed on. A module of the script's own can
+hold only what py_acts lets it import: an inert module, whose modules are read by name (lib.os,
+m.os), or os, which under another name there is os_exposed() (claude-config#3119).
 
 WHAT THIS READS FROM THE DISK, AND HOW (stdlib, load). The gate keeps the judgement of a call it
 allowed and uses it again only while every answer the disk gave it is the same
@@ -192,6 +193,37 @@ def dotted(expr):
         parts.append(expr.attr)
         expr = expr.value
     return ".".join([expr.id] + parts[::-1])
+
+
+def os_exposed(nodes, imported):
+    """The name os is imported by where something other than that name reaches it, or None
+    (claude-config#3119). py_acts holds each use of the name os is imported by to os's own reads, but
+    reads those uses only by that name. Imported in a class body, os is the class's attribute, read as
+    C.helper; at the top level of a module the script imports, or by a function that declares the
+    name global there, it is the module's attribute, read as lib.helper or imported out of it by
+    another file. Under its own name os is caught there by name (C.os, lib.os) and an _private name
+    is refused wherever it is read, so only another public name is returned. imported says whether
+    the text is a module another file imports rather than the script that was run."""
+    parent = {id(c): n for n in nodes for c in ast.iter_child_nodes(n)}
+
+    def scope_of(node):
+        up = parent.get(id(node))
+        while up is not None and not isinstance(up, SCOPES):
+            up = parent.get(id(up))
+        return up
+
+    declared = {(id(scope_of(n)), name) for n in nodes if isinstance(n, ast.Global) for name in n.names}
+    for node in nodes:
+        if not isinstance(node, ast.Import):
+            continue
+        for a in node.names:
+            if a.name != "os" or not a.asname or a.asname == "os" or a.asname.startswith("_"):
+                continue
+            scope = scope_of(node)
+            if isinstance(scope, ast.ClassDef) or (imported and (
+                    scope is None or (id(scope), a.asname) in declared)):
+                return a.asname
+    return None
 
 
 def make(inert):
