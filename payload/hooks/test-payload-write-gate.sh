@@ -588,6 +588,8 @@ runbash "f=$FIX/elsewhere/s.sh; printf '$QUOTED_LINES' > \"\$f\"; bash $FIX/else
 refused "#3152 and written to a file a variable names, which the command then runs"
 runbash "printf '$QUOTED_LINES' >&$FIX/elsewhere/s.sh; bash $FIX/elsewhere/s.sh" "$FIX/dev"
 refused "#3152 and written by >& to a script the command then runs"
+runbash "exec > $FIX/elsewhere/x.sh; printf '$QUOTED_LINES'; bash $FIX/elsewhere/x.sh" "$FIX/dev"
+refused "#3152 and sent by an exec redirect to a script the command then runs"
 runbash "printf(){ sh; }; printf '$QUOTED_LINES'" "$FIX/dev"
 refused "#3152 and printed by a printf the command defines as a function"
 runbash "alias echo=sh; echo '$QUOTED_LINES'" "$FIX/dev"

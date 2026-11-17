@@ -504,7 +504,8 @@ def copied_as_text(cmd):
 # breaks kept, only where nothing can run it: a printf or echo the session shell runs itself, at the
 # top of the command, with nothing in the command piping, saving (printf -v, eval), redefining
 # (a function, alias, hash or PATH change) or wrapping (a compound command, exec, coproc, a process
-# substitution) anything, and no file it writes named again in the command. Where it writes, and a
+# substitution) anything, and every file it writes named plainly (no value or pattern only the shell
+# can work out) and not named again in the command. Where it writes, and a
 # redirect target written in quotes, are read as ever. Anything else keeps every line read.
 PRINTER = re.compile(r"\s*(?:printf|echo)(?=\s|$)")
 COMPOUND = re.compile(r"\s*(?:[{}]|then|do|done|fi|else|elif|if|while|until|for|case|esac|select|[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\))(?=\s|$|;|\()")
