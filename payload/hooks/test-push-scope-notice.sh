@@ -313,8 +313,16 @@ out="$(run "cd $PR && git pull && git push origin HEAD" "$W/session")"; rc=$?
 [ "$rc" -eq 2 ] && check "#3092 and so it is behind a cd into the repository" ok || check "#3092 and so it is behind a cd into the repository" "exit $rc"
 # What makes nothing, what nothing pushes afterwards, and words that only name a route, are let
 # through with nothing said.
-pending_allowed "#3092 abandoning a rebase and pushing is let through" "git rebase --abort && git push" "$PR"
-pending_allowed "#3092 so is leaving a cherry-pick" "git cherry-pick --quit; git push" "$PR"
+pending_allowed "#3092 leaving a cherry-pick where it stands and pushing is let through" "git cherry-pick --quit; git push" "$PR"
+# An abandoned rebase was let through here until #3098: it makes no commit, which was all #3092
+# asked. But it puts HEAD back on the branch, off whatever the rebase had it on when the gates ran
+# (measured: the push then sends a commit that was not on HEAD), so it is refused as a move.
+out="$(run "git rebase --abort && git push" "$PR")"; rc=$?
+err="$(cat "$W/err")"
+case "$rc:$err" in
+  2:*"this command runs git rebase --abort before it pushes"*"claude-config#3098"*) check "#3098 abandoning a rebase and pushing is refused, as a move of the branch" ok ;;
+  *) check "#3098 abandoning a rebase and pushing is refused, as a move of the branch" "exit $rc [${err:0:200}]" ;;
+esac
 pending_allowed "#3092 a pull after the push is not carried by it" "git push && git pull" "$PR"
 pending_allowed "#3092 a route with no push is not this hook's" "git rebase --continue" "$PR"
 pending_allowed "#3092 a commit message that names a route runs none" "git commit -m 'run git pull, then git rebase --continue' && git push" "$PR"
@@ -329,6 +337,156 @@ case "$grc:$gerr" in
   2:*notes/side.md*) check "#3092 and the style gate then reads the line the cherry-pick brought in" ok ;;
   *) check "#3092 and the style gate then reads the line the cherry-pick brought in" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
 esac
+
+echo "push scope notice: a branch moved, or a commit staged by another route, then pushed (claude-config#3098)"
+
+# Two more ways one command changes what its push sends after the gates have read it, neither of
+# which makes a commit by a route #3092 names. A git checkout, switch or reset MOVES the branch onto
+# commits that already exist, so the push sends a range no gate read. And a command can change the
+# INDEX by a route other than git add (a path taken from another commit, a stash put back, a patch
+# applied with --index, a git rm) and then commit: the gates fold the pending commit in from the
+# index as it was before the command ran. Each is reproduced first with the real style gate, then
+# refused here, once, for every gate, with the same remedy: the same work as two commands.
+PM="$(mmf_repo "$W/moves" clean guide/new.md $'from main\n')"
+mmf_built "$PM" guide/new.md && check "#3098 the fixture is a branch with main merged in and committed" ok \
+  || check "#3098 the fixture is a branch with main merged in and committed" "it is not, so every case below would pass for the wrong reason"
+git -C "$PM" checkout -qb other >/dev/null 2>&1
+printf '%s\n' "$MAIN_LINE" > "$PM/notes/other.md"
+git -C "$PM" add notes/other.md >/dev/null 2>&1
+git -C "$PM" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm other >/dev/null 2>&1
+git -C "$PM" checkout -q feat >/dev/null 2>&1
+[ "$(git -C "$PM" branch --show-current 2>/dev/null)" = feat ] && [ ! -e "$PM/notes/other.md" ] \
+  && git -C "$PM" cat-file -e other:notes/other.md 2>/dev/null \
+  && check "#3098 the fixture is on feat, and only the branch other holds the line the style gate refuses" ok \
+  || check "#3098 the fixture is on feat, and only the branch other holds the line the style gate refuses" "it is not, so the faults below would be shown on the wrong state"
+moved="git checkout other && git push -u origin other"
+gate check-style-guide.sh "$moved" "$PM"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  0:*) check "#3098 the fault: the style gate says nothing of a line on the branch the command switches to and pushes" ok ;;
+  *) check "#3098 the fault: the style gate says nothing of a line on the branch the command switches to and pushes" "exit $grc [${gerr:0:200}]: if a gate now reads the branch a checkout will land on, this refusal may no longer be needed" ;;
+esac
+out="$(run "$moved" "$PM")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "#3098 a checkout of another branch and a push in one command is refused" ok \
+  || check "#3098 a checkout of another branch and a push in one command is refused" "exit $rc [${err:0:200}]"
+says "#3098 and names what the command runs before the push" "$err" "this command runs git checkout before it pushes"
+says "#3098 and says the branch may not be the one the gates read" "$err" "is not what the push gates read"
+says "#3098 and says how to push so the gates can read it" "$err" "as a command of its own, then push"
+says "#3098 and names the issue" "$err" "claude-config#3098"
+taken="git checkout other -- notes/other.md && git commit -m take && git push"
+gate check-style-guide.sh "$taken" "$PM"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  0:*) check "#3098 the fault: the style gate says nothing of a line the command takes from another commit, commits and pushes" ok ;;
+  *) check "#3098 the fault: the style gate says nothing of a line the command takes from another commit, commits and pushes" "exit $grc [${gerr:0:200}]: if a gate now reads what such a checkout will stage, this refusal may no longer be needed" ;;
+esac
+out="$(run "$taken" "$PM")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "#3098 a path taken from another commit, committed and pushed in one command is refused" ok \
+  || check "#3098 a path taken from another commit, committed and pushed in one command is refused" "exit $rc [${err:0:200}]"
+says "#3098 and names what the command runs before the commit" "$err" "this command runs git checkout, then commits and pushes"
+says "#3098 and says the index is not the one the gates read" "$err" "is not in the index when the push gates run"
+says "#3098 and says how to commit so the gates can read it" "$err" "as a command of its own, then commit and push"
+says "#3098 and names the issue there too" "$err" "claude-config#3098"
+# Each spelling measured to move the branch or change the index. The refusal names the route as
+# written, so somebody knows which command to run first.
+while IFS='|' read -r c kind want; do
+  [ -n "$c" ] || continue
+  out="$(run "$c" "$PM")"; rc=$?
+  err="$(cat "$W/err")"
+  case "$kind" in
+    move) phrase="this command runs $want before it pushes" ;;
+    *) phrase="this command runs $want, then commits and pushes" ;;
+  esac
+  case "$rc:$err" in
+    2:*"$phrase"*"claude-config#3098"*) check "#3098 refused, naming $want: $c" ok ;;
+    *) check "#3098 refused, naming $want: $c" "exit $rc [${err:0:200}]" ;;
+  esac
+done <<'ROUTES'
+git switch other && git push|move|git switch
+git reset --hard other && git push -f|move|git reset
+git checkout -b new origin/main && git push -u origin new|move|git checkout
+git rebase --abort && git push|move|git rebase --abort
+git cherry-pick --abort; git push|move|git cherry-pick --abort
+git update-ref refs/heads/feat other && git push|move|git update-ref
+git stash branch fromstash && git push -u origin fromstash|move|git stash branch
+(git checkout other) && git push|move|git checkout
+git stash pop && git commit -am take && git push|stage|git stash pop
+git apply --index fix.patch && git commit -m take && git push|stage|git apply
+git rm notes/feat.txt && git commit -m gone && git push|stage|git rm
+git mv notes/feat.txt notes/kept.txt && git commit -m moved && git push|stage|git mv
+git restore --staged notes/feat.txt && git commit -m less && git push|stage|git restore
+git reset && git commit --allow-empty -m none && git push|stage|git reset
+git merge --abort && git commit --allow-empty -m none && git push|stage|git merge --abort
+ROUTES
+out="$(run "cd $PM && git checkout other && git push origin HEAD" "$W/session")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3098 and so it is behind a cd into the repository" ok || check "#3098 and so it is behind a cd into the repository" "exit $rc"
+# What was measured to change neither HEAD nor the index, a staging route nothing commits, what
+# nothing pushes afterwards, and words that only name a route, are let through with nothing said.
+pending_allowed "#3098 a branch made where HEAD already is, then pushed, is let through" "git checkout -b new && git push -u origin new" "$PM"
+pending_allowed "#3098 so is one made with git switch, committed to and pushed" "git switch -c new && git add notes && git commit -m more && git push -u origin new" "$PM"
+pending_allowed "#3098 files written back from the index are no route" "git checkout -- notes/feat.txt && git push" "$PM"
+pending_allowed "#3098 a stash put back with no commit after it changes nothing the push sends" "git stash pop && git push" "$PM"
+pending_allowed "#3098 a stash only listed is no route" "git stash list && git commit --allow-empty -m none && git push" "$PM"
+pending_allowed "#3098 a checkout after the push is not carried by it" "git push && git checkout main" "$PM"
+pending_allowed "#3098 a commit message that names a route runs none" "git commit --allow-empty -m 'git checkout main, then git reset --hard' && git push" "$PM"
+# The remedy works (L111). The checkout run as a command of its own, the push is let through here
+# and the style gate reads the line on the branch it landed on.
+git -C "$PM" checkout -q other >/dev/null 2>&1
+pending_allowed "#3098 the checkout run on its own first, the push alone is let through" "git push -u origin other" "$PM"
+gate check-style-guide.sh "git push -u origin other" "$PM"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*notes/other.md*) check "#3098 and the style gate then reads the line on the branch the checkout landed on" ok ;;
+  *) check "#3098 and the style gate then reads the line on the branch the checkout landed on" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
+esac
+# And the path taken from another commit as a command of its own, the commit and push in one command
+# are let through here and the style gate reads the line now in the index.
+git -C "$PM" checkout -q feat >/dev/null 2>&1
+git -C "$PM" checkout -q other -- notes/other.md >/dev/null 2>&1
+pending_allowed "#3098 the path taken on its own first, the commit and push are let through" "git commit -m take && git push" "$PM"
+gate check-style-guide.sh "git commit -m take && git push" "$PM"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*notes/other.md*) check "#3098 and the style gate then reads the line the checkout staged" ok ;;
+  *) check "#3098 and the style gate then reads the line the checkout staged" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
+esac
+# A route question that cannot be asked is not one answered no (L1033, claude-config#1900). The hook
+# read every exit but 0 as nothing to refuse, so beside a library that lacks one of the two
+# questions (an older library under a newer hook) it let the command through with nothing said.
+# Asked of a copy of the hook whose library has the question renamed away; the copy with the
+# library whole is the control, so the refusal is the missing question's and not the copy's.
+copy_hook() { # copy_hook <folder> [<the library function to take away>] -> the hook and lib/ copied there
+  mkdir -p "$1" && cp "$HOOK" "$1/push-scope-notice.sh" && cp -R "$DIR/lib" "$1/lib" || return 1
+  [ -n "${2:-}" ] || return 0
+  sed "s/^$2() {/${2}_taken_away() {/" "$DIR/lib/push-scope.sh" > "$1/lib/push-scope.sh"
+}
+run_copy() { # run_copy <folder> <command> <cwd> -> the copied hook's exit code; stderr in $W/err
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
+    "$2" "$3" | bash "$1/push-scope-notice.sh" >/dev/null 2>"$W/err"
+}
+git -C "$PM" reset -q --hard >/dev/null 2>&1
+copy_hook "$W/whole" && run_copy "$W/whole" "git push" "$PM"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -s "$W/err" ] && check "#3098 control: a copy of the hook with its library whole lets a push through" ok \
+  || check "#3098 control: a copy of the hook with its library whole lets a push through" "exit $rc [$(head -c 200 "$W/err")], so the cases below would be refused for the copy's sake"
+for q in ps_unread_move_or_stage ps_unread_commit_route; do
+  copy_hook "$W/without-$q" "$q"
+  if grep -q "^$q() {" "$W/without-$q/lib/push-scope.sh" 2>/dev/null || [ ! -s "$W/without-$q/lib/push-scope.sh" ]; then
+    check "#3098 the copied library has $q taken away" "it does not, so the case below proves nothing"
+  else check "#3098 the copied library has $q taken away" ok; fi
+  # The command each question would have answered for, so nothing else refuses it first.
+  case "$q" in ps_unread_commit_route) c="git pull && git push" ;; *) c="git checkout other && git push" ;; esac
+  run_copy "$W/without-$q" "$c" "$PM"; rc=$?
+  err="$(cat "$W/err")"
+  case "$rc:$err" in
+    2:*"could not ask"*"$q"*) check "#3098 beside a library that lacks $q the push is refused, naming the question" ok ;;
+    *) check "#3098 beside a library that lacks $q the push is refused, naming the question" "exit $rc [${err:0:200}]" ;;
+  esac
+  run_copy "$W/without-$q" "git status" "$PM"; rc=$?
+  [ "$rc" -eq 0 ] && [ ! -s "$W/err" ] && check "#3098 and a command that does not push is still let through there ($q)" ok \
+    || check "#3098 and a command that does not push is still let through there ($q)" "exit $rc [$(head -c 200 "$W/err")]"
+done
 
 echo "push scope notice: silent where there is nothing to announce"
 

@@ -76,6 +76,8 @@ LAUNCHERS = frozenset({"npx", "bunx", "pnpx"})
 # (package_run, #2865): `@scope/name` or `name`, with an optional `@version`, holding no path separator
 # but the scope's. npm reads such a word as a package, never as a file.
 PACKAGE_SPEC = re.compile(r"(@[A-Za-z0-9][\w.~-]*/)?[A-Za-z0-9][\w.~-]*(@[\w.^~<>=*|+-]+)?")
+# A path npm reads as a package's archive, by its name, where any other path is a folder to it (#3083).
+PACKAGE_ARCHIVE = re.compile(r"\.(?:tgz|tar\.gz|tar)$", re.I)
 # What a package run by name can do, said as acts() says it: the gate reads no package, so it counts as
 # able to send a request or run code, as a package a script imports does (#2844).
 PACKAGE_ACTS = ("is a package, which the gate does not read, so it counts as able to send a request or run "
@@ -220,10 +222,31 @@ def make(marker, judged_by_name):
             data file is (every_file's actor), and a file another program only may have written by
             what is on disk: reading code files as scripts, imports followed, newly refused `npx
             prettier --write x.test.ts && npx vitest run x.test.ts` in the 14 day replay (2026-11-12),
-            where what prettier rewrites cannot be read."""
+            where what prettier rewrites cannot be read.
+
+            A word that is no spec is a package too unless it names a script on disk (#3083). #3069
+            read every such word as the file it names and nothing else, so `npx ./vitest run
+            posts.test.ts` beside a local package folder ./vitest, which is no script, read nothing:
+            the test file was never opened. npm takes a word starting with . / or ~ for a folder
+            holding a package unless it is named as an archive, which is a package as well, and a
+            word holding a / anywhere else for a repository (owner/repo). So the package reading is
+            made for all of them, a path naming nothing yet included (an earlier command may make
+            the folder), and the word is handed back for the path reading as well. Only a script on
+            disk, or one an earlier command writes, is read as that script alone, as #3069 left it,
+            and a word the gate cannot work out is left as it was (#2683)."""
             spec = words[0]
             if not PACKAGE_SPEC.fullmatch(spec):
-                return False
+                if re.search(r"[$`]", spec):
+                    return False
+                path = self.resolve(spec, d)
+                script = os.path.isfile(path) or any(kind != "maybe" for kind, _, _ in self.made_from(path) or ())
+                if script and not PACKAGE_ARCHIVE.search(spec):
+                    return False
+                label = f"the package {spec}, run by {launcher},"
+                hit = marker.search(" ".join(words[1:]))
+                if hit:
+                    return f"{label} {PACKAGE_ACTS}, and is run with {hit.group(0)} in its arguments"
+                return self.every_file(words, d, depth, False, actor=(label, PACKAGE_ACTS)) or False
             name = re.sub(r"(?<=.)@.*$", "", spec)
             base = name.rsplit("/", 1)[-1]
             if spec == base and judged_by_name(base):
