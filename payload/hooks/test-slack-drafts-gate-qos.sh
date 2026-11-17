@@ -87,6 +87,25 @@ echo "slack drafts gate: the judgement runs at a raised scheduling priority (cla
 
 printf '%s\n' 'echo hi' > "$T/run.sh"
 
+# lib/gate-qos.py on its own, loaded by path as the gate loads it, in a python3 of its own so the
+# raise touches nothing else: on macOS it must report raised, off macOS that there is nothing to
+# raise. The state is judged by the platform alone, since the module never consults taskpolicy.
+QOS_LIB="$DIR/lib/gate-qos.py"
+lib_state="$(python3 - "$QOS_LIB" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate_qos", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+state, line = mod.raise_qos()
+print(f"{state}|{line}")
+PY
+)"
+if [ "$(uname -s)" = Darwin ]; then want="raised"; else want="not macOS"; fi
+case "$lib_state" in
+  "$want|"*) check "lib/gate-qos.py on its own reports $want" ok ;;
+  *) check "lib/gate-qos.py on its own reports $want" "got: ${lib_state:0:300}" ;;
+esac
+
 if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
   # Off macOS there is nothing to raise: the gate still judges, and says so in its trace. The level
   # itself is untaken here, said so in the one shape the runner counts, never passed (L411).
