@@ -135,8 +135,12 @@
 #      as a failure with no jobs (GitHub failing to start it) is not a stop the first time: that run
 #      is re-run once and waited on, and only a second such start stops (claude-config#2537, see
 #      rerun_failed_start), or no signed in gh account that can merge in the repository, or none
-#      confirmed (claude-config#2629, see resolve_merger)
-#   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
+#      confirmed (claude-config#2629, see resolve_merger), or a pull request based on a branch other
+#      than the default one that nothing will move onto it: no pull request for that branch, one
+#      closed without merging, or one merged while this stayed on its branch (claude-config#3118,
+#      see wait_for_base), or a default branch GitHub did not name
+#   3  still waiting (on checks, the review, a base still moving, the repository's turn, or the
+#      pull request of the branch it is based on, claude-config#3118) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
 #      a line that keeps moving never ends it, #2351) or the poll count ran out, or
 #      given the turn back with less of its
@@ -889,7 +893,7 @@ read_methods(){
 # When none can, it stops before any update or wait, naming each account and its permission. It is
 # decided once in a run, at the start rather than after a refused merge, because a refusal arriving
 # only at the merge costs the whole wait first (L667).
-merge_as=""; merge_as_known=""; perm_account=""; perm_seen=""; active_name=""
+merge_as=""; merge_as_known=""; perm_account=""; perm_seen=""; active_name=""; repo_default=""
 can_merge(){ case "$1" in ADMIN|MAINTAIN|WRITE) return 0 ;; esac; return 1; }
 # An account as a sentence names it: $1 is the account, empty for the active one.
 who_is(){
@@ -906,12 +910,16 @@ read_permission(){
   if [ -n "$perm_account" ]; then
     tok="$(gh auth token -u "$perm_account" 2>/dev/null)" || tok=""
     [ -n "$tok" ] || { read_err="gh read no token for it"; return 1; }
-    out="$(GH_TOKEN="$tok" gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+    out="$(GH_TOKEN="$tok" gh repo view "$slug" --json viewerPermission,defaultBranchRef 2>&1 </dev/null)"; rc=$?
   else
-    out="$(gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+    out="$(gh repo view "$slug" --json viewerPermission,defaultBranchRef 2>&1 </dev/null)"; rc=$?
   fi
   if [ "$rc" -eq 0 ]; then
     perm_seen="$(printf '%s' "$out" | jq -r '.viewerPermission // ""' 2>/dev/null)" || perm_seen=""
+    # The same answer names the repository's default branch, a fact of the repository rather than of
+    # the account, so the first answer naming it is kept for the run (claude-config#3118, see
+    # wait_for_base). Read here, it costs no call of its own.
+    [ -n "$repo_default" ] || repo_default="$(printf '%s' "$out" | jq -r '.defaultBranchRef.name // ""' 2>/dev/null)" || repo_default=""
     [ -n "$perm_seen" ] && return 0
     read_err="GitHub named no permission: ${out:0:200}"; return 1
   fi
@@ -1128,6 +1136,82 @@ move_stacked(){   # $1 = pull request number; 0 moved here, 2 already moved, 1 r
   esac
   printf '%s' "$why"
   return 1
+}
+# A PULL REQUEST STACKED ON A BRANCH THAT HAS NOT MERGED WAITS FOR IT (claude-config#3118). This
+# merged into whatever base a pull request had, so on 2026-11-16 six queued pull requests based on
+# other feature branches reached their turn before their bases had merged, and each would have been
+# squash merged into its base branch, not main: its change would then reach main only inside the
+# base's squash, and its Closes lines never fire, because GitHub closes issues only from the default
+# branch. They were stopped by hand. So at each look, a pull request whose base is not the
+# repository's default branch (repo_default, as GitHub names it in the permission read, never
+# assumed to be main) waits for the pull request of its base branch, and takes no place in line
+# meanwhile: it holds nothing another run waits on, and leaves one of the session's looks free
+# whenever a run on this Mac holds the turn (take_a_look). When the base merges, the run that merged
+# it moves this pull request onto its base (move_stacked), or GitHub does on deleting the branch, and
+# the next look finds it on the default branch and joins the line as any run does. Waiting rather
+# than refusing, because a stacked pull request queued early then merges in order with nobody
+# requeueing it. The wait grows as the wait on checks does, through the injected sleep, and is
+# bounded by the time in line (budget_left, MWR_LINE_SECONDS). A base that nothing will merge stops
+# it, exit 1, naming the base pull request: no pull request for the base branch, one closed without
+# merging, or one merged while this pull request stayed on its branch for longer than GitHub's lag
+# (MWR_HEAD_LAG_SECONDS, the same allowance a head lagging its branch gets).
+base_pr=""; base_pr_state=""; stacked_since=""; stacked_merged_at=""; stacked_on=""
+# The pull request whose head is $base: an open one first, else a merged one, else a closed one,
+# wherever GitHub lists them. Sets base_pr and base_pr_state, both empty when there is none.
+BASE_PR_JQ='if type == "array" then
+  ((map(select(.state == "OPEN")) + map(select(.state == "MERGED")) + map(select(.state == "CLOSED")))[0] // {})
+  | "\(.number // "") \(.state // "")" else error("not a list") end'
+read_base_pr(){
+  local out rc pick
+  base_pr=""; base_pr_state=""
+  out="$(gh_as pr list --repo "$slug" --head "$base" --state all --limit 20 --json number,state 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && pick="$(printf '%s' "$out" | jq -r "$BASE_PR_JQ" 2>/dev/null)"; then
+    base_pr="${pick%% *}"; base_pr_state="${pick#* }"
+    return 0
+  fi
+  read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
+  [ "$rc" -ne 0 ] || return 1
+  mt_gh_read_class "$out" "$account"
+}
+# A place in line this run took while it was based on the default branch is given up when its base
+# turns out to be another branch, so it holds nobody up while it waits.
+leave_line_for_base(){
+  [ -n "$TURN_TICKET" ] || return 0
+  turn_lost "$(now)"
+  turn_leave
+  turn_state=""; turn_waited_from=""
+  say "#$pr is now based on $base, not $repo_default, so it gives up its place in line to merge in $slug while it waits for $base to merge."
+}
+# Waits one look for the base, or stops. Always returns, for the caller to look again.
+wait_for_base(){
+  local t how rrc
+  t="$(now)"
+  leave_line_for_base
+  with_retries "the pull request for #$pr's base branch $base" read_base_pr; rrc=$?
+  [ "$rrc" -eq 5 ] && return 0
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: $(signin_or_unread "the pull request for #$pr's base branch $base in $slug" "$rrc"). Nothing was merged."
+  how="set its base to $repo_default (gh pr edit $pr --repo $slug --base $repo_default), then run the same command again."
+  [ -n "$stacked_since" ] || stacked_since="$t"
+  stacked_on="#$base_pr ($base)"
+  case "$base_pr_state" in
+    OPEN)
+      stacked_merged_at=""
+      out_of_time "is based on $base, waiting for #$base_pr to merge into $repo_default"
+      wait_a_look "stacked:$base:$base_pr" "Head ${head:0:7}: based on $base, not $repo_default, so merging it now would merge it into $base. Waiting for #$base_pr ($base) to merge, after which #$pr is moved onto $repo_default and goes on; it takes no place in line to merge in $slug meanwhile." grows ;;
+    MERGED)
+      [ -n "$stacked_merged_at" ] || stacked_merged_at="$t"
+      if [ $(( t - stacked_merged_at )) -ge "$LAG_WAIT" ]; then
+        stop 1 "Stopped: #$pr is still based on $base $(mins "$LAG_WAIT") after #$base_pr, the pull request for $base, merged, so merging it would merge it into a branch that has already merged and its Closes lines would never close anything. Nothing was merged; $how"
+      fi
+      out_of_time "is based on $base, whose pull request #$base_pr has merged, waiting to be moved onto $repo_default"
+      wait_a_look "stacked-merged:$base:$base_pr" "Head ${head:0:7}: #$base_pr ($base) has merged and #$pr is still based on $base; waiting up to $(mins "$LAG_WAIT") for it to be moved onto $repo_default." ;;
+    CLOSED)
+      stop 1 "Stopped: #$pr is based on $base, not $repo_default, and #$base_pr, the pull request for $base, was closed without merging, so nothing will move #$pr onto $repo_default. Nothing was merged; reopen and merge #$base_pr first, or $how" ;;
+    *)
+      stop 1 "Stopped: #$pr is based on $base, not $repo_default, and no pull request merges $base, so nothing will move #$pr onto $repo_default. Nothing was merged; $how" ;;
+  esac
+  return 0
 }
 # THE MERGED BRANCH'S AGENT WORKTREE GOES AT THE MERGE (claude-config#1521). On 2026-10-22 this
 # repository held 66 agent worktrees, about 2.5 GB, 63 of them for merged pull requests: the sweep
@@ -1879,6 +1963,21 @@ EOF_VIEW
     if ! why="$(ask_gate "$WORK_NAMES_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: check-work-names-merge.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+  fi
+
+  # Based on a branch that is not the default one: wait for that branch to merge, with no place in
+  # line, and never update, review or merge meanwhile (claude-config#3118, see wait_for_base).
+  # Unnamed, the default branch cannot be compared, so nothing is merged.
+  [ -n "$repo_default" ] || stop 1 "Stopped: GitHub did not name the default branch of $slug, so whether #$pr's base $base is it cannot be told, and a pull request based on another branch would be merged into that branch. Nothing was merged."
+  if [ "$base" != "$repo_default" ]; then
+    wait_for_base
+    continue
+  fi
+  # Its wait for its base is over: the time in line counts from here, and the looks it took while
+  # waiting are spared from MWR_MAX_POLLS, as a moving line's are, since that wait had its own bound.
+  if [ -n "$stacked_since" ]; then
+    say "#$pr is now based on $repo_default, after waiting $(dur $(( $(now) - stacked_since ))) for $stacked_on, so it goes on as any run does."
+    stacked_since=""; stacked_merged_at=""; line_from="$(now)"; line_spare
   fi
 
   # The repository's turn, before any update, wait or lessons review is spent on a head another

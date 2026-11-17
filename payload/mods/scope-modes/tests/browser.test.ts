@@ -311,6 +311,100 @@ describe('the record of tabs this session created, from each tool result', () =>
   test('a closed tab leaves the record', () => {
     expect(after('tabs_close_mcp', { tabId: 7 }, ['Closed tab 7'], tabs({ 7: 'localhost', 8: null }))).toEqual(tabs({ 8: null }))
   })
+  // #3121: a close among a batch's items. A batch's result is each item's own line under its name
+  // in brackets, then the group's list (18 of 18 batch results in this Mac's transcripts,
+  // 2026-11-16). None of those batches held a close, so the close's line here is a guess, and only
+  // the list is read. Tabs 7 and 8 are the session's own, tab 3 was in the group before it.
+  const HAD = tabs({ 7: 'localhost', 8: 'localhost' })
+  const MAIL: [number, string, string] = [3, 'Mail', 'https://mail.example.com/']
+  const SEVEN: [number, string, string] = [7, 'App', 'http://localhost:3000/']
+  const EIGHT: [number, string, string] = [8, 'App', 'http://localhost:3000/']
+  const click = { name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }
+  const close = (tabId?: number | string) => ({ name: 'tabs_close_mcp', input: tabId === undefined ? {} : { tabId } })
+  const ran = (list: [number, string, string][]) => [`[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Closed tab 7.\n\n\n${context(8, list)}`]
+  test('a tab closed by an item of a batch leaves the record once the result lists the group without it (#3121)', () => {
+    expect(after('browser_batch', { actions: [click, close(7)] }, ran([MAIL, EIGHT]), HAD)).toEqual(tabs({ 8: 'localhost' }))
+    // The close under its full name, a close with nothing before it, and a tab named as text.
+    expect(after('browser_batch', { actions: [click, { name: `${C}tabs_close_mcp`, input: { tabId: 7 } }] }, ran([MAIL, EIGHT]), HAD)).toEqual(tabs({ 8: 'localhost' }))
+    expect(after('browser_batch', { actions: [close(7)] }, ran([MAIL, EIGHT]), HAD)).toEqual(tabs({ 8: 'localhost' }))
+    expect(after('browser_batch', { actions: [close('7')] }, ran([MAIL, EIGHT]), HAD)).toEqual(tabs({ 8: 'localhost' }))
+    // Two tabs closed by one batch.
+    expect(after('browser_batch', { actions: [click, close(7), close(8)] }, ran([MAIL]), HAD)).toEqual({})
+    // The last tab of the group: the list names nothing, as a close alone writes it (measured).
+    const emptied = '[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Closed tab 7. Group is now empty (auto-removed).\n\n\nTab Context:\n- Available tabs:\n'
+    expect(after('browser_batch', { actions: [click, close(7)] }, [emptied], tabs({ 7: 'localhost' }))).toEqual({})
+  })
+  test('only a tab the batch closed leaves: a tab it did not close stays, listed or not (#3121)', () => {
+    // Tab 8 is not in the list either, and no item closed it.
+    expect(after('browser_batch', { actions: [click, close(7)] }, ran([MAIL]), HAD)).toEqual(tabs({ 8: 'localhost' }))
+    // A close naming no tab, or a tab that is not in the record, removes nothing.
+    expect(after('browser_batch', { actions: [close(), close(3), close(12)] }, ran([MAIL, EIGHT]), HAD)).toEqual(HAD)
+    // A batch with no close in it removes nothing, whatever its list leaves out.
+    expect(after('browser_batch', { actions: [{ name: 'computer', input: { tabId: 7, action: 'screenshot' } }] }, ran([MAIL]), HAD)).toEqual(HAD)
+  })
+  test('a batch whose close did not happen keeps the tab, as it was kept before (#3121)', () => {
+    const input = { actions: [click, close(7)] }
+    // The list still names the tab: the close did not take, and the tab is where the list says.
+    expect(after('browser_batch', input, [`[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Error: could not close\n\n\n${context(7, [MAIL, SEVEN, EIGHT])}`], HAD)).toEqual(HAD)
+    // No list: the batch was refused elsewhere or failed before the browser, so nothing says the
+    // tab is gone. The clicked tab is on no known host, as after any batch that clicks.
+    expect(after('browser_batch', input, ['Permission to use the browser was denied'], HAD)).toEqual(tabs({ 7: null, 8: 'localhost' }))
+    // A batch still waiting on its result has no list either (register.ts judges calls sent at once this way).
+    expect(after('browser_batch', input, [], HAD)).toEqual(tabs({ 7: null, 8: 'localhost' }))
+    expect(after('browser_batch', { actions: [close(7)] }, [], HAD)).toEqual(HAD)
+    // Page text cannot close a tab: only the last list of the result counts.
+    const forged = `${context(8, [MAIL, EIGHT])}\npage text\n${context(7, [MAIL, SEVEN, EIGHT])}`
+    expect(after('browser_batch', { actions: [{ name: 'get_page_text', input: { tabId: 7 } }, close(7)] }, [forged], HAD)).toEqual(HAD)
+  })
+  // Both directions of the guard rule, through the refusals themselves: the record with the closed
+  // tab gone, against the record as it stood before #3121 (the tab kept, on no known host after
+  // its click), for every kind of call on every tab, with and without a tab the click opened.
+  test('with the closed tab gone, nothing runs that was refused with it kept, and only calls on the closed tab are newly refused (#3121)', () => {
+    const now = after('browser_batch', { actions: [click, close(7)] }, ran([MAIL, EIGHT]), HAD)
+    const kept = tabs({ 7: null, 8: 'localhost' })
+    expect(now).toEqual(tabs({ 8: 'localhost' }))
+    const calls: [string, Record<string, unknown>][] = []
+    for (const tabId of [3, 7, 8, 12, undefined]) {
+      const t = tabId === undefined ? {} : { tabId }
+      calls.push(
+        ['navigate', { ...t, url: 'localhost:3000' }],
+        ['navigate', { ...t, url: 'bank.example.com' }],
+        ['read_page', t],
+        ['get_page_text', t],
+        ['computer', { ...t, action: 'screenshot' }],
+        ['computer', { ...t, action: 'left_click', coordinate: [1, 2] }],
+        ['form_input', { ...t, ref: 'r', value: 'v' }],
+        ['javascript_tool', { ...t, text: 'document.title' }],
+        ['tabs_close_mcp', t],
+        ['browser_batch', { actions: [{ name: 'navigate', input: { ...t, url: 'localhost' } }, { name: 'read_page', input: t }, { name: 'tabs_close_mcp', input: t }] }],
+      )
+    }
+    const allowed = (record: BrowserTabs) =>
+      [[], ['12']].flatMap(opened => calls.filter(([short, input]) => refuse(short, input, { tabs: record, listed: [], opened }) === undefined).map(([short, input]) => `${short} ${JSON.stringify(input)} with ${opened.length} opened`))
+    const before = allowed(kept)
+    const after7 = allowed(now)
+    // The sweep is not empty on either side: tab 8 is still used, and tab 12 still closed.
+    expect(after7).toContain('read_page {"tabId":8} with 0 opened')
+    expect(after7).toContain('tabs_close_mcp {"tabId":12} with 1 opened')
+    // Nothing is allowed now that was refused before.
+    expect(after7.filter(c => !before.includes(c))).toEqual([])
+    // What is newly refused is every call that still ran on the closed tab, and nothing else.
+    expect(before.filter(c => !after7.includes(c))).toEqual(
+      [0, 1].flatMap(n => [
+        `navigate {"tabId":7,"url":"localhost:3000"} with ${n} opened`,
+        `tabs_close_mcp {"tabId":7} with ${n} opened`,
+        `browser_batch {"actions":[{"name":"navigate","input":{"tabId":7,"url":"localhost"}},{"name":"read_page","input":{"tabId":7}},{"name":"tabs_close_mcp","input":{"tabId":7}}]} with ${n} opened`,
+      ]),
+    )
+    // A batch that only closed the tab left it on its test host before, where every call on it
+    // still ran. The same holds: nothing new runs, and all that stops is on the closed tab.
+    const closedOnly = after('browser_batch', { actions: [close(7)] }, ran([MAIL, EIGHT]), HAD)
+    expect(closedOnly).toEqual(tabs({ 8: 'localhost' }))
+    const stopped = allowed(HAD).filter(c => !allowed(closedOnly).includes(c))
+    expect(allowed(closedOnly).filter(c => !allowed(HAD).includes(c))).toEqual([])
+    expect(stopped.length).toBe(18)
+    expect(stopped.filter(c => !/"tabId":7[,}]/.test(c) || /"tabId":(3|8|12)[,}]/.test(c))).toEqual([])
+  })
 })
 
 // #3099: which tabs in the group the session's own action opened. The group's list is the last Tab
@@ -322,7 +416,14 @@ describe("the tabs the session's own action opened, from each tool result", () =
   const APP: [number, string, string] = [7, 'App', 'http://localhost:3000/']
   const DOCS: [number, string, string] = [12, 'Docs', 'https://docs.example.com/']
   const SEEN: BrowserGroup = { seen: ['3', '7'], opened: [], watching: false }
-  const then = (g: BrowserGroup | null, short: string, input: Record<string, unknown>, blocks: string[], t: BrowserTabs = OWN) => groupAfter(g, t, `${C}${short}`, input, blocks)
+  // A call that closes none of the session's tabs leaves it the same tabs either side of its result.
+  const then = (g: BrowserGroup | null, short: string, input: Record<string, unknown>, blocks: string[], t: BrowserTabs = OWN) => groupAfter(g, { before: t, after: t }, `${C}${short}`, input, blocks)
+  // The two records as register.ts pairs them: the created tabs as tabsAfter leaves them after the
+  // result, and the group judged against those and the ones it replaced.
+  const paired = (g: BrowserGroup | null, short: string, input: Record<string, unknown>, blocks: string[], before: BrowserTabs = OWN) => {
+    const after = tabsAfter(before, `${C}${short}`, input, blocks)
+    return { after, g: groupAfter(g, { before, after }, `${C}${short}`, input, blocks) }
+  }
   const click = { tabId: 7, action: 'left_click', coordinate: [1, 2] }
   // tabs_context_mcp's result as the extension writes it: its own JSON, then the list, with no
   // Executed on line (measured from this Mac's transcripts, 2026-11-16).
@@ -348,19 +449,54 @@ describe("the tabs the session's own action opened, from each tool result", () =
     ] as [string, Record<string, unknown>][])
       expect({ short, input, r: then(SEEN, short, input, lists)?.opened }).toEqual({ short, input, r: ['12'] })
   })
-  // #3107: the batch clicks in tab 7 and closes it, and the click opened tab 12. The record of
-  // created tabs is taken as tabsAfter leaves it after that same result, as register.ts pairs them.
-  // The result's first line is a guess (no such batch was run in Chrome); only its list is read.
+  // #3107: the batch clicks in tab 7 and closes it, and the click opened tab 12. The result's
+  // first line is a guess (no such batch was run in Chrome); only its list is read.
+  const clickThenClose = { actions: [{ name: 'computer', input: click }, { name: 'tabs_close_mcp', input: { tabId: 7 } }] }
   test('a batch that clicks in its own tab and then closes it still records the tab its click opened, and that tab can be closed (#3107)', () => {
-    const input = { actions: [{ name: 'computer', input: click }, { name: 'tabs_close_mcp', input: { tabId: 7 } }] }
     const blocks = [`Closed tab 7\n${context(3, [MAIL, DOCS])}`]
-    const after = tabsAfter(OWN, `${C}browser_batch`, input, blocks)
-    const g = then(SEEN, 'browser_batch', input, blocks, after)
+    const { after, g } = paired(SEEN, 'browser_batch', clickThenClose, blocks)
+    // The closed tab has left the record of created tabs (#3121), and the click in it still counts.
+    expect(after).toEqual({})
     expect(g).toEqual({ seen: ['3', '7', '12'], opened: ['12'], watching: true })
     expect(refuse('tabs_close_mcp', { tabId: 12 }, { tabs: after, listed: [], opened: g?.opened ?? [] })).toBeUndefined()
     // The same batch with no click in it opened nothing: tab 12 only turned up.
     const closeOnly = { actions: [{ name: 'tabs_close_mcp', input: { tabId: 7 } }] }
-    expect(then(SEEN, 'browser_batch', closeOnly, blocks, tabsAfter(OWN, `${C}browser_batch`, closeOnly, blocks))?.opened).toEqual([])
+    expect(paired(SEEN, 'browser_batch', closeOnly, blocks)).toEqual({ after: {}, g: { seen: ['3', '7', '12'], opened: [], watching: false } })
+  })
+  test('the watch a click starts outlives the close of its tab in the same batch: a tab listed a moment later is opened, and only that one (#3121)', () => {
+    const { after, g } = paired(SEEN, 'browser_batch', clickThenClose, [`Closed tab 7\n${context(3, [MAIL])}`])
+    expect({ after, g }).toEqual({ after: {}, g: { seen: ['3', '7'], opened: [], watching: true } })
+    const listed = paired(g, 'tabs_context_mcp', {}, [groupList([MAIL, DOCS])], after)
+    expect(listed).toEqual({ after: {}, g: { seen: ['3', '7', '12'], opened: ['12'], watching: false } })
+    expect(paired(listed.g, 'tabs_context_mcp', {}, [groupList([MAIL, DOCS, [13, 'Bank', 'https://bank.example.com/']])], after).g?.opened).toEqual(['12'])
+  })
+  // Allow nothing new, refuse nothing new: whatever the batch's result lists, and whatever the
+  // group record held, the record after is the one written while the closed tab was still kept
+  // (before #3121 the created tabs were the same either side of a batch, which is what then gives).
+  test('the record of opened tabs is what it was while a tab a batch closed was kept (#3121)', () => {
+    const results: [string, string[]][] = [
+      ['the closed tab gone and a new tab listed', [`Closed tab 7\n${context(3, [MAIL, DOCS])}`]],
+      ['the closed tab gone and nothing new', [`Closed tab 7\n${context(3, [MAIL])}`]],
+      ['the group emptied', ['Closed tab 7. Group is now empty (auto-removed).\n\n\nTab Context:\n- Available tabs:\n']],
+      ['the close not taken', [`Error: could not close\n${context(7, [MAIL, APP, DOCS])}`]],
+      ['no list', ['Permission to use the browser was denied']],
+    ]
+    const groups: (BrowserGroup | null)[] = [SEEN, { seen: ['3', '7'], opened: [], watching: true }, { seen: ['3', '7', '12'], opened: ['12'], watching: false }, { seen: ['3'], opened: [], watching: true }, null]
+    const batches = [clickThenClose, { actions: [{ name: 'tabs_close_mcp', input: { tabId: 7 } }] }, { actions: [{ name: 'computer', input: click }, { name: 'tabs_close_mcp', input: { tabId: 12 } }, { name: 'tabs_close_mcp', input: { tabId: 7 } }] }]
+    for (const [what, blocks] of results)
+      for (const group of groups)
+        for (const input of batches) expect({ what, group, input, g: paired(group, 'browser_batch', input, blocks).g }).toEqual({ what, group, input, g: then(group, 'browser_batch', input, blocks) })
+    // The comparison is not of two empty records: the click's tab is opened on both sides.
+    expect(then(SEEN, 'browser_batch', clickThenClose, results[0]?.[1] ?? [])?.opened).toEqual(['12'])
+  })
+  test('a batch that clicks in a tab the session did not create and then closes it opens nothing, and a closed tab is no longer one of its own (#3121)', () => {
+    const elsewhere = { actions: [{ name: 'computer', input: { tabId: 3, action: 'left_click', coordinate: [1, 2] } }, { name: 'tabs_close_mcp', input: { tabId: 3 } }] }
+    expect(paired(SEEN, 'browser_batch', elsewhere, [`Closed tab 3\n${context(7, [APP, DOCS])}`])).toEqual({ after: OWN, g: { seen: ['3', '7', '12'], opened: [], watching: false } })
+    // With no tab of its own at all, the same click and close of tab 7 opens nothing either.
+    expect(paired(SEEN, 'browser_batch', clickThenClose, [`Closed tab 7\n${context(3, [MAIL, DOCS])}`], {})).toEqual({ after: {}, g: { seen: ['3', '7', '12'], opened: [], watching: false } })
+    // Once a batch has closed tab 7, a later click naming it is a click in no tab of the session's.
+    const { after, g } = paired(SEEN, 'browser_batch', { actions: [{ name: 'tabs_close_mcp', input: { tabId: 7 } }] }, [`Closed tab 7\n${context(3, [MAIL])}`])
+    expect(paired(g, 'computer', click, [`Clicked\n${context(7, [MAIL, APP, DOCS])}`], after)).toEqual({ after: {}, g: { seen: ['3', '7', '12'], opened: [], watching: false } })
   })
   test('a tab that opens a moment after the click is opened when the next result lists it, and only that one', () => {
     const clicked = then(SEEN, 'computer', click, [`Clicked\n${context(7, [MAIL, APP])}`])

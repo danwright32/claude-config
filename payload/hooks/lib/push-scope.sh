@@ -38,6 +38,14 @@
 #                      (checkout, switch, reset), or one that changes the index by a route other
 #                      than git add ahead of a commit (stash pop, apply --index, rm), which
 #                      push-scope-notice.sh refuses the same way (claude-config#3098)
+#   ps_unread_write:   does the command run something that may write a file, then stage, commit
+#                      and push, so that what it writes goes out with no gate having read it, which
+#                      push-scope-notice.sh refuses the same way (claude-config#3113)
+#   ps_unread_push_source: does a push name, as what it sends, something other than the branch
+#                      checked out that the gates did not read (commits neither this branch nor
+#                      the remote has, a name that cannot be resolved, or one the command moves
+#                      first), which push-scope-notice.sh refuses, each kind with its own sentence
+#                      (claude-config#3112)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -507,8 +515,15 @@ ps__read() {   # $1 = command
   while IFS= read -r -d $'\x1e' rec; do
     # Split by read, never by pattern removal, which tries every prefix of a 26 KB command.
     IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns tool wrap <<< "$rec"
-    # The last field takes read's trailing newline.
-    wrap="${wrap%$'\n'}"; tool="${tool%$'\n'}"; assigns="${assigns%$'\n'}"
+    # The last field takes read's trailing newline. Each is tested before anything is removed: a
+    # pattern removal that matches nowhere tries every position, and bash 3.2 measures the rest of
+    # the string at each, so on a field as long as the command (a commit's words hold its whole
+    # message) the cost grew with the square of the length: measured on 2026-11-16 on the personal
+    # MacBook, 2 seconds at 79 KB, 5 at 159 KB, 19 at 319 KB, and a 1.6 MB command was not read
+    # inside 60 (claude-config#3111). A case reads the field once.
+    case "$wrap" in *$'\n') wrap="${wrap%$'\n'}" ;; esac
+    case "$tool" in *$'\n') tool="${tool%$'\n'}" ;; esac
+    case "$assigns" in *$'\n') assigns="${assigns%$'\n'}" ;; esac
     PS__R_DIR+=("$dir"); PS__R_TEXT+=("$text"); PS__R_WORDS+=("$words"); PS__R_GITDIR+=("$gitdir")
     PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool"); PS__R_WRAP+=("$wrap")
     [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
@@ -1281,14 +1296,16 @@ else:
 #            beside a `commit -a`, they follow one per line, and the caller reads them too,
 #            because a named path may be untracked and -a alone never takes one.
 #   ALL      `git add -A`, `.`, `:/` or `*`: every change, untracked files included
-#   PATHS    the paths the add names, exactly as written, for the caller to resolve
-#   UNKNOWN  an add this cannot account for (it names nothing, or it cannot be tokenised)
+#   PATHS    the paths the add names, and the paths the commit names itself (`git commit <paths>`,
+#            claude-config#3111), exactly as written, for the caller to resolve
+#   UNKNOWN  an add this cannot account for (it names nothing, or it cannot be tokenised), or a
+#            commit that names its paths in a file (--pathspec-from-file)
 # UNKNOWN is an answer, not a failure: the caller must widen to the whole working tree AND say so,
 # because a reading quietly narrowed to nothing reports a clean push it never measured (L98).
 #
 # Only meaningful for a command that commits; a caller asks ps_commit_in_chain first.
 ps_add_scope() {   # $1 = command
-  local out=""
+  local out="" named="" p
   # The pattern is a cheap filter only: the parser decides, so an add named inside a message
   # (`git commit -m "fix git add"`) is not taken for one.
   if ps__git_add_in_chain "$1"; then
@@ -1297,14 +1314,161 @@ ps_add_scope() {   # $1 = command
     [ -n "$out" ] || out="UNKNOWN"
   fi
   case "$out" in
-    ''|NONE)
-      if ps__commit_stages_all "$1"; then printf 'TRACKED\n'; else printf 'INDEX\n'; fi
-      return 0 ;;
+    ''|NONE) if ps__commit_stages_all "$1"; then out=TRACKED; else out=INDEX; fi ;;
     # An add naming paths beside a `commit -a`: the commit takes every tracked change too, so
     # reporting the paths alone left a tracked edit nobody named unread (claude-config#457).
     PATHS*) ps__commit_stages_all "$1" && out="TRACKED${out#PATHS}" ;;
   esac
+  # The paths a commit names itself, `git commit <paths>`, which it takes from the files with no add
+  # (claude-config#3111). They join whatever the adds take: under ALL they are in it already, and
+  # paths nobody can read from the command (a list in a file) make the whole answer UNKNOWN.
+  case "$1" in *commit*) named="$(ps__commit_paths "$1")" ;; esac
+  case "$named" in
+    '') ;;
+    UNKNOWN*) [ "$out" = ALL ] || out=UNKNOWN ;;
+    *)
+      case "$out" in
+        INDEX) out="PATHS"$'\n'"$named" ;;
+        PATHS*|TRACKED*)
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            case "$out"$'\n' in *$'\n'"$p"$'\n'*) ;; *) out="$out"$'\n'"$p" ;; esac
+          done <<LOOP_INPUT
+$named
+LOOP_INPUT
+          ;;
+      esac ;;
+  esac
   printf '%s\n' "$out"
+}
+
+# ---- what a commit takes straight from the files (claude-config#3111) ----
+# `git commit <paths>` commits those paths as they stand in the working tree, with no git add.
+# Measured on git 2.51.1 in a throwaway repository: a named file's edit is in the commit while a
+# file staged beside it is left out (-o, --only, the default); with -i or --include the staged file
+# goes in as well; a directory takes the tracked edits under it; an untracked path is refused by
+# git; and --pathspec-from-file takes the paths a file lists. The gates read a git add's paths and a
+# commit -a, never these, so the real style gate exited 0 on `git commit notes/feat.txt -m x && git
+# push` with a line it refuses in that file. The paths are in the command, so they are read as an
+# add's are (ps_add_scope) rather than the command being refused. What is read is the working tree
+# beyond the index, as for an add: a file staged beside a commit --only is still read from the
+# index though the commit leaves it out, which reads more and never less.
+#
+# Is this word one of the shell's redirections, which the reader hands over among a command's
+# words? Sets PS__REDIR_FILE to 1 when the file it names is the next word (`> out.txt`).
+PS__REDIR_FILE=0
+ps__redirection() {   # $1 = one word
+  PS__REDIR_FILE=0
+  case "$1" in
+    [0-9]\>*|[0-9]\<*|\>*|\<*|\&\>*)
+      case "$1" in *[\<\>\|]) PS__REDIR_FILE=1 ;; esac
+      return 0 ;;
+  esac
+  return 1
+}
+
+# What closes a subshell or ends the command comes off the end of a word, into PS__WORD: everything
+# from its first ), } or ; on. Those are the crude cut's, never the word's. It is the pattern
+# removal ${1%%[)\};]*} for a word of ordinary length. A longer one (a message glued to its option,
+# --message=..., is a word as long as the message) is split by read instead, which passes over it
+# once: the removal tries every position up to the first match and bash 3.2 measures the rest of
+# the string at each, so its cost grows with the square of the length (claude-config#3111).
+PS__WORD=""
+ps__word_end() {   # $1 = one word
+  PS__WORD="$1"
+  case "$1" in *[\)\}\;]*) ;; *) return 0 ;; esac
+  if [ "${#1}" -le 4096 ]; then PS__WORD="${1%%[)\};]*}"; return 0; fi
+  # The word holds one of the three, so the first field ends at it and the here string's own
+  # newline falls in what follows. None of them is whitespace, so a word that starts with one
+  # gives an empty first field, as the removal does.
+  IFS=')};' read -r -d '' PS__WORD _ <<< "$1" || true
+  return 0
+}
+
+# The paths the git commit last read (PS_RUN_SUB, PS_RUN_ARGS) names, into PS__COMMIT_PATHS as
+# written, and PS__COMMIT_UNREAD set to 1 when it names them in a file. Every word that is no option,
+# no option's value and no redirection is a path, and so is everything after `--`. The value of an
+# option is consumed before anything else is asked of the word, so a message that looks like a
+# redirection (`-m "> quoted"`) never makes the word after it the value. An option this does not
+# know is taken to have no value, so its value, if it has one, is read as a path: more read, never
+# less (L42). PS__COMMIT_ALL is set to 1 when the commit stages tracked changes itself: an a or a p
+# in a cluster of short options before any that takes a value (-a, -am, -qam, -p), or --all,
+# --patch or --interactive. Read from the options, so --allow-empty and --amend, which stage
+# nothing, are not taken for it.
+PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
+ps__commit_takes() {
+  local a c skip=0 rest=0 file=0
+  PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
+  [ "$PS_RUN_SUB" = commit ] || return 0
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    if [ "$file" = 1 ]; then file=0; continue; fi
+    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
+    ps__word_end "$a"; a="$PS__WORD"
+    [ -n "$a" ] || continue
+    if [ "$rest" = 1 ]; then PS__COMMIT_PATHS+=("$a"); continue; fi
+    case "$a" in
+      --) rest=1 ;;
+      --pathspec-from-file) PS__COMMIT_UNREAD=1; skip=1 ;;
+      --pathspec-from-file=*) PS__COMMIT_UNREAD=1 ;;
+      -m|-F|-C|-c|-t|--message|--file|--reuse-message|--reedit-message|--fixup|--squash|--author|--date|--template|--cleanup|--trailer) skip=1 ;;
+      --all|--patch|--interactive) PS__COMMIT_ALL=1 ;;
+      --*|-) ;;
+      -*)
+        # A cluster of short options: the first of m F C c t takes a value, the rest of the word
+        # when there is any and the next word otherwise. -S and -u take theirs glued on only.
+        c="${a#-}"
+        while [ -n "$c" ]; do
+          case "$c" in
+            [mFCct]) skip=1; break ;;
+            [mFCctSu]*) break ;;
+            [ap]*) PS__COMMIT_ALL=1 ;;
+          esac
+          c="${c#?}"
+        done ;;
+      *) PS__COMMIT_PATHS+=("$a") ;;
+    esac
+  done
+}
+
+# Every path the commits in a command name, one per line, each once; the one line UNKNOWN when any
+# of them names its paths in a file; nothing when none names any. Read from the one reading of the
+# command, so a commit only named in a message or an echo is not one; with nothing to read the
+# command, from the crude cut, whose words keep their quotes, so a message of several words reads
+# as paths that are not there and the caller widens to the whole tree and says so (L42, L98).
+ps__commit_paths() {   # $1 = command
+  local cmd="$1" rc i end seg p unread=0 out="" loop_input
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      case "${PS__R_TEXT[$i]}" in
+        *commit*)
+          if ps_runs_at git "$i" commit; then
+            ps__commit_takes
+            [ "$PS__COMMIT_UNREAD" = 1 ] && unread=1
+            for p in ${PS__COMMIT_PATHS[@]+"${PS__COMMIT_PATHS[@]}"}; do
+              case $'\n'"$out" in *$'\n'"$p"$'\n'*) ;; *) out="$out$p"$'\n' ;; esac
+            done
+          fi ;;
+      esac
+      i=$((i + 1))
+    done
+  else
+    loop_input="$(ps__crude_cut "$cmd")" || true
+    while IFS= read -r seg; do
+      case "$seg" in *commit*) ;; *) continue ;; esac
+      ps_runs_git "$seg" commit || continue
+      ps__commit_takes
+      [ "$PS__COMMIT_UNREAD" = 1 ] && unread=1
+      for p in ${PS__COMMIT_PATHS[@]+"${PS__COMMIT_PATHS[@]}"}; do
+        case $'\n'"$out" in *$'\n'"$p"$'\n'*) ;; *) out="$out$p"$'\n' ;; esac
+      done
+    done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  fi
+  if [ "$unread" = 1 ]; then printf 'UNKNOWN\n'; else printf '%s' "$out"; fi
 }
 
 # Does a git add in this command take more than the paths it names: `-A`, `--all`, `.`, `:/`, `*`
@@ -1714,8 +1878,7 @@ ps__commit_route() {
   PS__ROUTE=""
   case "$PS_RUN_SUB" in rebase|cherry-pick|revert|am|merge|pull) ;; *) return 1 ;; esac
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    # What closes a subshell or ends the command is the crude cut's, never the word's.
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     case "$a" in
       --abort|--quit) return 1 ;;
       --continue) [ "$PS_RUN_SUB" = merge ] && return 1; word=" --continue" ;;
@@ -1782,9 +1945,10 @@ ps__commit_route() {
 # Read as ps_unread_commit_route reads: in command position, by the order the commands are written
 # in, and with nothing to read the command, by the crude cut, which can only see more (L42).
 #
-# Not read here, and no gate reads them either: files a command writes before a git add or a commit
-# -a in the same command (git apply with no --index, git checkout -- <path>, or any program), and
-# git submodule add, which could not be measured.
+# Not read here: files a command writes before a git add or a commit -a in the same command (git
+# apply with no --index, git checkout -- <path>, or any program), which are ps_unread_write's, below
+# (claude-config#3113); a push that names another branch, which is ps_unread_push_source's (#3112);
+# and git submodule add, which could not be measured and which no gate reads.
 #
 # Prints `move` or `stage`, a space, and the route as written (`move git checkout`, `stage git stash
 # pop`) and returns 0; returns 1 otherwise. A move is named ahead of a staging route.
@@ -1854,7 +2018,8 @@ ps__commits_here() {
   [ "$PS_RUN_SUB" = commit ] && return 0
   [ "$PS_RUN_SUB" = merge ] || return 1
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    [ "${a%%[)\};]*}" = --continue ] && return 0
+    ps__word_end "$a"
+    [ "$PS__WORD" = --continue ] && return 0
   done
   return 1
 }
@@ -1874,8 +2039,7 @@ ps__move_or_stage() {
   # One pass over the words: the first that is no option, how many are no option before and after a
   # `--`, how many options are anything but -q, and the flags each command's rule turns on.
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    # What closes a subshell or ends the command is the crude cut's, never the word's.
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     # A redirection is among the words read and is none of git's: `git checkout -b new 2>&1` names
     # one word, new. Written apart from its file (`> out.txt`), the file is the next word.
@@ -1944,6 +2108,515 @@ ps__move_or_stage() {
   esac
   [ -n "$kind" ] || return 1
   PS__ROUTE="git $PS_RUN_SUB$word"; PS__ROUTE_KIND="$kind"
+}
+
+# ---- files written, then staged, committed and pushed in one command (claude-config#3113) ----
+# The gates read the working files as they stand BEFORE the command runs. A command that writes a
+# file and then stages, commits and pushes it sends lines no gate read: the real style gate exited 0
+# on `cp held.txt notes/copied.md && git add -A && git commit -m x && git push`, and exited 2 on the
+# add, commit and push once the copy was already made. Measured the same for a copy onto a tracked
+# file before a commit -a or a commit naming the path, an append by redirection, sed -i, git apply
+# with no --index, and a script.
+#
+# What a program will write is nowhere to be read before it runs, so this refuses, once, as the two
+# questions above do: run as two commands, the files are written when the gates read them.
+#
+# The rule is by the state reached, never by a list of programs that write (L247, L96): ANY command
+# before the staging step counts, unless it is one measured to change no file. Those are:
+#   cd, pushd, popd, true, :, test, [, [[, echo, printf, pwd, export, set, ls, cat, head, tail,
+#   grep, wc, sleep, and what closes a block (fi, done, esac), with no output sent into a file;
+#   git status, diff, log, show, rev-parse, rev-list, branch, tag, fetch, remote, ls-files,
+#   merge-base, describe, and a checkout -b or switch -c of a new name alone, with no --output and
+#   no output sent into a file; and a git add or git commit, which stage or commit and write nothing.
+# Each was run in a throwaway repository with the files hashed before and after. A redirection to
+# /dev/null or to another descriptor (2>&1) writes no file. A wrapper whose commands were read
+# (bash -c '...') is judged by them; a script file, or a wrapper nobody can read into, may write.
+#
+# It counts only in this order: something that may write, then a staging step (a git add, or a
+# commit that takes files itself: -a, paths it names, or a list of them in a file), then a commit
+# (that same one will do), then a push. A write after the last staging step is not in the commit; a
+# write nothing stages is not either; and with no push nothing is sent.
+#
+# The cost is small where it was counted: on the personal MacBook, in the transcripts of the 45
+# days to 2026-11-16, of about 4,005 Bash calls that ran a push, 11 staged, committed and pushed in
+# one command, and 2 of those ran anything outside the list first (both building a throwaway
+# repository), by a pattern written beside this code, which sizes the cost and proves nothing about
+# what this function matches (L107). The work MacBook is not counted.
+#
+# Read as the two questions above read: in command position, by the order the commands are written
+# in, and with nothing to read the command, by the crude cut, where a segment is let stand only when
+# its first word is one of the commands above that is no git: which subcommand a git runs is the
+# reader's to say, so with no reader any git but an add, a commit or a push may write.
+#
+# Prints what may write, as written (`cp`, `git apply`, `echo into a file`), and returns 0; returns
+# 1 otherwise.
+ps_unread_write() {   # $1 = the command
+  local cmd="$1" rc i end seg prog wrote="" stale="" taken=0 loop_input
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *commit*|*merge*) ;; *) return 1 ;; esac
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      # ps_runs_at leaves the subcommand this record does run, and its words, for the readers below.
+      if ps_runs_at git "$i" push; then
+        [ "$taken" = 1 ] && { printf '%s' "$stale"; return 0; }
+      elif ps__commits_here; then
+        ps__commit_takes
+        if [ -n "$wrote" ] && [ -z "$stale" ]; then
+          if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || [ "$PS__COMMIT_ALL" = 1 ]; then
+            stale="$wrote"
+          fi
+        fi
+        [ -n "$stale" ] && taken=1
+      elif [ "$PS_RUN_SUB" = add ]; then
+        [ -n "$wrote" ] && [ -z "$stale" ] && stale="$wrote"
+      elif [ -z "$wrote" ]; then
+        prog=""; read -r prog _ <<< "${PS__R_CMD[$i]}" || true
+        case "${PS__R_WRAP[$i]}" in
+          # A script file, or a wrapper whose string nobody can read: what it runs is not known.
+          *$'\x1d'*) wrote="${prog:-${PS__R_WRAP[$i]%%$'\x1d'*}}" ;;
+          '') ps__words_at "$i"; ps__may_write "$prog" && wrote="$PS__WRITER" ;;
+          # A wrapper whose commands were read: they are records of their own, right after it.
+        esac
+      fi
+      i=$((i + 1))
+    done
+    return 1
+  fi
+  loop_input="$(ps__crude_cut "$cmd")" || true
+  while IFS= read -r seg; do
+    case "$seg" in *[![:space:]]*) ;; *) continue ;; esac
+    if ps_runs_git "$seg" push; then
+      [ "$taken" = 1 ] && { printf '%s' "$stale"; return 0; }
+      continue
+    fi
+    if ps_runs_git "$seg" commit || { ps_runs_git "$seg" merge && ps__commits_here; }; then
+      ps__commit_takes
+      if [ -n "$wrote" ] && [ -z "$stale" ]; then
+        if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || [ "$PS__COMMIT_ALL" = 1 ]; then
+          stale="$wrote"
+        fi
+      fi
+      [ -n "$stale" ] && taken=1
+      continue
+    fi
+    if ps_runs_git "$seg" add; then
+      [ -n "$wrote" ] && [ -z "$stale" ] && stale="$wrote"
+      continue
+    fi
+    [ -z "$wrote" ] || continue
+    ps__crude_program "$seg"
+    ps__may_write "$PS__PROG" && wrote="$PS__WRITER"
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  return 1
+}
+
+# The words of the record at $1 of a reading this shell holds, into PS__W.
+PS__W=()
+ps__words_at() {   # $1 = record index
+  local n
+  PS__W=()
+  [ -n "${PS__R_WORDS[$1]}" ] || return 0
+  # To the end of the field, never a line; the here string's one newline comes off the last word.
+  IFS=$'\x1f' read -r -d '' -a PS__W <<< "${PS__R_WORDS[$1]}" || true
+  n=$(( ${#PS__W[@]} - 1 ))
+  # Tested before it is removed, as in ps__read: a removal that matches nowhere costs the square of
+  # the word's length on bash 3.2.
+  if [ "$n" -ge 0 ]; then case "${PS__W[$n]}" in *$'\n') PS__W[$n]="${PS__W[$n]%$'\n'}" ;; esac; fi
+  return 0
+}
+
+# With nothing to read the command: one segment of the crude cut as a program and its words (PS__W).
+# Past what opens a subshell or a block, reserved words and plain assignments. Only for
+# ps__may_write, which lets a segment stand on its FIRST word alone, so a word this cannot place (an
+# assignment holding a substitution) is the program, and one that is not on the list. A git is never
+# let stand here: which subcommand it runs is read in one place (lib/shell-words.py, asked through
+# ps_runs_git), and this does not keep a second reading of it by counting words (claude-config#1188,
+# lib/word-position-scan.py). PS_RUN_SUB is left empty, so ps__may_write judges the program alone.
+PS__PROG=""
+ps__crude_program() {   # $1 = one segment of ps__crude_cut
+  local w="" k=0 n
+  PS__PROG=""; PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=(); PS__W=()
+  read -r -a PS__W <<< "$1" || true
+  n=${#PS__W[@]}
+  while [ "$k" -lt "$n" ]; do
+    w="${PS__W[$k]}"
+    while :; do case "$w" in [\(\{]*) w="${w#?}" ;; *) break ;; esac; done
+    case "$w" in
+      ''|then|do|else|elif|if|while|until|'!'|time) ;;
+      [A-Za-z_]*=*) case "$w" in *'$('*|*'`'*) break ;; esac ;;
+      *) break ;;
+    esac
+    k=$((k + 1))
+  done
+  [ "$k" -lt "$n" ] || return 0
+  PS__PROG="$w"
+  # An rtk in front is looked past, and a program that is git is named with the word after it, so
+  # the refusal says `git apply` and not `git`. Whether the word is git is asked of the one reading
+  # of git (ps_runs_git, on the word with a subcommand after it), never compared here.
+  if [ "${w##*/}" = rtk ] && [ "$((k + 1))" -lt "$n" ]; then k=$((k + 1)); w="${PS__W[$k]}"; fi
+  if [ "$((k + 1))" -lt "$n" ] && ps_runs_git "$w status" status; then
+    ps__word_end "${PS__W[$((k + 1))]}"
+    PS__PROG="$w $PS__WORD"
+  fi
+  PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
+  return 0
+}
+
+# Does a command send output into a file? Asked of its words: `> f`, `>> f`, `2> f`, `&> f`, `>| f`,
+# with the file glued on or as the next word. /dev/null, and a copy of one descriptor onto another
+# (2>&1, >&2), write no file.
+ps__writes_out() {   # $@ = one command's words
+  local a next=0
+  for a in "$@"; do
+    if [ "$next" = 1 ]; then
+      next=0
+      [ "$a" = /dev/null ] || return 0
+      continue
+    fi
+    case "$a" in
+      [0-9]\>\&[0-9-]*|\>\&[0-9-]*) ;;
+      [0-9]\>|[0-9]\>\>|\>|\>\>|\&\>|\&\>\>|\>\||[0-9]\>\|) next=1 ;;
+      [0-9]\>*|\>*|\&\>*)
+        a="${a##*>}"; a="${a#|}"
+        [ "$a" = /dev/null ] || return 0 ;;
+    esac
+  done
+  [ "$next" = 1 ]
+}
+
+# May the command last read write a file? $1 is its program as written, PS_RUN_SUB and PS_RUN_ARGS
+# its git reading (PS_RUN_SUB empty when it is no git) and PS__W its words. Returns 1 only for the
+# commands the table above lists, measured to change no file; for anything else sets PS__WRITER to
+# what the refusal names and returns 0.
+PS__WRITER=""
+ps__may_write() {   # $1 = the program as written
+  local prog="${1##*/}" sub="$PS_RUN_SUB" a n=0 creates=0 other=0 file=0
+  PS__WRITER=""
+  if [ -n "$sub" ]; then
+    case "$sub" in
+      status|diff|log|show|rev-parse|rev-list|branch|tag|fetch|remote|ls-files|merge-base|describe) ;;
+      checkout|switch)
+        # Only a branch made where HEAD already is: one create option, one name, nothing else.
+        for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+          if [ "$file" = 1 ]; then file=0; continue; fi
+          if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
+          ps__word_end "$a"; a="$PS__WORD"
+          case "$a" in
+            ''|-q|--quiet) ;;
+            -b|-c|--create) creates=$((creates + 1)) ;;
+            -*) other=1 ;;
+            *) n=$((n + 1)) ;;
+          esac
+        done
+        if [ "$other" != 0 ] || [ "$creates" != 1 ] || [ "$n" != 1 ]; then PS__WRITER="git $sub"; return 0; fi ;;
+      *) PS__WRITER="git $sub"; return 0 ;;
+    esac
+    for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+      case "$a" in --output|--output=*) PS__WRITER="git $sub"; return 0 ;; esac
+    done
+    if ps__writes_out ${PS__W[@]+"${PS__W[@]}"}; then PS__WRITER="git $sub into a file"; return 0; fi
+    return 1
+  fi
+  # A program written with a folder in front (./cat, bin/test, scripts/set) is whatever file is
+  # there, never the command of that name the list measured, so it may write.
+  case "$1" in */*) PS__WRITER="$1"; return 0 ;; esac
+  case "$prog" in
+    '') return 1 ;;
+    cd|pushd|popd|true|:|test|'['|'[['|echo|printf|pwd|export|set|ls|cat|head|tail|grep|wc|sleep|fi|done|esac) ;;
+    *) PS__WRITER="$1"; return 0 ;;
+  esac
+  if ps__writes_out ${PS__W[@]+"${PS__W[@]}"}; then PS__WRITER="$prog into a file"; return 0; fi
+  return 1
+}
+
+# ---- a push that names what it sends (claude-config#3112) ----
+# Every gate reads the branch checked out: its range, from where it leaves the base to HEAD, and its
+# working files. A push can name something else: on feat, `git push origin other` sends the branch
+# other, and the real style gate exited 0 on a line only other holds, where the same push made from
+# a checkout of other exited 2. So did other:other, +other:refs/heads/x, a tag on other, and --all.
+#
+# What the push names is in the command, so it is READ first, and most of it is what the gates
+# already judged:
+#   HEAD, @, the branch checked out by its name (or as HEAD:<any name>): the gates read exactly this.
+#   $(git branch --show-current) and the three other spellings of the same (git rev-parse
+#   --abbrev-ref HEAD, git symbolic-ref --short HEAD, with or without --quiet): the branch checked out.
+#   a name this command makes where HEAD is before the push (git checkout -b, git switch -c, git
+#   branch <name>, git tag <name>): it holds what HEAD holds.
+#   anything whose commits are all in HEAD's history or already on the remote: a branch already
+#   pushed, main once the branch has merged it, a tag on HEAD, HEAD~1. The push then gives the
+#   remote nothing the gates did not read. Asked of git as
+#       git rev-list --count <source> --not HEAD --remotes=<the remote pushed to>
+#   and measured in a throwaway repository: 1 for a branch with a commit of its own, 0 for each of
+#   those. A remote named by a URL has no remote tracking refs here, so only HEAD's history counts.
+#   a deletion (--delete, -d, an empty source) and a dry run: nothing is sent.
+#
+# What is left cannot be judged from here, and is refused with its own kind (L11):
+#   other       the source holds commits that are neither in HEAD's history nor on the remote. The
+#               gates read this checkout's branch and files, never that one's, so the remedy is to
+#               push it from a checkout of it. --all, --branches, --mirror and --tags are asked the
+#               same of every branch, ref or tag they send.
+#   unresolved  the source is not a commit git can name before the command runs: a variable, a
+#               substitution, a pattern, or a name that is no branch, tag or commit here.
+#   moved       the command makes or moves the source before the push (git branch with a start point
+#               or a force, git tag the same, git fetch <src>:<name>, git worktree add -b), or
+#               commits before pushing a ref that is not the branch checked out, so where it will
+#               stand is not known when the gates run.
+#
+# Why refuse `other` rather than read that branch's range in every gate: several gates judge the
+# working files (the scanners run the suites in them, the test gate reads them), and the files here
+# are another branch's. A checkout of the branch is the one place every gate can judge it.
+#
+# What it costs could not be counted by a pattern: which branch was checked out when a push ran is
+# not in the transcripts (the recorded branch lags, and a cd carries over from an earlier call).
+# Asked instead of each checkout's own reflog, for the checkouts that still exist on the personal
+# MacBook on 2026-11-16: of 107 pushes naming a branch in the 45 days before, 104 named the branch
+# checked out there and 3 another one, all three from a main session, and none of the three can be
+# judged today because the branches are gone. The other 1,915 ran in worktrees since removed. So
+# pushing another branch does happen, rarely, and how many of those held unread commits is unknown.
+# The work MacBook is not counted.
+#
+# Not read: a push that names no refspec under push.default=matching or a remote.<name>.push
+# setting, which can send other branches too.
+#
+# Prints the kind, a space, and the source as written (`other other`, `unresolved $BRANCH`, `moved
+# v9`, `other --all`) for the first refspec that cannot be judged, and returns 0; returns 1 otherwise.
+PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
+ps_unread_push_source() {   # $1 = the command  $2 = the repository directory the push runs in (default .)
+  local cmd="$1" dir="${2:-.}" rc i end seg sub loop_input
+  PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      # ps_runs_at leaves the subcommand this record does run, and its words, for the readers below.
+      if ps_runs_at git "$i" push; then
+        if ps__push_sources "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
+      else
+        ps__ref_step
+      fi
+      i=$((i + 1))
+    done
+    return 1
+  fi
+  loop_input="$(ps__crude_cut "$cmd")" || true
+  while IFS= read -r seg; do
+    case "$seg" in
+      *push*) if ps_runs_git "$seg" push; then
+          if ps__push_sources "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
+          continue
+        fi ;;
+    esac
+    for sub in commit merge checkout switch branch tag fetch worktree; do
+      case "$seg" in *"$sub"*) ;; *) continue ;; esac
+      ps_runs_git "$seg" "$sub" || continue
+      ps__ref_step
+      break
+    done
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  return 1
+}
+
+# A ref's name without the folder git files it under, into PS__SHORT.
+PS__SHORT=""
+ps__short_ref() {   # $1 = a ref as written
+  PS__SHORT="${1#refs/heads/}"; PS__SHORT="${PS__SHORT#refs/tags/}"
+  PS__SHORT="${PS__SHORT#heads/}"; PS__SHORT="${PS__SHORT#tags/}"
+}
+
+# What the git command last read (PS_RUN_SUB, PS_RUN_ARGS) does to the names a later push may send,
+# for ps_unread_push_source: a commit is noted; a name made where HEAD is goes into PS__SRC_MADE (git
+# branch, git tag) or PS__SRC_MADE_CUR (git checkout -b, git switch -c, which also check it out);
+# a name made with a start point, forced, renamed, deleted, fetched into or made by git worktree add
+# goes into PS__SRC_MOVED. Where the words cannot say which, the name is taken as moved.
+ps__ref_step() {
+  local a n=0 opts=0 creates=0 skip=0 file=0 names=" " flag=""
+  case "$PS_RUN_SUB" in
+    commit) PS__SRC_COMMITTED=1; return 0 ;;
+    merge) ps__commits_here && PS__SRC_COMMITTED=1; return 0 ;;
+    checkout|switch|branch|tag|fetch|worktree) ;;
+    *) return 0 ;;
+  esac
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    if [ "$file" = 1 ]; then file=0; continue; fi
+    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
+    ps__word_end "$a"; a="$PS__WORD"
+    [ -n "$a" ] || continue
+    case "$PS_RUN_SUB" in
+      checkout|switch)
+        case "$a" in
+          -q|--quiet) ;;
+          -b|-c|--create) creates=$((creates + 1)) ;;
+          -*) opts=$((opts + 1)) ;;
+          *) n=$((n + 1)); ps__short_ref "$a"; names="$names$PS__SHORT " ;;
+        esac ;;
+      branch)
+        case "$a" in
+          -q|--quiet) ;;
+          -*) opts=$((opts + 1)) ;;
+          *) n=$((n + 1)); ps__short_ref "$a"; names="$names$PS__SHORT " ;;
+        esac ;;
+      tag)
+        case "$a" in
+          -a|-s|-e|-q|--annotate|--sign|--no-sign|--edit) ;;
+          -m|-F|-u|--message|--file|--local-user|--cleanup) skip=1 ;;
+          --message=*|--file=*|--local-user=*|--cleanup=*|-m?*|-F?*|-u?*) ;;
+          -*) opts=$((opts + 1)) ;;
+          *) n=$((n + 1)); ps__short_ref "$a"; names="$names$PS__SHORT " ;;
+        esac ;;
+      fetch)
+        case "$a" in
+          -*) ;;
+          *:?*) ps__short_ref "${a##*:}"; names="$names$PS__SHORT " ;;
+        esac ;;
+      worktree)
+        if [ "$flag" = b ]; then flag=""; ps__short_ref "$a"; names="$names$PS__SHORT "
+        else case "$a" in -b|-B) flag=b ;; esac; fi ;;
+    esac
+  done
+  [ "$names" != " " ] || return 0
+  case "$PS_RUN_SUB" in
+    checkout|switch)
+      [ "$opts" = 0 ] && [ "$creates" = 1 ] && [ "$n" = 1 ] && PS__SRC_MADE_CUR="$PS__SRC_MADE_CUR${names# }" ;;
+    branch|tag)
+      if [ "$opts" = 0 ] && [ "$n" = 1 ]; then PS__SRC_MADE="$PS__SRC_MADE${names# }"
+      else PS__SRC_MOVED="$PS__SRC_MOVED${names# }"; fi ;;
+    *) PS__SRC_MOVED="$PS__SRC_MOVED${names# }" ;;
+  esac
+  return 0
+}
+
+# Does this text open more round brackets than it closes? For putting back together a substitution
+# the reader cut at its spaces. Text longer than any refspec is not counted and is not open: it is
+# then judged as it stands, and a substitution in it cannot be resolved.
+ps__bracket_open() {   # $1 = text
+  local o c
+  [ "${#1}" -le 4096 ] || return 1
+  o="${1//[^(]/}"; c="${1//[^)]/}"
+  [ "${#o}" -gt "${#c}" ]
+}
+
+# The refspecs of the git push last read (PS_RUN_ARGS), judged in the repository at $1 by the rule
+# above. Sets PS__SOURCE to the kind and the source as written and returns 0 for the first that
+# cannot be judged; returns 1 when the gates read everything the push sends.
+PS__SOURCE=""
+ps__push_sources() {   # $1 = the repository directory
+  local dir="$1" a c skip=0 file=0 n=0 dry=0 del=0 wide="" remote="" src ref short cur count rs="" tag=0 revs part=""
+  local -a specs=()
+  PS__SOURCE=""
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # A substitution written with no quotes round it arrives cut at its spaces, `$(git`,
+    # `rev-parse`, `--abbrev-ref`, `HEAD)`, so it is put back together before anything is asked of
+    # a word: one of its pieces can look like an option, and the whole is what the push names. One
+    # that never closes is kept as it stands, and cannot be resolved.
+    if [ -n "$part" ]; then
+      part="$part $a"
+      if ps__bracket_open "$part"; then continue; fi
+      a="$part"; part=""
+    else
+      case "$a" in *'$('*) if ps__bracket_open "$a"; then part="$a"; continue; fi ;; esac
+    fi
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    if [ "$file" = 1 ]; then file=0; continue; fi
+    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
+    # What closes a subshell or ends the command is the crude cut's, never the word's; a
+    # substitution the reader handed over whole keeps its own bracket.
+    case "$a" in *'$('*|*'`'*) ;; *) ps__word_end "$a"; a="$PS__WORD" ;; esac
+    [ -n "$a" ] || continue
+    case "$a" in
+      --dry-run) dry=1 ;;
+      --delete) del=1 ;;
+      --all|--branches|--mirror) wide="$a" ;;
+      --tags) [ -n "$wide" ] || wide="$a" ;;
+      -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
+      --*) ;;
+      -?*)
+        # git push's short options are f, u, q, v, 4, 6, n (dry run), d (delete) and o, whose
+        # value is the rest of the word, or the next word when o ends the cluster. Only the letters
+        # before the o are options: an n or a d in its value (-onotify, -odeploy) is neither a dry
+        # run nor a deletion, and read as one it let the push through unjudged.
+        c="${a#-}"
+        case "$c" in
+          *o) skip=1; c="${c%%o*}" ;;
+          *o*) c="${c%%o*}" ;;
+        esac
+        case "$c" in *n*) dry=1 ;; esac
+        case "$c" in *d*) del=1 ;; esac ;;
+      *) if [ "$n" = 0 ]; then remote="$a"; else specs+=("$a"); fi; n=$((n + 1)) ;;
+    esac
+  done
+  # A substitution that never closed took every word after it: what the push names is in there.
+  [ -z "$part" ] || specs+=("$part")
+  # Nothing is sent by a dry run, and with --delete every refspec is a deletion.
+  [ "$dry" = 1 ] && return 1
+  [ "$del" = 1 ] && return 1
+  # With no commit yet there is nothing to compare against, and git refuses the push itself.
+  git -C "$dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1 || return 1
+  cur="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" || cur=""
+  if [ -z "$remote" ]; then
+    [ -z "$cur" ] || remote="$(git -C "$dir" config --get "branch.$cur.remote" 2>/dev/null)" || remote=""
+    [ -n "$remote" ] || remote=origin
+  fi
+  # Only a remote this repository has by that name has remote tracking refs to read.
+  case "$remote" in
+    ''|*[!A-Za-z0-9._/-]*) ;;
+    *) if git -C "$dir" config --get "remote.$remote.url" >/dev/null 2>&1; then rs="--remotes=$remote"; fi ;;
+  esac
+  if [ -n "$wide" ]; then
+    case "$wide" in --mirror) revs=--all ;; --tags) revs=--tags ;; *) revs=--branches ;; esac
+    count="$(git -C "$dir" rev-list --count "$revs" --not HEAD ${rs:+"$rs"} 2>/dev/null)" || count=""
+    case "$count" in
+      0) ;;
+      ''|*[!0-9]*) PS__SOURCE="unresolved $wide"; return 0 ;;
+      *) PS__SOURCE="other $wide"; return 0 ;;
+    esac
+  fi
+  for a in ${specs[@]+"${specs[@]}"}; do
+    # `tag <name>` is the tag of that name.
+    if [ "$a" = tag ] && [ "$tag" = 0 ]; then tag=1; continue; fi
+    src="${a#+}"
+    case "$src" in *:*) src="${src%%:*}" ;; esac
+    # An empty source deletes.
+    if [ -z "$src" ]; then tag=0; continue; fi
+    ref="$src"
+    if [ "$tag" = 1 ]; then ref="refs/tags/$src"; tag=0
+    else
+      case "$src" in
+        HEAD|@) continue ;;
+        '$(git branch --show-current)'|'$(git rev-parse --abbrev-ref HEAD)'|'$(git symbolic-ref --short HEAD)'|'$(git symbolic-ref --quiet --short HEAD)') continue ;;
+      esac
+      if [ -n "$cur" ]; then
+        case "$src" in "$cur"|"refs/heads/$cur"|"heads/$cur") continue ;; esac
+      fi
+    fi
+    case "$src" in *'$'*|*'`'*|*'*'*|*'?'*|*'['*) PS__SOURCE="unresolved $src"; return 0 ;; esac
+    ps__short_ref "$src"; short="$PS__SHORT"
+    case "$PS__SRC_MOVED" in *" $short "*) PS__SOURCE="moved $src"; return 0 ;; esac
+    if git -C "$dir" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1; then
+      # It stands somewhere now. A commit this command makes first may be what it is about to carry.
+      if [ "$PS__SRC_COMMITTED" = 1 ]; then PS__SOURCE="moved $src"; return 0; fi
+      count="$(git -C "$dir" rev-list --count "$ref" --not HEAD ${rs:+"$rs"} 2>/dev/null)" || count=""
+      case "$count" in
+        0) ;;
+        ''|*[!0-9]*) PS__SOURCE="unresolved $src"; return 0 ;;
+        *) PS__SOURCE="other $src"; return 0 ;;
+      esac
+    else
+      # It is nothing yet: read only when this command makes it where HEAD is before the push.
+      case "$PS__SRC_MADE$PS__SRC_MADE_CUR" in
+        *" $short "*) ;;
+        *) PS__SOURCE="unresolved $src"; return 0 ;;
+      esac
+    fi
+  done
+  return 1
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then
