@@ -291,7 +291,9 @@ page where he ticks what goes, and removes them through `disk-remove.sh` with th
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
-once Dan has decided to clear the orphaned Xcode caches it listed. Anything else goes through
+once Dan has decided to clear the orphaned Xcode caches it listed. Step 2's check also deletes, by
+itself, its own copies of a warning's readings once they are 14 days old (#3157), and nothing else.
+Anything else goes through
 `disk-remove.sh`, never a hand typed `rm`, `mv` or `trash`. It never removes a sync or cloud
 client's store, iCloud Drive, an app package, a Photos or photo editor library, the Mail or Messages
 stores, keys and credentials, or anything under /Applications or /System; it checks each item again

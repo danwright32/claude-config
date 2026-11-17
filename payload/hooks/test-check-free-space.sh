@@ -370,14 +370,16 @@ check "a fall that lasts after that same spike still fires" \
 kept_copies(){ # kept_copies <folder>: the copies the check named there, one per line
   ls -1 "$1" 2>/dev/null | grep -E '^free-space-warning-[A-Za-z0-9_]+-[0-9]+-exit[34]\.readings$' || true
 }
-count_copies(){ kept_copies "$1" | grep -c . || true; }
+count_copies(){ local l; l="$(kept_copies "$1")"; if [ -z "$l" ]; then echo 0; else grep -c . <<< "$l"; fi; }
+# The first of them, read into a variable rather than through head, which can cut the producer off.
+first_copy(){ local l; l="$(kept_copies "$1")"; printf '%s' "${l%%$'\n'*}"; }
 
 # A warning writes one copy, holding the verdict line, its exit code and the readings.
 S_K1="$TMPROOT/state-keep-one"; mkdir -p "$S_K1"
 probe "$((7 * GB))" "$T0" "$S_K1"; k1_msg="$PROBE_MSG"
 check "a warning keeps one copy of its readings" \
   "$([ "$(count_copies "$S_K1/warnings")" = 1 ] && echo ok || echo "copies: $(ls -1 "$S_K1/warnings" 2>&1 | tr '\n' ' ')")"
-k1_file="$S_K1/warnings/$(kept_copies "$S_K1/warnings" | head -1)"
+k1_file="$S_K1/warnings/$(first_copy "$S_K1/warnings")"
 check "the copy is named for the volume, the instant and the exit code" \
   "$([ "$(kept_copies "$S_K1/warnings")" = "free-space-warning-_fixture-$T0-exit3.readings" ] && echo ok || echo "named: $(kept_copies "$S_K1/warnings")")"
 check "the copy holds the verdict line the warning printed" \
@@ -408,7 +410,8 @@ check "the second copy holds every reading still in the window, the one with roo
 S_KLONG="$TMPROOT/state-keep-long"; mkdir -p "$S_KLONG"
 _t="$T0"; _i=0
 while [ "$_i" -lt 14 ]; do probe "$((7 * GB))" "$_t" "$S_KLONG"; _t=$((_t + 1800)); _i=$((_i + 1)); done
-# 14 readings half an hour apart span six and a half hours: one copy at T0, one at T0 + 6 hours.
+# The fixture's 14 readings (set here, not measured) half an hour apart span six and a half hours:
+# one copy at T0, one at T0 + 6 hours.
 check "a warning lasting past the window keeps one more copy per window, no more" \
   "$([ "$(count_copies "$S_KLONG/warnings")" = 2 ] && [ -f "$S_KLONG/warnings/free-space-warning-_fixture-$((T0 + 21600))-exit3.readings" ] && echo ok || echo "copies: $(kept_copies "$S_KLONG/warnings" | tr '\n' ' ')")"
 
@@ -425,13 +428,22 @@ S_KREP="$TMPROOT/state-keep-replay"; mkdir -p "$S_KREP"
 while read -r _t _b; do probe "$_b" "$_t" "$S_KREP"; done <<< "$SPIKE_NIGHT"
 _t=1794889062; _b=106140241920; _i=0
 while [ "$_i" -lt 18 ]; do _t=$((_t + 300)); _b=$((_b - 3 * GB)); _i=$((_i + 1)); probe "$_b" "$_t" "$S_KREP"; done
-rep_file="$S_KREP/warnings/$(kept_copies "$S_KREP/warnings" | head -1)"
+rep_file="$S_KREP/warnings/$(first_copy "$S_KREP/warnings")"
+# Matched with case on a variable, not a pipe into grep -q, which can cut the producer off.
+rep_copies="$(kept_copies "$S_KREP/warnings")"; rep_has4="no"
+case "$rep_copies" in *-exit4.readings*) rep_has4="yes" ;; esac
 check "a falling warning keeps a copy too, named for exit 4" \
-  "$(kept_copies "$S_KREP/warnings" | grep -q -- '-exit4\.readings$' && echo ok || echo "copies: $(ls -1 "$S_KREP/warnings" 2>&1 | tr '\n' ' ')")"
+  "$([ "$rep_has4" = yes ] && echo ok || echo "copies: $(ls -1 "$S_KREP/warnings" 2>&1 | tr '\n' ' ')")"
 S_KREP2="$TMPROOT/state-keep-replayed"; mkdir -p "$S_KREP2"; rep_rc=""
-while read -r _t _b; do probe "$_b" "$_t" "$S_KREP2"; rep_rc="$PROBE_RC"; done < <(grep -v '^#' "$rep_file" 2>/dev/null)
+rep_lines="$(grep -v '^#' "$rep_file" 2>/dev/null || true)"
+while read -r _t _b; do
+  [ -n "$_t" ] || continue
+  probe "$_b" "$_t" "$S_KREP2"; rep_rc="$PROBE_RC"
+done <<EOF
+$rep_lines
+EOF
 check "the copy's readings replayed through the check give the same exit 4" \
-  "$([ "$rep_rc" = 4 ] && echo ok || echo "replayed to exit '${rep_rc:-<no readings>}' from $(cat "$rep_file" 2>&1 | head -5)")"
+  "$([ "$rep_rc" = 4 ] && echo ok || echo "replayed to exit '${rep_rc:-<no readings>}' from $(sed -n 1,5p "$rep_file" 2>&1)")"
 rep_size="$(wc -c < "$rep_file" 2>/dev/null | tr -d ' ')"
 check "a copy of a busy night's readings stays small (under 8 KB)" \
   "$([ -n "$rep_size" ] && [ "$rep_size" -lt 8192 ] && echo ok || echo "size: ${rep_size:-unread} bytes")"
@@ -484,14 +496,21 @@ check "a FREE_SPACE_WARNING_KEEP_DAYS that is not a number is refused by name" \
 # keeps its exit code, the failure is said in one line, and nothing else spills out.
 S_KRO="$TMPROOT/state-keep-readonly"; mkdir -p "$S_KRO/warnings"; chmod 555 "$S_KRO/warnings"
 probe "$((7 * GB))" "$T0" "$S_KRO"; ro_msg="$PROBE_MSG"; ro_rc="$PROBE_RC"
-check "a copy that cannot be written leaves the warning's exit code alone" \
-  "$([ "$ro_rc" -eq 3 ] && echo ok || echo "exit $ro_rc")"
-check "a copy that cannot be written leaves the warning itself printed" \
-  "$(grep -q 'under the .* floor' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
-check "a copy that cannot be written is said, in exactly one line" \
-  "$([ "$(grep -ci 'could not keep a copy' <<< "$ro_msg")" = 1 ] && echo ok || echo "said: $ro_msg")"
-check "and the shell's own error does not spill into the warning" \
-  "$(! grep -qi 'permission denied\|no such file' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+# A user who can write into a mode 555 folder (root) cannot set this case up, so it says so rather
+# than reading as the check failing to say the copy was lost (L411).
+if ( : > "$S_KRO/warnings/.can-write" ) 2>/dev/null; then
+  rm -f "$S_KRO/warnings/.can-write"
+  check "a copy that cannot be written leaves the warning as it was" "UNMEASURED: this user can write into a mode 555 folder (root?), so a copy that cannot be written cannot be set up here"
+else
+  check "a copy that cannot be written leaves the warning's exit code alone" \
+    "$([ "$ro_rc" -eq 3 ] && echo ok || echo "exit $ro_rc")"
+  check "a copy that cannot be written leaves the warning itself printed" \
+    "$(grep -q 'under the .* floor' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+  check "a copy that cannot be written is said, in exactly one line" \
+    "$([ "$(grep -ci 'could not keep a copy' <<< "$ro_msg")" = 1 ] && echo ok || echo "said: $ro_msg")"
+  check "and the shell's own error does not spill into the warning" \
+    "$(! grep -qi 'permission denied\|no such file' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+fi
 # Once it can be written again, the same episode keeps its copy: a failed copy is retried.
 chmod 755 "$S_KRO/warnings"
 probe "$((7 * GB))" "$((T0 + 60))" "$S_KRO"
