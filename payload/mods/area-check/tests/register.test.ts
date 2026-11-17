@@ -1016,7 +1016,9 @@ test('a script handed a folder that cannot be read, is not there, or runs under 
 // stays held for the held files under it, as #2321 holds any script's. Since #2565 a write is placed
 // where it can be, and since #3022 a plain name in a folder made with bare mktemp is placed there, in
 // no file of the checkout. This check is still held: its copy's name holds a command's output
-// (`$scratch/$(basename "$d")`), and its inline perl program names no file it writes.
+// (`$scratch/$(basename "$d")`), and its inline perl program names no file it writes. The script
+// itself, in this repository's own checkouts, is let through by name since Dan's later decision
+// (2026-11-16, named.ts, named.test.ts); a script like it, as here, is read and held as before.
 const CHECK ='scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
 
 test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {

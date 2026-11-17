@@ -15,7 +15,8 @@
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
 #                      runs BEFORE the command, so a `git add … && git commit … &&
 #                      git push` has nothing in history yet and the pending work
-#                      must be folded in.
+#                      must be folded in. A `git merge --continue` is a commit too
+#                      (claude-config#3081).
 #   ps_add_scope / ps_pending_files: what that pending commit will take beyond
 #                      the index, as a scope word or as the files themselves
 #   ps_add_takes_all: does a git add in the command take more than it names
@@ -1009,7 +1010,18 @@ ps_has_override() {
 
 ps_commit_in_chain() {
   # A quote may stand either side, since the commit may be a string a shell or eval runs (#1478).
-  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]"'"'"']|$)' <<< "$1"
+  #
+  # git merge --continue commits too (claude-config#3081): with a merge in progress it makes the
+  # merge commit, exactly as git commit does there. Read as no commit, no gate folded that pending
+  # commit in, so a conflict resolution went out unread, and ps_pending_merge_of_default, which asks
+  # this, let a merge of main concluded that way through. It is the one spelling of git merge that
+  # concludes a merge (measured on git 2.51.1 with MERGE_HEAD present: a git merge with anything
+  # else, or nothing, is refused, and --continue takes no other argument). A git merge naming a
+  # branch STARTS a merge, of which nothing is in the index when a gate runs, so it is not one.
+  # One pattern with one reading of where a git starts, so the two spellings cannot come apart.
+  # --continue is the last word of its command, so a separator may follow it with no space between.
+  local runs_git='(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+'
+  grep -Eq "$runs_git"'(commit([[:space:]"'"'"']|$)|merge[[:space:]]+--continue([[:space:];&|"'"'"']|$))' <<< "$1"
 }
 
 # Does the command stage with a git add, and does its commit stage for itself with -a? Two
@@ -1560,12 +1572,16 @@ ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answe
 # push-scope-notice.sh refuses it, once, for every push gate, on this question.
 #
 # Asked with ps_commit_in_chain, the very question each gate asks before folding the pending commit
-# in, so it is true exactly where the gates would misread: a git merge --continue is not read as a
-# commit by them, nor here. Only a merge bringing in default branch commits HEAD lacks counts: a
-# merge of any other branch brings lines the gates never judged, which are the push's own and are
-# read right already. With no default branch known nothing can say what came from main, and the
-# gates judge the range whole as ps_merged_apart says; this answers no there rather than refusing a
-# push the separated form would judge no differently.
+# in, so it is true exactly where the gates would misread. That question counts a git merge
+# --continue as a commit since claude-config#3081, so `git merge --continue && git push` is refused
+# here like the commit form; before, it was read as no commit by the gates and by this, and went out
+# with nothing having read the merge commit.
+#
+# Only a merge bringing in default branch commits HEAD lacks counts: a merge of any other branch
+# brings lines the gates never judged, which are the push's own and are read right already. With no
+# default branch known nothing can say what came from main, and the gates judge the range whole as
+# ps_merged_apart says; this answers no there rather than refusing a push the separated form would
+# judge no differently.
 #
 # Every commit MERGE_HEAD names is read (an octopus merge names several). Prints the default branch
 # ref and returns 0 when the command concludes such a merge; returns 1 otherwise.
