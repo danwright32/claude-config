@@ -1331,9 +1331,11 @@ L313
 The background work, fixed wait and failure triggers read the added lines as code, with string
 contents and comments removed, so a word in a fixture argument or a comment does not fire. The
 destructive operation trigger reads every line of source as it stands, and in a shell, Python,
-JavaScript or TypeScript test file reads a string as data unless the line hands it to something
-that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a Python or
-TypeScript test file 51 times, every one a string or a comment). A file
+JavaScript, TypeScript or Swift test file reads a string as data unless the line hands it to
+something that runs it (claude-config#3071, #3083: on 3168 claude-config commits it had fired on a
+Python or TypeScript test file 51 times, every one a string or a comment; #3104: on 4163 commits of
+the local Swift repositories it had fired on a Swift test file 21 times, 18 of them a string or a
+comment). Go and Ruby tests are still judged whole, since no local repository holds one. A file
 the repository marks generated in `.gitattributes` is still scanned but its matches raise no
 lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
 never read, because they quote the very words the triggers look for. The same finding in the same
