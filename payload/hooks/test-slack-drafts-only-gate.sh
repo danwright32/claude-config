@@ -4085,6 +4085,23 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   warm="$(mktemp -d "$T/warm.XXXXXX")"
   cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 57 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "bash tests/test-claude-sync.sh is judged within 57 units of the yardstick, about half the budget (#2918)" "$cost"
+  # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
+  # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
+  # runner's own distribution, the premise of the ceiling (L316), could not be read from any log. A
+  # SUITE-NOTE is the one line the runner prints under a passing suite (#505). Composed from the cost
+  # log by matching, so a change to that log's shape that matches nothing is a failure here rather
+  # than a note that silently stops (L100).
+  case "$cost" in
+    "the line was refused"*) cold_note="refused it: ${cost:0:160}" ;;
+    *) cold_note="$(sed -n 's/^suite-cold .*: \([0-9][0-9.]* (.*)\)$/at \1/p' "$T/cost.log" | sed -n 1p)" ;;
+  esac
+  if [ -n "$cold_note" ]; then
+    printf 'SUITE-NOTE drafts gate on %s, bash tests/test-claude-sync.sh from an empty cache: %s (#3167)\n' "$(uname -s)" "$cold_note"
+    cold_note=ok
+  else
+    cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
+  fi
+  check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
   cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
