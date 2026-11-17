@@ -19,9 +19,12 @@
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that sets no value and runs the script once, with nothing but a change of folder
+#     command that gives it no setting and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts
-#     as the checkout left the default branch with them.
+#     as the checkout left the default branch with them. Since #3093 an equals sign holds the run
+#     only where it may set a value for the script, so one in a reader of its output does not, and
+#     a run behind a runner (env, sudo, timeout, a shell's own script) or after a change of folder
+#     that is not one folder written from /, ./, ../ or ~ is judged.
 #     Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 #     with the run, the other script let through by name included, is still judged.
 # What it cannot prove, said so it is never claimed (L460): what the real claude command, the real
@@ -72,9 +75,17 @@ lines="$(named_fact LINES)"
 # reading of them has gone blind, which would pass every check below it (L98).
 [ "${lines:-0}" -ge 5 ] && check "the lines that source a file are found" ok || check "the lines that source a file are found" "found ${lines:-none}: $listed"
 # It runs no program file: its perl is given on the command line, so a run found here is a text the
-# list would need. The reading is by spelling, so a message quoting a run after a bracket counts too:
-# the script's own message once did (#3115), and is worded so it does not.
+# list would need. The reading knows quoting (#3134), so a message quoting a run counts nothing.
 [ "$(named_fact RUNS)" = 0 ] && check "and it runs no program file the list would have to name" ok || check "and it runs no program file the list would have to name" "$(named_fact RAN | paste -sd';' -)"
+# Seven commands are named by a variable these texts set only from the environment, an argument or a
+# PATH lookup, or not at all, so each runs a program the environment
+# or PATH names, never a text of the checkout: the compiler ($tsc, from TSC_BIN or PATH), claude three
+# times ($bin, from CLAUDE_BIN or PATH), pinned-compiler.sh's two test hooks, and load-average.sh's
+# $cmd (its argument or LOAD_AVERAGE_CMD). One more is a command nobody has looked at, so the count is
+# exact (#3134).
+byvalue="$(named_fact BYVALUE)"
+[ "$(printf '%s\n' "$byvalue" | grep -c .)" = 7 ] && check "the commands named by a value no text sets are the seven known" ok \
+  || check "the commands named by a value no text sets are the seven known" "$(printf '%s\n' "$byvalue" | paste -sd';' -)"
 problems="$(named_fact PROBLEM)"
 [ -z "$problems" ] && check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" ok \
   || check "CHECK_MODS.texts is the script and exactly the files it and its libraries source" "$problems"
@@ -218,8 +229,10 @@ mkdir -p tools/typescript/node_modules; : > tools/typescript/node_modules/plante
 " whole "tools/typescript/node_modules/planted"
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 31 of the run's shape and its text, one for
-# each of the four libraries, and one for the other script let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 36
+# How many checks must run is set here, not measured: 56 of the run's shape and its text (31 before
+# #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
+# than the rule asks, two of a change of folder that leads nowhere, and three of one written with
+# `..`), one for each of the four libraries, and one for the other script let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 61
 
 finish

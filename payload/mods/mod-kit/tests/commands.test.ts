@@ -293,7 +293,7 @@ describe('pipeline: heredocs', () => {
     expect(pipeline('cat << EOF\nls\nEOF')).toEqual([{ words: ['cat', '<<', 'EOF'], heredocs: [{ word: 1, body: 'ls', quoted: false }] }])
     expect(pipeline('cat 0<<"END"\nx\nEND')).toEqual([{ words: ['cat', '0<<END'], heredocs: [{ word: 1, body: 'x', quoted: true }] }])
     expect(pipeline('sudo -E python3 - <<\\EOF\nprint(1)\nEOF')).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: true }], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: true }], behind: ['sudo'], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
     ])
   })
   test('<<- takes the leading tabs off its body', () => {
@@ -315,7 +315,7 @@ describe('pipeline: heredocs', () => {
   })
   test("a heredoc inside a shell's -c script feeds the command there", () => {
     expect(pipeline(`bash -lc 'python3 - <<EOF\nprint(1)\nEOF'`)).toEqual([
-      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
+      { words: ['python3', '-', '<<EOF'], heredocs: [{ word: 2, body: 'print(1)', quoted: false }], behind: ['bash'], language: 'python', program: { text: 'print(1)', stdin: true }, asWritten: true },
     ])
   })
   // The cat the substitution runs is a command of its own since #974, and since #2141 it is fed the
@@ -371,7 +371,7 @@ describe('the reader after #730', () => {
   })
   // #730: xargs gives the command after it its files from its own input, so no reader can name them.
   test('a command xargs runs is marked as given its operands by xargs', () => {
-    expect(pipeline('ls | xargs rm')).toEqual([{ words: ['ls'] }, { words: ['rm'], pipedFrom: ['ls'], xargs: true }])
+    expect(pipeline('ls | xargs rm')).toEqual([{ words: ['ls'] }, { words: ['rm'], pipedFrom: ['ls'], xargs: true, behind: ['xargs'] }])
     expect(pipeline('rm a')).toEqual([{ words: ['rm', 'a'] }])
   })
 })
@@ -1016,6 +1016,50 @@ describe('pipeline: the settings written in front of a command (#3093)', () => {
   })
   test('the commands only setting variables are given as before, carrying none', () => {
     expect(pipeline('F=x; bash s.sh', { assignments: true }).map(c => [c.words, c.env])).toEqual([[['F=x'], undefined], [['bash', 's.sh'], undefined]])
+  })
+})
+
+// #3093: the reader looks past the words that only run a command (`env -C copy bash s.sh` is read
+// as `bash s.sh`), and past a shell to the script it is given. Each can change the folder or the
+// environment the command runs in with no setting written (`env -C`, `env -i`, `env -u`, `sudo`,
+// a login shell), so a guard that knows a script by its plain run could not tell it from one behind
+// a runner. Each command says what it is run behind, in order, and a shell's script inherits it.
+describe('pipeline: what a command is run behind (#3093)', () => {
+  const behind = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.behind])
+  test('each runner looked past is named, in the order written, by its name alone', () => {
+    expect(behind('env -C copy bash s.sh d')).toEqual([['bash', ['env']]])
+    expect(behind('env -i bash s.sh d')).toEqual([['bash', ['env']]])
+    expect(behind('env -u TMPDIR bash s.sh d')).toEqual([['bash', ['env']]])
+    expect(behind('env --chdir=copy bash s.sh d')).toEqual([['bash', ['env']]])
+    expect(behind('/usr/bin/env -P /x bash s.sh d')).toEqual([['bash', ['env']]])
+    expect(behind(`env -S 'bash s.sh d'`)).toEqual([['bash', ['env']]])
+    expect(behind('sudo -u dan nohup nice -n 5 timeout 5 bash s.sh d')).toEqual([['bash', ['sudo', 'nohup', 'nice', 'timeout']]])
+    expect(behind('exec bash s.sh d')).toEqual([['bash', ['exec']]])
+    expect(behind('command bash s.sh d')).toEqual([['bash', ['command']]])
+    expect(behind('time bash s.sh d')).toEqual([['bash', ['time']]])
+    expect(behind('ls | xargs bash s.sh')).toEqual([['ls', undefined], ['bash', ['xargs']]])
+    expect(behind('rtk git status')).toEqual([['git', ['rtk']]])
+    expect(behind('rtk proxy git status')).toEqual([['git', ['rtk']]])
+    expect(behind('flock /tmp/l bash s.sh d')).toEqual([['bash', ['flock']]])
+  })
+  test("a shell's script is run behind that shell, after what the shell itself is behind, and so is what find runs", () => {
+    expect(behind(`bash -c 'bash s.sh d'`)).toEqual([['bash', ['bash']]])
+    expect(behind(`bash -lc 'make; ls'`)).toEqual([['make', ['bash']], ['ls', ['bash']]])
+    expect(behind(`sudo zsh -c 'env make'`)).toEqual([['make', ['sudo', 'zsh', 'env']]])
+    expect(behind("bash <<'EOF'\nmake\nEOF")).toEqual([['make', ['bash']]])
+    expect(behind(`flock /tmp/l -c 'make'`)).toEqual([['make', ['flock', 'sh']]])
+    expect(behind(`bash -c 'echo $(git status)'`)).toEqual([['git', ['bash']], ['echo', ['bash']]])
+    expect(behind('find . -exec rm {} \\;')).toEqual([['find', undefined], ['rm', ['find']]])
+  })
+  test('a command typed as it runs is behind nothing: a reserved word, a cd, a pipe, a setting, a runner that is the command', () => {
+    expect(behind('bash s.sh d')).toEqual([['bash', undefined]])
+    expect(behind('! bash s.sh d')).toEqual([['bash', undefined]])
+    expect(behind('cd copy && bash s.sh d | tail -n 40')).toEqual([['cd', undefined], ['bash', undefined], ['tail', undefined]])
+    expect(behind('TMPDIR=x bash s.sh d')).toEqual([['bash', undefined]])
+    expect(behind('sudo ls; bash s.sh d')).toEqual([['ls', ['sudo']], ['bash', undefined]])
+    expect(behind('env')).toEqual([['env', undefined]])
+    expect(behind('command -v bash')).toEqual([['command', undefined]])
+    expect(behind('echo $(env true)')).toEqual([['true', ['env']], ['echo', undefined]])
   })
 })
 

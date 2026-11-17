@@ -772,6 +772,32 @@ test('a word built as the command runs is still held when the command also write
   expect(w.records().filter(x => x.kind === 'script-reads' && x.decision === 'passed')).toEqual([])
 })
 
+// Judging the scripts a built word is handed to failing mid way (here the session's folder, asked for
+// as the last step before their writes are judged) is no pass: the word is judged as one that cannot
+// be named, so the command is held (fail closed), and the one line said about it says so, never that
+// the command went ahead.
+test('a failure judging the scripts a built word is handed to holds the command, and says it was held (#3126)', KIT, async ($, on) => {
+  const command = `python3 measure.py ${STAMP}`
+  const w = world($, on)
+  w.files[`${APP}/measure.py`] = MEASURE_PY
+  // A clean run first, to count the times the session's folder is asked for: the last ask of the same
+  // command run again is the one under test.
+  expect((await bash($ as never, w, command)).result).toBe('done')
+  const once = w.ctl.cwdAsked
+  w.ctl.cwdThrowsOn = once * 2
+  const why = refusal(await bash($ as never, w, command, {}, 'b2'))
+  expect(w.ctl.cwdAsked).toBeGreaterThan(once * 2)
+  expect(why).toContain('cannot be read')
+  // The test engine words the failed ask itself, so the error is read back from the record.
+  const error = String(w.records(ERRORS)[0]?.error)
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', path: STAMP.slice(1, -1) })
+  const told = w.logs.filter(l => l.includes('area check'))
+  expect(told).toEqual([`The area check could not finish judging the scripts a word built as the command runs is handed to (${error}), so it judged that word as one it cannot name, which holds the command wherever a file could be held; the error is kept in ~/.claude-area-check/errors.jsonl.`])
+  expect(told.join(' ')).not.toContain('went ahead')
+  // Only the clean run's reading is on record: the failing one logged no pass.
+  expect(w.records().filter(x => x.kind === 'script-reads').length).toBe(1)
+})
+
 // A word the reader cannot close (a `$(`, `${`, `$[` or backtick it opens and never closes) is no word
 // the shell builds and hands on: the shell refuses the line, or reads on past it, so what the command
 // runs is not what was read. It is outside #3082's exemption, and is held even where the only script

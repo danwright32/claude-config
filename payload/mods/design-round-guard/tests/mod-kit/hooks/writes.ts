@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, pipeline, placed, readLine, type Command, type Line } from './commands.ts'
+import { git, pipeline, placed, readLine, type Command, type Line, type ReadOptions } from './commands.ts'
 import { codeOnly, codeTargets, codeVerdict } from './code.ts'
 import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
@@ -1401,14 +1401,16 @@ const lineFolders = (line: Line, cwd: string | undefined, home: string, inSubsti
  * with it); null where that cannot be followed (a variable the command did not set, cd -, a popd).
  * A reader asking about the folder a command acts on (is it live's question to GitHub about a merge)
  * asks this, so a `cd <other checkout> && ...` is never asked about in the session's folder (L237).
- * The folders are read with the assignments a reader otherwise drops, which `pipeline` does not give,
- * so its commands are matched to these in order and handed on exactly as it gives them.
+ * The folders are read with the assignments a reader otherwise drops, which `pipeline` gives only
+ * when asked, so its commands are matched to these in order and handed on exactly as it gives them.
+ * `opts` asks `pipeline` for more than the commands that run (#3093): with `assignments`, a command
+ * that only sets a value (`T=x;`) is given too, as its assignments, with the folder it stands in.
  */
-export const pipelineIn = (command: string, cwd: string, home: string): (Command & { folder: string | null })[] => {
+export const pipelineIn = (command: string, cwd: string, home: string, opts: ReadOptions = {}): (Command & { folder: string | null })[] => {
   const read = lineFolders(readLine(command, { assignments: true }), cwd, home)
   const same = (a: Command, b: Command) => a.words.length === b.words.length && a.words.every((w, i) => w === b.words[i])
   let at = 0
-  return pipeline(command).map(c => {
+  return pipeline(command, opts).map(c => {
     while (at < read.length && !same(read[at]?.c as Command, c)) at++
     const found = read[at++]
     return { ...c, folder: found?.folder ?? null }

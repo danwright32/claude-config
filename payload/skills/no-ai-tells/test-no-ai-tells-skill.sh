@@ -17,9 +17,25 @@
 #   5. on text Dan pastes in it suggests edits only;
 #   6. it never sends, posts or saves anything itself;
 #   7. the unconditional "suggestions only" lines that contradicted the callers are gone;
-#   8. no em or en dash in the skill.
+#   8. no em or en dash in the skill;
+#   9. a reply that reports checking or work opens with the verdict in one sentence, and the recap of
+#      what was checked comes out (see below);
+#  10. a reply in a thread is held to four steps: cut what the thread already gave the reader, shape
+#      the first line and each ask, match the writer's earlier messages, and put back any fact an ask
+#      needs (see below).
 # A control then removes one required phrase and confirms the check reports it, so a check that can
 # never fail is caught here rather than trusted.
+#
+# On 2026-11-17 a run read the whole list, checked a Slack reply and passed its opening, which listed
+# what the session had checked, said it all matched, and gave a deploy time and a pass count. Dan read
+# that opening as AI writing. The Wikipedia list is about articles and has no sign for a reply that
+# recaps the writer's own work, and the skill's own questions had none either, so nothing in the run
+# could have caught it.
+#
+# The rule written for that covered only the text before the first ask. Measured the same day on
+# five fresh runs of it: three reported that the cut had also removed a fact the reader needed, and
+# nothing in the skill reached a sentence inside an item that told the reader what they had written.
+# The skill checked sentence by sentence, and each such sentence reads fine alone.
 #
 # NO_AI_TELLS_SKILL points the suite at another copy, which is how a broken copy is shown to fail.
 set -uo pipefail
@@ -87,7 +103,40 @@ check "the description no longer limits the skill to suggestions" "$(lacks "$tex
 dashes="$(grep -n -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$SKILL" 2>/dev/null)"
 check "the no-ai-tells skill holds no em or en dash" "$([ -z "$dashes" ] && echo ok || echo "$dashes")"
 
+# ---- 9. a reply that reports checking or work opens with the verdict, not a recap ----
+check "the question list asks whether the opening recaps the writer's own work" "$(holds "$text" "Does the opening recap the writer's own work")"
+check "the skill has a section for a reply that reports checking or work" "$(holds "$text" "## A reply that reports checking or work")"
+check "the opening is the verdict in one sentence" "$(holds "$text" "The verdict, in one sentence")"
+check "the rule covers everything before the first ask" "$(holds "$text" "Everything before the first thing asked of the reader")"
+check "the recap is cut, never moved further down" "$(holds "$text" "cut from the message, never moved further down")"
+check "pass counts are named as part of the recap" "$(holds "$text" "pass counts")"
+check "the skill says why the Wikipedia list cannot catch it" "$(holds "$text" "has no sign for a reply that recaps the writer's own work")"
+
+# ---- 10. a reply in a thread: cut, shape, match, put back ----
+check "the question list sends a reply to the thread steps" "$(holds "$text" "Is the draft a reply in a thread")"
+check "the skill has a section for a reply in a thread" "$(holds "$text" "## A reply in a thread")"
+check "the thread is read before the steps run" "$(holds "$text" "read the thread first")"
+check "each sentence gives the reader something the thread has not" "$(holds "$text" "something they do not have from the thread")"
+check "the reasoning kept is what would change the reader's answer" "$(holds "$text" "would change whether the reader agrees or what they do")"
+check "the first line stands alone" "$(holds "$text" "The first line stands alone")"
+check "each item opens with what is asked" "$(holds "$text" "opens with what is asked")"
+check "the draft matches the writer's earlier messages" "$(holds "$text" "Match the writer's earlier messages")"
+check "earlier messages decide only what the list and the steps leave open" "$(holds "$text" "they decide what the sign list and these steps leave open")"
+check "a sign stays a finding when the earlier messages show it too" "$(holds "$text" "is still a finding when their earlier messages show it too")"
+check "the mention of the person addressed stays" "$(holds "$text" "A mention of the person the draft addresses stays")"
+check "a fact an ask needs is put back" "$(holds "$text" "Put back any fact an ask needs")"
+check "the fact goes back beside the ask it serves" "$(holds "$text" "beside that ask")"
+check "the change list names each fact put back and each left out" "$(holds "$text" "name each fact put back and each left out")"
+check "a reply that asks nothing has an anchor" "$(holds "$text" "When the reply asks nothing")"
+check "the sources of the thread steps are credited" "$(holds "$text" "blader/humanizer")"
+
 # ---- control: the checks above can fail ----
+no_put_back="$(grep -v -F 'Put back any fact an ask needs' <<< "$text")"
+check "control: a copy without the put back step is caught" \
+  "$([ "$(holds "$no_put_back" "Put back any fact an ask needs")" != ok ] && echo ok || echo "the check passed a copy that lacks the phrase")"
+no_recap_rule="$(grep -v -F 'The verdict, in one sentence' <<< "$text")"
+check "control: a copy without the verdict rule is caught" \
+  "$([ "$(holds "$no_recap_rule" "The verdict, in one sentence")" != ok ] && echo ok || echo "the check passed a copy that lacks the phrase")"
 # The same check run on the skill with its offset line removed must report it missing. Without this a
 # helper that always printed ok would pass every check above on any text at all.
 broken="$(grep -v -F 'offset' <<< "$text")"
