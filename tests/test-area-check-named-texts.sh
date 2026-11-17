@@ -154,7 +154,7 @@ missed_by(){
       found=yes
       read_fixture "$LENIENT" "$id"
       # A copy that crashed prints no PROBLEM either, so the miss counts only from a copy that read
-      # the list to its end: its SCRIPT line is the last but the problems.
+      # the list to its end: the reader prints its SCRIPT line only once every text is read.
       if [ "$(fact SCRIPT)" != "tools/$id.sh" ]; then check "without $copy, $name is missed" "the copy did not run to its end: $(printf '%s\n' "$out" | sed -n '1,3p' | paste -sd';' -)"
       elif fact PROBLEM | grep -qF -- "$what"; then check "without $copy, $name is missed" "it was still held: $(fact PROBLEM | paste -sd';' -)"
       else check "without $copy, $name is missed" ok
