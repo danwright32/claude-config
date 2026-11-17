@@ -1988,9 +1988,17 @@ w51 path-renamed-chain.py 'import glob' 'q = glob.sys' "q$PATH51" 'import json'
 w51 path-from.py 'from glob import sys as s' "s$PATH51" 'import json'
 w51 path-default.py 'import sys' 'def go(m=sys):' "    m$PATH51" 'go()' 'import json'
 w51 path-unfollowed-name.py 'import pathlib' 'p = pathlib.PurePath("x").parser.sys' "p$PATH51" 'import json'
+# sys read off one of the script's own modules, whose attributes the gate does not read: the value
+# is one reached from a module and not known to be one, which is not the same as one reached from
+# no module, and a name bound to it was not taken as a name for sys (PR #3151 review; measured
+# 2026-11-17, path-own-module-name.py passed with exit 0 while path-own-module-chain.py, the same
+# read with no name in between, was refused).
+w51 lib_sys.py 'import sys'
+w51 path-own-module-chain.py 'import lib_sys' "lib_sys.sys$PATH51" 'import json'
+w51 path-own-module-name.py 'import lib_sys' 'q = lib_sys.sys' "q$PATH51" 'import json'
 for route in bltns.py bltns-renamed.py bltns-from.py bltns-open.py hook-env.py hook-from.py hook-renamed.py remote.py \
   path-call-chain.py path-module-chain.py path-as.py path-renamed.py path-renamed-chain.py path-from.py \
-  path-default.py path-unfollowed-name.py; do
+  path-default.py path-unfollowed-name.py path-own-module-chain.py path-own-module-name.py; do
   run_51 "python3 $route msg.json"
   read_refused "#3151 a route the gate did not read is refused: $route"
 done
@@ -2077,6 +2085,12 @@ run_51 "python3 reads-3151.py msg.json"
 allowed "#3151 the control: a read only script using enum, sys under another name, a path field and a field named sys passes"
 run_51 "python3 reads-3151.py $RULES"
 allowed "#3151 and handed the real rules file"
+# And the same narrowing for a value read off one of the script's own modules: a field called sys
+# there, bound to a name and read, is a field, and only a write to its path is refused.
+w51 lib_times.py 'class Times:' '    sys, user, path = 0.5, 1.5, "x"' 'now = Times()'
+w51 own-module-field.py 'import lib_times' 'q = lib_times.now.sys' 'p = lib_times.now.path' 'print(q, round(q), p.upper())'
+run_51 "python3 own-module-field.py msg.json"
+allowed "#3151 and a field named sys read off one of the script's own modules into a name passes"
 
 echo
 

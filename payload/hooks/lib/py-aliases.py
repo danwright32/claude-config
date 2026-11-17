@@ -280,7 +280,9 @@ def make(inert):
         `import sys as s`, `q = sys` and `q = glob.sys` each changed where Python finds modules
         unseen. as_sys holds a name an import binds to something called sys, and a name bound to
         sys, to another such name, or to an attribute called sys of a value that is not followed
-        (`p = pathlib.PurePath("x").parser.sys`), by any binding read here."""
+        (`p = pathlib.PurePath("x").parser.sys`) or is not known to be a module or not, as one read
+        off one of the script's own modules is (`q = lib_sys.sys`, PR #3151 review), by any binding
+        read here."""
         ways = imported(nodes, local)
         holds = {}
         as_sys = {a.asname or a.name for node in nodes if isinstance(node, (ast.Import, ast.ImportFrom))
@@ -323,7 +325,8 @@ def make(inert):
             v = value(expr)
             if name not in as_sys and name != "sys" and (
                     v is sys or (isinstance(expr, ast.Name) and expr.id in as_sys)
-                    or (v is NOTHING and isinstance(expr, ast.Attribute) and expr.attr == "sys")):
+                    or ((v is NOTHING or v is UNKNOWN)
+                        and isinstance(expr, ast.Attribute) and expr.attr == "sys")):
                 as_sys.add(name)
                 changed[0] = True  # a name bound to this one, read before it, is read again
             if v is NOTHING:
