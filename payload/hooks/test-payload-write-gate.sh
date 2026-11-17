@@ -584,6 +584,8 @@ runbash "for i in 1; do
 printf '$QUOTED_LINES'
 done > $FIX/elsewhere/s.sh; bash $FIX/elsewhere/s.sh" "$FIX/dev"
 refused "#3152 and written by a loop around it to a script the command then runs"
+runbash "f=$FIX/elsewhere/s.sh; printf '$QUOTED_LINES' > \"\$f\"; bash $FIX/elsewhere/s.sh" "$FIX/dev"
+refused "#3152 and written to a file a variable names, which the command then runs"
 runbash "printf(){ sh; }; printf '$QUOTED_LINES'" "$FIX/dev"
 refused "#3152 and printed by a printf the command defines as a function"
 runbash "alias echo=sh; echo '$QUOTED_LINES'" "$FIX/dev"

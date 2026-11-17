@@ -412,7 +412,8 @@ def add(tok, base):
 # after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
 # Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
 #
-# One narrowing (Dan, 2026-11-11, the middle path, claude-config#2722): a body only cat or tee copies
+# Two narrowings. The single quoted arguments of a plain printf or echo (claude-config#3152,
+# printed_as_text, below). And (Dan, 2026-11-11, the middle path, claude-config#2722): a body only cat or tee copies
 # into files named on the command line is text, so the paths it names are not write targets. Where
 # that command writes is still judged, from its own words, and the substitutions the shell runs in
 # an unquoted body are still read as commands below. Every other consumer (a shell, sh -s, python,
@@ -581,6 +582,9 @@ def printed_as_text(cmd):
         spans, files = single_quoted(text), written_files(text)
         if not spans or files is None:
             continue
+        # A file named by a value or a pattern only the shell can work out may be the one run after.
+        if any(re.search(r"[$`*?\[]", f) for f in files):
+            continue
         rest = cmd[:p["start"]] + cmd[p["end"]:]
         if any(os.path.basename(f.rstrip("/")) in rest for f in files):
             continue
@@ -614,7 +618,8 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the
 # segments of the whole command above, which still read every line of it, heredoc bodies included,
-# except a body only cat or tee copies into a named file, which is blank there (claude-config#2722).
+# except a body only cat or tee copies into a named file, which is blank there (claude-config#2722),
+# and the single quoted arguments of a plain printf or echo, blank the same way (claude-config#3152).
 # So are the commands inside a substitution, which those segments never read as commands of their
 # own, those in the body of a heredoc whose end marker is unquoted among them, since the shell runs
 # them too (claude-config#2053). And with a heredoc, every command it runs, each in the directory it

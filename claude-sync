@@ -12010,12 +12010,6 @@ hold_live_left(){
 # there is none to renew, since then the hold it meant to keep has already run out or been lifted.
 # A renewal never SHORTENS the hold; asking for less than it already has keeps the longer one and
 # says so.
-# The hold and release lines of the usage block at the top of this file, so `hold --help` says
-# exactly what `help` says about holding and cannot drift from it.
-hold_usage(){
-  awk 'NR > 1 && /^# *Env overrides/ { exit } NR > 1 && /^#   claude-sync (hold|release)/' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-}
-
 do_hold(){   # [--extend]  $1 = minutes, --help, or the label's first word (optional)  $2.. = why (optional)
   local extend=0
   if [ "${1:-}" = --extend ]; then extend=1; shift; fi
@@ -12105,6 +12099,12 @@ HOLDROWS
 $rows
 HOLDROWS
   return 0
+}
+
+# The hold and release lines of the usage block at the top of this file, so `hold --help` says
+# exactly what `help` says about holding and cannot drift from it.
+hold_usage(){
+  awk 'NR > 1 && /^# *Env overrides/ { exit } NR > 1 && /^#   claude-sync (hold|release)/' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # Lifts the caller's OWN hold, and a hold nobody owns (one taken outside any session, or written
