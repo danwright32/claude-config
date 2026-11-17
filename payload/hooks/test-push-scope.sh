@@ -410,8 +410,9 @@ git init -q "$BR/empty" 2>/dev/null
 # bounds are settings, sized from what each question was measured to take on the personal MacBook
 # on 2026-11-16, with room for a loaded machine (L290). What a push sends and what a command writes
 # took 9 seconds on the 1.6 MB command and get 60, where the fault kept both past 60. What a commit
-# takes took 37 to 54 seconds, 28 of them the reading of the adds (ps__read_adds), which this
-# change does not touch, and gets 240, where the fault kept it past 240.
+# takes took 37 to 54 seconds, 28 of them the reading of the adds (ps__read_adds), which #3111
+# did not touch, and gets 240, where the fault kept it past 240. #3125 made that reading linear and
+# bounds it on its own, below; 240 is left as it was.
 # shellcheck source=lib/bounded-run.sh
 . "$DIR/lib/bounded-run.sh" || { echo "FAIL: cannot source $DIR/lib/bounded-run.sh"; exit 1; }
 LONG_BOUND=60

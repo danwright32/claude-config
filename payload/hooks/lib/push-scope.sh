@@ -1158,7 +1158,8 @@ except Exception:
 # The words of a segment, as shlex.split(posix=True) gives them, raising as it raises. shlex
 # builds a word a character at a time, adding to a string held on itself, which python copies
 # whole each time: a heredoc message is one word as long as the message, so the reading cost the
-# square of its length, 3 seconds at 399 KB and 34 at 1.6 MB (claude-config#3125). shell_split,
+# square of its length, 3 seconds at 399 KB and 34 at 1.6 MB, measured on the personal MacBook on
+# 2026-11-16 (claude-config#3125). shell_split,
 # from lib/shell-words.py, reads a piece at a time and gives the same words (claude-config#2918);
 # shlex is the reading only where that file cannot be loaded.
 split_words = getattr(shell_words, "shell_split", None) or (lambda s: shlex.split(s, posix=True))
