@@ -302,6 +302,9 @@ assert_contains "SQL in Prisma's queryRaw tagged template in a TypeScript test f
 R=$(make_repo fixturepyspark $'def teardown(spark):\n    spark.sql("DROP TABLE users")' tests/test_guard.py)
 out=$(run_hook "git push" "$R")
 assert_contains "SQL handed to spark.sql in a Python test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepysparkchain $'def teardown():\n    SparkSession.builder.getOrCreate().sql("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to sql on a call's result in a Python test fires" 'destructive data operation' "$out"
 R=$(make_repo fixturepydriversql $'def teardown(conn):\n    conn.exec_driver_sql("DELETE FROM users")' tests/test_guard.py)
 out=$(run_hook "git push" "$R")
 assert_contains "SQL handed to SQLAlchemy's exec_driver_sql in a Python test fires" 'destructive data operation' "$out"
