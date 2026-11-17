@@ -2854,6 +2854,53 @@ test("asleep, a batch whose close did not take leaves the tab the session's, on 
   expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c5' } as never)).toBe('ran')
   expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}read_page`, `${CHROME}tabs_close_mcp`])
 })
+// #3132: a created tab that leaves the group with no close of the session's (Dan closes it by hand,
+// Chrome restarts) is no longer the session's once a list of the group stops naming it, and its
+// number listed again later does not bring it back. Tabs 7 and 8 are the session's own.
+test("asleep, a created tab the group no longer lists is no longer the session's, a result with no list drops nothing, and the first list after a restart drops the rest (#3132)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const list = (ids: number[]) => `Tab Context:\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")${ids.map(t => `\n  • tabId ${t}: "App" ("http://localhost:3000/")`).join('')}`
+  const NOT_OWN = (tool: string, tab: number) => new RegExp(`did not use mcp__claude-in-chrome__${tool} on tab ${tab}, which this session did not create`)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'r1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r1', `Created new tab. Tab ID: 7\n${list([7])}`)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'r2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r2', `Created new tab. Tab ID: 8\n${list([7, 8])}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r3', `page\n${list([7, 8])}`)
+  // Dan closes tab 7 by hand. The next result, a read in tab 8, lists the group without it.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r4' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r4', `page\n${list([8])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r5' } as never)).toMatch(NOT_OWN('read_page', 7))
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'r6' } as never)).toMatch(NOT_OWN('navigate', 7))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'r7' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 7))
+  // The number 7 in a later list is some other tab: still not the session's, to use or to close.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r8' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r8', `{"availableTabs":[],"tabGroupId":1}\n\n\n${list([7, 8])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'r9' } as never)).toMatch(NOT_OWN('read_page', 7))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'r10' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 7))
+  // Chrome quits: a result with no list says nothing about the tabs, so tab 8 is still the session's.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r11' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r11', 'Browser extension is not connected. Please ensure the Claude browser extension is installed and running (https://claude.ai/chrome)')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r12' } as never)).toBe('ran')
+  // It comes back with a new group of one tab the session did not create: tab 8 is gone with the old one.
+  expect(await call($ as never, { tool: `${CHROME}tabs_context_mcp`, tool_use_id: 'r13' } as never)).toBe('ran')
+  await chromeResult($ as never, 'r13', '{"availableTabs":[],"tabGroupId":2}\n\n\nTab Context:\n- Available tabs:\n  • tabId 23: "New Tab" ("chrome://newtab/")')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 8, tool_use_id: 'r14' } as never)).toMatch(NOT_OWN('read_page', 8))
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 23, url: 'localhost:3000', tool_use_id: 'r15' } as never)).toMatch(NOT_OWN('navigate', 23))
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 23, tool_use_id: 'r16' } as never)).toMatch(NOT_OWN('tabs_close_mcp', 23))
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([
+    `${CHROME}tabs_create_mcp`,
+    `${CHROME}tabs_create_mcp`,
+    `${CHROME}read_page`,
+    `${CHROME}read_page`,
+    `${CHROME}tabs_context_mcp`,
+    `${CHROME}tabs_context_mcp`,
+    `${CHROME}read_page`,
+    `${CHROME}tabs_context_mcp`,
+  ])
+})
 // The failure paths of that record (#3099): both end with the tab not closable, never closable by default.
 const ownGroup = (also: string[] = []) => `Tab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 7: "App" ("http://localhost:3000/")${also.map(t => `\n  • tabId ${t}: "Docs" ("https://docs.example.com/")`).join('')}`
 const NOT_OPENED = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create and did not see appear in its tab group after its own action/

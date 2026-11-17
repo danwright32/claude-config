@@ -204,6 +204,19 @@ describe('pipelineIn: the folder each command runs in', () => {
     expect(folders('cd - && gh pr merge 12')).toEqual([['cd', CWD], ['gh', null]])
     expect(folders('pushd /w/other && popd && gh pr merge 12')).toEqual([['pushd', CWD], ['popd', '/w/other'], ['gh', null]])
   })
+  // #3093: a command that only sets a value (`T=x;`) runs nothing, so it is left out, and a guard
+  // that must know every value a line sets before a script could not see one. Asked for, it is
+  // given as its assignments, in its place, with the folder it stands in.
+  test('asked for, the commands that only set a value are given too, each in its place with its folder', () => {
+    const asked = (command: string) => pipelineIn(command, CWD, HOME, { assignments: true }).map(c => [c.words, c.env, c.folder])
+    expect(asked('T=x; cd /w/b && U=1 V=2; W=3 bash s.sh d')).toEqual([[['T=x'], undefined, CWD], [['cd', '/w/b'], undefined, CWD], [['U=1', 'V=2'], undefined, '/w/b'], [['bash', 's.sh', 'd'], ['W=3'], '/w/b']])
+    expect(asked('{ PATH=/x; bash s.sh d; }').map(c => c[0])).toEqual([['PATH=/x'], ['bash', 's.sh', 'd'], ['}']])
+    expect(asked(`bash -c 'T=x; make'`).map(c => c[0])).toEqual([['T=x'], ['make']])
+  })
+  test('not asked for, they are left out as before', () => {
+    expect(pipelineIn('T=x; cd /w/b && U=1; bash s.sh d', CWD, HOME).map(c => c.words)).toEqual([['cd', '/w/b'], ['bash', 's.sh', 'd']])
+    expect(pipelineIn('T=x; bash s.sh d', CWD, HOME, {}).map(c => c.words)).toEqual([['bash', 's.sh', 'd']])
+  })
 })
 
 describe('writes: copying, moving and linking', () => {

@@ -285,6 +285,46 @@ assert_contains "control: SQL in a tagged template in a TypeScript test still fi
 R=$(make_repo fixturetsprepare $'afterEach(() => {\n  db.prepare(\'DELETE FROM contacts\').run()\n})' api/contacts.test.ts)
 out=$(run_hook "git push" "$R")
 assert_contains "control: SQL handed to a prepare call in a TypeScript test still fires" 'destructive data operation' "$out"
+# The SQL runners #3122 added: Prisma's raw calls, whose names begin with a dollar sign, taken as a
+# call or as a tagged template, pyspark's and DuckDB's sql, and SQLAlchemy's exec_driver_sql.
+R=$(make_repo fixtureprismaexecunsafe $'afterEach(async () => {\n  await prisma.$executeRawUnsafe(\'DELETE FROM contacts\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to Prisma's executeRawUnsafe in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaexectag $'afterEach(async () => {\n  await prisma.$executeRaw`TRUNCATE contacts`\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL in Prisma's executeRaw tagged template in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaqueryunsafe $'afterEach(async () => {\n  await tx.$queryRawUnsafe(\'DELETE FROM contacts RETURNING id\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to Prisma's queryRawUnsafe in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismaquerytag $'afterEach(async () => {\n  await prisma.$queryRaw `DELETE FROM contacts RETURNING id`\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL in Prisma's queryRaw tagged template in a TypeScript test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepyspark $'def teardown(spark):\n    spark.sql("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to spark.sql in a Python test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepysparkchain $'def teardown():\n    SparkSession.builder.getOrCreate().sql("DROP TABLE users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to sql on a call's result in a Python test fires" 'destructive data operation' "$out"
+R=$(make_repo fixturepydriversql $'def teardown(conn):\n    conn.exec_driver_sql("DELETE FROM users")' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_contains "SQL handed to SQLAlchemy's exec_driver_sql in a Python test fires" 'destructive data operation' "$out"
+# And their controls: the same names where nothing is run. A mock asserted on (no call follows the
+# name), and a helper whose name only ends in sql or carries exec_driver_sql inside a longer word.
+R=$(make_repo fixtureprismamock $'test(\'purges\', async () => {\n  expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(\'DELETE FROM contacts\')\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a Prisma raw call's mock asserted on with SQL in a TypeScript test is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixtureprismalookalike $'test(\'purges\', async () => {\n  expect(fake$executeRawUnsafe(\'DELETE FROM contacts\')).toBe(true)\n})' api/contacts.test.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a name ending in executeRawUnsafe with no dot before its dollar sign in a TypeScript test is not a destructive data operation" 'destructive data operation' "$out"
+R=$(make_repo fixturepysqllookalike $'def test_renders():\n    assert query.to_sql("DROP TABLE users") == expected\n    assert fake.exec_driver_sql_calls == ["DELETE FROM users"]' tests/test_guard.py)
+out=$(run_hook "git push" "$R")
+assert_absent "a to_sql call and an exec_driver_sql lookalike in a Python test are not a destructive data operation" 'destructive data operation' "$out"
+# Overture's Swift test helpers throw an error case named sql with a message (ScaledCorpus.swift,
+# Phase0Corpus.swift: throw Failure.sql("open failed")). A type or an implicit member before .sql
+# is that, not a client running SQL.
+R=$(make_repo fixtureswiftsqlcase $'func purge() throws {\n    guard sqlite3_step(stmt) == SQLITE_DONE else { throw Failure.sql("DELETE FROM contacts failed") }\n    let e: Failure = .sql("DROP TABLE contacts")\n}' mac/AppTests/PurgeTests.swift)
+out=$(run_hook "git push" "$R")
+assert_absent "an error case named sql thrown with a message in a Swift test is not a destructive data operation" 'destructive data operation' "$out"
 R=$(make_repo fixturepyrun $'def teardown():\n    subprocess.run("rm -rf /var/data/customers", shell=True)' tests/test_guard.py)
 out=$(run_hook "git push" "$R")
 assert_contains "control: a removal handed to subprocess.run in a Python test still fires" 'destructive data operation' "$out"
