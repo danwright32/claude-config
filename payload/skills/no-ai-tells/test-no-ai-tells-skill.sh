@@ -17,9 +17,17 @@
 #   5. on text Dan pastes in it suggests edits only;
 #   6. it never sends, posts or saves anything itself;
 #   7. the unconditional "suggestions only" lines that contradicted the callers are gone;
-#   8. no em or en dash in the skill.
+#   8. no em or en dash in the skill;
+#   9. a reply that reports checking or work opens with the verdict in one sentence, and the recap of
+#      what was checked comes out (see below).
 # A control then removes one required phrase and confirms the check reports it, so a check that can
 # never fail is caught here rather than trusted.
+#
+# On 2026-11-17 a run read the whole list, checked a Slack reply and passed its opening, which listed
+# what the session had checked, said it all matched, and gave a deploy time and a pass count. Dan read
+# that opening as AI writing. The Wikipedia list is about articles and has no sign for a reply that
+# recaps the writer's own work, and the skill's own questions had none either, so nothing in the run
+# could have caught it.
 #
 # NO_AI_TELLS_SKILL points the suite at another copy, which is how a broken copy is shown to fail.
 set -uo pipefail
@@ -87,7 +95,19 @@ check "the description no longer limits the skill to suggestions" "$(lacks "$tex
 dashes="$(grep -n -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$SKILL" 2>/dev/null)"
 check "the no-ai-tells skill holds no em or en dash" "$([ -z "$dashes" ] && echo ok || echo "$dashes")"
 
+# ---- 9. a reply that reports checking or work opens with the verdict, not a recap ----
+check "the question list asks whether the opening recaps the writer's own work" "$(holds "$text" "Does the opening recap the writer's own work")"
+check "the skill has a section for a reply that reports checking or work" "$(holds "$text" "## A reply that reports checking or work")"
+check "the opening is the verdict in one sentence" "$(holds "$text" "The verdict, in one sentence")"
+check "the rule covers everything before the first ask" "$(holds "$text" "Everything before the first thing asked of the reader")"
+check "the recap is cut, never moved further down" "$(holds "$text" "cut from the message, never moved further down")"
+check "pass counts are named as part of the recap" "$(holds "$text" "pass counts")"
+check "the skill says why the Wikipedia list cannot catch it" "$(holds "$text" "has no sign for a reply that recaps the writer's own work")"
+
 # ---- control: the checks above can fail ----
+no_recap_rule="$(grep -v -F 'The verdict, in one sentence' <<< "$text")"
+check "control: a copy without the verdict rule is caught" \
+  "$([ "$(holds "$no_recap_rule" "The verdict, in one sentence")" != ok ] && echo ok || echo "the check passed a copy that lacks the phrase")"
 # The same check run on the skill with its offset line removed must report it missing. Without this a
 # helper that always printed ok would pass every check above on any text at all.
 broken="$(grep -v -F 'offset' <<< "$text")"
