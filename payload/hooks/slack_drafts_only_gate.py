@@ -1553,6 +1553,9 @@ DataNames = _data_names.make(MARKER, js_scan, py_marker, JS_SINK)
 ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, SH_PARAM, SH_UNKNOWN_DIR)
 # The modules a test file replaces with a mock, whose imports are not followed (claude-config#2359).
 _js_mocks = load_lib("js_mocks", "js-mocks.py")
+# The names a Python script gives a module beyond the one it imports it by, and a module put where
+# the gate does not follow it (claude-config#3102).
+py_follow = load_lib("py_aliases", "py-aliases.py").make(PY_INERT)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -6395,7 +6398,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         It is unable to only when every module it imports from outside the script's own files is in
         PY_INERT, and it uses no builtin in PY_RUNS, no attribute in PY_REACH (or any _private or
         dunder one bar PY_DUNDER_OK), no sys.path, no PY_WRITES method, and no open() or FileType
-        whose mode writes. A local module it imports is not judged here: modules() reaches it and
+        whose mode writes. A module given another name is read through that name as through the
+        imported one, and a module put where the next use of it cannot be read counts as acting
+        (py_follow, claude-config#3102). A local module it imports is not judged here: modules() reaches it and
         acts() judges it with this same reading, and an import placed nowhere is refused there. Text
         this python3 cannot parse counts as acting."""
         try:
@@ -6423,12 +6428,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         restricted = set()  # (a, b) for `import a.b` where only a.b is inert, so a.<other> acts
         os_names = set()  # the names os is imported by, each use of which is held to os_may
         os_may = OS_READS if writes else OS_FILES
+        local = set()  # the names bound by an import of the script's own, or of one placed nowhere
+        stdlib = set(getattr(sys, "stdlib_module_names", ())) | set(sys.builtin_module_names)
         for node in nodes:
             if isinstance(node, ast.Import):
                 for a in node.names:
                     top = a.name.split(".")[0]
                     bound.add(a.asname or top)
                     if self.resolve_py(0, a.name, (), cur_dir, root, inserts) != []:
+                        local.add(a.asname or top)
                         continue  # local (followed by modules()) or placed nowhere (refused there)
                     # `import os.path` binds os as `import os` does, so it is held the same way.
                     if a.name == "os" or (a.name == "os.path" and not a.asname):
@@ -6450,17 +6458,29 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         return f"imports {n} from {node.module or '.'}, which reaches past what the gate reads"
                 module = node.module or ""
                 if node.level or self.resolve_py(0, module, names, cur_dir, root, inserts) != []:
+                    local.update(a.asname or a.name for a in node.names)
                     continue
                 if module == "sys" and "path" in names:
                     return "changes where Python finds modules (sys.path)"
-                if (not writes and module in PY_FILES) or (module == "os" and all(n in os_may for n in names)):
-                    continue
-                if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
+                if module == "os" and all(n in os_may for n in names):
+                    continue  # os's own calls by name: `from os import stat` is not the stat module
+                if not (not writes and module in PY_FILES) and \
+                        module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
                         not all(f"{module}.{n}" in PY_INERT for n in names) and not self.py_inert_unless(module, text):
                     return f"imports {module}, {unknown}"
+                # `from glob import os` is glob.os written as an import (claude-config#3102). sys
+                # holds no module but sys.modules, and `from sys import platform` is a string. A
+                # module inline code may import for its files (PY_FILES) is read here like any other.
+                for n in names:
+                    if module != "sys" and n in stdlib and n not in PY_INERT and f"{module}.{n}" not in PY_INERT:
+                        return f"imports {n} from {module}, which reaches the {n} module through {module}"
         # A module's namespace holds the modules it imported (pathlib.os, os.path.os, json.codecs), so
         # an attribute chain from an imported name may not name a standard library module off the list.
-        stdlib = set(getattr(sys, "stdlib_module_names", ())) | set(sys.builtin_module_names)
+        # A name such a module is bound to beyond its import is read the same way, and a module put
+        # where the gate does not follow it is refused once everything else has been read
+        # (lib/py-aliases.py, claude-config#3102).
+        renamed, handed_on = py_follow(nodes, local)
+        bound |= renamed
         called = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
         cleared = set()  # id() of each restricted name used as a.<its inert submodule>
         for node in nodes:
@@ -6517,7 +6537,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
                                                  and not set(mode.value) & set("wax+")):
                         return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
-        return None
+        return handed_on
 
     def shell_acts(self, body, d, zero=False, depth=0):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what
