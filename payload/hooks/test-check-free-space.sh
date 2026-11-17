@@ -215,11 +215,13 @@ check "a real fall that starts after a build recovered still states its rate" \
   "$(grep -qi 'per hour' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
 check "and still fires, because zero is inside the horizon" \
   "$([ "$after_rc" -eq 4 ] && echo ok || echo "exit $after_rc, said: $after_msg")"
-# From the recovery at T0 - 4200 to the most free space seen in the last 30 minutes, the 90 GB at
-# T0 - 1400: 46 minutes. Measured from before the recovery (T0 - 5400) it would be 66, which reads
-# as 1 hour, so the figure tells the two apart (claude-config#1754). Fixture times, not measured.
-check "and measures from the recovery, not from before it" \
-  "$(grep -qi 'over 46 minute(s)' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
+# From the level the recovery held for 30 minutes (the 120 GB at T0 - 2800, the least seen in the 30
+# minutes from the recovery at T0 - 4200, claude-config#3153) to the most free space seen in the
+# last 30 minutes, the 90 GB at T0 - 1400: 23 minutes. Measured from the recovery's own reading it
+# was 46, and from before the recovery (T0 - 5400) it would be 66, which reads as 1 hour, so the
+# figure tells all three apart (claude-config#1754). Fixture times, not measured.
+check "and measures from the level the recovery held, not from before it" \
+  "$(grep -qi 'over 23 minute(s)' <<< "$after_msg" && echo ok || echo "said: $after_msg")"
 
 # A RECOVERY OF A FEW BYTES IS NOISE, NOT A RECOVERY. Every write and delete on a live machine
 # jitters the reading, so a rule that refused on any increase at all would refuse always, which is
@@ -289,6 +291,73 @@ for _reading in -30:360 -20:360 -10:361 0:360 5:335 10:316; do
 done
 check "with the persistence window set to 0 the same burst is projected, so the window is what refuses it" \
   "$([ "$PROBE_RC" -eq 4 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# ---- A SPIKE UP THAT DOES NOT LAST IS NOT A BASELINE (claude-config#3153) ----
+# The readings below are the real ones this check kept on Daniels-MacBook-Pro-2 on the night of
+# 2026-11-16, copied from its readings file (epoch seconds, free bytes), not shaped to the rule. At
+# 22:17 ET free space fell from 121 GB to 62 GB; at 22:33 it jumped to 196 GB for about three
+# minutes; by 22:41 it was back at 108 GB, and it sat at 105 to 106 GB from then on. At 23:16 ET the
+# check said "falling at about 204.5 GB per hour, measured over 26 minute(s) and counting only space
+# that has stayed gone for 30 minutes, which reaches zero in under an hour" and exited 4.
+#
+# The persistence rule (#1754) makes the NEWER end of the rate a level the disk has held for 30
+# minutes. The OLDER end, after a recovery, was the reading the disk recovered TO: here the 196 GB
+# spike, which held for three minutes. The 90 GB between that spike and the flat level had indeed
+# stayed gone for 30 minutes, but it had never been free for longer than three, so a rise that did
+# not last was read as space since lost. At no reading of that night may the check project zero.
+S_SPIKE="$TMPROOT/state-spike-3153"; mkdir -p "$S_SPIKE"
+SPIKE_NIGHT="1794883671 121761333248
+1794883746 121720897536
+1794884531 121229537280
+1794884542 121226928128
+1794884775 121173667840
+1794884776 121173475328
+1794885447 62133657600
+1794885708 61934665728
+1794885886 61855985664
+1794886389 196362051584
+1794886390 196305543168
+1794886587 151587049472
+1794886889 108202409984
+1794887139 108382830592
+1794887786 105763487744
+1794887976 106209177600
+1794888109 105271422976
+1794888382 106106880000
+1794888383 106103205888
+1794889013 105956319232
+1794889018 105980194816
+1794889038 106025984000
+1794889039 106025930752
+1794889052 105185943552
+1794889062 106140241920"
+spike_fired=""
+while read -r _t _b; do
+  probe "$_b" "$_t" "$S_SPIKE"
+  if [ "$PROBE_RC" -eq 4 ] || grep -qi 'per hour' <<< "$PROBE_MSG"; then
+    spike_fired="$spike_fired [$_t: exit $PROBE_RC, said: $PROBE_MSG]"
+  fi
+done <<< "$SPIKE_NIGHT"
+check "the real night of 2026-11-16, a three minute spike up to 196 GB, never projects zero at any reading" \
+  "$([ -z "$spike_fired" ] && echo ok || echo "$spike_fired")"
+# And --report at the moment the warning fired says it is not falling, and why, rather than going
+# quiet with no reason (L540).
+rprobe 106140241920 1794889070 "$S_SPIKE"
+check "--report after that spike says it is not falling, naming the rise that did not last" \
+  "$([ "$PROBE_RC" -eq 0 ] && ! grep -qi 'per hour' <<< "$PROBE_MSG" && grep -qi 'not falling' <<< "$PROBE_MSG" && grep -qi 'went back up' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# THE CONTROL (L159, L248): the same real night, then a fall that lasts. From 23:22 ET free space
+# drops 3 GB every five minutes, 36 GB an hour, which empties 106 GB inside the six hour horizon.
+# These later readings are the fixture's, not measured. The check must still say so.
+S_SPIKE_FALL="$TMPROOT/state-spike-then-fall"; mkdir -p "$S_SPIKE_FALL"
+while read -r _t _b; do probe "$_b" "$_t" "$S_SPIKE_FALL"; done <<< "$SPIKE_NIGHT"
+_t=1794889062; _b=106140241920; _i=0
+while [ "$_i" -lt 18 ]; do
+  _t=$((_t + 300)); _b=$((_b - 3 * GB)); _i=$((_i + 1))
+  probe "$_b" "$_t" "$S_SPIKE_FALL"
+done
+check "a fall that lasts after that same spike still fires" \
+  "$([ "$PROBE_RC" -eq 4 ] && grep -qi 'per hour' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
 
 # ---- falling fast, while still above the floor ----
 # 240 GB now, 300 GB three hours ago: 20 GB an hour, so zero is twelve hours out. That is outside
