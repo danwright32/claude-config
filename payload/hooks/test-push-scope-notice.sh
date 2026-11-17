@@ -162,6 +162,16 @@ says "#3081 and names git merge --continue among what to run on its own first" "
 says "#3081 and still says how to push so the gates can tell the lines apart" "$err" "as a command of its own, then push"
 out="$(run "cd $PW && git merge --continue && git push origin HEAD" "$W/session")"; rc=$?
 [ "$rc" -eq 2 ] && check "#3081 and so it is behind a cd into the repository" ok || check "#3081 and so it is behind a cd into the repository" "exit $rc"
+# The same commit written straight after a subshell or substitution opener is the same command
+# (claude-config#3091). The library read it as no commit, so this hook let it through.
+for c in "(git commit --no-edit) && git push" "(git merge --continue) && git push" \
+         "x=\$(git commit --no-edit) && git push"; do
+  out="$(run "$c" "$PW")"; rc=$?
+  err="$(cat "$W/err")"
+  [ "$rc" -eq 2 ] && check "#3091 concluding a merge of main inside brackets and pushing is refused: $c" ok \
+    || check "#3091 concluding a merge of main inside brackets and pushing is refused: $c" "exit $rc [${err:0:200}]"
+  says "#3091 and it is the merge in progress it is refused for: $c" "$err" "concludes a merge of origin/main"
+done
 pending_allowed() { # pending_allowed <description> <command> <cwd>
   local out rc
   out="$(run "$2" "$3")"; rc=$?
@@ -209,6 +219,17 @@ case "$grc:$gerr" in
   2:*notes/resolution.md*) check "#3081 the style gate reads the commit git merge --continue is about to make" ok ;;
   *) check "#3081 the style gate reads the commit git merge --continue is about to make" "exit $grc [${gerr:0:200}]: the line staged for the merge commit went out unread" ;;
 esac
+# And so it does when either is written inside brackets (claude-config#3091), where it saw no commit.
+for c in "(git commit --no-edit) && git push" "(git merge --continue) && git push" \
+         "x=\$(git commit --no-edit) && git push"; do
+  pending_allowed "#3091 a pending merge of another branch, concluded inside brackets and pushed, is let through: $c" "$c" "$PW"
+  gate check-style-guide.sh "$c" "$PW"; grc=$?
+  gerr="$(cat "$W/gate.err")"
+  case "$grc:$gerr" in
+    2:*notes/resolution.md*) check "#3091 the style gate reads the commit made inside brackets: $c" ok ;;
+    *) check "#3091 the style gate reads the commit made inside brackets: $c" "exit $grc [${gerr:0:200}]: the line staged for the commit went out unread" ;;
+  esac
+done
 git -C "$PW" merge --abort >/dev/null 2>&1
 rm -f "$PW/notes/resolution.md"
 # Read into a variable and cut there, never piped into head, which can end the producer early and
@@ -228,6 +249,86 @@ git -C "$PW" -c user.name=t -c user.email=t@t.t merge -q --no-commit --no-ff ori
 out="$(run "$combined" "$PW")"; rc=$?
 [ "$rc" -eq 2 ] && check "#3062 a clean merge of main left uncommitted, committed and pushed in one command, is refused" ok \
   || check "#3062 a clean merge of main left uncommitted, committed and pushed in one command, is refused" "exit $rc"
+
+echo "push scope notice: commits made by another route and pushed in one command (claude-config#3092)"
+
+# A git rebase, cherry-pick, revert, am, merge of a named branch or pull puts commits on the branch
+# that do not exist when PreToolUse runs, and no gate knows the command makes any: each reads the
+# range as it stands and says nothing of what the command is about to add to it. Reproduced first
+# with the real style gate on a line a cherry-pick is about to bring in, then refused here, once,
+# for every gate, with the same remedy as the pending merge: the same work as two commands.
+PR="$(mmf_repo "$W/routes" clean guide/new.md $'from main\n')"
+mmf_built "$PR" guide/new.md && check "#3092 the fixture is a branch with main merged in and committed" ok \
+  || check "#3092 the fixture is a branch with main merged in and committed" "it is not, so every case below would pass for the wrong reason"
+git -C "$PR" checkout -qb side >/dev/null 2>&1
+printf '%s\n' "$MAIN_LINE" > "$PR/notes/side.md"
+git -C "$PR" add notes/side.md >/dev/null 2>&1
+git -C "$PR" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm side >/dev/null 2>&1
+git -C "$PR" checkout -q feat >/dev/null 2>&1
+picked="git cherry-pick side && git push"
+gate check-style-guide.sh "$picked" "$PR"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  0:*) check "#3092 the fault: the style gate says nothing of the line a cherry-pick is about to commit and push" ok ;;
+  *) check "#3092 the fault: the style gate says nothing of the line a cherry-pick is about to commit and push" "exit $grc [${gerr:0:200}]: if a gate now reads what a cherry-pick will make, this refusal may no longer be needed" ;;
+esac
+out="$(run "$picked" "$PR")"; rc=$?
+err="$(cat "$W/err")"
+[ "$rc" -eq 2 ] && check "#3092 a cherry-pick and a push in one command is refused" ok \
+  || check "#3092 a cherry-pick and a push in one command is refused" "exit $rc [${err:0:200}]"
+says "#3092 and names what the command runs before the push" "$err" "git cherry-pick"
+says "#3092 and says no gate can read what it makes" "$err" "does not exist yet when the push gates run"
+says "#3092 and says how to push so the gates can read it" "$err" "as a command of its own, then push"
+says "#3092 and names the issue" "$err" "claude-config#3092"
+case "$err" in *"concludes a merge"*) check "#3092 and does not call it a merge in progress" "it did: ${err:0:200}" ;;
+  *) check "#3092 and does not call it a merge in progress" ok ;; esac
+# Each route the issue names, and its neighbours measured to make commits the same way. The refusal
+# names the route as written, so somebody knows which command to run first.
+while IFS='|' read -r c want; do
+  [ -n "$c" ] || continue
+  out="$(run "$c" "$PR")"; rc=$?
+  err="$(cat "$W/err")"
+  case "$rc:$err" in
+    2:*"this command runs $want before it pushes"*) check "#3092 refused, naming $want: $c" ok ;;
+    *) check "#3092 refused, naming $want: $c" "exit $rc [${err:0:200}]" ;;
+  esac
+done <<'ROUTES'
+git rebase --continue && git push --force-with-lease|git rebase --continue
+git cherry-pick --continue && git push|git cherry-pick --continue
+git revert --continue && git push|git revert --continue
+git am --continue && git push|git am --continue
+git merge --no-edit side && git push|git merge
+git cherry-pick side && git push origin HEAD|git cherry-pick
+git pull --no-edit && git push|git pull
+git pull --rebase && git push|git pull
+git rebase origin/main && git push -f|git rebase
+git revert --no-edit HEAD && git push|git revert
+git am fix.patch && git push|git am
+git rebase --skip; git push -f|git rebase --skip
+git merge --squash side && git commit -m squashed && git push|git merge
+GIT_EDITOR=true git rebase --continue && git push|git rebase --continue
+(git pull) && git push|git pull
+ROUTES
+out="$(run "cd $PR && git pull && git push origin HEAD" "$W/session")"; rc=$?
+[ "$rc" -eq 2 ] && check "#3092 and so it is behind a cd into the repository" ok || check "#3092 and so it is behind a cd into the repository" "exit $rc"
+# What makes nothing, what nothing pushes afterwards, and words that only name a route, are let
+# through with nothing said.
+pending_allowed "#3092 abandoning a rebase and pushing is let through" "git rebase --abort && git push" "$PR"
+pending_allowed "#3092 so is leaving a cherry-pick" "git cherry-pick --quit; git push" "$PR"
+pending_allowed "#3092 a pull after the push is not carried by it" "git push && git pull" "$PR"
+pending_allowed "#3092 a route with no push is not this hook's" "git rebase --continue" "$PR"
+pending_allowed "#3092 a commit message that names a route runs none" "git commit -m 'run git pull, then git rebase --continue' && git push" "$PR"
+pending_allowed "#3092 a fetch before the push is no route" "git fetch origin && git push" "$PR"
+# The remedy works (L111): the cherry-pick run as a command of its own, the push is let through here
+# and the style gate now reads the line it brought in.
+git -C "$PR" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false cherry-pick side >/dev/null 2>&1
+pending_allowed "#3092 the cherry-pick run on its own first, the push alone is let through" "git push" "$PR"
+gate check-style-guide.sh "git push" "$PR"; grc=$?
+gerr="$(cat "$W/gate.err")"
+case "$grc:$gerr" in
+  2:*notes/side.md*) check "#3092 and the style gate then reads the line the cherry-pick brought in" ok ;;
+  *) check "#3092 and the style gate then reads the line the cherry-pick brought in" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
+esac
 
 echo "push scope notice: silent where there is nothing to announce"
 

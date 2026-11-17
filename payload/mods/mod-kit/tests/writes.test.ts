@@ -1793,4 +1793,27 @@ describe('writes: a script handed a word holding old arithmetic (#3070)', () => 
     expect(read('echo x > "out$[1+1].txt"').files).toEqual([{ word: 'out$[1+1].txt' }])
     expect(read('cp a.txt "out$[1+1].txt"').files.map(f => f.word)).toEqual(['out$[1+1].txt'])
   })
+  // #3088: every shell works out `$((...))` (bash, zsh, sh, dash and ksh measured 2026-11-16), so a
+  // word holding only such sums is handed on as the one text they make, never as typed.
+  test('a word holding only $((...)) sums is given as the one text every shell hands on', () => {
+    expect(marked(String.raw`python3 s.py "a|\\$((0-9)),[0-9]{3}|b"`)).toEqual([[[String.raw`a|\-9,[0-9]{3}|b`, true]]])
+    expect(marked('python3 s.py "$[1]$((1))"')).toEqual([[['$[1]$((1))', true], ['11', true]]])
+    expect(marked('python3 s.py "$((N+1))"')).toEqual([[['$((N+1))', false]]])
+  })
+})
+
+// #3093: a setting written in front of a run (`TMPDIR=x bash tools/check-mods.sh`) is carried on the
+// run as `env`, so a guard judging a script by what it is handed sees what it reads from its
+// environment too.
+describe('writes: the settings a script is run with (#3093)', () => {
+  const envs = (command: string) => (read(command).runs ?? []).map(r => [r.script, r.env])
+  test('an assignment before the script, or given to env, is carried on its run', () => {
+    expect(envs('TMPDIR=payload/mods bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', ['TMPDIR=payload/mods']]])
+    expect(envs('env TMPDIR=x bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', ['TMPDIR=x']]])
+    expect(envs('A=1 npx prettier --write src/a.ts')).toEqual([['prettier', ['A=1']]])
+  })
+  test('a run given none carries none, whatever else the line sets', () => {
+    expect(envs('bash tools/check-mods.sh payload/mods')).toEqual([['tools/check-mods.sh', undefined]])
+    expect(envs('T=x; bash tools/check-mods.sh payload/mods && git log --format=%s')).toEqual([['tools/check-mods.sh', undefined]])
+  })
 })
