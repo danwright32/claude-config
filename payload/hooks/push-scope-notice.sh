@@ -63,6 +63,20 @@
 # Since claude-config#3092 it refuses a push whose command first runs a git rebase, cherry-pick,
 # revert, am, merge of a named branch or pull: the commits those make do not exist when the gates
 # run and no gate reads them, so they went out unjudged. The remedy is the same, two commands.
+#
+# Since claude-config#3098 it refuses a push whose command first moves the branch without making a
+# commit (a git checkout or switch of another branch, a git reset to another commit, a rebase
+# abandoned), or changes the index by a route other than git add and then commits (git stash pop,
+# git apply --index, git rm, a path taken from another commit). The remedy is the same again.
+#
+# Since claude-config#3113 it refuses a push whose command first runs something that may write a
+# file and then stages, commits and pushes it (cp, sed -i, a formatter, a script, git apply): the
+# gates read the files as they stood before the command ran. The remedy is the write as a command
+# of its own. Since claude-config#3112 it refuses a push that names a branch, tag or commit other
+# than the branch checked out, when that holds commits neither this branch nor the remote has, or
+# cannot be resolved before the command runs: the gates read the branch checked out and its files.
+# The remedy is to push it from a checkout of it. A commit that names its own paths (#3111) is not
+# refused: the library reads the paths, so the gates judge them.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -164,6 +178,16 @@ pending_merge_check() {   # $1 = the one repository directory the push runs in
   exit 2
 }
 
+# A route question below that could not be asked is not one answered no (L1033, claude-config#1900).
+# Each answers 0 with a route or 1 with none. Any other exit (127 when the library beside this hook
+# is an older one that lacks the function) used to read as none, and the command went through with
+# nothing said. Found by the lessons review of #3098.
+unasked() {   # $1 = the library question  $2 = its exit code
+  printf 'PUSH REFUSED: push-scope-notice.sh could not ask whether this command changes what it pushes before it pushes: %s exited %s (127 means %s does not hold it, a library older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again.\n' \
+    "$1" "$2" "$HOOK_DIR/lib/push-scope.sh" >&2
+  exit 2
+}
+
 # A git command before the push that puts commits on the branch by a route no gate reads: a rebase,
 # cherry-pick, revert, am, merge of a named branch or pull (claude-config#3092). What it will make
 # is nowhere a gate can read before the command runs, so every gate judges the range as it stands
@@ -172,10 +196,96 @@ pending_merge_check() {   # $1 = the one repository directory the push runs in
 # question, ps_unread_commit_route in lib/push-scope.sh. No override, as for the pending merge: the
 # remedy is one more command.
 unread_route_check() {
-  local route
-  route="$(ps_unread_commit_route "$cmd")" || return 0
+  local route rc
+  route="$(ps_unread_commit_route "$cmd" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 1 ] && return 0
+  [ "$rc" -eq 0 ] || unasked ps_unread_commit_route "$rc"
   printf 'PUSH REFUSED: this command runs %s before it pushes. What that puts on the branch (the commits it makes, or the changes it stages for a commit later in the command) does not exist yet when the push gates run, so no gate (tests, style, deferrals, scanners and the rest) can read it, and it would be pushed with none of them having judged it (claude-config#3092). Run everything before the push as a command of its own, then push as a command of its own, and the gates will read what it made.\n' \
     "$route" >&2
+  exit 2
+}
+
+# A git command before the push that makes no commit and still changes what the push sends
+# (claude-config#3098). One kind MOVES the branch: a checkout or switch of another branch, a reset
+# to another commit, a sequence abandoned back to where it began. The push then sends commits that
+# were never in the range a gate read, or leaves out ones that were. The other kind changes the
+# INDEX by a route other than git add (a stash put back, a patch applied with --index, a path taken
+# from another commit, a git rm) ahead of a commit: the gates fold that pending commit in from the
+# index as it was before the command ran. Which spellings, what was measured and what is let
+# through live with the question, ps_unread_move_or_stage in lib/push-scope.sh. Each kind has its
+# own sentence and remedy (L11). No override, as for the routes above: the remedy is one more
+# command.
+unread_move_check() {
+  local found kind route rc
+  found="$(ps_unread_move_or_stage "$cmd" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 1 ] && return 0
+  [ "$rc" -eq 0 ] || unasked ps_unread_move_or_stage "$rc"
+  kind="${found%% *}"; route="${found#* }"
+  if [ "$kind" = move ]; then
+    printf 'PUSH REFUSED: this command runs %s before it pushes. That can put the branch on commits it was not on when the push gates ran, or take it off ones it was on, so what the push would send is not what the push gates read (tests, style, deferrals, scanners and the rest), and it would go out with none of them having judged it (claude-config#3098). Run everything before the push as a command of its own, then push as a command of its own, and the gates will read the branch where it then stands.\n' \
+      "$route" >&2
+  else
+    printf 'PUSH REFUSED: this command runs %s, then commits and pushes. What that puts into the index or takes out of it is not in the index when the push gates run, so the commit this command makes would not hold what the gates read for it (tests, style, deferrals, scanners and the rest), and it would be pushed with none of them having judged it (claude-config#3098). Run everything before the commit as a command of its own, then commit and push, and the gates will read what is staged.\n' \
+      "$route" >&2
+  fi
+  exit 2
+}
+
+# Something before the staging step of a command that stages, commits and pushes, which may write a
+# file (claude-config#3113). The gates read the working files as they stand before the command
+# runs, so what it writes is staged, committed and pushed unread. Which commands are let stand (the
+# ones measured to change no file) and the order that counts live with the question, ps_unread_write
+# in lib/push-scope.sh. No override, as for the routes above: the remedy is one more command.
+unread_write_check() {
+  local found rc
+  found="$(ps_unread_write "$cmd" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 1 ] && return 0
+  [ "$rc" -eq 0 ] || unasked ps_unread_write "$rc"
+  printf 'PUSH REFUSED: this command runs %s, then stages, commits and pushes. The push gates (tests, style, deferrals, scanners and the rest) read the files as they stand before the command runs, so anything that step writes would be staged, committed and pushed with none of them having read it (claude-config#3113). Run everything before the git add (or before the commit, when the commit takes the files itself) as a command of its own, then add, commit and push, and the gates will read the files as they then stand.\n' \
+    "$found" >&2
+  exit 2
+}
+
+# A push that names something other than the branch checked out (claude-config#3112). What it names
+# is read first: HEAD, the branch checked out, anything in its history or already on the remote, a
+# name this command makes where HEAD is, and a deletion are all what the gates judged. What is left
+# has its own sentence and remedy for each cause (L11): a source holding commits the gates did not
+# read, one that cannot be resolved before the command runs, and one the command makes or moves
+# first. The rule and what was measured live with the question, ps_unread_push_source in
+# lib/push-scope.sh. No override: the remedy is to push it from where the gates can read it.
+unread_source_check() {   # $1 = the one repository directory the push runs in
+  local found kind src rc where
+  found="$(ps_unread_push_source "$cmd" "$1" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 1 ] && return 0
+  [ "$rc" -eq 0 ] || unasked ps_unread_push_source "$rc"
+  kind="${found%% *}"; src="${found#* }"
+  case "$kind" in
+    other)
+      case "$src" in
+        --*)
+          printf 'PUSH REFUSED: this command pushes with %s, which sends a branch or tag other than the branch checked out here, holding commits that neither this branch nor the remote has. The push gates (tests, style, deferrals, scanners and the rest) read the branch checked out and its files, so those commits would be pushed with none of them having judged them (claude-config#3112). Push each branch from a checkout of it, as a command of its own, and the gates will read it.\n' \
+            "$src" >&2
+          exit 2 ;;
+      esac
+      # Where the branch is checked out, when it is: the push from there is the whole remedy. One
+      # pass that reads to the end, never an early exit that would leave git writing to nobody.
+      where="$(git -C "$1" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/${src#refs/heads/}" '
+        /^worktree / { w = substr($0, 10) }
+        $1 == "branch" && $2 == b && !found { print w; found = 1 }')" || where=""
+      if [ -n "$where" ]; then
+        where="It is checked out in $where: run the push there (cd into it, or git -C $where push), as a command of its own, and the gates will read it."
+      else
+        where="Check it out as a command of its own (git checkout $src), then push as a command of its own, and the gates will read it."
+      fi
+      printf 'PUSH REFUSED: this command pushes %s, which is not the branch checked out here and holds commits that neither this branch nor the remote has. The push gates (tests, style, deferrals, scanners and the rest) read the branch checked out and its files, so those commits would be pushed with none of them having judged them (claude-config#3112). %s\n' \
+        "$src" "$where" >&2 ;;
+    moved)
+      printf 'PUSH REFUSED: this command pushes %s after a command that makes or moves it, or after a commit, so where it will stand when the push runs is not known when the push gates run, and they cannot tell whether it is what they read (claude-config#3112). Run everything before the push as a command of its own, then push as a command of its own.\n' \
+        "$src" >&2 ;;
+    *)
+      printf 'PUSH REFUSED: this command pushes %s, which cannot be resolved to a commit before the command runs (a variable, a pattern, or a name that is no branch, tag or commit here), so the push gates cannot tell whether it is the branch they read (claude-config#3112). Name what is pushed outright: HEAD for the branch checked out, or the branch by its own name. If a command works the name out, run that as a command of its own, then push naming it.\n' \
+        "$src" >&2 ;;
+  esac
   exit 2
 }
 
@@ -190,7 +300,7 @@ dirs="$out"; err="$out"
 # rc 1 (no repository named and none at the session directory) is a push git itself will refuse, and
 # a single repository is a push the gates do judge.
 if [ "$rc" -eq 0 ]; then
-  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; exit 0 ;; esac
+  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; unread_move_check; unread_write_check; unread_source_check "${dirs%%$'\n'*}"; exit 0 ;; esac
   printf 'PUSH REFUSED: this command pushes from more than one repository (%s), and every push gate (tests, style, scanners, docs and the rest) judges one repository per command, so the pushes after the first would go out with no gate having looked at them (claude-config#1062). Run each repository'"'"'s push as a command of its own.\n' \
     "$(printf '%s' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')" >&2
   exit 2

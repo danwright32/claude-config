@@ -2038,6 +2038,22 @@ and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks
 each move of the line. A wait still ends: only a run started with `--first` (below) can join a line
 ahead of a run, so it can move only as many times as there were pull requests ahead plus those sent to
 the front, and the line standing still for three hours ends it.
+A pull request stacked on another branch waits for that branch to merge (claude-config#3118). The
+helper merged into whatever base a pull request had, so on 2026-11-16 six queued pull requests based
+on other feature branches reached their turn before their bases had merged, and each would have been
+squash merged into its base branch rather than main: its change would then reach main only inside
+the base's squash, and its `Closes` lines would never fire, because GitHub closes issues only from
+the default branch. They were stopped by hand. Now, at each look, a pull request whose base is not
+the repository's default branch (as GitHub names it, read with the permission the helper already
+asks for, never assumed to be main) waits for the open pull request of its base branch, naming it,
+and takes no place in line meanwhile, so the run holding the turn is never kept waiting by it. When
+that base merges, the run that merged it (or GitHub, deleting the branch) moves the stacked pull
+request onto the default branch, and at its next look it joins the line as any run does. The wait
+grows to three minutes between looks, as the wait on checks does, and is bounded by the time in line
+(`MWR_LINE_SECONDS`), ending in exit 3. A base nothing will merge stops it at once, exit 1, naming
+the base pull request and saying to set the base by hand (`gh pr edit <pr> --base main`): a base
+branch with no pull request, one closed without merging, or one that merged while this pull request
+stayed on its branch past `MWR_HEAD_LAG_SECONDS`.
 A pull request the others in line need merged first goes to the front with `--first`
 (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests
 ahead of it needed to pass CI, and each of them would have held the line for about 50 minutes of mostly
@@ -3272,14 +3288,88 @@ are in the range the gates read (#3092). Each was measured in a throwaway reposi
 to make at least one commit a push would send, the forms that continue one in progress and the forms
 that start one alike; a merge that only fast forwards makes none and still puts another branch's
 commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
-refused as well, since a `git commit` later in the command would take what they staged. Only
-`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
-which the gates read. A route counts only when a push follows it in the command, and only in command
+refused as well, since a `git commit` later in the command would take what they staged.
+`--abort` and `--quit` make no commit and are not among these routes, and nor is
+`git merge --continue`, which the gates read. A route counts only when a push follows it in the command, and only in command
 position, so a commit message that names one is not one. `git pull && git push` is refused whole,
 though a pull that only fast forwards sends nothing unread, because which it will be is not known
-before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
-that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
-route (`git apply --index`, `git stash pop`).
+before it fetches.
+
+Two more kinds of git command change what a push in the same command sends without making a commit,
+and `push-scope-notice.sh` refuses those too, each with its own sentence (#3098). One kind moves the
+branch: `git checkout` or `git switch` of another branch or commit, `git reset` to another commit,
+`git update-ref`, `git symbolic-ref` with a target, `git bisect`, `git filter-branch`,
+`git stash branch`, and `--abort` of a rebase, cherry-pick, revert or am, which puts HEAD back where
+the sequence began. After it the push sends commits that were never in the range a gate read, or
+leaves out ones that were, so it is refused with any push after it. The other kind changes the
+index by a route other than `git add`: `git stash` and `git stash pop` or `apply`,
+`git apply --index`, `--cached` or `--3way`, `git rm`, `git mv`, `git restore --staged`,
+`git checkout <commit> -- <path>`, `git reset` with no commit (which unstages), `git read-tree`,
+`git update-index` and `git merge --abort`. The gates fold a pending commit in from the index as it
+was before the command ran, so this kind is refused only when a commit follows it and a push follows
+that. Each spelling was measured in a throwaway repository on git 2.51.1, comparing HEAD, the tree
+the index holds and the files before and after. What was measured to change neither HEAD nor the
+index is let through: a branch made where HEAD already is (`git checkout -b new`,
+`git switch -c new`), files written back from the index (`git checkout -- <path>`, `git restore
+<path>`), dry runs, the forms that only look (`git stash list`, `git symbolic-ref --short HEAD`,
+`git update-index --refresh`), `git branch -f` and `-m`, and `--quit`. Where the words cannot say
+which it is, the worse case is taken: `git checkout x` is read as a move though `x` may be a file.
+On the personal MacBook, in the transcripts of the 45 days to 2026-11-16, 1 Bash call of about
+4,064 that pushed ran any of these first. `git submodule add` was not measured and is not refused.
+
+Three more ways a command sent what no gate had read are closed together (#3111, #3112, #3113):
+read where the command says what it does, refused once where nothing can be read before it runs.
+
+A commit that names paths, `git commit notes/a.txt -m x && git push`, takes those files as they
+stand with no `git add`. The gates read an add's paths and a `commit -a`, never these, so the edits
+went out with no gate having read them. They are read now, by every gate, exactly as an add's paths
+are (`ps_add_scope`): with `-o` or `-i`, after a `--`, beside an add or a `commit -a`, and a
+directory or a dot as the tracked files under it. Paths listed in a file (`--pathspec-from-file`)
+are not in the command, so the whole working tree is read and the gate says so (#3111).
+
+A command that writes files and then stages, commits and pushes them,
+`cp draft.md notes/a.md && git add notes/a.md && git commit -m x && git push`, sends what it wrote,
+and the gates read the files as they stood before it ran. What a program will write is nowhere to
+be read beforehand, so `push-scope-notice.sh` refuses the command once, naming the step, with no
+override: run everything before the `git add` as a command of its own, then add, commit and push
+(#3113). The rule is by the state reached, never by a list of programs that write: any command
+before the staging step counts unless it is one measured to change no file (`cd`, `echo`, `ls`,
+`cat`, `grep` and their like with no output sent into a file, the git commands that only look, a
+branch made where HEAD already is, and `git add` and `git commit` themselves). It counts only in
+the order write, stage, commit, push, and a commit that takes files itself (`-a`, or paths it
+names) is a staging step. On the personal MacBook, in the transcripts of the 45 days to 2026-11-16,
+11 of about 4,005 Bash calls that pushed staged, committed and pushed in one command, and 2 of
+those ran anything outside that list first.
+
+A push that names what it sends, `git push origin other` from a checkout of another branch, was
+judged as the branch checked out (#3112). What it names is read first, and most of it is what the
+gates judged already: HEAD, the branch checked out by its name, a name the command makes where HEAD
+is, a deletion, a dry run, and anything whose commits are all in HEAD's history or already on the
+remote, asked of git as `git rev-list --count <source> --not HEAD --remotes=<remote>`. What is left
+is refused, each cause with its own sentence. A source holding commits that neither this branch nor
+the remote has is pushed from a checkout of it, and the refusal names the worktree it is checked
+out in when there is one; `--all`, `--branches`, `--mirror` and `--tags` are asked the same of
+everything they send. A source that cannot be resolved before the command runs (a variable, a
+pattern, a name that is no branch, tag or commit here) is named outright instead. A source the
+command makes or moves before the push, or any ref but the branch checked out after a commit in the
+same command, is pushed as a command of its own. Dan chose on 2026-11-16 to ship this refusal
+rather than hold it back. Its cost could not be counted by a pattern, because the branch checked
+out when a push ran is not in the transcripts: asked of each surviving checkout's own reflog, of
+107 pushes naming a branch in those 45 days, 104 named the branch checked out and 3 another, and
+1,915 more ran in worktrees since removed.
+
+Reading a command for these costs time in step with its length. `ps__read` took a trailing newline
+off three fields of every record by pattern removal where only the last holds one, and on bash 3.2
+a pattern removal that matches nowhere measures the rest of the string at every position, so a
+commit message of 319 KB took 19 seconds to read and one of 1.6 MB was not read inside 60
+(measured on the personal MacBook on 2026-11-16). The fields are
+now tested before anything is removed, and the trim that takes a closing bracket off a word
+(`ps__word_end`) splits a long word by `read` instead; the suite asks each question of a 1.6 MB
+command inside a bound.
+
+Not covered, by these or by any gate: a push that names no refspec under `push.default=matching`
+or a `remote.<name>.push` setting, which can send other branches too; a loop or a function that
+runs its commands in another order than they are written; and `git submodule add`.
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
@@ -7700,7 +7790,9 @@ page off a test host (localhost,
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
 after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
-which reaches no host and is judged as a close alone is), and every Chrome tool reaching past those
+which reaches no host and is judged as a close alone is; since #3121 a tab a batch closed is no
+longer the session's once the batch's result lists its tab group without it, as after a close
+alone), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
@@ -7789,7 +7881,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585, #3099, #3107
+#1765, #1812, #2064, #2261, #2585, #3099, #3107, #3121
 
 </td></tr>
 <tr><td>
