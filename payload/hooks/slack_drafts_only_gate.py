@@ -6406,7 +6406,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         (py_follow, claude-config#3102). A local module it imports is not judged here: modules() reaches it and
         acts() judges it with this same reading, imported True, and an import placed nowhere is
         refused there. A chain from a value the gate does not follow (a call's result, a parameter)
-        that names a module off the list counts as acting, and so does os imported under another
+        that reads os counts as acting, and so does os imported under another
         name where that name is read from outside (os_exposed, claude-config#3119). Text this
         python3 cannot parse counts as acting."""
         try:
@@ -6538,11 +6538,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return f"reaches the {a} module through {base.id}"
                 # A chain from anything else (a call's result, a parameter, an instance, a
                 # subscript) reaches whatever the value holds: pathlib.PurePath("x").parser is
-                # os.path, whose os is os (claude-config#3119). Only read, not called: a module
-                # cannot be called, so p.stat() is a method whatever it is named. Said after a
-                # module handed on, which is how such a value most often came to hold one.
-                if unfollowed is None and not (isinstance(base, ast.Name) and base.id in bound) and a in stdlib \
-                        and a not in PY_INERT and isinstance(node.ctx, ast.Load) and id(node) not in called:
+                # os.path, whose os is os (claude-config#3119). Only os is read for here: what such
+                # a value can hold is a class's attributes and the modules those hold (parser, then
+                # os.path's own os, stat and genericpath, on Python 3.14.4), so os is reached by its
+                # name, and a field named like another module (args.email, e.code, self.queue) is a
+                # field (Dan's choice on PR #3161, 2026-11-17). Only read, not called: a module
+                # cannot be called. Said after a module handed on, which is how such a value most
+                # often came to hold one.
+                if unfollowed is None and not (isinstance(base, ast.Name) and base.id in bound) and a == "os" \
+                        and isinstance(node.ctx, ast.Load) and id(node) not in called:
                     unfollowed = f"reaches the {a} module through {ast.unparse(node.value)[:80]}, which the gate does not follow"
             elif isinstance(node, ast.Call) and writes:
                 f = node.func

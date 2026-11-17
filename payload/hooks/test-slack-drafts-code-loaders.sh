@@ -1932,6 +1932,22 @@ run_19 "python3 reads-routes.py msg.json"
 allowed "#3119 the control: a read only script with chains from calls and parameters and its own modules passes"
 run_19 "python3 reads-routes.py $RULES"
 allowed "#3119 and handed the real rules file"
+# A field of a script's own named like a standard library module is a field, not the module: the
+# chain rule is about reaching os, so a value it does not follow may have any other attribute read
+# off it, and on through it (Dan's choice on PR #3161, 2026-11-17). Each of these was refused by the
+# rule's first version, which refused every standard library module's name off the list.
+w19 field-email.py 'import argparse, sys' 'parser = argparse.ArgumentParser()' 'parser.add_argument("file")' \
+  'parser.add_argument("--email", default="a@example.com")' 'args = parser.parse_args()' \
+  'print(args.email, args.email.lower(), len(open(args.file).read()))'
+w19 field-code.py 'import sys' 'try:' '    sys.exit(len(open(sys.argv[1]).read()) % 3)' 'except SystemExit as e:' \
+  '    print(e.code, str(e.code).zfill(2))'
+w19 field-queue.py 'import sys' 'class Store:' '    def __init__(self):' '        self.queue = []' \
+  '    def add(self, line):' '        self.queue.append(line)' '        return len(self.queue)' \
+  's = Store()' 'print(s.add(open(sys.argv[1]).read()[:20]), s.queue)'
+for field in field-email.py field-code.py field-queue.py; do
+  run_19 "python3 $field msg.json"
+  allowed "#3119 a field named like a standard library module is read as a field: $field"
+done
 
 echo
 
