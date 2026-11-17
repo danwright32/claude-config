@@ -140,7 +140,10 @@ case "$*" in
     w="$(who)"; printf '%s\n' "$w" >> "$ST/perm-asked"
     fail_read "perm-$w"
     p="$(rd "perm-$w")"
-    printf '{"viewerPermission":"%s"}\n' "${p:-WRITE}"
+    # The same answer names the repository's default branch (claude-config#3118): default-branch
+    # holds it, main when unset, and default-branch-unnamed leaves it out of the answer.
+    if [ -e "$ST/default-branch-unnamed" ]; then printf '{"viewerPermission":"%s"}\n' "${p:-WRITE}"
+    else db="$(rd default-branch)"; printf '{"viewerPermission":"%s","defaultBranchRef":{"name":"%s"}}\n' "${p:-WRITE}" "${db:-main}"; fi
     ;;
   # The rate limit probe (claude-config#1482): probe holds GitHub's whole answer, headers and body,
   # as `gh api -i` prints it; with none it is a call nothing expected.
@@ -160,8 +163,10 @@ case "$*" in
     cx="$(rd cross)"
     # fork-owner names the account a fork's branch lives under (claude-config#1458); acme otherwise.
     fo="$(rd fork-owner)"
-    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+    # base-ref names the branch the pull request is based on, main when unset (claude-config#3118).
+    br="$(rd base-ref)"
+    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" --arg br "${br:-main}" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:$br,isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
     ;;
   # A fork's branch, read from the fork (claude-config#1458): fork-tip, or the head when unset.
   "api repos/someone/widget/git/ref/heads/feat/x"*)
@@ -201,6 +206,12 @@ case "$*" in
   "pr list --state merged"*)
     [ -e "$ST/merged-list-fails" ] && { echo "gh: simulated failure" >&2; exit 1; }
     cat "$ST/merged-list" 2>/dev/null
+    ;;
+  # The pull requests whose head is the branch this one is based on, its base pull request
+  # (claude-config#3118): base-prs holds GitHub's answer, none when unset.
+  "pr list --repo acme/widget --head "*)
+    fail_read base-prs
+    if [ -s "$ST/base-prs" ]; then cat "$ST/base-prs"; else printf '[]\n'; fi
     ;;
   "pr list"*)
     fail_read list
@@ -330,6 +341,8 @@ case "$*" in
     [ -n "$bt" ] && [ "$bt" != "$(rd head)" ] && { echo "GraphQL: Head branch is out of date. Review and try the merge again. (mergePullRequest)" >&2; exit 1; }
     [ "$pinned" = "$(rd head)" ] || { echo "Head branch was modified. Review and try the merge again." >&2; exit 1; }
     : > "$ST/merged"
+    # The branch the merge landed in, the pull request's base at that moment (claude-config#3118).
+    br="$(rd base-ref)"; printf '%s\n' "${br:-main}" >> "$ST/merged-into"
     # auto-delete: the repository deletes head branches itself once merged. tip-after-merge: a push
     # lands on the branch just after the merge.
     [ -e "$ST/auto-delete" ] && gone
@@ -3965,6 +3978,125 @@ printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/jobs-down"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#2714 unreadable jobs still merge" "0" "$rc"
 check "#2714 saying whether a job waited is unknown" "Could not read the jobs of workflow run $PW_RUN" "$out"
+
+# =================================================================================================
+# 32. A pull request stacked on a branch that has not merged waits for it (claude-config#3118). On
+# 2026-11-16 six queued pull requests based on other feature branches reached their turn before
+# their bases had merged and would each have been squash merged into its base branch, not main: the
+# change would then ride into main inside the base's squash, and its Closes lines never fire, since
+# GitHub closes issues only from the default branch. They were stopped by hand. Now a run whose base
+# is not the repository's default branch (as GitHub names it, never assumed to be main) waits for its
+# base pull request to merge, taking no place in line meanwhile, and goes on once it has been moved
+# onto the default branch; a base nothing will merge stops it, naming the base pull request.
+# =================================================================================================
+# What a step run by the injected sleep records: how many tickets the line holds while this waits.
+TICKETS='find "$MWR_TURN_DIR" -type f -name "[0-9]*" ! -name "*.*" 2>/dev/null | wc -l | tr -d " " >> "$ST/tickets-at-sleep"'
+stacked_fresh(){ # stacked_fresh <behind> <base pull request answer>
+  fresh "$OLD" "$1" "$GREEN"
+  printf 'feat/base' > "$ST/base-ref"
+  printf '%s\n' "$2" > "$ST/base-prs"
+}
+OPEN6='[{"number":6,"state":"OPEN"}]'
+
+# Its base merges while it waits, and the pull request is moved onto main: it then merges, into main.
+stacked_fresh 0 "$OPEN6"
+printf '%s\n%s\n' "$TICKETS" "$TICKETS; printf main > \"\$ST/base-ref\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 a stacked pull request merges once it is moved onto main" "0" "$rc"
+check_eq "#3118 into main, never into the branch it was stacked on" "main" "$(cat "$ST/merged-into" 2>/dev/null)"
+check "#3118 it says what it waits for, naming the base pull request and its branch" "Waiting for #6 (feat/base) to merge" "$out"
+check "#3118 and why it does not merge now" "based on feat/base, not main" "$out"
+check_eq "#3118 and takes no place in line to merge while it waits" "0 0" "$(paste -sd ' ' - < "$ST/tickets-at-sleep" 2>/dev/null)"
+check "#3118 it says when it goes on" "#7 is now based on main" "$out"
+check "#3118 and then takes the turn as any run does" "Took the turn to merge in acme/widget" "$out"
+
+# Its base never merges: it waits through the injected sleep until its budget ends, exit 3, and
+# never updates, reviews, takes a turn or merges meanwhile, though it is behind.
+stacked_fresh 3 "$OPEN6"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do printf '%s\n' "$TICKETS"; done > "$ST/on-sleep"
+out="$(MWR_LINE_SECONDS=300 run 7 --squash)"; rc=$?
+check_eq "#3118 a base that never merges ends in out of time, to be run again" "3" "$rc"
+check "#3118 saying what it was still waiting for" "is based on feat/base, waiting for #6 to merge into main" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#3118 the branch is never updated with a base it will not merge into" "0" "$(count gh-calls 'pr update-branch')"
+check_eq "#3118 no lessons review is started" "0" "$(count review-calls '^start')"
+check_eq "#3118 no place in line was taken at any look" "0" "$(sort -u "$ST/tickets-at-sleep" 2>/dev/null | paste -sd ' ' -)"
+check_eq "#3118 every wait went through the injected sleep" "30" "$(sort -u "$ST/sleeps" 2>/dev/null | paste -sd ' ' -)"
+
+# A base pull request closed without merging: nothing will move it onto main, so it stops at once.
+stacked_fresh 0 '[{"number":6,"state":"CLOSED"}]'
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 a base closed without merging stops it for a person" "1" "$rc"
+check "#3118 naming the base pull request and how it ended" "#6, the pull request for feat/base, was closed without merging" "$out"
+check "#3118 and how to go on" "gh pr edit 7 --repo acme/widget --base main" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#3118 with no wait first" "0" "$(count sleeps .)"
+
+# No pull request for the base branch at all: the same.
+stacked_fresh 0 '[]'
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 a base branch no pull request merges stops it" "1" "$rc"
+check "#3118 saying so" "no pull request merges feat/base" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The base pull request has merged and this one is still on its branch: GitHub, or the run that
+# merged it, moves it in moments, so that is waited for, and past the lag it stops.
+stacked_fresh 0 '[{"number":6,"state":"MERGED"},{"number":5,"state":"CLOSED"}]'
+out="$(MWR_HEAD_LAG_SECONDS=60 run 7 --squash)"; rc=$?
+check_eq "#3118 a merged base it was never moved off stops it" "1" "$rc"
+check "#3118 saying the base merged and it is still on its branch" "still based on feat/base 1m after #6, the pull request for feat/base, merged" "$out"
+check_eq "#3118 having waited the lag first" "2" "$(count sleeps .)"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+stacked_fresh 0 '[{"number":6,"state":"MERGED"}]'
+printf '%s\n' "printf main > \"\$ST/base-ref\"" > "$ST/on-sleep"
+out="$(MWR_HEAD_LAG_SECONDS=60 run 7 --squash)"; rc=$?
+check_eq "#3118 moved onto main within the lag, it merges" "0" "$rc"
+check_eq "#3118 into main" "main" "$(cat "$ST/merged-into" 2>/dev/null)"
+
+# An open base pull request is the one waited for, wherever GitHub lists it.
+stacked_fresh 0 '[{"number":5,"state":"CLOSED"},{"number":6,"state":"OPEN"}]'
+printf '%s\n' "printf main > \"\$ST/base-ref\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check "#3118 an open base pull request is named over a closed one" "Waiting for #6 (feat/base) to merge" "$out"
+
+# The base pull request cannot be read: a stop that says so, never a merge.
+stacked_fresh 0 "$OPEN6"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/base-prs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 an unreadable base pull request stops it" "1" "$rc"
+check "#3118 saying what could not be read" "could not read the pull request for #7's base branch feat/base" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The default branch is GitHub's, never assumed: based on trunk where trunk is the default, it merges
+# as any run does; based on main where trunk is the default, main is the branch it is stacked on.
+fresh "$OLD" 0 "$GREEN"
+printf 'trunk' > "$ST/default-branch"; printf 'trunk' > "$ST/base-ref"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 based on a default branch not named main, it merges" "0" "$rc"
+check_eq "#3118 into that branch" "trunk" "$(cat "$ST/merged-into" 2>/dev/null)"
+check_eq "#3118 with no look for a base pull request" "0" "$(count gh-calls 'pr list --repo acme/widget --head')"
+fresh "$OLD" 0 "$GREEN"
+printf 'trunk' > "$ST/default-branch"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 based on main where trunk is the default, it is stacked" "1" "$rc"
+check "#3118 and says so against trunk" "based on main, not trunk" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# GitHub names no default branch: whether the base is it cannot be told, so nothing is merged.
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/default-branch-unnamed"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 an unnamed default branch stops it" "1" "$rc"
+check "#3118 saying so" "GitHub did not name the default branch of acme/widget" "$out"
+check_eq "#3118 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A pull request based on the default branch behaves exactly as before: no base pull request is
+# looked for, and nothing is said about a base.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3118 based on main, it merges as before" "0" "$rc"
+check_eq "#3118 with no look for a base pull request" "0" "$(count gh-calls 'pr list --repo acme/widget --head')"
+check_not "#3118 and nothing said about a base" "based on" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
