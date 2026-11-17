@@ -8318,7 +8318,11 @@ and its control shows a copy of the script without `-I` loading it. Each script 
 let through for itself alone, so the two chained in one command are both judged. What the two
 suites share (the guarded temporary folder, the listings of a checkout, the reader of the list and
 the rule's checks on mod-kit's real reader) is in `tests/area-check-named-reader.sh`,
-`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. A third name is a third
+`tests/area-check-named-texts.mjs` and `tests/area-check-named-rule.mjs`. The reader of the list
+reads each script with mod-kit's reader of shell commands, so a message quoting a run counts
+nothing, and refuses whatever it cannot read (eval of built text, a variable set to a shell, a line
+that reads as a run on its own), never skipping it; `tests/test-area-check-named-texts.sh` holds
+both, with controls that make it too lenient (#3134). A third name is a third
 exemption, which is Dan's to sign off.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
