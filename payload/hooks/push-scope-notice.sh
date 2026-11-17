@@ -171,19 +171,27 @@ hooks_folder_check() {   # $1 = the one repository directory the push runs in
 # hook and may report main's lines, so the refusal says not to edit them. No override: the remedy is
 # one more command, and every gate would judge the same lines wrongly under one.
 pending_merge_check() {   # $1 = the one repository directory the push runs in
-  local def
-  def="$(ps_pending_merge_of_default "$cmd" "$1")" || return 0
+  local def rc
+  def="$(ps_pending_merge_of_default "$cmd" "$1" 2>/dev/null)"; rc=$?
+  answered_no "$rc" && return 0
+  [ "$rc" -eq 0 ] || unasked ps_pending_merge_of_default "$rc"
   printf 'PUSH REFUSED: this command concludes a merge of %s that is still in progress and pushes in the same breath. The merge commit does not exist yet when the push gates run, so every gate (tests, style, deferrals, scanners and the rest) reads the commit this command is about to make as this branch'"'"'s own work and judges every line %s brought in as if this branch wrote it (claude-config#3062). A finding another gate reports for this command may be a line %s already holds: do not edit it. Run everything before the push (the git add, and the git commit or git merge --continue) as a command of its own, then push as a command of its own, and the gates will set the merge apart.\n' \
     "$def" "$def" "$def" >&2
   exit 2
 }
 
-# A route question below that could not be asked is not one answered no (L1033, claude-config#1900).
-# Each answers 0 with a route or 1 with none. Any other exit (127 when the library beside this hook
-# is an older one that lacks the function) used to read as none, and the command went through with
-# nothing said. Found by the lessons review of #3098.
+# A question this hook asks that could not be asked is not one answered no (L1033,
+# claude-config#1900). Each answers 0 with what it found, or PS_NO, from lib/push-scope.sh, with
+# nothing. Any other exit used to read as nothing found: 127 when the library beside this hook is an
+# older one that lacks the function (the lessons review of #3098), and 1, which was the questions' no
+# until claude-config#3120 and is also what bash gives for a crash inside one (an unbound variable
+# under set -u, or a last command that fails), so a crashed question let the push through. PS_NO is
+# a code no crash gives, and with no PS_NO at all (a library older than #3120) nothing is a no.
+answered_no() {   # $1 = the exit code
+  [ -n "${PS_NO:-}" ] && [ "$1" -eq "$PS_NO" ]
+}
 unasked() {   # $1 = the library question  $2 = its exit code
-  printf 'PUSH REFUSED: push-scope-notice.sh could not ask whether this command changes what it pushes before it pushes: %s exited %s (127 means %s does not hold it, a library older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again.\n' \
+  printf 'PUSH REFUSED: push-scope-notice.sh could not ask whether this command changes what it pushes before it pushes: %s exited %s, which is none of its answers (127 means %s does not hold it, and any other code that the question crashed or that the library is older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again; if it still refuses, hand back and say so.\n' \
     "$1" "$2" "$HOOK_DIR/lib/push-scope.sh" >&2
   exit 2
 }
@@ -198,7 +206,7 @@ unasked() {   # $1 = the library question  $2 = its exit code
 unread_route_check() {
   local route rc
   route="$(ps_unread_commit_route "$cmd" 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 1 ] && return 0
+  answered_no "$rc" && return 0
   [ "$rc" -eq 0 ] || unasked ps_unread_commit_route "$rc"
   printf 'PUSH REFUSED: this command runs %s before it pushes. What that puts on the branch (the commits it makes, or the changes it stages for a commit later in the command) does not exist yet when the push gates run, so no gate (tests, style, deferrals, scanners and the rest) can read it, and it would be pushed with none of them having judged it (claude-config#3092). Run everything before the push as a command of its own, then push as a command of its own, and the gates will read what it made.\n' \
     "$route" >&2
@@ -218,7 +226,7 @@ unread_route_check() {
 unread_move_check() {
   local found kind route rc
   found="$(ps_unread_move_or_stage "$cmd" 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 1 ] && return 0
+  answered_no "$rc" && return 0
   [ "$rc" -eq 0 ] || unasked ps_unread_move_or_stage "$rc"
   kind="${found%% *}"; route="${found#* }"
   if [ "$kind" = move ]; then
@@ -239,7 +247,7 @@ unread_move_check() {
 unread_write_check() {
   local found rc
   found="$(ps_unread_write "$cmd" 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 1 ] && return 0
+  answered_no "$rc" && return 0
   [ "$rc" -eq 0 ] || unasked ps_unread_write "$rc"
   printf 'PUSH REFUSED: this command runs %s, then stages, commits and pushes. The push gates (tests, style, deferrals, scanners and the rest) read the files as they stand before the command runs, so anything that step writes would be staged, committed and pushed with none of them having read it (claude-config#3113). Run everything before the git add (or before the commit, when the commit takes the files itself) as a command of its own, then add, commit and push, and the gates will read the files as they then stand.\n' \
     "$found" >&2
@@ -256,7 +264,7 @@ unread_write_check() {
 unread_source_check() {   # $1 = the one repository directory the push runs in
   local found kind src rc where
   found="$(ps_unread_push_source "$cmd" "$1" 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 1 ] && return 0
+  answered_no "$rc" && return 0
   [ "$rc" -eq 0 ] || unasked ps_unread_push_source "$rc"
   kind="${found%% *}"; src="${found#* }"
   case "$kind" in

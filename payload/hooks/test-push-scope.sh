@@ -43,6 +43,9 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 
 # shellcheck source=lib/push-scope.sh
 . "$LIB" || { echo "FAIL: cannot source $LIB"; exit 1; }
+# The exit the five questions push-scope-notice.sh asks answer no with (claude-config#3120), compared
+# as text, so a library without it fails each case rather than stopping the suite under set -u.
+NO="${PS_NO:-unset}"
 
 # The whole chain a hook runs: a JSON payload in, a verdict on whether this is a
 # push out. Asked this way rather than of ps_is_git_push alone, because the
@@ -407,12 +410,20 @@ git init -q "$BR/empty" 2>/dev/null
 # bounds are settings, sized from what each question was measured to take on the personal MacBook
 # on 2026-11-16, with room for a loaded machine (L290). What a push sends and what a command writes
 # took 9 seconds on the 1.6 MB command and get 60, where the fault kept both past 60. What a commit
-# takes took 37 to 54 seconds, 28 of them the reading of the adds (ps__read_adds), which this
-# change does not touch, and gets 240, where the fault kept it past 240.
+# takes took 37 to 54 seconds, 28 of them the reading of the adds (ps__read_adds), which #3111
+# did not touch, and gets 240, where the fault kept it past 240. #3125 made that reading linear and
+# bounds it on its own, below; 240 is left as it was.
 # shellcheck source=lib/bounded-run.sh
 . "$DIR/lib/bounded-run.sh" || { echo "FAIL: cannot source $DIR/lib/bounded-run.sh"; exit 1; }
 LONG_BOUND=60
 LONG_BOUND_ADDS=240
+# The reading of the adds grew with the square of the command too (claude-config#3125): python's
+# shlex builds a word a character at a time, and a heredoc message is one word as long as itself.
+# Measured on the personal MacBook on 2026-11-16, one run each: 0.5, 1.1, 3.1, 8.2 and 34 seconds as
+# the command doubled from 99 KB to 1.6 MB, and 2.1 seconds at 1.6 MB once it read with
+# shell-words.py's splitter (4.2 at 3.3 MB). The bound is a setting with room for a loaded machine
+# (L290), and the fault, at 34 seconds, is past it.
+LONG_BOUND_READ_ADDS=15
 # shellcheck disable=SC2016  # the child shell expands these, not this one
 LONG_ASK='set -uo pipefail; . "$1" || exit 9; cmd="$(cat "$2")"; "$3" "$cmd" "$4" | tr "\n" "|"'
 long_within() { # long_within <seconds> <function> <command> <expected answer, lines joined by |> <description>
@@ -439,6 +450,18 @@ EOF
   # long_within, above.
   long_within "$LONG_BOUND_ADDS" ps_add_scope "$long_cmd" "TRACKED|a.txt" \
     "a $size command still has its add and its -a seen, inside the bound (#403, #3111)"
+  # The reading of the adds on its own, under a bound of its own (claude-config#3125): see
+  # LONG_BOUND_READ_ADDS, above. Asked in a shell of its own as long_within asks, with the question
+  # named, which long_within's last argument (a repository directory) is not.
+  printf '%s' "$long_cmd" > "$BR/long-cmd.txt"
+  # shellcheck disable=SC2016  # the child shell expands these, not this one
+  bounded_run "$LONG_BOUND_READ_ADDS" bash -c 'set -uo pipefail; . "$1" || exit 9; ps__read_adds "$(cat "$2")" scope | tr "\n" "|"' \
+    long "$LIB" "$BR/long-cmd.txt"
+  if [ "$BOUNDED_RC" = 0 ] && [ "${BOUNDED_OUT%|}" = "PATHS|a.txt" ]; then
+    check "#3125 a $size command's adds are read inside ${LONG_BOUND_READ_ADDS}s" ok
+  else
+    check "#3125 a $size command's adds are read inside ${LONG_BOUND_READ_ADDS}s" "exit $BOUNDED_RC over ${#long_cmd} bytes, answer [${BOUNDED_OUT:0:60}]"
+  fi
   # What a push gate asks of a commit and a push in one command (claude-config#3111, #3112, #3113),
   # each with something to say, so a question that came back early with nothing does not pass.
   long_msg="\$(cat <<'EOF'
@@ -1605,8 +1628,8 @@ r="$(ps_pending_merge_of_default "git commit --no-edit && git push" "$PW")"; rc=
   || check "#3062 a commit and push in one command concludes the merge of main" "exit $rc, printed [$r]"
 r="$(cd "$PW" && ps_pending_merge_of_default "git commit --no-edit && git push")"; rc=$?
 [ "$rc" -eq 0 ] && check "#3062 the directory defaults to where it is asked" ok || check "#3062 the directory defaults to where it is asked" "exit $rc"
-ps_pending_merge_of_default "git push" "$PW" >/dev/null \
-  && check "#3062 a push alone does not conclude it" "said it does" || check "#3062 a push alone does not conclude it" ok
+ps_pending_merge_of_default "git push" "$PW" >/dev/null; rc=$?
+[ "$rc" = "$NO" ] && check "#3062 a push alone does not conclude it" ok || check "#3062 a push alone does not conclude it" "exit $rc"
 # git merge --continue concludes the same merge and makes the same commit, so it is a commit in the
 # chain, for every gate and for this question (claude-config#3081). It used to be read as no commit
 # at all, so no gate folded the pending merge commit in and a conflict resolution went out unread.
@@ -1632,12 +1655,12 @@ done
 r="$(ps_pending_merge_of_default "git merge --continue && git push" "$PW")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$r" = origin/main ] && check "#3081 git merge --continue and a push in one command concludes the merge of main" ok \
   || check "#3081 git merge --continue and a push in one command concludes the merge of main" "exit $rc, printed [$r]"
-ps_pending_merge_of_default "git merge --abort && git push" "$PW" >/dev/null \
-  && check "#3081 abandoning the merge and pushing does not conclude it" "said it does" \
-  || check "#3081 abandoning the merge and pushing does not conclude it" ok
+ps_pending_merge_of_default "git merge --abort && git push" "$PW" >/dev/null; rc=$?
+[ "$rc" = "$NO" ] && check "#3081 abandoning the merge and pushing does not conclude it" ok \
+  || check "#3081 abandoning the merge and pushing does not conclude it" "exit $rc"
 git -C "$PW" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -q --no-edit >/dev/null 2>&1
-ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
-  && check "#3062 once the merge is committed nothing is pending" "said it is" || check "#3062 once the merge is committed nothing is pending" ok
+ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null; rc=$?
+[ "$rc" = "$NO" ] && check "#3062 once the merge is committed nothing is pending" ok || check "#3062 once the merge is committed nothing is pending" "exit $rc"
 # A clean merge of main left in progress again, first with origin/main known (the control: it is
 # pending), then with no default branch known, where nothing can say what came from main and the
 # gates judge the range whole as ps_merged_apart does, so it does not answer yes.
@@ -1652,9 +1675,9 @@ ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null 
   || check "#3062 control: a clean merge of main left uncommitted is pending" "said it is not"
 git -C "$PW" update-ref -d refs/remotes/origin/main >/dev/null 2>&1
 git -C "$PW" symbolic-ref -d refs/remotes/origin/HEAD >/dev/null 2>&1
-ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null \
-  && check "#3062 with no default branch known it does not answer yes" "said yes" \
-  || check "#3062 with no default branch known it does not answer yes" ok
+ps_pending_merge_of_default "git commit --no-edit && git push" "$PW" >/dev/null; rc=$?
+[ "$rc" = "$NO" ] && check "#3062 with no default branch known it does not answer yes" ok \
+  || check "#3062 with no default branch known it does not answer yes" "exit $rc"
 rm -rf "$WP"
 
 echo "push-scope: a commit written straight after a bracket or a backquote (claude-config#3091)"
@@ -1690,6 +1713,16 @@ done
 
 echo "push-scope: commits a command makes by a route no gate can read (claude-config#3092)"
 
+# The five questions push-scope-notice.sh asks answer no with PS_NO (claude-config#3120), a code a
+# crash inside one cannot give: never 1 or 2 (bash's own for an unbound variable or a misused
+# builtin, and what a failing test, git, grep, awk or python3 gives as a last command), 3 (what
+# ps__shell_segments gives), 126 or 127, or 128 and over (git's fatal errors, and every signal).
+case "$NO" in
+  ''|*[!0-9]*) check "#3120 the questions' no has a code of its own" "PS_NO is [$NO]" ;;
+  *) if [ "$NO" -ge 4 ] && [ "$NO" -le 125 ]; then check "#3120 the questions' no has a code of its own" ok
+     else check "#3120 the questions' no has a code of its own" "PS_NO is $NO, which a crash can give"; fi ;;
+esac
+
 # ps_unread_commit_route answers whether a command runs, before a push, a git command that puts
 # commits on the branch (or stages changes for a commit later in the command) by a route other than
 # the two the gates read, git commit and git merge --continue. Measured in throwaway repositories on
@@ -1706,7 +1739,7 @@ route_is() { # route_is <description> <command> <the route it must print>
 no_route() { # no_route <description> <command>
   local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_commit_route "$2")"; rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  if [ "$rc" = "$NO" ] && [ -z "$r" ]; then check "$name" ok
   else check "$name" "exit $rc, printed [$r]"; fi
 }
 # The seven the issue names.
@@ -1777,7 +1810,7 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "GIT_EDI
 [ "$rc" -eq 0 ] && [ "$r" = "git rebase --continue" ] && check "#3092 with no reader a continued rebase is still found" ok \
   || check "#3092 with no reader a continued rebase is still found" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_commit_route "git merge --abort && git push")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3092 with no reader an abandoned merge is still no route" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3092 with no reader an abandoned merge is still no route" ok \
   || check "#3092 with no reader an abandoned merge is still no route" "exit $rc, printed [$r]"
 
 echo "push-scope: a branch moved or a commit staged by a route no gate reads (claude-config#3098)"
@@ -1798,7 +1831,7 @@ moves_or_stages() { # moves_or_stages <description> <command> <what it must prin
 neither() { # neither <description> <command>
   local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_move_or_stage "$2")"; rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  if [ "$rc" = "$NO" ] && [ -z "$r" ]; then check "$name" ok
   else check "$name" "exit $rc, printed [$r]"; fi
 }
 # The branch moves: HEAD names another commit afterwards, so the push sends commits no gate read, or
@@ -1999,10 +2032,10 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "(git r
 [ "$rc" -eq 0 ] && [ "$r" = "move git reset" ] && check "#3098 with no reader a reset inside brackets is still found" ok \
   || check "#3098 with no reader a reset inside brackets is still found" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git checkout -b new && git push -u origin new")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3098 with no reader a branch made at HEAD is still neither" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3098 with no reader a branch made at HEAD is still neither" ok \
   || check "#3098 with no reader a branch made at HEAD is still neither" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git stash pop && git push")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3098 with no reader a staging route nothing commits is still neither" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3098 with no reader a staging route nothing commits is still neither" ok \
   || check "#3098 with no reader a staging route nothing commits is still neither" "exit $rc, printed [$r]"
 
 echo "push-scope: a commit that names the paths it takes (claude-config#3111)"
@@ -2128,7 +2161,7 @@ writes() { # writes <description> <command> <what it must print>
 no_write() { # no_write <description> <command>
   local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_write "$2")"; rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  if [ "$rc" = "$NO" ] && [ -z "$r" ]; then check "$name" ok
   else check "$name" "exit $rc, printed [$r]"; fi
 }
 # The answer is after the LAST bar of a line, since a command can hold a pipe of its own.
@@ -2226,7 +2259,7 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "(git apply fix
 [ "$rc" -eq 0 ] && [ "$r" = "git apply" ] && check "#3113 with no reader a patch applied before a commit -a is still found" ok \
   || check "#3113 with no reader a patch applied before a commit -a is still found" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cd repo && git add -A && git commit -m x && git push")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3113 with no reader an add, commit and push alone is still let through" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3113 with no reader an add, commit and push alone is still let through" ok \
   || check "#3113 with no reader an add, commit and push alone is still let through" "exit $rc, printed [$r]"
 # Which subcommand a git runs is the reader's to say (lib/word-position-scan.py). With no reader
 # this keeps no second reading of it, so any git but an add, a commit or a push may write: more
@@ -2241,7 +2274,7 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "./cat notes.tx
 [ "$rc" -eq 0 ] && [ "$r" = "./cat" ] && check "#3113 with no reader a project script named like a command that only reads may write" ok \
   || check "#3113 with no reader a project script named like a command that only reads may write" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cat notes.txt && git add -A && git commit -m x && git push")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3113 control: with no reader the command of that name is still let stand" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3113 control: with no reader the command of that name is still let stand" ok \
   || check "#3113 control: with no reader the command of that name is still let stand" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cp status git && git add -A && git commit -m x && git push")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$r" = "cp" ] && check "#3113 with no reader a copy whose words name git and status is still a copy" ok \
@@ -2278,7 +2311,7 @@ source_is() { # source_is <description> <command> <what it must print>
 source_read() { # source_read <description> <command>
   local r rc name="$1: ${2//$'\n'/\\n}"
   r="$(ps_unread_push_source "$2" "$PSRC")"; rc=$?
-  if [ "$rc" -eq 1 ] && [ -z "$r" ]; then check "$name" ok
+  if [ "$rc" = "$NO" ] && [ -z "$r" ]; then check "$name" ok
   else check "$name" "exit $rc, printed [$r]"; fi
 }
 # The answer is after the LAST bar of a line, since a command can hold a pipe of its own.
@@ -2300,6 +2333,10 @@ git push -odeploy origin other|other other
 git push -onotify origin other|other other
 git push -fo ci.skip origin other|other other
 git push -fonotify origin other|other other
+git push -oecho origin other|other other
+git push -foecho origin other|other other
+git push -oo origin other|other other
+git push -fo -oecho origin other|other other
 git push origin feat other|other other
 git push origin HEAD other:x|other other
 git push origin onother|other onother
@@ -2390,7 +2427,7 @@ source_is "#3112 a branch the command would make at HEAD, already there with com
 # A repository with no commit has nothing to compare against, and git itself refuses its push.
 git init -q "$RS/empty" 2>/dev/null
 r="$(ps_unread_push_source "git push origin other" "$RS/empty")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 a repository with no commit is not asked" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3112 a repository with no commit is not asked" ok \
   || check "#3112 a repository with no commit is not asked" "exit $rc, printed [$r]"
 r="$(cd "$PSRC" && ps_unread_push_source "git push origin other")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$r" = "other other" ] && check "#3112 the directory defaults to where it is asked" ok \
@@ -2406,10 +2443,10 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git bran
 [ "$rc" -eq 0 ] && [ "$r" = "moved pushed" ] && check "#3112 with no reader a branch moved before its push is still found" ok \
   || check "#3112 with no reader a branch moved before its push is still found" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git checkout -b new && git push -u origin new" "$PSRC")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 with no reader a branch made at HEAD and pushed is still let through" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3112 with no reader a branch made at HEAD and pushed is still let through" ok \
   || check "#3112 with no reader a branch made at HEAD and pushed is still let through" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git push -u origin feat" "$PSRC")"; rc=$?
-[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3112 with no reader a push of the branch checked out is still let through" ok \
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3112 with no reader a push of the branch checked out is still let through" ok \
   || check "#3112 with no reader a push of the branch checked out is still let through" "exit $rc, printed [$r]"
 rm -rf "$RS"
 

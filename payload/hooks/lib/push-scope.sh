@@ -55,6 +55,15 @@
 # exception is the reading of a command (ps__read, claude-config#1040), kept per
 # command so one hook asking several questions reads it once; see its comment.
 
+# The exit with which the five questions push-scope-notice.sh asks (ps_pending_merge_of_default
+# and the four ps_unread_ ones) answer no (claude-config#3120). It was 1, which is also what bash
+# gives for a crash inside one (an unbound variable under set -u, a last command that fails where
+# no return follows; measured on bash 3.2.57), so the hook read a crashed question as no and let the
+# push through. This is a code no crash inside them gives: bash's own errors are 1, 2, 126, 127 and
+# 128 and over, the commands they end on (test, git, grep, awk, python3) give 1, 2 or 128 and over,
+# and the helpers they call give 0 to 3. Any exit but 0 and this one is a refusal there.
+PS_NO=10
+
 # ---- taking the hook payload off stdin, legible to every reader (claude-config#1944) ----
 # jq 1.7.1, the Mac's jq, rejects a WHOLE payload holding one lone surrogate escape: \ud800 with no
 # low half after it, or a low half with no high one before it ("Invalid \uXXXX\uXXXX surrogate pair
@@ -1146,6 +1155,14 @@ except Exception:
         if "git" in names and "add" in toks:  # gh-reader: the crude reading, when there is no other
             return ("add", [], toks[toks.index("add") + 1:])
         return None
+# The words of a segment, as shlex.split(posix=True) gives them, raising as it raises. shlex
+# builds a word a character at a time, adding to a string held on itself, which python copies
+# whole each time: a heredoc message is one word as long as the message, so the reading cost the
+# square of its length, 3 seconds at 399 KB and 34 at 1.6 MB, measured on the personal MacBook on
+# 2026-11-16 (claude-config#3125). shell_split,
+# from lib/shell-words.py, reads a piece at a time and gives the same words (claude-config#2918);
+# shlex is the reading only where that file cannot be loaded.
+split_words = getattr(shell_words, "shell_split", None) or (lambda s: shlex.split(s, posix=True))
 def names_an_add(text):
     # Does this text name a git add anywhere a wrapper nobody can read into might run it
     # (claude-config#2078)? The bare word add anywhere used to count, so a `git worktree add` or a
@@ -1169,7 +1186,7 @@ def add_named(text):
     # a git whose subcommand is a variable an add (claude-config#2203).
     for seg in re.split(r"&&|\|\||;|\||\n", text):
         try:
-            toks = shlex.split(seg, posix=True)
+            toks = split_words(seg)
         except ValueError:
             toks = seg.split()
         found = git_command(toks)
@@ -1209,7 +1226,7 @@ for k, (d, text, wrapper, why, depth) in enumerate(wrapped):
 direct_takes, script_takes = False, []
 for where, script, seg in segments:
     try:
-        toks, readable = shlex.split(seg, posix=True), True
+        toks, readable = split_words(seg), True
     except ValueError:
         toks, readable = seg.split(), False
     while toks and toks[0].strip("({") == "":
@@ -1764,14 +1781,14 @@ ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answe
 # judge no differently.
 #
 # Every commit MERGE_HEAD names is read (an octopus merge names several). Prints the default branch
-# ref and returns 0 when the command concludes such a merge; returns 1 otherwise.
+# ref and returns 0 when the command concludes such a merge; returns PS_NO otherwise.
 ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository directory (default .)
   local cmd="$1" d="${2:-.}" mh def sha rest m
-  ps_commit_in_chain "$cmd" || return 1
-  mh="$(git -C "$d" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null)" || return 1
-  [ -f "$mh" ] || return 1
-  def="$(cd "$d" 2>/dev/null && ps__default_ref)" || return 1
-  [ -n "$def" ] || return 1
+  ps_commit_in_chain "$cmd" || return "$PS_NO"
+  mh="$(git -C "$d" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null)" || return "$PS_NO"
+  [ -f "$mh" ] || return "$PS_NO"
+  def="$(cd "$d" 2>/dev/null && ps__default_ref)" || return "$PS_NO"
+  [ -n "$def" ] || return "$PS_NO"
   while read -r sha rest; do
     [ -n "$sha" ] || continue
     m="$(git -C "$d" merge-base "$def" "$sha" 2>/dev/null)" || continue
@@ -1780,7 +1797,7 @@ ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository direct
     printf '%s' "$def"
     return 0
   done < "$mh"
-  return 1
+  return "$PS_NO"
 }
 
 # ---- commits a command makes by a route no gate can read, then pushes (claude-config#3092) ----
@@ -1802,7 +1819,9 @@ ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository direct
 #   pull         1 when the branches have diverged (the merge commit, or with --rebase this branch's
 #                commit replayed), 2 from a local branch; 0 when it only fast forwards to what the
 #                remote already holds or finds nothing new
-#   --abort and --quit of each: none, and nothing staged
+#   --abort and --quit of each: no commit made. --abort still moves HEAD back to where the sequence
+#                began (rebase, cherry-pick, revert, am) or the index back to HEAD (merge), which
+#                ps_unread_move_or_stage reads, below (claude-config#3098); --quit changes neither
 # -n and --no-commit on cherry-pick and revert, and --squash and --no-commit on a merge that is not
 # a fast forward, make no commit but STAGE the change, for a `git commit` later in the command, which
 # the gates would fold in from an index that does not hold it yet. So they are routes too.
@@ -1833,12 +1852,12 @@ ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository direct
 # back where the sequence began), and what stages by another route (git apply --index, git stash
 # pop, git rm). Those are ps_unread_move_or_stage's, below (claude-config#3098).
 #
-# Prints the route as written, `git rebase --continue`, `git merge`, and returns 0; returns 1
-# otherwise.
+# Prints the route as written, `git rebase --continue`, `git merge`, and returns 0; returns
+# PS_NO otherwise.
 ps_unread_commit_route() {   # $1 = the command
   local cmd="$1" rc i end seg sub found="" loop_input
-  case "$cmd" in *push*) ;; *) return 1 ;; esac
-  case "$cmd" in *rebase*|*cherry-pick*|*revert*|*merge*|*pull*|*am*) ;; *) return 1 ;; esac
+  case "$cmd" in *push*) ;; *) return "$PS_NO" ;; esac
+  case "$cmd" in *rebase*|*cherry-pick*|*revert*|*merge*|*pull*|*am*) ;; *) return "$PS_NO" ;; esac
   ps__read "$cmd"; rc=$?
   if [ "$rc" -ne 1 ]; then
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
@@ -1851,7 +1870,7 @@ ps_unread_commit_route() {   # $1 = the command
       fi
       i=$((i + 1))
     done
-    return 1
+    return "$PS_NO"
   fi
   loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
@@ -1866,7 +1885,7 @@ ps_unread_commit_route() {   # $1 = the command
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
-  return 1
+  return "$PS_NO"
 }
 
 # Is the git command ps_runs_at or ps_runs_git last read (PS_RUN_SUB, PS_RUN_ARGS) one of the routes
@@ -1951,14 +1970,14 @@ ps__commit_route() {
 # and git submodule add, which could not be measured and which no gate reads.
 #
 # Prints `move` or `stage`, a space, and the route as written (`move git checkout`, `stage git stash
-# pop`) and returns 0; returns 1 otherwise. A move is named ahead of a staging route.
+# pop`) and returns 0; returns PS_NO otherwise. A move is named ahead of a staging route.
 ps_unread_move_or_stage() {   # $1 = the command
   local cmd="$1" rc i end seg sub move="" stage="" taken=0 loop_input
-  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *push*) ;; *) return "$PS_NO" ;; esac
   case "$cmd" in
     *checkout*|*switch*|*reset*|*update-ref*|*symbolic-ref*|*bisect*|*filter-branch*|*--abort*) ;;
     *stash*|*apply*|*[[:space:]]rm*|*[[:space:]]mv*|*restore*|*read-tree*|*update-index*) ;;
-    *) return 1 ;;
+    *) return "$PS_NO" ;;
   esac
   ps__read "$cmd"; rc=$?
   if [ "$rc" -ne 1 ]; then
@@ -1978,7 +1997,7 @@ ps_unread_move_or_stage() {   # $1 = the command
       fi
       i=$((i + 1))
     done
-    return 1
+    return "$PS_NO"
   fi
   loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
@@ -2008,7 +2027,7 @@ ps_unread_move_or_stage() {   # $1 = the command
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
-  return 1
+  return "$PS_NO"
 }
 
 # Is the git command last read (PS_RUN_SUB, PS_RUN_ARGS) one of the two ps_commit_in_chain reads as a
@@ -2044,11 +2063,7 @@ ps__move_or_stage() {
     # A redirection is among the words read and is none of git's: `git checkout -b new 2>&1` names
     # one word, new. Written apart from its file (`> out.txt`), the file is the next word.
     if [ "$file" = 1 ]; then file=0; continue; fi
-    case "$a" in
-      [0-9]\>*|[0-9]\<*|\>*|\<*|\&\>*)
-        case "$a" in *[\<\>\|]) file=1 ;; esac
-        continue ;;
-    esac
+    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
     if [ "$a" = -- ] && [ "$dashes" = 0 ]; then dashes=1; continue; fi
     if [ "$dashes" = 1 ]; then after=$((after + 1)); continue; fi
     case "$a" in
@@ -2149,11 +2164,11 @@ ps__move_or_stage() {
 # reader's to say, so with no reader any git but an add, a commit or a push may write.
 #
 # Prints what may write, as written (`cp`, `git apply`, `echo into a file`), and returns 0; returns
-# 1 otherwise.
+# PS_NO otherwise.
 ps_unread_write() {   # $1 = the command
   local cmd="$1" rc i end seg prog wrote="" stale="" taken=0 loop_input
-  case "$cmd" in *push*) ;; *) return 1 ;; esac
-  case "$cmd" in *commit*|*merge*) ;; *) return 1 ;; esac
+  case "$cmd" in *push*) ;; *) return "$PS_NO" ;; esac
+  case "$cmd" in *commit*|*merge*) ;; *) return "$PS_NO" ;; esac
   ps__read "$cmd"; rc=$?
   if [ "$rc" -ne 1 ]; then
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
@@ -2182,7 +2197,7 @@ ps_unread_write() {   # $1 = the command
       fi
       i=$((i + 1))
     done
-    return 1
+    return "$PS_NO"
   fi
   loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
@@ -2211,7 +2226,7 @@ ps_unread_write() {   # $1 = the command
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
-  return 1
+  return "$PS_NO"
 }
 
 # The words of the record at $1 of a reading this shell holds, into PS__W.
@@ -2383,12 +2398,12 @@ ps__may_write() {   # $1 = the program as written
 # setting, which can send other branches too.
 #
 # Prints the kind, a space, and the source as written (`other other`, `unresolved $BRANCH`, `moved
-# v9`, `other --all`) for the first refspec that cannot be judged, and returns 0; returns 1 otherwise.
+# v9`, `other --all`) for the first refspec that cannot be judged, and returns 0; returns PS_NO otherwise.
 PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
 ps_unread_push_source() {   # $1 = the command  $2 = the repository directory the push runs in (default .)
   local cmd="$1" dir="${2:-.}" rc i end seg sub loop_input
   PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
-  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *push*) ;; *) return "$PS_NO" ;; esac
   ps__read "$cmd"; rc=$?
   if [ "$rc" -ne 1 ]; then
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
@@ -2401,7 +2416,7 @@ ps_unread_push_source() {   # $1 = the command  $2 = the repository directory th
       fi
       i=$((i + 1))
     done
-    return 1
+    return "$PS_NO"
   fi
   loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
@@ -2420,7 +2435,7 @@ ps_unread_push_source() {   # $1 = the command  $2 = the repository directory th
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
-  return 1
+  return "$PS_NO"
 }
 
 # A ref's name without the folder git files it under, into PS__SHORT.
@@ -2541,11 +2556,17 @@ ps__push_sources() {   # $1 = the repository directory
         # git push's short options are f, u, q, v, 4, 6, n (dry run), d (delete) and o, whose
         # value is the rest of the word, or the next word when o ends the cluster. Only the letters
         # before the o are options: an n or a d in its value (-onotify, -odeploy) is neither a dry
-        # run nor a deletion, and read as one it let the push through unjudged.
+        # run nor a deletion, and read as one it let the push through unjudged. The o ends the cluster
+        # only when it is the FIRST o and nothing follows it: a value glued on that itself ends in o
+        # (-oecho) is the value, and taking the next word for it as well read the remote as the
+        # value and the branch as the remote, so what the push sends went unread (claude-config#3133).
         c="${a#-}"
         case "$c" in
-          *o) skip=1; c="${c%%o*}" ;;
-          *o*) c="${c%%o*}" ;;
+          *o*)
+            # The letters before the first o, and whether anything follows that o, counted from them
+            # rather than by a second pattern removal.
+            c="${c%%o*}"
+            [ "${#a}" -eq $((${#c} + 2)) ] && skip=1 ;;
         esac
         case "$c" in *n*) dry=1 ;; esac
         case "$c" in *d*) del=1 ;; esac ;;
