@@ -304,6 +304,21 @@ test('#1953: a name a shell variable fills in is known by its last part; a folde
     expect([w, nameFromVariable(w)]).toEqual([w, false])
 })
 
+// #3088: `$((...))` is arithmetic, so its two parentheses open no command substitution: a name it
+// fills in is a value the shell works out from numbers and variables, read as a variable's value is.
+// A command substitution inside one, or beside one, is still a command's output.
+test('#3088: arithmetic in a name is a value, never a command output, unless a substitution sits in it', () => {
+  for (const w of [String.raw`a|\$((0-9)),[0-9]{3}|b`, 'x$((N+1)).css', 'app/$((1+1)).tsx', 'app/$((N/2)).tsx', '$((a)+(b)).md'])
+    expect([w, nameFromOutput(w), nameFromVariable(w)]).toEqual([w, false, true])
+  for (const w of ['x$(( $(cat n) + 1 )).css', 'x$((1+1))$(date).css', 'app/$((`cat n`)).tsx', 'x$((1', '$(git ls-files app)', 'app/$(cat name)'])
+    expect([w, nameFromOutput(w)]).toEqual([w, true])
+  // In the folder alone it fills in no name.
+  expect(nameFromVariable('$((N))/x.css')).toBe(false)
+  expect(nameFromOutput('$((N))/x.css')).toBe(false)
+  for (const [w, filled] of [['app/x$((N))', 'variable'], ['app/$(( $(cat n) ))', 'output'], ['app/x', null]] as const)
+    expect([w, removalFilledIn(w)]).toEqual([w, filled])
+})
+
 // #1954: an Edit or MultiEdit whose text is not in the file, or is there twice without replace_all,
 // would not apply; one Claude Code's Edit may still apply by matching curly quotes to straight ones,
 // one replacing empty text, and any other tool are not read so.

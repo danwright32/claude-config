@@ -1143,7 +1143,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // of two known texts, the sum worked out (bash, zsh) or the word as typed (dash, ksh): both are
     // given, each as text, so a guard judges every file either spells and neither as a variable's
     // value. Only here, where each word is judged alone: a write the command itself makes is read by
-    // the word's place among the others, so there it stays a word the shell fills in.
+    // the word's place among the others, so there it stays a word the shell fills in. A word holding
+    // no `$[`, whose sums are all `$((...))` (#3088), is given only worked out: every shell works
+    // that out, and none hands it on as typed.
     type Handed = NonNullable<ModKitWrites['runs']>[number]['args'][number]
     const asText = (w: string): Handed => {
       const p = absolutePath(w, dir, home, true)
@@ -1153,7 +1155,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const handedOf = (words: readonly string[]): Handed[] =>
       words.flatMap((w): Handed[] => {
         const sum = sums.get(w)
-        if (sum !== undefined) return [asText(w), asText(sum)]
+        if (sum !== undefined) return w.includes('$[') ? [asText(w), asText(sum)] : [asText(sum)]
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
         return [{
@@ -1164,6 +1166,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
           ...(textOnly(w) ? { unexpanded: true as const } : {}),
         }]
       })
+    // The settings a run is given in front of it (#3093, Command.env), so a guard judging a script by
+    // what it is handed sees what it reads from its environment too.
+    const ranWith = c.env ? { env: c.env } : {}
     // bun's or node's test runner (#2823) runs no script file, so its words are read as a tool's below.
     const runner = kind === 'node' ? testRunner(name, args, scriptFile) : undefined
     if (scriptFile && !runner) {
@@ -1171,7 +1176,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const handed = at < 0 ? [] : handedOf(scriptArgs(args.slice(at + 1)))
       if (handed.length) {
         const path = abs(scriptFile)
-        runs.push({ what: kind === undefined ? 'a script file run directly' : `a ${name} script file`, script: asWritten.get(scriptFile) ?? scriptFile, ...(path ? { path } : {}), args: handed })
+        runs.push({ what: kind === undefined ? 'a script file run directly' : `a ${name} script file`, script: asWritten.get(scriptFile) ?? scriptFile, ...(path ? { path } : {}), args: handed, ...ranWith })
       }
     }
     // A module python runs with -m, or a tool npx runs (#1682): what either writes cannot be read
@@ -1181,7 +1186,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     if (tool) {
       const handed = handedOf(toolArgs(tool.name, args.slice(tool.args)))
       const what = runner ? `the test runner ${tool.name}` : kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx'
-      if (handed.length) runs.push({ what, script: tool.name, tool: true, args: handed })
+      if (handed.length) runs.push({ what, script: tool.name, tool: true, args: handed, ...ranWith })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
