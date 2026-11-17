@@ -488,6 +488,38 @@ for q in ps_unread_move_or_stage ps_unread_commit_route; do
     || check "#3098 and a command that does not push is still let through there ($q)" "exit $rc [$(head -c 200 "$W/err")]"
 done
 
+echo "push scope notice: a question that crashes refuses the push (claude-config#3120)"
+
+# Each question answered no with exit 1, which bash also gives for a crash inside it: an unbound
+# variable under the hook's set -u, or a last command that fails where no return follows. So a
+# crashed question read as no, and the push went through with nothing having asked it. Now no has a
+# code of its own (PS_NO in lib/push-scope.sh), and any other exit refuses. Asked of a copy of the
+# hook whose library has the question replaced, after the library, by one that crashes either way,
+# with a plain push the whole library lets through (the control above).
+broken_hook() { # broken_hook <folder> <question> <body> -> a copy whose question is redefined as <body>
+  copy_hook "$1" || return 1
+  printf '\n%s() { %s; }\n' "$2" "$3" >> "$1/lib/push-scope.sh"
+}
+for q in ps_pending_merge_of_default ps_unread_commit_route ps_unread_move_or_stage ps_unread_write ps_unread_push_source; do
+  for how in unbound failing; do
+    case "$how" in
+      # shellcheck disable=SC2016  # the copied library expands it, and must find it unset
+      unbound) body=': "$ps__never_set_3120"; return 0' ;;
+      failing) body='[ -n "" ]' ;;
+    esac
+    broken_hook "$W/broken-$q-$how" "$q" "$body"
+    run_copy "$W/broken-$q-$how" "git push" "$PM"; rc=$?
+    err="$(cat "$W/err")"
+    case "$rc:$err" in
+      2:*"could not ask"*"$q"*) check "#3120 a $q that crashes ($how) refuses the push, naming the question" ok ;;
+      *) check "#3120 a $q that crashes ($how) refuses the push, naming the question" "exit $rc [${err:0:200}]" ;;
+    esac
+  done
+done
+run_copy "$W/broken-ps_unread_write-failing" "git status" "$PM"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -s "$W/err" ] && check "#3120 and a command that does not push is still let through beside a crashing question" ok \
+  || check "#3120 and a command that does not push is still let through beside a crashing question" "exit $rc [$(head -c 200 "$W/err")]"
+
 echo "push scope notice: a commit that names the paths it takes is read, not refused (claude-config#3111)"
 
 # `git commit <paths>` takes those files' edits straight from the working tree, with no git add.
