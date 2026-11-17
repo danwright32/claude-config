@@ -1950,6 +1950,130 @@ for field in field-email.py field-code.py field-queue.py; do
   allowed "#3119 a field named like a standard library module is read as a field: $field"
 done
 
+echo "slack drafts only: builtins under another name, sys.breakpointhook and sys.path under another name are read (claude-config#3151)"
+
+# Three more routes, each of which ran on Python 3.14.4 and passed the gate as it stood (measured
+# 2026-11-17 by the cases below, exit 0 and nothing said, handed a data file naming an endpoint).
+# One: enum binds builtins as bltns (Python 3.12 and later), a name no standard library module has,
+# so enum.bltns.exec(...) named no module off the list and exec was an attribute, not the builtin.
+# Two: sys.breakpointhook imports and calls whatever PYTHONBREAKPOINT names, set by the script
+# itself or on the command, and only the builtin breakpoint was read. Three: sys.path was read only
+# as the name sys followed by path, so sys under another name, sys read off another module
+# (glob.sys) and sys read off a value the gate does not follow (pathlib.PurePath("x").parser.sys)
+# all changed where Python finds modules unseen.
+D51="$T/d3151"
+mkdir -p "$D51/lib"
+cp "$D02/msg.json" "$D51/msg.json"
+run_51() { run_raw "$(payload Bash "$(bash_input "$1")" "$D51")"; }
+w51() { local name="$1"; shift; printf '%s\n' "$@" > "$D51/$name"; }
+EXEC51='.exec("import os; os.system(\"bash \" + sys.argv[1])")'
+w51 bltns.py 'import enum, sys' "enum.bltns$EXEC51"
+w51 bltns-renamed.py 'import enum, sys' 'e = enum' "e.bltns$EXEC51"
+w51 bltns-from.py 'import sys' 'from enum import bltns' "bltns$EXEC51"
+w51 bltns-open.py 'import enum, sys' 'enum.bltns.open(sys.argv[1], "a").close()'
+w51 hook-env.py 'import os, sys' 'os.environ["PYTHONBREAKPOINT"] = "os.system"' 'sys.breakpointhook("bash " + sys.argv[1])'
+w51 hook.py 'import sys' 'sys.breakpointhook("bash " + sys.argv[1])'
+w51 hook-from.py 'import sys' 'from sys import breakpointhook' 'breakpointhook("bash " + sys.argv[1])'
+w51 hook-renamed.py 'import sys' 's = sys' 's.breakpointhook("bash " + sys.argv[1])'
+# The other name on sys that runs code it is given by name rather than as a function the script
+# already holds: sys.remote_exec (Python 3.14) runs a file in a Python process, the script's own
+# included (measured 2026-11-17: handed its own pid and a file, the file ran).
+w51 remote.py 'import os, sys' 'sys.remote_exec(os.getpid(), sys.argv[1])'
+PATH51='.path.insert(0, "lib")'
+w51 path-call-chain.py 'import pathlib' "pathlib.PurePath(\"x\").parser.sys$PATH51" 'import json'
+w51 path-module-chain.py 'import glob' "glob.sys$PATH51" 'import json'
+w51 path-as.py 'import sys as s' "s$PATH51" 'import json'
+w51 path-renamed.py 'import sys' 'q = sys' "q$PATH51" 'import json'
+w51 path-renamed-chain.py 'import glob' 'q = glob.sys' "q$PATH51" 'import json'
+w51 path-from.py 'from glob import sys as s' "s$PATH51" 'import json'
+w51 path-default.py 'import sys' 'def go(m=sys):' "    m$PATH51" 'go()' 'import json'
+w51 path-unfollowed-name.py 'import pathlib' 'p = pathlib.PurePath("x").parser.sys' "p$PATH51" 'import json'
+for route in bltns.py bltns-renamed.py bltns-from.py bltns-open.py hook-env.py hook-from.py hook-renamed.py remote.py \
+  path-call-chain.py path-module-chain.py path-as.py path-renamed.py path-renamed-chain.py path-from.py \
+  path-default.py path-unfollowed-name.py; do
+  run_51 "python3 $route msg.json"
+  read_refused "#3151 a route the gate did not read is refused: $route"
+done
+run_51 "PYTHONBREAKPOINT=os.system python3 hook.py msg.json"
+read_refused "#3151 and sys.breakpointhook with PYTHONBREAKPOINT set on the command"
+run_51 "python3 bltns.py msg.json"
+says "#3151 the refusal names enum's name for builtins" "reaches past what the gate reads (bltns)"
+run_51 "python3 hook-env.py msg.json"
+says "#3151 the refusal names sys.breakpointhook" "reaches past what the gate reads (breakpointhook)"
+run_51 "python3 path-call-chain.py msg.json"
+says "#3151 sys.path read off a value the gate does not follow is named as sys.path" "changes where Python finds modules (sys.path)"
+run_51 "python3 path-as.py msg.json"
+says "#3151 and sys.path under another name" "changes where Python finds modules (sys.path)"
+# The class behind bltns (L96): a module the gate holds to be inert may bind any module under a
+# name that is not the module's own, which a reading by name cannot see. Every such name this
+# Python has is found here, from the gate's own list (its names cut out of the gate's text and
+# handed over as words, never the file), and a script reading through it must be refused, so the
+# next one fails here on the Python that brings it.
+read -r -a INERT51 <<< "$(sed -n '/^PY_INERT = frozenset({/,/})/p' "$DIR/slack_drafts_only_gate.py" | grep -o '"[A-Za-z_.]*"' | tr -d '"' | tr '\n' ' ')"
+python3 -B - ${INERT51[@]+"${INERT51[@]}"} > "$D51/aliases.txt" 2>"$D51/aliases.err" <<'PY'
+import importlib, sys
+MODULE = type(sys)
+seen, todo = set(), []
+for name in sorted(sys.argv[1:]):
+    try:
+        todo.append((name, importlib.import_module(name)))
+    except ImportError:
+        pass  # a module this Python does not have binds nothing
+print(f"modules {len(todo)}")
+while todo:
+    label, mod = todo.pop()
+    if id(mod) in seen:
+        continue
+    seen.add(id(mod))
+    for attr, value in sorted(vars(mod).items()):
+        if attr.startswith("_") or not isinstance(value, MODULE):
+            continue
+        if value.__name__.split(".")[-1] != attr:
+            print(f"alias {label} {attr} {value.__name__}")
+        if value.__name__.startswith(mod.__name__ + "."):
+            todo.append((f"{label}.{attr}", value))
+PY
+walked="$(sed -n 's/^modules //p' "$D51/aliases.txt")"
+if [ "${walked:-0}" -ge 40 ] 2>/dev/null; then check "#3151 the walk read the gate's list of inert modules ($walked of them)" ok
+else check "#3151 the walk read the gate's list of inert modules" "it read ${walked:-none}: $(head -c 300 "$D51/aliases.err")"; fi
+if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'; then
+  if grep -qx 'alias enum bltns builtins' "$D51/aliases.txt"; then check "#3151 and finds builtins under enum's name for it" ok
+  else check "#3151 and finds builtins under enum's name for it" "it found: $(tr '\n' '|' < "$D51/aliases.txt")"; fi
+else
+  echo "SUITE-PART-UNMEASURED enum binds builtins as bltns only on Python 3.12 and later, and this is $(python3 -V 2>&1)"
+fi
+while read -r _ module attr real; do
+  w51 "alias-$module-$attr.py" "import $module, sys" "$module.$attr.x(sys.argv[1])"
+  run_51 "python3 alias-$module-$attr.py msg.json"
+  read_refused "#3151 a script reading through $module.$attr, which is the $real module, is refused"
+done < <(grep '^alias ' "$D51/aliases.txt")
+# The controls: enum and sys used as they ordinarily are, sys under another name for anything but
+# its path, a path that is a field or os.path, and a field named sys, read and handed on, which is
+# a field like any other the gate does not follow (PR #3161).
+cat > "$D51/reads-3151.py" <<'PY'
+import argparse, enum, os, sys
+import sys as s
+class Kind(enum.Enum):
+    A = enum.auto()
+class Times:
+    def __init__(self, path):
+        self.path, self.sys, self.user = path, 0.5, 1.5
+    def total(self):
+        return self.sys + self.user
+q = sys
+parser = argparse.ArgumentParser()
+parser.add_argument("path")
+args = parser.parse_args()
+t = Times(args.path)
+print(Kind.A.name, s.argv[0], q.platform, sys.version_info[0], t.sys, round(t.sys), t.total())
+print(len(open(t.path).read()), os.path.basename(args.path), t.path.upper(), args.path.lower())
+sys.stdout.write("done\n")
+PY
+run_51 "python3 reads-3151.py msg.json"
+allowed "#3151 the control: a read only script using enum, sys under another name, a path field and a field named sys passes"
+run_51 "python3 reads-3151.py $RULES"
+allowed "#3151 and handed the real rules file"
+
 echo
 
 echo "passed: $pass, failed: $fail"

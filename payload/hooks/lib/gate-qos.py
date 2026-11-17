@@ -25,12 +25,20 @@ after both calls. So the level is never taken from what was asked: it is read ba
 
 Nothing here may stop the gate judging: every failure is reported in the line raise_qos returns, which
 the gate traces and puts in a refusal for running out of time, and the judgement goes on at whatever
-level it has.
+level it has. That holds for loading this file too, which the gate does as it starts: a python3 built
+without _ctypes has no ctypes to import, and with the import outside any try the gate failed there
+before judging anything (claude-config#3151). So the import's failure is kept (NO_CTYPES) and said
+by raise_qos like any other.
 """
 
-import ctypes
 import os
 import sys
+
+try:
+    import ctypes
+    NO_CTYPES = None
+except Exception as e:  # reported by raise_qos, never fatal: there is nothing to raise the level with
+    ctypes, NO_CTYPES = None, f"{type(e).__name__} {e}"
 
 QOS_CLASS_USER_INITIATED = 0x19
 TASK_CATEGORY_POLICY = 1
@@ -41,14 +49,17 @@ PROC_PIDTHREADID64INFO = 15
 LEGACY_PRIORITY = 31
 
 
-class _ThreadInfo(ctypes.Structure):
-    # struct proc_threadinfo, sys/proc_info.h
-    _fields_ = [("pth_user_time", ctypes.c_uint64), ("pth_system_time", ctypes.c_uint64),
-                ("pth_cpu_usage", ctypes.c_int32), ("pth_policy", ctypes.c_int32),
-                ("pth_run_state", ctypes.c_int32), ("pth_flags", ctypes.c_int32),
-                ("pth_sleep_time", ctypes.c_int32), ("pth_curpri", ctypes.c_int32),
-                ("pth_priority", ctypes.c_int32), ("pth_maxpriority", ctypes.c_int32),
-                ("pth_name", ctypes.c_char * 64)]
+def _thread_info():
+    """struct proc_threadinfo, sys/proc_info.h. Made when asked for, not as this file loads, which
+    must not need ctypes."""
+    class _ThreadInfo(ctypes.Structure):
+        _fields_ = [("pth_user_time", ctypes.c_uint64), ("pth_system_time", ctypes.c_uint64),
+                    ("pth_cpu_usage", ctypes.c_int32), ("pth_policy", ctypes.c_int32),
+                    ("pth_run_state", ctypes.c_int32), ("pth_flags", ctypes.c_int32),
+                    ("pth_sleep_time", ctypes.c_int32), ("pth_curpri", ctypes.c_int32),
+                    ("pth_priority", ctypes.c_int32), ("pth_maxpriority", ctypes.c_int32),
+                    ("pth_name", ctypes.c_char * 64)]
+    return _ThreadInfo()
 
 
 def _base_priority(libc):
@@ -58,7 +69,7 @@ def _base_priority(libc):
     tid = ctypes.c_uint64()
     if libc.pthread_threadid_np(None, ctypes.byref(tid)) != 0:
         return None
-    info = _ThreadInfo()
+    info = _thread_info()
     got = libc.proc_pidinfo(os.getpid(), PROC_PIDTHREADID64INFO, tid.value, ctypes.byref(info), ctypes.sizeof(info))
     return info.pth_priority if got == ctypes.sizeof(info) else None
 
@@ -77,6 +88,8 @@ def raise_qos():
     and a line saying the level it really runs at and, if not raised, why."""
     if sys.platform != "darwin":
         return NOT_MACOS, "qos: not raised: not macOS"
+    if ctypes is None:
+        return NOT_RAISED, f"qos: not raised: this python3 has no ctypes ({NO_CTYPES})"[:200]
     try:
         libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
         task = ctypes.c_uint.in_dll(libc, "mach_task_self_").value

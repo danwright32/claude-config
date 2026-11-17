@@ -316,6 +316,29 @@ class Recorder:
         self._note("pathfinder", (name, tuple(path)), ["ok", _spec_form(spec)])
         return spec
 
+    def module_from_spec(self, spec):
+        """importlib.util.module_from_spec, which is where a compiled extension's file is loaded: the
+        system's loader reads it there and then, with no open and no event the audit hook reads
+        (measured on Python 3.14.4, claude-config#3151). So what that file holds is asked first, as a
+        recorded read, unless this judgement has read it already (lib/py-aliases.py reads it a moment
+        before), and a kept judgement asks for it again. A loader that makes its module without
+        the disk (one written in Python, built in or frozen: the default, empty module) passes
+        through; any other marks the record not whole."""
+        loader = getattr(spec, "loader", None)
+        if isinstance(loader, _machinery.ExtensionFileLoader):
+            origin = getattr(spec, "origin", None)
+            if not isinstance(origin, str):
+                self.taint(f"importlib.util.module_from_spec of a compiled module with no file ({origin!r})")
+            elif ("read", origin) not in self.reads:
+                try:
+                    self.open(origin, "rb").close()
+                except (OSError, ValueError):
+                    pass  # recorded as the read's answer; the real call below says what it makes of it
+        elif not (isinstance(loader, (_machinery.SourceFileLoader, _machinery.SourcelessFileLoader))
+                  or loader in (_machinery.BuiltinImporter, _machinery.FrozenImporter)):
+            self.taint(f"importlib.util.module_from_spec with the loader {type(loader).__name__}, which the recorder does not know")
+        return _util.module_from_spec(spec)
+
     def parse(self, source, filename="<unknown>", *rest, **kw):
         """ast.parse. On a syntax error CPython opens the file it was told the source came from (by
         default "<unknown>", relative to the process's directory) to quote the line, so that attempt
@@ -442,8 +465,8 @@ def stand_ins(recorder):
         "path": path, "environ": environ, "getenv": environ.get, "getcwd": lambda: recorder.asked("getcwd"),
         "access": access, "listdir": listdir, "walk": recorder.walk})
     glob_ = _StandIn(_glob, recorder, "glob", ("escape", "has_magic"), {"glob": recorder.glob})
-    util = _StandIn(_util, recorder, "importlib.util", ("spec_from_file_location", "module_from_spec"),
-                    {"find_spec": recorder.find_spec})
+    util = _StandIn(_util, recorder, "importlib.util", ("spec_from_file_location",),
+                    {"find_spec": recorder.find_spec, "module_from_spec": recorder.module_from_spec})
     finder = _StandIn(_machinery.PathFinder, recorder, "importlib.machinery.PathFinder", (),
                       {"find_spec": recorder.pathfinder})
     machinery = _StandIn(_machinery, recorder, "importlib.machinery", (), {"PathFinder": finder})

@@ -9,7 +9,8 @@ read as unable to act, so the data file such a script was handed went unchecked 
 address. Measured through the gate on 2026-11-16: every renamed form in
 test-slack-drafts-code-loaders.sh passed.
 
-follow() reads two things from a script's syntax tree:
+follow() reads three things from a script's syntax tree, the third being the names sys goes by
+beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow):
 
 - The names a module, or anything reached from one by attributes, is bound to where the binding can
   be read: an assignment to a name (annotated or not, chained, or a tuple against a tuple of the
@@ -271,11 +272,19 @@ def make(inert):
         return ways
 
     def follow(nodes, local):
-        """(names, phrase): the names a module, or something reached from one, is bound to beyond
-        the ones an import binds, and how the script puts a module where the gate does not follow
-        it, as a phrase, or None."""
+        """(names, phrase, as_sys): the names a module, or something reached from one, is bound to
+        beyond the ones an import binds; how the script puts a module where the gate does not
+        follow it, as a phrase, or None; and the names sys goes by beyond its own
+        (claude-config#3151). sys is not among the first (reaches): the only thing read off it by
+        name is its path, which py_acts read as the name sys followed by path alone, so
+        `import sys as s`, `q = sys` and `q = glob.sys` each changed where Python finds modules
+        unseen. as_sys holds a name an import binds to something called sys, and a name bound to
+        sys, to another such name, or to an attribute called sys of a value that is not followed
+        (`p = pathlib.PurePath("x").parser.sys`), by any binding read here."""
         ways = imported(nodes, local)
         holds = {}
+        as_sys = {a.asname or a.name for node in nodes if isinstance(node, (ast.Import, ast.ImportFrom))
+                  for a in node.names if a.name == "sys"} - {"sys"}
 
         def held(name):
             """What name holds, NOTHING for one no module has reached."""
@@ -312,6 +321,11 @@ def make(inert):
         def bind_name(name, expr, whole=True):
             """Whether expr's value was read, and so went to a name the gate reads on from."""
             v = value(expr)
+            if name not in as_sys and name != "sys" and (
+                    v is sys or (isinstance(expr, ast.Name) and expr.id in as_sys)
+                    or (v is NOTHING and isinstance(expr, ast.Attribute) and expr.attr == "sys")):
+                as_sys.add(name)
+                changed[0] = True  # a name bound to this one, read before it, is read again
             if v is NOTHING:
                 return False
             if whole:  # a walrus also gives its value to wherever it stands, which is read below
@@ -399,6 +413,6 @@ def make(inert):
             if is_module(value(node)):
                 phrase = f"puts the module {dotted(node)} where the gate does not follow it"
                 break
-        return renamed, phrase
+        return renamed, phrase, as_sys
 
     return follow

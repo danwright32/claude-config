@@ -188,6 +188,44 @@ with gate.open(os.path.join(work, "t", "a", "f.txt"), "rb") as f:
     expect("a file past MAX_READ is still read whole", f.read() == b"hello\n")
 jc.MAX_READ = was
 expect("a file past MAX_READ marks the record: %r" % rec4.tainted, rec4.tainted and "larger" in rec4.tainted)
+# importlib.util.module_from_spec is where a compiled extension's file is loaded from the disk, by
+# the system's loader, with no open and no event the audit hook reads (claude-config#3151): passed
+# through as pure, a judgement that made one could be kept with that file nowhere in its record.
+# Measured here by an audit hook of the test's own: the call raises import with the file's path.
+import importlib.machinery
+ext = next((s for s in (importlib.util.find_spec(n) for n in ("_lsprof", "_multibytecodec", "_statistics",
+            "_queue", "_dbm", "_posixshmem", "_uuid", "cmath", "audioop")) if s is not None
+            and isinstance(s.loader, importlib.machinery.ExtensionFileLoader) and s.name not in sys.modules), None)
+if ext is None:
+    print("SUITE-PART-UNMEASURED a compiled extension made through the stand ins, because none of the ones tried is there unloaded")
+else:
+    loaded = []
+    sys.addaudithook(lambda event, args: loaded.append(args[1]) if event == "import" and args[1] == ext.origin else None)
+    rec5 = jc.Recorder()
+    jc.install(rec5, [vars(gate)])
+    made = gate.importlib.util.module_from_spec(gate.importlib.util.spec_from_file_location(ext.name, ext.origin))
+    expect("the control: making %s from its spec loaded %s from the disk" % (ext.name, ext.origin),
+           loaded == [ext.origin] and getattr(made, "__file__", None) == ext.origin)
+    big = os.path.getsize(ext.origin) > jc.MAX_READ
+    expect("what the compiled extension's file holds is in the record, or the record is marked for its size: %r, %r"
+           % (rec5.tainted, sorted(k for k in rec5.reads if k[0] == "read")),
+           (rec5.tainted and "larger" in rec5.tainted) if big
+           else (rec5.tainted is None and rec5.reads.get(("read", ext.origin), [None])[0] == "ok"))
+    # A module written in Python is made empty, with nothing read: it passes through unmarked. A
+    # loader the recorder does not know may read anything while it makes its module.
+    rec6 = jc.Recorder()
+    jc.install(rec6, [vars(gate)])
+    plain = gate.importlib.util.module_from_spec(gate.importlib.util.spec_from_file_location("jc_plain", os.path.join(work, "src.py")))
+    expect("a module written in Python made from its spec leaves the record whole and empty: %r, %r"
+           % (rec6.tainted, rec6.reads), plain.__name__ == "jc_plain" and rec6.tainted is None and not rec6.reads)
+    class OwnLoader:
+        def create_module(self, spec):
+            return None
+        def exec_module(self, module):
+            pass
+    gate.importlib.util.module_from_spec(importlib.machinery.ModuleSpec("jc_own", OwnLoader()))
+    expect("a loader the recorder does not know marks the record: %r" % rec6.tainted,
+           rec6.tainted and "OwnLoader" in rec6.tainted)
 
 # Fail closed on the way in and on the way out.
 cache = os.path.join(work, "cache")
@@ -634,7 +672,7 @@ def judged(text, follow):
 # A real standard library module the gate loaded for itself is asked the same two questions, though
 # nothing of it is read from the disk to answer: the next run loads it from wherever it is then.
 glob_file = sys.modules["glob"].__spec__.origin
-rec, (renamed, phrase) = judged("import glob\nq = glob\ngo(glob.os)\n", al.make(frozenset({"glob"})))
+rec, (renamed, phrase, _as_sys) = judged("import glob\nq = glob\ngo(glob.os)\n", al.make(frozenset({"glob"})))
 rec.closed = True
 expect("a module already loaded is read as it stands (%r, %r)" % (sorted(renamed), phrase),
        renamed == {"q"} and phrase == "puts the module glob.os where the gate does not follow it")
@@ -647,7 +685,7 @@ follow = al.make(frozenset({"jcmod", "jcdep", "jcsource"}))
 
 # A module whose own imports are all loaded: read whole, with nothing left unrecorded.
 mod_file = os.path.join(lib, "jcmod.py")
-rec, (renamed, phrase) = judged("import jcmod\nq = jcmod\ngo(jcmod.os, jcmod.size)\n", follow)
+rec, (renamed, phrase, _as_sys) = judged("import jcmod\nq = jcmod\ngo(jcmod.os, jcmod.size)\n", follow)
 jc.store(cache, "alias", rec)  # which closes the record: nothing this test does below is the judgement's
 expect("the record is whole: %r" % rec.tainted, rec.tainted is None)
 expect("the module was read: the name it is given is followed (%r)" % sorted(renamed), renamed == {"q"})
@@ -665,7 +703,7 @@ if compiled is None:
     print("SUITE-PART-UNMEASURED a compiled module arriving while another loads, because this run had already loaded cmath, array and unicodedata")
 else:
     open(os.path.join(lib, "jcdep.py"), "w").write("import %s as tool\n" % compiled)
-    rec, (renamed, phrase) = judged("import jcdep\nr = jcdep\ngo(jcdep.tool)\n", follow)
+    rec, (renamed, phrase, _as_sys) = judged("import jcdep\nr = jcdep\ngo(jcdep.tool)\n", follow)
     rec.closed = True
     expect("a module that imports a compiled one is read (%r, %r)" % (sorted(renamed), phrase),
            renamed == {"r"} and phrase == "puts the module jcdep.tool where the gate does not follow it")
@@ -684,7 +722,7 @@ if source is None:
     print("SUITE-PART-UNMEASURED a Python module arriving while another loads, because none of the ones tried is there to load")
 else:
     open(os.path.join(lib, "jcsource.py"), "w").write("import %s as tool\n" % source)
-    rec, (renamed, phrase) = judged("import jcsource\ns = jcsource\n", follow)
+    rec, (renamed, phrase, _as_sys) = judged("import jcsource\ns = jcsource\n", follow)
     rec.closed = True
     expect("a module importing one Python reads for itself is still read (%r)" % sorted(renamed), renamed == {"s"})
     expect("and that read marks the record, so it is not kept: %r" % rec.tainted,
