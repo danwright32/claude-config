@@ -3734,7 +3734,9 @@ alone does nothing for a command line process (XNU squashes it to legacy for a t
 application role), so the gate first takes the default application role, then asks: base priority
 37. The level is read back from the kernel and traced (`SLACK_GATE_CACHE_TRACE`); under a QoS clamp
 (`taskpolicy -c`, a ceiling nothing inside a process can lift) the trace says it was not raised, and
-a refusal for running out of time names the level it ran at. `test-slack-drafts-gate-qos.sh` holds it.
+a refusal for running out of time names the level it ran at. When the level cannot be read back, the
+trace and the refusal say exactly that, never that the raise failed. `test-slack-drafts-gate-qos.sh`
+holds it.
 
 The suite's cost checks (`test-slack-drafts-only-gate.sh`) hold the gate's processor time in units of
 a fixed workload that shares nothing with the gate (0.095 s each on the personal MacBook), the least

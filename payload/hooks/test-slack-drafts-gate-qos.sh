@@ -122,9 +122,15 @@ esac
 
 # The failure path: a QoS clamp is a ceiling nothing inside the process can lift (measured: under
 # taskpolicy -c utility the base priority stays 20 after the raise). The gate still judges, and its
-# trace says it could not raise, with the level it really ran at.
-judge taskpolicy -c utility
+# trace says it could not raise, with the level it really ran at. A cache of its own, so the allow
+# the control stored cannot answer it: the call is judged afresh at the clamped level (L159).
+judge env SLACK_GATE_CACHE_DIR="$T/gate-cache-clamp" taskpolicy -c utility
 allowed "under a utility clamp the same call is still judged and allowed"
+if grep -q '^miss: ' "$T/trace" && ! grep -qx 'hit' "$T/trace"; then
+  check "and it was judged afresh under the clamp, not answered from the cache" ok
+else
+  check "and it was judged afresh under the clamp, not answered from the cache" "trace: $(tr '\n' '|' < "$T/trace")"
+fi
 case "$QOS_LINE" in
   "qos: not raised"*"base priority 20") check "and the gate says it could not raise its priority, naming the level it ran at" ok ;;
   *) check "and the gate says it could not raise its priority, naming the level it ran at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
@@ -142,6 +148,31 @@ ERR="$(cat "$T/err")"
 refused "the control: out of time with no clamp is refused too"
 says "and says it ran out of time" "ran out of time"
 lacks "but says nothing of the priority, which was raised" "scheduling priority"
+
+# The level asked for but never read back: the raise was not refused, so the refusal may not say it
+# could not raise, only that its priority could not be read back (L11). A copy of the gate stands in
+# whose read of the kernel's level answers nothing, the case proc_pidinfo failing produces.
+mkdir -p "$T/unread/hooks"
+cp "$HOOK" "$T/unread/hooks/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/unread/hooks/lib"
+cat > "$T/unread/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os
+spec = importlib.util.spec_from_file_location("gate", os.environ["UNREAD_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+gate.raise_qos.__globals__["_base_priority"] = lambda libc: None
+gate.main()
+PY
+: > "$T/trace"
+OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1 SLACK_GATE_CACHE_TRACE="$T/trace" UNREAD_REAL_READER="$DIR/slack_drafts_only_gate.py" bash "$T/unread/hooks/slack-drafts-only-gate.sh" 2>"$T/err")"; RC=$?
+ERR="$(cat "$T/err")"
+refused "out of time with the level unread is refused"
+says "and the refusal says its priority could not be read back" "its priority could not be read back"
+lacks "and never that it could not raise it, which was not measured" "could not raise"
+case "$(grep '^qos: ' "$T/trace")" in
+  "qos: unread: "*) check "and the trace says the level was not read back, not that it was not raised" ok ;;
+  *) check "and the trace says the level was not read back, not that it was not raised" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+esac
 
 echo
 echo "passed: $pass, failed: $fail"

@@ -63,12 +63,20 @@ def _base_priority(libc):
     return info.pth_priority if got == ctypes.sizeof(info) else None
 
 
+# What raise_qos found, the first half of what it returns. Four, because each says something different
+# in a refusal for running out of time (L11): only NOT_RAISED may say the gate could not raise its
+# priority, since only there was a refusal or an unrisen level measured.
+RAISED = "raised"          # read back above the legacy level
+NOT_RAISED = "not raised"  # a call was refused, or the level read back did not rise
+UNREAD = "unread"          # both calls accepted, but the level could not be read back
+NOT_MACOS = "not macOS"    # nothing to raise, and no slower cores to be moved to
+
+
 def raise_qos():
-    """Raise the calling thread to user initiated. Returns (held, line): whether the kernel now runs it
-    above the legacy level (None off macOS, where there are no such cores to keep), and a line saying
-    the level it really runs at and, if not raised, why."""
+    """Raise the calling thread to user initiated. Returns (state, line): one of the four states above,
+    and a line saying the level it really runs at and, if not raised, why."""
     if sys.platform != "darwin":
-        return None, "qos: not raised: not macOS"
+        return NOT_MACOS, "qos: not raised: not macOS"
     try:
         libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
         task = ctypes.c_uint.in_dll(libc, "mach_task_self_").value
@@ -77,18 +85,23 @@ def raise_qos():
         role = ctypes.c_int(TASK_DEFAULT_APPLICATION)
         rc_role = libc.task_policy_set(task, TASK_CATEGORY_POLICY, ctypes.byref(role), 1)
         rc_qos = libc.pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)
-        base = _base_priority(libc)
     except Exception as e:  # reported, never fatal: the judgement goes on at the level it has
-        return False, f"qos: not raised: {type(e).__name__} {e}"[:200]
-    level = f"base priority {base if base is not None else 'unread'}"
-    if base is not None and base > LEGACY_PRIORITY:
-        return True, f"qos: user-initiated, {level}"
-    why = []
+        return NOT_RAISED, f"qos: not raised: {type(e).__name__} {e}"[:200]
+    refused = []
     if rc_role != 0:
-        why.append(f"the application role was refused ({rc_role})")
+        refused.append(f"the application role was refused ({rc_role})")
     if rc_qos != 0:
-        why.append(f"user initiated was refused ({rc_qos})")
-    if not why:
-        why.append("the level did not rise (a QoS clamp, which nothing inside a process can lift)"
-                   if base is not None else "the level could not be read back")
-    return False, f"qos: not raised: {', '.join(why)}, {level}"
+        refused.append(f"user initiated was refused ({rc_qos})")
+    try:
+        base, unread = _base_priority(libc), "the level could not be read back"
+    except Exception as e:  # the raise was asked for; only the reading back failed
+        base, unread = None, f"the level could not be read back ({type(e).__name__} {e})"[:120]
+    level = f"base priority {base if base is not None else 'unread'}"
+    if refused:
+        return NOT_RAISED, f"qos: not raised: {', '.join(refused)}, {level}"
+    if base is None:
+        return UNREAD, f"qos: unread: user initiated asked for and accepted, but {unread}"
+    if base > LEGACY_PRIORITY:
+        return RAISED, f"qos: user-initiated, {level}"
+    return NOT_RAISED, (f"qos: not raised: the level did not rise (a QoS clamp, which nothing inside a "
+                        f"process can lift), {level}")

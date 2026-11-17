@@ -1556,9 +1556,11 @@ _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
-# (claude-config#2918). QOS[0] is (held, the line saying the level the kernel gave it), set by main.
-raise_qos = load_lib("gate_qos", "gate-qos.py").raise_qos
-QOS = [(True, "")]
+# (claude-config#2918). QOS[0] is (gate_qos's state, the line saying the level the kernel gave it), set
+# by main; None until then.
+gate_qos = load_lib("gate_qos", "gate-qos.py")
+raise_qos = gate_qos.raise_qos
+QOS = [(None, "")]
 
 
 def draft_advice(where):
@@ -1816,9 +1818,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         spent = (f"{BUDGET_SECONDS} seconds" if self.budget == BUDGET_SECONDS and self.clock is time.monotonic
                  else f"its budget of {self.budget} step{'' if self.budget == 1 else 's'}")
         # Run at a level it could not raise, a busy Mac had it on its slower cores (claude-config#2918).
-        held, line = QOS[0]
-        slow = "" if held is not False else (f" It could not raise its scheduling priority ({line.removeprefix('qos: not raised: ')}), "
-                                f"so a busy Mac may have run it on its slower cores.")
+        # Said only where a refusal or an unrisen level was measured; a level never read back is said
+        # to be unknown, not unraised (L11).
+        state, line = QOS[0]
+        slow = ""
+        if state == gate_qos.NOT_RAISED:
+            slow = (f" It could not raise its scheduling priority ({line.removeprefix('qos: not raised: ')}), "
+                    f"so a busy Mac may have run it on its slower cores.")
+        elif state == gate_qos.UNREAD:
+            slow = (" It asked for a higher scheduling priority and was not refused, but its priority could "
+                    "not be read back, so whether a busy Mac ran it on its slower cores is not known.")
         return (f"BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after "
                 f"{spent}, inside the time limit Claude Code gives it, while {doing}.{slow} Whether this "
                 f"command sends a Slack message was not checked, and this is not a finding that it does "
