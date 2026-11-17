@@ -3730,6 +3730,20 @@ test('/sleep typed mid turn whose turn ends before the driver reaches a Stop sta
   expect(w.prompts.length).toBe(1)
 })
 
+test('a night owed at a turn end that cannot be started is said in a toast, with how to start it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  w.o.noRepo = true
+  w.o.cwdThrows = true
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  // The reason is whatever the read threw, as the engine passes it on.
+  expect(w.toasts.filter(t => /^Sleep mode is on, but this session could not be started on the night's work \(.+\)\. Type "start the night's work" here to start it\.$/.test(t)).length).toBe(1)
+})
+
 test('a /sleep mid turn that started no night, and one in a session with no goal, start nothing (#3136)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { goals: { s1: null }, ask: NO_GOAL })
   await start($ as never, clock)

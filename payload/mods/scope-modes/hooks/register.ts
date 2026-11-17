@@ -3364,7 +3364,8 @@ const startHere = async ($: EngineInterface): Promise<string> => {
     return ` This session could not be started on the night's work (${msg(err)}): type "start the night's work" here to start it.`
   }
 }
-// The night owed to this session at its turn's end (#3136), started then; a failure is said in a toast.
+// The night owed to this session at its turn's end (#3136), started then; a failure is said in a toast,
+// and nothing here throws past the turn's end it runs in (lessons review).
 const startOwed = async ($: EngineInterface) => {
   const owed = turnEnded(mid)
   if (owed === undefined) return
@@ -3373,7 +3374,12 @@ const startOwed = async ($: EngineInterface) => {
     if ((await startOwnNight($, owed, lead)) !== 'started') mid.notes.unshift(...lead)
   } catch (err) {
     mid.notes.unshift(...lead)
-    $.ui.toast(`Sleep mode is on, but this session could not be started on the night's work (${msg(err)}). Type "start the night's work" here to start it.`)
+    const said = `Sleep mode is on, but this session could not be started on the night's work (${msg(err)}). Type "start the night's work" here to start it.`
+    try {
+      $.ui.toast(said)
+    } catch (toastErr) {
+      $.ui.log(`scope-modes: ${said} The toast saying so failed too: ${msg(toastErr)}`)
+    }
   }
 }
 
