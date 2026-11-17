@@ -2806,6 +2806,51 @@ test('asleep, a batch that clicks in its own tab and then closes it runs; a read
   expect(await batch('k6', [click, close(7)])).toBe('ran')
   expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`])
 })
+// #3121: once that batch's result lists the group without the tab it closed, the tab is no longer
+// the session's, as after a close alone. The tab its click opened (12) is still the session's to
+// close, and only to close, so the two records are written from one reading of the tabs it had.
+// The close's own line in a batch result is a guess (no such batch had run); only the list is read.
+const batchGroup = (ids: number[]) => `Tab Context:\n- Executed on tabId: 3\n- Available tabs:\n  • tabId 3: "Mail" ("https://mail.example.com/")${ids.map(t => `\n  • tabId ${t}: "Page" ("${t === 7 ? 'http://localhost:3000/' : 'https://docs.example.com/'}")`).join('')}`
+const batchClosing = async ($: $T, on: Parameters<typeof world>[0], result: string) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}tabs_create_mcp`, tool_use_id: 'c1' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c1', `Created new tab. Tab ID: 7\n${tabContext(7, 'chrome://newtab/')}`)
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'c2' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c2', `Navigated to http://localhost:3000\n${tabContext(7, 'http://localhost:3000/')}`)
+  const actions = [{ name: 'computer', input: { tabId: 7, action: 'left_click', coordinate: [1, 2] } }, { name: 'tabs_close_mcp', input: { tabId: 7 } }]
+  expect(await call($ as never, { tool: `${CHROME}browser_batch`, actions, tool_use_id: 'c3' } as never)).toBe('ran')
+  await chromeResult($ as never, 'c3', result)
+  return w
+}
+test("asleep, a tab a batch closed is no longer the session's once its result lists the group without it, and the tab its click opened can still be closed and nothing more (#3121)", withDeps, async ($, on) => {
+  const w = await batchClosing($ as never, on, `[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Closed tab 7.\n\n\n${batchGroup([12])}`)
+  const GONE = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 7, which this session did not create and did not see appear in its tab group after its own action/
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 7, url: 'localhost:3000', tool_use_id: 'c4' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 7, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c5' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 7, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c6' } as never)).toMatch(GONE)
+  expect(await call($ as never, { tool: `${CHROME}browser_batch`, actions: [{ name: 'navigate', input: { tabId: 7, url: 'localhost' } }, { name: 'tabs_close_mcp', input: { tabId: 7 } }], tool_use_id: 'c7' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 7, which this session did not create/)
+  // The tab the batch's click opened: closable, and nothing more. The tab that was there: neither.
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 12, tool_use_id: 'c8' } as never)).toMatch(/did not use mcp__claude-in-chrome__read_page on tab 12, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}navigate`, tabId: 12, url: 'localhost:3000', tool_use_id: 'c9' } as never)).toMatch(/did not use mcp__claude-in-chrome__navigate on tab 12, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 3, tool_use_id: 'c10' } as never)).toMatch(/did not use mcp__claude-in-chrome__tabs_close_mcp on tab 3, which this session did not create/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 12, tool_use_id: 'c11' } as never)).toBe('ran')
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}tabs_close_mcp`])
+})
+test("asleep, a batch whose result lists no group leaves the tab it would have closed the session's (#3121)", withDeps, async ($, on) => {
+  // Refused elsewhere, or failed before the browser: nothing says the tab is gone, so it can be closed.
+  const denied = await batchClosing($ as never, on, 'Permission to use the browser was denied')
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c4' } as never)).toMatch(/on tab 7, whose page is not on a test host/)
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c5' } as never)).toBe('ran')
+  expect(denied.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}tabs_close_mcp`])
+})
+test("asleep, a batch whose close did not take leaves the tab the session's, on the host its result's list shows (#3121)", withDeps, async ($, on) => {
+  const w = await batchClosing($ as never, on, `[computer:left_click] Clicked on element ref_1\n[tabs_close_mcp] Error: could not close\n\n\n${batchGroup([7])}`)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 7, tool_use_id: 'c4' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: `${CHROME}tabs_close_mcp`, tabId: 7, tool_use_id: 'c5' } as never)).toBe('ran')
+  expect(w.reached.filter(r => r.startsWith(CHROME))).toEqual([`${CHROME}tabs_create_mcp`, `${CHROME}navigate`, `${CHROME}browser_batch`, `${CHROME}read_page`, `${CHROME}tabs_close_mcp`])
+})
 // The failure paths of that record (#3099): both end with the tab not closable, never closable by default.
 const ownGroup = (also: string[] = []) => `Tab Context:\n- Executed on tabId: 7\n- Available tabs:\n  • tabId 7: "App" ("http://localhost:3000/")${also.map(t => `\n  • tabId ${t}: "Docs" ("https://docs.example.com/")`).join('')}`
 const NOT_OPENED = /did not use mcp__claude-in-chrome__tabs_close_mcp on tab 12, which this session did not create and did not see appear in its tab group after its own action/
