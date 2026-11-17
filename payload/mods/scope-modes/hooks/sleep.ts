@@ -221,33 +221,9 @@ export const sleepDir = (home: string) => `${home.replace(/\/+$/, '')}/.claude/s
 
 /**
  * The name a record takes in the ended folder when it is moved aside at the end of a sleep, by a wake
- * or by its noon end: when it moved, how, and the session that moved it. The one spelling, so when a
- * sleep ended is read back from it (sleepEndsOf).
+ * or by its noon end: when it moved, how, and the session that moved it. The one spelling.
  */
 export const endedNameOf = (at: number, how: 'woke' | 'limit', session: string) => `${at}-${how}-${session}.json`
-const ENDED_NAME = /^(\d+)-(?:woke|limit)-.+\.json$/
-
-/**
- * When each sleep on this Mac ended (#2993), ms, oldest first: one per record moved aside, read from
- * the name endedNameOf gave it, and the end of a record past its time not yet moved aside. A record
- * still asleep, or from another boot (moved aside by the next session to see it), adds nothing.
- */
-export const sleepEndsOf = (names: readonly string[], reading: SleepReading): number[] => {
-  const ends: number[] = []
-  for (const n of names) {
-    const m = ENDED_NAME.exec(n)
-    if (m) ends.push(Number(m[1]))
-  }
-  if (reading.state === 'expired') ends.push(reading.record.until)
-  return ends.sort((a, b) => a - b)
-}
-
-/**
- * sleepEndsOf over the ended folder `dir`, read through the calls given (the engine refuses handing
- * its handle to a helper). No folder is no end; one that cannot be listed throws, so the caller says so.
- */
-export const readSleepEnds = async (io: { exists: (p: string) => Promise<boolean>; list: (p: string) => Promise<readonly { name: string }[]> }, dir: string, reading: SleepReading): Promise<number[]> =>
-  sleepEndsOf((await io.exists(dir)) ? (await io.list(dir)).map(e => e.name) : [], reading)
 
 /** A night's notes file, named by its generation as hooks/lib/sleep-report.py names it (notes_path). */
 export const notesOf = (home: string, generation: string) => `${sleepDir(home)}/notes/${generation.replace(/[^\w.-]/g, '_')}.jsonl`

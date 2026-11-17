@@ -86,7 +86,7 @@ import { transcriptPlaces } from './mod-kit/projects.ts'
 import { inputTexts } from './mod-kit/inputs.ts'
 import { patchedPaths } from './mod-kit/patch.ts'
 import { answerMidTurn, drivenStop, midTurn, midTurnToast, resetMidTurn, startNight, takeNotes, turnEnded } from './midturn.ts'
-import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, readSleepEnds, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, endedNameOf, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -5291,13 +5291,6 @@ export const register: Register = on => {
         const r = await built.process.run(noteArgv(seen.home, `${sleepDir(seen.home)}/current.json`, line), { timeoutMs: BOOT_MS })
         if (r.exitCode !== 0) throw new Error(noteFailure(r))
         return { isNoted: true }
-      },
-      // When each sleep ended (#2993), for the Slack alert guard's question two hours after.
-      sleepEnds: async () => {
-        const seen = await nounReading()
-        const home = seen?.home ?? (await built.env.get('HOME'))
-        if (!home) throw new Error('HOME is not set')
-        return readSleepEnds({ exists: p => built.fs.exists(p), list: d => built.fs.list(d) }, `${sleepDir(home)}/ended`, seen?.reading ?? { state: 'none' })
       },
     }
     return { ...built, scopeModes }
