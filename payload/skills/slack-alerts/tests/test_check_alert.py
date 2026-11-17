@@ -11,11 +11,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 sys.path.insert(0, SKILL_DIR)
+# The skill folder is carried to both Macs by the sync, so loading the checker leaves no bytecode
+# folder behind in it (claude-config#2600).
+sys.dont_write_bytecode = True
 
 import check_alert  # noqa: E402
 
@@ -253,6 +257,23 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("no-such-message.txt", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_byte_that_is_not_utf8_is_judged_and_quoted_back_not_raised(self):
+        # A message can carry any byte. It is still judged on its rules, and the failure line that
+        # quotes it back must print, from standard input and from a file alike.
+        message = b"*Deploy \xff alert*\n<https://example.com/pulls/641|View pull request>\n"
+        command = [sys.executable, "-I", os.path.join(SKILL_DIR, "check_alert.py"), "--kind", "alert"]
+        piped = subprocess.run(command, input=message, capture_output=True)
+        # Written here, not kept as a fixture, so the repository holds no file with such a byte.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "message.txt")
+            with open(path, "wb") as handle:
+                handle.write(message)
+            filed = subprocess.run(command + [path], capture_output=True)
+        for done in (piped, filed):
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn(b"first-line-title", done.stdout)
+            self.assertNotIn(b"Traceback", done.stderr)
 
 
 def skill_text():

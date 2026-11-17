@@ -223,13 +223,15 @@ def main(argv=None):
     parser.add_argument("--app", action="append", default=[], help="the app's name, which the message must not open with (repeatable)")
     parser.add_argument("file", nargs="?", help="the message file; standard input when left out")
     args = parser.parse_args(argv)
+    # A byte that is not UTF-8 is read as the replacement character, so the message is still
+    # judged on its rules and a failure line that quotes it back can always be printed.
     try:
         if args.file:
-            with open(args.file, encoding="utf-8") as handle:
+            with open(args.file, encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
         else:
-            text = sys.stdin.read()
-    except (OSError, UnicodeDecodeError) as error:
+            text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
+    except OSError as error:
         # Exit 1 means the message broke a rule, so a message that could not be read is exit 2.
         print(f"check_alert.py: cannot read {args.file or 'standard input'}: {error}", file=sys.stderr)
         return 2

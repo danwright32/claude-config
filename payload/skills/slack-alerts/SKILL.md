@@ -115,6 +115,9 @@ problem is urgent: read the rendered message once for those.
 - **The project's CLAUDE.md** records the bot and channel, which alerts are urgent, who is
   mentioned, and any alert that keeps its own layout, named with the date it was approved. An
   alert recorded there is left exactly as it posts.
+- **The project's tests** run the checker over every message the code can render. CI has no
+  Claude config folder, so the project keeps its own copy of `check_alert.py`, with a test that
+  runs where this one exists and fails when the two differ (Dan, 2026-11-17).
 - **The route has to render formatting.** Read one posted message in Slack. If the asterisks and
   angle brackets show as typed, which is what a workflow builder variable does, move the alert to
   an app webhook.
