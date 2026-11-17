@@ -788,7 +788,7 @@ const programReach = async ($: EngineInterface, run: ShellRun, text: string, at:
 // Where the writes of every script a path was handed to land, one list per script, when each write of
 // every one is placed (#2426 lessons review, #2565), or null. The path is a folder (gatePath), or a
 // word built as the command runs, read as handed no real folder (gateHanded, #3082), and `folder` is
-// where the scripts are read as run from. The first script with a write that may reach the whole
+// the folder they are handed, which a write relative to it lands in. The first script with a write that may reach the whole
 // folder, or whose reading throws, makes it null for all. Placed writes costing more judgings than
 // the folder itself would (placedCost, FOLDER_JUDGE_MAX) is null too, so the walk stays inside the
 // hook's budget and the path is judged as before: a folder for the files under it, a built word as
