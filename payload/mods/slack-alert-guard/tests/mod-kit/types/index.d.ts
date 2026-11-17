@@ -367,6 +367,14 @@ export type ModKitPane = { mod: string; id: string; lines: ModKitBandLine[]; fra
  */
 export type ModKitCommand = {
   words: string[]
+  /**
+   * The settings the command is run with (#3093), each `NAME=value` as written and in order: those
+   * written in front of it or given to a runner before it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash
+   * s.sh`), after those of the shell running it, for a command in a shell's script or in a
+   * substitution that shell runs; absent where there are none. env's own options (-i, -u) are not
+   * in it, and a command that only sets variables (`F=x;`) gives none to the commands after it.
+   */
+  env?: string[]
   pipedFrom?: string[]
   heredocs?: { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
   xargs?: true
@@ -406,6 +414,15 @@ export type ModKitCommand = {
    * never empty and never safe.
    */
   derived?: (ModKitDerived | null)[]
+  /**
+   * For each word whose only expansions are old arithmetic (`$[...]`) of whole numbers joined by
+   * + - and * (#3070), the word as bash and zsh hand it on (`"x\\$[0-9]"` is `x\-9`), null for every
+   * other word; absent where no word is one. dash and ksh hand such a word on as typed, so it is one
+   * of two known texts and never a variable's value: a reader that judges it judges both. Since
+   * #3088 a sum in `$((...))` is worked out too, which every shell does: a word holding no `$[` is
+   * the one text, never handed on as typed.
+   */
+  worked?: (string | null)[]
   /** The folder it runs in, given only when `pipeline` was given `cwd`; null where a cd before it cannot be followed. */
   folder?: string | null
 }
@@ -558,8 +575,14 @@ export type ModKitWrites = {
    * a name, brace, bracket or quote can start), wherever the command spells it (#1953: a regex 'x$',
    * prose 'costs $5'; #2320: a regex "bar$"): the shell hands it on as written, so it holds no
    * variable's value, and its `path` is the file it spells (#2402: "src/big.ts$").
+   * A word whose only expansions are old arithmetic the reader works out (#3070: `"x\\$[0-9]"`) is
+   * given twice, each `unexpanded`: as typed, which dash and ksh hand on, and with each sum worked
+   * out, which bash and zsh do. One whose sums are all `$((...))` (#3088), which every shell works
+   * out, is given once, worked out.
+   * `env` is the settings the run is given in front of it (#3093), as `ModKitCommand.env` gives them
+   * (`TMPDIR=x bash s.sh`), absent where there are none.
    */
-  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[]; env?: string[] }[]
   /**
    * The files a redirect sends standard output into (#1976), present when there are any: `>`, `>>`,
    * `>|`, `1>`, `&>`, `&>>` and `>& file`, each also in `files`, its `word`, `path` and `folder` as

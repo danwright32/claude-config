@@ -31,7 +31,8 @@
 #
 # It checks that a tab is NAMED, not that the tab is the agent's own: nothing in one payload says
 # which agent created a tab. The brief rule covers that half (pass the id tabs_create_mcp returned,
-# never one read from tabs_context_mcp).
+# never one read from tabs_context_mcp, except to close a tab the agent's own click opened, which
+# lands in the same shared group: claude-config#3095).
 #
 # Fails OPEN on a payload it cannot read, loudly, for the Playwright gate's reason: Claude Code writes
 # the payload, so an unreadable one means the platform changed, and refusing would take the browser
@@ -109,7 +110,7 @@ case "$verdict" in
     rest="${verdict#*$'\t'}"
     tool="${rest%%$'\t'*}"
     why="${rest#*$'\t'}"
-    echo "REFUSED: $tool was called from a subagent and $why. Every caller in this session shares one Claude in Chrome tab group, and a call naming no tab acts on the group's first tab, which can be another agent's: on 2026-11-05 one agent typed into another agent's test session this way (claude-config#2285). Call tabs_create_mcp once, keep the tabId it returns, and pass that tabId on every Claude in Chrome call, inside browser_batch too. Never use a tabId read from tabs_context_mcp, which lists every agent's tabs. If this tool genuinely takes no tabId, it belongs in TAB_FREE in chrome-subagent-tab-gate.sh." >&2
+    echo "REFUSED: $tool was called from a subagent and $why. Every caller in this session shares one Claude in Chrome tab group, and a call naming no tab acts on the group's first tab, which can be another agent's: on 2026-11-05 one agent typed into another agent's test session this way (claude-config#2285). Call tabs_create_mcp once, keep the tabId it returns, and pass that tabId on every Claude in Chrome call, inside browser_batch too. Never use a tabId read from tabs_context_mcp, which lists every agent's tabs, except to close a tab your own click opened. If this tool genuinely takes no tabId, it belongs in TAB_FREE in chrome-subagent-tab-gate.sh." >&2
     exit 2
     ;;
   allow$'\t'*)
