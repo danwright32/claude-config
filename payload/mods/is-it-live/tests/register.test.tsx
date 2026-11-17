@@ -2020,6 +2020,11 @@ test('a pull request GitHub cannot be asked about for a pasted thread is said, a
   await mergeAndCard($, 412)
   expect((await turnEnd($)).block).toBeUndefined()
   expect(w.toasts.join(' ')).toContain('HTTP 502')
+  // #2596: a toast of its own, naming the pull request, in the wording Dan approved on 2026-11-16.
+  const said = w.toasts.filter(t => t.includes('HTTP 502'))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toStartWith(`Is it live could not tell whether ${REPO}#412 is for a Slack thread pasted in this session, so no reply there is asked for it: `)
+  expect(w.toasts.join(' ')).not.toContain('could not note a merge')
 })
 
 test('a session that started from a thread still asks after every merge, and the hold says it started there (#2578)', withKit, async ($, on) => {

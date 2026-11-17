@@ -271,20 +271,20 @@ test("Dan's answer stands for a week for the same issues, so a later first edit 
   expect(w.cards).toEqual([])
 })
 
-test("Dan's answer kept under the key questions had before #2246 still stands for its week", KIT, async ($, on) => {
+test("an answer kept under the key questions had before #2246 is no longer read, so the edit is held again (#2256)", KIT, async ($, on) => {
   const w = world($, on)
   w.store[OLD_QKEY] = { state: 'answered', answer: 'Proceed anyway', at: T0 - 1000, issues: [41] }
-  expect((await edit($ as never, w, SLACK)).result).toBe('done')
-  expect(w.judged()[0]).toMatchObject({ decision: 'held', applied: 'Proceed anyway' })
-  expect(w.cards).toEqual([])
+  expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
+  expect(w.judged()[0]).toMatchObject({ decision: 'held' })
+  expect(w.judged()[0]).not.toHaveProperty('applied')
 })
 
-test('a question waiting under the key before #2246 is cleared once its held call is decided', KIT, async ($, on) => {
+test('a question waiting under the key before #2246 is left alone when its held call is decided (#2256)', KIT, async ($, on) => {
   const w = world($, on)
   expect(refusal(await edit($ as never, w, SLACK))).toContain('The area check held this Edit')
   w.store[OLD_QKEY] = { state: 'pending', at: T0, issues: [41], session: 's1', call: 'c1', agent: null }
   await decide($ as never, { call: 'c1', decision: 'proceed', reason: REASON })
-  expect(w.store[OLD_QKEY]).toBeUndefined()
+  expect(w.store[OLD_QKEY]).toMatchObject({ state: 'pending', call: 'c1' })
 })
 
 test("Dan's answer past its week, or for another set of issues, asks again", KIT, async ($, on) => {
@@ -1016,7 +1016,9 @@ test('a script handed a folder that cannot be read, is not there, or runs under 
 // stays held for the held files under it, as #2321 holds any script's. Since #2565 a write is placed
 // where it can be, and since #3022 a plain name in a folder made with bare mktemp is placed there, in
 // no file of the checkout. This check is still held: its copy's name holds a command's output
-// (`$scratch/$(basename "$d")`), and its inline perl program names no file it writes.
+// (`$scratch/$(basename "$d")`), and its inline perl program names no file it writes. The script
+// itself, in this repository's own checkouts, is let through by name since Dan's later decision
+// (2026-11-16, named.ts, named.test.ts); a script like it, as here, is read and held as before.
 const CHECK ='scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
 
 test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {

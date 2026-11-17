@@ -57,8 +57,9 @@ const RUNNERS = new Map<string, Runner>([
 ])
 
 // Where the command a runner at `at` runs begins, past its options and their values, its leading
-// words and any assignments; undefined when it runs none, so it is the command itself.
-const runs = (words: string[], at: number, r: Runner): number | undefined => {
+// words and any assignments, with where those assignments start (#3093); undefined when it runs none,
+// so it is the command itself.
+const runs = (words: string[], at: number, r: Runner): { next: number; sets: number } | undefined => {
   let i = at + 1
   for (; i < words.length; i++) {
     const w = words[i] as string
@@ -88,8 +89,9 @@ const runs = (words: string[], at: number, r: Runner): number | undefined => {
     }
   }
   i += r.leading ?? 0
+  const sets = i
   while (ASSIGNMENT.test(words[i] ?? '')) i++
-  return i < words.length ? i : undefined
+  return i < words.length ? { next: i, sets } : undefined
 }
 
 // A heredoc's opening: exactly two <, so a here-string (<<<) is not taken for one, then <<- or <<,
@@ -165,6 +167,29 @@ const commentStart = (line: string): number => {
   return line.length
 }
 
+// Whether a line ends in a backslash that joins the next line to it (#3022), as the shell reads it:
+// its last character, itself after no backslash, outside single quotes and outside a comment, quotes
+// read on that line alone as commentStart reads them.
+const joinsNext = (line: string): boolean => {
+  let quote: string | undefined
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i] as string
+    const last = i === line.length - 1
+    if (quote) {
+      if (c === quote) quote = undefined
+      else if (c === '\\' && quote === '"') {
+        if (last) return true
+        i++
+      }
+    } else if (c === '\\') {
+      if (last) return true
+      i++
+    } else if (c === '"' || c === "'") quote = c
+    else if (c === '#' && commentAt(line, i)) return false
+  }
+  return false
+}
+
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it. Each body is kept with
 // where its << stands in the text left, so a reader that judges what a heredoc feeds can have it
@@ -175,6 +200,9 @@ const commentStart = (line: string): number => {
 // where its << stands too. `removed` is each run of lines taken out, as written, with the place in
 // the text left where they stood, so the text of a command substitution a heredoc sits in can be put
 // back whole (#2141: `"$(cat <<'EOF' ... EOF\n)"` was read as a cat of a heredoc with no body).
+// A body starts after the whole line its << stands on, so where that line ends in a backslash that
+// joins the next (joinsNext, #3022) the next is more of the command: `cat <<EOF \` then `> out.txt`
+// writes out.txt (measured on bash, zsh and dash), which read as the body's first line was no write.
 export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; unended?: Heredoc; removed: { at: number; lines: string[] }[] } => {
   const out: string[] = []
   const heredocs: Heredoc[] = []
@@ -189,9 +217,11 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
     if (run && run.at === offset) run.lines.push(line)
     else removed.push({ at: offset, lines: [line] })
   }
+  // Whether the command line before this one joins it on.
+  let joined = false
   for (const line of cmd.split('\n')) {
     const h = open[0]
-    if (h) {
+    if (h && !joined) {
       remove(line)
       if (line.trim() === h.end) {
         heredocs.push({ at: h.at, body: body.join('\n'), quoted: h.quoted })
@@ -212,6 +242,7 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
       if (d) open.push({ end: d.end, tabs: m[1] === '-', at: offset + (m.index ?? 0), quoted: d.quoted })
     }
     offset += line.length + 1
+    joined = joinsNext(line)
   }
   const h = open[0]
   // The lines of one that never ends are put back, at the end where they stood, so none was removed.
@@ -276,7 +307,12 @@ const restored = (text: string, removed: readonly { at: number; lines: string[] 
 // `subbed`, where given, is filled with each word's command substitutions (#2141): by the word's
 // place in the text, where each starts in the text (`at`), where its text starts in the word and how
 // long it is there (`pos`, `len`), and whether double quotes hold it, so the shell neither splits
-// nor matches against files what it prints.
+// nor matches against files what it prints. A `$[...]` (#3070, sumEnd) is listed with them, and so
+// is a `$((...))` holding a sum this reader works out (#3088).
+//
+// `worked`, where given, is filled with each word whose only expansions are `$[...]` or `$((...))`
+// sums this reader works out (#3070, #3088, sumOf), by its place in the text: the word with each sum
+// in its place.
 type Split = { words: string[]; starts: number[]; from?: number }
 type InWord = { at: number; pos: number; len: number; quoted: boolean }
 // The characters that make a word a pattern the shell may expand: a glob's, a brace's, and zsh's
@@ -295,6 +331,63 @@ const leftAsWritten = (cmd: string, i: number, inDouble: boolean): boolean => {
   if (next === undefined || /[\s/.,%]/.test(next)) return true
   return inDouble ? next === '"' : /[;|&]/.test(next)
 }
+// Where the `]` closing a `$[` at `i` stands (#3070), or undefined where this reader takes none.
+// `$[...]` is the old arithmetic expansion of bash and zsh (measured 2026-11-16 on bash 3.2, zsh 5.9
+// and macOS sh: `"x\\$[0-9]"` is handed on as `x\-9`), and text to dash and ksh, which hand the word
+// on as typed and read a blank or a redirect inside one outside quotes as they do anywhere (measured:
+// `dash -c 'echo $[1 > 2]'` writes a file named `2]`). So one is taken only where both readings give
+// the same words: inside double quotes, or outside quotes holding nothing that ends a word. One
+// holding a quote, a backslash or a new line, or never closed, is read as before. A bracket inside
+// is matched, and a command substitution inside is part of it.
+// A `$((...))` (#3088) is arithmetic in every shell (measured 2026-11-16 on bash 3.2, zsh 5.9, macOS
+// sh, dash and ksh: `"a|\\$((0-9))"` is handed on as `a|\-9`), so one is taken here only where it
+// holds a sum sumOf works out, its last `)` the end; any other is read as before, as a substitution
+// whose text says it is arithmetic.
+const sumEnd = (text: string, i: number, inDouble: boolean): number | undefined => {
+  if (text.startsWith('$((', i)) {
+    const close = text.indexOf('))', i + 3)
+    const inner = close < 0 ? '' : text.slice(i + 3, close)
+    return close > 0 && !inner.includes('\n') && sumOf(inner) !== undefined ? close + 1 : undefined
+  }
+  if (text[i] !== '$' || text[i + 1] !== '[') return undefined
+  let depth = 1
+  for (let j = i + 2; j < text.length; j++) {
+    const c = text[j] as string
+    if (c === '\\' || c === '\n' || c === '"' || c === "'") return undefined
+    const sub = c === '$' || c === '`' ? subEnd(text, j) : undefined
+    if (sub !== undefined) j = sub
+    else if (!inDouble && /[\s;&|<>()]/.test(c)) return undefined
+    else if (c === '[') depth++
+    else if (c === ']' && --depth === 0) return j
+  }
+  return undefined
+}
+// What bash and zsh both make of the text inside a `$[...]` (#3070), where this reader works it out:
+// whole numbers joined by + - and *, a - before the first allowed, nothing else. A number written
+// with a leading zero is octal to bash and ten based to zsh (measured: `$[010 + 1]` is 9 and 11), a
+// name is a variable's value, a division may fail, and a count past 64 bits wraps, so each of those
+// is not worked out, as nothing else is.
+const SUM = /^\s*-?\s*(?:0|[1-9]\d*)(?:\s*[-+*]\s*(?:0|[1-9]\d*))*\s*$/
+const SUM_LIMIT = 2n ** 63n
+const sumOf = (inner: string): string | undefined => {
+  if (!SUM.test(inner)) return undefined
+  const within = (n: bigint) => n < SUM_LIMIT && n > -SUM_LIMIT
+  let total = 0n
+  // Each term with its sign: the products are worked first, as the shell works them.
+  for (const m of inner.replace(/\s+/g, '').matchAll(/([-+]?)([\d*]+)/g)) {
+    let product = 1n
+    for (const n of (m[2] as string).split('*')) {
+      product *= BigInt(n)
+      if (!within(product)) return undefined
+    }
+    total += m[1] === '-' ? -product : product
+    if (!within(total)) return undefined
+  }
+  return String(total)
+}
+// The text inside a sum sumEnd took, from its `$` at `i` to its end at `end`: between `$[` and `]`,
+// or between `$((` and `))`.
+const sumInner = (text: string, i: number, end: number): string => (text.startsWith('$((', i) ? text.slice(i + 3, end - 1) : text.slice(i + 2, end))
 // The words that name a function where a command would begin (#2619): `name()`, or `function name`,
 // after nothing but the reserved words that lead a command. They were read as the command, and a
 // body starting on the same line as its words (`w(){ sed -i ...; }`, `w() { ...`, `w()( ... )`,
@@ -332,7 +425,7 @@ const testEndFrom = (cmd: string, from: number): number => {
   }
   return -1
 }
-const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -341,6 +434,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   let inWord = false
   let wordBare: number[] = []
   let wordSubs: InWord[] = []
+  // For `worked`: each `$[...]` in the word being read (#3070, sumEnd), where it stands in the word
+  // and what it comes to, undefined where that is not worked out (sumOf).
+  let wordSums: { pos: number; len: number; text: string | undefined }[] = []
   // For `literal`: whether the word being read holds a pattern character quoted, one bare, and an
   // expansion (a $ or a backtick, quoted or not, or a substitution).
   let globQuoted = false
@@ -382,6 +478,7 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     start = i
     wordBare = []
     wordSubs = []
+    wordSums = []
     globQuoted = false
     globBare = false
     expands = false
@@ -395,10 +492,26 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       if (bare && wordBare.length) bare.set(start, wordBare)
       if (subbed && wordSubs.length) subbed.set(start, wordSubs)
       if (literal && globQuoted && !globBare && !expands) literal.add(start)
-      if (unexpanded && dollarText && !dollarLive) unexpanded.add(start)
+      if (unexpanded && dollarText && !dollarLive && !wordSums.length) unexpanded.add(start)
+      // Worked only where every `$[...]` or `$((...))` in it is, and nothing else in it is expanded.
+      if (worked && wordSums.length && !dollarLive && wordSums.every(s => s.text !== undefined)) {
+        let text = word
+        for (const s of [...wordSums].reverse()) text = text.slice(0, s.pos) + s.text + text.slice(s.pos + s.len)
+        worked.set(start, text)
+      }
     }
     word = ''
     inWord = false
+  }
+  // A `$[...]` from `i` to its `]` at `end` (#3070), or a `$((...))` to its last `)` (#3088), is part
+  // of the word it sits in, kept as typed.
+  // It is an expansion for `literal` and `unexpanded`, and its text is derived as a `$((...))`'s is.
+  const sum = (i: number, end: number, quoted: boolean) => {
+    begin(i)
+    expands = true
+    wordSubs.push({ at: i, pos: word.length, len: end + 1 - i, quoted })
+    wordSums.push({ pos: word.length, len: end + 1 - i, text: sumOf(sumInner(cmd, i, end)) })
+    word += cmd.slice(i, end + 1)
   }
   // After a list separator a command reads what its subshell reads.
   const listed = () => {
@@ -448,11 +561,19 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     const c = cmd[i] as string
     if (quote) {
       const sub = quote === '"' && c !== '<' && c !== '>' ? subEnd(cmd, i) : undefined
+      const summed = quote === '"' ? sumEnd(cmd, i, true) : undefined
       if (c === quote) quote = undefined
-      else if (c === '\\' && quote === '"' && i + 1 < cmd.length) {
+      else if (c === '\\' && quote === '"' && cmd[i + 1] === '\n') {
+        // A backslash before a new line joins the two lines (#3022): neither is in the word. In
+        // single quotes both are kept, as the shell keeps them.
+        i++
+      } else if (c === '\\' && quote === '"' && i + 1 < cmd.length) {
         quotedChar(cmd[i + 1] as string)
         dollar(cmd[i + 1] as string, false)
         word += cmd[++i]
+      } else if (summed !== undefined) {
+        sum(i, summed, true)
+        i = summed
       } else if (sub !== undefined) {
         // In double quotes too, a quote inside a substitution belongs to it, never closing these.
         expands = true
@@ -523,7 +644,11 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       continue
     }
     const sub = subEnd(cmd, i)
-    if (sub !== undefined) {
+    const summed = sumEnd(cmd, i, false)
+    if (summed !== undefined) {
+      sum(i, summed, false)
+      i = summed
+    } else if (sub !== undefined) {
       // A substitution is part of the word it sits in, its spaces, quotes and redirects included
       // (#974: `x=$(npm publish)` gave a command named `publish)`); what it runs is read apart, by
       // readLine. A process substitution is a word of its own.
@@ -557,6 +682,11 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       }
       words.push(op)
       starts.push(at)
+    } else if (c === '\\' && cmd[i + 1] === '\n') {
+      // A backslash before a new line joins the two lines (#3022), as the shell reads them: it is no
+      // character of a word, ends no word and no command, and begins none. Read as a word of its
+      // own, it gave the command before it a word holding a new line (`rm -rf x \` named two files).
+      i++
     } else if (c === '\\' && i + 1 < cmd.length) {
       begin(i)
       quotedChar(cmd[i + 1] as string)
@@ -676,7 +806,9 @@ const envSplit = (words: readonly string[], at: number): { value: string; next: 
 // `expands` says whether the word at a place in the text holds a $ or backtick the shell expands.
 // A caller that knows no places (a find -exec's words) takes every $ and backtick as one the shell
 // expands, so a word it cannot place is unread, never read as written (lessons review of 7677fc0).
-type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string }
+// `env` is each assignment written in front of the command or given to a runner before it (`A=1 env
+// B=2 bash s.sh`), as written and in order (#3093): the settings it is run with.
+type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string; env: string[] }
 const MAY_EXPAND = (word: string): boolean => /[$`]/.test(word)
 const begins = (words: string[], starts: number[], expands: (word: string, start: number) => boolean = MAY_EXPAND): Begun => {
   let w = words
@@ -684,26 +816,30 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
   let xargs = false
   let proxied = false
   let unread: string | undefined
+  const env: string[] = []
   let i = 0
   for (;;) {
     const word = w[i] ?? ''
     if (ASSIGNMENT.test(word) || LEADS.has(word)) {
+      if (ASSIGNMENT.test(word)) env.push(word)
       i++
       continue
     }
     const name = word.split('/').pop() ?? ''
     const runner = RUNNERS.get(name)
     if (!runner) break
-    const env = name === 'env' ? envSplit(w, i) : undefined
-    if (env) {
-      const inner = split(env.value).flatMap(x => x.words)
-      w = [...inner, ...w.slice(env.next)]
-      s = [...inner.map(() => -1), ...s.slice(env.next)]
+    const string = name === 'env' ? envSplit(w, i) : undefined
+    if (string) {
+      const inner = split(string.value).flatMap(x => x.words)
+      w = [...inner, ...w.slice(string.next)]
+      s = [...inner.map(() => -1), ...s.slice(string.next)]
       i = 0
       continue
     }
-    const next = runs(w, i, runner)
-    if (next === undefined) break
+    const ran = runs(w, i, runner)
+    if (ran === undefined) break
+    const { next } = ran
+    env.push(...w.slice(ran.sets, next))
     // flock's -c after its lock file is a string its shell runs (#3021), read as a shell's -c is.
     if (name === 'flock' && (w[next] === '-c' || w[next] === '--command')) {
       w = ['sh', '-c', ...w.slice(next + 1)]
@@ -741,7 +877,7 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
     }
     i = next
   }
-  return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}) }
+  return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}), env }
 }
 
 // Why what a command runs cannot be read from its words (#3021), or undefined. Until then the reader
@@ -1003,9 +1139,22 @@ const printfText = (args: readonly string[]): string | undefined => {
  * it runs (#2983); and eval, a command a value names, an alias, ssh and a trap whose text the shell
  * expands (#3021, unreadOf). Its words are never all of what runs, so every guard holds or refuses
  * one, never judging it by its words alone.
+ * `worked` gives, for each word whose only expansions are old arithmetic (`$[...]`) of whole numbers
+ * joined by + - and * (#3070, sumOf), the word as bash and zsh hand it on (`"x\\$[0-9]"` is `x\-9`),
+ * null for every other word; absent where no word is one. dash and ksh hand such a word on as typed
+ * (to them `$[` is text), so it is one of two known texts and never a variable's value: a reader
+ * that judges it judges both. A word holding any other expansion, or a sum not worked out, has none.
+ * Since #3088 a sum in `$((...))` is worked out too, which every shell does (`"a|\\$((0-9))"` is
+ * `a|\-9`): a word holding no `$[` is the one text, never handed on as typed.
+ * `env` is the settings the command is run with (#3093), each `NAME=value` as written and in order:
+ * those written in front of it or given to a runner before it (`TMPDIR=x bash s.sh`, `env TMPDIR=x
+ * bash s.sh`), after those of the shell running it, for a command in a shell's script or in a
+ * substitution that shell runs; absent where there are none. env's own options (-i, -u) are not in
+ * it. A command that only sets variables (`F=x;`) gives none to the commands after it.
  */
 export type Command = {
   words: string[]
+  env?: string[]
   pipedFrom?: string[]
   heredocs?: Fed
   xargs?: true
@@ -1022,6 +1171,7 @@ export type Command = {
   literal?: boolean[]
   unexpanded?: boolean[]
   derived?: (Derived | null)[]
+  worked?: (string | null)[]
 }
 
 /**
@@ -1041,12 +1191,15 @@ const wordDerived = (word: string, inWord: readonly InWord[], subs: readonly (Ra
   let why: string | undefined
   const parts: { pos: number; len: number; text: string }[] = []
   for (const w of inWord) {
-    // A $(( )) is arithmetic and lists only the substitutions inside it, so every one within the
-    // word's span is its own.
+    // A $(( )) or a $[ ] is arithmetic and lists only the substitutions inside it, so every one
+    // within the word's span is its own.
     for (const s of subs) if (s.at >= w.at && s.at < w.at + w.len) commands.push(...flatten(s.line, true))
     if (why) continue
     const s = subs.find(x => x.at === w.at)
-    const made = !s ? { unresolved: 'it is arithmetic, which this reader does not work out' } : s.process ? { unresolved: 'a process substitution stands for a file only the shell knows' } : printed(s.line)
+    // A $[ ] of whole numbers is worked out (#3070, sumOf), as bash and zsh work it, and a $(( ))
+    // as every shell does (#3088).
+    const summed = !s && (word.startsWith('$[', w.pos) || word.startsWith('$((', w.pos)) ? sumOf(sumInner(word, w.pos, w.pos + w.len - 1)) : undefined
+    const made = summed !== undefined ? { text: summed } : !s ? { unresolved: 'it is arithmetic, which this reader does not work out' } : s.process ? { unresolved: 'a process substitution stands for a file only the shell knows' } : printed(s.line)
     if ('unresolved' in made) why = made.unresolved
     else if (!w.quoted && (!made.text || /\s/.test(made.text) || GLOB_CHAR.test(made.text))) why = 'outside double quotes the shell splits what it prints into words and may match them against files'
     else parts.push({ pos: w.pos, len: w.len, text: made.text })
@@ -1121,19 +1274,22 @@ export type Line = (Command | { sub: Line })[]
 // says the shell running them splits an unquoted expansion's value into words (#1834): the one a
 // Bash call runs in, at the top, and the shell itself for the script it is given. `proxied` and
 // `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983). `arithmetic` says
-// the one command it feeds stands inside `(( ))`, where a value names no command (#3021).
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean }
+// the one command it feeds stands inside `(( ))`, where a value names no command (#3021). `env` is
+// the settings they are run with (#3093): those of the shell running them, then their own.
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean; env?: string[] }
 // The marks a feed gives each command it feeds.
 const carried = (f: Feed) => ({
   ...(f.xargs ? { xargs: true as const } : {}),
   ...(f.found ? { found: f.found } : {}),
   ...(f.proxied ? { proxied: true as const } : {}),
   ...(f.unread ? { unread: f.unread } : {}),
+  ...(f.env?.length ? { env: f.env } : {}),
 })
 // The marks the runners in front of a command give it, beside those of the feed it is read in.
 const marksOf = (b: Begun, outer: Feed): Feed => {
   const unread = b.unread ?? outer.unread
-  return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}) }
+  const env = [...(outer.env ?? []), ...b.env]
+  return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}), ...(env.length ? { env } : {}) }
 }
 
 // A command's output redirects that name a file, each with its target: `> f`, `>> f`, `>| f`,
@@ -1160,7 +1316,7 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // is read after it, as a command of its own. The script is read as that shell splits words (#1834),
 // and `splits` is where each word's expansions outside quotes are, when the shell running this one
 // splits their values. `literal` is which words the shell hands on as written (#1951).
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[]) => {
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[], worked?: (string | null)[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
@@ -1194,6 +1350,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
     ...(literal && literal.some(Boolean) ? { literal } : {}),
     ...(unexpanded && unexpanded.some(Boolean) ? { unexpanded } : {}),
     ...(derived && derived.some(d => d !== null) ? { derived } : {}),
+    ...(worked && worked.some(w => w !== null) ? { worked } : {}),
   })
   // Its {} stands for each thing find finds, which this reader writes as the folder find starts
   // from, so the command carries those folders as `found`: what it changes at one of them is that
@@ -1202,7 +1359,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   const roots = findRoots(words)
   for (const inner of execsOf(words)) {
     const b = begins(inner, inner.map(() => -1))
-    if (b.words.length) emit(b.words, [], { ...marksOf(b, { proxied: feed.proxied, unread: feed.unread }), found: roots }, out, opts)
+    if (b.words.length) emit(b.words, [], { ...marksOf(b, { proxied: feed.proxied, unread: feed.unread, env: feed.env }), found: roots }, out, opts)
   }
 }
 
@@ -1261,10 +1418,13 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const unexpanded = new Set<number>()
   // Each word's command substitutions, by its place in the text (#2141).
   const subbed = new Map<number, InWord[]>()
-  const read = split(text, bare, literal, unexpanded, subbed)
+  // Each word whose only expansions are sums this reader works out, as bash and zsh hand it on (#3070).
+  const worked = new Map<number, string>()
+  const read = split(text, bare, literal, unexpanded, subbed, worked)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
-  // A substitution runs in the shell running the line, so it splits words as that shell does.
-  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}) }
+  // A substitution runs in the shell running the line, so it splits words as that shell does, and
+  // is run with that shell's settings (#3093).
+  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}), ...(outer.env ? { env: outer.env } : {}) }
   // Each substitution, by the command it sits in: the last one starting at or before it.
   const ran = new Map<number, Line[]>()
   const place = (at: number, sub: Line) => {
@@ -1373,7 +1533,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     feed = { ...feed, ...marksOf(b, outer), ...(arithmetic.has(k) ? { arithmetic: true } : {}) }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b))
+    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b), b.starts.map(s => worked.get(s) ?? null))
   })
   for (const texts of later.reverse()) runLater(texts)
   return out

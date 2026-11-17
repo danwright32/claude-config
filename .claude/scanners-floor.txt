@@ -32,6 +32,7 @@ payload/hooks/test-this-mac.sh
 payload/hooks/test-two-file-awk.sh
 payload/hooks/test-unwaited-children.sh
 payload/hooks/test-whole-number.sh
+tests/test-area-check-check-mods-read-only.sh
 tests/test-ci-environment-tools.sh
 tests/test-ci-parts-real-tree.sh
 tests/test-dev-update-registry.sh
