@@ -63,16 +63,18 @@ lacks() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; 
 
 # The kernel's base priority of the calling thread, read by a python3 the suite starts itself, so the
 # level the gate starts at comes from outside the gate (a guard and its reading never share a source).
+# qos_prio 11 reads pth_maxpriority instead, the ceiling the kernel holds that thread under.
 qos_prio() {
   python3 -c '
-import ctypes, os
+import ctypes, os, sys
 c = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
 c.pthread_threadid_np.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint64)]
 c.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
 t = ctypes.c_uint64(); c.pthread_threadid_np(None, ctypes.byref(t))
 b = (ctypes.c_int32 * 40)()  # struct proc_threadinfo: two uint64 times (ints 0 to 3), then cpu_usage,
-# policy, run_state, flags, sleep_time, curpri, and pth_priority, the base priority, is int 10
-print(b[10] if c.proc_pidinfo(os.getpid(), 15, t.value, b, ctypes.sizeof(b)) > 0 else "unread")'
+# policy, run_state, flags, sleep_time, curpri, then pth_priority, the base priority, is int 10 and
+# pth_maxpriority is int 11
+print(b[int(sys.argv[1])] if c.proc_pidinfo(os.getpid(), 15, t.value, b, ctypes.sizeof(b)) > 0 else "unread")' "${1:-10}"
 }
 # judge <runner words...>: one plain script run judged through the wrapper, traced; sets RC, OUT, ERR
 # and QOS_LINE, the trace's qos line.
@@ -87,9 +89,23 @@ echo "slack drafts gate: the judgement runs at a raised scheduling priority (cla
 
 printf '%s\n' 'echo hi' > "$T/run.sh"
 
+# The level this suite was itself started at, which it cannot set (claude-config#3175, L411). The
+# sync watcher is a launchd agent the kernel holds at base priority 20 under a ceiling of 20 (measured
+# 2026-11-17, where a session's shell reads 31 under 63), and the send gate runs this suite from it.
+# A raise lands above the legacy level, 31, so under a ceiling at or below that none can be seen and
+# every check that needs one is said unmeasured at the end, never failed: red there held this suite
+# back from 227 sends in one day while every hand run was green. The ceiling is the kernel's own
+# reading, never the base priority alone, which a lowered thread with no ceiling shares and can leave.
+start="unread"; ceiling="unread"; CLAMPED=0
+if [ "$(uname -s)" = Darwin ]; then
+  start="$(qos_prio)"; ceiling="$(qos_prio 11)"
+  case "$ceiling" in ''|*[!0-9]*) ;; *) [ "$ceiling" -le 31 ] && CLAMPED=1 ;; esac
+fi
+
 # lib/gate-qos.py on its own, loaded by path as the gate loads it, in a python3 of its own so the
 # raise touches nothing else: on macOS it must report raised, off macOS that there is nothing to
 # raise. The state is judged by the platform alone, since the module never consults taskpolicy.
+# Started under a clamp it must say it could not raise, at the level this suite read for itself.
 QOS_LIB="$DIR/lib/gate-qos.py"
 lib_state="$(python3 -B - "$QOS_LIB" 2>&1 <<'PY'
 import importlib.util, sys
@@ -100,11 +116,18 @@ state, line = mod.raise_qos()
 print(f"{state}|{line}")
 PY
 )"
-if [ "$(uname -s)" = Darwin ]; then want="raised"; else want="not macOS"; fi
-case "$lib_state" in
-  "$want|"*) check "lib/gate-qos.py on its own reports $want" ok ;;
-  *) check "lib/gate-qos.py on its own reports $want" "got: ${lib_state:0:300}" ;;
-esac
+if [ "$CLAMPED" -eq 1 ]; then
+  case "$lib_state" in
+    "not raised|qos: not raised: the level did not rise"*"base priority $start") check "lib/gate-qos.py on its own says it could not raise under the clamp this suite started under" ok ;;
+    *) check "lib/gate-qos.py on its own says it could not raise under the clamp this suite started under" "started at base priority $start, got: ${lib_state:0:300}" ;;
+  esac
+else
+  if [ "$(uname -s)" = Darwin ]; then want="raised"; else want="not macOS"; fi
+  case "$lib_state" in
+    "$want|"*) check "lib/gate-qos.py on its own reports $want" ok ;;
+    *) check "lib/gate-qos.py on its own reports $want" "got: ${lib_state:0:300}" ;;
+  esac
+fi
 
 if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
   # Off macOS there is nothing to raise: the gate still judges, and says so in its trace. The level
@@ -123,21 +146,23 @@ if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
   exit
 fi
 
-start="$(qos_prio)"
 case "$start" in ''|*[!0-9]*) check "the suite reads the level a python3 it starts runs at" "read: $start" ;; esac
+case "$ceiling" in ''|*[!0-9]*) check "the suite reads the ceiling a python3 it starts runs under" "read: $ceiling" ;; esac
 
 judge env
 allowed "the control: a plain script run is judged and allowed"
-case "$QOS_LINE" in
-  "qos: user-initiated, base priority "*)
-    got="${QOS_LINE##* }"
-    if [ "$got" -gt "${start:-99}" ] 2>/dev/null && [ "$got" -gt 31 ]; then
-      check "the gate judges above the level it was started at ($start), read from the kernel" ok
-    else
-      check "the gate judges above the level it was started at ($start), read from the kernel" "$QOS_LINE"
-    fi ;;
-  *) check "the gate traces the priority it judges at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
-esac
+if [ "$CLAMPED" -eq 0 ]; then
+  case "$QOS_LINE" in
+    "qos: user-initiated, base priority "*)
+      got="${QOS_LINE##* }"
+      if [ "$got" -gt "${start:-99}" ] 2>/dev/null && [ "$got" -gt 31 ]; then
+        check "the gate judges above the level it was started at ($start), read from the kernel" ok
+      else
+        check "the gate judges above the level it was started at ($start), read from the kernel" "$QOS_LINE"
+      fi ;;
+    *) check "the gate traces the priority it judges at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+  esac
+fi
 
 # The failure path: a QoS clamp is a ceiling nothing inside the process can lift (measured: under
 # taskpolicy -c utility the base priority stays 20 after the raise). The gate still judges, and its
@@ -166,7 +191,8 @@ OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLAC
 ERR="$(cat "$T/err")"
 refused "the control: out of time with no clamp is refused too"
 says "and says it ran out of time" "ran out of time"
-lacks "but says nothing of the priority, which was raised" "scheduling priority"
+# Started under a clamp there is no run without one, so that refusal rightly names the priority.
+[ "$CLAMPED" -eq 1 ] || lacks "but says nothing of the priority, which was raised" "scheduling priority"
 
 # The level asked for but never read back: the raise was not refused, so the refusal may not say it
 # could not raise, only that its priority could not be read back (L11). A copy of the gate stands in
@@ -192,6 +218,33 @@ case "$(grep '^qos: ' "$T/trace")" in
   "qos: unread: "*) check "and the trace says the level was not read back, not that it was not raised" ok ;;
   *) check "and the trace says the level was not read back, not that it was not raised" "trace: $(tr '\n' '|' < "$T/trace")" ;;
 esac
+
+# The suite itself started under a clamp (claude-config#3175): the sync watcher is a launchd agent the
+# kernel holds at base priority 20 with a ceiling of 20 (measured 2026-11-17), and the send gate runs
+# this suite from it. There no raise can be seen at all, so the three checks that need one are said
+# unmeasured, never failed (L411): red there held this suite back from 227 sends in one day while
+# every hand run was green. Run once more under a utility clamp, unless this run is that one, or is
+# clamped already and so is the case itself.
+if [ -z "${SLACK_GATE_QOS_NESTED:-}" ] && [ "$CLAMPED" -eq 0 ]; then
+  nested="$(SLACK_GATE_QOS_NESTED=1 taskpolicy -c utility bash "${BASH_SOURCE[0]}" 2>&1)"; nested_rc=$?
+  if [ "$nested_rc" -eq 0 ]; then
+    check "started under a utility clamp, this suite passes" ok
+  else
+    check "started under a utility clamp, this suite passes" "exit $nested_rc: $(printf '%s' "$nested" | grep '^FAIL' | cut -c1-160 | tr '\n' '|')"
+  fi
+  case "$nested" in
+    *"SUITE-PART-UNMEASURED the gate's raise"*"ceiling 20"*) check "and says the raise was not measured there, naming the ceiling it read" ok ;;
+    *) check "and says the raise was not measured there, naming the ceiling it read" "it printed: $(printf '%s' "$nested" | grep 'UNMEASURED' | cut -c1-200 | tr '\n' '|')" ;;
+  esac
+  case "$nested" in
+    *"SUITE-RESULT passed=0 "*) check "and still ran its other checks there" "$(printf '%s' "$nested" | grep '^SUITE-RESULT')" ;;
+    *"SUITE-RESULT passed="*) check "and still ran its other checks there" ok ;;
+    *) check "and still ran its other checks there" "no SUITE-RESULT line" ;;
+  esac
+fi
+if [ "$CLAMPED" -eq 1 ]; then
+  echo "SUITE-PART-UNMEASURED the gate's raise above the legacy level, and a refusal that leaves the priority out because it was raised: this suite was started under a QoS clamp (kernel ceiling $ceiling, base priority $start), which nothing inside a process can lift"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"
