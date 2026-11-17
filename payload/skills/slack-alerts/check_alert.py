@@ -10,7 +10,8 @@ lines that start with a bullet character or a hyphen.
 
 Exit 0 when the message passes, 1 with one FAIL line per broken rule, 2 on a bad command line or a
 message that could not be read.
-Nothing inside the code fence is judged: that text belongs to the other system. What no script can
+The words inside the code fence are not judged, since that text belongs to the other system; only
+its length, and that there is one closed block, are. What no script can
 judge (whether the first line is true, whether the link opens the failed thing) stays with the
 skill and with whoever reviews the wording.
 """
