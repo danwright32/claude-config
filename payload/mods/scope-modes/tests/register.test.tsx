@@ -426,6 +426,8 @@ type Opts = {
   lsFails?: string
   /** Reading this session's folder throws (#836: after the unanswered list is written). */
   cwdThrows?: boolean
+  /** The folder read throws once a sleep record is in place, so /sleep itself can start (#3136). */
+  cwdThrowsAsleep?: boolean
   /** The session registry's answer as raw text, in place of the usual one (#837). */
   registryAnswer?: string
   /** The next prompts beneath the mod that fail, counted (#837: a prompt that never entered). */
@@ -1016,6 +1018,7 @@ const world = (on: On, o: Opts = {}) => {
   })
   on('session.cwd', () => {
     if (o.cwdThrows) throw new Error('the folder could not be read')
+    if (o.cwdThrowsAsleep && Object.keys(w.files).some(f => f.endsWith('/sleep/current.json'))) throw new Error('the folder could not be read')
     return { value: o.cwd ?? '/repo' } as never
   })
   on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: o.remote === undefined ? 'git@github.com:o/r.git' : o.remote, internal: false, name: null } }) as never)
@@ -3743,6 +3746,30 @@ test('a night owed at a turn end that cannot be started is said in a toast, with
   expect(w.prompts).toEqual([])
   // The reason is whatever the read threw, as the engine passes it on.
   expect(w.toasts.filter(t => /^Sleep mode is on, but this session could not be started on the night's work \(.+\)\. Type "start the night's work" here to start it\.$/.test(t)).length).toBe(1)
+})
+
+test('an idle /sleep whose own start cannot be made says so in its answer, with how to start it (#3136)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { noRepo: true, cwdThrowsAsleep: true })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(r.text).toMatch(/ This session could not be started on the night's work \(.+\): type "start the night's work" here to start it\.$/)
+})
+
+test("a night start whose prompt does not go in keeps the notes it carried for the next prompt, and says why in the log (#3136)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await turnStart($, 't1')
+  await command($ as never, 'sleep')
+  w.o.promptFails = 1
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  // The reason is whatever the submit threw, as the engine passes it on.
+  expect(w.logs.join('\n')).toContain("scope-modes: the night's work could not be started: ")
+  const typed = await say($ as never, 'still there?')
+  expect(typed.context ?? []).toContain(ackOn('sleep'))
 })
 
 test('a /sleep mid turn that started no night, and one in a session with no goal, start nothing (#3136)', withDeps, async ($, on) => {
