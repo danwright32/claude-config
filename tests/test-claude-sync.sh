@@ -19160,6 +19160,62 @@ check "#1854 and so does a hold with no length at all" "[ '$rc_54e' = 0 ] && lin
 h54_env bash "$SCRIPT" release >/dev/null 2>&1 || true
 
 
+section "== hold --help prints the usage and takes no hold (#3152) =="
+# On 2026-11-17 `claude-sync hold --help` took a 30 minute hold: hold read any first word that was
+# not a number as "no length given", so the default length was used and the word itself dropped. A
+# session asking how to hold paused the sync, and `hold "a label"` held under the default label
+# rather than the one typed. A first word is now one of three things: a length, a request for the
+# usage, or the start of the label.
+H52H="$WORK/h3152"; mkdir -p "$H52H/home/hooks"
+echo '{"hooks":{}}' > "$H52H/home/settings.json"
+git init -q "$H52H/repo" 2>/dev/null
+H52H_HOLD="$H52H/hold-marker"
+h52h_env(){ CLAUDE_HOME="$H52H/home" SYNC_REPO="$H52H/repo" SYNC_HOLD_FILE="$H52H_HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+
+for h52h_ask in --help -h help; do
+  out_52hh=""; rc_52hh=0
+  out_52hh="$(h52h_env bash "$SCRIPT" hold "$h52h_ask" 2>&1)" || rc_52hh=$?
+  dbg "#3152 hold $h52h_ask: rc=$rc_52hh $out_52hh"
+  check "#3152 hold $h52h_ask succeeds" "[ '$rc_52hh' = 0 ]"
+  check "#3152 and prints the hold usage" "line_has \"\$out_52hh\" 'claude-sync hold' 'minutes'"
+  check "#3152 and takes no hold" "[ ! -e '$H52H_HOLD' ]"
+  check "#3152 and says nothing of holding off" "case \"\$out_52hh\" in *'held off'*) false ;; *) true ;; esac"
+  rm -f "$H52H_HOLD"
+done
+
+out_52hx=""; rc_52hx=0
+out_52hx="$(h52h_env bash "$SCRIPT" hold --extend --help 2>&1)" || rc_52hx=$?
+check "#3152 hold --extend --help prints the usage too" "[ '$rc_52hx' = 0 ] && line_has \"\$out_52hx\" 'claude-sync hold --extend' 'renew'"
+check "#3152 and takes no hold either" "[ ! -e '$H52H_HOLD' ]"
+
+# An option hold does not know is refused, never read as a label: `--hepl` held under the label
+# "--hepl" would pause the sync for a typo.
+out_52ho=""; rc_52ho=0
+out_52ho="$(h52h_env bash "$SCRIPT" hold --hepl 2>&1)" || rc_52ho=$?
+check "#3152 an unknown option fails" "[ '$rc_52ho' != 0 ]"
+check "#3152 and takes no hold" "[ ! -e '$H52H_HOLD' ]"
+check "#3152 and names the option and the usage" "line_has \"\$out_52ho\" 'no hold was taken' '--hepl'"
+
+# A label beginning with a dash goes after --, as release takes one.
+out_52hd=""; rc_52hd=0
+out_52hd="$(h52h_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold -- "-fix" 2>&1)" || rc_52hd=$?
+check "#3152 hold -- with a dash label holds under that label" "[ '$rc_52hd' = 0 ] && line_has \"\$out_52hd\" 'held off for 45 minutes' '[(]-fix[)]'"
+h52h_env bash "$SCRIPT" release -- "-fix" >/dev/null 2>&1 || true
+# A label with no length is that label, at the default length.
+out_52hl=""; rc_52hl=0
+out_52hl="$(h52h_env SYNC_HOLD_MINUTES=45 bash "$SCRIPT" hold "fixing the gate" 2>&1)" || rc_52hl=$?
+dbg "#3152 hold with a label only: rc=$rc_52hl $out_52hl"
+check "#3152 a hold given only a label succeeds" "[ '$rc_52hl' = 0 ]"
+check "#3152 and holds under that label at the default length" "line_has \"\$out_52hl\" 'held off for 45 minutes' 'fixing the gate'"
+check "#3152 and the record carries the label" "grep -q 'fixing the gate' '$H52H_HOLD'"
+h52h_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+# The control: a length and a label are still read as they always were.
+out_52hc=""; rc_52hc=0
+out_52hc="$(h52h_env bash "$SCRIPT" hold 5 "a length and a label" 2>&1)" || rc_52hc=$?
+check "#3152 a length and a label still hold" "[ '$rc_52hc' = 0 ] && line_has \"\$out_52hc\" 'held off for 5 minutes' 'a length and a label'"
+h52h_env bash "$SCRIPT" release >/dev/null 2>&1 || true
+
+
 section "== each hold belongs to the session that took it, and release lifts only its own (#1863) =="
 # Before this a hold was one record for the whole Mac with no owner, so any session's release lifted
 # a pause another session had taken, and the watcher then sent that session's half finished work.
