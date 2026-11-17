@@ -882,10 +882,12 @@ PY_RUNS = frozenset({"exec", "eval", "compile", "execfile", "__import__", "break
                      "__spec__"})
 # Attributes (and imported names) that reach another module or a frame's namespace, change where
 # Python finds modules, or evaluate a string as code: sys.modules, sys.path, a frame's f_globals,
-# typing's forward references. Any _private attribute and any dunder one counts too (py_acts).
+# typing's forward references, and string.Formatter, which reads the attributes a string names
+# ("{0.__globals__[os]}") and hands what it finds to get_field's caller or a subclass's format_field
+# (claude-config#3119). Any _private attribute and any dunder one counts too (py_acts).
 PY_REACH = frozenset({"modules", "path_hooks", "meta_path", "path_importer_cache", "f_globals",
                       "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
-                      "get_type_hints", "ForwardRef", "evaluate_forward_ref"})
+                      "get_type_hints", "ForwardRef", "evaluate_forward_ref", "Formatter"})
 PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # Methods that write or move a file (pathlib's), beside open() and argparse.FileType with a mode
 # that writes.
@@ -1555,7 +1557,8 @@ ShWalkShapes = load_lib("sh_walk_shapes", "sh-walk-shapes.py").make(SH_SPECIAL, 
 _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # The names a Python script gives a module beyond the one it imports it by, and a module put where
 # the gate does not follow it (claude-config#3102).
-py_follow = load_lib("py_aliases", "py-aliases.py").make(PY_INERT)
+_py_aliases = load_lib("py_aliases", "py-aliases.py")
+py_follow = _py_aliases.make(PY_INERT)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -6262,7 +6265,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         for why, _, target, found in self.modules("it", real, root, body, kind):
             if why:
                 return f"imports a module the gate cannot follow ({why})"
-            inner = (self.py_acts(found, target, root, not runs_only) if kind == "py"
+            inner = (self.py_acts(found, target, root, not runs_only, imported=True) if kind == "py"
                      else self.js_acts(found, not runs_only))
             if inner:
                 return f"imports {os.path.basename(target)}, which {inner}"
@@ -6383,7 +6386,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         catalog query handed a file sqlite3 wrote to code importing sqlite3 was refused."""
         return module in PY_INERT_UNLESS and not PY_INERT_UNLESS[module].search(text)
 
-    def py_acts(self, text, cur, root, writes=True, ran=frozenset()):
+    def py_acts(self, text, cur, root, writes=True, ran=frozenset(), imported=False):
         """acts() for one Python file's text (cur its file, root the script's folder): how it can act
         on what it is handed, as a phrase, or None when it is seen unable to.
 
@@ -6401,8 +6404,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         whose mode writes. A module given another name is read through that name as through the
         imported one, and a module put where the next use of it cannot be read counts as acting
         (py_follow, claude-config#3102). A local module it imports is not judged here: modules() reaches it and
-        acts() judges it with this same reading, and an import placed nowhere is refused there. Text
-        this python3 cannot parse counts as acting."""
+        acts() judges it with this same reading, imported True, and an import placed nowhere is
+        refused there. A chain from a value the gate does not follow (a call's result, a parameter)
+        that names a module off the list counts as acting, and so does os imported under another
+        name where that name is read from outside (os_exposed, claude-config#3119). Text this
+        python3 cannot parse counts as acting."""
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -6459,6 +6465,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 module = node.module or ""
                 if node.level or self.resolve_py(0, module, names, cur_dir, root, inserts) != []:
                     local.update(a.asname or a.name for a in node.names)
+                    # A module of the script's own may hold os, as `import os` binds it there, so
+                    # what is imported out of it as os is held to os's reads (claude-config#3119).
+                    os_names.update(a.asname or a.name for a in node.names if a.name == "os")
                     continue
                 if module == "sys" and "path" in names:
                     return "changes where Python finds modules (sys.path)"
@@ -6481,6 +6490,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # (lib/py-aliases.py, claude-config#3102).
         renamed, handed_on = py_follow(nodes, local)
         bound |= renamed
+        exposed = _py_aliases.os_exposed(nodes, imported)
+        if exposed:
+            return f"binds os as {exposed}, which another file or a class's reader reaches without the gate holding it to os's reads"
         called = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
         cleared = set()  # id() of each restricted name used as a.<its inert submodule>
         for node in nodes:
@@ -6493,6 +6505,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                    and isinstance(n.value, ast.Name) and n.value.id in os_names}
         os_ok = {i for i, attr in os_used.items() if attr in os_may}
         ran_here = {id(n.func) for n in nodes if ran and self.py_env_exec(n, os_names) in ran}
+        unfollowed = None  # the first chain from a value the gate does not follow that names a module
         for node in nodes:
             if isinstance(node, ast.Name):
                 if node.id in PY_RUNS and id(node) not in ran_here:
@@ -6523,6 +6536,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         and a not in PY_INERT and (base.id, a) not in restricted \
                         and not (base.id in os_names and node.value is base and a in os_may):
                     return f"reaches the {a} module through {base.id}"
+                # A chain from anything else (a call's result, a parameter, an instance, a
+                # subscript) reaches whatever the value holds: pathlib.PurePath("x").parser is
+                # os.path, whose os is os (claude-config#3119). Only read, not called: a module
+                # cannot be called, so p.stat() is a method whatever it is named. Said after a
+                # module handed on, which is how such a value most often came to hold one.
+                if unfollowed is None and not (isinstance(base, ast.Name) and base.id in bound) and a in stdlib \
+                        and a not in PY_INERT and isinstance(node.ctx, ast.Load) and id(node) not in called:
+                    unfollowed = f"reaches the {a} module through {ast.unparse(node.value)[:80]}, which the gate does not follow"
             elif isinstance(node, ast.Call) and writes:
                 f = node.func
                 name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
@@ -6537,7 +6558,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
                                                  and not set(mode.value) & set("wax+")):
                         return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
-        return handed_on
+        return handed_on or unfollowed
 
     def shell_acts(self, body, d, zero=False, depth=0):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what

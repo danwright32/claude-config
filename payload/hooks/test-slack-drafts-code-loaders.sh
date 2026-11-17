@@ -15,7 +15,9 @@
 # folder a launcher is handed by path (#3083). And a Python script that uses os only to read, handed
 # a file naming an endpoint (#3085), kept here so the larger suite does not grow. And
 # lib/py-aliases.py (#3102): a Python module given another name, or put where the gate does not
-# follow it, is read as the imported name is. Every other
+# follow it, is read as the imported name is. And three more routes to os (#3119): string.Formatter,
+# a chain from a value the gate does not follow, and os under another name in a module the script
+# imports or a class body. Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -1841,6 +1843,95 @@ allowed "#3102 judged afresh, the script still passes"
 if [ -e "$D02C/ran" ]; then check "#3102 and the gate does not run that file" "the gate ran $D02C/pp/numbers.py"
 else check "#3102 and the gate does not run that file" ok; fi
 rm -f "$D02C/pp/numbers.py"
+
+echo
+echo "slack drafts only: three more routes to os in a Python script are followed (claude-config#3119)"
+
+# Three routes past the #3102 reading, each of which passed the gate as it stood (measured
+# 2026-11-17 by the cases below, exit 0 and nothing said, handed a data file naming an endpoint):
+# a string naming attributes, read by string.Formatter; an attribute chain that starts at a call's
+# result, a parameter or any other value the gate does not follow; and a module one of the script's
+# own modules binds under another name. Where the gate cannot follow a value to say it is no
+# module, the script now counts as able to act.
+D19="$T/d3119"
+mkdir -p "$D19"
+cp "$D02/msg.json" "$D19/msg.json"
+run_19() { run_raw "$(payload Bash "$(bash_input "$1")" "$D19")"; }
+w19() { local name="$1"; shift; printf '%s\n' "$@" > "$D19/$name"; }
+SYS19='.system("bash " + sys.argv[1])'
+# string.Formatter reads the attributes a field names, so a string reaches what no attribute shows:
+# a function's globals, a class's attributes, and a subclass's format_field is handed what it found.
+w19 fmt-function.py 'import glob, string, sys' "string.Formatter().get_field(\"0.__globals__[os]\", (glob.glob,), {})[0]$SYS19"
+w19 fmt-class.py 'import pathlib, string, sys' "string.Formatter().get_field(\"0.parser.os\", (pathlib.PurePath,), {})[0]$SYS19"
+w19 fmt-from.py 'import glob, sys' 'from string import Formatter' "Formatter().get_field(\"0.__globals__[os]\", (glob.glob,), {})[0]$SYS19"
+w19 fmt-renamed.py 'import glob, string, sys' 's = string' "s.Formatter().get_field(\"0.__globals__[os]\", (glob.glob,), {})[0]$SYS19"
+w19 fmt-subclass.py 'import glob, string, sys' 'class F(string.Formatter):' '    def format_field(self, value, spec):' \
+  "        value$SYS19" '        return ""' 'F().format("{0.__globals__[os]}", glob.glob)'
+# A chain from a value the gate does not follow: a call's result, a parameter handed a class, a
+# name bound to an instance, a subscript, a name functools.update_wrapper copied a class's
+# attribute onto, and a class body's own import.
+w19 call-chain.py 'import pathlib, sys' "pathlib.PurePath(\"x\").parser.os$SYS19"
+w19 param-chain.py 'import pathlib, sys' 'def go(c, p):' '    c.parser.os.system("bash " + p)' 'go(pathlib.PurePath, sys.argv[1])'
+w19 lambda-chain.py 'import pathlib, sys' '(lambda c, p: c.parser.os.system("bash " + p))(pathlib.PurePath, sys.argv[1])'
+w19 instance-chain.py 'import pathlib, sys' 'p = pathlib.PurePath("x")' "p.parser.os$SYS19"
+w19 subscript-chain.py 'import pathlib, sys' "[pathlib.PurePath][0].parser.os$SYS19"
+w19 wrapper-chain.py 'import functools, pathlib, sys' 'class H: pass' 'h = H()' \
+  'functools.update_wrapper(h, pathlib.PurePath, assigned=("parser",), updated=())' "h.parser.os$SYS19"
+w19 class-import.py 'import sys' 'class C:' '    import os' "C.os$SYS19"
+# A module the script's own module binds under another name: handed on (the issue's own form, and
+# one whose helper uses it straight away), read through the module, imported out of it, and os
+# imported by its own name out of such a module. And os imported under another name in a class
+# body, or by a function into the module's globals, where a chain through the class or the module
+# reaches it under that name.
+w19 lib_g.py 'import glob as helper'
+w19 lib_os.py 'import os as helper' 'def size(p):' '    return helper.path.getsize(p)'
+w19 lib_plain.py 'import os' 'def size(p):' '    return os.path.getsize(p)'
+w19 lib_global.py 'def setup():' '    global helper' '    import os as helper'
+w19 own-glob-handed.py 'import lib_g, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'go(lib_g.helper, sys.argv[1])'
+w19 own-handed.py 'import lib_os, sys' 'def go(m, p):' '    m.system("bash " + p)' 'go(lib_os.helper, sys.argv[1])'
+w19 own-direct.py 'import lib_os, sys' "lib_os.helper$SYS19"
+w19 own-from.py 'import sys' 'from lib_os import helper' "helper$SYS19"
+w19 own-from-os.py 'import sys' 'from lib_plain import os' "os$SYS19"
+w19 own-from-os-as.py 'import sys' 'from lib_plain import os as tool' "tool$SYS19"
+w19 own-global.py 'import lib_global, sys' 'lib_global.setup()' "lib_global.helper$SYS19"
+w19 class-alias.py 'import sys' 'class C:' '    import os as helper' "C.helper$SYS19"
+for route in fmt-function.py fmt-class.py fmt-from.py fmt-renamed.py fmt-subclass.py \
+  call-chain.py param-chain.py lambda-chain.py instance-chain.py subscript-chain.py wrapper-chain.py class-import.py \
+  own-glob-handed.py own-handed.py own-direct.py own-from.py own-from-os.py own-from-os-as.py own-global.py class-alias.py; do
+  run_19 "python3 $route msg.json"
+  read_refused "#3119 a route to os the gate did not follow is refused: $route"
+done
+run_19 "python3 fmt-function.py msg.json"
+says "#3119 the refusal names string.Formatter" "reaches past what the gate reads (Formatter)"
+run_19 "python3 call-chain.py msg.json"
+says "#3119 the refusal names the module and the value it was reached through" "reaches the os module through pathlib.PurePath('x').parser, which the gate does not follow"
+run_19 "python3 own-handed.py msg.json"
+says "#3119 the refusal names the module that binds os under another name" "imports lib_os.py, which binds os as helper"
+run_19 "python3 own-from-os.py msg.json"
+says "#3119 os imported out of the script's own module is held to os's reads" "uses os for more than reading files, paths and the environment (os.system)"
+run_19 "python3 class-alias.py msg.json"
+says "#3119 and os imported under another name in a class body" "binds os as helper"
+# The controls: read only scripts that call a method named like a module, read a chain from a call's
+# result and a parameter, format a string, import os under another name at their own top level or
+# in a function, and import the script's own module that imports os by name, still pass.
+w19 lib_fn.py 'def size(p):' '    import os as o' '    return o.path.getsize(p)'
+cat > "$D19/reads-routes.py" <<'PY'
+import argparse, os as o, pathlib, string, sys
+import lib_fn, lib_plain
+from lib_plain import size
+parser = argparse.ArgumentParser()
+parser.add_argument("file", type=pathlib.Path)
+args = parser.parse_args()
+def width(p):
+    return p.stat().st_size
+print(args.file.stat().st_size, pathlib.Path(args.file).parent.name, width(args.file))
+print("{0.name}".format(args.file), string.Template("$x").substitute(x=1), o.path.basename(str(args.file)))
+print(lib_fn.size(args.file), size(args.file), sorted([str(args.file)], key=lib_plain.size))
+PY
+run_19 "python3 reads-routes.py msg.json"
+allowed "#3119 the control: a read only script with chains from calls and parameters and its own modules passes"
+run_19 "python3 reads-routes.py $RULES"
+allowed "#3119 and handed the real rules file"
 
 echo
 
