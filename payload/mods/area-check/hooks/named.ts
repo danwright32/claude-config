@@ -34,11 +34,42 @@ export const CHECK_MODS = {
 } as const
 
 /**
- * What git is asked, in the checkout, to learn whether the texts are the ones the suite proved: the
- * working tree against where the checkout left the default branch. It exits 0 when none differs and 1
- * when one does, an edit not yet committed included.
+ * `bash tools/check-mod-shared-parts.sh <mods folder>` in a checkout of this repository (#3082, signed
+ * off by Dan, 2026-11-16). It reads every mod in the folder for a hand rolled copy of what mod-kit
+ * shares. Its own commands are read as writing nothing; what kept the hold is the python program it
+ * runs through a variable (`python3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"`), which writes each
+ * mod's hooks with the comments taken out into a folder the script makes under the temporary folder
+ * and removes as it ends. That write is real, and its path is built inside python from the
+ * program's arguments, which no reader places, so the script was held on every run for the held
+ * files under the folder.
+ *
+ * `texts` is the script and the program it runs, which loads nothing but python's own library: it
+ * imports os, re and sys, and the script runs it isolated (-I), so a file beside it named for one of
+ * them is never loaded in its place. A run
+ * is let through only while neither has changed since the checkout left the default branch, where
+ * tests/test-area-check-shared-parts-read-only.sh runs them before every merge: over a throwaway
+ * checkout holding this repository's own mods, it is red when a run changes any path in the checkout
+ * or adds one, an ignored one included, and red when the script sources a file, or runs a program,
+ * this list lacks.
  */
-export const unchangedArgs = (defaultBranch: string): string[] => ['diff', '--quiet', '--merge-base', `origin/${defaultBranch}`, '--', ...CHECK_MODS.texts]
+export const SHARED_PARTS = {
+  repo: 'danwright32/claude-config',
+  script: 'tools/check-mod-shared-parts.sh',
+  texts: ['tools/check-mod-shared-parts.sh', 'tools/lib/ts_source.py'],
+} as const
+
+/** A script known by name: where it lives, and every text a run of it is made of. */
+export type NamedScript = { readonly repo: string; readonly script: string; readonly texts: readonly string[] }
+
+/** Every script let through by name. Each one is an exemption, so a new one is Dan's to sign off. */
+export const NAMED: readonly NamedScript[] = [CHECK_MODS, SHARED_PARTS]
+
+/**
+ * What git is asked, in the checkout, to learn whether a script's texts are the ones its suite
+ * proved: the working tree against where the checkout left the default branch. It exits 0 when none
+ * differs and 1 when one does, an edit not yet committed included.
+ */
+export const unchangedArgs = (named: NamedScript, defaultBranch: string): string[] => ['diff', '--quiet', '--merge-base', `origin/${defaultBranch}`, '--', ...named.texts]
 
 /** What the rule asks of the machine, handed in so the rule itself is plain to test. */
 export type NamedFacts = {
@@ -122,10 +153,18 @@ const whySet = (run: readonly Read[], at: number, r: Run): string | null => {
 }
 
 // Why a run shaped like the named one is not it, or null when it is.
-const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<string | null> => {
+const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts): Promise<string | null> => {
   const [handed, ...more] = r.args
   if (!handed || more.length) return 'it is handed more than the one folder it reads'
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
+  // Each named script takes the programs it runs, and where it keeps its copies and logs, from the
+  // environment (check-mods.sh: CLAUDE_BIN, TSC_BIN, TMPDIR, CHECK_MODS_FAILURE_OUTPUT; the shared
+  // parts scan: python3 by PATH, and TMPDIR, which set to the folder puts its copies there). Dan
+  // signed off on 2026-11-16 (#3093) that, for tools/check-mods.sh alone, an equals sign that gives
+  // the script no setting (a reader's own option, `| tail --lines=40`) no longer holds the run. Every
+  // other named script is held on any equals sign in the command, as when it was signed off (#3082),
+  // until its own sign off says otherwise.
+  if (n.script !== CHECK_MODS.script && command.includes('=')) return 'the command sets a value (it holds an equals sign), and the script takes the programs it runs and where it keeps its copies from the environment'
   // Until #3093 any equals sign held the run, a reader's own option included (`| tail --lines=40`),
   // because the reader carried no setting, and a run behind a runner was let through, because the
   // reader looked past it and said nothing. It says both now, so it is asked, once it has shown that
@@ -159,12 +198,12 @@ const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<strin
   if (!run.slice(0, own).every(plainCd)) return 'the change of folder before it is not a cd to one folder written from /, ./, ../ or ~, so the folder the script runs in cannot be shown'
   const at = await facts.checkout(r.path as string)
   if ('unread' in at) return `its checkout cannot be read (${at.unread})`
-  if (r.path !== `${at.root}/${CHECK_MODS.script}`) return `it is not ${CHECK_MODS.script} at the root of its checkout`
-  if (at.github?.toLowerCase() !== CHECK_MODS.repo) return `it is in a checkout of ${at.github ?? 'no GitHub repository'}, never ${CHECK_MODS.repo}`
+  if (r.path !== `${at.root}/${n.script}`) return `it is not ${n.script} at the root of its checkout`
+  if (at.github?.toLowerCase() !== n.repo) return `it is in a checkout of ${at.github ?? 'no GitHub repository'}, never ${n.repo}`
   if (!(await facts.isFolder(handed.path))) return `${handed.word} is no folder on the disk`
   if (!at.defaultBranch) return 'origin names no default branch, so its text cannot be compared with the one the suite proved'
-  const code = await facts.git(at.root, unchangedArgs(at.defaultBranch))
-  if (code === 1) return `its text, or that of a library it sources, has changed since this checkout left origin/${at.defaultBranch}, so it is not the text the suite proved`
+  const code = await facts.git(at.root, unchangedArgs(n, at.defaultBranch))
+  if (code === 1) return `its text, or that of a file it sources or runs, has changed since this checkout left origin/${at.defaultBranch}, so it is not the text the suite proved`
   if (code !== 0) return `git could not compare its text with origin/${at.defaultBranch} (exit ${code})`
   return null
 }
@@ -173,7 +212,8 @@ const whyNot = async (command: string, r: Run, facts: NamedFacts): Promise<strin
  * What a command writes, without the folder a named script only reads. A run is let through when it
  * is the named script itself: run by bash or directly, at its path from the root of a checkout of its
  * repository, handed one folder that is on the disk, in a command that gives it no setting (#3093,
- * whySet: an equals sign may stand only in a reader of its output, or a comment), runs it behind no
+ * whySet: for tools/check-mods.sh an equals sign may stand only in a reader of its output, or a
+ * comment; for every other named script the command holds no equals sign at all), runs it behind no
  * runner (`env`, `sudo`, `timeout`, a shell's `-c` script, anything the reader gives as `behind`)
  * and runs nothing else but a change of folder before it (plainCd: `cd` and one folder written from
  * /, ./, ../ or ~, behind no runner) and readers of its output after it, with its texts unchanged.
@@ -187,14 +227,16 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
   const named: Named[] = []
   const kept: Run[] = []
   for (const r of w.runs ?? []) {
-    if (r.tool || !SHELLS.includes(r.what) || !r.path?.endsWith(`/${CHECK_MODS.script}`)) {
+    const path = r.path
+    const n = !r.tool && SHELLS.includes(r.what) && path ? NAMED.find(s => path.endsWith(`/${s.script}`)) : undefined
+    if (!n || !path) {
       kept.push(r)
       continue
     }
-    const about = { script: r.path, word: r.args[0]?.word ?? '', ...(r.args[0]?.path ? { folder: r.args[0].path } : {}) }
+    const about = { script: path, word: r.args[0]?.word ?? '', ...(r.args[0]?.path ? { folder: r.args[0].path } : {}) }
     let why: string | null
     try {
-      why = await whyNot(command, r, facts)
+      why = await whyNot(command, r, n, facts)
     } catch (err) {
       why = `it could not be checked (${err instanceof Error ? err.message : String(err)})`
     }

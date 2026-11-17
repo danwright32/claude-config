@@ -1,8 +1,8 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
-import { CHECK_MODS, namedReaders, unchangedArgs, type NamedFacts } from '../hooks/named.ts'
-import { APP, HOME, KIT, NAMED_TEXTS, bash, refusal, world } from './world.ts'
+import { CHECK_MODS, NAMED, SHARED_PARTS, namedReaders, unchangedArgs, type NamedFacts } from '../hooks/named.ts'
+import { APP, HOME, KIT, NAMED_TEXTS, SCAN_TEXTS, bash, refusal, world } from './world.ts'
 
 // #3022, Dan's decision (2026-11-16, "Name check-mods.sh in the guard"): `bash tools/check-mods.sh
 // <mods folder>`, run from a checkout of this repository, is known by name to read the folder it is
@@ -30,8 +30,108 @@ const ours = ($: unknown, on: Parameters<typeof world>[1]) => {
 }
 
 test('the list of texts the world answers git about is the one the code hands git (#3022)', async () => {
-  expect(unchangedArgs('main').join(' ')).toBe(`diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`)
+  expect(unchangedArgs(CHECK_MODS, 'main').join(' ')).toBe(`diff --quiet --merge-base origin/main -- ${NAMED_TEXTS}`)
   expect([CHECK_MODS.repo, CHECK_MODS.script]).toEqual([REPO, 'tools/check-mods.sh'])
+})
+
+// #3082, Dan's decision (2026-11-16, "Name it in the guard"): `bash tools/check-mod-shared-parts.sh
+// <mods folder>` is the second script known by name, under the same conditions as the first. It
+// runs a python program named by a variable, which writes comment free copies into a folder the
+// script makes under the temporary folder, and no reader can place a write whose path python builds
+// from its arguments. tests/test-area-check-shared-parts-read-only.sh runs the real script.
+const SCAN = 'tools/check-mod-shared-parts.sh'
+// A script held for what the real one is held for: a python program named by a variable, handed the
+// folder and a folder of its own.
+const SCAN_UNREADABLE = '#!/bin/bash\ndir="${1%/}"\nTS_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/ts_source.py"\nstripped="$(mktemp -d "${TMPDIR:-/tmp}/check-mod-shared-parts.XXXXXX")" || exit 1\ntrap \'rm -rf "$stripped"\' EXIT\npython3 -I "$TS_SOURCE" strip-hooks "$dir" "$stripped"\n'
+const both = ($: unknown, on: Parameters<typeof world>[1]) => {
+  const w = ours($, on)
+  w.files[`${APP}/${SCAN}`] = SCAN_UNREADABLE
+  return w
+}
+
+test('exactly two scripts are known by name, each with the texts the world answers git about (#3082)', async () => {
+  // A third name is a third exemption, which is Dan's to sign off: adding one turns this red.
+  expect(NAMED.map(n => [n.repo, n.script])).toEqual([[REPO, 'tools/check-mods.sh'], [REPO, SCAN]])
+  expect(NAMED).toEqual([CHECK_MODS, SHARED_PARTS])
+  expect(unchangedArgs(SHARED_PARTS, 'main').join(' ')).toBe(`diff --quiet --merge-base origin/main -- ${SCAN_TEXTS}`)
+})
+
+test("this repository's own tools/check-mod-shared-parts.sh handed a folder holding held files runs, judging no file, on record (#3082)", KIT, async ($, on) => {
+  const w = both($, on)
+  expect((await bash($ as never, w, `bash ${SCAN} src/`)).result).toBe('done')
+  expect((await bash($ as never, w, `./${SCAN} src/`, {}, 'b2')).result).toBe('done')
+  expect((await bash($ as never, w, `cd ./src && bash ../${SCAN} lib 2>&1 | tail -n 40`, {}, 'b3')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(named(w)).toMatchObject([
+    { word: 'src/', script: `${APP}/${SCAN}`, decision: 'passed' },
+    { word: 'src/', script: `${APP}/${SCAN}`, decision: 'passed' },
+    { word: 'lib', script: `${APP}/${SCAN}`, decision: 'passed' },
+  ])
+  // Its own texts are the ones git was asked about, never the other script's.
+  expect(w.ran.filter(l => l.includes(' diff ')).every(l => l.endsWith(SCAN_TEXTS))).toBe(true)
+  expect(w.ran.filter(l => l.includes(' diff ')).length).toBe(3)
+})
+
+test('the scan in another repository is held as before, and git is never asked about its text (#3082)', KIT, async ($, on) => {
+  const other = world($, on)
+  other.files[`${APP}/${SCAN}`] = SCAN_UNREADABLE
+  expect(refusal(await bash($ as never, other, `bash ${SCAN} src/`))).toContain(HELD)
+  expect(named(other)).toMatchObject([{ decision: 'judged', why: `it is in a checkout of dan/app, never ${REPO}` }])
+  expect(other.ran.filter(l => l.includes(' diff '))).toEqual([])
+})
+
+test('a copy of the scan elsewhere in this repository is held as before (#3082)', KIT, async ($, on) => {
+  const w = both($, on)
+  w.files[`${APP}/copy/${SCAN}`] = SCAN_UNREADABLE
+  expect(refusal(await bash($ as never, w, `bash copy/${SCAN} src/`))).toContain(HELD)
+  expect(named(w)).toMatchObject([{ decision: 'judged', why: `it is not ${SCAN} at the root of its checkout` }])
+  expect(w.ran.filter(l => l.includes(' diff '))).toEqual([])
+})
+
+test("each named script answers for its own texts: one's change holds it and never the other (#3082)", KIT, async ($, on) => {
+  const w = both($, on)
+  w.ctl.scanDiff = 1
+  expect(refusal(await bash($ as never, w, `bash ${SCAN} src/`))).toContain(HELD)
+  expect((await bash($ as never, w, 'bash tools/check-mods.sh src/', {}, 'b2')).result).toBe('done')
+  w.ctl.scanDiff = 0
+  w.ctl.namedDiff = 1
+  expect((await bash($ as never, w, `bash ${SCAN} src/`, {}, 'b3')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, 'bash tools/check-mods.sh src/', {}, 'b4'))).toContain(HELD)
+  const CHANGED = 'its text, or that of a file it sources or runs, has changed since this checkout left origin/main, so it is not the text the suite proved'
+  expect(named(w).map(x => [x.script, x.decision, x.why])).toEqual([
+    [`${APP}/${SCAN}`, 'judged', CHANGED],
+    [`${APP}/tools/check-mods.sh`, 'passed', undefined],
+    [`${APP}/${SCAN}`, 'passed', undefined],
+    [`${APP}/tools/check-mods.sh`, 'judged', CHANGED],
+  ])
+})
+
+// The scan in any other shape, and beside the other named script, judged as before.
+const SCAN_SHAPES: [string, string][] = [
+  ['handed a second folder', `bash ${SCAN} lib src/`],
+  ['with the folder it keeps its copies in set for it', `TMPDIR=src bash ${SCAN} src/`],
+  ['with the python it runs set for it', `PATH=src:$PATH bash ${SCAN} src/`],
+  ['after a value read and exported with no equals sign', `read TMPDIR <<< src; export TMPDIR; bash ${SCAN} src/`],
+  ['run by another shell', `sh ${SCAN} src/`],
+  ['handed a file', `bash ${SCAN} src/big.ts`],
+  ['with its output sent into a held file', `bash ${SCAN} src/ > src/big.ts`],
+  ['chained with an edit of a held file', `bash ${SCAN} src/ && sed -i '' 's/a/b/' src/big.ts`],
+  ['chained after the other named script', `bash tools/check-mods.sh src/ && bash ${SCAN} src/`],
+  ['chained before the other named script', `bash ${SCAN} src/; bash tools/check-mods.sh src/`],
+]
+
+test('the scan in any other shape, and chained with the other named script, is held as before (#3082)', KIT, async ($, on) => {
+  const w = both($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of SCAN_SHAPES.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/big\.ts\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(SCAN_SHAPES.map(([what]) => `held: ${what}`))
+  // Chained, each of the two is judged for the other running beside it, and neither is let through.
+  const chained = named(w).slice(-4)
+  expect(chained.map(x => [x.decision, x.why])).toEqual(Array(4).fill(['judged', 'bash runs in the same command, and what that leaves in the environment cannot be read']))
 })
 
 test("this repository's own tools/check-mods.sh handed a folder holding held files runs, judging no file, on record (#3022)", KIT, async ($, on) => {
@@ -73,7 +173,7 @@ test('a copy whose text changed since its checkout left the default branch, or t
   w.ctl.namedDiff = 129
   expect(refusal(await bash($ as never, w, 'bash tools/check-mods.sh src/', {}, 'b2'))).toContain(HELD)
   expect(named(w).map(x => [x.decision, x.why])).toEqual([
-    ['judged', 'its text, or that of a library it sources, has changed since this checkout left origin/main, so it is not the text the suite proved'],
+    ['judged', 'its text, or that of a file it sources or runs, has changed since this checkout left origin/main, so it is not the text the suite proved'],
     ['judged', 'git could not compare its text with origin/main (exit 129)'],
   ])
 })
@@ -373,6 +473,29 @@ test('the plain run, and one after a change of folder written from a place the s
   }
   expect(ran).toEqual(PLAIN.map(([what]) => `ran: ${what}`))
   expect(named(w).map(x => x.decision)).toEqual(PLAIN.map(() => 'passed'))
+})
+
+// Dan's #3093 sign off (2026-11-16) loosened the hold on an equals sign for tools/check-mods.sh
+// alone. The scan was signed off (#3082) with "the command holds no equals sign", so every command
+// the loosening lets through for the first script still holds the scan, and what #3093 tightened (a
+// runner, a change of folder by a bare name) holds the scan as it holds the first.
+const ANY_EQUALS = 'the command sets a value (it holds an equals sign), and the script takes the programs it runs and where it keeps its copies from the environment'
+const SCAN_HELD: [string, string, string][] = [
+  ...NO_SETTING.map(([what, command]): [string, string, string] => [what, command.replace('tools/check-mods.sh', SCAN), ANY_EQUALS]),
+  ['behind env clearing the environment', `env -i bash ${SCAN} src/`, behindIt('env')],
+  ['after a change of folder by a bare name', `cd src && bash ../${SCAN} lib`, NOT_PLAIN_CD],
+]
+
+test('an equals sign anywhere in the command still holds the scan, which the loosening for check-mods does not reach, and a runner or a bare change of folder holds it too (#3082, #3093)', KIT, async ($, on) => {
+  const w = both($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of SCAN_HELD.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(SCAN_HELD.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.script, x.decision, x.why])).toEqual(SCAN_HELD.map(([, , why]) => [`${APP}/${SCAN}`, 'judged', why]))
 })
 
 test('a setting the write reader carries on the run holds it though the commands show none (#3093)', async () => {

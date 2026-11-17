@@ -411,7 +411,7 @@ const keepError = async ($: EngineInterface, path: string, error: string): Promi
 
 // Its own failure: counted, kept in the error file, said once a session. Every step is caught on its
 // own, so a failure here can never reach the call (L561, L95). `kept` says what it means for the edit.
-const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' = 'unchecked') => {
+const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unchecked' | 'unlogged' | 'shell' | 'command' | 'rotation' | 'handed' = 'unchecked') => {
   const error = msg(err)
   let n = 1
   try {
@@ -429,6 +429,8 @@ const failed = async ($: EngineInterface, path: string, err: unknown, kept: 'unc
         ? `The area check could not rotate its log (${error}); nothing was lost, and ${where}.`
         : kept === 'shell'
         ? `The area check could not read what a shell command writes (${error}), so it went ahead unchecked; ${where}.`
+        : kept === 'handed'
+        ? `The area check could not finish judging the scripts a word built as the command runs is handed to (${error}), so it judged that word as one it cannot name, which holds the command wherever a file could be held; ${where}.`
         : kept === 'command'
         ? `The area check could not check the pull request command (${error}), so it went ahead unchecked; ${where}.`
         : kept === 'unchecked'
@@ -783,11 +785,14 @@ const programReach = async ($: EngineInterface, run: ShellRun, text: string, at:
   return { placed }
 }
 
-// Where the writes of every script a folder was handed to land, one list per script, when each write
-// of every one is placed (#2426 lessons review, #2565), or null: the first whose write may reach the
-// whole folder, or whose reading throws, answers for all. Placed writes costing more judgings than
+// Where the writes of every script a path was handed to land, one list per script, when each write of
+// every one is placed (#2426 lessons review, #2565), or null. The path is a folder (gatePath), or a
+// word built as the command runs, read as handed no real folder (gateHanded, #3082), and `folder` is
+// the folder they are handed, which a write relative to it lands in. The first script with a write that may reach the whole
+// folder, or whose reading throws, makes it null for all. Placed writes costing more judgings than
 // the folder itself would (placedCost, FOLDER_JUDGE_MAX) is null too, so the walk stays inside the
-// hook's budget and the folder is judged as before.
+// hook's budget and the path is judged as before: a folder for the files under it, a built word as
+// one that cannot be named.
 const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: string): Promise<ScriptPlaced[][] | null> => {
   const out: ScriptPlaced[][] = []
   for (const r of runs) {
@@ -876,7 +881,7 @@ const gateHanded = async ($: EngineInterface, id: string, t: Unread & { runs: re
     if (!placed || placed.flat().some(p => p.handed)) return null
     return await judgePlaced($, id, t.word, t.runs, placed, agent, await $.session.cwd())
   } catch (err) {
-    await failed($, t.word, err)
+    await failed($, t.word, err, 'handed')
     return null
   }
 }
