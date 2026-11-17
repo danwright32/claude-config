@@ -550,6 +550,44 @@ EOF
 $NOTE_BODY
 EOF" "$FIX/dev"
 refused "#2789 a function defined by a body the shell runs is still seen, so the append after it is read"
+# A single quoted argument of printf or echo is text the command prints, so a line in it beginning
+# with "> " is not a redirect (claude-config#3152). On 2026-11-17 a printf appending to a notes file
+# was refused because a line of its quoted text began "> payload/mods/area-check/hooks/named.ts".
+# Where the command writes is still judged from its own words, and the text is read as ever wherever
+# a shell could run it: piped on, saved for eval, written to a script the command runs, or printed
+# by a printf or echo the command redefines.
+QUOTED_LINES="- the gate read this line
+> payload/LESSONS.md as a redirect, and $FIX/dev/payload/LESSONS.md too"
+runbash "printf '%s\n' '$QUOTED_LINES' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+allowed "#3152 a printf appending quoted text whose line begins > payload to a notes file is allowed"
+runbash "echo '$QUOTED_LINES' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+allowed "#3152 so is an echo of the same text"
+runbash "printf '%s\n' 'one line > payload/LESSONS.md' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+allowed "#3152 and a > inside one line of the quoted text"
+runbash "printf '$QUOTED_LINES'" "$FIX/dev"
+allowed "#3152 and a printf of it to the terminal"
+runbash "printf 'x\n> elsewhere\n' >> payload/LESSONS.md" "$FIX/dev"
+refused "#3152 a printf appending into payload is still refused"
+runbash "printf 'x' > 'payload/LESSONS.md'" "$FIX/dev"
+refused "#3152 and so is a printf whose quoted redirect target is payload"
+runbash "printf '$QUOTED_LINES' | sh" "$FIX/dev"
+refused "#3152 the same text piped into sh is read, and refused"
+runbash "{ echo hi; printf '$QUOTED_LINES'; } | sh" "$FIX/dev"
+refused "#3152 and inside a group piped into sh"
+runbash "printf -v run '$QUOTED_LINES'; eval \"\$run\"" "$FIX/dev"
+refused "#3152 and saved by printf -v for eval"
+runbash "printf '$QUOTED_LINES' > $FIX/elsewhere/s.sh; bash $FIX/elsewhere/s.sh" "$FIX/dev"
+refused "#3152 and written to a script the command then runs"
+runbash "printf(){ sh; }; printf '$QUOTED_LINES'" "$FIX/dev"
+refused "#3152 and printed by a printf the command defines as a function"
+runbash "alias echo=sh; echo '$QUOTED_LINES'" "$FIX/dev"
+refused "#3152 and by an echo aliased to a shell"
+runbash "bash -c \"\$(printf '$QUOTED_LINES')\"" "$FIX/dev"
+refused "#3152 and inside a substitution bash runs"
+runbash "sh -c '$QUOTED_LINES'" "$FIX/dev"
+refused "#3152 and a single quoted string a shell runs is read as ever"
+runbash "printf \"$QUOTED_LINES\" >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3152 double quoted text is read as ever, since only single quoted text is narrowed"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"

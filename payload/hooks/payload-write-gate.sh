@@ -496,6 +496,108 @@ def copied_as_text(cmd):
         return cmd
     return "".join(out)
 
+# The single quoted arguments of printf and echo are text the command prints, as the body of a
+# heredoc cat or tee copies is (claude-config#3152). The lines below read every line of a command as
+# shell, so a quoted argument holding a line that began "> payload/..." was taken for a redirect: on
+# 2026-11-17 a printf appending to a notes file was refused for one. Such text is blanked, its line
+# breaks kept, only where nothing can run it: a printf or echo the session shell runs itself, at the
+# top of the command, with nothing in the command piping, saving (printf -v, eval), redefining
+# (a function, alias, hash or PATH change) or wrapping (a compound command, exec, coproc, a process
+# substitution) anything, and no file it writes named again in the command. Where it writes, and a
+# redirect target written in quotes, are read as ever. Anything else keeps every line read.
+PRINTER = re.compile(r"\s*(?:printf|echo)(?=\s|$)")
+COMPOUND = re.compile(r"\s*(?:[{}]|then|do|done|fi|else|elif|if|while|until|for|case|esac|select|[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\))(?=\s|$|;|\()")
+RUNS_TEXT = re.compile(r"\b(?:eval|exec|coproc)\b|(?:^|[\s;&|(){}])(?:printf|echo)\s*\(\s*\)")
+UNREAD_FORMS = ("$(", "`", "${", "$\x27", "<(", ">(")
+
+def single_quoted(text):
+    """(start, end) of the inside of each single quoted string in text as bash reads it, leaving out
+    the word after a redirection, or None when a quote never closes."""
+    spans, i, n = [], 0, len(text)
+    in_dq, target, seen = False, False, False
+    while i < n:
+        c = text[i]
+        if in_dq:
+            if c == "\\":
+                i += 2
+                continue
+            if c == "\"":
+                in_dq = False
+            i += 1
+            continue
+        if c == "\\":
+            seen = True
+            i += 2
+            continue
+        if c in "<>":
+            target, seen = True, False
+            i += 1
+            continue
+        if c in " \t\n":
+            if target and seen:
+                target = False
+            i += 1
+            continue
+        seen = True
+        if c == "\"":
+            in_dq = True
+        elif c == "\x27":
+            j = text.find("\x27", i + 1)
+            if j < 0:
+                return None
+            if not target:
+                spans.append((i + 1, j))
+            i = j
+        i += 1
+    return spans
+
+def written_files(text):
+    """The files text redirects its output into, from its own words, or None when it cannot be read."""
+    try:
+        toks = _sw.shell_tokens(text)
+    except Exception:
+        return None
+    return [toks[k + 1] for k in range(len(toks) - 1) if re.fullmatch(r"[0-9&]*>[>|]?", toks[k])]
+
+def printed_as_text(cmd):
+    """cmd with the single quoted arguments of each plain printf or echo blanked, line breaks kept,
+    or cmd unchanged wherever that cannot be read (claude-config#3152)."""
+    if "\x27" not in cmd:
+        return cmd
+    try:
+        parts = []
+        _sw.commands(cmd, parts=parts)
+    except Exception:
+        return cmd
+    if any(p["how"] == "|" or COMPOUND.match(cmd[p["start"]:p["end"]]) for p in parts):
+        return cmd
+    out = list(cmd)
+    for p in parts:
+        text = cmd[p["start"]:p["end"]]
+        if p["scope"] != (0,) or p["inner"] or p["openers"] or not PRINTER.match(text):
+            continue
+        if any(f in text for f in UNREAD_FORMS) or re.match(r"\s*printf\s.*(?:^|\s)-v", text, re.S):
+            continue
+        spans, files = single_quoted(text), written_files(text)
+        if not spans or files is None:
+            continue
+        rest = cmd[:p["start"]] + cmd[p["end"]:]
+        if any(os.path.basename(f.rstrip("/")) in rest for f in files):
+            continue
+        for a, b in spans:
+            for k in range(p["start"] + a, p["start"] + b):
+                if out[k] != "\n":
+                    out[k] = " "
+    narrowed = "".join(out)
+    if NOT_A_PLAIN_COPY.search(narrowed) or RUNS_TEXT.search(narrowed):
+        return cmd
+    return narrowed
+
+try:
+    cmd = printed_as_text(cmd)
+except Exception:
+    pass
+
 try:
     shell_text = copied_as_text(cmd)
 except Exception:
