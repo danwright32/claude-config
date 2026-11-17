@@ -1,0 +1,3 @@
+*Pull request 641 has a check stuck on pending*
+A CI re-run finished without reporting its result.
+<https://example.com/pulls/641|View pull request>
