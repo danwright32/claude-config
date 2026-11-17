@@ -866,6 +866,12 @@ export type Held = {
    */
   more?: Held[]
   under?: string
+  /**
+   * Why a script the area check knows by name, run in the held command, was not let through (#3162,
+   * named.ts declinedNote), said beside the files so the session can tell what to change. It changes
+   * nothing about what is held.
+   */
+  declined?: string
 }
 
 /** Every file one hold stands for: the file it names, and the others held under the same folder (#2920). */
@@ -955,8 +961,16 @@ const growthLine = (h: Held): string | undefined => {
   return `Rough: ${g.net >= 0 ? 'grew' : 'shrank'} ${Math.abs(g.net)} lines net in ${GROWTH_DAYS} days${size}${fixes}.`
 }
 
-/** The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as rough. */
+/**
+ * The grey card's words (mod-kit draws it): the file, each issue shown with its priority, growth as
+ * rough, and why a script known by name was not let through, where one was not (#3162).
+ */
 export const holdCard = (h: Held): { reason: string; safeWay: string; note?: string } => {
+  const c = cardFacts(h)
+  return h.declined ? { ...c, reason: `${c.reason} ${h.declined}` } : c
+}
+
+const cardFacts = (h: Held): { reason: string; safeWay: string; note?: string } => {
   if (h.unread) {
     return {
       reason: `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,

@@ -26,11 +26,19 @@ type Run = NonNullable<ModKitWrites['runs']>[number]
  * tests/test-area-check-check-mods-read-only.sh runs them before every merge: over a throwaway
  * checkout, it is red when a run changes a file git tracks there or adds one git does not ignore,
  * and red when a text sources a file this list lacks.
+ *
+ * `byValue` is every variable a program the texts run is named by, which only the environment sets
+ * (#3154): the compiler (TSC_BIN), claude three times (CLAUDE_BIN), the load average's command
+ * (LOAD_AVERAGE_CMD) and the pinned compiler's two test hooks. No list of texts can hold what those
+ * programs are, so a command naming one before the script is held for it by name (byValueNamed). The
+ * same suite names each of the seven commands by file, line and variable, and is red when one changes
+ * or its variable is missing here.
  */
 export const CHECK_MODS = {
   repo: 'danwright32/claude-config',
   script: 'tools/check-mods.sh',
   texts: ['tools/check-mods.sh', 'tools/lib/pinned-compiler.sh', 'payload/hooks/lib/kept-output.sh', 'payload/hooks/lib/load-average.sh', 'payload/hooks/lib/whole-number.sh'],
+  byValue: ['TSC_BIN', 'CLAUDE_BIN', 'LOAD_AVERAGE_CMD', 'PINNED_TS_TEST_BEFORE_REMOVE', 'PINNED_TS_TEST_BEFORE_LINK'],
 } as const
 
 /**
@@ -58,8 +66,11 @@ export const SHARED_PARTS = {
   texts: ['tools/check-mod-shared-parts.sh', 'tools/lib/ts_source.py'],
 } as const
 
-/** A script known by name: where it lives, and every text a run of it is made of. */
-export type NamedScript = { readonly repo: string; readonly script: string; readonly texts: readonly string[] }
+/**
+ * A script known by name: where it lives, every text a run of it is made of, and the variables naming
+ * a program it runs that only the environment sets (#3154), where it has any.
+ */
+export type NamedScript = { readonly repo: string; readonly script: string; readonly texts: readonly string[]; readonly byValue?: readonly string[] }
 
 /** Every script let through by name. Each one is an exemption, so a new one is Dan's to sign off. */
 export const NAMED: readonly NamedScript[] = [CHECK_MODS, SHARED_PARTS]
@@ -172,11 +183,29 @@ const whySet = (run: readonly Read[], at: number, r: Run): string | null => {
   return null
 }
 
+// Why a command naming a variable a program the script runs is named by (NamedScript.byValue, #3154)
+// is not the plain run, or null when it names none before the script. It reads the command's own
+// text, up to the last place the script's path is written, and never the reader of commands, so a
+// reader that leaves a setting out cannot let one written by name (`X=`, `export X`, `read X`,
+// `unset X`, `${X:=}`) through. A name built as the command runs (`export ${p}_BIN=x`) is not seen
+// here, and is held by the rules below as any setting or other command is. A name written after the script stands only in
+// a reader of its output, which whyNot lets nothing else be, and that sets nothing the script sees
+// (#3093), so it is left to that loosening.
+const byValueNamed = (command: string, n: NamedScript): string | null => {
+  const at = command.lastIndexOf(n.script)
+  const before = at < 0 ? command : command.slice(0, at)
+  const names = (n.byValue ?? []).filter(v => new RegExp(`(?<![A-Za-z0-9_])${v}(?![A-Za-z0-9_])`).test(before))
+  if (!names.length) return null
+  return `the command names ${names.join(', ')} before it, and the script runs the program ${names.length === 1 ? 'that variable names' : 'each of those variables names'}`
+}
+
 // Why a run shaped like the named one is not it, or null when it is.
 const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts): Promise<string | null> => {
   const [handed, ...more] = r.args
   if (!handed || more.length) return 'it is handed more than the one folder it reads'
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
+  const program = byValueNamed(command, n)
+  if (program) return program
   // Each named script takes the programs it runs, and where it keeps its copies and logs, from the
   // environment (check-mods.sh: CLAUDE_BIN, TSC_BIN, TMPDIR, CHECK_MODS_FAILURE_OUTPUT; the shared
   // parts scan: python3 by PATH, and TMPDIR, which set to the folder puts its copies there). Dan
@@ -245,7 +274,8 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
 /**
  * What a command writes, without the folder a named script only reads. A run is let through when it
  * is the named script itself: run by bash or directly, at its path from the root of a checkout of its
- * repository, handed one folder that is on the disk, in a command that gives it no setting (#3093,
+ * repository, handed one folder that is on the disk, in a command that names none of the variables
+ * its programs are named by before it (byValue, #3154) and gives it no setting (#3093,
  * whySet: for tools/check-mods.sh an equals sign may stand only in a reader of its output, or a
  * comment; for every other named script the command holds no equals sign at all), runs it behind no
  * runner (`env`, `sudo`, `timeout`, a shell's `-c` script, anything the reader gives as `behind`)
@@ -284,6 +314,19 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
   }
   if (!named.some(n => 'passed' in n)) return { writes: w, named }
   return { writes: { ...w, runs: kept }, named }
+}
+
+/**
+ * What a hold says of the runs of named scripts among `scripts` (each a run's path) that were not let
+ * through (#3162): each script as NAMED spells it, with the reason it was judged as before, so the
+ * session can tell what to change. Undefined where none was declined. The reason names programs and
+ * variables, never a value, as it does in the log.
+ */
+export const declinedNote = (named: readonly Named[], scripts: readonly (string | null | undefined)[]): string | undefined => {
+  const lines = named.flatMap(n =>
+    'why' in n && scripts.includes(n.script) ? [`${NAMED.find(s => n.script.endsWith(`/${s.script}`))?.script ?? n.script} was not let through by name: ${n.why}.`] : [],
+  )
+  return lines.length ? [...new Set(lines)].join(' ') : undefined
 }
 
 /**
