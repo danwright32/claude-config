@@ -5608,6 +5608,11 @@ pre push check or build that takes a few GB and gives it back within minutes nev
 Measured on 2026-10-26 on the work MacBook, two such bursts of 1.4 to 4.4 GB came and went inside 27
 minutes while the old rule said "zero in about 2 hour(s)". The cost is that a real fast fill is
 projected up to 30 minutes later; the floor does not wait. 0 turns the window off.
+The same window holds the older end after a recovery (claude-config#3153): the rate starts from the
+least free space seen in the 30 minutes from the rise, never the rise's own reading. On 2026-11-16
+free space jumped to 196 GB for about three minutes and settled at 105 to 106 GB, and the old rule
+projected that settling as 204.5 GB an hour for half an hour while nothing moved. The cost is that a
+fall beginning just as a recovery ends is projected up to 30 minutes later again.
 
 When the verdict is 3 or 4 it names what it can. Swap first (claude-config#1770): swap lives on
 `/System/Volumes/VM`, which shares the disk and which no folder size reaches, and on 2026-10-26 95
