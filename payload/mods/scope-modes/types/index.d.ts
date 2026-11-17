@@ -70,13 +70,6 @@ export type ScopeModes = {
    * when nothing is written. Throws when the note could not be written, so the caller can say so.
    */
   sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>
-  /**
-   * When each sleep on this Mac ended (#2993), ms since the epoch, oldest first: one per record moved
-   * aside at a wake or its noon end, and the end of a record past its time not yet moved aside. Empty
-   * when none has. Throws when the ended records cannot be listed, so the caller can say so. For the
-   * Slack alert guard, which asks Dan again about wording chosen overnight once the night is long over.
-   */
-  sleepEnds: () => Promise<number[]>
 }
 
 /**

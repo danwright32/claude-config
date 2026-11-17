@@ -1412,7 +1412,7 @@ want_stderr "could not set apart" "#2028 the refusal says why main's changes wer
 
 # --- claude-config#2258: a mod's byte identical copy of a mod-kit helper is tested by mod-kit ------
 # Every mod keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/, and the gate
-# refused a new mod for them alone (slack-alert-guard, 2026-11-04, for hold.ts and skew.ts). A copy
+# refused a new mod for them alone (a new guard, 2026-11-04, for hold.ts and skew.ts). A copy
 # whose bytes and mode match payload/mods/mod-kit/hooks/<same name> in the tree the push delivers,
 # and which a test under payload/mods/mod-kit/tests/ in that tree imports, is counted as tested.
 # Anything short of that is judged as before, and each narrowing is seen to refuse here.
