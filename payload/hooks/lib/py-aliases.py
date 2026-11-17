@@ -15,7 +15,9 @@ follow() reads two things from a script's syntax tree:
   be read: an assignment to a name (annotated or not, chained, or a tuple against a tuple of the
   same shape), a walrus, a for loop or comprehension over a tuple, list or set written out, and a
   parameter's default. py_acts then reads an attribute chain from such a name as it reads one from
-  the imported name. Names are followed whatever scope they are in, which can only refuse more.
+  the imported name. Names are followed in every scope but a class body, which can only refuse
+  more; a binding made in a class body is not followed, and counts as a module put where its next
+  use cannot be read (below).
 - A module put where its next use cannot be read: an argument, a list or dictionary, an attribute
   or a subscript, a class body, a return, a lambda's body, an arm of a choice, a comparison another
   object answers, a walrus whose name is not followed (one in a class body, or over a value that
