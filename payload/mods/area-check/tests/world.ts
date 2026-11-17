@@ -134,6 +134,13 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // inside the pull request check, the other before it, so the hook itself fails.
     pipelineThrows?: boolean
     cwdThrows?: boolean
+    // mod-kit's readers as a copy loaded before #3093 gives them: no setting carried on a command or
+    // on a run, nothing said of what a command is run behind, and a command that only sets a value
+    // left out whatever is asked.
+    oldReader?: boolean
+    // The session's folder failing on its Nth ask only (#3126), and how many times it has been asked.
+    cwdThrowsOn?: number
+    cwdAsked: number
     numstat?: string
     sha: string
     goal: string | null
@@ -173,6 +180,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     namedDiff?: number
     scanDiff?: number
   } = {
+    cwdAsked: 0,
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
     links: {},
@@ -191,7 +199,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : e.name === 'CLAUDE_AREA_CHECK_DIR' ? init.areaDir : undefined }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.cwd', () => {
-    if (ctl.cwdThrows) throw new Error('the session folder could not be read')
+    ctl.cwdAsked += 1
+    if (ctl.cwdThrows || ctl.cwdAsked === ctl.cwdThrowsOn) throw new Error('the session folder could not be read')
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
@@ -275,13 +284,20 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       // mod-kit's command readers, standing in: their byte for byte copies, as is it live keeps.
       if (argv[1] === 'pipeline' && ctl.pipelineThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the pipeline could not be read' })
       if (argv[1] === 'gh' || argv[1] === 'mergeHelper' || argv[1] === 'pipeline') {
-        const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '') : pipeline(input.command)
+        // The commands that only set a value, where asked for, as mod-kit's own handler gives them (#3093).
+        const opts = input.assignments === true && !ctl.oldReader ? { assignments: true } : {}
+        const piped = (): Command[] => {
+          const cs: Command[] = input.cwd !== undefined ? pipelineIn(input.command, input.cwd, input.home ?? '', opts) : pipeline(input.command, opts)
+          return ctl.oldReader ? cs.map(({ env: _env, behind: _behind, ...c }) => c) : cs
+        }
+        const read = argv[1] === 'gh' ? ghArgs(input.words) : argv[1] === 'mergeHelper' ? mergeHelperArgs(input as Command) : piped()
         return answer(ok(read === undefined ? 'null' : JSON.stringify(read)))
       }
       // What a Bash call writes (#2142), from the same copy of mod-kit's reader.
       if (argv[1] === 'writes') {
         if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
-        return answer(ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home ?? ''))))
+        const w = commandWrites(input.command, input.cwd, input.home ?? '')
+        return answer(ok(JSON.stringify(ctl.oldReader && w.runs ? { ...w, runs: w.runs.map(({ env: _env, ...r }) => r) } : w)))
       }
       if (argv[1] === 'branch') {
         if (ctl.branchThrows) return answer({ exitCode: 1, stdout: '', stderr: 'git could not be asked' })

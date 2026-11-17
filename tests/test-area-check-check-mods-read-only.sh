@@ -19,9 +19,12 @@
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that sets no value and runs the script once, with nothing but a change of folder
+#     command that gives it no setting and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts
-#     as the checkout left the default branch with them.
+#     as the checkout left the default branch with them. Since #3093 an equals sign holds the run
+#     only where it may set a value for the script, so one in a reader of its output does not, and
+#     a run behind a runner (env, sudo, timeout, a shell's own script) or after a change of folder
+#     that is not one folder written from /, ./, ../ or ~ is judged.
 #     Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 #     with the run, the other script let through by name included, is still judged.
 # What it cannot prove, said so it is never claimed (L460): what the real claude command, the real
@@ -225,8 +228,10 @@ mkdir -p tools/typescript/node_modules; : > tools/typescript/node_modules/plante
 " whole "tools/typescript/node_modules/planted"
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 31 of the run's shape and its text, one for
-# each of the four libraries, and one for the other script let through by name.
-named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 36
+# How many checks must run is set here, not measured: 56 of the run's shape and its text (31 before
+# #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
+# than the rule asks, two of a change of folder that leads nowhere, and three of one written with
+# `..`), one for each of the four libraries, and one for the other script let through by name.
+named_rule CHECK_MODS "$REPO" payload/mods/fine/hooks/register.ts 61
 
 finish

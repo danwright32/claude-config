@@ -331,18 +331,22 @@ const leftAsWritten = (cmd: string, i: number, inDouble: boolean): boolean => {
   if (next === undefined || /[\s/.,%]/.test(next)) return true
   return inDouble ? next === '"' : /[;|&]/.test(next)
 }
-// Where the `]` closing a `$[` at `i` stands (#3070), or undefined where this reader takes none.
+// Where the arithmetic opening at `i` ends, or undefined where this reader takes none there: the `]`
+// closing a `$[` (#3070), or the last `)` of a `$((...))` that holds a sum sumOf works out (#3088).
+// The two are taken by different rules, because the shells agree on one and not on the other.
 // `$[...]` is the old arithmetic expansion of bash and zsh (measured 2026-11-16 on bash 3.2, zsh 5.9
 // and macOS sh: `"x\\$[0-9]"` is handed on as `x\-9`), and text to dash and ksh, which hand the word
 // on as typed and read a blank or a redirect inside one outside quotes as they do anywhere (measured:
 // `dash -c 'echo $[1 > 2]'` writes a file named `2]`). So one is taken only where both readings give
 // the same words: inside double quotes, or outside quotes holding nothing that ends a word. One
 // holding a quote, a backslash or a new line, or never closed, is read as before. A bracket inside
-// is matched, and a command substitution inside is part of it.
-// A `$((...))` (#3088) is arithmetic in every shell (measured 2026-11-16 on bash 3.2, zsh 5.9, macOS
-// sh, dash and ksh: `"a|\\$((0-9))"` is handed on as `a|\-9`), so one is taken here only where it
-// holds a sum sumOf works out, its last `)` the end; any other is read as before, as a substitution
-// whose text says it is arithmetic.
+// is matched, and a command substitution inside is part of it. It is taken whether or not its sum
+// is one sumOf works out: the caller asks that, and a word holding one that is not has no `worked`.
+// A `$((...))` is arithmetic in every shell (measured 2026-11-16 on bash 3.2, zsh 5.9, macOS sh, dash
+// and ksh: `"a|\\$((0-9))"` is handed on as `a|\-9`), one word inside double quotes and outside them
+// alike, so `inDouble` is not asked for it. One is taken only where the text up to the first `))`
+// after it is on one line and is a sum sumOf works out; any other is read as before, as a
+// substitution whose text says it is arithmetic.
 const sumEnd = (text: string, i: number, inDouble: boolean): number | undefined => {
   if (text.startsWith('$((', i)) {
     const close = text.indexOf('))', i + 3)
@@ -434,8 +438,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
   let inWord = false
   let wordBare: number[] = []
   let wordSubs: InWord[] = []
-  // For `worked`: each `$[...]` in the word being read (#3070, sumEnd), where it stands in the word
-  // and what it comes to, undefined where that is not worked out (sumOf).
+  // For `worked`: each `$[...]` and each `$((...))` sumEnd took in the word being read (#3070,
+  // #3088), where it stands in the word and what it comes to, undefined where that is not worked
+  // out (sumOf), as only a `$[...]` can be.
   let wordSums: { pos: number; len: number; text: string | undefined }[] = []
   // For `literal`: whether the word being read holds a pattern character quoted, one bare, and an
   // expansion (a $ or a backtick, quoted or not, or a substitution).
@@ -807,8 +812,10 @@ const envSplit = (words: readonly string[], at: number): { value: string; next: 
 // A caller that knows no places (a find -exec's words) takes every $ and backtick as one the shell
 // expands, so a word it cannot place is unread, never read as written (lessons review of 7677fc0).
 // `env` is each assignment written in front of the command or given to a runner before it (`A=1 env
-// B=2 bash s.sh`), as written and in order (#3093): the settings it is run with.
-type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string; env: string[] }
+// B=2 bash s.sh`), as written and in order (#3093): the settings it is run with. `behind` is the
+// name of each runner looked past, in order (#3093): what the command is run behind. A runner with
+// no command after it is the command, and is behind nothing.
+type Begun = { words: string[]; starts: number[]; xargs: boolean; proxied: boolean; unread?: string; env: string[]; behind: string[] }
 const MAY_EXPAND = (word: string): boolean => /[$`]/.test(word)
 const begins = (words: string[], starts: number[], expands: (word: string, start: number) => boolean = MAY_EXPAND): Begun => {
   let w = words
@@ -817,6 +824,7 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
   let proxied = false
   let unread: string | undefined
   const env: string[] = []
+  const behind: string[] = []
   let i = 0
   for (;;) {
     const word = w[i] ?? ''
@@ -833,6 +841,7 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
       const inner = split(string.value).flatMap(x => x.words)
       w = [...inner, ...w.slice(string.next)]
       s = [...inner.map(() => -1), ...s.slice(string.next)]
+      behind.push(name)
       i = 0
       continue
     }
@@ -844,12 +853,14 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
     if (name === 'flock' && (w[next] === '-c' || w[next] === '--command')) {
       w = ['sh', '-c', ...w.slice(next + 1)]
       s = [-1, -1, ...s.slice(next + 1)]
+      behind.push(name)
       i = 0
       continue
     }
     if (name === 'xargs') xargs = true
     const proxy = name === 'rtk' && w[next] === 'proxy' ? proxyRuns(w, next) : undefined
     if (proxy === null) break
+    behind.push(name)
     if (proxy !== undefined) {
       proxied = true
       // The words rtk is given, the shell having taken the redirects away.
@@ -877,7 +888,7 @@ const begins = (words: string[], starts: number[], expands: (word: string, start
     }
     i = next
   }
-  return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}), env }
+  return { words: w.slice(i), starts: s.slice(i), xargs, proxied, ...(unread ? { unread } : {}), env, behind }
 }
 
 // Why what a command runs cannot be read from its words (#3021), or undefined. Until then the reader
@@ -1151,10 +1162,18 @@ const printfText = (args: readonly string[]): string | undefined => {
  * bash s.sh`), after those of the shell running it, for a command in a shell's script or in a
  * substitution that shell runs; absent where there are none. env's own options (-i, -u) are not in
  * it. A command that only sets variables (`F=x;`) gives none to the commands after it.
+ * `behind` is what the command is run behind (#3093), by name and in order: each word this reader
+ * looked past because it only runs the command after it (`env -C copy bash s.sh` is `['env']`,
+ * `sudo nice make` is `['sudo', 'nice']`), the shell whose script it stands in (`bash -c 'make'` is
+ * `['bash']`), and find for what its -exec runs, after what that shell or find is itself behind;
+ * absent for a command typed as it runs. Each of those can change the folder or the environment
+ * the command runs in with no setting written (`env -C`, `env -i`, `env -u`, sudo, a login shell),
+ * and the options that do it are not given, so a reader that needs the plain run takes any as not it.
  */
 export type Command = {
   words: string[]
   env?: string[]
+  behind?: string[]
   pipedFrom?: string[]
   heredocs?: Fed
   xargs?: true
@@ -1275,8 +1294,10 @@ export type Line = (Command | { sub: Line })[]
 // Bash call runs in, at the top, and the shell itself for the script it is given. `proxied` and
 // `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983). `arithmetic` says
 // the one command it feeds stands inside `(( ))`, where a value names no command (#3021). `env` is
-// the settings they are run with (#3093): those of the shell running them, then their own.
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean; env?: string[] }
+// the settings they are run with (#3093): those of the shell running them, then their own. `behind`
+// is what they are run behind (#3093): what the shell running them is behind, that shell, then
+// their own runners.
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean; env?: string[]; behind?: string[] }
 // The marks a feed gives each command it feeds.
 const carried = (f: Feed) => ({
   ...(f.xargs ? { xargs: true as const } : {}),
@@ -1284,13 +1305,17 @@ const carried = (f: Feed) => ({
   ...(f.proxied ? { proxied: true as const } : {}),
   ...(f.unread ? { unread: f.unread } : {}),
   ...(f.env?.length ? { env: f.env } : {}),
+  ...(f.behind?.length ? { behind: f.behind } : {}),
 })
 // The marks the runners in front of a command give it, beside those of the feed it is read in.
 const marksOf = (b: Begun, outer: Feed): Feed => {
   const unread = b.unread ?? outer.unread
   const env = [...(outer.env ?? []), ...b.env]
-  return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}), ...(env.length ? { env } : {}) }
+  const behind = [...(outer.behind ?? []), ...b.behind]
+  return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}), ...(env.length ? { env } : {}), ...(behind.length ? { behind } : {}) }
 }
+// What the commands a program runs are behind (#3093): what the program is, then the program, by its name.
+const behindIt = (feed: Feed, program: string | undefined): string[] => [...(feed.behind ?? []), (program ?? '').split('/').pop() ?? '']
 
 // A command's output redirects that name a file, each with its target: `> f`, `>> f`, `>| f`,
 // `&> f`, `2> f`, and a `>&` whose target is no descriptor. A descriptor copy (2>&1) names none.
@@ -1323,7 +1348,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   if (kind === 'shell' && program && 'text' in program) {
     const inner: Feed = program.stdin ? { stdin: { unreadable: 'fed the rest of the script the shell reads' } } : { pipedFrom: feed.pipedFrom, stdin }
     const splitting = splitsWords(words[0]) ? { splits: true } : {}
-    out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...splitting }))
+    out.push(...readLine(program.text, opts, { ...inner, ...carried(feed), ...splitting, behind: behindIt(feed, words[0]) }))
     // The shell's own output redirects send everything its script prints to a file, which the
     // script's commands never name (#760: `bash -c 'make' > build.log` wrote a build.log no reader
     // saw). They are given as a command of their own, the shell and those redirects, so every
@@ -1359,7 +1384,7 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   const roots = findRoots(words)
   for (const inner of execsOf(words)) {
     const b = begins(inner, inner.map(() => -1))
-    if (b.words.length) emit(b.words, [], { ...marksOf(b, { proxied: feed.proxied, unread: feed.unread, env: feed.env }), found: roots }, out, opts)
+    if (b.words.length) emit(b.words, [], { ...marksOf(b, { proxied: feed.proxied, unread: feed.unread, env: feed.env, behind: behindIt(feed, words[0]) }), found: roots }, out, opts)
   }
 }
 
@@ -1418,13 +1443,16 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   const unexpanded = new Set<number>()
   // Each word's command substitutions, by its place in the text (#2141).
   const subbed = new Map<number, InWord[]>()
-  // Each word whose only expansions are sums this reader works out, as bash and zsh hand it on (#3070).
+  // Each word whose only expansions are sums this reader works out, by its place in the text: the
+  // word with each sum in its place. That is the word every shell hands on where its sums are all
+  // `$((...))` (#3088), and the one bash and zsh hand on where it holds a `$[...]` (#3070), which
+  // dash and ksh hand on as typed.
   const worked = new Map<number, string>()
   const read = split(text, bare, literal, unexpanded, subbed, worked)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does, and
-  // is run with that shell's settings (#3093).
-  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}), ...(outer.env ? { env: outer.env } : {}) }
+  // is run with that shell's settings, behind what that shell is (#3093).
+  const subFeed: Feed = { ...(outer.pipedFrom ? { pipedFrom: outer.pipedFrom } : {}), ...(outer.stdin ? { stdin: outer.stdin } : {}), ...(outer.splits ? { splits: true } : {}), ...(outer.env ? { env: outer.env } : {}), ...(outer.behind ? { behind: outer.behind } : {}) }
   // Each substitution, by the command it sits in: the last one starting at or before it.
   const ran = new Map<number, Line[]>()
   const place = (at: number, sub: Line) => {
