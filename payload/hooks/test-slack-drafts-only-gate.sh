@@ -4081,10 +4081,29 @@ fi
 # units, and the ceiling of 57 is about half of it, which leaves a runner twice as slow per unit inside
 # the budget. Measured on 2026-11-13 in readings of claude-sync: about 22 before #2918 (21.5 to 24
 # under load), about 15 after; on 2026-11-15 in units: 44.8 to 45.7 at a load of 11.
+#
+# OFF macOS THE LIMIT IS 77 (#3167, Dan's choice of 2026-11-17). The yardstick does not carry over
+# to CI's Linux runners for this line: the one lesson line reads 1.05 to 1.35 times its macOS units
+# there, this line 1.2 to 1.9 times, and 57 failed about one PR run in 20 (7 first run failures in
+# about 144 runs, 2026-11-16 to 11-17). The Linux readings it was set from, every one CI has printed:
+# five that passed, first judgement each, 49.4, 49.5, 54.3 and 56.7 (runs 44189981436, 44191721861,
+# 44194128760, 44195907808 on this branch, 2026-11-17) and 55.1 (43798917120, 2026-11-16); and the
+# seven that failed 57, least of three, 58.0, 58.6, 58.6, 59.3, 60.3 and 66.3 (2026-11-16) and 68.2
+# (2026-11-17), whose 21 samples ran 58.0 to 75.9. Rather than widen 57, which still holds macOS to
+# its own premise, the runner gets its own limit set the same way: 57 is 1.41 times the macOS reading
+# (40.3, the mean of 15 readings on 2026-11-17, and 40.1 to 40.4 in the other sets that day), and 77
+# is 1.41 times the middle passing Linux reading, 54.3, rounded up. Every reading above passes it.
+# What fails it: the least of three cold judgements past 77 units, which is a gate about 1.42 times
+# as slow as that middle reading; the slowed gate check below shows one failing it. On a runner
+# whose unit is past about 0.14 s, 77 units is at or past the gate's own 11 s budget, which refuses first.
+case "$(uname -s)" in
+  Darwin) cold_ceiling=57 ;;
+  *) cold_ceiling=77 ;;
+esac
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
-  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 57 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  check "bash tests/test-claude-sync.sh is judged within 57 units of the yardstick, about half the budget (#2918)" "$cost"
+  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  check "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick on $(uname -s) (#2918, #3167)" "$cost"
   # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
   # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
   # runner's own distribution, the premise of the ceiling (L316), could not be read from any log. A
@@ -4102,6 +4121,19 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
   fi
   check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
+  # The limit this platform got still fails on a real slowdown (#3167, L1): the copy of the gate whose
+  # reader burns ten times its own time again, made above, judging the same line, once. It counts its
+  # steps rather than seconds (SLACK_GATE_TICK_BUDGET under a test run), so the gate's own 11 s budget
+  # cannot refuse it first and the units decide. Measured 2026-11-17: 95.6 units on the personal
+  # MacBook against 41.0 for the gate itself.
+  if [ -f "$T/slow-gate/slack-drafts-only-gate.sh" ]; then
+    cost="$(SLACK_GATE_COST_LABEL=suite-slowed SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 python3 -B "$T/cost.py" "$T/slow-gate/slack-drafts-only-gate.sh" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+    case "$cost" in
+      "judging it took"*) cost=ok ;;
+      ok) cost="the slowed gate read within $cold_ceiling, so this limit passes a gate that slow: $(grep '^suite-slowed' "$T/cost.log")" ;;
+    esac
+    check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "$cost"
+  fi
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
   cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
