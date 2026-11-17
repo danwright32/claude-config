@@ -251,8 +251,9 @@ done <<EOF
 $(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
 EOF
 
-# The other end of the span is the start of the current segment: the oldest reading when nothing
-# recovered, the reading the disk recovered TO when something did.
+# The other end of the span starts as the start of the current segment: the oldest reading when
+# nothing recovered, the reading the disk recovered TO when something did. After a recovery the rate
+# below then moves it to the level that recovery held for FREE_SPACE_PERSIST_MIN minutes (#3153).
 # Why no rate is stated, kept for --report, which owes the reader the reason (L540: an absent
 # answer carries a measured reason, never membership by failing to match the good case).
 no_rate_clause=""
@@ -282,8 +283,9 @@ fi
 # FREE_SPACE_PERSIST_MIN minutes (default 30, longer than both bursts measured that morning took to
 # fill and give back): the level the disk has stayed at or below for that long, which is the least
 # space the disk has been USING over it. A dip that comes back inside the window never lowers it; a
-# fall that lasts lowers it, a window late. The rate runs from the start of the segment to the
-# reading that set that level, and zero is projected from that level, less the time since it.
+# fall that lasts lowers it, a window late. The rate runs from the start of the segment (after a
+# recovery, the least free space in the window from it, #3153) to the reading that set that level,
+# and zero is projected from that level, less the time since it.
 #
 # WHAT THIS COSTS, said rather than hidden (L93): a real fall is not projected until readings span
 # the window, so a fast fill starting from nothing is reported up to 30 minutes later than before,
