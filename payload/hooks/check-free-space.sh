@@ -287,9 +287,13 @@ keep_copy(){ # keep_copy <exit code> <verdict line>
   fi
   # Claimed with noclobber, so two sessions warning in the same instant keep one copy between them.
   # A claim that fails because the other got there first stops here; one that fails because nothing
-  # can be written goes on and tries the copy anyway, since that is the copy that matters.
+  # can be written goes on and tries the copy anyway, since that is the copy that matters. Only a
+  # record holding something is another session's claim: one left empty is this run's own claim
+  # whose write failed (a disk too full for one line), and stopping there kept no copy, silently, on
+  # every warning while the disk stayed full. Another session caught between creating its record and
+  # writing it also reads as empty, which costs at most a second copy of the same readings.
   if ! ( set -C; printf '%s\n' "$now" > "$EPISODE" ) 2>/dev/null; then
-    [ -f "$EPISODE" ] && { keep_copy_note; return 0; }
+    [ -s "$EPISODE" ] && { keep_copy_note; return 0; }
   fi
   if [ -z "$WARN_DIR" ]; then
     why="HOME is not set"
@@ -308,6 +312,8 @@ keep_copy(){ # keep_copy <exit code> <verdict line>
          echo "# To replay it, run the check once per line below, oldest first, with FREE_SPACE_NOW and FREE_SPACE_BYTES set to that line's two numbers, the settings above and a FREE_SPACE_STATE_DIR of its own."
          printf '%s\n' "$series"
        } 2>/dev/null > "$tmp" && mv -f "$tmp" "$name" 2>/dev/null; then
+      # The claim's own write may have failed (above); record the episode now the copy is kept.
+      [ -s "$EPISODE" ] || printf '%s\n' "$now" 2>/dev/null > "$EPISODE"
       LATEST_COPY="$name"; keep_copy_note; return 0
     fi
     rm -f "$tmp" 2>/dev/null

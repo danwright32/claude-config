@@ -521,6 +521,20 @@ S_KFILE="$TMPROOT/state-keep-file"; mkdir -p "$S_KFILE"; printf 'x\n' > "$S_KFIL
 probe "$((7 * GB))" "$T0" "$S_KFILE"
 check "a folder for copies that cannot be made is said in one line, with the warning intact" \
   "$([ "$PROBE_RC" -eq 3 ] && [ "$(grep -ci 'could not keep a copy' <<< "$PROBE_MSG")" = 1 ] && ! grep -qi 'not a directory\|file exists' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+# The episode record is claimed by creating it, then its time is written into it. On a disk too full
+# to write even that, the claim leaves the record empty, which is nobody's claim: read as another
+# session's, it stopped every copy, silently, for as long as the disk stayed full. The write is made
+# to fail here by a printf that refuses only while noclobber is on, which only the claim runs under.
+S_KEMPTY="$TMPROOT/state-keep-empty-claim"; mkdir -p "$S_KEMPTY"
+printf(){ if [[ $- == *C* ]]; then return 1; fi; builtin printf "$@"; }
+export -f printf
+probe "$((7 * GB))" "$T0" "$S_KEMPTY"
+unset -f printf
+check "a claim left empty by a failed write is not read as another session's copy" \
+  "$([ "$(count_copies "$S_KEMPTY/warnings")" = 1 ] && [ "$PROBE_RC" -eq 3 ] && echo ok || echo "exit $PROBE_RC, copies: $(kept_copies "$S_KEMPTY/warnings" | tr '\n' ' '), said: $PROBE_MSG")"
+probe "$((7 * GB))" "$((T0 + 60))" "$S_KEMPTY"
+check "and once that copy is kept, the warning carrying on writes no second one" \
+  "$([ "$(count_copies "$S_KEMPTY/warnings")" = 1 ] && echo ok || echo "copies: $(kept_copies "$S_KEMPTY/warnings" | tr '\n' ' ')")"
 
 # Where the copies go. Named outright, they go there; otherwise beside the readings when those were
 # moved (every suite moves them, so no suite writes into the real folder), else per Mac under
