@@ -7799,7 +7799,9 @@ staging or qa before its last label), the page readers included, every action in
 after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
 which reaches no host and is judged as a close alone is; since #3121 a tab a batch closed is no
 longer the session's once the batch's result lists its tab group without it, as after a close
-alone), and every Chrome tool reaching past those
+alone; since #3132 so is a created tab that left the group any other way, closed by hand or lost
+to a restart of Chrome, at the first result listing the group without it, and its number listed
+again later does not bring it back), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
@@ -7888,7 +7890,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585, #3099, #3107, #3121
+#1765, #1812, #2064, #2261, #2585, #3099, #3107, #3121, #3132
 
 </td></tr>
 <tr><td>
