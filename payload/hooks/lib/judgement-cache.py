@@ -94,6 +94,9 @@ MODULES = {
     "os": "proxied", "glob": "proxied", "importlib.util": "proxied", "importlib.machinery": "proxied",
     "io": "audited", "lzma": "audited", "tarfile": "audited", "zipfile": "audited", "configparser": "audited",
     "tempfile": "audited", "shutil": "audited", "subprocess": "audited",
+    # lib/gate-qos.py's raise of the gate's scheduling priority, before any judgement starts (#2918).
+    # Every ctypes call raises an audit event under ctypes., which UNRECORDED_EVENTS taints.
+    "ctypes": "audited",
 }
 # An audited module some of whose functions read the disk with no audit event (shutil.which and its
 # stat and access helpers): only the names listed may be used, which test-judgement-cache.sh checks.

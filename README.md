@@ -3726,6 +3726,18 @@ is its 1.8 MB and claude-sync's 1 MB, about a fifth of the judgement. A parse is
 whole contents, the reader's code, the directory and HOME, never a path or a time, so a changed file
 is read afresh; it is signed with the same key, and given back exactly or not at all.
 
+The gate judges at user initiated priority (`lib/gate-qos.py`, #2918, Dan's decision of 2026-11-16).
+Claude Code starts it at the legacy level (kernel base priority 31), where every other session's
+suites run, so on a busy Mac it was moved to an efficiency core and a cold judgement ran 11.2 to
+11.8 s, past its 11 s budget, against 4.2 to 4.5 s on a performance core. Asking for user initiated
+alone does nothing for a command line process (XNU squashes it to legacy for a task with no
+application role), so the gate first takes the default application role, then asks: base priority
+37. The level is read back from the kernel and traced (`SLACK_GATE_CACHE_TRACE`); under a QoS clamp
+(`taskpolicy -c`, a ceiling nothing inside a process can lift) the trace says it was not raised, and
+a refusal for running out of time names the level it ran at. When the level cannot be read back, the
+trace and the refusal say exactly that, never that the raise failed. `test-slack-drafts-gate-qos.sh`
+holds it.
+
 The suite's cost checks (`test-slack-drafts-only-gate.sh`) hold the gate's processor time in units of
 a fixed workload that shares nothing with the gate (0.095 s each on the personal MacBook), the least
 of several samples taken in the same run, and print each measurement, so a CI runner's can be read
