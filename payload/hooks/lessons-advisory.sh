@@ -465,7 +465,8 @@ trig_destructive_data_op(){   # $1 = a file holding the added lines  $2 = the pa
 # A Python, JavaScript or TypeScript TEST file is read the same way (claude-config#3083): a line is
 # judged where the pattern is in its code text (fs.rm, unlinkSync and .drop called by the test), or
 # where the line hands a string to a call that runs it (FH_RUNNER_CALLS: execSync, subprocess.run,
-# os.system, a SQL client's execute or query, a tagged sql template). Any other string, and every
+# os.system, a SQL client's execute, query or prepare, Prisma's raw calls, spark.sql, a tagged sql
+# template; the full list is in lib/failure-handling.sh). Any other string, and every
 # comment, is data. Measured before choosing, on 2026-11-16, over all 3168 commits on claude-config's
 # main line: the trigger fired on such a file 51 times, in 35 commits, and all 51 were words held only
 # in a string or a comment, none a removal the test ran; replayed with this rule, none of the 51
