@@ -2032,6 +2032,22 @@ and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks
 each move of the line. A wait still ends: only a run started with `--first` (below) can join a line
 ahead of a run, so it can move only as many times as there were pull requests ahead plus those sent to
 the front, and the line standing still for three hours ends it.
+A pull request stacked on another branch waits for that branch to merge (claude-config#3118). The
+helper merged into whatever base a pull request had, so on 2026-11-16 six queued pull requests based
+on other feature branches reached their turn before their bases had merged, and each would have been
+squash merged into its base branch rather than main: its change would then reach main only inside
+the base's squash, and its `Closes` lines would never fire, because GitHub closes issues only from
+the default branch. They were stopped by hand. Now, at each look, a pull request whose base is not
+the repository's default branch (as GitHub names it, read with the permission the helper already
+asks for, never assumed to be main) waits for the open pull request of its base branch, naming it,
+and takes no place in line meanwhile, so the run holding the turn is never kept waiting by it. When
+that base merges, the run that merged it (or GitHub, deleting the branch) moves the stacked pull
+request onto the default branch, and at its next look it joins the line as any run does. The wait
+grows to three minutes between looks, as the wait on checks does, and is bounded by the time in line
+(`MWR_LINE_SECONDS`), ending in exit 3. A base nothing will merge stops it at once, exit 1, naming
+the base pull request and saying to set the base by hand (`gh pr edit <pr> --base main`): a base
+branch with no pull request, one closed without merging, or one that merged while this pull request
+stayed on its branch past `MWR_HEAD_LAG_SECONDS`.
 A pull request the others in line need merged first goes to the front with `--first`
 (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests
 ahead of it needed to pass CI, and each of them would have held the line for about 50 minutes of mostly
