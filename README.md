@@ -8315,7 +8315,13 @@ script a shell reads from a heredoc). The `cd` before the run is let through onl
 folder written from `/`, `./`, `../` or `~`, holding nothing the shell expands or matches, behind
 no runner. A bare name is held (`cd payload && bash ../tools/check-mods.sh mods`, which #3022 let
 through), since bash looks it up along `CDPATH` first; write `cd ./payload`. So is `cd` with an
-option or a second word, and `pushd`.
+option or a second word, and `pushd`. The folder the `cd` leads to must be on the disk too (found
+by the lessons review of #3131; let through since #3022): a `cd` that fails leaves the shell where
+it was, and joined by `;` or `||` the script still runs, from there, so
+`cd ./nowhere; bash ../tools/check-mods.sh /abs/payload/mods` read as the script at the root of
+the checkout and ran the file one folder above it. The reader does not say what joins two
+commands, so the check is on the folder and holds a `cd ./nowhere && ...` as well. A `cd` that
+fails on a folder that is there (one the shell may not enter) is not caught.
 A copy of mod-kit loaded before #3093 carries no setting and names no runner, so the rule first
 asks the reader about a line it knows the answer for (`A=1; B=2 env true`), and where the answer
 lacks the setting, the runner or the command that only sets a value, no run is let through.

@@ -265,9 +265,10 @@ else
 fi
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 51 of the run's shape and its text (31 before
-# #3093, 19 of settings, runners and changes of folder it added, and one of a reader that says less
-# than the rule asks), one for the program, and one for the other script let through by name.
-named_rule SHARED_PARTS "$REPO" payload/mods/mod-kit/hooks/card.ts 53
+# How many checks must run is set here, not measured: 53 of the run's shape and its text (31 before
+# #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
+# than the rule asks, and two of a change of folder that leads nowhere), one for the program, and
+# one for the other script let through by name.
+named_rule SHARED_PARTS "$REPO" payload/mods/mod-kit/hooks/card.ts 55
 
 finish

@@ -6,8 +6,9 @@
 //
 // It lets through only that script at its path from the root of a checkout of its repository, handed
 // one folder, in a command that gives it no setting and runs the script once, behind no runner, with
-// nothing but a change of folder before it (one folder written from /, ./, ../ or ~) and readers its
-// output is piped into after it, with its texts as the checkout left the default branch with them.
+// nothing but a change of folder before it (one folder written from /, ./, ../ or ~, which is on
+// the disk) and readers its output is piped into after it, with its texts as the checkout left the
+// default branch with them.
 // Every other shape, a changed text, a copy elsewhere, another repository, and everything chained
 // with the run, another named script included, is still judged.
 //
@@ -118,6 +119,13 @@ const NOT_PLAIN_CD = 'the change of folder before it is not a cd to one folder w
 await judged('after a change of folder by a bare name, it is judged', `cd payload && bash ../${S} mods`, [MODS], NOT_PLAIN_CD)
 await judged('after a change of folder with an option, it is judged', `cd -P ./payload && bash ../${S} mods`, [MODS], NOT_PLAIN_CD)
 await through('after a change of folder written from the root, it is let through', `cd ${repo}/payload && bash ../${S} mods`)
+// A change of folder that fails leaves the shell where it was, and joined by `;` or `||` the script
+// still runs, from there: the file one folder above the one the reader placed, which nobody
+// compared, handed a folder written from the root. The reader does not say what joins two commands,
+// so a change of folder must lead to a folder on the disk (lessons review at 2a15886).
+const NOWHERE = 'the change of folder before it leads to no folder on the disk'
+await judged('after a change of folder to no folder on the disk, joined by a semicolon, it is judged', `cd ./nowhere; bash ../${S} ${MODS}`, [MODS], NOWHERE)
+await judged('run only if a change of folder to no folder on the disk fails, it is judged', `cd ./nowhere || bash ../${S} ${MODS}`, [MODS], NOWHERE)
 // Written after it, a command still runs before it the second time round a loop, or once a function is called.
 await judged('in a loop that reads and exports a value after it, it is judged', `for i in 1 2; do bash ${S} payload/mods; read TMPDIR <<< payload/mods; export TMPDIR; done`, [MODS], BEFORE)
 await judged('in a function called after a value is read and exported, it is judged', `f() { bash ${S} payload/mods; }; read TMPDIR <<< payload/mods; export TMPDIR; f`, [MODS], BEFORE)

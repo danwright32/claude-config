@@ -77,9 +77,11 @@ export type NamedFacts = {
    * The commands a Bash call runs, in the order it runs them, as mod-kit reads them when asked for
    * the commands that only set a value too (`T=x;`, given as its assignments): each with the
    * settings it is run with (`env`, #3093), what it is run behind (`behind`, #3093: each runner
-   * looked past and the shell whose script it stands in) and the body of each heredoc fed to it.
+   * looked past and the shell whose script it stands in), the body of each heredoc fed to it, and
+   * `folder`, the folder it runs in, a change of folder before it followed (#2000); null or absent
+   * where the reader cannot place it.
    */
-  commands: (command: string) => Promise<readonly { words: readonly string[]; pipedFrom?: readonly string[]; env?: readonly string[]; behind?: readonly string[]; heredocs?: readonly { body: string }[] }[]>
+  commands: (command: string) => Promise<readonly { words: readonly string[]; pipedFrom?: readonly string[]; env?: readonly string[]; behind?: readonly string[]; heredocs?: readonly { body: string }[]; folder?: string | null }[]>
   /** The checkout a path is in, the GitHub repository it is a clone of, and its default branch. */
   checkout: (path: string) => Promise<{ root: string; github: string | null; defaultBranch: string | null } | { unread: string }>
   isFolder: (path: string) => Promise<boolean>
@@ -196,6 +198,18 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   const behind = run.slice(0, own + 1).findIndex(c => c.behind?.length)
   if (behind >= 0) return `${behind === own ? 'it is' : 'the change of folder before it is'} run behind ${(run[behind]?.behind ?? []).join(', ')}, which can change the folder or the environment it runs in`
   if (!run.slice(0, own).every(plainCd)) return 'the change of folder before it is not a cd to one folder written from /, ./, ../ or ~, so the folder the script runs in cannot be shown'
+  // A change of folder that fails leaves the shell where it was, and joined by `;`, `||` or a new
+  // line the script still runs, from there: `cd ./nowhere; bash ../tools/check-mods.sh /w/app/src`
+  // was read as the script at the root of the checkout, and what runs is the file one folder above
+  // it, which nobody compared (let through since #3022; the lessons review of #3131 at 2a15886).
+  // The reader does not say what joins two commands, so every change of folder, an `&&` one too,
+  // must lead to a folder on the disk: the folder the reader places the next command in. What this
+  // cannot show is a cd that fails on a folder that is there (one the shell may not enter, or one
+  // removed between this check and the run).
+  for (let i = 0; i < own; i++) {
+    const to = run[i + 1]?.folder
+    if (!to || !(await facts.isFolder(to))) return `the change of folder before it leads to ${to ? 'no folder on the disk' : 'a folder the reader cannot place'}, so the script may run from another folder than the one it was read in`
+  }
   const at = await facts.checkout(r.path as string)
   if ('unread' in at) return `its checkout cannot be read (${at.unread})`
   if (r.path !== `${at.root}/${n.script}`) return `it is not ${n.script} at the root of its checkout`
@@ -216,7 +230,9 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
  * comment; for every other named script the command holds no equals sign at all), runs it behind no
  * runner (`env`, `sudo`, `timeout`, a shell's `-c` script, anything the reader gives as `behind`)
  * and runs nothing else but a change of folder before it (plainCd: `cd` and one folder written from
- * /, ./, ../ or ~, behind no runner) and readers of its output after it, with its texts unchanged.
+ * /, ./, ../ or ~, behind no runner, leading to a folder on the disk, since one that fails leaves
+ * the script running from where the shell was) and readers of its output after it, with its texts
+ * unchanged.
  * Then the run is taken out of `runs`, so the folder is no write of that run's. Every other write in
  * the command (a redirect of its output) stays as mod-kit read it, and a run that is not let through,
  * as one chained with any other command is not, is judged as before.

@@ -498,6 +498,42 @@ test('an equals sign anywhere in the command still holds the scan, which the loo
   expect(named(w).map(x => [x.script, x.decision, x.why])).toEqual(SCAN_HELD.map(([, , why]) => [`${APP}/${SCAN}`, 'judged', why]))
 })
 
+// Lessons review of #3131 at 2a15886: a change of folder that fails leaves the shell where it was,
+// and joined by `;` or `||` the script still runs, from there. `cd ./nowhere; bash
+// ../tools/check-mods.sh /w/app/src/` was read as the script at the root of the checkout, and what
+// runs is the file one folder above it, which nobody compared. The reader does not say what joins
+// two commands, so every change of folder before the run must lead to a folder on the disk.
+const LEADS = (where: string) => `the change of folder before it leads to ${where}, so the script may run from another folder than the one it was read in`
+const FAILED_CD: [string, string][] = [
+  ['joined by a semicolon', `cd ./nowhere; bash ../tools/check-mods.sh ${APP}/src/`],
+  ['run only if the change of folder fails', `cd ./nowhere || bash ../tools/check-mods.sh ${APP}/src/`],
+  ['joined so the shell would not run it, which the reader cannot tell from the two above', `cd ./nowhere && bash ../tools/check-mods.sh ${APP}/src/`],
+  ['after two changes of folder, the first to a folder that is there', `cd ./src && cd ./nowhere; bash ../../tools/check-mods.sh ${APP}/src/`],
+  ['the scan, joined by a semicolon', `cd ./nowhere; bash ../${SCAN} ${APP}/src/`],
+  ['the scan, run only if the change of folder fails', `cd ./nowhere || bash ../${SCAN} ${APP}/src/`],
+]
+
+test('a run after a change of folder to no folder on the disk is held, since the script may run from where the shell was (#3131 lessons review)', KIT, async ($, on) => {
+  const w = both($, on)
+  const held: string[] = []
+  for (const [i, [what, command]] of FAILED_CD.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    const why = r.result === 'done' ? 'ran' : refusal(r)
+    held.push(/which writes src\/(big\.ts|lib\/slack\.ts)\./.test(why) ? `held: ${what}` : `${what}: ${why}`)
+  }
+  expect(held).toEqual(FAILED_CD.map(([what]) => `held: ${what}`))
+  expect(named(w).map(x => [x.decision, x.why])).toEqual(FAILED_CD.map(() => ['judged', LEADS('no folder on the disk')]))
+})
+
+test('a change of folder the reader gives no folder for holds the run, and one to a folder on the disk does not (#3131 lessons review)', async () => {
+  const command = 'cd ./src && bash ../tools/check-mods.sh lib'
+  const unplaced = only([{ words: ['cd', './src'] }, { words: ['bash', '../tools/check-mods.sh', 'lib'] }])
+  expect((await read(command, facts({ commands: unplaced }))).named).toMatchObject([{ why: LEADS('a folder the reader cannot place') }])
+  const asked: string[] = []
+  expect((await read(command, facts({}, asked))).named).toMatchObject([{ passed: true }])
+  expect(asked).toContain(`folder ${APP}/src`)
+})
+
 test('a setting the write reader carries on the run holds it though the commands show none (#3093)', async () => {
   const command = `TMPDIR=src ${RUN}`
   const bare: NamedFacts['commands'] = async c => (c === command ? [{ words: ['bash', 'tools/check-mods.sh', 'src/'] }] : pipelineIn(c, APP, HOME, { assignments: true }))
