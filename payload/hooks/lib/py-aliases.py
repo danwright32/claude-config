@@ -18,8 +18,9 @@ follow() reads two things from a script's syntax tree:
   the imported name. Names are followed whatever scope they are in, which can only refuse more.
 - A module put where its next use cannot be read: an argument, a list or dictionary, an attribute
   or a subscript, a class body, a return, a lambda's body, an arm of a choice, a comparison another
-  object answers. The script is then one the gate has not read end to end, and counts as able to
-  act. A module that is only called on (it cannot be), tested (`if json:`, `json is None`), written
+  object answers, a walrus whose name is not followed (one in a class body, or over a value that
+  is not a name or a chain). The script is then one the gate has not read end to end, and counts
+  as able to act. A module that is only called on (it cannot be), tested (`if json:`, `json is None`), written
   as an annotation, or left as a statement goes nowhere and passes.
 
 Whether a chain is a module is not guessed from its name: datetime.time is a class, os.path a
@@ -270,13 +271,15 @@ def make(inert):
                         stack.extend(ast.iter_child_nodes(n))
 
         followed = set()  # id() of each expression whose value went to a name the gate reads on from
+        walrus = set()  # id() of each walrus whose value went to such a name
         renamed = set()  # each name bound to something that may lead to a module (reaches)
         changed = [True]
 
         def bind_name(name, expr, whole=True):
+            """Whether expr's value was read, and so went to a name the gate reads on from."""
             v = value(expr)
             if v is NOTHING:
-                return
+                return False
             if whole:  # a walrus also gives its value to wherever it stands, which is read below
                 followed.add(id(expr))
             if reaches(v):
@@ -286,6 +289,7 @@ def make(inert):
             if new is not old:
                 holds[name] = new
                 changed[0] = True
+            return True
 
         def bind(target, expr):
             if isinstance(target, ast.Name):
@@ -307,7 +311,8 @@ def make(inert):
                 elif isinstance(node, ast.AnnAssign) and node.value is not None:
                     bind(node.target, node.value)
                 elif isinstance(node, ast.NamedExpr):
-                    bind_name(node.target.id, node.value, whole=False)
+                    if bind_name(node.target.id, node.value, whole=False):
+                        walrus.add(id(node))
                 elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
                     if isinstance(node.target, ast.Name) and isinstance(node.iter, FOLLOWED_LISTS):
                         for e in node.iter.elts:
@@ -345,10 +350,15 @@ def make(inert):
             p = parent.get(id(node))
             if isinstance(p, ast.Attribute) or id(node) in followed:
                 continue
-            # `a and b` and `a or b` give one of the two, and a walrus gives what it binds, so each
-            # goes wherever the whole expression goes.
+            # `a and b` and `a or b` give one of the two, so each goes wherever the whole expression
+            # goes. A walrus gives what it binds as well, and is read on through only where the name
+            # it binds was followed above. One in a class body, or over a value that is not a name
+            # or a chain (`(q := glob or None)`, `(q := (r := glob))`), has put the module under a
+            # name the gate does not read on from, which is a place like any other it does not
+            # follow. Read as going wherever the whole expression went, such a walrus left as a
+            # statement passed, and `q.os.system(...)` after it was never read (PR #3130 review).
             at = node
-            while isinstance(p, (ast.BoolOp, ast.NamedExpr)):
+            while isinstance(p, ast.BoolOp) or (isinstance(p, ast.NamedExpr) and id(p) in walrus):
                 at, p = p, parent.get(id(p))
             if goes_nowhere(at, p):
                 continue

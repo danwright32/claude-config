@@ -3913,8 +3913,9 @@ trust a program the gate reads end to end, and nothing it cannot follow. A modul
 name is read through that name as through the imported one (claude-config#3102, `lib/py-aliases.py`):
 until then `q = pathlib` followed by `q.os.system(...)` passed, as did `p = os.path`, a walrus, a
 loop over `(glob,)`, a parameter's default and `from glob import os`. A module put where the gate
-does not follow it (an argument, a list, an attribute, a class body, a return) counts as the
-script being able to act; whether what is handed on is a module is asked of the standard library
+does not follow it (an argument, a list, an attribute, a class body, a return, a walrus whose
+name is not followed, as in a class body or over `glob or None`) counts as the script being able
+to act; whether what is handed on is a module is asked of the standard library
 module itself, so `key=os.path.getsize` is a function and passes while `go(os.path)` does not.
 Asking it is two answers from the disk (where Python finds the module, what its file holds), and
 both go through the stand ins the judgement cache records (`importlib.util.find_spec` and `open`),

@@ -1582,8 +1582,13 @@ w02 lambda-default.py 'import glob, sys' '(lambda p, m=glob: m.os.system("bash "
 w02 submodule.py 'import glob, sys' 'f = glob.fnmatch' "f$ACT02"
 w02 lib_q.py 'import glob as helper'
 w02 local.py 'import lib_q, sys' 'h = lib_q.helper' "h$ACT02"
+# A walrus inside a function, a method or a lambda binds a name of that function, which is followed.
+w02 function-walrus.py 'import glob, sys' 'def go(p):' '    (q := glob)' '    q.os.system("bash " + p)' 'go(sys.argv[1])'
+w02 method-walrus.py 'import glob, sys' 'class H:' '    def go(self, p):' '        (q := glob)' '        q.os.system("bash " + p)' 'H().go(sys.argv[1])'
+w02 lambda-walrus.py 'import glob, sys' '(lambda p: [(q := glob), q.os.system("bash " + p)])(sys.argv[1])'
 for renamed in assign.py assign-glob.py ospath.py twice.py annotated.py chained.py walrus.py walrus-if.py tuple.py \
-  for.py comprehension.py default.py kw-default.py lambda-default.py submodule.py local.py; do
+  for.py comprehension.py default.py kw-default.py lambda-default.py submodule.py local.py \
+  function-walrus.py method-walrus.py lambda-walrus.py; do
   run_02 "python3 $renamed msg.json"
   read_refused "#3102 a module renamed and then used to start a program is refused: $renamed"
 done
@@ -1625,9 +1630,31 @@ w02 comparison.py 'import glob, sys' 'class E:' '    def __eq__(self, o):' '    
 w02 renamed-argument.py 'import glob, sys' 'def go(m, p):' '    m.os.system("bash " + p)' 'q = glob' 'go(q, sys.argv[1])'
 w02 get-field.py 'import glob, string, sys' 'string.Formatter().get_field("0.os.system", (glob,), {})[0]("bash " + sys.argv[1])'
 w02 update-wrapper.py 'import functools, glob, sys' 'class H: pass' 'h = H()' 'functools.update_wrapper(h, glob, assigned=())' "h$ACT02"
+# A walrus whose name the gate does not follow is a place like any other the module has gone to
+# (the lessons review of PR #3130 at 4c7dc1b): one in a class body, whose bindings are not followed,
+# and one over a value the gate does not read as a name or a chain (a choice of two, another
+# walrus). Each was read as going wherever the whole expression went, a statement left alone, so the
+# module was neither followed as renamed nor counted as handed on. And the other bindings of a
+# class body (a loop, a comprehension, a method's default, a lambda's), and a walrus inside a
+# comprehension or a default, which were refused already and are kept so.
+w02 class-walrus.py 'import glob, sys' 'class H:' '    (q := glob)' "    q$ACT02"
+w02 class-walrus-if.py 'import glob, sys' 'class H:' '    if (q := glob):' "        q$ACT02"
+w02 class-walrus-attribute.py 'import glob, sys' 'class H:' '    (q := glob)' "H.q$ACT02"
+w02 class-walrus-ospath.py 'import os, sys' 'class H:' '    (p := os.path)' "    p$ACT02"
+w02 walrus-either.py 'import glob, sys' '(q := glob or None)' "q$ACT02"
+w02 walrus-nested.py 'import glob, sys' '(q := (r := glob))' "q$ACT02"
+w02 class-for.py 'import glob, sys' 'class H:' '    for m in (glob,):' "        m$ACT02"
+w02 class-comprehension.py 'import glob, sys' 'class H:' "    [m$ACT02 for m in [glob]]"
+w02 class-default.py 'import glob, sys' 'class H:' '    def go(self, p, m=glob):' '        m.os.system("bash " + p)' 'H().go(sys.argv[1])'
+w02 class-lambda-default.py 'import glob, sys' 'class H:' '    go = lambda p, m=glob: m.os.system("bash " + p)' 'H.go(sys.argv[1])'
+w02 comprehension-walrus.py 'import glob, sys' '[(q := glob) for _ in (1,)]' "q$ACT02"
+w02 default-walrus.py 'import glob, sys' 'def go(p, m=(q := glob)):' '    q.os.system("bash " + p)' 'go(sys.argv[1])'
+w02 lambda-default-walrus.py 'import glob, sys' '(lambda p, m=(q := glob): q.os.system("bash " + p))(sys.argv[1])'
 for handed in argument.py ospath-argument.py submodule-argument.py local-argument.py list.py dictionary.py choice.py \
   either.py starred.py attribute.py ospath-attribute.py class-body.py return.py lambda.py comparison.py \
-  renamed-argument.py get-field.py update-wrapper.py; do
+  renamed-argument.py get-field.py update-wrapper.py class-walrus.py class-walrus-if.py class-walrus-attribute.py \
+  class-walrus-ospath.py walrus-either.py walrus-nested.py class-for.py class-comprehension.py class-default.py \
+  class-lambda-default.py comprehension-walrus.py default-walrus.py lambda-default-walrus.py; do
   run_02 "python3 $handed msg.json"
   read_refused "#3102 a module handed on where the gate does not follow it is refused: $handed"
 done
@@ -1635,6 +1662,10 @@ run_02 "python3 argument.py msg.json"
 says "#3102 the refusal names the module handed on" "puts the module glob where the gate does not follow it"
 run_02 "python3 ospath-argument.py msg.json"
 says "#3102 and os.path, which is a module" "puts the module os.path where the gate does not follow it"
+run_02 "python3 class-walrus.py msg.json"
+says "#3102 and a walrus in a class body, in the same words" "puts the module glob where the gate does not follow it"
+run_02 "python3 walrus-either.py msg.json"
+says "#3102 and a walrus over a choice of two" "puts the module glob where the gate does not follow it"
 # A module imported out of another module's namespace is the same reach written as an import.
 w02 from-module.py 'import sys' 'from glob import os' 'os.system("bash " + sys.argv[1])'
 w02 from-module-as.py 'import sys' 'from glob import os as tool' 'tool.system("bash " + sys.argv[1])'
@@ -1689,6 +1720,23 @@ run_02 "python3 reads-renamed.py $RULES"
 allowed "#3102 and handed the real rules file"
 run_02 "python3 -c 'import json, sys; j = json; print(len(j.loads(open(sys.argv[1]).read())))' msg.json"
 allowed "#3102 the control: code given inline that renames a module only to read passes"
+# The control for the walrus cases: a walrus in a class body and one over a choice of two pass where
+# what they bind is no module, and a module a followed walrus renames is still read on from.
+cat > "$D02/reads-walrus.py" <<'PY'
+import json, re, sys
+class Reader:
+    if (limit := len(sys.argv)) > 1:
+        cap = limit
+    (pattern := re.compile("chat"))
+    (flags := re.I or 0)
+text = open(sys.argv[1]).read()
+if (j := json) and (m := Reader.pattern.search(text)) and (lines := text.splitlines() or None):
+    print(m.group(0), len(lines), (n := len(text) or 1), (a := (b := len(lines))), j.dumps(lines[:1]))
+PY
+run_02 "python3 reads-walrus.py msg.json"
+allowed "#3102 the control: a read only script with a walrus in a class body and one over a choice of two passes"
+run_02 "python3 reads-walrus.py $RULES"
+allowed "#3102 and handed the real rules file"
 # The from import check runs for every module inline code may import, the ones it may import for its
 # files (errno, io, stat, tempfile) included (the lessons review of PR #3130). It sat behind the line
 # that passes those four, so code a shell script writes inline could write `from tempfile import os`
