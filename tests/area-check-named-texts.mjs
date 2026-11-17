@@ -153,9 +153,11 @@ for (const text of named.texts) {
       const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)/.exec(w0)?.[1]
       if (!v) return refuse(w0, `runs what this suite cannot read (${c.unread})`)
       const values = [...body.matchAll(new RegExp(String.raw`(?:^|[^A-Za-z0-9_$])${v}=(.*)$`, 'gm'))].map(m => m[1])
+      // Any value that is a shell, interpreter or source refuses it, whatever the others are: the
+      // shell runs whichever was set last, which this reading cannot know.
+      if (values.some(x => SPELLED.test(x))) return refuse(w0, `runs $${v}, which this text sets to a shell, interpreter or source this suite cannot follow`)
       const file = values.map(x => new RegExp(FILE).exec(x)?.[1]).find(Boolean)
       if (file) return ran(w0, file)
-      if (values.some(x => SPELLED.test(x))) return refuse(w0, `runs $${v}, which this text sets to a shell, interpreter or source this suite cannot follow`)
       const where = locate(w0)
       byValue.push(`${text}:${where} ${w0}`)
       return

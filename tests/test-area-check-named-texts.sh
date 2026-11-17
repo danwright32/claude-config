@@ -90,8 +90,8 @@ free 'a program given on the command line' "perl -e 'print 1'"
 
 # ---- Every spelling the shell runs is counted or refused ----
 HELD=()
-held(){   # $1 = name  $2 = body  $3 = what the PROBLEM must say
-  fixture "$2"; HELD+=("$ID|$3|$1")
+held(){   # $1 = name  $2 = body  $3 = what the PROBLEM must say  [$4 = lib: tools/lib.sh is listed]
+  fixture "$2" "${4:-}"; HELD+=("$ID|$3|$1")
   read_fixture "$READER" "$ID"
   fact PROBLEM | grep -qF -- "$3" && check "$1 is held" ok || check "$1 is held" "no PROBLEM saying $3: $(printf '%s\n' "$out" | paste -sd';' -)"
 }
@@ -114,8 +114,11 @@ held 'a run in a heredoc fed to a shell' "$(printf "bash <<'EOF'\nbash tools/unl
 held 'a run in a heredoc piped to a shell' "$(printf 'cat <<EOF | bash\nbash tools/unlisted.sh\nEOF')" "$UN"
 held "a run in a shell's -c" "bash -c 'bash tools/unlisted.sh'" "$UN"
 held 'a variable naming the shell' "$(printf 'CMD=bash\n$CMD tools/unlisted.sh')" 'CMD'
-held 'a variable holding the whole run' "$(printf 'RUN="bash tools/unlisted.sh"\n$RUN')" "$UN"
+held 'a variable holding the whole run' "$(printf 'RUN="bash tools/unlisted.sh"\n$RUN')" 'sets to a shell'
 held 'a variable holding the file' "$(printf 'P="$DIR/unlisted.py"\npython3 -I "$P" go')" 'unlisted.py'
+# A variable set to a listed file in one place and to a shell in another is refused, in either order.
+held 'a variable set to a file, then to a shell' "$(printf 'R=tools/lib.sh\n[ -n "$X" ] && R=bash\n$R tools/unlisted.sh')" 'sets to a shell' lib
+held 'a variable set to a shell, then to a file' "$(printf 'R=bash\n[ -n "$X" ] && R=tools/lib.sh\n$R tools/unlisted.sh')" 'sets to a shell' lib
 held 'a file run directly by its path' './tools/unlisted.sh go' "$UN"
 held 'a shell reading what feeds it' 'cat tools/x | bash' 'cannot'
 held 'a run by ssh' 'ssh host bash tools/unlisted.sh' 'cannot read'
@@ -164,7 +167,7 @@ missed_by(){
   done
 }
 lenient no-refusal 's#if (c.unread) {  // control: no-refusal#if (false) {#' \
-  && missed_by 'the refusal of what cannot be read' 'a run by eval' 'eval of text the shell builds' 'a variable naming the shell' 'a variable holding the whole run' 'a run by ssh'
+  && missed_by 'the refusal of what cannot be read' 'a run by eval' 'eval of text the shell builds' 'a variable naming the shell' 'a variable holding the whole run' 'a run by ssh' 'a variable set to a file, then to a shell' 'a variable set to a shell, then to a file'
 lenient no-second-reading 's#const second = true  // control: no-second-reading#const second = false#' \
   && missed_by 'the line by line second reading' 'a line reading as a run in a quoted message over several lines'
 lenient no-substitutions 's#const second = true  // control: no-second-reading#const second = false#; s#commands = pipeline(body)  // control: no-substitutions#commands = pipeline(body).filter(c => !c.substitution)#' \
