@@ -5,7 +5,8 @@
 // <file> a file under payload/mods there, from the root.
 //
 // It lets through only that script at its path from the root of a checkout of its repository, handed
-// one folder, in a command that gives it no setting and runs the script once, behind no runner, with
+// one folder, in a command that gives it no setting, names none of the variables its programs are
+// named by before it (byValue, #3154, even with no equals sign) and runs the script once, behind no runner, with
 // nothing but a change of folder before it (one folder written from /, ./, ../ or ~, which is on
 // the disk) and readers its output is piped into after it, with its texts as the checkout left the
 // default branch with them.

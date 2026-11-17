@@ -19,7 +19,8 @@
 #     (tests/area-check-named-rule.mjs, shared with the suite of the other script let through by
 #     name, #3082), lets through only that
 #     script at its path from the root of a checkout of its repository, handed one folder, in a
-#     command that gives it no setting and runs the script once, with nothing but a change of folder
+#     command that gives it no setting, names none of the variables its programs are named by
+#     before it (CLAUDE_BIN and the others in byValue, #3154), and runs the script once, with nothing but a change of folder
 #     before it and readers its output is piped into after it, with its texts
 #     as the checkout left the default branch with them. Since #3093 an equals sign holds the run
 #     only where it may set a value for the script, so one in a reader of its output does not, and
