@@ -2145,6 +2145,9 @@ git checkout -- a.txt && git add a.txt && git commit -m x && git push|git checko
 git restore a.txt && git add a.txt && git commit -m x && git push|git restore
 git stash pop && git add -A && git commit -m x && git push|git stash
 cp a b && git commit -am x && git push|cp
+./cat notes.txt && git add a && git commit -m x && git push|./cat
+bin/test -f a && git add a && git commit -m x && git push|bin/test
+scripts/set up && git add a && git commit -m x && git push|scripts/set
 cp a b && git commit -qam x && git push|cp
 cp a b && git commit --all -m x && git push|cp
 cp a b && git commit -p -m x && git push|cp
@@ -2234,6 +2237,12 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cd repo && git
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "rtk git stash pop; git add -A; git commit -m x; git push")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$r" = "git stash" ] && check "#3113 with no reader a git behind rtk is named with its next word" ok \
   || check "#3113 with no reader a git behind rtk is named with its next word" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "./cat notes.txt && git add -A && git commit -m x && git push")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$r" = "./cat" ] && check "#3113 with no reader a project script named like a command that only reads may write" ok \
+  || check "#3113 with no reader a project script named like a command that only reads may write" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cat notes.txt && git add -A && git commit -m x && git push")"; rc=$?
+[ "$rc" -eq 1 ] && [ -z "$r" ] && check "#3113 control: with no reader the command of that name is still let stand" ok \
+  || check "#3113 control: with no reader the command of that name is still let stand" "exit $rc, printed [$r]"
 r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_write "cp status git && git add -A && git commit -m x && git push")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$r" = "cp" ] && check "#3113 with no reader a copy whose words name git and status is still a copy" ok \
   || check "#3113 with no reader a copy whose words name git and status is still a copy" "exit $rc, printed [$r]"

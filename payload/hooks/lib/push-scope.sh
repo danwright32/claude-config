@@ -2223,7 +2223,9 @@ ps__words_at() {   # $1 = record index
   # To the end of the field, never a line; the here string's one newline comes off the last word.
   IFS=$'\x1f' read -r -d '' -a PS__W <<< "${PS__R_WORDS[$1]}" || true
   n=$(( ${#PS__W[@]} - 1 ))
-  if [ "$n" -ge 0 ]; then PS__W[$n]="${PS__W[$n]%$'\n'}"; fi
+  # Tested before it is removed, as in ps__read: a removal that matches nowhere costs the square of
+  # the word's length on bash 3.2.
+  if [ "$n" -ge 0 ]; then case "${PS__W[$n]}" in *$'\n') PS__W[$n]="${PS__W[$n]%$'\n'}" ;; esac; fi
   return 0
 }
 
@@ -2319,6 +2321,9 @@ ps__may_write() {   # $1 = the program as written
     if ps__writes_out ${PS__W[@]+"${PS__W[@]}"}; then PS__WRITER="git $sub into a file"; return 0; fi
     return 1
   fi
+  # A program written with a folder in front (./cat, bin/test, scripts/set) is whatever file is
+  # there, never the command of that name the list measured, so it may write.
+  case "$1" in */*) PS__WRITER="$1"; return 0 ;; esac
   case "$prog" in
     '') return 1 ;;
     cd|pushd|popd|true|:|test|'['|'[['|echo|printf|pwd|export|set|ls|cat|head|tail|grep|wc|sleep|fi|done|esac) ;;
@@ -2337,7 +2342,8 @@ ps__may_write() {   # $1 = the program as written
 # What the push names is in the command, so it is READ first, and most of it is what the gates
 # already judged:
 #   HEAD, @, the branch checked out by its name (or as HEAD:<any name>): the gates read exactly this.
-#   $(git branch --show-current) and the two other spellings of the same: the branch checked out.
+#   $(git branch --show-current) and the three other spellings of the same (git rev-parse
+#   --abbrev-ref HEAD, git symbolic-ref --short HEAD, with or without --quiet): the branch checked out.
 #   a name this command makes where HEAD is before the push (git checkout -b, git switch -c, git
 #   branch <name>, git tag <name>): it holds what HEAD holds.
 #   anything whose commits are all in HEAD's history or already on the remote: a branch already
