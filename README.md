@@ -3914,10 +3914,15 @@ an object's key is not read as running or writing anything. A package is still r
 imported or required.
 
 Since claude-config#2865 the first word npx, bunx, pnpx, npm exec, pnpm dlx or yarn dlx is handed is
-read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`)
-naming no file on disk and none an earlier command wrote: before, `@scope/name@1` was read as a path
-to a script. A package counts as able to post, as an imported one does, so it is refused when it is
-handed an endpoint or a file whose text names one. `claude mcp add` and the other `claude mcp`
+read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`):
+before, `@scope/name@1` was read as a path to a script. A package counts as able to post, as an
+imported one does, so it is refused when it is handed an endpoint or a file whose text names one.
+Since claude-config#3069 that holds whatever is on disk: a folder or a file of the package's name in
+the directory used to make the word a path, and a path holding no `/` is read as nothing, so beside a
+folder named `vitest` the test file `npx vitest run posts.test.ts` names was never opened. Where a
+file of that name is on disk, or an earlier command wrote one, the word is read as that file as well,
+and the call is refused where either reading refuses. A word that can only be a path (`./x.js`,
+`dir/x.js`) is read as the file alone. `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
@@ -7662,7 +7667,10 @@ mod-kit marks unread, refused with its reason (`eval`, a command a value names s
 which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
-Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
+#3099 it may also close, and only close, a tab first listed in its tab group after its own click,
+typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
+that was in the group before or that appears with no such action behind it) or on a
 page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
@@ -7756,7 +7764,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585
+#1765, #1812, #2064, #2261, #2585, #3099
 
 </td></tr>
 <tr><td>
@@ -8146,11 +8154,33 @@ it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$
 trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
 arithmetic names no command. So
-`bash tools/check-mods.sh payload/mods` is still held, though no longer for copying into a folder
+the text of `tools/check-mods.sh` still cannot be read as writing nothing in the folder it is
+handed, though no longer for copying into a folder
 of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test
 "$d"`, `"$tsc"`), makes its folder from a template under `TMPDIR`, names each copy through another
 variable, runs inline perl whose writes its words do not name, and sources one file by a command's
 output, each of which keeps the hold on its own (measured 2026-11-16).
+One script is let through by name instead (#3022, signed off by Dan, 2026-11-16, for this script
+only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a checkout of
+danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
+writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
+the checkout is a clone of that repository, it is handed one folder that is on the disk, the
+command sets no value (it holds no equals sign, and it runs the script once with nothing else but
+a `cd` before it and readers its output is piped into, such as `2>&1 | tail -n 40`,
+since the script takes the programs it runs and
+where it keeps its copies and logs from the environment), and neither the script nor a library it
+sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
+Anything else is judged as before: a script of that name in another repository or elsewhere in the
+checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
+shell, the file its output is redirected into, and the script chained with any other command, in a
+loop or in a function, which is judged with that command as before. Each such run is one
+`named-reader` line in the log, `passed` or `judged` with why.
+`tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
+ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
+adds), and red when the script sources a file the list
+in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
+not proved there, as it is not judged when `claude plugin test` is typed directly.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
@@ -8425,6 +8455,10 @@ and the engine's words, when `claude` answers that hooks modules are turned off 
 (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
 set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
 exit code and the last lines of output instead of an empty reason.
+Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
+mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
+exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
+mods inside it, found none, and printed "0 mods checked" with exit 0.
 A refused or failed mod's line carries three verdict lines at most, so the engine's whole output is
 kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (outside the config, which
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read
