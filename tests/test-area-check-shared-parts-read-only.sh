@@ -24,11 +24,15 @@
 #     copies are made inside it.
 #   - The rule itself, run on mod-kit's REAL reader of a command and real git
 #     (tests/area-check-named-rule.mjs), lets through only that script at its path from the root of a
-#     checkout of its repository, handed one folder, in a command that sets no value and runs the
-#     script once, with nothing but a change of folder before it and readers its output is piped into
-#     after it, with its texts as the checkout left the default branch with them. Every other shape,
-#     a changed text, a copy elsewhere, another repository, and everything chained with the run, the
-#     other script let through by name included, is still judged.
+#     checkout of its repository, handed one folder, in a command that holds no equals sign and runs
+#     the script once, behind no runner, with nothing but a change of folder before it (one folder
+#     written from /, ./, ../ or ~) and readers its output is piped into after it, with its texts as
+#     the checkout left the default branch with them. Every other shape, a changed text, a copy
+#     elsewhere, another repository, and everything chained with the run, the other script let
+#     through by name included, is still judged. The #3093 loosening, which lets an equals sign stand
+#     in a reader of the output, was signed off for tools/check-mods.sh alone: here any equals sign
+#     in the command still holds the run, a reader's own option included, and the suite is red when
+#     one is let through.
 #   - A file left beside the program under the name of a module it imports (tools/lib/re.py) is never
 #     loaded, since the script runs the program isolated (python3 -I). Git is not asked about a file
 #     it does not track, so the texts comparison could not see one. The control: under a copy of the
@@ -261,8 +265,10 @@ else
 fi
 
 # ---- The rule, on the real reader and real git ----
-# How many checks must run is set here, not measured: 31 of the run's shape and its text, one for
-# the program, and one for the other script let through by name.
-named_rule SHARED_PARTS "$REPO" payload/mods/mod-kit/hooks/card.ts 33
+# How many checks must run is set here, not measured: 56 of the run's shape and its text (31 before
+# #3093, 19 of settings, runners and changes of folder it added, one of a reader that says less
+# than the rule asks, two of a change of folder that leads nowhere, and three of one written with
+# `..`), one for the program, and one for the other script let through by name.
+named_rule SHARED_PARTS "$REPO" payload/mods/mod-kit/hooks/card.ts 58
 
 finish

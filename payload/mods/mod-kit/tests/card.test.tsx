@@ -175,6 +175,32 @@ test("a heredoc's body, and the program each command runs, are shared on $.modki
   ])
 })
 
+// #3093: a guard that must know every value a line sets asks for the commands that only set one,
+// which the kit otherwise leaves out, with or without the folder the call starts in.
+const settingReader: { name: string; register: Register } = {
+  name: 'setting-reader',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      const command = String((e as { command?: string }).command)
+      const words = (cs: { words: string[]; env?: string[] }[]) => cs.map(c => [c.words, c.env ?? null])
+      return {
+        deny: JSON.stringify({
+          plain: words(await $.modkit.pipeline({ command })),
+          asked: words(await $.modkit.pipeline({ command, assignments: true })),
+          askedIn: words(await $.modkit.pipeline({ command, cwd: '/w', home: '/h', assignments: true })),
+        }),
+      }
+    })
+  },
+}
+
+test('$.modkit.pipeline gives the commands that only set a value when asked for them (#3093)', { plugins: [settingReader] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const r = (await $.tool.call({ tool: 'Bash', command: 'A=1; B=2 true' } as never)) as { deny?: string; text?: string }
+  const both = [[['A=1'], null], [['true'], ['B=2']]]
+  expect(JSON.parse(r.deny ?? r.text ?? '{}')).toEqual({ plain: [[['true'], ['B=2']]], asked: both, askedIn: both })
+})
+
 // #726: the working tree a path sits in, asked of the disk through the kit. The reader stands in
 // for ask before saving, and the disk is the test's: a .git folder at /tmp/repo and nowhere else.
 const treeReader: { name: string; register: Register } = {

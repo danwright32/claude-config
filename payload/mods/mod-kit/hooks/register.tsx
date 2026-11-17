@@ -341,8 +341,12 @@ export const register: Register = (on, options) => {
       // The one reader of a transcript's /goal (#1252), each read bounded at 5 seconds (chosen, not
       // measured: a grep of one file).
       goal: async ({ transcript }) => goalAt(transcript, argv => built.process.run(argv, { timeoutMs: 5_000 })),
-      // Each command with the folder it runs in where the caller says where the call starts (#2000).
-      pipeline: async ({ command, cwd, home }) => (cwd === undefined ? pipeline(command) : pipelineIn(command, cwd, home ?? '')),
+      // Each command with the folder it runs in where the caller says where the call starts (#2000),
+      // and the commands that only set a value where the caller asks for them (#3093).
+      pipeline: async ({ command, cwd, home, assignments }) => {
+        const opts = assignments === true ? { assignments: true } : {}
+        return cwd === undefined ? pipeline(command, opts) : pipelineIn(command, cwd, home ?? '', opts)
+      },
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.
       login: async () => undefined,
