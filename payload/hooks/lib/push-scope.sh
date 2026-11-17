@@ -507,8 +507,15 @@ ps__read() {   # $1 = command
   while IFS= read -r -d $'\x1e' rec; do
     # Split by read, never by pattern removal, which tries every prefix of a 26 KB command.
     IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns tool wrap <<< "$rec"
-    # The last field takes read's trailing newline.
-    wrap="${wrap%$'\n'}"; tool="${tool%$'\n'}"; assigns="${assigns%$'\n'}"
+    # The last field takes read's trailing newline. Each is tested before anything is removed: a
+    # pattern removal that matches nowhere tries every position, and bash 3.2 measures the rest of
+    # the string at each, so on a field as long as the command (a commit's words hold its whole
+    # message) the cost grew with the square of the length: 2 seconds at 79 KB, 5 at 159 KB, 19 at
+    # 319 KB, and a 1.6 MB command was not read inside 60 (claude-config#3111). A case reads the
+    # field once.
+    case "$wrap" in *$'\n') wrap="${wrap%$'\n'}" ;; esac
+    case "$tool" in *$'\n') tool="${tool%$'\n'}" ;; esac
+    case "$assigns" in *$'\n') assigns="${assigns%$'\n'}" ;; esac
     PS__R_DIR+=("$dir"); PS__R_TEXT+=("$text"); PS__R_WORDS+=("$words"); PS__R_GITDIR+=("$gitdir")
     PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool"); PS__R_WRAP+=("$wrap")
     [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
@@ -1352,24 +1359,44 @@ ps__redirection() {   # $1 = one word
   return 1
 }
 
+# What closes a subshell or ends the command comes off the end of a word, into PS__WORD: everything
+# from its first ), } or ; on. Those are the crude cut's, never the word's. It is the pattern
+# removal ${1%%[)\};]*} for a word of ordinary length. A longer one (a message glued to its option,
+# --message=..., is a word as long as the message) is split by read instead, which passes over it
+# once: the removal tries every position up to the first match and bash 3.2 measures the rest of
+# the string at each, so its cost grows with the square of the length (claude-config#3111).
+PS__WORD=""
+ps__word_end() {   # $1 = one word
+  PS__WORD="$1"
+  case "$1" in *[\)\}\;]*) ;; *) return 0 ;; esac
+  if [ "${#1}" -le 4096 ]; then PS__WORD="${1%%[)\};]*}"; return 0; fi
+  # The word holds one of the three, so the first field ends at it and the here string's own
+  # newline falls in what follows. None of them is whitespace, so a word that starts with one
+  # gives an empty first field, as the removal does.
+  IFS=')};' read -r -d '' PS__WORD _ <<< "$1" || true
+  return 0
+}
+
 # The paths the git commit last read (PS_RUN_SUB, PS_RUN_ARGS) names, into PS__COMMIT_PATHS as
 # written, and PS__COMMIT_UNREAD set to 1 when it names them in a file. Every word that is no option,
 # no option's value and no redirection is a path, and so is everything after `--`. The value of an
 # option is consumed before anything else is asked of the word, so a message that looks like a
 # redirection (`-m "> quoted"`) never makes the word after it the value. An option this does not
 # know is taken to have no value, so its value, if it has one, is read as a path: more read, never
-# less (L42).
-PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0
+# less (L42). PS__COMMIT_ALL is set to 1 when the commit stages tracked changes itself: an a or a p
+# in a cluster of short options before any that takes a value (-a, -am, -qam, -p), or --all,
+# --patch or --interactive. Read from the options, so --allow-empty and --amend, which stage
+# nothing, are not taken for it.
+PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
 ps__commit_takes() {
   local a c skip=0 rest=0 file=0
-  PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0
+  PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
   [ "$PS_RUN_SUB" = commit ] || return 0
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     if [ "$file" = 1 ]; then file=0; continue; fi
     if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
-    # What closes a subshell or ends the command is the crude cut's, never the word's.
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     if [ "$rest" = 1 ]; then PS__COMMIT_PATHS+=("$a"); continue; fi
     case "$a" in
@@ -1377,6 +1404,7 @@ ps__commit_takes() {
       --pathspec-from-file) PS__COMMIT_UNREAD=1; skip=1 ;;
       --pathspec-from-file=*) PS__COMMIT_UNREAD=1 ;;
       -m|-F|-C|-c|-t|--message|--file|--reuse-message|--reedit-message|--fixup|--squash|--author|--date|--template|--cleanup|--trailer) skip=1 ;;
+      --all|--patch|--interactive) PS__COMMIT_ALL=1 ;;
       --*|-) ;;
       -*)
         # A cluster of short options: the first of m F C c t takes a value, the rest of the word
@@ -1386,6 +1414,7 @@ ps__commit_takes() {
           case "$c" in
             [mFCct]) skip=1; break ;;
             [mFCctSu]*) break ;;
+            [ap]*) PS__COMMIT_ALL=1 ;;
           esac
           c="${c#?}"
         done ;;
@@ -1841,8 +1870,7 @@ ps__commit_route() {
   PS__ROUTE=""
   case "$PS_RUN_SUB" in rebase|cherry-pick|revert|am|merge|pull) ;; *) return 1 ;; esac
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    # What closes a subshell or ends the command is the crude cut's, never the word's.
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     case "$a" in
       --abort|--quit) return 1 ;;
       --continue) [ "$PS_RUN_SUB" = merge ] && return 1; word=" --continue" ;;
@@ -1982,7 +2010,8 @@ ps__commits_here() {
   [ "$PS_RUN_SUB" = commit ] && return 0
   [ "$PS_RUN_SUB" = merge ] || return 1
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    [ "${a%%[)\};]*}" = --continue ] && return 0
+    ps__word_end "$a"
+    [ "$PS__WORD" = --continue ] && return 0
   done
   return 1
 }
@@ -2002,8 +2031,7 @@ ps__move_or_stage() {
   # One pass over the words: the first that is no option, how many are no option before and after a
   # `--`, how many options are anything but -q, and the flags each command's rule turns on.
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    # What closes a subshell or ends the command is the crude cut's, never the word's.
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     # A redirection is among the words read and is none of git's: `git checkout -b new 2>&1` names
     # one word, new. Written apart from its file (`> out.txt`), the file is the next word.
@@ -2109,7 +2137,8 @@ ps__move_or_stage() {
 #
 # Read as the two questions above read: in command position, by the order the commands are written
 # in, and with nothing to read the command, by the crude cut, where a segment is let stand only when
-# its first word is one of the commands above.
+# its first word is one of the commands above that is no git: which subcommand a git runs is the
+# reader's to say, so with no reader any git but an add, a commit or a push may write.
 #
 # Prints what may write, as written (`cp`, `git apply`, `echo into a file`), and returns 0; returns
 # 1 otherwise.
@@ -2127,7 +2156,7 @@ ps_unread_write() {   # $1 = the command
       elif ps__commits_here; then
         ps__commit_takes
         if [ -n "$wrote" ] && [ -z "$stale" ]; then
-          if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || ps__commit_stages_all "${PS__R_TEXT[$i]}"; then
+          if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || [ "$PS__COMMIT_ALL" = 1 ]; then
             stale="$wrote"
           fi
         fi
@@ -2157,7 +2186,7 @@ ps_unread_write() {   # $1 = the command
     if ps_runs_git "$seg" commit || { ps_runs_git "$seg" merge && ps__commits_here; }; then
       ps__commit_takes
       if [ -n "$wrote" ] && [ -z "$stale" ]; then
-        if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || ps__commit_stages_all "$seg"; then
+        if [ "${#PS__COMMIT_PATHS[@]}" -gt 0 ] || [ "$PS__COMMIT_UNREAD" = 1 ] || [ "$PS__COMMIT_ALL" = 1 ]; then
           stale="$wrote"
         fi
       fi
@@ -2190,12 +2219,13 @@ ps__words_at() {   # $1 = record index
   return 0
 }
 
-# With nothing to read the command: one segment of the crude cut as a program and its words (PS__W),
-# and when the program is git, the subcommand and the words after it (PS_RUN_SUB, PS_RUN_ARGS). Past
-# what opens a subshell or a block, reserved words and plain assignments, an rtk in front of git,
-# and the options git takes itself. Only for ps__may_write, which lets a segment stand on its FIRST
-# word alone, so a word this cannot place (an assignment holding a substitution) is the program,
-# and one that is not on the list.
+# With nothing to read the command: one segment of the crude cut as a program and its words (PS__W).
+# Past what opens a subshell or a block, reserved words and plain assignments. Only for
+# ps__may_write, which lets a segment stand on its FIRST word alone, so a word this cannot place (an
+# assignment holding a substitution) is the program, and one that is not on the list. A git is never
+# let stand here: which subcommand it runs is read in one place (lib/shell-words.py, asked through
+# ps_runs_git), and this does not keep a second reading of it by counting words (claude-config#1188,
+# lib/word-position-scan.py). PS_RUN_SUB is left empty, so ps__may_write judges the program alone.
 PS__PROG=""
 ps__crude_program() {   # $1 = one segment of ps__crude_cut
   local w="" k=0 n
@@ -2214,22 +2244,15 @@ ps__crude_program() {   # $1 = one segment of ps__crude_cut
   done
   [ "$k" -lt "$n" ] || return 0
   PS__PROG="$w"
-  if [ "${w##*/}" = rtk ] && [ "$((k + 1))" -lt "$n" ] && [ "${PS__W[$((k + 1))]##*/}" = git ]; then
-    k=$((k + 1)); w=git; PS__PROG=git
+  # An rtk in front is looked past, and a program that is git is named with the word after it, so
+  # the refusal says `git apply` and not `git`. Whether the word is git is asked of the one reading
+  # of git (ps_runs_git, on the word with a subcommand after it), never compared here.
+  if [ "${w##*/}" = rtk ] && [ "$((k + 1))" -lt "$n" ]; then k=$((k + 1)); w="${PS__W[$k]}"; fi
+  if [ "$((k + 1))" -lt "$n" ] && ps_runs_git "$w status" status; then
+    ps__word_end "${PS__W[$((k + 1))]}"
+    PS__PROG="$w $PS__WORD"
   fi
-  [ "${w##*/}" = git ] || return 0
-  k=$((k + 1))
-  while [ "$k" -lt "$n" ]; do
-    w="${PS__W[$k]}"
-    case "$w" in
-      -C|-c) k=$((k + 2)) ;;
-      -*) k=$((k + 1)) ;;
-      *) break ;;
-    esac
-  done
-  [ "$k" -lt "$n" ] || return 0
-  PS_RUN_SUB="${w%%[)\};]*}"
-  PS_RUN_ARGS=("${PS__W[@]:$((k + 1))}")
+  PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
   return 0
 }
 
@@ -2271,7 +2294,7 @@ ps__may_write() {   # $1 = the program as written
         for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
           if [ "$file" = 1 ]; then file=0; continue; fi
           if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
-          a="${a%%[)\};]*}"
+          ps__word_end "$a"; a="$PS__WORD"
           case "$a" in
             ''|-q|--quiet) ;;
             -b|-c|--create) creates=$((creates + 1)) ;;
@@ -2410,7 +2433,7 @@ ps__ref_step() {
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     if [ "$file" = 1 ]; then file=0; continue; fi
     if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
-    a="${a%%[)\};]*}"
+    ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     case "$PS_RUN_SUB" in
       checkout|switch)
@@ -2456,21 +2479,42 @@ ps__ref_step() {
   return 0
 }
 
+# Does this text open more round brackets than it closes? For putting back together a substitution
+# the reader cut at its spaces. Text longer than any refspec is not counted and is not open: it is
+# then judged as it stands, and a substitution in it cannot be resolved.
+ps__bracket_open() {   # $1 = text
+  local o c
+  [ "${#1}" -le 4096 ] || return 1
+  o="${1//[^(]/}"; c="${1//[^)]/}"
+  [ "${#o}" -gt "${#c}" ]
+}
+
 # The refspecs of the git push last read (PS_RUN_ARGS), judged in the repository at $1 by the rule
 # above. Sets PS__SOURCE to the kind and the source as written and returns 0 for the first that
 # cannot be judged; returns 1 when the gates read everything the push sends.
 PS__SOURCE=""
 ps__push_sources() {   # $1 = the repository directory
-  local dir="$1" a c skip=0 file=0 n=0 dry=0 del=0 wide="" remote="" src ref short cur count rs="" tag=0 revs
+  local dir="$1" a c skip=0 file=0 n=0 dry=0 del=0 wide="" remote="" src ref short cur count rs="" tag=0 revs part=""
   local -a specs=()
   PS__SOURCE=""
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # A substitution written with no quotes round it arrives cut at its spaces, `$(git`,
+    # `rev-parse`, `--abbrev-ref`, `HEAD)`, so it is put back together before anything is asked of
+    # a word: one of its pieces can look like an option, and the whole is what the push names. One
+    # that never closes is kept as it stands, and cannot be resolved.
+    if [ -n "$part" ]; then
+      part="$part $a"
+      if ps__bracket_open "$part"; then continue; fi
+      a="$part"; part=""
+    else
+      case "$a" in *'$('*) if ps__bracket_open "$a"; then part="$a"; continue; fi ;; esac
+    fi
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     if [ "$file" = 1 ]; then file=0; continue; fi
     if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
     # What closes a subshell or ends the command is the crude cut's, never the word's; a
     # substitution the reader handed over whole keeps its own bracket.
-    case "$a" in *'$('*|*'`'*) ;; *) a="${a%%[)\};]*}" ;; esac
+    case "$a" in *'$('*|*'`'*) ;; *) ps__word_end "$a"; a="$PS__WORD" ;; esac
     [ -n "$a" ] || continue
     case "$a" in
       --dry-run) dry=1 ;;
@@ -2489,6 +2533,8 @@ ps__push_sources() {   # $1 = the repository directory
       *) if [ "$n" = 0 ]; then remote="$a"; else specs+=("$a"); fi; n=$((n + 1)) ;;
     esac
   done
+  # A substitution that never closed took every word after it: what the push names is in there.
+  [ -z "$part" ] || specs+=("$part")
   # Nothing is sent by a dry run, and with --delete every refspec is a deletion.
   [ "$dry" = 1 ] && return 1
   [ "$del" = 1 ] && return 1

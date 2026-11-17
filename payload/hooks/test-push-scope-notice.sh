@@ -614,9 +614,11 @@ READ
 git -C "$PN" worktree add -q "$W/wt-other" other >/dev/null 2>&1
 out="$(run "$named" "$PN")"; rc=$?
 err="$(cat "$W/err")"
+# By the folder's own name: git prints the path as it resolves it, which on macOS is not the
+# spelling mktemp handed back (/private in front, and one slash where TMPDIR leaves two).
 case "$rc:$err" in
-  2:*"$W/wt-other"*) check "#3112 with the branch checked out in another worktree, the refusal names where" ok ;;
-  *) check "#3112 with the branch checked out in another worktree, the refusal names where" "exit $rc [${err:0:300}]" ;;
+  2:*"It is checked out in "*"${W##*/}/wt-other"*) check "#3112 with the branch checked out in another worktree, the refusal names where" ok ;;
+  *) check "#3112 with the branch checked out in another worktree, the refusal names where" "exit $rc [...${err: -300}]" ;;
 esac
 pending_allowed "#3112 the same push from the worktree the branch is checked out in is let through" "$named" "$W/wt-other"
 pending_allowed "#3112 and so it is through git -C" "git -C $W/wt-other push origin other" "$PN"
