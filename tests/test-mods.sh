@@ -627,6 +627,31 @@ ln -s "$M4L/illtyped" "$M4LV/illtyped"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4LV" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "#2417: a failing run over links to mods fails" ok || check "#2417: a failing run over links to mods fails" "exit=$code out=$out"
 check "#2417: and leaves git status as it found it" "$(m4l_left)"
+# One mod's own folder is checked as that one mod, its dependencies read from the folder holding it
+# (#3105). Handed payload/mods/<mod>, the run found no mod among the mod's own subfolders, said
+# "0 mods checked" and exited 0, so a type check that checked nothing read as a pass.
+: > "$TSC_LOG"
+# The run names the folder as a resolved path, which collapses the doubled slash TMPDIR can leave.
+M4L_AT="$(cd "$M4L" && pwd)"; M4H_AT="$(cd "$M4H" && pwd)"
+runone(){ : > "$LOG"; out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$1" 2>&1)"; code=$?; }
+runone "$M4L/leaning/"
+[ "$code" -eq 0 ] && grep -qxF 'TYPES leaning: "claude-code","claude-code-tools","claude-code-mcp","fine"' "$TSC_LOG" \
+  && printf '%s\n' "$out" | grep -q '^check-mods: leaning ok (types checked' \
+  && check "#3105: one mod's own folder is checked, its dependency read beside it" ok \
+  || check "#3105: one mod's own folder is checked, its dependency read beside it" "exit=$code out=$out $(cat "$TSC_LOG")"
+[ "$(grep -c 'plugin validate' "$LOG")" = 1 ] && grep -q 'plugin validate .*/leaning$' "$LOG" \
+  && printf '%s\n' "$out" | grep -qF "check-mods: 1 mod checked: leaning, its dependencies read from $M4L_AT" \
+  && check "#3105: and only that mod, the count saying so" ok \
+  || check "#3105: and only that mod, the count saying so" "out=$out calls=$(cat "$LOG")"
+check "#3105: and leaves git status as it found it" "$(m4l_left)"
+runone "$M4L/illtyped"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'illtyped fails a strict type check' \
+  && check "#3105: one mod's own folder failing its type check fails the run" ok \
+  || check "#3105: one mod's own folder failing its type check fails the run" "exit=$code out=$out"
+runone "$M4H/orphan"
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'orphan could not be type checked' | grep -qF "elsewhere, which is not in $M4H_AT" \
+  && check "#3105: one mod whose dependency is not beside it fails, naming where it looked" ok \
+  || check "#3105: one mod whose dependency is not beside it fails, naming where it looked" "exit=$code out=$out"
 # The pinned types missing a file: no mod can be checked, and that is a fault in the checkout.
 TSX="$TMPROOT/ts-broken"; pin "$TSX" 2.1.291; rm -f "$TSX/claude-code-types/claude-code-tools/index.d.ts"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSX" bash "$CHECK" "$M4G" 2>&1)"; code=$?
@@ -722,10 +747,14 @@ fi
 
 # 5. A folder with no manifest is not a mod and is not counted.
 M5="$TMPROOT/m5"; mkdir -p "$M5/notes"; printf 'x\n' > "$M5/notes/readme"; : > "$M5/.gitkeep"
+# A run that checks no mod is not a pass (#3105, L98): it has its own exit code, says it checked
+# nothing, and says how to check one mod.
 runit "$M5"
-[ "$code" -eq 0 ] && case "$out" in *"0 mods checked"*) true ;; *) false ;; esac \
-  && check "an empty mods folder passes and says it checked none" ok \
-  || check "an empty mods folder passes and says it checked none" "exit=$code out=$out"
+[ "$code" -eq 5 ] && check "a folder holding no mod fails with its own exit code" ok \
+  || check "a folder holding no mod fails with its own exit code" "exit=$code out=$out"
+case "$out" in *"no mods in $M5, so nothing was checked"*) check "and says nothing was checked" ok ;; *) check "and says nothing was checked" "$out" ;; esac
+case "$out" in *"hand it the mod's own folder"*"links to it and to each mod its plugin.json depends on"*) check "and says how to check one mod" ok ;; *) check "and says how to check one mod" "$out" ;; esac
+[ ! -s "$LOG" ] && check "and asks claude nothing" ok || check "and asks claude nothing" "$(cat "$LOG")"
 
 # 6. With no claude to ask, mods present is UNMEASURED: its own exit code, never a pass (L411, L490).
 : > "$TSC_LOG"

@@ -15,7 +15,9 @@
 #   ps_commit_in_chain: does the same command commit before pushing? PreToolUse
 #                      runs BEFORE the command, so a `git add … && git commit … &&
 #                      git push` has nothing in history yet and the pending work
-#                      must be folded in.
+#                      must be folded in. A `git merge --continue` is a commit too
+#                      (claude-config#3081), and either may be written straight after a
+#                      bracket or a backquote (claude-config#3091).
 #   ps_add_scope / ps_pending_files: what that pending commit will take beyond
 #                      the index, as a scope word or as the files themselves
 #   ps_add_takes_all: does a git add in the command take more than it names
@@ -27,6 +29,10 @@
 #   ps_pending_merge_of_default: does the command's commit conclude a merge of the default branch
 #                      still in progress, which nothing can set apart before that commit exists, so
 #                      push-scope-notice.sh refuses the push for every gate (claude-config#3062)
+#   ps_unread_commit_route: does the command run, before a push, a git command that makes commits
+#                      no gate can read before it runs (rebase, cherry-pick, revert, am, a merge of
+#                      a named branch, pull), which push-scope-notice.sh refuses the same way
+#                      (claude-config#3092)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -1009,7 +1015,24 @@ ps_has_override() {
 
 ps_commit_in_chain() {
   # A quote may stand either side, since the commit may be a string a shell or eval runs (#1478).
-  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]"'"'"']|$)' <<< "$1"
+  #
+  # git merge --continue commits too (claude-config#3081): with a merge in progress it makes the
+  # merge commit, exactly as git commit does there. Read as no commit, no gate folded that pending
+  # commit in, so a conflict resolution went out unread, and ps_pending_merge_of_default, which asks
+  # this, let a merge of main concluded that way through. It is the one spelling of git merge that
+  # concludes a merge (measured on git 2.51.1 with MERGE_HEAD present: a git merge with anything
+  # else, or nothing, is refused, and --continue takes no other argument). A git merge naming a
+  # branch STARTS a merge, of which nothing is in the index when a gate runs, so it is not one.
+  # One pattern with one reading of where a git starts, so the two spellings cannot come apart.
+  #
+  # A git may start straight after the opener of a subshell or of a command substitution, a bracket
+  # or a backquote, as ps__git_add_in_chain has read an add since #2203 (claude-config#3091). Without
+  # them `(git commit -m x) && git push` and `x=$(git merge --continue) && git push` were read as no
+  # commit, so no gate folded the pending commit in and it went out unread. Either spelling may be
+  # the last word of its command, so what closes the brackets, or a separator, may follow it with no
+  # space between: `(git commit)`, `git commit;git push`.
+  local runs_git='(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+'
+  grep -Eq "$runs_git"'(commit|merge[[:space:]]+--continue)([[:space:];&|"'"'"')`]|$)' <<< "$1"
 }
 
 # Does the command stage with a git add, and does its commit stage for itself with -a? Two
@@ -1560,12 +1583,16 @@ ps_merged_apart() {   # $1 = where the committed range starts (a ps_*_base answe
 # push-scope-notice.sh refuses it, once, for every push gate, on this question.
 #
 # Asked with ps_commit_in_chain, the very question each gate asks before folding the pending commit
-# in, so it is true exactly where the gates would misread: a git merge --continue is not read as a
-# commit by them, nor here. Only a merge bringing in default branch commits HEAD lacks counts: a
-# merge of any other branch brings lines the gates never judged, which are the push's own and are
-# read right already. With no default branch known nothing can say what came from main, and the
-# gates judge the range whole as ps_merged_apart says; this answers no there rather than refusing a
-# push the separated form would judge no differently.
+# in, so it is true exactly where the gates would misread. That question counts a git merge
+# --continue as a commit since claude-config#3081, so `git merge --continue && git push` is refused
+# here like the commit form; before, it was read as no commit by the gates and by this, and went out
+# with nothing having read the merge commit.
+#
+# Only a merge bringing in default branch commits HEAD lacks counts: a merge of any other branch
+# brings lines the gates never judged, which are the push's own and are read right already. With no
+# default branch known nothing can say what came from main, and the gates judge the range whole as
+# ps_merged_apart says; this answers no there rather than refusing a push the separated form would
+# judge no differently.
 #
 # Every commit MERGE_HEAD names is read (an octopus merge names several). Prints the default branch
 # ref and returns 0 when the command concludes such a merge; returns 1 otherwise.
@@ -1585,6 +1612,111 @@ ps_pending_merge_of_default() {   # $1 = the command  $2 = the repository direct
     return 0
   done < "$mh"
   return 1
+}
+
+# ---- commits a command makes by a route no gate can read, then pushes (claude-config#3092) ----
+# A gate folds in the commit a command is about to make only for the two spellings
+# ps_commit_in_chain reads, git commit and git merge --continue, whose content is in the index when
+# the gate runs. Six other git commands put commits on the branch, and what they will make exists
+# nowhere a gate can read before the command runs: rebase, cherry-pick, revert, am, a merge of a
+# named branch, and pull. Chained before a push, `git cherry-pick abc123 && git push`, every gate
+# judged the range as it stood and said nothing of what was about to join it.
+#
+# Measured in throwaway repositories on git 2.51.1, one fresh repository per spelling, counting the
+# commits a push would send afterwards that were not on HEAD when a gate would have run:
+#   rebase       --continue 2, --skip 1, onto a branch 2
+#   cherry-pick  --continue 1, of a named commit 1
+#   revert       --continue 1, of a named commit 1
+#   am           --continue 1, of a patch 1
+#   merge        of a named branch 2 (1 when it only fast forwards, which makes no commit and still
+#                puts the other branch's commits on this one, --ff-only and --no-commit included)
+#   pull         1 when the branches have diverged (the merge commit, or with --rebase this branch's
+#                commit replayed), 2 from a local branch; 0 when it only fast forwards to what the
+#                remote already holds or finds nothing new
+#   --abort and --quit of each: none, and nothing staged
+# -n and --no-commit on cherry-pick and revert, and --squash and --no-commit on a merge that is not
+# a fast forward, make no commit but STAGE the change, for a `git commit` later in the command, which
+# the gates would fold in from an index that does not hold it yet. So they are routes too.
+#
+# So the rule is by command, never by spelling (L247): any of the six, unless it is abandoned or
+# left (--abort, --quit), or is the git merge --continue the gates already read. A pull is refused
+# whole, though one that only fast forwards sends nothing unread: which it will be is not known
+# until it has fetched, and telling a pull of the branch's own remote from a pull of anything else
+# would be one more reading to keep right. The cost is small where it was counted: on the personal
+# MacBook, in the transcripts of the 45 days to 2026-11-16, about 4,067 Bash calls ran a push, and
+# 2 of them (one command, a rebase onto main before a first push) ran any of the six before it; none
+# ran a pull. That is a count by a pattern written beside this code, never by this function, so it
+# sizes the cost and proves nothing about what this function matches (L107). The work MacBook is
+# not counted.
+#
+# It refuses, like ps_pending_merge_of_default and for its reason: reading these commits before
+# they exist would be a second reading in every gate, and run as two commands they are in the range
+# when the push is judged, which every gate already reads.
+#
+# Read from the command's own words in command position (ps__read), so a commit message or a heredoc
+# that only names a route is not one. Only a route with a push AFTER it in the command counts: what
+# a route makes after the push is not carried by it. That is by the order the commands are written
+# in, so a push in a function or a loop written before the route and run after it is not seen.
+# With nothing to read the command, the crude cut answers, which can only see more routes (L42).
+#
+# Not read here, and no gate reads them either: what moves HEAD onto commits that already exist
+# without making one (git checkout or switch to another branch, git reset, a rebase abandoned back
+# onto its branch), and what stages by another route (git apply --index, git stash pop, git rm).
+#
+# Prints the route as written, `git rebase --continue`, `git merge`, and returns 0; returns 1
+# otherwise.
+ps_unread_commit_route() {   # $1 = the command
+  local cmd="$1" rc i end seg sub found="" loop_input
+  case "$cmd" in *push*) ;; *) return 1 ;; esac
+  case "$cmd" in *rebase*|*cherry-pick*|*revert*|*merge*|*pull*|*am*) ;; *) return 1 ;; esac
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      # ps_runs_at leaves the subcommand this record does run, and its words, for ps__commit_route.
+      if ps_runs_at git "$i" push; then
+        [ -n "$found" ] && { printf '%s' "$found"; return 0; }
+      elif [ -z "$found" ] && ps__commit_route; then
+        found="$PS__ROUTE"
+      fi
+      i=$((i + 1))
+    done
+    return 1
+  fi
+  loop_input="$(ps__crude_cut "$cmd")" || true
+  while IFS= read -r seg; do
+    if [ -n "$found" ]; then
+      case "$seg" in *push*) ps_runs_git "$seg" push && { printf '%s' "$found"; return 0; } ;; esac
+      continue
+    fi
+    for sub in rebase cherry-pick revert am merge pull; do
+      case "$seg" in *"$sub"*) ;; *) continue ;; esac
+      if ps_runs_git "$seg" "$sub" && ps__commit_route; then found="$PS__ROUTE"; break; fi
+    done
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
+  return 1
+}
+
+# Is the git command ps_runs_at or ps_runs_git last read (PS_RUN_SUB, PS_RUN_ARGS) one of the routes
+# above? Sets PS__ROUTE to it as written and returns 0; returns 1 for any other command, for one
+# abandoned or left, and for the git merge --continue ps_commit_in_chain reads.
+PS__ROUTE=""
+ps__commit_route() {
+  local a word=""
+  PS__ROUTE=""
+  case "$PS_RUN_SUB" in rebase|cherry-pick|revert|am|merge|pull) ;; *) return 1 ;; esac
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # What closes a subshell or ends the command is the crude cut's, never the word's.
+    a="${a%%[)\};]*}"
+    case "$a" in
+      --abort|--quit) return 1 ;;
+      --continue) [ "$PS_RUN_SUB" = merge ] && return 1; word=" --continue" ;;
+      --skip) word=" --skip" ;;
+    esac
+  done
+  PS__ROUTE="git $PS_RUN_SUB$word"
 }
 
 # The ref a push should be judged AGAINST (claude-config#339). The upstream if there is one, then

@@ -3248,9 +3248,38 @@ with the merge still in progress, the merge commit does not exist when the gates
 them reads the commit the command is about to make as the branch's own work, every line main
 brought in included. `push-scope-notice.sh` refuses that one command, once, for every gate, and says
 to run the commit and the push as two commands, which the gates already judge correctly (#3062).
+`git merge --continue && git push` is the same command and is refused the same way (#3081): a
+`git merge --continue` is read as the commit it makes, by every push gate, through
+`ps_commit_in_chain`. Read as no commit, as it was, nothing folded the pending merge commit in, so a
+conflict resolution went out with no gate having read it. With a merge of any other branch in
+progress the gates now read that pending commit, as they do for `git commit`. It is the only
+spelling of `git merge` that concludes a merge in progress (measured on git 2.51.1).
 Reading the pending merge as a merge of its second parent was the other option, and was not taken:
 each gate reads a pending commit its own way, so it would have been one change per gate, and a gate
 added later would miss it without a word.
+
+A commit written inside brackets is read like any other (#3091): `(git commit -m x) && git push`
+and `x=$(git merge --continue) && git push` were read as no commit, because the pattern that finds
+where a git starts left out the opener of a subshell and of a command substitution, so the pending
+commit went out with no gate having read it.
+
+Six other git commands put commits on the branch that no gate can read before the command runs:
+`git rebase`, `git cherry-pick`, `git revert`, `git am`, a `git merge` of a named branch and
+`git pull`. Chained before a push, `git cherry-pick abc123 && git push`, every gate judged the range
+as it stood and said nothing of what was about to join it. `push-scope-notice.sh` refuses that
+command too, naming the route, with the same remedy: run it on its own, then push, and the commits
+are in the range the gates read (#3092). Each was measured in a throwaway repository on git 2.51.1
+to make at least one commit a push would send, the forms that continue one in progress and the forms
+that start one alike; a merge that only fast forwards makes none and still puts another branch's
+commits on this one. The forms that stage without committing (`-n`, `--no-commit`, `--squash`) are
+refused as well, since a `git commit` later in the command would take what they staged. Only
+`--abort` and `--quit` are let through, which make and stage nothing, and `git merge --continue`,
+which the gates read. A route counts only when a push follows it in the command, and only in command
+position, so a commit message that names one is not one. `git pull && git push` is refused whole,
+though a pull that only fast forwards sends nothing unread, because which it will be is not known
+before it fetches. Not covered, by this or by any gate: a command that moves the branch onto commits
+that already exist and pushes (`git checkout` of another branch, `git reset`), or stages by another
+route (`git apply --index`, `git stash pop`).
 
 The test judge counts the tests a branch pushed earlier, not only those in the push (#2153). On
 2026-11-03 a work branch pushed its failing database tests first and its migration and code in two
@@ -6271,7 +6300,11 @@ else `unresolved` with why, never empty and never safe; and `unread` (#2983, #30
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
 `$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
-every guard holds or refuses it rather than judging its words alone), of which files a command
+every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
+settings a command is run with, each `NAME=value` written in front of it or given to a runner before
+it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a
+shell's script, also given on each script run the write reader lists in `runs`, so a guard can see
+what a script reads from its environment, of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
@@ -7377,7 +7410,15 @@ command sets to a plain name is judged by that name, and `$PWD`, `$HOME`, `$OLDP
 name a folder, no file. mod-kit gives a `for` loop over plain words (an issue's title included, read
 whole and as each piece a split would make) as each of its words, and marks an argument whose every
 `$` is in single quotes or after a backslash `unexpanded` (a regex `'x$'`, prose `'costs $5'`),
-which holds no variable's value. Over this Mac's distinct Bash commands (2026-09-26 to 2026-10-30) a
+which holds no variable's value. Since #3070 an argument whose only expansions are the shell's old
+arithmetic over whole numbers (`"x\\$[0-9]"`, an escaped backslash before a bare dollar) is given
+as both texts a shell may hand on, the sum worked out (bash, zsh) and the word as typed (dash, ksh),
+each judged as the name it spells; a sum mod-kit does not work out is still held. Since #3088 a
+sum in the newer spelling (`"a|\\$((0-9))"`), which every shell works out, is given as that one
+text, and the guard reads `$((...))` as arithmetic, never as a command substitution
+(rules.ts `arithmeticMarked`): one holding a variable is held as a variable's value, and one holding
+a command substitution as a command's output. Over this Mac's
+distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
 dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
 would not apply to the file as it stands (its text missing, or there more than once without
@@ -7650,12 +7691,16 @@ mod-kit marks unread, refused with its reason (`eval`, a command a value names s
 which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
-Chrome call outside a tab the session created (recorded from its tabs_create_mcp result) or on a
+Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
+#3099 it may also close, and only close, a tab first listed in its tab group after its own click,
+typing, form fill or script in a tab it created, since a clicked link can open one, and never a tab
+that was in the group before or that appears with no such action behind it) or on a
 page off a test host (localhost,
 127.0.0.1, [::1], a name ending .localhost or .test, or a host the default branch's copy of the
 project's CLAUDE.md lists on its `Sleep mode test hosts:` line, each with a test label such as
 staging or qa before its last label), the page readers included, every action in a browser_batch
-after a click until a navigate re-reads the tab's host, and every Chrome tool reaching past those
+after a click until a navigate re-reads the tab's host (except, since #3107, closing that tab,
+which reaches no host and is judged as a close alone is), and every Chrome tool reaching past those
 tabs (recordings to disk, local file uploads, saved workflows, another browser), judged in
 `hooks/browser.ts` (#2064), Supabase and psql writes, a branch switch in a primary checkout, force
 pushes, branch deletes, and `claude-sync` send, sync,
@@ -7744,7 +7789,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261, #2585
+#1765, #1812, #2064, #2261, #2585, #3099, #3107
 
 </td></tr>
 <tr><td>
@@ -8134,11 +8179,33 @@ it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$
 trap whose text the shell expands as it is set, and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
 arithmetic names no command. So
-`bash tools/check-mods.sh payload/mods` is still held, though no longer for copying into a folder
+the text of `tools/check-mods.sh` still cannot be read as writing nothing in the folder it is
+handed, though no longer for copying into a folder
 of its own: it runs Claude Code and the TypeScript compiler through variables (`"$bin" plugin test
 "$d"`, `"$tsc"`), makes its folder from a template under `TMPDIR`, names each copy through another
 variable, runs inline perl whose writes its words do not name, and sources one file by a command's
 output, each of which keeps the hold on its own (measured 2026-11-16).
+One script is let through by name instead (#3022, signed off by Dan, 2026-11-16, for this script
+only): `bash tools/check-mods.sh <mods folder>`, or that path run directly, in a checkout of
+danwright32/claude-config. `hooks/named.ts` takes the run out of what the command is read as
+writing when all of this holds: the script is `tools/check-mods.sh` at the root of its checkout,
+the checkout is a clone of that repository, it is handed one folder that is on the disk, the
+command sets no value (it holds no equals sign, and it runs the script once with nothing else but
+a `cd` before it and readers its output is piped into, such as `2>&1 | tail -n 40`,
+since the script takes the programs it runs and
+where it keeps its copies and logs from the environment), and neither the script nor a library it
+sources has changed since the checkout left the default branch (`git diff --quiet --merge-base`).
+Anything else is judged as before: a script of that name in another repository or elsewhere in the
+checkout, a changed copy, a second argument, a file or a pattern in place of the folder, another
+shell, the file its output is redirected into, and the script chained with any other command, in a
+loop or in a function, which is judged with that command as before. Each such run is one
+`named-reader` line in the log, `passed` or `judged` with why.
+`tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
+throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
+ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
+adds), and red when the script sources a file the list
+in `named.ts` lacks. What the real claude command, the compiler and each mod's own tests write is
+not proved there, as it is not judged when `claude plugin test` is typed directly.
 A script in another language (node, python, ruby) whose only part
 mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
 `importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
@@ -8413,6 +8480,10 @@ and the engine's words, when `claude` answers that hooks modules are turned off 
 (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
 set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
 exit code and the last lines of output instead of an empty reason.
+Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
+mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
+exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
+mods inside it, found none, and printed "0 mods checked" with exit 0.
 A refused or failed mod's line carries three verdict lines at most, so the engine's whole output is
 kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (outside the config, which
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read

@@ -355,6 +355,10 @@ test('in a python program, a mention in a comment or in a sentence is text, and 
     // Markdown backticks in a sentence, and a shell substitution held as text: no quote in python.
     "open('x.md','w').write('Rules live in `~/.claude/CLAUDE.md` for every session.')",
     "open('x.sh','w').write('echo `cat ~/.claude/CLAUDE.md`')",
+    // #3082: a quoted sentence inside a longer string ends at its own quote, which closes neither
+    // the string holding it nor a path; it was read as a path, and a measuring script was held.
+    `md = '''\nnames = {"C": "(c) Incident narratives that could move to LESSONS.md"}\n'''\nopen(p, "w").write(s)`,
+    "s = '''\nsee 'the rules in CLAUDE.md' first\n'''\nopen(p, 'w').write(s)",
   ])
     expect(`${code}: ${await left(code)}`).toBe(`${code}: `)
   // Paths: kept.
@@ -374,6 +378,11 @@ test('in a python program, a mention in a comment or in a sentence is text, and 
     [`s=r'it\\'s here'\nopen('${'/Users'}/dan/.claude/AGENTS.md','a')`, '~/.claude/AGENTS.md'],
     // A comment that is really inside a string is no comment.
     [`s='# x'; open('${'/Users'}/dan/.claude/CLAUDE.md','a')`, '~/.claude/CLAUDE.md'],
+    // #3082: the quote a path ends at still makes it one when it closes the path's own string, a
+    // space in the folder's name included, or a quoted path inside code held as text.
+    [`open('${'/Users'}/dan/My Notes/CLAUDE.md','a')`, 'Notes/CLAUDE.md'],
+    [`exec("open('${'/Users'}/dan/My Notes/CLAUDE.md','a')")`, 'Notes/CLAUDE.md'],
+    ["new='''\nprintf '# rules' > '/tmp/repo/my dir/CLAUDE.md'\n'''", 'dir/CLAUDE.md'],
   ])
     expect(`${code}: ${await left(code as string)}`).toBe(`${code}: ${file}`)
 })

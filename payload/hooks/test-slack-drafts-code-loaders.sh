@@ -1386,10 +1386,15 @@ echo "slack drafts only: a script that uses os only to read is one the gate has 
 # use: the names that read a file, a path or the environment (OS_READS) pass, and any other use of
 # os (a program started, a file written, os handed on or renamed) is refused as before, as is
 # anything the gate cannot follow. The file handed below is the real rules file beside this hooks
-# folder.
-RULES="$(cd "$DIR/.." && pwd)/CLAUDE.md"
+# folder, copied, with the Slack rule line that named chat.postMessage put back on its end: #3084
+# (the #2575 trim) took that line out, so the real file alone no longer names an endpoint, and every
+# case below would pass for that reason instead of the one it measures. The control just after
+# checks the copy still names one.
 D85="$T/d3085"
-mkdir -p "$D85"
+mkdir -p "$D85/rules"
+RULES="$D85/rules/CLAUDE.md"
+cp "$(cd "$DIR/.." && pwd)/CLAUDE.md" "$RULES"
+printf '%s\n' '- Never post another way (`curl` to `chat.postMessage`, a webhook, a script) to get around it.' >> "$RULES"
 printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$D85/msg.json"
 run_85() { run_raw "$(payload Bash "$(bash_input "$1")" "$D85")"; }
 printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(open(sys.argv[1]).read()[:40])' > "$D85/sends.py"
