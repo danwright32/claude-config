@@ -6255,11 +6255,11 @@ else `unresolved` with why, never empty and never safe; and `unread` (#2983, #30
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
 `$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
-every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the settings
-a command is run with, each `NAME=value` written in front of it or given to a runner before it
-(`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a shell's
-script, also given on each script run the write reader lists in `runs`, so a guard can see what a
-script reads from its environment, of which files a command
+every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
+settings a command is run with, each `NAME=value` written in front of it or given to a runner before
+it (`TMPDIR=x bash s.sh`, `env TMPDIR=x bash s.sh`), after its shell's own for a command in a
+shell's script, also given on each script run the write reader lists in `runs`, so a guard can see
+what a script reads from its environment, of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
 `perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
