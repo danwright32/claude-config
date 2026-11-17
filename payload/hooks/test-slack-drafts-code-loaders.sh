@@ -1689,6 +1689,110 @@ run_02 "python3 reads-renamed.py $RULES"
 allowed "#3102 and handed the real rules file"
 run_02 "python3 -c 'import json, sys; j = json; print(len(j.loads(open(sys.argv[1]).read())))' msg.json"
 allowed "#3102 the control: code given inline that renames a module only to read passes"
+# The from import check runs for every module inline code may import, the ones it may import for its
+# files (errno, io, stat, tempfile) included (the lessons review of PR #3130). It sat behind the line
+# that passes those four, so code a shell script writes inline could write `from tempfile import os`
+# and then os.system(...): measured through the gate at 055ac70, both forms below passed, exit 0 and
+# nothing said. Neither can run on a Python measured (3.9.6, 3.11.16, 3.14.4): none of the four holds
+# a module under a public name but io.abc, which is inert, so the import stops with ImportError before
+# the next line. The gate still read a script that names os.system as one unable to act, so the check
+# now comes first. os keeps its own line: `from os import stat` is os's call, not the stat module.
+cat > "$D02/inline-from-files.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import sys
+from tempfile import os
+os.system("bash " + sys.argv[1])
+PY
+SH
+cat > "$D02/inline-from-files-as.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import sys
+from io import os as tool
+tool.system("bash " + sys.argv[1])
+PY
+SH
+for imported in inline-from-files.sh inline-from-files-as.sh; do
+  run_02 "bash $imported msg.json"
+  read_refused "#3102 inline code importing a module out of one it may import for its files is refused: $imported"
+done
+run_02 "bash inline-from-files.sh msg.json"
+says "#3102 in the words the same import gets from any other module" "imports os from tempfile, which reaches the os module through tempfile"
+cat > "$D02/inline-files.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import sys
+from errno import ENOENT
+from io import StringIO, abc
+from os import path, stat
+from stat import S_ISDIR
+from tempfile import gettempdir
+print(StringIO(open(sys.argv[1]).read()).getvalue()[:20], S_ISDIR(stat(gettempdir()).st_mode), path.basename(sys.argv[1]), ENOENT)
+PY
+SH
+run_02 "bash inline-files.sh msg.json"
+allowed "#3102 the control: inline code importing those modules' own names, and os's stat and path, still passes"
+
+# The reading asks the standard library module itself, so a judgement it took part in rests on where
+# Python finds that module and on what its file holds. Both are asked through the stand ins the
+# judgement cache records (lib/judgement-cache.py), and a kept judgement is not used once either has
+# changed. Measured through the gate at 055ac70, where the module was imported by name: "its
+# judgement is kept" failed for both scripts below (the cache traced "not stored: importlib.import_module,
+# which the recorder does not know"), so no call whose script renamed a module was ever answered
+# from the cache; and the file of the same name in front of the standard library's was run inside
+# the gate. The cache's own checks of this are in test-judgement-cache.sh.
+D02C="$T/d3102-kept"
+mkdir -p "$D02C/w" "$D02C/pp" "$D02C/other"
+cp "$D02/msg.json" "$D02C/w/msg.json"
+printf '%s\n' 'import numbers, sys' 'n = numbers' 'print(isinstance(len(open(sys.argv[1]).read()), n.Integral))' > "$D02C/w/counts.py"
+printf '%s\n' 'import cmath, sys' 'q = cmath' 'print(q.pi, len(open(sys.argv[1]).read()))' > "$D02C/w/compiled.py"
+# run_02c <command>: judged with a cache of its own, traced, with $D02C/pp on the gate's own path.
+run_02c() {
+  : > "$D02C/trace"
+  PYTHONPATH="$D02C/pp" SLACK_GATE_CACHE_DIR="$D02C/cache" SLACK_GATE_CACHE_TRACE="$D02C/trace" \
+    run_raw "$(payload Bash "$(bash_input "$1")" "$D02C/w")"
+}
+# traced_02 <what> <start> [<also>]: a trace line starts with <start> (so "stored" is never "not
+# stored") and, where given, holds <also>.
+traced_02() { if awk -v p="$2" -v q="${3:-}" 'index($0, p) == 1 && (q == "" || index($0, q)) { f = 1 } END { exit !f }' "$D02C/trace"
+              then check "$1" ok; else check "$1" "the cache traced: $(tr '\n' '|' < "$D02C/trace")"; fi; }
+run_02c "python3 counts.py msg.json"
+allowed "#3102 a script that renames a module written in Python, only to read, passes"
+traced_02 "#3102 its judgement is kept" "stored"
+run_02c "python3 counts.py msg.json"
+allowed "#3102 judged again with nothing changed, it passes"
+traced_02 "#3102 and is answered from the cache" "hit"
+run_02c "python3 compiled.py msg.json"
+allowed "#3102 a script that renames a compiled module, only to read, passes"
+traced_02 "#3102 its judgement is kept too" "stored"
+run_02c "python3 compiled.py msg.json"
+traced_02 "#3102 and is answered from the cache" "hit"
+# A file of the module's name in a folder the command's own path holds too: the gate's placing of
+# the import looked there, so the kept judgement is not used (by whichever of its recorded answers
+# is asked first, here that file test).
+printf '%s\n' 'Integral = int' > "$D02C/pp/numbers.py"
+run_02c "python3 counts.py msg.json"
+traced_02 "#3102 once a file of the module's name is on the path, the kept judgement is not used" "miss: " "answers differently now"
+rm -f "$D02C/pp/numbers.py"
+run_02c "python3 counts.py msg.json"
+allowed "#3102 with that file gone, the script passes as before"
+# The same where the command sets a path of its own, so the only thing that looks in the gate's
+# folder is the reading's own question, where does Python find numbers. Kept while the answer is the
+# standard library's; not used once it is that file; and the file, which is not the standard
+# library's, is not run to answer. It says so itself if it is.
+run_02c "PYTHONPATH=$D02C/other python3 counts.py msg.json"
+allowed "#3102 the same script run with a path of its own passes"
+traced_02 "#3102 its judgement is kept" "stored"
+run_02c "PYTHONPATH=$D02C/other python3 counts.py msg.json"
+traced_02 "#3102 and is answered from the cache" "hit"
+printf '%s\n' 'import sys' "open('$D02C/ran', 'w').write('ran')" 'Integral = int' > "$D02C/pp/numbers.py"
+run_02c "PYTHONPATH=$D02C/other python3 counts.py msg.json"
+traced_02 "#3102 once Python would find the module in another file, the kept judgement is not used" "miss: find_spec" "answers differently now"
+allowed "#3102 judged afresh, the script still passes"
+if [ -e "$D02C/ran" ]; then check "#3102 and the gate does not run that file" "the gate ran $D02C/pp/numbers.py"
+else check "#3102 and the gate does not run that file" ok; fi
+rm -f "$D02C/pp/numbers.py"
 
 echo
 

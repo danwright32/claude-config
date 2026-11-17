@@ -24,20 +24,31 @@ follow() reads two things from a script's syntax tree:
 
 Whether a chain is a module is not guessed from its name: datetime.time is a class, os.path a
 module, and a sort key such as os.path.getsize a function, which every other script hands on. So
-the standard library module is asked. Only a module py_acts already holds to be inert is imported
-here (importing one does nothing, which is what the list means), from the standard library's own
-folder, and it is read through vars() and a class's own dictionaries, so no property or descriptor
-of it runs. What the answer cannot say counts as follows: a module of the script's own is a module
-with attributes that are not read (UNREAD), and an attribute of one, or one this Python does not
-have, is not known to be a module, so it is followed through a binding and passes when handed on.
-That last part is what is not covered: a module held by one of the script's own modules, handed on
-rather than renamed.
+the standard library module is asked. Only a module py_acts already holds to be inert is asked
+(running one does nothing, which is what the list means), only where Python finds it in the
+standard library's own folder or in the interpreter itself, and it is read through vars() and a
+class's own dictionaries, so no property or descriptor of it runs. What the answer cannot say
+counts as follows: a module of the script's own is a module with attributes that are not read
+(UNREAD), and an attribute of one, or one this Python does not have, is not known to be a module,
+so it is followed through a binding and passes when handed on. That last part is what is not
+covered: a module held by one of the script's own modules, handed on rather than renamed.
+
+WHAT THIS READS FROM THE DISK, AND HOW (stdlib, load). The gate keeps the judgement of a call it
+allowed and uses it again only while every answer the disk gave it is the same
+(lib/judgement-cache.py), so every disk read here goes through the names that file's install()
+replaces in this namespace (importlib, os and open), and nothing is imported by name, which would
+read the disk around them (test-judgement-cache.sh fails on one). A module's namespace rests on two
+answers: which file Python finds the module in (importlib.util.find_spec) and what that file holds
+(open). Both are asked for every module asked here by name, loaded already or not, so a kept
+judgement is not used once a file shadows the module or its own file has changed. A module this
+run has not loaded is then run from the very bytes just read, as the gate loads its own libraries
+(load_lib), so nothing can change between the bytes recorded and the bytes run. What that cannot
+cover is said in load.
 """
 import ast
-import importlib
+import importlib.util
 import os
 import sys
-import types
 
 UNREAD = object()   # a module whose attributes are not read here: one of the script's own
 UNKNOWN = object()  # reached from a module, and not known to be one or not
@@ -46,34 +57,109 @@ NOTHING = object()  # reached from no module at all
 
 SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 FOLLOWED_LISTS = (ast.Tuple, ast.List, ast.Set)
-STDLIB_DIR = os.path.dirname(os.path.realpath(os.__file__))
+MODULE = type(sys)
+# The standard library's folder as this Python names it. Its real path is asked when a module is
+# (in_stdlib), not here: this line runs before a judgement's stand ins are in place.
+STDLIB_DIR = os.path.dirname(os.__file__)
+INTERPRETER = ("built-in", "frozen")  # where a module that is part of the interpreter is "found"
 _modules = {}
 
 
+def in_stdlib(path):
+    """Whether the file at path is inside the standard library's own folder, each by its real path."""
+    return os.path.realpath(path).startswith(os.path.realpath(STDLIB_DIR) + os.sep)
+
+
+def file_of(spec):
+    """The file a module's spec names, or None for a module that has none: part of the interpreter
+    (which the cache's key holds), or a package with no file of its own."""
+    return spec.origin if isinstance(spec.origin, str) and spec.origin not in INTERPRETER else None
+
+
+def read(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def load(name, spec, data):
+    """The module spec names, which this run has not loaded, loaded as an import would load it.
+
+    A module written in Python is run from data, the bytes of its file as found() read them, so
+    its own file is never read around the stand ins. Any other (a compiled extension, or one built
+    into the interpreter) is made by its own loader: a compiled file is read by the system's
+    loader, which nothing here can stand in for, so its bytes are the ones found() read a moment
+    before, and a kept judgement asks for them again.
+
+    The module's own imports run as imports do. One that is loaded already costs nothing. One
+    written in Python that is not is read by Python itself, which marks a judgement being kept as
+    not whole, so it is not kept. A compiled or built in one arrives with no event that marks
+    anything, so every module that arrived while this one loaded is asked the same two questions
+    afterwards (where Python finds it, what its file holds), and is recorded as this one is."""
+    before = set(sys.modules)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        if data is not None and spec.origin.endswith(".py"):
+            exec(compile(data, spec.origin, "exec", dont_inherit=True), vars(mod))
+        else:
+            spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    finally:
+        for other in sorted(set(sys.modules) - before - {name}):
+            try:
+                arrived = importlib.util.find_spec(other)
+                if arrived is not None and file_of(arrived):
+                    read(file_of(arrived))
+            except Exception:
+                pass  # asked, and answered with that failure, which is recorded as its answer
+    return sys.modules.get(name, mod)  # a module may put another in its own place, as under an import
+
+
+def found(name):
+    """stdlib(name), worked out: asked where Python finds it and what its file holds, and loaded
+    where this run has not loaded it. A module found nowhere, or in a file that is not the standard
+    library's (one of the same name in front of it on the path), is neither read nor run here."""
+    parent, _, child = name.rpartition(".")
+    if parent and not isinstance(stdlib(parent), MODULE):
+        return UNREAD
+    spec = importlib.util.find_spec(name)
+    if spec is None:
+        return UNREAD
+    data = None
+    if spec.origin not in INTERPRETER:
+        if not file_of(spec) or not in_stdlib(spec.origin):
+            return UNREAD
+        data = read(spec.origin)
+    mod = sys.modules.get(name)
+    if mod is None:
+        mod = load(name, spec, data)
+        if parent:
+            setattr(sys.modules[parent], child, mod)  # as an import binds a submodule on its package
+    return mod if isinstance(mod, MODULE) else UNREAD
+
+
 def stdlib(name):
-    """The standard library module name, imported once in this run, or UNREAD where it cannot be
-    had from the standard library's own folder: it is still a module."""
+    """The standard library module name, asked once in this run, or UNREAD where it cannot be had
+    from the standard library's own folder or the interpreter: it is still a module."""
     if name not in _modules:
         try:
-            mod = importlib.import_module(name)
-            file = getattr(mod, "__file__", None)
-            if file and not os.path.realpath(file).startswith(STDLIB_DIR + os.sep):
-                mod = UNREAD
+            _modules[name] = found(name)
         except Exception:
-            mod = UNREAD
-        _modules[name] = mod
+            _modules[name] = UNREAD
     return _modules[name]
 
 
 def is_module(value):
-    return value is UNREAD or isinstance(value, types.ModuleType)
+    return value is UNREAD or isinstance(value, MODULE)
 
 
 def step(value, attr):
     """What value.attr holds, read without running anything of value's."""
     if value is UNREAD or value is UNKNOWN:
         return UNKNOWN
-    if isinstance(value, types.ModuleType):
+    if isinstance(value, MODULE):
         return vars(value).get(attr, UNKNOWN)
     if isinstance(value, type):
         for cls in type.mro(value):

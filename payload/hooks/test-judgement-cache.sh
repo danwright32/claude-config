@@ -10,7 +10,10 @@
 #     know (an unclassified os attribute, an open from another route) marks the record not whole;
 #   - fail closed: a tainted record, a read that changed while judging, and an unreadable entry are
 #     never a kept allow;
-#   - the size bound.
+#   - the size bound;
+#   - a standard library module the gate's reading of a Python script asks (lib/py-aliases.py, #3102):
+#     where Python finds it and what its file holds are recorded, and a kept judgement is not used
+#     once either has changed.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
@@ -586,6 +589,129 @@ print("; ".join(bad) or "ok")
 PY
 out="$(env -u SLACK_GATE_CACHE_DIR PYTHONHASHSEED=0 python3 -B "$T/parses.py" "$DIR/slack_drafts_only_gate.py" "$T/work" 2>&1)"
 check "a parse is kept by its text's contents, given back exactly, and a changed or forged one is a miss" "$out"
+
+echo
+echo "judgement cache: a standard library module the script reading asks is found and read through the stand ins (#3102)"
+# lib/py-aliases.py asks a standard library module what one of its names holds (whether glob.os is a
+# module), so a judgement it took part in rests on two answers from the disk: which file Python finds
+# that module in, and what the file holds. It asks both through the stand ins (importlib.util.find_spec
+# and open) and, for a module this run has not loaded, runs it from the very bytes it read, as the
+# gate loads its own libraries. So both are recorded, and a kept judgement is not used once either
+# has changed. Run against the library as it stood at 055ac70, which imported the module with
+# importlib.import_module: the first check failed, the import's own read of the file having marked
+# the record, so nothing was kept (the through the gate cases are in test-slack-drafts-code-loaders.sh).
+# A test cannot change a real standard library module's file, so the folder taken for the standard
+# library's is a throwaway one, on the path behind an empty folder. Each look is a new process, as
+# each run of the gate is: a module the asking process has loaded is found in memory, not on the disk.
+cat > "$T/alias.py" <<'PY'
+import ast, importlib.util, os, sys
+gate_path, work, what = sys.argv[1], sys.argv[2], sys.argv[3]
+front, lib = os.path.join(work, "alias-front"), os.path.join(work, "alias-lib")
+sys.path[:0] = [front, lib]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+jc = gate._cache
+cache, trace = os.path.join(work, "alias-cache"), os.path.join(work, "alias-trace")
+os.environ["SLACK_GATE_CACHE_TRACE"] = trace
+open(trace, "w").close()
+if what == "look":
+    print("hit" if jc.lookup(cache, "alias") else open(trace).read().strip() or "a miss the cache did not trace")
+    sys.exit(0)
+bad = []
+def expect(what, ok):
+    if not ok:
+        bad.append(what)
+al = [m for m in gate.LIBS if m.__name__ == "py_aliases"][0]
+spaces = [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc]
+def judged(text, follow):
+    """The record of one reading of text, and what the reading said."""
+    rec = jc.Recorder()
+    jc.install(rec, spaces)
+    said = follow(list(ast.walk(ast.parse(text))), set())
+    return rec, said
+
+# A real standard library module the gate loaded for itself is asked the same two questions, though
+# nothing of it is read from the disk to answer: the next run loads it from wherever it is then.
+glob_file = sys.modules["glob"].__spec__.origin
+rec, (renamed, phrase) = judged("import glob\nq = glob\ngo(glob.os)\n", al.make(frozenset({"glob"})))
+rec.closed = True
+expect("a module already loaded is read as it stands (%r, %r)" % (sorted(renamed), phrase),
+       renamed == {"q"} and phrase == "puts the module glob.os where the gate does not follow it")
+expect("with where Python finds it and what its file holds recorded, and the record whole (%r, %r)" % (glob_file, rec.tainted),
+       rec.tainted is None and rec.reads.get(("find_spec", "glob")) == ["ok", ["glob", glob_file]]
+       and ("read", glob_file) in rec.reads)
+
+al.STDLIB_DIR = lib
+follow = al.make(frozenset({"jcmod", "jcdep", "jcsource"}))
+
+# A module whose own imports are all loaded: read whole, with nothing left unrecorded.
+mod_file = os.path.join(lib, "jcmod.py")
+rec, (renamed, phrase) = judged("import jcmod\nq = jcmod\ngo(jcmod.os, jcmod.size)\n", follow)
+jc.store(cache, "alias", rec)  # which closes the record: nothing this test does below is the judgement's
+expect("the record is whole: %r" % rec.tainted, rec.tainted is None)
+expect("the module was read: the name it is given is followed (%r)" % sorted(renamed), renamed == {"q"})
+expect("and what its names hold is known, jcmod.os a module and jcmod.size not (%r)" % phrase,
+       phrase == "puts the module jcmod.os where the gate does not follow it")
+expect("where Python finds the module is recorded (%r)" % (rec.reads.get(("find_spec", "jcmod")),),
+       rec.reads.get(("find_spec", "jcmod")) == ["ok", ["jcmod", mod_file]])
+expect("and so is what its file holds", rec.reads.get(("read", mod_file), [None])[0] == "ok")
+expect("the judgement is kept (%s)" % open(trace).read().strip(), os.path.exists(os.path.join(cache, "alias.json")))
+
+# A module that imports a compiled one this run had not loaded: Python loads that one with no event
+# the audit hook marks a record for, so it is asked the same two questions once it has arrived.
+compiled = next((n for n in ("cmath", "array", "unicodedata") if n not in sys.modules), None)
+if compiled is None:
+    print("SUITE-PART-UNMEASURED a compiled module arriving while another loads, because this run had already loaded cmath, array and unicodedata")
+else:
+    open(os.path.join(lib, "jcdep.py"), "w").write("import %s as tool\n" % compiled)
+    rec, (renamed, phrase) = judged("import jcdep\nr = jcdep\ngo(jcdep.tool)\n", follow)
+    rec.closed = True
+    expect("a module that imports a compiled one is read (%r, %r)" % (sorted(renamed), phrase),
+           renamed == {"r"} and phrase == "puts the module jcdep.tool where the gate does not follow it")
+    expect("the record is still whole: %r" % rec.tainted, rec.tainted is None)
+    expect("and where Python found the compiled module is recorded (%r)" % sorted(k for k in rec.reads if k[0] == "find_spec"),
+           ("find_spec", compiled) in rec.reads)
+    origin = rec.reads.get(("find_spec", compiled), ["", ["", ""]])[1][1]
+    expect("with what its file holds, where it is a file (%r)" % origin,
+           origin == "built-in" or ("read", origin) in rec.reads)
+
+# A module that imports one written in Python that this run had not loaded: Python reads that file
+# itself, outside the stand ins, which marks the record, so the judgement is not kept.
+source = next((n for n in ("colorsys", "sndhdr", "nturl2path", "this") if n not in sys.modules
+               and importlib.util.find_spec(n) is not None), None)
+if source is None:
+    print("SUITE-PART-UNMEASURED a Python module arriving while another loads, because none of the ones tried is there to load")
+else:
+    open(os.path.join(lib, "jcsource.py"), "w").write("import %s as tool\n" % source)
+    rec, (renamed, phrase) = judged("import jcsource\ns = jcsource\n", follow)
+    rec.closed = True
+    expect("a module importing one Python reads for itself is still read (%r)" % sorted(renamed), renamed == {"s"})
+    expect("and that read marks the record, so it is not kept: %r" % rec.tainted,
+           bool(rec.tainted) and "open" in rec.tainted)
+print("; ".join(bad) or "ok")
+PY
+mkdir -p "$T/work/alias-front" "$T/work/alias-lib"
+printf '%s\n' 'import os' '' '' 'def size(p):' '    return os.path.getsize(p)' > "$T/work/alias-lib/jcmod.py"
+alias_py() { env -u SLACK_GATE_CACHE_DIR PYTHONHASHSEED=0 python3 -B "$T/alias.py" "$DIR/slack_drafts_only_gate.py" "$T/work" "$1" 2>&1; }
+out="$(alias_py judge)"
+while [[ "$out" == SUITE-PART-UNMEASURED* ]]; do echo "${out%%$'\n'*}"; out="${out#*$'\n'}"; done
+check "a reading that asked a module is kept, with where Python finds the module and what its file holds recorded" "$out"
+# looks <what> <how the look's answer must start> [<what it must also hold>]
+looks() {
+  local got; got="$(alias_py look)"
+  case "$got" in "$2"*"${3:-}"*) check "$1" ok ;; *) check "$1" "the look said: $got" ;; esac
+}
+looks "looked up in another run with nothing changed, the kept judgement is used" "hit"
+cp "$T/work/alias-lib/jcmod.py" "$T/work/jcmod.was"
+printf '%s\n' 'import glob as size' >> "$T/work/alias-lib/jcmod.py"
+looks "once the module's file holds something else, it is not used" "miss: read" "answers differently now"
+cp "$T/work/jcmod.was" "$T/work/alias-lib/jcmod.py"
+looks "with the file as it was, it is used again" "hit"
+printf '%s\n' 'size = None' > "$T/work/alias-front/jcmod.py"
+looks "once Python would find the module in another file, it is not used" "miss: find_spec" "answers differently now"
+rm -f "$T/work/alias-front/jcmod.py"
+looks "with that file gone, it is used again" "hit"
 
 echo
 echo "passed: $pass, failed: $fail"

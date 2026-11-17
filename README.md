@@ -3916,6 +3916,18 @@ loop over `(glob,)`, a parameter's default and `from glob import os`. A module p
 does not follow it (an argument, a list, an attribute, a class body, a return) counts as the
 script being able to act; whether what is handed on is a module is asked of the standard library
 module itself, so `key=os.path.getsize` is a function and passes while `go(os.path)` does not.
+Asking it is two answers from the disk (where Python finds the module, what its file holds), and
+both go through the stand ins the judgement cache records (`importlib.util.find_spec` and `open`),
+with a module this run has not loaded run from the very bytes read, as the gate loads its own
+libraries: so a kept judgement is not used once a file shadows the module or its file has changed,
+and a file of the module's name in front of the standard library's is neither read nor run. A
+module that in turn imports one written in Python that is not loaded yet is read by Python
+itself, which leaves that judgement unkept: measured 2026-11-16 on Python 3.14.4, of the 21 inert
+modules the gate does not load for itself, 12 leave the record whole (typing, textwrap, csv,
+datetime, pprint, string, heapq, numbers, `__future__` and the compiled array, cmath and
+unicodedata) and 9 do not (argparse, calendar, dataclasses, decimal, difflib, fractions, html,
+statistics, zoneinfo). Running a module from its source costs its compile, 15 ms for typing
+against 2 ms from its cached bytecode, once per judgement that asks it.
 Measured 2026-11-16 over this project's session records, with the gate's own reading before and
 after: of 4,133 distinct Python texts (inline code, scripts written, scripts run), 994 passed
 before and the same 994 pass after. Not followed: a module held by one of the script's own

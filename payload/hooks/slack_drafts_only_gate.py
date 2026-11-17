@@ -6445,13 +6445,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     continue
                 if module == "sys" and "path" in names:
                     return "changes where Python finds modules (sys.path)"
-                if (not writes and module in PY_FILES) or (module == "os" and all(n in os_may for n in names)):
-                    continue
-                if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
+                if module == "os" and all(n in os_may for n in names):
+                    continue  # os's own calls by name: `from os import stat` is not the stat module
+                if not (not writes and module in PY_FILES) and \
+                        module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
                         not all(f"{module}.{n}" in PY_INERT for n in names) and not self.py_inert_unless(module, text):
                     return f"imports {module}, {unknown}"
                 # `from glob import os` is glob.os written as an import (claude-config#3102). sys
-                # holds no module but sys.modules, and `from sys import platform` is a string.
+                # holds no module but sys.modules, and `from sys import platform` is a string. A
+                # module inline code may import for its files (PY_FILES) is read here like any other.
                 for n in names:
                     if module != "sys" and n in stdlib and n not in PY_INERT and f"{module}.{n}" not in PY_INERT:
                         return f"imports {n} from {module}, which reaches the {n} module through {module}"
