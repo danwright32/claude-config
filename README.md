@@ -8432,6 +8432,10 @@ and the engine's words, when `claude` answers that hooks modules are turned off 
 (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
 set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
 exit code and the last lines of output instead of an empty reason.
+Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
+mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
+exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
+mods inside it, found none, and printed "0 mods checked" with exit 0.
 A refused or failed mod's line carries three verdict lines at most, so the engine's whole output is
 kept too, one file per failure in `~/.cache/claude-config/mod-test-failures` (outside the config, which
 syncs), and the line ends `whole output kept in <file>`, so a failure seen once can still be read

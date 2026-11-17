@@ -1,5 +1,5 @@
 #!/bin/bash
-# check-mods.sh <mods dir>: hold every mod in a folder to what Claude Code itself accepts
+# check-mods.sh <mods dir | one mod's dir>: hold every mod in a folder to what Claude Code itself accepts
 # (claude-config#606). A mod is a folder holding .claude-plugin/plugin.json. Each one is run through
 # `claude plugin validate`, and through `claude plugin test` when it carries any *.test.ts or
 # *.test.tsx of its own. Both commands' exit codes were measured on 2.1.288 before this relied on
@@ -7,7 +7,7 @@
 # a failing test.
 #
 # Exit codes, each distinct so a caller can never read one as another (L11, L53):
-#   0  every mod passed (the count is printed, so zero mods is visibly zero, L98)
+#   0  every mod passed (the count is printed)
 #   1  at least one mod failed, each named with the engine's reason
 #   2  the mods folder does not exist
 #   3  UNMEASURED: mods are present but there is no claude command to ask (L411, L490)
@@ -15,6 +15,8 @@
 #      rollout switch, cachedGrowthBookFeatures.tengu_plugin_hooks_modules in the user's
 #      .claude.json, or a setting such as disableAllHooks), which no test can set; the engine's
 #      words are printed (#740). A definite failure of another mod outranks it, as it outranks 3.
+#   5  no mods: the folder holds none, so nothing was checked, which is never a pass (#3105, L98).
+#      Handed one mod's own folder, it checks that mod alone, its dependencies read beside it.
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
@@ -74,14 +76,29 @@ fi
 dir="${dir%/}"
 
 mods=()
-for d in "$dir"/*/; do
-  [ -f "$d.claude-plugin/plugin.json" ] && mods+=("${d%/}")
-done
-n=${#mods[@]}
-if [ "$n" -eq 0 ]; then
-  echo "check-mods: 0 mods checked in $dir"
-  exit 0
+# One mod's own folder is checked as that one mod (#3105), its dependencies read from the folder
+# holding it, as they are for every mod in a mods folder. The path is made absolute first, so a mod
+# handed as "." still has a name, and logically, so a link to a mod (a folder of links, #2417) reads
+# its dependencies beside the link rather than beside the mod it points at.
+scope=""
+if [ -f "$dir/.claude-plugin/plugin.json" ]; then
+  one="$(cd "$dir" && pwd)"
+  dir="$(dirname "$one")"
+  mods=("$one")
+  scope="1 mod checked: $(basename "$one"), its dependencies read from $dir"
+else
+  for d in "$dir"/*/; do
+    [ -f "$d.claude-plugin/plugin.json" ] && mods+=("${d%/}")
+  done
 fi
+n=${#mods[@]}
+# A run that checks no mod is not a pass (#3105, L98): handed one mod's subfolder, or any folder with
+# no mod in it, "0 mods checked" and exit 0 read as a type check that passed.
+if [ "$n" -eq 0 ]; then
+  echo "check-mods: no mods in $dir, so nothing was checked. A mod is a folder holding .claude-plugin/plugin.json, and neither $dir nor any folder directly inside it holds one. To check one mod, hand it the mod's own folder (bash tools/check-mods.sh payload/mods/<mod>), or a folder of links to it and to each mod its plugin.json depends on." >&2
+  exit 5
+fi
+scope="${scope:-$n mods checked in $dir}"
 
 # Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638). Without one, Claude Code
 # generates it in the installed copy, and the sync sends that up to main as a local edit. This needs
@@ -592,7 +609,7 @@ for i in "${!mods[@]}"; do
   [ "${typefail[i]}" -eq 1 ] && continue
   echo "check-mods: $name ok (${types_of[i]})"
 done
-echo "check-mods: $n mods checked in $dir"
+echo "check-mods: $scope"
 # A Mac running another build than the pinned one is told so, and nothing else changes: every verdict
 # above came from the pinned types, so it is the same on every build (#953). cc_now was read above.
 if [ -n "$cc_now" ] && [ -n "$pinned_build" ] && [ "$cc_now" != "$pinned_build" ]; then
