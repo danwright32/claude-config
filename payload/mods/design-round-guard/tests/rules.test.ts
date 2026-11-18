@@ -68,6 +68,7 @@ import {
   afterVariable,
   shellVarPath,
   spelledThrough,
+  literalValue,
   tempRoots,
   ROUND_FILES,
   checked,
@@ -625,6 +626,20 @@ test('spelledThrough spells a word through the literal values the command gives 
     ['T=a; python -m tool -q "x * plain"', 'x * plain'],
   ])
     expect({ command, spelled: spelledThrough(command as string, word as string) }).toEqual({ command, spelled: undefined })
+})
+
+// Lessons review of #3144: a variable the command changes any other way than a whole literal
+// assignment holds another value, or none, when what it is handed runs, so it has no one value.
+test('literalValue reads only a variable every change of which is a whole literal assignment', () => {
+  expect(literalValue('T=txt; x "$T"', 'T')).toBe('txt')
+  expect(literalValue('export T=txt && x "${T}"', 'T')).toBe('txt')
+  for (const change of [
+    'T+=sx', 'for T in tsx; do true; done', 'for T; do true; done', 'read T < f', 'read -r a T < f',
+    'mapfile T < f', 'readarray -t T < f', 'printf -v T tsx', 'getopts ab T', 'unset T', 'unset -v T',
+    'let T=txt', 'let "T = 1"', '((T=txt))', '(( T += 1 ))', 'declare T', 'declare -i T=txt', 'local T',
+    'local T=txt', 'typeset T', 'readonly T=txt', 'export -n T', 'export T',
+  ])
+    expect({ change, value: literalValue(`T=txt; ${change}; x "$T"`, 'T') }).toEqual({ change, value: undefined })
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {

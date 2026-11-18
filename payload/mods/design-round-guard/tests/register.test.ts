@@ -5075,6 +5075,24 @@ test('#3144: a pattern spelled through a variable the command sets is judged by 
     `${CLI} -q "select * from $T"`,
     `T=a; T=.tsx; npx prettier --write "app/*$T"`,
     `T="$X.css"; npx prettier --write "app/*$T"`,
+    // Lessons review: a variable the command also changes another way than a whole literal
+    // assignment holds another value when the tool runs. mod-kit already places none of the first
+    // seven; the rest it placed, spelled from `txt`.
+    ...[
+      'T+=sx',
+      'for T in tsx; do true; done',
+      'read T < f',
+      'printf -v T tsx',
+      'unset T',
+      'mapfile T < f',
+      'getopts ab T',
+      'let T=txt',
+      '((T=txt))',
+      'declare T',
+      'local T',
+      'typeset T',
+      'export -n T',
+    ].map(change => `T=txt; ${change}; npx prettier --write "app/*.$T"`),
   ]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') || why.includes('could not check') }).toEqual({ command, held: true })

@@ -238,13 +238,22 @@ export const shellVarPath = (command: string, text: string, name: string): strin
  * literal (bare, or in quotes with no `$` or backtick in it), each the same and not empty. Undefined
  * for a variable set nowhere, set to different values, or set by any assignment that is not wholly
  * such a literal: one built another way (`R="$X/y"`, `R=$(pwd)`), or one the literal only begins
- * (`R=/a$X`, `R=/a"b"`), whose value is more than the literal.
+ * (`R=/a$X`, `R=/a"b"`), whose value is more than the literal. Undefined too where the command
+ * changes it any other way (lessons review of #3144), so it may hold another value, or none, when
+ * what it is handed runs: its name anywhere but in a use (`$R`, `${R}`) or such an assignment
+ * (`R+=x`, `for R in`, `read R`, `mapfile R`, `printf -v R`, `getopts ab R`, `unset R`, `declare R`,
+ * `export -n R`, even `export R`), or an assignment let, `((`, declare, local, typeset or readonly
+ * makes. A name the command only mentions in other text (`-q "select R"`) is read so too, and held.
  */
 export const literalValue = (command: string, v: string): string | undefined => {
   const starts = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=`, 'g'))].length
-  const whole = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))(?=$|[\\s;&|)])`, 'g'))]
+  const assignment = new RegExp(`(^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))(?=$|[\\s;&|)])`, 'g')
+  const whole = [...command.matchAll(assignment)]
   if (whole.length !== starts) return undefined
-  const values = new Set(whole.map(m => m[1] ?? m[2] ?? m[3] ?? ''))
+  const rest = command.replace(assignment, '$1').replace(new RegExp(`\\$\\{${v}\\}|\\$${v}(?!\\w)`, 'g'), '')
+  if (new RegExp(`(?<![\\w$])${v}(?!\\w)`).test(rest)) return undefined
+  if (new RegExp(`(?:\\b(?:let|declare|local|typeset|readonly)\\b|\\(\\()[^;&|\\n]*(?<![\\w$])${v}(?!\\w)`).test(command)) return undefined
+  const values = new Set(whole.map(m => m[2] ?? m[3] ?? m[4] ?? ''))
   const [value] = [...values]
   return values.size === 1 && value ? value : undefined
 }
