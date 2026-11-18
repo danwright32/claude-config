@@ -64,6 +64,10 @@
 #   FREE_SPACE_RECOVERY_GB    a rise larger than this means the disk recovered, so no rate
 #   FREE_SPACE_PERSIST_MIN    only a fall that has lasted this long is projected (default 30, #1754)
 #   FREE_SPACE_STATE_DIR      where the readings are kept
+#   FREE_SPACE_WARNINGS_DIR   where each warning's copy of its readings is kept (claude-config#3157;
+#                             default beside the readings when FREE_SPACE_STATE_DIR moves them, else
+#                             ~/.claude/state/free-space-warnings)
+#   FREE_SPACE_WARNING_KEEP_DAYS  how long each of those copies is kept (default 14, Dan's decision)
 #   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
 #   FREE_SPACE_SWAP_SHARE_PCT swap above this share of the disk names the memory holders (default 2)
 #   FREE_SPACE_SWAP_FULL_PCT  swap above this share of its own total is nearly full (default 90, #2559)
@@ -121,6 +125,7 @@ PERSIST_MIN="${FREE_SPACE_PERSIST_MIN:-30}"
 SWAP_SHARE_PCT="${FREE_SPACE_SWAP_SHARE_PCT:-2}"
 SWAP_FULL_PCT="${FREE_SPACE_SWAP_FULL_PCT:-90}"
 TOP_SECONDS="${FREE_SPACE_TOP_SECONDS:-2}"
+KEEP_DAYS="${FREE_SPACE_WARNING_KEEP_DAYS:-14}"
 # A reading higher than an earlier one by MORE than this is a recovery rather than jitter.
 # Every write and delete on a live machine moves the number a little, so a rule that refused
 # on any increase at all would refuse always, which is the same as deleting the warning.
@@ -142,7 +147,8 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS" \
                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB" \
                 FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
-                FREE_SPACE_SWAP_FULL_PCT:"$SWAP_FULL_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS"; do
+                FREE_SPACE_SWAP_FULL_PCT:"$SWAP_FULL_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS" \
+                FREE_SPACE_WARNING_KEEP_DAYS:"$KEEP_DAYS"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
 done
 
@@ -202,6 +208,193 @@ tmp="$STATE.$$"
 { printf '%s' "$kept"; printf '%s %s\n' "$now" "$free_bytes"; } > "$tmp" 2>/dev/null \
   && mv -f "$tmp" "$STATE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
 
+# ---------- a copy of the readings behind each warning (claude-config#3157) ----------
+# The readings above are kept for FREE_SPACE_WINDOW_HOURS only, so by the morning after a warning
+# the readings behind it are gone, and the 2026-11-16 night #3153 needed survived only because a
+# session happened to print the file into its transcript (L202: evidence on a retention schedule is
+# gone before the investigation arrives). So an exit 3 or 4 keeps a copy of the readings in the
+# window, with the verdict line, its exit code and the settings it was judged by, so it can be
+# replayed one reading at a time the way the #3153 tests replay that night.
+#
+# AT MOST ONE NEW FILE A WINDOW, WHATEVER THE DISK DOES. This runs on every prompt of every
+# session, so a file per warning would write dozens of near identical files an hour, and a file per
+# episode had no bound either: a disk hovering at the floor dips on every build, and a day crossing
+# it every 10 to 20 minutes wrote 58 files (the lessons review at baed01d, measured by the suite).
+# So a warning starts a new file only when the newest one for the volume began a whole window ago
+# or more (FREE_SPACE_WINDOW_HOURS, at least an hour): at most 4 a day and 57 in 14 days at the
+# default 6 hours. Every other warning ADDS to the newest file, appending the readings taken since
+# its last one (those with room between dips included, since they are behind the new verdict) and,
+# when the verdict is new rather than carrying on, a `# exit N at <epoch>: <verdict>` line. So no
+# reading behind any warning is lost: a file holds its first window and every reading after it, up
+# to its last warning. `<readings>.warning-copy` beside the readings records the file's start, its
+# first exit code, its last reading and the last verdict (0 once the disk has room); a restart
+# empties it with the readings, and the newest file in the folder is then found and added to.
+#
+# KEPT PER MAC, NOT IN THE TEMPORARY FOLDER. The readings live in TMPDIR, which macOS empties at
+# every restart (measured 2026-11-17: nothing in it older than the last boot), and a copy has to
+# outlive several. ~/.claude/state is per Mac and never synced. When FREE_SPACE_STATE_DIR moves the
+# readings, as every suite does, the copies follow them, so no suite writes into the real folder.
+#
+# DELETED AFTER FREE_SPACE_WARNING_KEEP_DAYS (14, Dan's decision on #3157), by the first run an hour
+# or more after the last sweep, healthy or not, so a copy does not outlive its keep just because no
+# warning came to sweep it. Only a file this check named is ever deleted: a regular file in its own
+# folder whose WHOLE name is the pattern it writes, the instant read from the name rather than from
+# the file. A file of any other name, a link or a folder is never touched. Hourly, not every run,
+# because the sweep is a bash loop over the folder: with 56 copies in it (57 is the most 14 days can
+# hold for one volume) it added about 5 ms to a 50 ms run, measured 2026-11-17, where reading when
+# it last ran adds nothing measurable. `<readings>.warnings-swept` records when; --report always sweeps,
+# since it names the newest copy.
+#
+# A COPY THAT CANNOT BE WRITTEN NEVER COSTS THE WARNING. A full disk is exactly when this runs: the
+# warning prints and keeps its exit code, the failure is one line, the episode record is removed so
+# the next warning tries again, and nothing the shell says on the way spills into the warning.
+if [ -n "${FREE_SPACE_WARNINGS_DIR:-}" ]; then WARN_DIR="$FREE_SPACE_WARNINGS_DIR"
+elif [ -n "${FREE_SPACE_STATE_DIR:-}" ]; then WARN_DIR="$STATE_DIR/warnings"
+elif [ -n "${HOME:-}" ]; then WARN_DIR="$HOME/.claude/state/free-space-warnings"
+else WARN_DIR=""; fi
+EPISODE="$STATE.warning-copy"
+COPY_RE='^free-space-warning-[A-Za-z0-9_]+-([0-9]{1,12})-exit[34]\.readings(\.tmp[0-9]+)?$'
+LATEST_COPY=""   # the newest copy kept for this volume, which --report names
+
+sweep_copies(){
+  [ -n "$WARN_DIR" ] && [ -d "$WARN_DIR" ] || return 0
+  local f name t latest_t=0 cutoff=$((now - KEEP_DAYS * 86400))
+  for f in "$WARN_DIR"/free-space-warning-*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $COPY_RE ]] || continue
+    t="${BASH_REMATCH[1]}"
+    if [ "$t" -lt "$cutoff" ]; then
+      rm -f "$f" 2>/dev/null
+    elif [ -z "${BASH_REMATCH[2]}" ] && [ "${name#free-space-warning-"$key"-}" != "$name" ] && [ "$t" -ge "$latest_t" ]; then
+      latest_t="$t"; LATEST_COPY="$f"
+    fi
+  done
+}
+SWEPT="$STATE.warnings-swept"
+_swept=""
+[ -f "$SWEPT" ] && { read -r _swept 2>/dev/null < "$SWEPT" || true; }
+if [ "$REPORT" -eq 1 ] || ! is_number "$_swept" || [ "$_swept" -gt "$now" ] || [ $((now - _swept)) -ge 3600 ]; then
+  sweep_copies
+  # Recorded only when there is a folder to sweep: without one the sweep is a single test.
+  [ -n "$WARN_DIR" ] && [ -d "$WARN_DIR" ] && printf '%s\n' "$now" 2>/dev/null > "$SWEPT"
+fi
+
+# A new file at most once this long, and never more often than hourly, so a window set to 0 cannot
+# turn the bound off.
+COPY_PERIOD=$((WINDOW_HOURS * 3600)); [ "$COPY_PERIOD" -ge 3600 ] || COPY_PERIOD=3600
+
+# The episode record: "<file start> <its first exit code> <its last reading> <last verdict>".
+# Anything else in it (a write cut short, an older shape) reads as no record.
+read_episode(){
+  EP_S=""; EP_R0=""; EP_L=""; EP_LR=""
+  [ -s "$EPISODE" ] || return 1
+  read -r EP_S EP_R0 EP_L EP_LR _ep_rest 2>/dev/null < "$EPISODE" || true
+  is_number "$EP_S" && is_number "$EP_L" && is_number "${EP_LR:-x}" || return 1
+  case "$EP_R0" in 3|4) return 0 ;; *) return 1 ;; esac
+}
+write_episode(){ printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" 2>/dev/null > "$EPISODE"; }
+
+# The disk has room: the next warning is a new verdict, so it gets its verdict line. One write, and
+# only on the change, so a healthy prompt pays a read of the record at most.
+end_episode(){
+  read_episode || return 0
+  [ "$EP_LR" = 0 ] || write_episode "$EP_S" "$EP_R0" "$EP_L" 0
+  return 0
+}
+
+# With no record (a restart emptied it), the newest file for this volume that began less than a
+# period ago is the one to add to, and its last reading is read from it. Runs only on a warning
+# with no record, so its loops cost nothing on an ordinary prompt.
+adopt_copy(){
+  [ -n "$WARN_DIR" ] && [ -d "$WARN_DIR" ] || return 1
+  local f name t best="" best_t=-1 r0="" a b
+  for f in "$WARN_DIR"/free-space-warning-"$key"-*.readings; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    name="${f##*/}"
+    [[ "$name" =~ $COPY_RE ]] && [ -z "${BASH_REMATCH[2]}" ] || continue
+    t="${BASH_REMATCH[1]}"
+    [ "$t" -le "$now" ] && [ $((now - t)) -lt "$COPY_PERIOD" ] && [ "$t" -gt "$best_t" ] || continue
+    best="$f"; best_t="$t"; r0="${name##*-exit}"; r0="${r0%%.*}"
+  done
+  [ -n "$best" ] || return 1
+  EP_S="$best_t"; EP_R0="$r0"; EP_L="$best_t"; EP_LR=""
+  while read -r a b _rest; do
+    is_number "${a:-}" && is_number "${b:-}" && [ "$a" -gt "$EP_L" ] && EP_L="$a"
+  done < "$best"
+  return 0
+}
+
+keep_copy(){ # keep_copy <exit code> <verdict line>
+  local rc="$1" line="$2" name tmp why="" at add="" _t _b
+  # The newest file, from the record or else the folder, if it began less than a period ago.
+  if ! { read_episode && [ "$EP_S" -le "$now" ] && [ $((now - EP_S)) -lt "$COPY_PERIOD" ] \
+         && [ -f "$WARN_DIR/free-space-warning-$key-$EP_S-exit$EP_R0.readings" ]; }; then
+    adopt_copy || EP_S=""
+  fi
+  if [ -n "$EP_S" ]; then
+    name="$WARN_DIR/free-space-warning-$key-$EP_S-exit$EP_R0.readings"
+    while IFS=' ' read -r _t _b; do
+      is_number "${_t:-}" && [ "$_t" -gt "$EP_L" ] && add="$add$_t $_b
+"
+    done <<EOF
+$series
+EOF
+    # Appended rather than rewritten: a few lines, so a cut short write loses only them, and the
+    # record is moved on only once they are in, so a failed append is tried again next time. Joined
+    # with &&, so the group fails when the readings did, not only when the verdict line did: the
+    # verdict line is skipped on a warning that carries on, and that skip is a success.
+    if { printf '%s' "$add" && { [ "$EP_LR" = "$rc" ] || echo "# exit $rc at $now: $line"; }; } 2>/dev/null >> "$name"; then
+      write_episode "$EP_S" "$EP_R0" "$now" "$rc"
+      LATEST_COPY="$name"; keep_copy_note; return 0
+    fi
+    echo "claude-sync: could not add the readings behind this warning to $name, so the ones since its last are gone once they are $WINDOW_HOURS hour(s) old."
+    return 0
+  fi
+  rm -f "$EPISODE" 2>/dev/null
+  # Claimed with noclobber, so two sessions warning in the same instant keep one copy between them.
+  # A claim that fails because the other got there first stops here; one that fails because nothing
+  # can be written goes on and tries the copy anyway, since that is the copy that matters. Only a
+  # record holding something is another session's claim: one left empty is this run's own claim
+  # whose write failed (a disk too full for one line), and stopping there kept no copy, silently, on
+  # every warning while the disk stayed full. Another session caught between creating its record and
+  # writing it also reads as empty, which costs at most a second copy of the same readings.
+  if ! ( set -C; printf '%s %s %s %s\n' "$now" "$rc" "$now" "$rc" > "$EPISODE" ) 2>/dev/null; then
+    [ -s "$EPISODE" ] && { keep_copy_note; return 0; }
+  fi
+  if [ -z "$WARN_DIR" ]; then
+    why="HOME is not set"
+  elif ! mkdir -p "$WARN_DIR" 2>/dev/null; then
+    why="the folder could not be made"
+  else
+    name="$WARN_DIR/free-space-warning-$key-$now-exit$rc.readings"; tmp="$name.tmp$$"
+    at="$(date -u -r "$now" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -d "@$now" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || true)"
+    if {
+         echo "# The readings behind a low space warning, kept by check-free-space.sh (claude-config#3157)."
+         echo "# verdict: $line"
+         echo "# exit $rc"
+         echo "# volume: $VOLUME"
+         echo "# at: $now${at:+ ($at)}"
+         echo "# settings: FREE_SPACE_FLOOR_GB=$FLOOR_GB FREE_SPACE_HORIZON_HOURS=$HORIZON_HOURS FREE_SPACE_MIN_SPAN_MIN=$MIN_SPAN_MIN FREE_SPACE_WINDOW_HOURS=$WINDOW_HOURS FREE_SPACE_RECOVERY_GB=$RECOVERY_GB FREE_SPACE_PERSIST_MIN=$PERSIST_MIN"
+         echo "# To replay it, run the check once per line below, oldest first, with FREE_SPACE_NOW and FREE_SPACE_BYTES set to that line's two numbers, the settings above and a FREE_SPACE_STATE_DIR of its own."
+         printf '%s\n' "$series"
+       } 2>/dev/null > "$tmp" && mv -f "$tmp" "$name" 2>/dev/null; then
+      # The claim's own write may have failed (above); record the episode now the copy is kept.
+      [ -s "$EPISODE" ] || write_episode "$now" "$rc" "$now" "$rc"
+      LATEST_COPY="$name"; keep_copy_note; return 0
+    fi
+    rm -f "$tmp" 2>/dev/null
+    why="writing it failed"
+  fi
+  rm -f "$EPISODE" 2>/dev/null
+  echo "claude-sync: could not keep a copy of the readings behind this warning in ${WARN_DIR:-<no folder>} ($why), so they are gone once they are $WINDOW_HOURS hour(s) old."
+}
+
+keep_copy_note(){
+  [ "$REPORT" -eq 1 ] && [ -n "$LATEST_COPY" ] || return 0
+  echo "claude-sync: the readings behind this warning are kept in $LATEST_COPY, deleted after $KEEP_DAYS days."
+}
+
 # ---------- did it ever go back up? ----------
 # A SAWTOOTH IS NOT A FALL (claude-config#436). The rate used to come from the oldest reading and
 # the newest, and every reading in between was kept and then ignored, so two points set the verdict
@@ -234,6 +427,8 @@ recovered=0
 seg_t=""; seg_b=""; seg_n=0
 seg_lines=""   # every reading of the current segment, oldest first, for the persistence rule below
 _prev_b=""
+# Kept whole, because a warning's copy of its readings is this same series (claude-config#3157).
+series="$(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)"
 while IFS=' ' read -r _t _b; do
   is_number "${_t:-}" || continue
   is_number "${_b:-}" || continue
@@ -248,7 +443,7 @@ while IFS=' ' read -r _t _b; do
 "
   _prev_b="$_b"
 done <<EOF
-$(printf '%s%s %s\n' "$kept" "$now" "$free_bytes" | sort -n -k1,1)
+$series
 EOF
 
 # The other end of the span starts as the start of the current segment: the oldest reading when
@@ -699,8 +894,13 @@ scan_note(){
 # always had, so a notice on every prompt does not grow a clause nobody asked for.
 [ "$REPORT" -eq 1 ] || no_rate_clause=""
 
+# The disk has room (whatever swap says), so the next warning is a new verdict (claude-config#3157).
+if [ "$free_gb" -ge "$FLOOR_GB" ] && [ "$falling_fast" -ne 1 ]; then end_episode; fi
+
 if [ "$free_gb" -lt "$FLOOR_GB" ]; then
-  echo "claude-sync: only $free_words free on $VOLUME, under the $floor_words floor.$rate_clause$no_rate_clause$cause_clause"
+  verdict_line="claude-sync: only $free_words free on $VOLUME, under the $floor_words floor.$rate_clause$no_rate_clause$cause_clause"
+  echo "$verdict_line"
+  keep_copy 3 "$verdict_line"
   scan_note
   swap_note
   symbol_cache_note
@@ -708,7 +908,9 @@ if [ "$free_gb" -lt "$FLOOR_GB" ]; then
 fi
 
 if [ "$falling_fast" -eq 1 ]; then
-  echo "claude-sync: $free_words free on $VOLUME, which is above the $floor_words floor but not for long.$rate_clause$cause_clause"
+  verdict_line="claude-sync: $free_words free on $VOLUME, which is above the $floor_words floor but not for long.$rate_clause$cause_clause"
+  echo "$verdict_line"
+  keep_copy 4 "$verdict_line"
   scan_note
   swap_note
   symbol_cache_note

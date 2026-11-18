@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own) and removals Dan decides on, made through disk-remove.sh, in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own), the low space check removing its own copies of a warning's readings after 14 days, and removals Dan decides on, made through disk-remove.sh, in the order that finds the cause fastest.
 ---
 
 # disk-full
@@ -64,6 +64,15 @@ enough to reach zero within six hours, 5 that the disk has room but swap is near
 total (memory being held, which step 3 below covers, #2559), and 2 that it could not measure, which
 is not the same as fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.
+
+The six hours of readings roll on, so on a 3 or 4 the check also keeps a copy of the readings behind
+the warning, for 14 days (`FREE_SPACE_WARNING_KEEP_DAYS`), and then deletes it (#3157). A new file
+starts at most once every six hours per volume (four a day, 57 in 14 days, however often the disk
+dips); later warnings add their readings to the newest file. `--report` names it, under
+`~/.claude/state/free-space-warnings`. A warning from last night can still be checked from it: its
+first lines hold the first verdict, the exit code and the settings it was judged by, and each line
+after them is one reading, epoch seconds then free bytes, oldest first, with a `# exit N at <epoch>`
+line where a later warning began.
 
 ### 3. Swap, which no folder size reaches
 
@@ -284,7 +293,9 @@ page where he ticks what goes, and removes them through `disk-remove.sh` with th
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 6, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 7, which
 the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
-once Dan has decided to clear the orphaned Xcode caches it listed. Anything else goes through
+once Dan has decided to clear the orphaned Xcode caches it listed. Step 2's check also deletes, by
+itself, its own copies of a warning's readings once they are 14 days old (#3157), and nothing else.
+Anything else goes through
 `disk-remove.sh`, never a hand typed `rm`, `mv` or `trash`. It never removes a sync or cloud
 client's store, iCloud Drive, an app package, a Photos or photo editor library, the Mail or Messages
 stores, keys and credentials, or anything under /Applications or /System; it checks each item again
