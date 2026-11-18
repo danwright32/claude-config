@@ -10,7 +10,7 @@
 # without --force (disk-remove.sh's worktree method), only when ALL of these hold, checked in order:
 #   no Claude Code session's working folder is in it (the live session map)
 #   nothing in it was changed or opened in 30 days (the floor every kind keeps, #2134)
-#   `git status --porcelain --untracked-files=all` is empty, untracked files included
+#   `git --no-optional-locks status --porcelain --untracked-files=all` is empty, untracked files included
 #   it is on a branch, and gh finds a MERGED pull request for that branch whose head is exactly the
 #   worktree's HEAD, so nothing in it is unpushed or unmerged. Asked of gh because squash merges
 #   leave no merged branch git could see locally (L642)
@@ -64,7 +64,9 @@ wt_rules() { # <worktree>
   V=offerable
   dcs_floor "$t" .git .gitignore .gitattributes
   [ "$V" = offerable ] || return
-  st="$(git -C "$t" status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  # Optional locks off: a plain git status refreshes the index file it reads, which is a write, and
+  # the scan writes nothing in the folders it judges (#3216).
+  st="$(git -C "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
   [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
   br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
   [ -n "$br" ] || { V="not offerable: it is on no branch, so no pull request can be matched to it"; rm -f "$err"; return; }
