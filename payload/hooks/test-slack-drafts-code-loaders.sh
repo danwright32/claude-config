@@ -2172,13 +2172,14 @@ while read -r kind sub; do
   else read_refused "#3172 a submodule not on the list by its own name is refused: $sub"; fi
 done < "$D72/subs.txt"
 # The controls: json read and written to the screen, its decoder and html's parser imported as real
-# hook code imports them (lib/local-allow-rules.py, lib/html-blocks.py), collections.abc, sys used
-# as scripts use it, and a field named sys read, printed, rounded, formatted, compared and added,
-# which is a field (PR #3161), also when a conditional picks it into a name.
+# code in this repository imports them (lib/local-allow-rules.py, skills/design-rounds/design_file.py),
+# html.parser also as `import html.parser`, sys used as scripts use it, and a field named sys read, printed,
+# rounded, formatted, compared and added, which is a field (PR #3161), also when a conditional picks
+# it into a name.
 cat > "$D72/reads-3172.py" <<'PY'
-import collections.abc, json, sys
+import html.parser, json, sys
 import sys as s
-from collections.abc import Iterable
+from collections import abc
 from html.parser import HTMLParser
 from json.decoder import JSONDecodeError, scanstring
 class Times:
@@ -2193,13 +2194,13 @@ try:
 except JSONDecodeError as e:
     print(e, file=sys.stderr)
     sys.exit(1)
-print(json.dumps(data, indent=2), isinstance(data, Iterable), scanstring('"a"', 1)[0], HTMLParser)
+print(json.dumps(data, indent=2), isinstance(data, abc.Iterable), scanstring('"a"', 1)[0], HTMLParser, html.parser.HTMLParser)
 print(t.sys, round(t.sys), str(t.sys), f"{t.sys:.1f}", t.sys == 0.5, -t.sys, t.sys * 2, t.total(), round(q))
 json.dump(data, sys.stdout)
 s.stdout.write(s.argv[0] + "\n")
 PY
 run_72 "python3 reads-3172.py msg.json"
-allowed "#3172 the control: json, its decoder, html.parser, collections.abc, sys and a field named sys used as scripts use them pass"
+allowed "#3172 the control: json, its decoder, html.parser, collections' abc, sys and a field named sys used as scripts use them pass"
 run_72 "python3 reads-3172.py $RULES"
 allowed "#3172 and handed the real rules file"
 run_72 "python3 -m json.tool msg.json"

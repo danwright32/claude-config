@@ -868,14 +868,16 @@ OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # binds os, so os used for anything but os.path counts as acting. A package's entry is the package
 # alone: each submodule is listed by its own dotted name or counts as acting, however it is imported
 # (claude-config#3172: json.tool, admitted as part of json, writes the file its sys.argv names). The
-# submodules listed were each read on Python 3.14.4 and hold no way to send, run code or write.
+# two submodules listed are the ones code here imports (skills/design-rounds/design_file.py imports
+# html.parser, lib/local-allow-rules.py json.decoder) and session scripts name, each read on Python
+# 3.14.4 and holding no way to send, run code or write.
 PY_INERT = frozenset({
     "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
-    "collections", "collections.abc", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib",
-    "enum", "fnmatch", "fractions", "functools", "glob", "hashlib", "heapq", "html", "html.entities",
-    "html.parser", "itertools", "json", "json.decoder", "json.encoder", "json.scanner", "math",
-    "numbers", "os.path", "pathlib", "pprint", "random", "re", "shlex", "statistics", "string",
-    "struct", "sys", "textwrap", "time", "typing", "unicodedata", "warnings", "zoneinfo"})
+    "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",
+    "fractions", "functools", "glob", "hashlib", "heapq", "html", "html.parser", "itertools", "json",
+    "json.decoder", "math", "numbers", "os.path", "pathlib", "pprint", "random", "re", "shlex",
+    "statistics", "string", "struct", "sys", "textwrap", "time", "typing", "unicodedata", "warnings",
+    "zoneinfo"})
 # Modules unable to send a request or run code unless the code names what turns that on: each module,
 # with the pattern that names it (py_inert_unless, claude-config#2844).
 PY_INERT_UNLESS = {"sqlite3": re.compile(r"load_extension")}
