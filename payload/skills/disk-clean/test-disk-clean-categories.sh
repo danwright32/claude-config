@@ -289,6 +289,34 @@ printf 'today\n' > "$P/stale/src/b.ts"
 judge build-folders "$P/stale/node_modules"
 check "build folders judge: once the project is edited again it is not" "$(has "$JUDGED" "not offerable: the project's own files changed within 30 days")"
 
+# A build folder iCloud syncs (Documents or Desktop while iCloud syncs them) is never offered:
+# removing one removes it from iCloud on every device (#3215: the personal MacBook's dry run offered
+# 98 of them). It is left out of the list, counted in the kind's note so leaving it out is visible,
+# and the judge refuses it, so a record from before this rule cannot remove one either.
+fresh
+mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents" "$H/Documents/proj/node_modules/x" "$H/Documents/proj/src" \
+  "$H/Documents/proj2/node_modules/x" "$H/Apps/local/node_modules/x"
+printf '{}\n' > "$H/Documents/proj/package.json"; printf 'x\n' > "$H/Documents/proj/src/a.ts"
+printf '{}\n' > "$H/Documents/proj2/package.json"; printf '{}\n' > "$H/Apps/local/package.json"
+old "$H/Documents"; old "$H/Apps"
+run_scan --only build-folders
+check "build folders: one iCloud syncs is not listed" "$(eq "$(item_of "$H/Documents/proj/node_modules")" "")"
+check "build folders: nor its neighbour" "$(eq "$(item_of "$H/Documents/proj2/node_modules")" "")"
+check "build folders: a project outside iCloud is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
+check "build folders: the kind's note counts what iCloud syncs and says why" "$(eq "$(note_of build-folders)" "2 build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device.")"
+check "build folders: the scan's summary says so too" "$(has "$OUT_TEXT" "2 build folders were left out because iCloud syncs them")"
+check "build folders: one iCloud syncs is never passed to du" "$(hasnt "$(dc_calls du)" "$H/Documents/proj/node_modules")"
+judge build-folders "$H/Documents/proj/node_modules"
+check "build folders judge: one iCloud syncs is not offerable" "$(eq "$JUDGED" "not offerable: iCloud syncs it, so removing it would remove it from iCloud on every device")"
+# The control: the same folder once iCloud no longer syncs Documents is listed and offered.
+rm -rf "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
+run_scan --only build-folders
+check "build folders: once iCloud does not sync Documents, the same folder is offered" "$(eq "$(state_of "$H/Documents/proj/node_modules")" offerable)"
+check "build folders: and no note is written" "$(eq "$(note_of build-folders)" "")"
+mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"; rm -rf "$H/Documents/proj2"; old "$H/Documents"
+run_scan --only build-folders
+check "build folders: one left out is counted in the singular" "$(eq "$(note_of build-folders)" "1 build folder was left out because iCloud syncs it: removing it would remove it from iCloud on every device.")"
+
 # A folder iCloud keeps only in the cloud (dataless) is never read, because listing one makes iCloud
 # fetch it, and du does not skip it (#1860: four Slate worktree build folders held 1,673). chflags
 # cannot set the flag, so DISK_CLEAN_DATALESS names a file of paths that stand in for dataless ones,
@@ -517,7 +545,8 @@ printf '{"pid":1,"sessionId":"s1","cwd":"%s/src"}\n' "$R/.claude/worktrees/inses
 dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
 x="${d%/.claude/worktrees/*}/.fx/${d##*/}"
 case "$1 $2" in
-  "status --porcelain") cat "$x/status" ;;
+  "--no-optional-locks status") cat "$x/status" ;;
+  "status --porcelain") echo "git stub: a status without --no-optional-locks can rewrite the index" >&2; exit 1 ;;
   "symbolic-ref --short") b="$(cat "$x/branch")"; [ -n "$b" ] && echo "$b" || exit 1 ;;
   "rev-parse HEAD") cat "$x/head" ;;
   "remote get-url") cat "$x/remote" ;;
@@ -526,6 +555,10 @@ esac'
 dc_stub gh 'for a in "$@"; do case "$a" in feat-a) echo "41 aaa1" ;; feat-d) echo "42 ddd1" ;; feat-e) : ;; feat-h) echo "gh: could not resolve host" >&2; exit 1 ;; feat-i) echo "43 iii1" ;; esac; done; exit 0'
 run_scan --only worktrees
 W="$R/.claude/worktrees"
+# A plain git status refreshes the index file it reads, a write the scan must not make (#3216; the
+# PR's evidence measured it on git 2.51): every status runs with optional locks off.
+check "worktrees: git status runs with optional locks off, so it never rewrites the index" "$(has "$(dc_calls git)" "--no-optional-locks status --porcelain")"
+check "worktrees: and no git status runs without that" "$(eq "$(dc_calls git | grep -c ' status ')" "$(dc_calls git | grep -cF -- ' --no-optional-locks status ')")"
 check "worktrees: clean, merged by gh at exactly its HEAD, is offerable" "$(eq "$(state_of "$W/merged")" offerable)"
 check "worktrees: through git worktree remove" "$(eq "$(method_of "$W/merged")" worktree)"
 check "worktrees: a worktree holding a .env is flagged as holding credentials" "$(has "$(flags_of "$W/merged")" credential)"

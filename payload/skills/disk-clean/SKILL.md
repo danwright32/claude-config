@@ -1,6 +1,6 @@
 ---
 name: disk-clean
-description: Clears space on the Mac when Dan types /disk-clean. A read only scan of what can go, one review page where he ticks what goes, one confirm, then removal through disk-remove.sh with the result verified by df. For working out why a disk is full, use disk-full.
+description: Clears space on the Mac when Dan types /disk-clean. A scan of what can go that removes nothing, one review page where he ticks what goes, one confirm, then removal through disk-remove.sh with the result verified by df. For working out why a disk is full, use disk-full.
 disable-model-invocation: true
 ---
 
@@ -23,6 +23,11 @@ when one is missing here). Judge each run by its exit code, never by its last li
   really went.
 - Claude never runs `sudo` itself. Anything that needs Dan's password is handed to him as one
   command in step 6.
+- Steps 1 and 2 remove nothing, but they are not write free, so never call them read only. They
+  write three things: the scan record `~/.claude/state/disk-clean/last-scan.json` (replacing the
+  last scan's), and in `<folder>` the review page and its nonce. They change nothing inside the
+  folders they judge: a worktree's state is read with `git --no-optional-locks status`, since a
+  plain `git status` refreshes the repository's index file as it reads it (#3216).
 
 ## 1. Scan
 
@@ -56,6 +61,9 @@ Report what it printed, in plain words, in this order:
    runaway logs, forgotten tools and large files). For a partial walk, name each folder it could not read, as the scan printed them, with
    the reason beside each: Operation not permitted is macOS protecting the folder, which Full Disk
    Access usually lifts, and Permission denied is the folder's own permissions, which it does not.
+4. Every note the scan printed under a kind, in plain words. Under Project build folders it says
+   how many build folders were left out because iCloud syncs them: none of those is ever offered,
+   since removing one would remove it from iCloud on every device (#3215).
 
 - **Exit 0**: the scan was written, unmeasured kinds included. Report it as above and go on to step 2.
 - **Exit 2**: it refused, or its record could not be written, so there is nothing to review. Tell

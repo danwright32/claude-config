@@ -9,10 +9,14 @@
 # changed within 30 days, by modification time: access times are unreliable on APFS (the plan). Never
 # offered: .wrangler/state, which holds a project's local D1, KV and R2 data and is never even
 # listed; anything inside a home dotfolder (~/.nvm's global packages, which carry Claude Code itself,
-# ~/.npm's npx copies); a node_modules no package.json claims.
+# ~/.npm's npx copies); a node_modules no package.json claims; and one iCloud syncs (in Documents or
+# Desktop while iCloud syncs them, dcs_icloud), since removing it removes it from iCloud on every
+# device (#3215). Those are left out of the list, counted in the kind's note, and refused by the judge.
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
+
+ICLOUD_WHY="not offerable: iCloud syncs it, so removing it would remove it from iCloud on every device"
 
 # Sets PROJ to the project a build folder belongs to, or fails setting V to why it is not one.
 project_of() { # <target>
@@ -38,6 +42,7 @@ project_of() { # <target>
 build_rules() { # <target>
   local t="${1%/}" recent err="$DCS_WORK/build.find.err.$$"
   [ -d "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there"; return; }
+  dcs_icloud "$t" && { V="$ICLOUD_WHY"; return; }
   recent="$(dcs_recent_file "$PROJ" "$DCS_BUILD_DAYS" "$err" node_modules .next .git .wrangler .claude)"
   if [ -n "$recent" ] && [ -d "$recent" ]; then
     V="unmeasured: part of the project is kept only in iCloud (${recent#"$PROJ"/}), so whether it is in use is not known"; rm -f "$err"; return
@@ -53,20 +58,25 @@ build_rules() { # <target>
 do_scan() {
   dcs_walk_ready
   : > "$DCS_WORK/build.paths"
-  local t
+  local t synced=0
   while IFS= read -r t; do
     case "$t" in */node_modules|*/.next|*/.wrangler/tmp) ;; *) continue ;; esac
     [ -d "$t" ] || continue
     project_of "$t" || continue
+    dcs_icloud "$t" && { synced=$((synced + 1)); continue; }
     printf '%s\n' "$t" >> "$DCS_WORK/build.paths"
   done < "$DCS_WALK"
+  if [ "$synced" -eq 1 ]; then
+    dcs_note "1 build folder was left out because iCloud syncs it: removing it would remove it from iCloud on every device."
+  elif [ "$synced" -gt 1 ]; then
+    dcs_note "$synced build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device."
+  fi
   dcs_measure "$DCS_WORK/build.paths" > "$DCS_WORK/build.sized"
-  local p kib size ident flags
+  local p kib size ident
   while IFS="$S" read -r p kib size ident; do
     project_of "$p"
     D=""; build_rules "$p"
-    flags=""; dcs_icloud "$p" && flags=icloud
-    dcs_item "$p" delete "$kib" "$size" "$V" "$flags" "$D" "$ident"
+    dcs_item "$p" delete "$kib" "$size" "$V" "" "$D" "$ident"
   done < "$DCS_WORK/build.sized"
 }
 
