@@ -3974,7 +3974,16 @@ level of a module the script imports), with `os` imported out of one of the scri
 held to `os`'s reads. A field named like another module (`args.email`, `e.code`, `self.queue`) is a
 field: such a value gets a module only from a class's attributes, and on Python 3.14.4 those lead
 on to `os` only by its name. Measured 2026-11-17 the same way over 4,210 texts: 1,033 passed before
-and 1,033 after, the same texts. The Python
+and 1,033 after, the same texts. Three more since claude-config#3151, each of which ran on Python
+3.14.4 and passed: `enum.bltns`, the name `enum` binds `builtins` by, refused wherever it is named
+(the code loaders suite walks every inert module for the next module held under a name that is not
+its own); `sys.breakpointhook`, which imports and calls whatever `PYTHONBREAKPOINT` names, and
+`sys.remote_exec`, which runs a file in a Python process; and `sys.path` under any other name `sys`
+goes by (`import sys as s`, `q = sys`) or read off an attribute called `sys` (`glob.sys.path`,
+`pathlib.PurePath("x").parser.sys.path`). A field called `sys` is still a field, so one read off a
+value the gate does not follow and handed on, with its `path` changed where it lands, is not
+followed. Measured the same way over the 4,227 texts stamped before anyone tried these routes:
+1,036 passed before and 1,036 after, the same texts. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
