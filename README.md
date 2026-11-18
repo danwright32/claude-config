@@ -6696,7 +6696,13 @@ idiom, by `ownFolderVar`, `ownFolderPath` and `withoutOwnFolder`) is read only t
 `hooks/scriptvars.ts`, kept by each mod that asks at `hooks/mod-kit/scriptvars.ts` (#3022: the
 design round guard wrote it, and the area check, which could place no write into such a folder,
 held every checker copying into one); the scan fails a mod matching a bare `mktemp` substitution
-with a pattern, or naming `BASH_SOURCE`, by hand. `hooks/quoted.ts` holds `pythonText` too
+with a pattern, or naming `BASH_SOURCE`, by hand. A tool call's own arguments, its `tool.call`
+event without the keys Claude Code carries beside them (`tool`, `tool_use_id`, `agentId`,
+`consent`), are read only through `toolArgs` in `hooks/toolargs.ts`, kept by each mod that asks at
+`hooks/mod-kit/toolargs.ts` (#3190: eight mods took the keys off by hand in twelve places, so a key
+the engine added had to be learned by every copy); a site wanting `tool_use_id` or `agentId` reads
+that one key from the event, and the scan fails a mod line naming both `agentId` and `consent`.
+`hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
 strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
 request it makes, a module it loads by a name given at run time) is read only through `fileReach`
