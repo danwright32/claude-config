@@ -44,7 +44,7 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${SCRATCH_ISOLATION_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+ROOT="${SCRATCH_ISOLATION_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"
 
 pass=0
 fail=0

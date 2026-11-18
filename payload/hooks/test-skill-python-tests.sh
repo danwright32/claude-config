@@ -31,14 +31,14 @@ unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$DIR/lib/skill-python-tests.py"
-ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 SKILLS="$ROOT/payload/skills"
 # The repository's skills, never an installed ~/.claude/skills: that folder also holds skills no send
 # carries (the Claude app's own downloads, plugin skills), whose tests this suite has no say over
 # (L36). An installed copy says so in the shape the runner reads as NOT RUN, and the runner re-runs
 # it from the checkout (claude-config#155, #237).
 if [ -z "$ROOT" ] || [ ! -d "$SKILLS" ]; then
-  printf 'SUITE-NOT-RUN %s\n' "runs the repository's payload/skills tests, and there is no repository above $DIR"
+  printf 'SUITE-NOT-RUN %s\n' "runs the repository's payload/skills tests, and $DIR is not in a claude-config checkout"
   exit 2
 fi
 

@@ -227,14 +227,15 @@ out_gone="$(bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code_gone=$?
   || check "a root that is not there is refused" "exit=$code_gone out=$out_gone"
 
 # ---------------------------------------------------------------------------
-# The real repository, last, located by GIT rather than by counting upwards, which is the whole
-# point of this check (L411 for the installed copy, which has no repository to scan).
+# The real repository, last, located by lib/checkout-root.sh rather than by counting upwards, which
+# is the whole point of this check (L411 for the installed copy, which has no repository to scan).
+# Never by asking git from here, which takes any repository above a copy for this one (#3221).
 # ---------------------------------------------------------------------------
-ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -z "$ROOT" ]; then
   # Said once, by the agreed line, and counted as nothing: a pass here would be a check that
   # measured nothing (claude-config#1452, L98).
-  echo "SUITE-PART-UNMEASURED the real tree, because this copy is not inside a git checkout"
+  echo "SUITE-PART-UNMEASURED the real tree, because this copy is not in a claude-config checkout"
 else
   out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
   [ "$code_real" -eq 0 ] \

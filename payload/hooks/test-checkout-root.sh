@@ -25,12 +25,22 @@ real() { (cd "$1" 2>/dev/null && pwd -P); }
 not_run() { case "$1" in "SUITE-NOT-RUN "*|*$'\n'"SUITE-NOT-RUN "*) echo yes ;; *) echo no ;; esac; }
 
 # ---- the helper itself ----
-# This suite's own payload, when it sits in a checkout, is one; the top level is printed.
-SELF_TOP="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ "$(real "$SELF_TOP/payload")" = "$(real "$DIR/..")" ]; then
-  out="$(bash "$HELPER" "$DIR/.." 2>/dev/null)"; rc=$?
-  check_eq "this checkout's payload is a checkout, and its top level is printed" "0 $(real "$SELF_TOP")" "$rc $(real "$out")"
+# This suite's own payload, when it sits in a checkout, is one; the top level is printed. The answer
+# is judged by what must be true of it (git's own top level for that folder, holding claude-sync,
+# whose payload/ is this folder), never against a lookup of this suite's own, which the scan below
+# refuses in every suite (claude-config#3221). CI always runs in a checkout, so a refusal there is a
+# failure; anywhere else it is an installed copy with nothing to measure.
+SELF_TOP="$(bash "$HELPER" "$DIR/.." 2>/dev/null)"; self_rc=$?
+if [ "$self_rc" -eq 0 ]; then
+  self_git="$(git -C "$SELF_TOP" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$self_git" ] && [ "$(real "$self_git")" = "$(real "$SELF_TOP")" ] && [ -f "$SELF_TOP/claude-sync" ] \
+     && [ "$(real "$SELF_TOP/payload")" = "$(real "$DIR/..")" ]; then facts=yes; else facts="no ($SELF_TOP)"; fi
+  check_eq "this checkout's payload is a checkout, and its top level is printed" "0 yes" "$self_rc $facts"
+elif [ "${CI:-}" = true ]; then
+  check_eq "this checkout's payload is a checkout, and its top level is printed (CI runs from a checkout)" "0" "$self_rc"
+  SELF_TOP=""
 else
+  SELF_TOP=""
   echo "SUITE-PART-UNMEASURED this copy is not in a claude-config checkout, so the real checkout case was not measured here"
 fi
 
@@ -102,6 +112,9 @@ done
 SCAN="$DIR/lib/hand-rolled-checkout.py"
 mkdir -p "$TMPROOT/scan/payload/hooks"
 _UP='/..''/..'
+_TOP='--show''-toplevel'
+_CDUP='--show''-cdup'
+_PREFIX='--show''-prefix'
 {
   printf '#!/usr/bin/env bash\n'
   printf 'REPO="$(cd "$DIR%s" && pwd)"\n' "$_UP"
@@ -111,12 +124,25 @@ _UP='/..''/..'
   printf '# REPO="$(cd "$DIR%s" && pwd)" is what this used to say\n' "$_UP"
   printf "mk test-careless.sh '#!/usr/bin/env bash\nROOT=\"\$(cd \"\$DIR%s\" && pwd)\"'\n" "$_UP"
   printf 'REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"\n'
+  # Asking git for the top level from the suite's own folder is the same lookup by another route
+  # (claude-config#3221): it takes any repository above a copy for this one, which is what the
+  # helper exists to refuse. A git question about a fixture's repository, or any other question
+  # about this one, is not a lookup of the checkout.
+  printf 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+  printf 'ROOT="$(git -C "$DIR" rev-parse %s 2>/dev/null || true)"\n' "$_TOP"
+  printf 'up="$(cd "$DIR/.." && git rev-parse %s)"\n' "$_CDUP"
+  printf 'T="$(git -C "$(dirname "$0")" rev-parse %s)"\n' "$_TOP"
+  printf 'F="$(git -C "$FIXTURE" rev-parse %s)"\n' "$_TOP"
+  printf '# ROOT="$(git -C "$DIR" rev-parse %s)" is what this used to say\n' "$_TOP"
+  printf 'B="$(git -C "$DIR" rev-parse --abbrev-ref HEAD)"\n'
+  printf 'HERE=$(dirname "$0")\n'
+  printf 'W="$(git -C "${HERE}/.." rev-parse %s)"\n' "$_PREFIX"
 } > "$TMPROOT/scan/payload/hooks/test-probe.sh"
 cp "$TMPROOT/scan/payload/hooks/test-probe.sh" "$TMPROOT/scan/payload/hooks/probe-helper.sh"
 probe="$(printf 'payload/hooks/test-probe.sh\npayload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan")"; probe_rc=$?
 probe_lines="$(printf '%s\n' "$probe" | awk -F: 'NF { printf "%s ", $2 }')"
-check_eq "#1663 the scan sees every upward lookup, and not a comment, a fixture or the helper" \
-  "1 2 3 4 5 " "$probe_rc $probe_lines"
+check_eq "#1663 #3221 the scan sees every upward lookup and every git lookup of the top level from the suite's own folder, and not a comment, a fixture, another git question or the helper" \
+  "1 2 3 4 5 11 12 13 18 " "$probe_rc $probe_lines"
 
 # ---- nor reads a FILE above its own payload (claude-config#2623) ----
 # A file path counted up the same way is the same lookup without the cd: `"$DIR/../../README.md"`
