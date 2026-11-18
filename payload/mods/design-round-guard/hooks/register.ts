@@ -136,6 +136,7 @@ import {
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
 import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
@@ -381,12 +382,6 @@ const message = (err: unknown) => errorText(err, 'design-round-guard')
 // The catches' refusal when even naming the guard's own failure throws, built once here, so a catch
 // always ends in a refusal and never in a throw, which the engine reads as no hook at all (#2039).
 const HELD = cannotCheck('unknown failure')
-
-// The arguments the tool takes, without the keys the engine carries beside them.
-const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
-  const { tool: _t, tool_use_id: _i, agentId: _a, consent: _c, ...input } = e
-  return input
-}
 
 // `session`, the session's id, and `temps`, the temp folders Claude Code may keep it under, which
 // together name its scratchpad (#1191).
@@ -2315,7 +2310,7 @@ export const register: Register = on => {
     if (e.agentId === undefined || e.tool === 'AskUserQuestion') return next(e)
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
-    const input = argsOf(raw)
+    const input = toolArgs(raw)
     const v = await judge($, e.tool, input, id)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
     if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, called: await keyOf($, e.tool, input) }) : previewed(v) }
@@ -2340,7 +2335,7 @@ export const register: Register = on => {
   // long command ran) replays what the call settled to, outside neverThrows: it already ran, so a
   // refusal saying it was stopped would be untrue and could have Claude run it twice (#2726, #2039).
   // One before is answered as the hook would answer it where that needs no reading (caughtCall).
-  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, argsOf(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, toolArgs(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -2358,7 +2353,7 @@ export const register: Register = on => {
     }
     if (!watch) return r
     try {
-      return await afterShell($, r, watch, { id, tool: e.tool, agent: false, input: argsOf(e as unknown as Record<string, unknown>) })
+      return await afterShell($, r, watch, { id, tool: e.tool, agent: false, input: toolArgs(e as unknown as Record<string, unknown>) })
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }

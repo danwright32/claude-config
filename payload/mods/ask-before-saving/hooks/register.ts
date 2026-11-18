@@ -3,6 +3,7 @@ import type { EngineInterface, Hook, MatchedHook, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -107,12 +108,6 @@ const taken = new Map<string, AskBeforeSavingApproval>()
 // The index lines let through on a saved memory file's For good (#1794), by tool_use_id, read back
 // by the tool.call hook the same way, to say so and give the cover back when the write did not land.
 const coverTaken = new Map<string, AskBeforeSavingIndexCover>()
-
-// The arguments the tool takes, without the keys the engine carries beside them.
-const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
-  const { tool: _t, tool_use_id: _i, agentId: _a, consent: _c, ...input } = e
-  return input
-}
 
 let saves = 0
 // An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
@@ -571,7 +566,7 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   const tool = e.tool
   const raw = e as unknown as Record<string, unknown>
   const id = String(raw.tool_use_id ?? '')
-  const input = argsOf(raw)
+  const input = toolArgs(raw)
 
   // A subagent's call (#777): judged here, where the loop is known, refused when it would save
   // lasting memory, and never asked about. One the tool.check hook beneath must let through.
@@ -716,7 +711,7 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   // only being looked at, and the real call is judged when it is made.
   if (e.tool_use_id === undefined) return next(e)
   const raw: Record<string, unknown> = { ...((e.input ?? {}) as Record<string, unknown>), tool, tool_use_id: e.tool_use_id }
-  const input = argsOf(raw)
+  const input = toolArgs(raw)
   const at = await whereOf($)
   const key = saveKey(tool, input, at.cwd, at.home)
   if (approved.delete(key) || fromAgent.has(key)) return next(e)

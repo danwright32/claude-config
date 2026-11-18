@@ -7,6 +7,7 @@ import { askPr } from './mod-kit/prmerged.ts'
 import { errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { transcriptPlaces } from './mod-kit/projects.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -363,8 +364,9 @@ export const register: Register = on => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused
     if (e.agentId !== undefined) return { deny: 'No box: only the main conversation shows the Goal accomplished box, once the work Dan asked for is finished.' }
-    const { tool: _t, tool_use_id: toolUseId, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>
-    const input = readInput(raw)
+    const x = e as unknown as Record<string, unknown>
+    const toolUseId = x.tool_use_id
+    const input = readInput(toolArgs(x))
     if ('refusal' in input) return { deny: `No box: ${input.refusal}.` }
     const goal = await goalNow($)
     const holds = [...(await agentHolds($)), ...(await mergeHoldsNow($)), ...(await openHolds($))]
