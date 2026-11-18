@@ -492,7 +492,8 @@ check "at the real count the rows are still in order" "$big_verdict"
 
 # ================================================================================================
 # 7. The Trash is one row, at the real count (#3216): the personal MacBook's dry run drew its 5,979
-# entries as 5,979 rows on a 2.3 MB page. Its row carries every entry it ticks, its count and the
+# entries as 5,979 rows on a 2.3 MB page. Its row carries one summary of the entries it ticks
+# (#3232), their count and the
 # shared tally's total, and anything in the Trash that cannot be ticked is one greyed row per reason.
 # ================================================================================================
 fresh

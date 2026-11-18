@@ -260,12 +260,13 @@ check "the pasted selection is written with the Write tool, never through a shel
 check "there is exactly one AskUserQuestion confirm picker" \
   "$(eq "$(grep -c 'AskUserQuestion' "$SKILL")" 1)"
 check "and it sits in the step after the check" "$(grep -q 'AskUserQuestion' <<< "$check_sec" && echo ok || echo "not in the check step")"
-check "the Trash and Dan's own files are named one by one in it" \
+check "the Trash and Dan's own files are named in it, Dan's own files by path" \
   "$(grep -qF 'Trash' <<< "$check_sec" && grep -qF 'Large personal files' <<< "$check_sec" && grep -qF 'Tools not used in 180 days' <<< "$check_sec" && grep -qi 'by path' <<< "$check_sec" && echo ok || echo "the step does not name them")"
 check "and so are worktrees whose repository is gone, by the name the record gives them (#2346)" \
   "$(grep -qF 'Worktrees whose repository is gone' <<< "$check_sec" && echo ok || echo "the step does not name them")"
 # The Trash chosen whole is one line, its count and total, and its entries are listed only when Dan
-# asks, by the checker's read only listing (#3232: 5,979 entries were 5,979 lines of the picker).
+# asks, by the checker's read only listing (#3232: the 5,979 entries of the dry run on 2026-11-17
+# were 5,979 lines of the picker).
 entries_line="$(grep -m 1 -E '^bash ~/\.claude/skills/disk-clean/review-check\.sh --entries ' <<< "$check_code")"
 check "the step says a kind chosen whole is one line, its count and total" \
   "$(grep -qi 'chosen whole' <<< "$check_sec" && grep -qi 'one line' <<< "$check_sec" && echo ok || echo "the step does not say so")"
