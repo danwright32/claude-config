@@ -1109,7 +1109,8 @@ ps__commit_stages_all() {
 #          could not be read, or it names nothing), or NONE (no add at all)
 #   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no;
 #          when the only such adds are in a script file the command runs, two more lines follow:
-#          the directory the first of them runs in, then that script file's path
+#          the directory the first of them inside a repository runs in (its own git -C counted,
+#          claude-config#3234), or the first when none is, then that script file's path
 #
 # $3, when given, is the session's directory, and asks for the script files the command runs to be
 # read as well (lib/shell-words.py every_command, claude-config#2301): their commands are judged as
@@ -1275,14 +1276,41 @@ for where, script, seg in segments:
         if script is None:
             direct_takes = True
         else:
+            # The add runs where its own `git -C` sends it from the directory the script is in
+            # (claude-config#3234): the `git -C "$T" add -A` of a suite fixture stages its throwaway
+            # repository, never the one the session stands in. Read by shell-words.py git_dir, the
+            # one reading of git -C. A variable stays as written, so the directory is one nobody can
+            # name, judged as a `cd "$T"` in the script already is.
+            if shell_words is not None:
+                try:
+                    to = shell_words.git_dir(shell_words.command_rest(shell_words.rejoin(toks))[0])
+                except Exception:
+                    to = ""
+                if to:
+                    where = to if (to.startswith("/") or not where) else os.path.join(where, to)
             script_takes.append((where, script))
 if mode == "takes":
     print("yes" if (takes_all or tracked or unread_wrapper) else "no")
     # Where an add that takes everything runs when only a script holds one (claude-config#2301): the
     # command itself has no add to find its repository by.
     if (takes_all or tracked) and not direct_takes and not unread_wrapper and script_takes:
-        print(script_takes[0][0])
-        print(script_takes[0][1])
+        # The first that runs inside a repository (claude-config#3234), so an add in the directory
+        # of a fixture, or one that is no repository, never stands in for a real add later in the
+        # script; with none in a repository, the first, which stages nothing anywhere.
+        def in_repository(d):
+            d = os.path.abspath(d) if d else ""
+            if not d or not os.path.isdir(d):
+                return False
+            while True:
+                if os.path.exists(os.path.join(d, ".git")):
+                    return True
+                up = os.path.dirname(d)
+                if up == d:
+                    return False
+                d = up
+        judged = next((t for t in script_takes if in_repository(t[0])), script_takes[0])
+        print(judged[0])
+        print(judged[1])
 elif not saw_add:
     print("NONE")
 elif takes_all:
@@ -1499,7 +1527,8 @@ LOOP_INPUT
 # Only a caller that has already asked whether the command can run a script at all
 # (srw_may_run_script, lib/script-run-words.sh) should pass it, since reading starts python. When the
 # only adds that take everything are in a script, PS_ADD_SCRIPT_DIR is set to the directory the
-# first runs in and PS_ADD_SCRIPT to that script's path; both are empty otherwise.
+# first of them inside a repository runs in, its own git -C counted (claude-config#3234), and
+# PS_ADD_SCRIPT to that script's path; both are empty otherwise.
 ps_add_takes_all() {   # $1 = command  $2 = the session directory, to read the scripts it runs
   local out
   PS_ADD_SCRIPT_DIR=""; PS_ADD_SCRIPT=""
