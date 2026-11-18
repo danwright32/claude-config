@@ -7323,7 +7323,8 @@ runs, a script named through a variable the command sets, a script the command w
 heredoc, read as that text, and the local modules a script imports; since #3214 a script named
 through a variable the command never sets (`python3 $N/gen.py`, nothing setting N), which the guard
 cannot find and so cannot read, is held as could not check, while one named through a variable the
-command sets some other way (a loop, a command's output) is still not read; since #2991 a name such a
+command sets some other way (a loop, a command's output) is still not read; since #2991 a name
+such a
 script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
 that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and
 since #3022 only where it starts the path (`root + ch + ...` lands under root), so a suite writing
