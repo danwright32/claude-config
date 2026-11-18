@@ -329,11 +329,60 @@ fi
 # already account for.
 _sc_changed_unread=""
 _sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_changed_list=""; _sc_changed_unread=1; }
+
+# A SUITE THAT WALKS THE CHECKOUT IT SITS IN (claude-config#3183). Some whole tree scans list no file
+# through git: they find the checkout above them with lib/checkout-root.sh, the one shared test for
+# a suite whose subject is the repository, and walk it with os.walk, in their own code or in a
+# program beside them (or in their lib/) that their code names. The marker above never saw them,
+# so on 2026-11-17 PR #3177 added two absence checks to a suite, this gate let the push through,
+# and CI failed on test-scan-absence-needles.sh, which reads every suite that way. They are run
+# when a push adds or changes a test suite, the input they were missed on; a push touching no suite
+# runs them only in CI, as before. Recognised by both facts, never one: of the suites the marker
+# misses, 24 find the checkout (the whole repository suite, test-run-all-tests.sh, among them) and
+# 16 walk something, often a scratch home of their own, against 5 that do both (measured
+# 2026-11-17). Only code lines count.
+#
+# A walk is a walk however it is spelled (L247): os.walk or pathlib's rglob, or a find that prunes
+# .git, which only a find over a checkout needs to. test-bad-byte-locale.sh reads every suite with
+# such a find and was missed while os.walk was the one spelling read; a find over a suite's own
+# scratch folder prunes no .git and is not a walk of the checkout (measured 2026-11-18: of the
+# suites that find their checkout and are not scanners, two find in a scratch folder, and neither
+# prunes .git). Read from a here string, never a pipe into grep -q, which leaves on its first hit
+# and under pipefail reports the match as a failure (L183).
+_sc_walks_tree(){   # $1 = code lines -> 0 when they walk a tree
+  case "$1" in *'os.walk('*|*'.rglob('*) return 0 ;; esac
+  grep -qE '(^|[^[:alnum:]_-])find[[:space:]].*-name[[:space:]]+["'\'']?[.]git([^[:alnum:]_]|$)' <<< "$1"
+}
+_sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks a tree
+  local code d p b c progs
+  grep -q 'checkout-root[.]sh' "$1" 2>/dev/null || return 1
+  code="$(grep -v '^[[:space:]]*#' "$1" 2>/dev/null)"
+  case "$code" in *checkout-root.sh*) ;; *) return 1 ;; esac
+  _sc_walks_tree "$code" && return 0
+  case "$1" in */*) d="${1%/*}" ;; *) d=. ;; esac
+  progs="$(printf '%s\n' "$code" | grep -oE '[A-Za-z0-9_.-]+[.]py' | sort -u)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    b="${p##*/}"
+    for c in "$d/$b" "$d/lib/$b"; do
+      [ -f "$c" ] || continue
+      _sc_walks_tree "$(grep -v '^[[:space:]]*#' "$c" 2>/dev/null)" && return 0
+    done
+  done <<PROGS
+$progs
+PROGS
+  return 1
+}
+
 scanners=""
+walkers=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
   [ -f "$s" ] || continue
-  grep -qE "$SCANS" "$s" 2>/dev/null || continue
+  if grep -qE "$SCANS" "$s" 2>/dev/null; then _sc_kind=scan
+  elif _sc_walks_checkout "$s"; then _sc_kind=walk
+  else continue
+  fi
   # A suite that DRIVES this gate is not a subject of it. It matches the marker because its
   # fixtures have to contain one, and running it re-enters this gate once per fixture. Recognised
   # by the fact that it names this file, so a second suite written to test this gate later is
@@ -345,12 +394,13 @@ while IFS= read -r s; do
   # the day a comment about this file was added there (claude-config#522).
   _code="$(grep -v '^[[:space:]]*#' "$s" 2>/dev/null)"
   case "$_code" in *"$(basename "${BASH_SOURCE[0]}")"*) continue ;; esac
-  scanners="$scanners$s"$'\n'
+  if [ "$_sc_kind" = scan ]; then scanners="$scanners$s"$'\n'; else walkers="$walkers$s"$'\n'; fi
 done <<EOF
 $suites
 EOF
 
 scanners="${scanners%$'\n'}"
+walkers="${walkers%$'\n'}"
 if [ -z "$scanners" ]; then
   hook_allow_notice "scanners-before-push: found no scanner in this repository, which has the marker, so nothing was scanned before this push. That is not a clean run, it is an unmeasured one."
 fi
@@ -376,6 +426,9 @@ if [ "${SCANNERS_LIST:-}" = "1" ]; then
   done <<LIST
 $scanners
 LIST
+  # The walkers, whether or not this push changes a suite, so the listing shows the whole of what
+  # the gate can run; on a line of their own, since only a push changing a suite runs them.
+  [ -n "$walkers" ] && printf '%s\n' "$walkers" | sed 's|^|WHEN-A-SUITE-CHANGES |'
   exit 0
 fi
 
@@ -398,13 +451,23 @@ fi
 # listed never blocks (adding a scanner never fails a push); the repository's own suite holds the
 # list equal to the selection, so it cannot drift low again. A file holding only a number is read as
 # the count it always was.
+#
+# The walkers are held to it too (claude-config#3183): one that stops being recognised drops out of
+# what a push changing a suite runs as silently as a scanner drops out of every push. Each is named
+# on a line of its own as the listing prints it, `WHEN-A-SUITE-CHANGES <path>`, and must be selected
+# as a walker. That form, never a bare path, because the gate a Mac has installed reads this file
+# from the checkout being pushed: a gate older than #3183 takes a bare path for a scanner it does
+# not select and blocks every push until the sync installs this one (seen 2026-11-18 on the push of
+# this change), while its awk reads `WHEN-A-SUITE-CHANGES` as the first field and passes the line by.
 _sc_selected="$(printf '%s\n' "$scanners" | grep -c . || true)"
 _sc_floor_file="$repo_dir/.claude/scanners-floor.txt"
 _sc_floor=""
 _sc_floor_note=""
 _sc_named=""
+_sc_named_walkers=""
 [ -f "$_sc_floor_file" ] && _sc_named="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 }' "$_sc_floor_file" 2>/dev/null)"
-if [ -n "$_sc_named" ]; then
+[ -f "$_sc_floor_file" ] && _sc_named_walkers="$(awk '/^[[:space:]]*#/ { next } $1 == "WHEN-A-SUITE-CHANGES" && $2 ~ /[.]sh$/ { print $2 }' "$_sc_floor_file" 2>/dev/null)"
+if [ -n "$_sc_named" ] || [ -n "$_sc_named_walkers" ]; then
   _sc_dropped=""
   while IFS= read -r _n; do
     [ -n "$_n" ] || continue
@@ -412,6 +475,12 @@ if [ -n "$_sc_named" ]; then
     case $'\n'"$scanners"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
   done <<NAMED
 $_sc_named
+NAMED
+  while IFS= read -r _n; do
+    [ -n "$_n" ] || continue
+    case $'\n'"$walkers"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n (run when a push changes a suite)"$'\n' ;; esac
+  done <<NAMED
+$_sc_named_walkers
 NAMED
   if [ -n "$_sc_dropped" ]; then
     {
@@ -423,7 +492,9 @@ NAMED
       echo "A scanner that stops being selected is silent: the gate goes on reporting a clean run"
       echo "over a smaller set, which is how two defects reached main on 2026-09-21 after a change"
       echo "moved two scanners off the text this gate recognised them by. A suite is selected when"
-      echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code."
+      echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code, or when"
+      echo "it finds its checkout through lib/checkout-root.sh and walks it (os.walk, rglob, or a find"
+      echo "that prunes .git), itself or through a program beside it that its code names."
       echo ""
       echo "If one was removed on purpose, take its line out of $_sc_floor_file in the same change."
       echo "If not, find why it stopped being recognised."
@@ -432,7 +503,7 @@ NAMED
     } >&2
     exit 2
   fi
-  _sc_floor_note=", meeting the floor of $(printf '%s\n' "$_sc_named" | grep -c .) named suites this repository records"
+  _sc_floor_note=", meeting the floor of $(printf '%s\n' "$_sc_named" "$_sc_named_walkers" | grep -c .) named suites this repository records"
 elif [ -f "$_sc_floor_file" ]; then
   # The first line that is neither blank nor a comment, so the file can say what the number is for.
   _sc_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1; exit }' "$_sc_floor_file" 2>/dev/null)"
@@ -982,6 +1053,21 @@ SECTIONS
 done <<EOF
 $scanners
 EOF
+# The walkers, whole, when this push adds or changes a test suite (claude-config#3183). None of them
+# runs section wise: a section is picked by a globbed listing, which a walker does not have.
+_sc_walkers_run=0
+if [ -n "$_sc_new_suites" ] && [ -n "$walkers" ]; then
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    # Counted only when queued: one that already passed on this key is skipped, and a line saying
+    # the walkers were included must not count a walker that never ran.
+    _sc_n_before=$_sc_n
+    start_one "$s" ""
+    [ "$_sc_n" -gt "$_sc_n_before" ] && _sc_walkers_run=$(( _sc_walkers_run + 1 ))
+  done <<EOF
+$walkers
+EOF
+fi
 
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
@@ -1403,6 +1489,8 @@ if [ -z "$failed" ]; then
   else
     _sc_covered="$(printf 'scanners-before-push: %s whole tree scan(s) passed before this push, run at once, reading %s uncommitted file(s) as well as the committed ones%s.' "$ran" "${uncommitted_n:-0}" "$_sc_floor_note")"
   fi
+  # The walkers are counted among them, and said apart, so a push changing a suite shows it ran them.
+  [ "$_sc_walkers_run" -gt 0 ] && _sc_covered="$_sc_covered $(printf '%s of those walk the checkout and were included because this push adds or changes a test suite (#3183).' "$_sc_walkers_run")"
   _sc_unremembered=""
   [ -n "$_sc_record_unwritten" ] && _sc_unremembered="scanners-before-push: ${_sc_record_unwritten}"$'\n'
   hook_allow_notice "${_sc_unremembered}${_sc_bg}${_sc_covered}"
