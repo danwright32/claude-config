@@ -172,35 +172,44 @@ h2 { font-size: 15px; margin: 0; }
   // not; at least when one was read only in part (each row's data-partial is the tally's dcu_part).
   // The bytes are rounded to KiB first, half to even, as the tally's printf does, then worded. The
   // suite runs this against the tally on the same selections.
+  // A count with its thousands marked, by the rule of dcu_commas in hooks/lib/disk-clean-units.sh,
+  // so the bar writes 5,979 as the row and the terminal do (#3232).
+  function commas(n) {
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  }
+
   function totalWords(unsized, n, bytes, partial) {
     if (n > 0 && unsized === n) return "size unknown";
     var kib = Math.floor(bytes / 1024), rest = bytes - kib * 1024;
     if (rest > 512 || (rest === 512 && kib % 2 === 1)) kib++;
     var w = (unsized > 0 || partial ? "at least " : "") + human(kib * 1024);
-    if (unsized > 0) w += ", plus " + unsized + " whose size was not read";
+    if (unsized > 0) w += ", plus " + commas(unsized) + " whose size was not read";
     return w;
   }
 
   function selection() {
-    var ids = [], bytes = 0, unsized = 0, partial = false;
+    var ids = [], n = 0, bytes = 0, unsized = 0, partial = false;
     for (var i = 0; i < ticks.length; i++) {
       var t = ticks[i];
       if (!t.checked || t.disabled) continue;
-      var b = t.getAttribute("data-bytes"), many = t.getAttribute("data-ids");
-      if (many !== null) {
-        // A kind drawn as one row (the Trash, #3216): its box stands for every entry it lists, its
-        // bytes are their read sizes added up, and data-unsized counts the ones never read.
-        var each = many === "" ? [] : many.split(" ");
-        for (var j = 0; j < each.length; j++) ids.push(each[j]);
+      var b = t.getAttribute("data-bytes"), whole = t.getAttribute("data-all");
+      if (whole !== null) {
+        // A kind drawn as one row (the Trash, #3216): its box copies one summary of every entry it
+        // stands for (#3232), which the checker turns back into exactly the entries the scan
+        // listed; data-count is how many, its bytes are their read sizes added up, and
+        // data-unsized counts the ones never read.
+        ids.push(whole);
+        n += Number(t.getAttribute("data-count") || 0);
         bytes += Number(b || 0);
         unsized += Number(t.getAttribute("data-unsized") || 0);
       } else {
         ids.push(t.getAttribute("data-id"));
+        n++;
         if (b === "") unsized++; else bytes += Number(b);
       }
       if (t.getAttribute("data-partial") === "1") partial = true;
     }
-    return { ids: ids, words: ids.length ? ids.length + " selected, " + totalWords(unsized, ids.length, bytes, partial) : "Nothing selected" };
+    return { ids: ids, words: n ? commas(n) + " selected, " + totalWords(unsized, n, bytes, partial) : "Nothing selected" };
   }
 
   function payloadText(sel) {
