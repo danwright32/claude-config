@@ -47,8 +47,8 @@ answers: which file Python finds the module in (importlib.util.find_spec) and wh
 (open). Both are asked for every module asked here by name, loaded already or not, so a kept
 judgement is not used once a file shadows the module or its own file has changed. A module this
 run has not loaded is then run from the very bytes just read, as the gate loads its own libraries
-(load_lib), so nothing can change between the bytes recorded and the bytes run. What that cannot
-cover is said in load.
+(load_lib), so nothing can change between the bytes recorded and the bytes run. How the rest is
+recorded (a compiled module's file, and the modules a module imports as it loads) is said in load.
 """
 import ast
 import importlib.util
