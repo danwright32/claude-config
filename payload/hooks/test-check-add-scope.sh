@@ -678,6 +678,29 @@ for c in "git fetch && bash $S2301/missing.sh add -A" "git fetch && bash $S2301/
   refused "#2301 an add beside a script is still refused, whatever the script holds: $c"
 done
 chmod 600 "$S2301/locked.sh"
+# An add in a script runs where its own `git -C` sends it, not where the script starts
+# (claude-config#3234). A test suite's fixture stages its own throwaway repository with
+# `git -C "$T" add -A`; that add was judged in the session's directory, so a builder running a suite
+# from a session standing in the shared checkout was refused over another session's file there. Its
+# directory is a variable set while the script runs, judged as a script's `cd "$T"` already is. The
+# same reading makes a literal `git -C <repo>` count wherever the session stands, and one fixture
+# add never hides a real add later in the script: the add in a repository is the one judged.
+printf '#!/bin/bash\nT="$(mktemp -d)"\ngit -C "$T" init -q\ngit -C "$T" add -A\n' > "$S2301/fixture.sh"
+printf '#!/bin/bash\nT="$(mktemp -d)"\ngit -C "$T" add -A\ngit add -A\n' > "$S2301/fixture-then-real.sh"
+printf '#!/bin/bash\ngit -C %s add -A\ngit add -A\n' "$S2301" > "$S2301/nonrepo-then-real.sh"
+printf '#!/bin/bash\ngit -C %s add -A\n' "$REPO" > "$S2301/literal-c.sh"
+mkdir -p "$REPO/sub3234"
+printf '#!/bin/bash\ngit -C sub3234 add .\n' > "$S2301/relative-c.sh"
+run "bash $S2301/fixture.sh"
+allowed "#3234 a script's fixture add in its own variable directory is not judged in the session's checkout"
+run "cd $S2301 && bash ./literal-c.sh"
+refused "#3234 a script add whose git -C names the repository is judged there, wherever the session stands"
+says "#3234 and the refusal names the foreign file in that repository" "theirs.txt"
+for c in "bash $S2301/fixture-then-real.sh" "bash $S2301/nonrepo-then-real.sh" "bash $S2301/relative-c.sh"; do
+  run "$c"
+  refused "#3234 a real add in the script is still refused beside a fixture add, or through a relative git -C: $c"
+done
+rmdir "$REPO/sub3234"
 # A copy of the hook whose lib/ holds the readers but not lib/script-run-words.sh, the cheap filter
 # in front of the script reading: no filter is never "runs no script", so the script is still read.
 mkdir -p "$FIX/nofilter/lib"
