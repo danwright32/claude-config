@@ -74,7 +74,7 @@ MAX_READ = 8 * 1024 * 1024  # a file larger than this is read as it always was, 
 # when a name read in their source is missing here. A variable read by a name worked out at run time
 # is recorded and checked again instead (Recorder.env).
 KEY_ENV = ("CARGO_TARGET_DIR", "CDPATH", "CURL_HOME", "DATA_GUARDED_RE", "GATE_DIR", "HOME", "HOOK_TESTS_RUNNING",
-           "PATH", "PYTHONPATH", "SLACK_GATE_CACHE_DIR", "SLACK_GATE_CACHE_TRACE", "SLACK_GATE_TICK_BUDGET",
+           "PATH", "PYTHONPATH", "SLACK_GATE_CACHE_DIR", "SLACK_GATE_CACHE_TRACE", "SLACK_GATE_PHASE_LOG", "SLACK_GATE_TICK_BUDGET",
            "SLACK_GATE_UNWORKED_PATHS", "VIRTUAL_ENV", "XDG_CONFIG_HOME")
 
 # Every module the gate and its libraries import, and why its disk reads are seen. test-judgement-cache.sh

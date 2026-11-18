@@ -197,7 +197,9 @@ ext = next((s for s in (importlib.util.find_spec(n) for n in ("_lsprof", "_multi
             "_queue", "_dbm", "_posixshmem", "_uuid", "cmath", "audioop")) if s is not None
             and isinstance(s.loader, importlib.machinery.ExtensionFileLoader) and s.name not in sys.modules), None)
 if ext is None:
-    print("SUITE-PART-UNMEASURED a compiled extension made through the stand ins, because none of the ones tried is there unloaded")
+    # The count is the two expect calls in the branch below, which this machine cannot run
+    # (claude-config#3191): they are named here, never folded into this script's one pass.
+    print("SUITE-PART-UNMEASURED 2 checks of a compiled extension made through the stand ins (its file loaded from the disk, and what it holds in the record), because none of the ones tried is there unloaded")
 else:
     loaded = []
     sys.addaudithook(lambda event, args: loaded.append(args[1]) if event == "import" and args[1] == ext.origin else None)
@@ -211,21 +213,22 @@ else:
            % (rec5.tainted, sorted(k for k in rec5.reads if k[0] == "read")),
            (rec5.tainted and "larger" in rec5.tainted) if big
            else (rec5.tainted is None and rec5.reads.get(("read", ext.origin), [None])[0] == "ok"))
-    # A module written in Python is made empty, with nothing read: it passes through unmarked. A
-    # loader the recorder does not know may read anything while it makes its module.
-    rec6 = jc.Recorder()
-    jc.install(rec6, [vars(gate)])
-    plain = gate.importlib.util.module_from_spec(gate.importlib.util.spec_from_file_location("jc_plain", os.path.join(work, "src.py")))
-    expect("a module written in Python made from its spec leaves the record whole and empty: %r, %r"
-           % (rec6.tainted, rec6.reads), plain.__name__ == "jc_plain" and rec6.tainted is None and not rec6.reads)
-    class OwnLoader:
-        def create_module(self, spec):
-            return None
-        def exec_module(self, module):
-            pass
-    gate.importlib.util.module_from_spec(importlib.machinery.ModuleSpec("jc_own", OwnLoader()))
-    expect("a loader the recorder does not know marks the record: %r" % rec6.tainted,
-           rec6.tainted and "OwnLoader" in rec6.tainted)
+# A module written in Python is made empty, with nothing read: it passes through unmarked. A
+# loader the recorder does not know may read anything while it makes its module. Neither needs a
+# compiled extension, so both run on every machine, outside the branch above (claude-config#3191).
+rec6 = jc.Recorder()
+jc.install(rec6, [vars(gate)])
+plain = gate.importlib.util.module_from_spec(gate.importlib.util.spec_from_file_location("jc_plain", os.path.join(work, "src.py")))
+expect("a module written in Python made from its spec leaves the record whole and empty: %r, %r"
+       % (rec6.tainted, rec6.reads), plain.__name__ == "jc_plain" and rec6.tainted is None and not rec6.reads)
+class OwnLoader:
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        pass
+gate.importlib.util.module_from_spec(importlib.machinery.ModuleSpec("jc_own", OwnLoader()))
+expect("a loader the recorder does not know marks the record: %r" % rec6.tainted,
+       rec6.tainted and "OwnLoader" in rec6.tainted)
 
 # Fail closed on the way in and on the way out.
 cache = os.path.join(work, "cache")

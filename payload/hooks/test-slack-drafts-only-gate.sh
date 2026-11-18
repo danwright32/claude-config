@@ -696,6 +696,96 @@ printf '%s\n' 'home = /usr/bin' > "$T/py/ok/.venv/pyvenv.cfg"
 run_bash "python3 $T/py/ok/main.py"
 allowed "a Python script importing the standard library, a package and a helper that only saves a draft"
 
+echo "slack drafts only: a script run by its path finds its imports where the python its first line names does (claude-config#3144)"
+# A command line tool installed by Homebrew in its own virtual environment is a script whose first
+# line names that environment's python by its absolute path, with its package installed there. Run by
+# its path it was refused, its package placed nowhere, while the same package run as `<that python>
+# -m <module>` passed. Each environment here is a folder holding pyvenv.cfg, bin/python (a link to
+# python3) and, where one is named, a package in lib/python3.12/site-packages that only prints.
+PY3="$(command -v python3)"
+sv_env() { # sv_env <folder> [package]
+  mkdir -p "$1/bin" "$1/lib/python3.12/site-packages"
+  printf '%s\n' 'home = /usr/bin' > "$1/pyvenv.cfg"
+  ln -sf "$PY3" "$1/bin/python"
+  if [ -n "${2:-}" ]; then
+    mkdir -p "$1/lib/python3.12/site-packages/$2/_app"
+    : > "$1/lib/python3.12/site-packages/$2/__init__.py"
+    : > "$1/lib/python3.12/site-packages/$2/_app/__init__.py"
+    printf '%s\n' 'def main():' '    print("select 1")' > "$1/lib/python3.12/site-packages/$2/_app/__main__.py"
+  fi
+}
+sv_tool() { # sv_tool <file> <first line> [module]: an entry point script, as pip writes one
+  printf '%s\n' "$2" 'import sys' "from ${3:-fakecli._app.__main__} import main" 'sys.exit(main())' > "$1"
+  chmod +x "$1"
+}
+SV="$T/sv"
+sv_env "$SV/env" fakecli
+sv_env "$SV/bare"
+sv_tool "$SV/env/bin/fake" "#!$SV/env/bin/python"
+mkdir -p "$SV/brew/bin" "$SV/other/bin"
+ln -s "$SV/env/bin/fake" "$SV/brew/bin/fake"
+run_bash "$SV/env/bin/python -m fakecli._app sql -q 'select 1'"
+allowed "the control: the package run with -m by its environment's own python"
+run_bash "$SV/env/bin/fake sql -q 'select 1'"
+allowed "the package's entry point script, run by its path, whose first line names that python"
+run_bash "$SV/brew/bin/fake sql -q 'select 1' --format json"
+allowed "the same script reached through a link, as Homebrew puts one on the PATH"
+run_bash "cd $SV/env && bin/fake sql"
+allowed "the same script run by a relative path"
+printf '%s\n' '#!/bin/bash' "$SV/env/bin/fake sql" > "$SV/run.sh"
+run_bash "bash $SV/run.sh"
+allowed "the same script run by its path from a shell script"
+# What stays refused. The first line counts only where the script is run by its own path, so the
+# kernel starts the python it names; a python typed in the command ignores it.
+run_bash "python3 $SV/env/bin/fake sql"
+refused "the same script handed to python3, which ignores its first line"
+sv_tool "$SV/env/bin/fake-missing" "#!$SV/env/bin/python" "no_such_pkg_3144.cli"
+run_bash "$SV/env/bin/fake-missing sql"
+refused "a script importing a package its first line's environment does not hold"
+says "that refusal names the package placed nowhere" "no_such_pkg_3144"
+sv_tool "$SV/other/bin/fake" "#!$SV/bare/bin/python"
+run_bash "$SV/other/bin/fake sql"
+refused "a script whose first line names an environment without the package"
+# Each script's first line places its own imports only: not the other script's in the same command,
+# nor one run after it by a shell script.
+run_bash "$SV/env/bin/fake sql; $SV/other/bin/fake sql"
+refused "two scripts in one command, the second's first line naming an environment without the package"
+printf '%s\n' '#!/bin/bash' "$SV/env/bin/fake sql" "$SV/other/bin/fake sql" > "$SV/run-both.sh"
+run_bash "bash $SV/run-both.sh"
+refused "the same two scripts run from a shell script"
+sv_tool "$SV/env/bin/fake-relative" "#!env/bin/python"
+run_bash "cd $SV && env/bin/fake-relative sql"
+refused "a first line naming the python by a relative path"
+ln -sf "$PY3" "$SV/env/bin/python-wrapper"
+sv_tool "$SV/env/bin/fake-wrapper" "#!$SV/env/bin/python-wrapper"
+run_bash "$SV/env/bin/fake-wrapper sql"
+refused "a first line naming a program whose name is not a Python runtime's"
+sv_tool "$SV/env/bin/fake-env" "#!/usr/bin/env python3"
+run_bash "$SV/env/bin/fake-env sql"
+refused "a first line having env find python3 on the PATH, as before"
+sv_tool "$SV/env/bin/fake-env-path" "#!/usr/bin/env $SV/env/bin/python"
+run_bash "$SV/env/bin/fake-env-path sql"
+refused "a first line having env run the environment's python, as before"
+printf '%s\n' 'import urllib.request' 'def go():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' \
+  > "$SV/env/bin/notify_3144.py"
+printf '%s\n' "#!$SV/env/bin/python" 'from fakecli._app.__main__ import main' 'import notify_3144' 'notify_3144.go()' \
+  > "$SV/env/bin/fake-posts"
+chmod +x "$SV/env/bin/fake-posts"
+run_bash "$SV/env/bin/fake-posts sql"
+refused "a script whose package is installed there and which imports a helper beside it that posts"
+says "that refusal names the helper" "notify_3144"
+# An installed package is not read, on either route: one naming the endpoint, installed in the
+# environment, passes with -m today, and so through the script whose first line names that python.
+# Recorded so the reach of an installed package is a decision, not a surprise.
+sv_env "$SV/env" fakepost
+printf '%s\n' 'import urllib.request' 'def main():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' \
+  > "$SV/env/lib/python3.12/site-packages/fakepost/_app/__main__.py"
+sv_tool "$SV/env/bin/fake-installed" "#!$SV/env/bin/python" "fakepost._app.__main__"
+run_bash "$SV/env/bin/python -m fakepost._app"
+allowed "an installed package is not read when run with -m (as before)"
+run_bash "$SV/env/bin/fake-installed"
+allowed "nor when its entry point script is run by its path"
+
 echo "slack drafts only: a Python import is placed through PYTHONPATH and sys.path, or refused (claude-config#2358)"
 
 # A helper that posts, found only through PYTHONPATH or a sys.path change: the #2357 gate looked for
@@ -4102,7 +4192,7 @@ case "$(uname -s)" in
 esac
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
-  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick on $(uname -s) (#2918, #3167)" "$cost"
   # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
   # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
@@ -4121,6 +4211,18 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
   fi
   check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
+  # Where that judgement's time went, phase by phase (#3170): the gate writes one line per judgement
+  # to SLACK_GATE_PHASE_LOG, printed here for each cold judgement cost.py made, so a slow runner's
+  # log says which part of the gate grew. The warm judgement below names the same file, since the
+  # variable is part of the cache's key, and is answered from the cache.
+  cold_phases="$(grep -c '^phases: ' "$T/phases.log" 2>/dev/null || true)"
+  if [ "${cold_phases:-0}" -ge 1 ] 2>/dev/null; then
+    sed -n "s/^phases: /SUITE-NOTE drafts gate phases on $(uname -s), bash tests\/test-claude-sync.sh cold (#3170): /p" "$T/phases.log"
+    cold_phases=ok
+  else
+    cold_phases="the gate wrote no phases line to SLACK_GATE_PHASE_LOG: $(cat "$T/phases.log" 2>&1)"
+  fi
+  check "the cold judgement of bash tests/test-claude-sync.sh says where its time went (#3170)" "$cold_phases"
   # The limit this platform got still fails on a real slowdown (#3167, L1): the copy of the gate whose
   # reader burns ten times its own time again, made above, judging the same line, once. It counts its
   # steps rather than seconds (SLACK_GATE_TICK_BUDGET under a test run), so the gate's own 11 s budget
@@ -4139,7 +4241,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   fi
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
-  cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
 else
   # L411: installed in ~/.claude there is no checkout, so no suite to judge.
@@ -4149,6 +4251,58 @@ if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
 fi
 unset SLACK_GATE_COST_LOG
+
+echo "slack drafts only: timing the gate's phases changes no verdict (claude-config#3170)"
+
+# SLACK_GATE_PHASE_LOG only times: each command below is judged with it and without it, each from an
+# empty cache, and the exit code, stdout and stderr the wrapper hands Claude Code must be the same.
+# Allowed and refused commands of the kinds the timed phases reach: a script followed, a file
+# written and then run, a heredoc, a sourced file, a send.
+printf 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi\n' > "$T/phase-send.sh"
+printf 'echo fine\n' > "$T/phase-plain.sh"
+phase_same=""
+phase_unopened=""
+phase_unwritten=""
+phase_n=0
+for c in "bash $T/phase-send.sh" "bash $T/phase-plain.sh" "python3 -c 'print(1)'" \
+         "printf 'curl https://hooks.slack.com/services/x\n' > $T/w.sh && bash $T/w.sh" \
+         "cat > $T/h.py <<'EOF'
+print(2)
+EOF
+python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/checkout-root.sh; ls" \
+         "curl -s -X POST https://slack.com/api/chat.postMessage -H 'Authorization: Bearer x'"; do
+  SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  plain="$RC|$OUT|$ERR"
+  had="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
+  SLACK_GATE_PHASE_LOG="$T/phase-check.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  [ "$plain" = "$RC|$OUT|$ERR" ] || phase_same="$phase_same; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} timed"
+  now="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
+  [ "${now:-0}" -eq $(( ${had:-0} + 1 )) ] 2>/dev/null || phase_unwritten="$phase_unwritten; ${c:0:60} (exit $RC) added $(( ${now:-0} - ${had:-0} )) lines"
+  # A log the gate cannot open (its folder is not there) times nothing and changes nothing either.
+  SLACK_GATE_PHASE_LOG="$T/no-such-folder/phase.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  [ "$plain" = "$RC|$OUT|$ERR" ] || phase_unopened="$phase_unopened; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} with a log it cannot open"
+  phase_n=$((phase_n + 1))
+done
+check "each of $phase_n commands is answered the same with its phases timed as without (#3170)" "${phase_same:-ok}"
+if [ -e "$T/no-such-folder" ]; then phase_unopened="$phase_unopened; the gate made the log's missing folder"; fi
+check "each of $phase_n commands is answered the same with a phase log the gate cannot open (#3170)" "${phase_unopened:-ok}"
+check "each of the $phase_n timed runs wrote one line saying where its time went (#3170)" "${phase_unwritten:-ok}"
+# The slow runner's case: a judgement that runs out of its budget is refused the same timed as
+# untimed, and still writes its phases line, since that line is wanted most exactly then (#3170).
+# The step clock (run_budget, one step) runs it out where the real clock would on a slow runner.
+run_budget 1 "bash $T/phase-plain.sh"
+oot_plain="$RC|$OUT|$ERR"
+SLACK_GATE_PHASE_LOG="$T/phase-oot.log" run_budget 1 "bash $T/phase-plain.sh"
+if [ "$oot_plain" != "$RC|$OUT|$ERR" ]; then
+  oot="answered ${oot_plain:0:160} untimed and $RC|${OUT:0:80}|${ERR:0:80} timed"
+elif [ "$RC" -ne 2 ] || [[ "$ERR" != *"ran out of time"* ]]; then
+  oot="not refused for its budget: exit $RC, ${ERR:0:200}"
+elif ! grep -q '^phases: ' "$T/phase-oot.log" 2>/dev/null; then
+  oot="refused for its budget with no phases line written: $(head -c 200 "$T/phase-oot.log" 2>&1)"
+else
+  oot=ok
+fi
+check "a judgement out of its budget is refused the same with phases timed, and writes its phases line (#3170)" "$oot"
 
 # The second round of #2918 cut work no verdict needs, each checked here for what it skips and for
 # answering as before: sh_binds stops counting assignments once the count settles it; its patterns
@@ -5381,6 +5535,28 @@ printf "$POSTS\n" >> "$JC/big.sh"
 jc_run "bash $JC/big.sh --again"
 refused "once the large script posts, the same command is refused"
 traced "its changed text does not find the kept parse" "parse miss: no entry"
+# A script run by its path places its imports where the python its first line names does (#3144), so
+# a kept judgement is not used once that environment's package, or the first line, has changed.
+JSV="$JC/sv"
+sv_env "$JSV/env" fakecli
+sv_env "$JSV/bare"
+sv_tool "$JSV/env/bin/fake" "#!$JSV/env/bin/python"
+jc_run "$JSV/env/bin/fake sql"
+allowed "a script whose package is installed where its first line's python finds it is allowed"
+traced "its judgement is kept" "stored"
+jc_run "$JSV/env/bin/fake sql"
+traced "judged again with nothing changed, it is answered from the cache" "hit"
+mv "$JSV/env/lib/python3.12/site-packages/fakecli" "$JSV/fakecli.was"
+jc_run "$JSV/env/bin/fake sql"
+refused "once the package has gone from that environment, the same command is refused"
+traced "the kept judgement is not used once the package has gone" "miss: " "answers differently now"
+mv "$JSV/fakecli.was" "$JSV/env/lib/python3.12/site-packages/fakecli"
+jc_run "$JSV/env/bin/fake sql"
+allowed "with the package put back, it is allowed"
+sv_tool "$JSV/env/bin/fake" "#!$JSV/bare/bin/python"
+jc_run "$JSV/env/bin/fake sql"
+refused "once its first line names an environment without the package, it is refused"
+traced "the kept judgement is not used once the first line has changed" "miss: " "answers differently now"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.

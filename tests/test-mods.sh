@@ -995,10 +995,10 @@ for want in 'collision-guard keeps its own write-reader' 'collision-guard keeps 
 done
 printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'modkit.pipeline(' \
   && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
-# #2710: a file's text is judged by mod-kit's file reader, kept as a copy since a search asks it
-# synchronously, so the remedy names that copy as well as pipeline.
-printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'fileReach from the copy of hooks/reaches.ts kept at hooks/mod-kit/reaches.ts' \
-  && check "and points a mod judging a file's text at mod-kit's file reader" ok || check "and points a mod judging a file's text at mod-kit's file reader" "$out"
+# #3171: mod-kit's file reader (hooks/reaches.ts, #2710) lost its last user when the Slack alert
+# guard was retired (#3169) and was deleted, so the remedy must not send a mod to a file that is gone.
+printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q -e 'reaches\.ts' -e 'fileReach' \
+  && check "and never points a mod at the deleted file reader" "$out" || check "and never points a mod at the deleted file reader" ok
 # #939: a button must work where it is drawn. A mod-kit button's press reaches its mod through
 # modkit.press, which a click and a typed /press both raise, so a mod hooking ui.press for one is
 # reached by a click alone and fails the run. A mod drawing its own Button must ask

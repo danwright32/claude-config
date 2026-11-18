@@ -333,12 +333,22 @@ for, and run `capture-chrome.js` (beside this skill) by whichever route the sess
 give it. It makes the page one self contained document, every stylesheet, font and image inlined and
 every script taken out, and names anything it could not inline in its first comment.
 
-- **Playwright:** run it with `browser_evaluate`, the file's text as the function. It answers with
-  the document.
+**First, read the page's content security policy and pass it as `csp`** (claude-config#2894). The
+capture reads fonts, images and the page's own markup with `fetch`, which the policy governs, and a read
+it refuses is reported to whoever the policy names, as the loopback post below was. Page script cannot
+see a policy sent as a response header, so read it with `curl -sS -D - -o /dev/null '<the page's URL>'`
+and pass the values of its `Content-Security-Policy` and `Content-Security-Policy-Report-Only` lines,
+joined by `", "`, or `""` when there are neither. When curl does not get the page itself (a redirect to
+sign in, an error), those headers are not the page's: pass no `csp`. Given no `csp`, the capture reads
+nothing over the network, inlines its stylesheets alone, and its first comment names every font and
+image left out; a read the policy does not allow is named the same way and never attempted.
+
+- **Playwright:** run it with `browser_evaluate`, the file's text wrapped as the function
+  `() => (<the file's text>)({csp: "<the policy>"})`. It answers with the document.
 - **Claude in Chrome** (claude-config#2774), in the tab the session opened and with nothing typed or
   clicked:
   1. Run the javascript tool on that tab with the file's text wrapped as
-     `await (<the file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html"})`.
+     `await (<the file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html", csp: "<the policy>"})`.
   2. The page saves the document itself, as a download into `~/Downloads`, and answers with one line:
      the file name, its size in bytes, and the first comment.
   3. Check the file is in `~/Downloads` at exactly that size (`stat -f %z`), then move it beside the
