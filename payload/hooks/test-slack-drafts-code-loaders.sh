@@ -2071,7 +2071,7 @@ class Times:
     def __init__(self, path):
         self.path, self.sys, self.user = path, 0.5, 1.5
     def total(self):
-        return self.sys + self.user
+        return round(self.sys, 1) + self.user
 q = sys
 parser = argparse.ArgumentParser()
 parser.add_argument("path")
@@ -2162,10 +2162,19 @@ w72 operand-in-if.py 'import os, pathlib' 'class A:' '    if os.sep:' '        d
   '            return 0' "print($SYS72 + A())" 'import json'
 w72 operand-in-try.py 'import pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' 'class A:' '    try:' \
   '        __radd__ = radd' '    except Exception:' '        pass' "print($SYS72 + A())" 'import json'
+# The lessons review at 54ccd1c: abc.ABCMeta makes a class from a dictionary whose key is built, or
+# from dict() with keywords. Three reviews each found a way to give a class a method the last list
+# missed, so an operand now passes only beside literals; one beside any other value is refused,
+# a field added to a field included (handed the other's __radd__ all the same).
+w72 operand-abcmeta-key.py 'import abc, pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = abc.ABCMeta("A", (), {"__r" + "add__": radd})' "print($SYS72 + A())" 'import json'
+w72 operand-abcmeta-kw.py 'import abc, pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = abc.ABCMeta("A", (), dict(__radd__=radd))' "print($SYS72 + A())" 'import json'
+w72 operand-field.py 'import pathlib' 'class T:' '    user = 1.5' 't = T()' "print($SYS72 + t.user)" 'import json'
 for route in go-call-chain.py go-own-module.py go-keyword.py go-name.py ifexp-name.py ifexp-chain.py ifexp-direct.py \
   boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py \
   chain-attr.py operand-own-module.py operand-type.py operand-set-later.py operand-setattr.py operand-in-if.py \
-  operand-in-try.py; do
+  operand-in-try.py operand-abcmeta-key.py operand-abcmeta-kw.py operand-field.py; do
   run_72 "python3 $route msg.json"
   read_refused "#3172 sys put where the gate does not follow it is refused: $route"
 done
@@ -2209,9 +2218,10 @@ class Times:
     def __init__(self):
         self.sys, self.user = 0.5, 1.5
     def total(self):
-        return self.sys + self.user
+        return round(self.sys, 1) + self.user
 t = Times()
 q = t.sys if t.user else 0
+assert 0 < t.sys <= 1.5 and t.sys != -1 and t.sys + 1 > 1
 try:
     data = json.load(open(sys.argv[1]))
 except JSONDecodeError as e:

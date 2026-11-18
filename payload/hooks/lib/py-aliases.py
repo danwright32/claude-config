@@ -234,13 +234,9 @@ def os_exposed(nodes, imported):
 # field called sys is printed, rounded or measured by (PR #3161), which sys handed to cannot use.
 SYS_SAFE_CALLS = frozenset({"print", "round", "len", "str", "repr", "int", "float", "bool", "abs", "hash",
                             "id", "format", "ascii"})
-# A class's methods and names that are never handed another object: what a script's own class may
-# bind while a sys it cannot see is still an operand that passes (sys_placed). __slots__ and
-# __doc__ are data.
-SYS_DUNDERS_OK = frozenset({"__init__", "__repr__", "__str__", "__hash__", "__slots__", "__doc__"})
 
 
-def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
+def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere):
     """How the script puts a sys the gate cannot see is sys where it does not follow it, as a phrase,
     or None (claude-config#3172). follow() reads sys.path through each name sys is bound to, and
     py_acts reads it off any attribute called sys, but sys read off a value that is not followed
@@ -249,11 +245,10 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
 
     Such a read (sys_read) passes where it is read on by attribute (its path refused there), bound
     to a name follow() reads on from, going nowhere, or used where a module cannot be handed on: an
-    operand of arithmetic or a comparison (where nothing in the script, and none of its own
-    modules, can write a method the other operand hands it to), negated, formatted into a string,
-    indexed, or handed to one of
-    SYS_SAFE_CALLS the script does not bind itself. That keeps a field called sys, printed,
-    rounded, added or compared, a field as PR #3161 chose. Anywhere else it is refused. An arm of a
+    operand of arithmetic or a comparison whose other operands are all literals, negated, formatted
+    into a string, indexed, or handed to one of SYS_SAFE_CALLS the script does not bind itself.
+    That keeps a field called sys printed, rounded, or added to or compared with a number as a
+    field, as PR #3161 chose. Anywhere else it is refused. An arm of a
     choice and a walrus give it on to wherever they go, so they are read through."""
     bound_here = {n.id for n in nodes if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
     bound_here |= {n.name for n in nodes if isinstance(n, SCOPES) and not isinstance(n, ast.Lambda)}
@@ -261,29 +256,19 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
     bound_here |= {(a.asname or a.name).split(".")[0] for n in nodes if isinstance(n, (ast.Import, ast.ImportFrom))
                    for a in n.names}
     # An operand of arithmetic or a comparison is handed to the other operand's method (a module
-    # has none, so sys + a calls a's __radd__ with sys, and `sys in a` its __contains__). So an
-    # operand passes only where the script writes no dunder name that is not SYS_DUNDERS_OK (none
-    # of which is handed another object) as a method: a function of that name anywhere, a name of
-    # that name bound anywhere in a class (its if or try included), or a string of that name as a
-    # dictionary key or an argument (type()'s dictionary of methods). Nor where a class can come
-    # from somewhere not read here: one of the script's own modules, or type() called with more
-    # than an object (lessons reviews at d63d189 and 510611e). The rest of the ways to give a class
-    # a method (setattr, vars, an attribute starting with _) are refused by py_acts already.
-    def hook(name):
-        return name.startswith("__") and name.endswith("__") and name not in SYS_DUNDERS_OK
+    # has none, so sys + a calls a's __radd__ with sys, and `sys in a` its __contains__). So it
+    # passes only where every other operand is a literal, whose methods are the interpreter's own:
+    # a list of the ways a script can give a class such a method missed the next one in three
+    # reviews running (an if in the class body, type(), abc.ABCMeta with a built key), L96.
+    def literal(e):
+        if isinstance(e, ast.UnaryOp) and isinstance(e.op, (ast.USub, ast.UAdd)):
+            e = e.operand
+        return isinstance(e, ast.Constant)
 
-    def one_arg_type(n):
-        call = parent.get(id(n))
-        return isinstance(call, ast.Call) and call.func is n and len(call.args) == 1 and not call.keywords
+    def among_literals(at, p):
+        others = [p.left, p.right] if isinstance(p, ast.BinOp) else [p.left, *p.comparators]
+        return all(o is at or literal(o) for o in others)
 
-    in_class = {id(n) for c in nodes if isinstance(c, ast.ClassDef) for n in ast.walk(c)}
-    operand_hooks = own_modules or any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and hook(n.name)
-        or isinstance(n, ast.Name) and (id(n) in in_class and not isinstance(n.ctx, ast.Load) and hook(n.id)
-                                        or n.id == "type" and not one_arg_type(n))
-        or isinstance(n, ast.Constant) and isinstance(n.value, str) and hook(n.value)
-        and isinstance(parent.get(id(n)), (ast.Dict, ast.Call))
-        for n in nodes)
     for node in nodes:
         if not isinstance(node, (ast.Name, ast.Attribute)) or not isinstance(node.ctx, ast.Load) or not sys_read(node):
             continue
@@ -301,7 +286,7 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
         if (id(at) in sys_bound and not unfollowed) or goes_nowhere(at, p):
             continue
         if isinstance(p, (ast.UnaryOp, ast.FormattedValue)) or (isinstance(p, ast.Subscript) and p.value is at) \
-                or (isinstance(p, (ast.BinOp, ast.Compare)) and not operand_hooks):
+                or (isinstance(p, (ast.BinOp, ast.Compare)) and among_literals(at, p)):
             continue
         call = parent.get(id(p)) if isinstance(p, ast.keyword) else p
         if isinstance(call, ast.Call) and call.func is not at and isinstance(call.func, ast.Name) \
@@ -523,6 +508,6 @@ def make(inert):
             if is_module(value(node)):
                 phrase = f"puts the module {dotted(node)} where the gate does not follow it"
                 break
-        return renamed, phrase or sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, bool(local)), as_sys
+        return renamed, phrase or sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere), as_sys
 
     return follow
