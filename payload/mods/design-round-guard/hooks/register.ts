@@ -334,8 +334,14 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   variable the command sets to one literal; a script the command writes first from a heredoc, read
 //   as that text; and each local module a python or node script imports. Over 14 days of this Mac's
 //   commands and the repository's scripts none newly held a command. A destination a variable the
-//   script does not set fills in, a loop's or the environment's variable naming a script, and a module
-//   found only through sys.path or an installed package are not read (docs/mods-design.md).
+//   script does not set fills in, a loop's variable naming a script, and a module found only through
+//   sys.path or an installed package are not read (docs/mods-design.md).
+// - Since #3214: a script the command names through a variable it never sets (`python3 $N/gen.py`,
+//   nothing setting N), which #2855 left out with a loop's as one only the environment holds, cannot
+//   be found, so cannot be read: held as could not check, as a script that cannot be opened is
+//   (rules.ts neverSetVariable). Over the 14 days to 2026-11-18 it newly held 1 of this Mac's 63,461
+//   recorded Bash calls. A variable the command sets some way no reader follows, and one a shell
+//   script the command runs never sets in its own text, are left as before, each measured as noisy.
 // - Since #2924: a shell script that cannot write what it is handed is not judged as writing its
 //   arguments (#1586). It cannot where, read whole as mod-kit reads a command (with its trap bodies),
 //   every file its commands write, empty or take away is a name its own text spells or a temporary
@@ -719,7 +725,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // in such a script is not: over 14 days of this Mac's commands every one was usage text, a docstring
   // or a fixture for a scratch repository (make-switcher.py's `<out.html>`), never a write, where an
   // inline program's names are its own (#1151). A file its code names where the folder it runs in
-  // cannot be followed, or a script that cannot be read, is held as could not check. A script whose
+  // cannot be followed, or a script that cannot be read, is held as could not check, and so since
+  // #3214 is one that cannot be found, named through a variable the command never sets. A script whose
   // writes are not all named and whose text names the plugin store may write the guard's record,
   // refused as a command naming the store is.
   let scriptStore = false
