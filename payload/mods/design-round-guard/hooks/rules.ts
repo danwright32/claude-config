@@ -1750,6 +1750,9 @@ export const scriptUnplaced = (script: string, file: string): string =>
 /** Why a script file that is there could not be checked (#2847): reading it failed, so what its code writes is unknown. */
 export const scriptUnreadable = (script: string, why: string): string => `${script} could not be read for the files its own code writes (${why})`
 
+/** Why a script file named through a variable the command never sets could not be checked (#3214): where it is cannot be followed, so it was never opened. */
+export const scriptNeverSet = (script: string, v: string): string => scriptUnreadable(script, `the command never sets ${v}, so where the script is could not be followed`)
+
 /**
  * The language a script file a command runs is read in for what its own code writes (#2847): python
  * or node, by the program the command runs it with (mod-kit's `language`, the one reader of what a
@@ -1915,8 +1918,9 @@ export const scriptOf = (c: RunCommand): { word: string; shell?: true } | undefi
  * written, `~`, `$HOME` and `${HOME}` as the home folder, `$PWD` as the folder it runs in, and
  * `$N/step.py` or `${N}/step.py` by `command`'s own assignment of N to a literal (shellVarPath), the
  * one value it can hold. Undefined for anything else: a variable the command sets nowhere (one only
- * the environment holds) or sets more than one way, a command's output, a pattern, and a relative
- * name where the folder it runs in is not known.
+ * the environment holds, which scriptsRunIn gives as unread since #3214, neverSetVariable) or sets
+ * more than one way, a command's output, a pattern, and a relative name where the folder it runs in
+ * is not known.
  * Since #2924, where `command` is the text of a script file at `self`, a variable that script sets
  * once to its own folder by the usual idiom (`HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`,
  * read by mod-kit's ownFolderPath, #3022) is that file's folder, so a file it sources beside itself
@@ -1943,6 +1947,34 @@ export const scriptPath = (word: string, command: string, folder: string | undef
   if (/[$`*?[]/.test(w)) return undefined
   if (/^(\/|~(\/|$))/.test(w)) return resolvePath(w, '/', home)
   return folder === undefined ? undefined : resolvePath(w, folder, home)
+}
+
+/**
+ * The variable a command spells a script file's name through and never sets (#3214), for a script
+ * scriptPath could not place: the first `$V`, `${V}` or `${V...}` in `word` whose name `command`
+ * spells nowhere as a word of its own, or undefined. Only the environment can hold such a variable,
+ * so the guard cannot find the script, and what it cannot find it cannot read: scriptsRunIn gives it
+ * as unread, and the guard holds it as could not check. Until #3214 it was left out as a route that
+ * cannot be judged precisely (#2855), and `python3 $N/gen.py`, gen.py writing app/page.tsx, ran
+ * unasked.
+ *
+ * A command sets a variable only by spelling its name as a word of its own: at the start, or after
+ * a space, `;`, `&`, `|`, `(`, a quote or a `{` no `$` opens, and before the end, a space, one of
+ * those, `=`, `+`, `[` or `}` (`V=x`, `V+=x`, `export V`, `for V in`, `read -r V`, `printf -v V`,
+ * `((V=1))`, `exec {V}>f`), or by a default it assigns (`${V:=x}`). A name it spells only in uses,
+ * in a flag (`-V`), in a longer name or as a value (`x=V`) sets nothing. HOME and PWD are the
+ * shell's own. A variable the command does spell so, set some way no reader here follows (a loop, a
+ * command's output, two values), is left as before, not read and not held: over the 14 days to
+ * 2026-11-18, of this Mac's 63,461 recorded Bash calls, 206 ran a script through one, against 1
+ * through a variable the command never sets.
+ */
+export const neverSetVariable = (word: string, command: string): string | undefined => {
+  for (const m of word.matchAll(/\$(?:\{([A-Za-z_]\w*)|([A-Za-z_]\w*))/g)) {
+    const v = (m[1] ?? m[2]) as string
+    if (v === 'HOME' || v === 'PWD') continue
+    if (!new RegExp(`(?:^|[\\s;&|("']|(?<!\\$)\\{)${v}(?=$|[\\s;&|)"'=+[}])|\\$\\{${v}:?=`).test(command)) return v
+  }
+  return undefined
 }
 
 /**
@@ -2040,10 +2072,14 @@ export type ScriptRun = { word: string; path: string; lang: ScriptLang; folder: 
  *   SHELL_DEPTH, its variables read from its own text;
  * - a script named through a variable the command sets to a literal (`N=/n; python3 "$N/a.py"`);
  * - a script the same command writes first from a heredoc, read as the text it writes.
- * A script named through a variable only the environment holds, a pattern or a command's output, a
- * relative name where the folder is unknown, one not there, one larger than SCRIPT_MAX, and one run by
- * its own name with no python, node or shell extension are not read. `word` says which file, and for
- * a module or a script a shell script runs, which script brought it in.
+ * A script the command names through a variable it never sets cannot be found, and since #3214 is
+ * given as unread, saying so (neverSetVariable), as one that is there and cannot be opened is. A
+ * script named through a variable set another way (a loop, a command's output, two values), or by a
+ * shell script the command runs through a variable that script's text never sets, a pattern or a
+ * command's output, a relative name where the folder is unknown, one not there, one larger than
+ * SCRIPT_MAX, and one run by its own name with no python, node or shell extension are not read.
+ * `word` says which file, and for a module or a script a shell script runs, which script brought it
+ * in.
  */
 export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, home: string): Promise<ScriptRun[]> => {
   const out: ScriptRun[] = []
@@ -2093,6 +2129,17 @@ export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, h
       const run = scriptOf(c)
       const folder = c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder
       const path = run ? scriptPath(run.word, line, folder, home, self) : undefined
+      // #3214: a script the command names through a variable it never sets cannot be found, so cannot
+      // be read: given as unread, once for each spelling, for the guard to hold as could not check.
+      // Only in the command itself (`via` undefined). One a shell script the command runs names so is
+      // left as before, not read and not held: a file it sources, or whatever runs it, may set the
+      // variable, and with the hold built there too this reading gave 156 of this Mac's 63,505 Bash
+      // calls recorded over the 14 days to 2026-11-18 as unread, against 1 for the command itself.
+      const unset = run && path === undefined && via === undefined ? neverSetVariable(run.word, line) : undefined
+      if (run && unset !== undefined && !seen.has(`${unset}\n${run.word}`)) {
+        seen.add(`${unset}\n${run.word}`)
+        out.push({ word: run.word, unread: scriptNeverSet(run.word, unset) })
+      }
       if (run && path !== undefined && !seen.has(path)) {
         seen.add(path)
         const word = via ? `${run.word}, which ${via} runs,` : run.word
