@@ -24,12 +24,16 @@
 #   - kinds largest first by what can go, with Worktrees whose repository is gone, Tools not used in
 #     180 days and Large personal files always last, in that order, because those are Dan's own and
 #     cannot come back (D3; the worktrees one added for #2346, since it can hold uncommitted work). A kind the
-#     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
-#     is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows, and the reason the scan
-#     recorded (its status, else its note) where the total goes, after the measured kinds that
-#     regenerate and before Dan's own files;
+#     scan found nothing in is not drawn, as the design draws it, unless it has a note; a kind it
+#     could not measure at all is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows,
+#     and the reason the scan recorded (its status, else its note) where the total goes, after the
+#     measured kinds that regenerate and before Dan's own files;
+#   - a measured kind's note (what the scan left out of it and why, such as the build folders iCloud
+#     syncs, #3215) as one line under its heading, drawn even when nothing of the kind is listed;
 #   - within a kind, what can be ticked largest first and unknown sizes last (D4), then what will not
-#     be removed, greyed, each with its reason (D2), in the order the scan found them;
+#     be removed, greyed, each with its reason (D2), in the order the scan found them; except the
+#     Trash, drawn as ONE row whose box ticks every entry that can go, with their count and total,
+#     and one greyed row per reason for what cannot (#3216: 5,979 entries were 5,979 rows);
 #   - each row on one line: path (the home folder as ~), then its reason or detail, then its marks
 #     (D5, D7, D8), and its size;
 #   - every tick box unticked, the foot bar reading Nothing selected (D9).
@@ -128,7 +132,7 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
       if (why == "") why = sf[3]
       if (why == "") why = "the scan could not measure it"
       unm[sf[1]] = why
-    }
+    } else if (sf[3] != "") noted[sf[1]] = sf[3]
     next
   }
   {
@@ -142,7 +146,9 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
   END {
     for (c in n) kib[c] = dcu_tally_kib(c)
     # The kinds, in the scan header order, then any the header does not name. A kind with items is
-    # drawn; so is one the scan could not measure at all, which has none (Dan, 2026-10-28).
+    # drawn; so is one the scan could not measure at all, which has none (Dan, 2026-10-28); and so
+    # is one with a note and nothing listed, whose note says what was left out of it (#3215).
+    for (c in noted) if (!(c in n)) n[c] = 0
     m = split(cats, co, " "); nk = 0
     for (j = 1; j <= m; j++) if (((co[j] in n) || (co[j] in unm)) && !(co[j] in placed)) { kinds[++nk] = co[j]; placed[co[j]] = 1 }
     for (j = 1; j <= nfirst; j++) if (!(firsts[j] in placed)) { kinds[++nk] = firsts[j]; placed[firsts[j]] = 1 }
@@ -166,7 +172,7 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
     for (r = 1; r <= nr; r++) {
       c = order[r]; rank[c] = r
       total = (kind[c] == "unknown") ? "Size unknown" : ((kind[c] == "lower") ? "At least " : "") dcu_h(kib[c] + 0)
-      printf "%d%s%s%s%s%s%s%s%d%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, total, tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]) > catfile
+      printf "%d%s%s%s%s%s%s%s%d%s%s%s%s\n", r, tab, c, tab, dcr_t(c, table), tab, total, tab, can[c] + 0, tab, ((c in n) ? "" : unm[c]), tab, noted[c] > catfile
     }
     for (i = 1; i <= ni; i++) {
       split(seq[i], f, FS)
@@ -209,10 +215,68 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
       # D11: the heading box, in the tick column of the rows, ticking every item of the kind that
       # can be ticked; disabled when none can.
       printf "<div class=\"group-head\" data-category=\"%s\"><label class=\"head-left\"><input class=\"tick head-tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"Tick every %s item\" data-category=\"%s\"%s><h2>%s</h2></label><span class=\"group-total\">%s</span></div>\n", h(name[drawn]), h(title[drawn]), h(name[drawn]), (can[drawn] ? "" : " disabled"), h(title[drawn]), h(total[drawn])
+      # The note of the kind, one line under its heading: what the scan left out of it and why (#3215).
+      if (gnote[drawn] != "") printf "<p class=\"group-note\">%s</p>\n", h(gnote[drawn])
     }
   }
+  function commas(x,    s) {
+    s = x ""
+    while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]($|,)/, ",&", s)
+    return s
+  }
+  function entries(x) { return commas(x) (x == 1 ? " entry" : " entries") }
+  # A size from the shared tally over one key, in the words the total of a kind uses.
+  function tsize(key,    k) {
+    k = dcu_tally_kind(key)
+    return (k == "unknown") ? "Size unknown" : ((k == "lower") ? "At least " : "") dcu_h(dcu_tally_kib(key) + 0)
+  }
+  # A kind drawn as ONE row (#3216): every entry that can be ticked is one row, whose box carries
+  # their ids, their count and the tally of their sizes; what cannot be ticked is one greyed row
+  # per reason, saying how many. The Trash held 5,979 entries on the personal MacBook.
+  function fold(r, f, st, b, ok,    t, k, nf, fl) {
+    if (gr != r) { gr = r; gn = 0; gids = ""; gp = 0; gflags = ""; nko = 0; split("", kc); split("", ko); split("", seenf) }
+    if (gdir == "") { t = f[4]; sub(/\/[^\/]*$/, "", t); gdir = t }
+    if (ok) {
+      gn++; gids = gids (gids == "" ? "" : " ") f[1]
+      dcu_tally("fold" r, b, f[8])
+      if (dcu_part(b, f[8])) gp = 1
+      nf = split(f[9], fl, ",")
+      for (k = 1; k <= nf; k++) if (fl[k] != "" && !(fl[k] in seenf)) { seenf[fl[k]] = 1; gflags = gflags (gflags == "" ? "" : ",") fl[k] }
+    } else {
+      t = reason(st)
+      if (!(t in kc)) ko[++nko] = t
+      kc[t]++
+      dcu_tally("kept" r SUBSEP t, b, f[8])
+    }
+  }
+  function unfold(    p, sub_, marks, nf, fl, k, key, bytes) {
+    if (gr == "") return
+    p = h(short(gdir))
+    if (gn) {
+      key = "fold" gr
+      sub_ = "<span class=\"note\">" h(entries(gn)) "</span>"
+      if (gflags != "") {
+        nf = split(gflags, fl, ","); marks = ""
+        for (k = 1; k <= nf; k++) marks = marks "<span class=\"flag" (dcrv_flag_quiet(fl[k]) ? " quiet" : "") "\">" h(dcrv_flags(fl[k])) "</span>"
+        sub_ = sub_ "<span class=\"flags\">" marks "</span>"
+      }
+      bytes = sprintf("%.0f", dcu_tb[key] + 0)
+      printf "<div class=\"item\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s, %s\" data-id=\"%s\" data-ids=\"%s\" data-category=\"%s\" data-bytes=\"%s\" data-unsized=\"%d\" data-partial=\"%d\"><div class=\"what\"><span class=\"path\">%s</span><span class=\"sub\">%s</span></div><span class=\"size%s\">%s</span></div>\n", \
+        h(name[gr]), p, h(entries(gn)), h(name[gr]), h(gids), h(name[gr]), bytes, dcu_tally_unsized(key), gp, p, sub_, (dcu_tally_kind(key) == "unknown" ? " unknown" : ""), h(tsize(key))
+      rows++
+    }
+    for (k = 1; k <= nko; k++) {
+      key = "kept" gr SUBSEP ko[k]
+      printf "<div class=\"item kept\" data-id=\"%s-kept-%d\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s, %s\" data-id=\"%s-kept-%d\" data-category=\"%s\" data-bytes=\"\" data-partial=\"0\" disabled><div class=\"what\"><span class=\"path\">%s</span><span class=\"sub\"><span class=\"note\">%s</span></span></div><span class=\"size%s\">%s</span></div>\n", \
+        h(name[gr]), k, p, h(entries(kc[ko[k]])), h(name[gr]), k, h(name[gr]), p, h(entries(kc[ko[k]]) ": " ko[k]), (dcu_tally_kind(key) == "unknown" ? " unknown" : ""), h(tsize(key))
+      rows++
+    }
+    gr = ""; gdir = ""
+  }
   BEGIN {
-    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; nkinds++ }
+    # The kinds drawn as one row rather than a row per entry (#3216).
+    folded["trash"] = 1
+    while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; gnote[c[1]] = c[7]; nkinds++ }
     printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back. Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
     FS = tab
@@ -221,8 +285,10 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     r = $1; rest = $0
     for (k = 1; k <= 4; k++) rest = substr(rest, index(rest, tab) + 1)
     split(rest, f, sep)
+    if (gr != "" && gr != r) unfold()
     heads(r + 0)
     id = f[1]; st = f[5]; b = f[6]; ok = (st == "offerable")
+    if (name[r] in folded) { fold(r, f, st, b, ok); next }
     p = h(short(f[4]))
     note = ok ? f[10] : reason(st)
     sub_ = ""
@@ -239,6 +305,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     rows++
   }
   END {
+    unfold()
     heads(nkinds + 0)
     if (!rows && unmeasured) print "<p class=\"empty\">Nothing was found to remove in what the scan could measure.</p>"
     else if (!rows) print "<p class=\"empty\">This scan found nothing to remove.</p>"
