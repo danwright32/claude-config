@@ -185,7 +185,7 @@ check_eq "#2623 the scan sees a file, a glob and a cd climbing out of the payloa
 FILES="$(bash "$DIR/lib/repo-files.sh" "$SELF_TOP" 2>/dev/null || true)"
 if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ -n "$FILES" ]; then
   found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$SELF_TOP")"; found_rc=$?
-  check_eq "#1663 no suite finds the repository by counting folders up; each asks lib/checkout-root.sh" \
+  check_eq "#1663 #3221 no suite finds the repository by counting folders up or by asking git from its own folder; each asks lib/checkout-root.sh" \
     "0" "$found_rc${found:+
 $found}"
 else

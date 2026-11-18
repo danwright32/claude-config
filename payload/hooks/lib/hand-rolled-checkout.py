@@ -8,7 +8,7 @@ unrelated repository. lib/checkout-root.sh is the one test of whether a folder i
 claude-config checkout (#1567), and every suite that needs the checkout asks it. This finds the next
 suite that hand rolls the lookup instead (L613), so the fix is not converted one site at a time.
 
-WHAT IT LOOKS FOR, in a suite file (a test-*.sh), two shapes:
+WHAT IT LOOKS FOR, in a suite file (a test-*.sh), three shapes:
 
 - An upward derivation, a command substitution that changes into a variable's folder (or a
   `dirname`) followed only by two or more `..` and prints where it landed (`$(cd "$DIR/../.." &&
