@@ -331,7 +331,7 @@ class Recorder:
                 self.taint(f"importlib.util.module_from_spec of a compiled module with no file ({origin!r})")
             elif ("read", origin) not in self.reads:
                 try:
-                    self.open(origin, "rb").close()
+                    self.open(origin, mode="rb").close()
                 except (OSError, ValueError):
                     pass  # recorded as the read's answer; the real call below says what it makes of it
         elif not (isinstance(loader, (_machinery.SourceFileLoader, _machinery.SourcelessFileLoader))
