@@ -554,15 +554,16 @@ want_eq "#3187 control: when that commit leaves the generator out, the section i
 
 # A file list the hook cannot read skips OUT LOUD rather than judging without it. A git on the PATH
 # that fails only the listing call FAIL_LIST names (tree: the whole tree listing, index: the index
-# listing), and passes everything else to the real one. The index listing's subcommand is matched
-# by a prefix, not spelled out: scanners-before-push.sh runs every suite whose text names it as a
-# whole tree scanner, and this suite is not one (its floor would otherwise have to list it).
+# listing), and passes everything else to the real one. Naming the index listing here is why
+# scanners-before-push.sh selects this suite as a whole tree scanner, and .claude/scanners-floor.txt
+# names it: the suite reads only fixture repositories it builds, but the gate running it costs a
+# few seconds and is not an exemption.
 REAL_GIT="$(command -v git)"
 mkdir -p "$WORKDIR/failing-git"
 cat > "$WORKDIR/failing-git/git" <<SHIM
 #!/usr/bin/env bash
 [ "\${FAIL_LIST:-}" = tree ] && [ "\$1" = ls-tree ] && [ "\$2" = -r ] && exit 128
-[ "\${FAIL_LIST:-}" = index ] && [ "\$1" = -C ] && [ \$# -eq 3 ] && case "\$3" in ls-fil*) exit 128 ;; esac
+[ "\${FAIL_LIST:-}" = index ] && [ "\$1" = -C ] && [ "\$3" = ls-files ] && [ \$# -eq 3 ] && exit 128
 exec "$REAL_GIT" "\$@"
 SHIM
 chmod +x "$WORKDIR/failing-git/git"

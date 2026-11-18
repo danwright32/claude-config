@@ -13,6 +13,7 @@
 # Never as a bare path: a gate installed before #3183 would take it for a scanner and block every push.
 payload/hooks/test-blank-check-cost.sh
 payload/hooks/test-branch-issue-reader.sh
+payload/hooks/test-check-duplication.sh
 payload/hooks/test-check-home-paths.sh
 payload/hooks/test-check-root-guard.sh
 payload/hooks/test-checkout-root.sh
