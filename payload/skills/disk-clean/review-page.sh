@@ -24,12 +24,16 @@
 #   - kinds largest first by what can go, with Worktrees whose repository is gone, Tools not used in
 #     180 days and Large personal files always last, in that order, because those are Dan's own and
 #     cannot come back (D3; the worktrees one added for #2346, since it can hold uncommitted work). A kind the
-#     scan found nothing in is not drawn, as the design draws it; a kind it could not measure at all
-#     is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows, and the reason the scan
-#     recorded (its status, else its note) where the total goes, after the measured kinds that
-#     regenerate and before Dan's own files;
+#     scan found nothing in is not drawn, as the design draws it, unless it has a note; a kind it
+#     could not measure at all is (Dan, 2026-10-28): its heading greyed, with no tick box and no rows,
+#     and the reason the scan recorded (its status, else its note) where the total goes, after the
+#     measured kinds that regenerate and before Dan's own files;
+#   - a measured kind's note (what the scan left out of it and why, such as the build folders iCloud
+#     syncs, #3215) as one line under its heading, drawn even when nothing of the kind is listed;
 #   - within a kind, what can be ticked largest first and unknown sizes last (D4), then what will not
-#     be removed, greyed, each with its reason (D2), in the order the scan found them;
+#     be removed, greyed, each with its reason (D2), in the order the scan found them; except the
+#     Trash, drawn as ONE row whose box ticks every entry that can go, with their count and total,
+#     and one greyed row per reason for what cannot (#3216: 5,979 entries were 5,979 rows);
 #   - each row on one line: path (the home folder as ~), then its reason or detail, then its marks
 #     (D5, D7, D8), and its size;
 #   - every tick box unticked, the foot bar reading Nothing selected (D9).
