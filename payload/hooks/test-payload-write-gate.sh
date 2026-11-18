@@ -600,6 +600,36 @@ runbash "sh -c '$QUOTED_LINES'" "$FIX/dev"
 refused "#3152 and a single quoted string a shell runs is read as ever"
 runbash "printf \"$QUOTED_LINES\" >> $FIX/elsewhere/notes.md" "$FIX/dev"
 refused "#3152 double quoted text is read as ever, since only single quoted text is narrowed"
+# A backquote inside single quotes is a character the shell prints, not a substitution
+# (claude-config#3184). Markdown text nearly always holds one, so on 2026-11-17 a printf appending a
+# lessons review quote, "> payload/<file>:<line>: `<code>`", to a notes file was still refused. A
+# backquote anywhere else in the printf or echo, a redirect target in quotes included, can run a
+# command, so that text is read as ever.
+TICKED_LINES="- the gate read this line
+> payload/LESSONS.md:12: \`printf\` as a redirect"
+runbash "printf '%s\n' '$TICKED_LINES' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+allowed "#3184 a backquote inside the single quoted text no longer stops it being read as text"
+runbash "echo '$TICKED_LINES' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+allowed "#3184 nor in echo text"
+runbash "printf '$TICKED_LINES
+'" "$FIX/dev"
+allowed "#3184 nor in text printed to the terminal"
+runbash "printf '%s\n' '$TICKED_LINES' > payload/LESSONS.md" "$FIX/dev"
+refused "#3184 a redirect into payload after single quoted text holding a backquote is still refused"
+runbash "printf '%s\n' 'a \`b\`' \`sh -c 'echo x > payload/LESSONS.md'\` >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 a backquote substitution outside the quotes that writes into payload is still refused"
+runbash "printf '%s\n' '$TICKED_LINES' \`cat $FIX/elsewhere/x\` >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 a backquote substitution outside the quotes still keeps the text read"
+runbash "printf '%s\n' '$TICKED_LINES'\`cat $FIX/elsewhere/x\` >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 and so does one right after the closing quote"
+runbash "printf '%s\n' \\'\`cat $FIX/elsewhere/x\`\\' '$TICKED_LINES' >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 and one between escaped quotes, which open no quoted text"
+runbash "printf '%s\n' '$TICKED_LINES' >> $FIX/elsewhere/\`echo notes.md\`" "$FIX/dev"
+refused "#3184 and one in the file it writes"
+runbash "printf '%s\n' '$TICKED_LINES' \"\`echo x\`\" >> $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 and one inside double quotes"
+runbash "printf '%s\n' '$TICKED_LINES' >> $FIX/elsewhere/notes.md && cat $FIX/elsewhere/notes.md" "$FIX/dev"
+refused "#3184 the file written named again later in the command still keeps the text read"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
