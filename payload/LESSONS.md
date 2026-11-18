@@ -5777,6 +5777,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+- **L864. A filter that removes data by its shape must run on the text in the form it will be
+  output in, after every squeeze, join, unescape and normalisation, because reshaping text after
+  the filter can rebuild a shape the filter had passed. Prove it with one test over every caller:
+  filtering the output a second time changes nothing, and nothing the previous version removed is
+  readable now.**
+  (slate#5178, 2026-11-18)
+  SHORT: A shape filter must run on text in its output form, after every reshape, or the reshape rebuilds what it passed; test a second pass changes nothing.
 - **L858. An answer sent to a caller outside the system carries a fixed failure message and a
   trace id, never the text of the error that was thrown.** A thrown message names vendors,
   fields and sometimes data that nobody chose to disclose, and it changes with every new
