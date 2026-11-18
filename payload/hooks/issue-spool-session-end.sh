@@ -18,15 +18,18 @@
 # HOW IT IS SAID. The hooks documentation: SessionEnd "discards their JSON output fields, such as
 # systemMessage", "Claude never sees stderr from a hook that exits 0", and exit 2 on SessionEnd
 # "Shows stderr to user only", with "no decision control" to block anything. So the notice goes to
-# stderr with exit 2, as the documentation directs. But SessionEnd stderr has NOT been seen to
-# reach the person. On 2026-10-30 a /clear with the spool root made read only (chmod 500) printed
-# no issue-spool-session-end line; the stamp goes into the ended/ folder, which stayed writable,
-# and both test sessions were stamped ended (18:10 and 18:11 ET), so the hook succeeded and had
-# nothing to print. That check could not fail, so whether exit 2 stderr shows at /clear is still
-# unseen; making ended/ read only is the check that can. So the failure is ALSO left in a marker
+# stderr with exit 2, as the documentation directs. But SessionEnd stderr was SEEN NOT TO REACH the
+# person, measured on 2026-11-18 on Claude Code 2.1.327. With the spool's ended/ folder made read
+# only (chmod 500), a /clear at 11:00 AM ET showed no issue-spool-session-end line, although the
+# hook did fail (no stamp was written for that session). An earlier attempt on 2026-10-30 could
+# not settle it: it made the spool root read only, the stamp goes into ended/, which stayed
+# writable, and both test sessions were stamped ended (18:10 and 18:11 ET), so the hook succeeded
+# and had nothing to print. So the stderr line and exit 2 stay as they are (the documentation
+# directs them, and a later Claude Code may show them), and the failure is ALSO left in a marker
 # file (lib/spool-end-marker.sh: in the spool, or in TMPDIR when the spool is what cannot be
-# written), and the next prompt in any session says it once, through sync-stuck-notice.sh's
-# systemMessage, a channel seen to reach the person that same day.
+# written). The next prompt in any session says it once, through sync-stuck-notice.sh's
+# systemMessage. That route was seen to work on 2026-11-18: the prompt in another session said it
+# once, as a UserPromptSubmit message, after the failed /clear above.
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
 HERE="$(cd "${HERE:-/}" && pwd)"
