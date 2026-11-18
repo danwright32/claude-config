@@ -1101,7 +1101,7 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
 <body><header>Larkspur</header><main id="main">x</main>
 <script>
 var run = (%s);
-run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = doc; document.body.append(pre); });
+run({csp: ""}).then(function (doc) { var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = doc; document.body.append(pre); });
 </script></body></html>""" % (html_tag, boot, snippet))
         url = theme_base + name if not name.startswith("file-") else "file://" + os.path.join(T, name)
         proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
@@ -1173,7 +1173,7 @@ var realSend = XMLHttpRequest.prototype.send;
 XMLHttpRequest.prototype.send = function (body) { if (body) posted.push("xhr"); return realSend.apply(this, arguments); };
 var run = (%s);
 var out = {};
-run({saveAs: "chrome-probe.html"}).then(function (said) {
+run({saveAs: "chrome-probe.html", csp: ""}).then(function (said) {
   out.said = said;
   var c = clicked[0] || {};
   out.clicks = clicked.length; out.download = c.download || ""; out.href = (c.href || "").slice(0, 5); out.attached = !!c.attached;
@@ -1212,6 +1212,179 @@ run({saveAs: "chrome-probe.html"}).then(function (said) {
     check("#2774 a saveAs that is not a plain .html file name is refused, saving nothing",
           "saveAs" in saved.get("bad", "") and saved.get("bad") != "accepted" and saved.get("clicksAfter") == 1, shown)
     theme_server.shutdown()
+
+    # The capture reads only what the page's content security policy lets it connect to
+    # (claude-config#2894). It reads every font and image its stylesheets name, and the page's own
+    # markup, with fetch(), which the policy's connect-src governs; a production page whose policy
+    # does not list a font's host refused the read and reported the refusal, the way the loopback post
+    # of #2774 paged Dan. Page script cannot read a policy the server sent by header (measured
+    # 2026-11-17: no property of the page or its navigation entry carries it), so the caller passes
+    # that header as csp, and the capture reads the page's meta policy itself. A policy not given means
+    # nothing is read over the network at all. Every read and every refusal the page reports is
+    # recorded here, so a capture that trips the policy is seen.
+    import http.server as _hs
+
+    class _Policed(_hs.SimpleHTTPRequestHandler):
+        """Serves the suite's folder, with a Content-Security-Policy header on the pages named in
+        HEADERS, as a production server sends one."""
+        HEADERS = {}
+        # /hold?<key> answers only once /release?<key> is asked for (or after 40 s). A probe page holds
+        # its own load event open with one until its capture has finished, so Chrome dumps the page
+        # when the capture is done, in real time. Virtual time cannot wait for it: it does not count a
+        # body being read or a FileReader as work, so it raced past a capture of several fonts and
+        # fired the probe's stall timer in 3 runs of 8 (measured 2026-11-17).
+        HOLDS = {}
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            route, _, key = self.path.partition("?")
+            if route in ("/hold", "/release"):
+                held = self.HOLDS.setdefault(key, threading.Event())
+                if route == "/release":
+                    held.set()
+                else:
+                    held.wait(40)
+                self.send_response(204)
+                self.end_headers()
+                return
+            _hs.SimpleHTTPRequestHandler.do_GET(self)
+
+        def end_headers(self):
+            policy = self.HEADERS.get(self.path.split("?")[0].lstrip("/"))
+            if policy is not None:
+                self.send_header("Content-Security-Policy", policy)
+            # A font host lets any page read its fonts, as a real one does, so only the policy decides.
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            _hs.SimpleHTTPRequestHandler.end_headers(self)
+
+    policed = _hs.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Policed, directory=T))
+    threading.Thread(target=policed.serve_forever, daemon=True).start()
+    own = "http://127.0.0.1:%d/" % policed.server_address[1]
+    # A second server on another port is another origin, as a font host is to a product's page. Not the
+    # same server named localhost: a read from localhost left the capture unsettled in 1 run of 4
+    # (measured 2026-11-17), while this one serves on the address it is reached by.
+    font_host = _hs.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Policed, directory=T))
+    threading.Thread(target=font_host.serve_forever, daemon=True).start()
+    port = font_host.server_address[1]
+    other = "http://127.0.0.1:%d/" % port
+    for font in ("brand.woff2", "brand-bold.woff2"):
+        with open(os.path.join(T, font), "wb") as fh:
+            fh.write(b"wOF2 not a real font, only its bytes are read")
+    with open(os.path.join(T, "mark.svg"), "w", encoding="utf-8") as fh:
+        fh.write('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>')
+    HEADER_POLICY = "default-src 'self' 'unsafe-inline'; img-src *; font-src *"
+
+    def policed_page(name, head, runs):
+        """A page whose stylesheet names two fonts on another origin and an image on its own. Loaded as
+        name?run=N it runs the capture once, with runs[N] as its options, and records every fetch the
+        capture calls and every refusal the page's policy reports. One capture per load. Its load event
+        is held open by /hold until the capture has finished (see _Policed.HOLDS)."""
+        return write(name, """<!doctype html><html lang="en"><head><meta charset="utf-8">%s
+<style>@font-face { font-family: Brand; src: url("%sbrand.woff2"); } @font-face { font-family: Brand; font-weight: 700; src: url("%sbrand-bold.woff2"); }
+header { background: url("mark.svg"); }</style></head>
+<body><header>Larkspur</header><main id="main">x</main>
+<script>
+var holdKey = location.pathname.slice(1) + location.search;
+// An iframe, never an image: the capture reads every image, and would wait on its own hold.
+document.write('<iframe title="hold" src="/hold?' + holdKey + '"></iframe>');
+var refused = [], fetched = [], said = false;
+document.addEventListener("securitypolicyviolation", function (e) {
+  if (e.blockedURI.indexOf("own-beacon") < 0) refused.push(e.violatedDirective + " " + e.blockedURI);
+});
+var realFetch = window.fetch;
+// The page's own script trips its policy while the capture is reading an image that fails for another
+// reason (it is not there), as a product's analytics can: that refusal is the page's, and must neither
+// stop the capture's reads nor be named as the capture's.
+window.fetch = function (url) {
+  fetched.push(String(url));
+  if (String(url).indexOf("gone.png") >= 0) realFetch("%sown-beacon").catch(function () {});
+  return realFetch.apply(this, arguments);
+};
+var run = (%s);
+var opts = (%s)[Number(new URLSearchParams(location.search).get("run"))];
+// A run that never settles is reported as stalled, with what it had recorded, rather than leaving the
+// probe out of the page and the checks to say nothing about why.
+var say = function (r) {
+  if (said) return; said = true;
+  r.refused = refused.slice(); r.fetched = fetched.slice();
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = JSON.stringify(r); document.body.append(pre);
+  realFetch("/release?" + holdKey);
+};
+setTimeout(function () { say({stalled: "the capture had not settled after 30 s"}); }, 30000);
+run(opts).then(function (doc) { return {doc: doc}; }, function (e) { return {threw: String(e && e.message || e)}; })
+  .then(function (r) { setTimeout(function () { say(r); }, 100); });
+</script></body></html>""" % (head, other, other, other, snippet, json.dumps(runs)))
+
+    def policed_run(name, n):
+        """What the capture did on one load of a page policed_page wrote, and what to show when it failed."""
+        proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox",
+                               "--dump-dom", own + name + "?run=%d" % n], capture_output=True, text=True,
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
+        m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+        try:
+            got = json.loads(html_unescape(m.group(1))) if m and proc.returncode == 0 else {}
+        except ValueError:
+            got = {}
+        return got, (repr(got)[:900] if got else proc.stdout[-600:] + proc.stderr[-300:])
+
+    def first_comment(doc):
+        m = re.search(r"<!--(.*?)-->", doc or "", re.S)
+        return m.group(1) if m else ""
+
+    # A policy sent by header: the caller passes it, then passes none, then passes Playwright's
+    # nothing, then passes one that is not the page's (the failure path: the page refuses a read).
+    _Policed.HEADERS["policed-header.html"] = HEADER_POLICY
+    policed_page("policed-header.html", '<style>.gone { background: url("gone.png"); }</style>',
+                 [{"csp": HEADER_POLICY}, {}, None, {"csp": ""}, {"csp": 7}])
+    (given, shown), (none, _), (bare, _), (wrong, _), (junk, _) = [policed_run("policed-header.html", n) for n in range(5)]
+    note = first_comment(given.get("doc"))
+    check("#2894 given the page's header policy, the capture reads nothing that policy refuses: no refusal is reported",
+          given.get("refused") == [] and "doc" in given and not any(other in u for u in given.get("fetched", [])), shown)
+    check("#2894 and it still reads what the policy allows: the page's own image and its served markup",
+          "data:image/svg+xml" in given.get("doc", "") and own + "policed-header.html?run=0" in given.get("fetched", [])
+          and "could not be read" not in note and "REFUSED" not in note and "refused" not in note
+          and own + "gone.png (HTTP 404)" in note, note or shown)
+    check("#2894 and it names the font it did not read, saying the page's policy does not allow connecting to it",
+          "NOT inlined" in note and other + "brand.woff2" in note and "content security policy" in note
+          and "does not allow" in note, note or shown)
+    for label, r in (("given no csp", none), ("called with nothing, as Playwright calls it", bare)):
+        n = first_comment(r.get("doc"))
+        check("#2894 %s, the capture reads nothing over the network at all, so nothing can be refused" % label,
+              r.get("fetched") == [] and r.get("refused") == [] and (r.get("doc") or "").startswith("<!doctype html>"),
+              repr(r)[:600] or shown)
+        check("#2894 %s, its first comment says the policy was not given and names what was not read" % label,
+              "not given" in n and "csp" in n and other + "brand.woff2" in n and own + "mark.svg" in n, n or shown)
+    wn = first_comment(wrong.get("doc"))
+    check("#2894 given a policy that is not the page's, a read the page refuses is named in the first comment",
+          len(wrong.get("refused", [])) >= 1 and "REFUSED" in wn and other + "brand.woff2" in wn, wn or repr(wrong)[:600])
+    check("#2894 and the capture stops reading at the first refusal, so one wrong policy is one report, never one per asset",
+          len(wrong.get("refused", [])) == 1, repr(wrong)[:600])
+    check("#2894 a csp that is not text is refused before anything is read",
+          "csp" in junk.get("threw", "") and junk.get("fetched") == [], repr(junk)[:600])
+
+    # A policy in the page's own meta tag is read by the capture itself, whatever the caller passed.
+    policed_page("policed-meta.html", """<meta http-equiv="Content-Security-Policy" content="connect-src 'self'">""",
+                 [{"csp": ""}])
+    r, shown = policed_run("policed-meta.html", 0)
+    n = first_comment(r.get("doc"))
+    check("#2894 a policy in the page's meta tag is obeyed too: its refused host is not read, and nothing is reported",
+          r.get("refused") == [] and not any(other in u for u in r.get("fetched", [])) and other + "brand.woff2" in n
+          and "data:image/svg+xml" in r.get("doc", ""), n or shown)
+
+    # A policy that lists the font's host lets the capture read it: the rule follows the policy, it
+    # does not simply refuse every other origin.
+    _Policed.HEADERS["policed-allowed.html"] = "connect-src 'self' http://127.0.0.1:%d" % port
+    policed_page("policed-allowed.html", "", [{"csp": "connect-src 'self' http://127.0.0.1:%d" % port}])
+    r, shown = policed_run("policed-allowed.html", 0)
+    check("#2894 a font on a host the policy lists is read and inlined, with nothing reported",
+          r.get("refused") == [] and other + "brand.woff2" in r.get("fetched", [])
+          and re.search(r'@font-face[^}]*url\("data:', r.get("doc", "")) is not None and other + "brand" not in r.get("doc", "")
+          and "NOT inlined" not in first_comment(r.get("doc")), first_comment(r.get("doc")) or shown)
+    policed.shutdown()
+    font_host.shutdown()
 
 # --- a settled frame follows its page's height, as a round's option does (claude-config#1816) --------
 # A settled frame was sized once, as it loaded, from its page root's scroll height, which never reads less
