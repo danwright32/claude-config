@@ -341,12 +341,24 @@ _sc_changed_list="$(bash "$REPO_FILES" --changed . 2>/dev/null)" || { _sc_change
 # misses, 24 find the checkout (the whole repository suite, test-run-all-tests.sh, among them) and
 # 16 walk something, often a scratch home of their own, against 5 that do both (measured
 # 2026-11-17). Only code lines count.
+#
+# A walk is a walk however it is spelled (L247): os.walk or pathlib's rglob, or a find that prunes
+# .git, which only a find over a checkout needs to. test-bad-byte-locale.sh reads every suite with
+# such a find and was missed while os.walk was the one spelling read; a find over a suite's own
+# scratch folder prunes no .git and is not a walk of the checkout (measured 2026-11-18: of the
+# suites that find their checkout and are not scanners, two find in a scratch folder, and neither
+# prunes .git). Read from a here string, never a pipe into grep -q, which leaves on its first hit
+# and under pipefail reports the match as a failure (L183).
+_sc_walks_tree(){   # $1 = code lines -> 0 when they walk a tree
+  case "$1" in *'os.walk('*|*'.rglob('*) return 0 ;; esac
+  grep -qE '(^|[^[:alnum:]_-])find[[:space:]].*-name[[:space:]]+["'\'']?[.]git([^[:alnum:]_]|$)' <<< "$1"
+}
 _sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks a tree
   local code d p b c progs
   grep -q 'checkout-root[.]sh' "$1" 2>/dev/null || return 1
   code="$(grep -v '^[[:space:]]*#' "$1" 2>/dev/null)"
   case "$code" in *checkout-root.sh*) ;; *) return 1 ;; esac
-  case "$code" in *'os.walk('*) return 0 ;; esac
+  _sc_walks_tree "$code" && return 0
   case "$1" in */*) d="${1%/*}" ;; *) d=. ;; esac
   progs="$(printf '%s\n' "$code" | grep -oE '[A-Za-z0-9_.-]+[.]py' | sort -u)"
   while IFS= read -r p; do
@@ -354,7 +366,7 @@ _sc_walks_checkout(){   # $1 = a suite -> 0 when it finds its checkout and walks
     b="${p##*/}"
     for c in "$d/$b" "$d/lib/$b"; do
       [ -f "$c" ] || continue
-      grep -q 'os[.]walk(' "$c" 2>/dev/null && return 0
+      _sc_walks_tree "$(grep -v '^[[:space:]]*#' "$c" 2>/dev/null)" && return 0
     done
   done <<PROGS
 $progs
@@ -415,7 +427,7 @@ if [ "${SCANNERS_LIST:-}" = "1" ]; then
 $scanners
 LIST
   # The walkers, whether or not this push changes a suite, so the listing shows the whole of what
-  # the gate can run; on a line of their own, since the floor below names only what every push runs.
+  # the gate can run; on a line of their own, since only a push changing a suite runs them.
   [ -n "$walkers" ] && printf '%s\n' "$walkers" | sed 's|^|WHEN-A-SUITE-CHANGES |'
   exit 0
 fi
@@ -439,7 +451,13 @@ fi
 # listed never blocks (adding a scanner never fails a push); the repository's own suite holds the
 # list equal to the selection, so it cannot drift low again. A file holding only a number is read as
 # the count it always was.
-_sc_selected="$(printf '%s\n' "$scanners" | grep -c . || true)"
+#
+# The walkers are held to it too (claude-config#3183): one that stops being recognised drops out of
+# what a push changing a suite runs as silently as a scanner drops out of every push, so the floor
+# is read against both, though only a push changing a suite runs the walkers.
+_sc_floor_pool="$scanners"
+[ -n "$walkers" ] && _sc_floor_pool="${_sc_floor_pool:+$_sc_floor_pool$'\n'}$walkers"
+_sc_selected="$(printf '%s\n' "$_sc_floor_pool" | grep -c . || true)"
 _sc_floor_file="$repo_dir/.claude/scanners-floor.txt"
 _sc_floor=""
 _sc_floor_note=""
@@ -450,7 +468,7 @@ if [ -n "$_sc_named" ]; then
   while IFS= read -r _n; do
     [ -n "$_n" ] || continue
     # A whole line of the selection, matched by `case` so no pipeline can stop early (L183).
-    case $'\n'"$scanners"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
+    case $'\n'"$_sc_floor_pool"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
   done <<NAMED
 $_sc_named
 NAMED
@@ -464,7 +482,9 @@ NAMED
       echo "A scanner that stops being selected is silent: the gate goes on reporting a clean run"
       echo "over a smaller set, which is how two defects reached main on 2026-09-21 after a change"
       echo "moved two scanners off the text this gate recognised them by. A suite is selected when"
-      echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code."
+      echo "it lists the repository's files (git ls-files or lib/repo-files.sh) in its code, or when"
+      echo "it finds its checkout through lib/checkout-root.sh and walks it (os.walk, rglob, or a find"
+      echo "that prunes .git), itself or through a program beside it that its code names."
       echo ""
       echo "If one was removed on purpose, take its line out of $_sc_floor_file in the same change."
       echo "If not, find why it stopped being recognised."
@@ -494,7 +514,7 @@ elif [ -f "$_sc_floor_file" ]; then
           echo "off the text this gate recognised them by."
           echo ""
           echo "What it selected:"
-          printf '%s\n' "$scanners" | sed 's/^/    /'
+          printf '%s\n' "$_sc_floor_pool" | sed 's/^/    /'
           echo ""
           echo "If a scanner was deliberately removed, lower the number in $_sc_floor_file in the"
           echo "same change. If not, find which suite stopped being recognised."

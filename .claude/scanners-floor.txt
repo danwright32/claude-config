@@ -7,6 +7,10 @@
 # reached main (claude-config#530). It held a count until claude-config#1744, which said only that
 # fewer were selected, never which, and had drifted to 6 while 21 were selected (measured 2026-10-25).
 # test-scanners-before-push.sh holds this list equal to what the gate selects.
+# Since claude-config#3183 it also names the suites that walk the checkout, which the gate runs only
+# when a push adds or changes a test suite and lists as WHEN-A-SUITE-CHANGES; one that stops being
+# recognised is as silent as a scanner that does, so it is held here the same way.
+payload/hooks/test-bad-byte-locale.sh
 payload/hooks/test-blank-check-cost.sh
 payload/hooks/test-branch-issue-reader.sh
 payload/hooks/test-check-home-paths.sh
@@ -15,17 +19,21 @@ payload/hooks/test-checkout-root.sh
 payload/hooks/test-db-write-ask-git-fails.sh
 payload/hooks/test-fail-margin.sh
 payload/hooks/test-hand-rolled-heredoc-marker.sh
-payload/hooks/test-hand-written-lib-list.sh
 payload/hooks/test-hand-rolled-wait.sh
+payload/hooks/test-hand-written-lib-list.sh
+payload/hooks/test-headless-claude-config.sh
 payload/hooks/test-heredoc-in-substitution.sh
 payload/hooks/test-lib-bytecode-importers.sh
 payload/hooks/test-lib-self-locate.sh
 payload/hooks/test-pipefail-shortcircuit.sh
 payload/hooks/test-push-changes.sh
 payload/hooks/test-python-c-ascii.sh
+payload/hooks/test-ratchet.sh
 payload/hooks/test-repo-files.sh
 payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
+payload/hooks/test-scan-absence-needles.sh
+payload/hooks/test-scan-subshell-globals.sh
 payload/hooks/test-suite-modes.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
@@ -33,6 +41,7 @@ payload/hooks/test-this-mac.sh
 payload/hooks/test-two-file-awk.sh
 payload/hooks/test-unwaited-children.sh
 payload/hooks/test-whole-number.sh
+payload/skills/design-rounds/test-headless-chrome.sh
 tests/test-area-check-check-mods-read-only.sh
 tests/test-area-check-shared-parts-read-only.sh
 tests/test-ci-environment-tools.sh
