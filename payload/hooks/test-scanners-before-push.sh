@@ -110,15 +110,18 @@ checkout_parts(){
   # The recorded floor names exactly the suites selected here, so it can never again sit far below
   # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
   # named in the same change; one removed on purpose is taken out.
-  # The walkers a push changing a suite adds (claude-config#3183) are listed on lines of their own and
-  # named in the floor too: one that stops being recognised is as silent as a scanner that does.
-  _real_sel="$(awk '/^(SUITE|SECTION|WHEN-A-SUITE-CHANGES) / { print $2 }' <<< "$_sel" | sort -u)"
+  # The walkers a push changing a suite adds (claude-config#3183) are named in the floor too, on lines
+  # of their own in the listing's form, `WHEN-A-SUITE-CHANGES <path>`; one that stops being recognised
+  # is as silent as a scanner that does. The bare paths are compared with what every push runs, read
+  # the way every gate before #3183 reads them, so a walker written there bare, which an older
+  # installed gate takes for a scanner it does not select and blocks every push on, fails here.
+  _real_sel="$(awk '/^(SUITE|SECTION) / { print $2 } /^WHEN-A-SUITE-CHANGES / { print }' <<< "$_sel" | sort -u)"
   # The suite whose miss raised #3183 is a walker the gate adds when a push changes a suite, read
   # from the real tree, so a change that moves it off what the gate recognises fails here by name.
   grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-scan-absence-needles.sh' <<< "$_sel" \
     && check "#3183 the real repo's absence needle scan is run when a push changes a suite" ok \
     || check "#3183 the real repo's absence needle scan is run when a push changes a suite" "got=$_sel"
-  _real_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
+  _real_floor="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 } $1 == "WHEN-A-SUITE-CHANGES" { print $1 " " $2 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
   _real_n="$(grep -c . <<< "$_real_sel")"
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
     && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
@@ -1988,7 +1991,7 @@ RFW="$(mkrepo floorwalk)"; add_scanner "$RFW" alpha 0
 printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\npython3 - <<PY\nimport os\nfor b, d, n in os.walk("."):\n    pass\nPY\nexit 0\n' > "$RFW/payload/hooks/test-pwalk.sh"
 chmod +x "$RFW/payload/hooks/test-pwalk.sh"
 mkdir -p "$RFW/.claude"
-printf '# the whole tree scanners this repo expects\npayload/hooks/test-alpha.sh\npayload/hooks/test-pwalk.sh\n' > "$RFW/.claude/scanners-floor.txt"
+printf '# the whole tree scanners this repo expects\npayload/hooks/test-alpha.sh\nWHEN-A-SUITE-CHANGES payload/hooks/test-pwalk.sh\n' > "$RFW/.claude/scanners-floor.txt"
 commit_all "$RFW"
 out="$(fire "$RFW" "git push")"; rc=$?
 [ "$rc" -eq 0 ] && grep -q -F "floor of 2" <<< "$out" \

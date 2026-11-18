@@ -453,24 +453,34 @@ fi
 # the count it always was.
 #
 # The walkers are held to it too (claude-config#3183): one that stops being recognised drops out of
-# what a push changing a suite runs as silently as a scanner drops out of every push, so the floor
-# is read against both, though only a push changing a suite runs the walkers.
-_sc_floor_pool="$scanners"
-[ -n "$walkers" ] && _sc_floor_pool="${_sc_floor_pool:+$_sc_floor_pool$'\n'}$walkers"
-_sc_selected="$(printf '%s\n' "$_sc_floor_pool" | grep -c . || true)"
+# what a push changing a suite runs as silently as a scanner drops out of every push. Each is named
+# on a line of its own as the listing prints it, `WHEN-A-SUITE-CHANGES <path>`, and must be selected
+# as a walker. That form, never a bare path, because the gate a Mac has installed reads this file
+# from the checkout being pushed: a gate older than #3183 takes a bare path for a scanner it does
+# not select and blocks every push until the sync installs this one (seen 2026-11-18 on the push of
+# this change), while its awk reads `WHEN-A-SUITE-CHANGES` as the first field and passes the line by.
+_sc_selected="$(printf '%s\n' "$scanners" | grep -c . || true)"
 _sc_floor_file="$repo_dir/.claude/scanners-floor.txt"
 _sc_floor=""
 _sc_floor_note=""
 _sc_named=""
+_sc_named_walkers=""
 [ -f "$_sc_floor_file" ] && _sc_named="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 }' "$_sc_floor_file" 2>/dev/null)"
-if [ -n "$_sc_named" ]; then
+[ -f "$_sc_floor_file" ] && _sc_named_walkers="$(awk '/^[[:space:]]*#/ { next } $1 == "WHEN-A-SUITE-CHANGES" && $2 ~ /[.]sh$/ { print $2 }' "$_sc_floor_file" 2>/dev/null)"
+if [ -n "$_sc_named" ] || [ -n "$_sc_named_walkers" ]; then
   _sc_dropped=""
   while IFS= read -r _n; do
     [ -n "$_n" ] || continue
     # A whole line of the selection, matched by `case` so no pipeline can stop early (L183).
-    case $'\n'"$_sc_floor_pool"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
+    case $'\n'"$scanners"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n"$'\n' ;; esac
   done <<NAMED
 $_sc_named
+NAMED
+  while IFS= read -r _n; do
+    [ -n "$_n" ] || continue
+    case $'\n'"$walkers"$'\n' in *$'\n'"$_n"$'\n'*) ;; *) _sc_dropped="$_sc_dropped$_n (run when a push changes a suite)"$'\n' ;; esac
+  done <<NAMED
+$_sc_named_walkers
 NAMED
   if [ -n "$_sc_dropped" ]; then
     {
@@ -493,7 +503,7 @@ NAMED
     } >&2
     exit 2
   fi
-  _sc_floor_note=", meeting the floor of $(printf '%s\n' "$_sc_named" | grep -c .) named suites this repository records"
+  _sc_floor_note=", meeting the floor of $(printf '%s\n' "$_sc_named" "$_sc_named_walkers" | grep -c .) named suites this repository records"
 elif [ -f "$_sc_floor_file" ]; then
   # The first line that is neither blank nor a comment, so the file can say what the number is for.
   _sc_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1; exit }' "$_sc_floor_file" 2>/dev/null)"
@@ -514,7 +524,7 @@ elif [ -f "$_sc_floor_file" ]; then
           echo "off the text this gate recognised them by."
           echo ""
           echo "What it selected:"
-          printf '%s\n' "$_sc_floor_pool" | sed 's/^/    /'
+          printf '%s\n' "$scanners" | sed 's/^/    /'
           echo ""
           echo "If a scanner was deliberately removed, lower the number in $_sc_floor_file in the"
           echo "same change. If not, find which suite stopped being recognised."
