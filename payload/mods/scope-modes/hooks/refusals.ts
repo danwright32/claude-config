@@ -39,7 +39,7 @@ const READ_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', '
 const always = () => true
 const noneOf = (bad: readonly string[]) => (args: readonly string[]) => !args.some(a => bad.some(b => a === b || a.startsWith(`${b}=`)))
 const READ_PROGRAMS: ReadonlyMap<string, (args: readonly string[]) => boolean> = new Map([
-  ...['cat', 'head', 'tail', 'ls', 'wc', 'pwd', 'stat', 'file', 'which', 'echo', 'printf', 'basename', 'dirname', 'realpath', 'readlink', 'du', 'df', 'diff', 'cmp', 'comm', 'cut', 'tr', 'nl', 'grep', 'egrep', 'fgrep', 'test', '[', 'true', 'false', 'cd', 'jq', 'shasum', 'md5', 'tree', 'column'].map(p => [p, always] as const),
+  ...['cat', 'head', 'tail', 'ls', 'wc', 'pwd', 'stat', 'file', 'which', 'echo', 'printf', 'basename', 'dirname', 'realpath', 'readlink', 'du', 'df', 'diff', 'cmp', 'comm', 'cut', 'tr', 'nl', 'grep', 'egrep', 'fgrep', 'test', '[', 'true', 'false', 'cd', 'jq', 'shasum', 'md5', 'column'].map(p => [p, always] as const),
   ['rg', (args: readonly string[]) => !args.some(a => a.startsWith('--pre'))],
   ['find', noneOf(['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'])],
   ['sort', (args: readonly string[]) => !args.some(a => a.startsWith('--output') || /^-[A-Za-z]*o/.test(a))],
@@ -52,7 +52,11 @@ const base = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 const gitReads = (c: Cmd): boolean => {
   const g = c.git
   if (!g?.sub || !GIT_READS.has(g.sub) || base(c.words[0]) !== 'git') return false
-  if (g.args.some(a => a.startsWith('--output'))) return false
+  // git takes any unambiguous start of a long option, so --outp and --out are --output too.
+  if (g.args.some(a => {
+    const name = a.split('=')[0] as string
+    return name.length >= 3 && '--output'.startsWith(name)
+  })) return false
   const before = c.words.slice(1, c.words.length - g.args.length - 1)
   for (let i = 0; i < before.length; i++) {
     if (before[i] === '-C' && i + 1 < before.length) i++

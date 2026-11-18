@@ -16,12 +16,12 @@ const bashReads = (command: string) => readsOnly('Bash', readCommands(command), 
 
 describe('which refused calls only read', () => {
   test('plain reads, git reads and rtk in front of them only read', () => {
-    for (const c of ['git status', 'git log -5 --oneline', 'git -C /r/repo diff main', 'rtk git status', 'ls -la /r/repo', 'cat a.txt | grep -n x', 'rg -n foo src', 'find . -name "*.ts"', 'wc -l a.txt b.txt', 'cd /r/repo && git status', 'sort a.txt'])
+    for (const c of ['git status', 'git log -5 --oneline', 'git log --oneline --stat','git -C /r/repo diff main', 'rtk git status', 'ls -la /r/repo', 'cat a.txt | grep -n x', 'rg -n foo src', 'find . -name "*.ts"', 'wc -l a.txt b.txt', 'cd /r/repo && git status', 'sort a.txt'])
       expect([c, bashReads(c)]).toEqual([c, true])
   })
   test('anything that writes, runs code or cannot be read is not a read', () => {
     for (const c of [
-      'git commit -m x', 'git add a.txt', 'git push', 'git branch -D x', 'git diff --output=x.patch', 'git -c core.pager=x log',
+      'git commit -m x', 'git add a.txt', 'git push', 'git branch -D x', 'git diff --output=x.patch', 'git diff --outp=x.patch', 'git log --out x.log', 'tree -o out.txt','git -c core.pager=x log',
       'mkdir -p out', 'rm a.txt', 'cp a b', 'cat a > b', 'echo hi >> notes.md', 'ls | tee out.txt', 'sed -i s/a/b/ a.txt', 'sed -n 1p a.txt',
       'find . -delete', 'find . -exec rm {} +', 'sort -o out.txt a.txt', 'rg --pre ./x foo', 'python3 x.py', 'bash x.sh', 'npm test',
       'gh issue view 3', 'curl https://x.dev', 'xargs rm < list', 'eval "$x"', 'cat $(make-list)', 'sudo cat /etc/x', 'awk "{print}" a',
