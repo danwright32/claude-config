@@ -40,6 +40,17 @@ if git diff --quiet "$BASE" -- "$REL" 2>/dev/null; then
   exit 0
 fi
 
+# Only the file's mode changed (claude-config#3180 committed every suite as 100755): the diff lists
+# the file, but no line of it changed, so no section can be derived and none needs running. Judged
+# by the content's own fingerprint, which leaves the mode out, never by the diff holding no hunks,
+# so any change to a line still has to name its sections (Dan's decision, 2026-11-17).
+_base_blob="$(git rev-parse --verify --quiet "$BASE:$REL" 2>/dev/null || true)"
+_work_blob="$(git hash-object -- "$REL" 2>/dev/null || true)"
+if [ -n "$_base_blob" ] && [ "$_base_blob" = "$_work_blob" ]; then
+  echo "audit-changed-sections: only its mode changed against $BASE; $REL holds the same content, so no section needed running on its own. The full suite still runs."
+  exit 0
+fi
+
 # The changed lines, on the NEW side. A hunk that only REMOVES lines has a count of zero there, and
 # that is exactly how a derivation quietly comes back empty, so a deletion is attributed to the
 # position it happened at rather than dropped. split()'s return value is used rather than

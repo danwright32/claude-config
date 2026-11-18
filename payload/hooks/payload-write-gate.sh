@@ -225,14 +225,63 @@ if [ "$event" = "PostToolUse" ]; then
     changed="$changed$(printf '%s\n' "$now_list" | LC_ALL=C comm -3 - "$list_f" | sed 's/^[[:space:]]*//')"
   fi
   roots_list="$(cat "$roots_f")"
-  rm -f "$roots_f" "$list_f"
+  # A linked worktree noted before the call whose folder is gone now was removed whole
+  # (claude-config#3165, note_worktrees_before). Its files are not edits the daemon could revert,
+  # since nothing is left there to revert, so they leave the report below; the ones that had
+  # uncommitted changes when the call started are a loss, said apart in say_lost, with no hold
+  # advised, since a hold cannot bring back a file that no longer exists. Everything else, the
+  # primary checkout and a worktree still there included, is judged exactly as before.
+  wt_f="$STATE_DIR/$state_key.wt"; dirty_f="$STATE_DIR/$state_key.dirty"
+  gone=""
+  if [ -f "$wt_f" ]; then
+    while IFS= read -r wroot; do
+      [ -n "$wroot" ] || continue
+      [ -e "$wroot" ] || [ -L "$wroot" ] || gone="$gone$wroot
+"
+    done < "$wt_f"
+  fi
+  dirty_list="$(LC_ALL=C sort -u "$dirty_f" 2>/dev/null)"
+  rm -f "$roots_f" "$list_f" "$wt_f" "$dirty_f"
   changed="$(printf '%s\n' "$changed" | sed '/^$/d' | LC_ALL=C sort -u)"
-  [ -n "$changed" ] || exit 0
+  lost=""
+  if [ -n "$gone" ] && [ -n "$changed" ]; then
+    # One pass over the list, never a process per file: a removed worktree is the whole payload/.
+    in_gone="$(printf '%s\n' "$changed" | GONE="$gone" awk '
+      BEGIN { n = split(ENVIRON["GONE"], g, "\n"); for (i = 1; i <= n; i++) if (g[i] != "") p[++m] = g[i] "/payload/" }
+      { for (i = 1; i <= m; i++) if (index($0, p[i]) == 1) { print; next } }')"
+    if [ -n "$in_gone" ]; then
+      lost="$(LC_ALL=C comm -12 <(printf '%s\n' "$in_gone") <(printf '%s\n' "$dirty_list") | sed '/^$/d')"
+      changed="$(LC_ALL=C comm -23 <(printf '%s\n' "$changed") <(printf '%s\n' "$in_gone") | sed '/^$/d')"
+    fi
+  fi
+  say_lost(){   # $1 = the exit code when there is no loss to report
+    if [ -z "$lost" ]; then exit "$1"; fi
+    local ln shown_lost where
+    ln="$(printf '%s\n' "$lost" | grep -c .)"
+    shown_lost="$(printf '%s\n' "$lost" | awk 'NR <= 20 { print "  " $0 }')"
+    [ "$ln" -gt 20 ] && shown_lost="$shown_lost
+  ... and $((ln - 20)) more"
+    # Only the worktrees a lost file was in: a clean one removed by the same command lost nothing.
+    where="$(printf '%s\n' "$lost" | GONE="$gone" awk '
+      BEGIN { n = split(ENVIRON["GONE"], g, "\n") }
+      { for (i = 1; i <= n; i++) if (g[i] != "" && index($0, g[i] "/payload/") == 1 && !(g[i] in seen)) { seen[g[i]] = 1; o = o (o == "" ? "" : ", ") g[i] } }
+      END { print o }')"
+    [ "$1" -eq 0 ] || printf '\n' >&2
+    cat >&2 <<MSG
+claude-sync: $ln file(s) under payload/ had uncommitted changes when this command started, in a worktree whose folder is no longer there ($where):
+
+$shown_lost
+
+If the worktree was removed, those changes went with it, and a sync hold cannot bring them back. A change that was staged stays in the repository's objects until git next prunes them, and git fsck --lost-found lists it; one never staged is not in git at all.
+MSG
+    exit 2
+  }
+  [ -n "$changed" ] || say_lost 0
   # Protected since it ran: a hold of this session's own taken meanwhile, or the watcher gone, is
   # what makes it safe now. Another session's hold is not (claude-config#1886).
   wcmd="$(sc_watcher_cmd || true)"
-  [ -n "$wcmd" ] || exit 0
-  sc_hold_covers "$sid" && exit 0
+  [ -n "$wcmd" ] || say_lost 0
+  sc_hold_covers "$sid" && say_lost 0
   # Left out: a file that already matches the installed config, which the daemon mirrors FROM, so
   # it has nothing to revert there (claude-config#1211). On 2026-10-15 a fast forward pull of the
   # checkout right after the same commit was installed listed 27 files, every one identical to its
@@ -261,7 +310,7 @@ LOOP_INPUT
 $changed
 LOOP_INPUT
   changed="$(printf '%s' "$differ" | sed '/^$/d')"
-  [ -n "$changed" ] || exit 0
+  [ -n "$changed" ] || say_lost 0
   n="$(printf '%s\n' "$changed" | grep -c .)"
   shown="$(printf '%s\n' "$changed" | awk 'NR <= 20 { print "  " $0 }')"
   [ "$n" -gt 20 ] && shown="$shown
@@ -281,7 +330,7 @@ ${OTHERS_NOTE}Nothing in the command's words showed those writes, so they could 
 
 Then make ~/.claude match the checkout before the hold expires, or the next send reverts them.
 MSG
-  exit 2
+  say_lost 2
 fi
 
 # WHICH FILES this call would write. Two shapes, because two kinds of tool call write a file and
@@ -849,6 +898,43 @@ DIRS
   printf '%s\n' "$roots" | while IFS= read -r root; do
     find "$root/payload" -type f 2>/dev/null
   done | LC_ALL=C sort > "$STATE_DIR/$state_key.list"
+  note_worktrees_before
+  return 0
+}
+
+# A LINKED worktree's uncommitted payload files, noted before the call, so that the check after it
+# can tell a worktree the command removed whole from edits at risk (claude-config#3165). On
+# 2026-11-17 a git worktree remove of a detached worktree of main was reported as 1398 files changed
+# under payload/, with a 120 minute hold advised before anything else, when every one was a
+# committed file ceasing to exist with its worktree. A folder that is gone holds nothing for the
+# daemon to revert, but a file in it that was never committed is lost, and only a note taken BEFORE
+# the call can say which those were. So for each linked worktree among the roots, one line in .wt
+# naming it, and every file git status lists under its payload/ in .dirty: modified, staged or
+# untracked. Ignored files are left out, by the repository's own rules of what is not its work
+# (bytecode caches, .DS_Store, a Mac's own *.local.json the sync never carries). A worktree git
+# cannot answer for gets no .wt line, so its files are judged after the call exactly as before (L42).
+# The primary checkout is never noted here: only a linked worktree is ever read as removed whole.
+note_worktrees_before(){
+  local root top line skip=""
+  : > "$STATE_DIR/$state_key.wt" || return 0
+  : > "$STATE_DIR/$state_key.dirty" || return 0
+  printf '%s\n' "$roots" | while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    sc_is_linked_worktree "$root" || continue
+    top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || continue
+    [ "$(cd "$top" 2>/dev/null && pwd -P)" = "$root" ] || continue
+    # -z, so no path comes back quoted; a rename or copy carries its old path as one more field,
+    # skipped. Into a file first, so a git that fails is seen by its exit code.
+    git -C "$root" status --porcelain=v1 -z --untracked-files=all --ignored=no -- payload \
+      > "$STATE_DIR/$state_key.st" 2>/dev/null || continue
+    tr '\0' '\n' < "$STATE_DIR/$state_key.st" | while IFS= read -r line; do
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case "$line" in [RC]?\ *|?[RC]\ *) skip=1 ;; esac
+      [ "${#line}" -gt 3 ] && printf '%s/%s\n' "$root" "${line:3}"
+    done >> "$STATE_DIR/$state_key.dirty"
+    printf '%s\n' "$root" >> "$STATE_DIR/$state_key.wt"
+  done
+  rm -f "$STATE_DIR/$state_key.st"
   return 0
 }
 

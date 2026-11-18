@@ -36,6 +36,7 @@ state/
 .last-sent
 .last-received
 .hook-tests
+.hook-tests-rerun*
 .resolved/
 .send-suite-verdicts
 .send-suite-output/
