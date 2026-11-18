@@ -251,6 +251,11 @@ while IFS= read -r tok; do
   case " $WHOLE " in *" $k "*) refuse 2 "the pasted selection chooses every entry of the $(dcr_title "$k") twice, which a review page never copies. Nothing was planned; copy the selection from the page again." ;; esac
   WHOLE="${WHOLE:+$WHOLE }$k"
   want="$(dcrv_whole_token "$WORK/items" "$LAST" "$k")" || want=""
+  # An empty summary means the scan offers none of the kind now, unless it does, when the summary
+  # itself could not be worked out (shasum or sort failed), which is said as that.
+  if [ -z "$want" ] && [ -n "$(dcrv_whole_entries "$WORK/items" "$k")" ]; then
+    refuse 2 "the summary of the $(dcr_title "$k") could not be worked out from the scan record (sort or shasum failed), so the selection cannot be checked, and nothing was planned."
+  fi
   have="${want#all:*:}"; have="${have%%:*}"; [ -n "$want" ] || have=0
   title="$(dcr_title "$k")"
   [ "$cnt" = "$have" ] || refuse 8 "the selection chooses all $(commas "$cnt") $title entries, but the scan offers $(commas "$have") now, so the scan changed after the page was drawn, or the selection was edited. Nothing was planned; open the review page again, which draws what the scan offers now, and copy the selection from it."

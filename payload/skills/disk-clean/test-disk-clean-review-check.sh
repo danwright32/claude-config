@@ -369,6 +369,14 @@ done
 payload "scan-1700000000-1" "$N" 1 "$TOKEN"
 run_check
 check "a summary from another scan is refused with exit 3" "$(eq "$RC" 3)"
+# A summary that cannot be worked out (shasum failing) is said as that, never as a scan offering none.
+mv "$DC_CORE/shasum" "$DC_CORE/shasum.real"
+printf '#!/bin/bash\nexit 1\n' > "$DC_CORE/shasum"; chmod +x "$DC_CORE/shasum"
+payload "$SID" "$N" 1 "$TOKEN"
+run_check
+rm -f "$DC_CORE/shasum"; mv "$DC_CORE/shasum.real" "$DC_CORE/shasum"
+check "a summary the checker cannot work out is refused with exit 2" "$(eq "$RC" 2)"
+check "saying it could not be worked out, not that the scan offers none" "$(has "$OUT_TEXT" "could not be worked out")"
 check "after every refusal the plan is untouched" "$(eq "$(cat "$PLAN")" "keep me")"
 
 # A summary from another scan pasted with this scan's id and this page's nonce: a new scan of the same
