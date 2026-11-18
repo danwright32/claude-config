@@ -786,14 +786,233 @@ judge large-files "$H/Pictures/raw.dng"
 check "large files judge: outside the four folders it is not" "$(has "$JUDGED" "not offerable: ")"
 
 # ================================================================================================
+# Swift .build beside a Package.swift, and a build folder inside a home dotfolder only when that
+# folder is a git worktree (a .git file), never a tool's own copy such as npx's (#3235)
+# ================================================================================================
+fresh
+mkdir -p "$H/Apps/pkg/.build/debug" "$H/Apps/pkg/Sources" "$H/Apps/nopkg/.build/x" "$H/.verify-wt/node_modules/x" "$H/.verify-wt/src" \
+  "$H/.npm/_npx/abc/node_modules/y" "$H/.oh-my-thing/node_modules/z"
+printf '// swift-tools-version:5.9\n' > "$H/Apps/pkg/Package.swift"; printf 'o\n' > "$H/Apps/pkg/.build/debug/o"
+printf 'o\n' > "$H/Apps/nopkg/.build/x/o"
+printf '{}\n' > "$H/.verify-wt/package.json"; printf 'gitdir: /x/.git/worktrees/v\n' > "$H/.verify-wt/.git"
+printf '{}\n' > "$H/.npm/_npx/abc/package.json"
+mkdir -p "$H/.oh-my-thing/.git"; printf '{}\n' > "$H/.oh-my-thing/package.json"
+old "$H/Apps"; old "$H/.verify-wt"; old "$H/.npm"; old "$H/.oh-my-thing"
+run_scan --only build-folders
+check "swift build: .build beside a Package.swift, in a project untouched 30 days, is offerable" "$(eq "$(state_of "$H/Apps/pkg/.build")" offerable)"
+check "swift build: by deleting it, since swift build makes it again" "$(eq "$(method_of "$H/Apps/pkg/.build")" delete)"
+check "swift build: a .build with no Package.swift beside it is not listed" "$(eq "$(item_of "$H/Apps/nopkg/.build")" "")"
+check "dotfolder worktree: node_modules in a home dotfolder that is a git worktree is offerable" "$(eq "$(state_of "$H/.verify-wt/node_modules")" offerable)"
+check "dotfolder worktree: npx's own copy in ~/.npm is still not listed" "$(eq "$(item_of "$H/.npm/_npx/abc/node_modules")" "")"
+check "dotfolder worktree: a dotfolder holding a whole repository (a .git folder) is not listed" "$(eq "$(item_of "$H/.oh-my-thing/node_modules")" "")"
+judge build-folders "$H/Apps/nopkg/.build"
+check "swift build judge: a .build with no Package.swift is not offerable" "$(has "$JUDGED" "not offerable: no Package.swift beside it")"
+judge build-folders "$H/Apps/pkg/.build"
+check "swift build judge: one beside a Package.swift is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks build-folders "$H/Apps/pkg/.build" "$H/Apps/pkg/.build/debug/o" folder
+printf 'edited\n' > "$H/Apps/pkg/Sources/main.swift"
+judge build-folders "$H/Apps/pkg/.build"
+check "swift build judge: a project whose own Swift files changed keeps its .build" "$(has "$JUDGED" "not offerable: the project's own files changed within 30 days")"
+judge build-folders "$H/.npm/_npx/abc/node_modules"
+check "dotfolder worktree judge: npx's copy is not offerable" "$(has "$JUDGED" "not offerable: it is inside a home dotfolder")"
+judge build-folders "$H/.verify-wt/node_modules"
+check "dotfolder worktree judge: a worktree's node_modules is offerable" "$(eq "$JUDGED" offerable)"
+rm -f "$H/.verify-wt/.git"; mkdir -p "$H/.verify-wt/.git"; old "$H/.verify-wt"
+judge build-folders "$H/.verify-wt/node_modules"
+check "dotfolder worktree judge: once its .git is a folder, not a worktree's file, it is not offerable" "$(has "$JUDGED" "not offerable: it is inside a home dotfolder")"
+
+# ================================================================================================
+# Tool output beside transcripts: a session's tool-results folder, offered only once that session's
+# own transcript is gone and no live session owns it; subagent records and memory never listed
+# ================================================================================================
+fresh
+PJ="$H/.claude/projects/-Users-x-Apps-proj"
+U5=55555555-5555-4555-8555-555555555555; U6=66666666-6666-4666-8666-666666666666
+U7=77777777-7777-4777-8777-777777777777; U8=88888888-8888-4888-8888-888888888888; U9=99999999-9999-4999-8999-999999999999
+mkdir -p "$PJ/$U5/tool-results" "$PJ/$U6/tool-results" "$PJ/$U7/tool-results" "$PJ/$U8/subagents" "$PJ/memory" "$PJ/$U9" "$H/.claude/sessions"
+printf 't\n' > "$PJ/$U5.jsonl"; printf 'r\n' > "$PJ/$U5/tool-results/a.txt"
+printf 'r\n' > "$PJ/$U6/tool-results/b.txt"; printf 'r\n' > "$PJ/$U7/tool-results/c.txt"
+printf '{}\n' > "$PJ/$U8/subagents/agent-a1.meta.json"; printf 'm\n' > "$PJ/memory/MEMORY.md"
+old "$H/.claude/projects"
+printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$U7" > "$H/.claude/sessions/1.json"
+run_scan --only transcript-extras
+check "beside transcripts: the scan exits 0" "$(eq "$RC" 0)"
+check "beside transcripts: tool output whose session transcript is still there is not offerable" "$(has "$(state_of "$PJ/$U5/tool-results")" "not offerable: its session's transcript is still there")"
+check "beside transcripts: tool output whose transcript is gone, untouched 30 days, is offerable" "$(eq "$(state_of "$PJ/$U6/tool-results")" offerable)"
+check "beside transcripts: by moving it to the Trash" "$(eq "$(method_of "$PJ/$U6/tool-results")" trash)"
+check "beside transcripts: a live session's tool output is not offerable, though its transcript is gone" "$(has "$(state_of "$PJ/$U7/tool-results")" "not offerable: a live session")"
+check "beside transcripts: subagent records are not listed" "$(eq "$(item_of "$PJ/$U8/subagents")$(item_of "$PJ/$U8/subagents/agent-a1.meta.json")" "")"
+check "beside transcripts: memory is not listed" "$(eq "$(item_of "$PJ/memory")$(item_of "$PJ/memory/MEMORY.md")" "")"
+check "beside transcripts: the note says memory and subagent records are left out" "$(has "$(note_of transcript-extras)" "memory")"
+judge transcript-extras "$PJ/$U6/tool-results"
+check "beside transcripts judge: orphaned tool output is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks transcript-extras "$PJ/$U6/tool-results" "$PJ/$U6/tool-results/b.txt" folder
+judge transcript-extras "$PJ/memory"
+check "beside transcripts judge: memory is not offerable" "$(has "$JUDGED" "not offerable: it is not a session's tool output")"
+judge transcript-extras "$PJ/$U6/tool-results/b.txt"
+check "beside transcripts judge: one file inside is not offerable" "$(has "$JUDGED" "not offerable: it is not a session's tool output")"
+judge transcript-extras "$H/Downloads/$U6/tool-results"
+check "beside transcripts judge: a folder outside ~/.claude/projects is not offerable" "$(has "$JUDGED" "not offerable: it is not a session's tool output")"
+ln -s "$PJ/$U6/tool-results" "$PJ/$U9/tool-results"
+judge transcript-extras "$PJ/$U9/tool-results"
+check "beside transcripts judge: a link is not offerable" "$(has "$JUDGED" "not offerable: ")"
+printf 't\n' > "$PJ/$U6.jsonl"
+judge transcript-extras "$PJ/$U6/tool-results"
+check "beside transcripts judge: a transcript that is back since the scan makes it not offerable" "$(has "$JUDGED" "not offerable: its session's transcript is still there")"
+rm -f "$PJ/$U6.jsonl"
+chmod 000 "$H/.claude/sessions/1.json"
+judge transcript-extras "$PJ/$U6/tool-results"
+check "beside transcripts judge: an unreadable session map makes it unmeasured" "$(has "$JUDGED" "unmeasured: the session map")"
+chmod 600 "$H/.claude/sessions/1.json"
+
+# ================================================================================================
+# Old Claude Code versions: never the one the claude command starts, never one a process runs
+# ================================================================================================
+fresh
+CV="$H/.local/share/claude/versions"
+mkdir -p "$CV" "$H/.local/bin"
+printf 'b\n' > "$CV/2.1.1"; printf 'b\n' > "$CV/2.1.2"; printf 'b\n' > "$CV/2.1.3"; printf 'b\n' > "$CV/2.1.4"
+ln -s "$CV/2.1.4" "$H/.local/bin/claude"; ln -s "$CV/2.1.1" "$CV/a-link"
+old "$CV"
+dc_stub lsof "printf 'p10\nc2.1.2\nf3\nn%s\n' $(printf %q "$CV/2.1.2")"
+run_scan --only claude-versions
+check "claude versions: the one the claude command starts is not offerable" "$(has "$(state_of "$CV/2.1.4")" "not offerable: it is the version the claude command starts")"
+check "claude versions: one a running process holds is not offerable" "$(has "$(state_of "$CV/2.1.2")" "not offerable: in use by 2.1.2")"
+check "claude versions: an older one nothing runs, unused 30 days, is offerable" "$(eq "$(state_of "$CV/2.1.1")" offerable)"
+check "claude versions: by deleting it, since the installer fetches any version again" "$(eq "$(method_of "$CV/2.1.1")" delete)"
+check "claude versions: a link among them is not listed" "$(eq "$(item_of "$CV/a-link")" "")"
+judge claude-versions "$CV/2.1.3"
+check "claude versions judge: an older one is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks claude-versions "$CV/2.1.3" "$CV/2.1.3"
+judge claude-versions "$CV/a-link"
+check "claude versions judge: a link is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-versions "$H/.local/share/claude/other"
+check "claude versions judge: anything outside the versions folder is not offerable" "$(has "$JUDGED" "not offerable: it is not a Claude Code version")"
+judge claude-versions "$CV/2.1.4"
+check "claude versions judge: the current one is not offerable" "$(has "$JUDGED" "not offerable: it is the version the claude command starts")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+judge claude-versions "$CV/2.1.3"
+check "claude versions judge: lsof saying anything on stderr makes it unmeasured" "$(has "$JUDGED" "unmeasured: could not tell whether it is running")"
+dc_stub lsof 'exit 1'
+rm -f "$H/.local/bin/claude"
+run_scan --only claude-versions
+check "claude versions: with no claude command to read, which one is current is unknown, so unmeasured" "$(has "$(state_of "$CV/2.1.3")" "unmeasured: ")"
+
+# ================================================================================================
+# The GitHub command line's cache: entries in ~/.cache/gh, which gh fetches again
+# ================================================================================================
+fresh
+G="$H/.cache/gh"
+mkdir -p "$G/22" "$G/56"
+printf 'z\n' > "$G/run-log-1-2.zip"; printf 'z\n' > "$G/run-log-3-4.zip"; printf 'h\n' > "$G/22/abc"; printf 'h\n' > "$G/56/def"
+old "$G"; touch -m -t "$RECENT" "$G/run-log-3-4.zip"; ln -s "$G/56" "$G/a-link"
+dc_stub lsof "printf 'p10\ncgh\nf3\nn%s\n' $(printf %q "$G/22/abc")"
+run_scan --only gh-cache
+check "gh cache: a run log untouched 30 days is offerable" "$(eq "$(state_of "$G/run-log-1-2.zip")" offerable)"
+check "gh cache: by deleting it" "$(eq "$(method_of "$G/run-log-1-2.zip")" delete)"
+check "gh cache: one changed 5 days ago is not offerable" "$(has "$(state_of "$G/run-log-3-4.zip")" "not offerable: changed within 30 days")"
+check "gh cache: an entry gh holds open is not offerable" "$(has "$(state_of "$G/22")" "not offerable: in use by gh")"
+check "gh cache: an idle cache folder is offerable" "$(eq "$(state_of "$G/56")" offerable)"
+check "gh cache: a link is not listed" "$(eq "$(item_of "$G/a-link")" "")"
+judge gh-cache "$G/56"
+check "gh cache judge: an idle entry is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks gh-cache "$G/56" "$G/56/def" folder
+judge gh-cache "$G"
+check "gh cache judge: the cache folder itself is not offerable" "$(has "$JUDGED" "not offerable: it is not an entry directly inside ~/.cache/gh")"
+judge gh-cache "$H/.cache/other"
+check "gh cache judge: another tool's cache is not offerable" "$(has "$JUDGED" "not offerable: it is not an entry directly inside ~/.cache/gh")"
+judge gh-cache "$G/a-link"
+check "gh cache judge: a link is not offerable" "$(has "$JUDGED" "not offerable: ")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+judge gh-cache "$G/56"
+check "gh cache judge: lsof saying anything on stderr makes in use unknown" "$(has "$JUDGED" "unmeasured: could not tell whether it is in use")"
+
+# ================================================================================================
+# Claude Code's own records: measured and shown, never offered (state, file history, the finding
+# spool and its backups, and the folders this config's hooks keep in the home folder)
+# ================================================================================================
+fresh
+mkdir -p "$H/.claude/state/session-notes/p/s" "$H/.claude/state/ai-review" "$H/.claude/file-history/$U5" "$H/.claude-issue-spool" \
+  "$H/.claude-issue-spool.backup-20260829-161937" "$H/.claude-payload-write-gate" "$H/.claude-area-check/rotated" "$H/.claude-quiz-verdicts" \
+  "$H/.claude-allow-rule-backups" "$H/.claude-handback-check" "$H/.claude-engine-checks"
+printf 'n\n' > "$H/.claude/state/session-notes/p/s/handoff.md"; printf 'a\n' > "$H/.claude/state/ai-review/x"
+printf 'v\n' > "$H/.claude/file-history/$U5/abc@v1"; printf '{}\n' > "$H/.claude-issue-spool/aaa.jsonl"
+printf '{}\n' > "$H/.claude-issue-spool.backup-20260829-161937/aaa.jsonl"; printf 'x\n' > "$H/.claude-payload-write-gate/toolu_1.list"
+old "$H"
+run_scan --only claude-records
+check "claude records: the scan exits 0" "$(eq "$RC" 0)"
+check "claude records: session notes are shown" "$(has "$(state_of "$H/.claude/state/session-notes")" "not offerable: ")"
+check "claude records: each other entry of state is shown" "$(has "$(state_of "$H/.claude/state/ai-review")" "not offerable: ")"
+check "claude records: file history is shown, as /rewind's copies" "$(has "$(state_of "$H/.claude/file-history")" "/rewind")"
+check "claude records: the finding spool is never offered" "$(has "$(state_of "$H/.claude-issue-spool")" "not offerable: findings not yet reviewed")"
+check "claude records: a spool backup is never offered" "$(has "$(state_of "$H/.claude-issue-spool.backup-20260829-161937")" "not offerable: ")"
+check "claude records: the payload write gate's notes are shown" "$(has "$(state_of "$H/.claude-payload-write-gate")" "not offerable: ")"
+for d in .claude-area-check .claude-quiz-verdicts .claude-allow-rule-backups .claude-handback-check .claude-engine-checks; do
+  check "claude records: ~/$d is shown" "$(has "$(state_of "$H/$d")" "not offerable: ")"
+done
+check "claude records: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
+check "claude records: each is sized" "$(eq "$(field "$(item_of "$H/.claude-issue-spool")" 8)" measured)"
+judge claude-records "$H/.claude-issue-spool"
+check "claude records judge: the spool is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$H/.claude/state/session-notes"
+check "claude records judge: session notes are not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$H/Downloads"
+check "claude records judge: a folder it does not list is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
+
+# ================================================================================================
+# npm and pnpm caches: measured and shown, never offered (only partly Claude's; Dan's call, #3235)
+# ================================================================================================
+fresh
+mkdir -p "$H/.npm/_cacache/content-v2" "$H/.npm/_npx/abc123/node_modules" "$H/.npm/_logs" "$H/Library/pnpm/store/v11/files"
+printf 'c\n' > "$H/.npm/_cacache/content-v2/x"; printf 'p\n' > "$H/.npm/_npx/abc123/package.json"; printf 's\n' > "$H/Library/pnpm/store/v11/files/y"
+old "$H"
+run_scan --only package-caches
+check "package caches: npm's download cache is shown, not offered" "$(has "$(state_of "$H/.npm/_cacache")" "not offerable: ")"
+check "package caches: each npx copy is shown, not offered" "$(has "$(state_of "$H/.npm/_npx/abc123")" "not offerable: ")"
+check "package caches: npm's logs are shown, not offered" "$(has "$(state_of "$H/.npm/_logs")" "not offerable: ")"
+check "package caches: the pnpm store is shown, not offered" "$(has "$(state_of "$H/Library/pnpm/store/v11")" "not offerable: ")"
+check "package caches: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
+judge package-caches "$H/.npm/_npx/abc123"
+check "package caches judge: an npx copy is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge package-caches "$H/.npm"
+check "package caches judge: ~/.npm itself is not offerable" "$(has "$JUDGED" "not offerable: ")"
+
+# ================================================================================================
+# Claude named items in the user temp folder: counted and sized in the kind's note, never listed
+# ================================================================================================
+fresh
+uid="$(id -u)"
+mkdir -p "$DC_TMPDIR/claude-sync-suite-work.isolated.AbC123/x" "$DC_TMPDIR/claude-$uid/proj" "$DC_TMPDIR/other-app"
+printf 's\n' > "$DC_TMPDIR/claude-add-scope-0f6a3deac760.state"; printf 'l\n' > "$DC_TMPDIR/.claude-lessons-advisory.1"
+printf 'o\n' > "$DC_TMPDIR/other-app/f"
+run_scan --only claude-user-temp
+check "user temp: the scan exits 0" "$(eq "$RC" 0)"
+check "user temp: the note counts the three Claude named entries" "$(has "$(note_of claude-user-temp)" "3 entries")"
+check "user temp: and lists none of them" "$(eq "$(items_in claude-user-temp)" 0)"
+check "user temp: Claude Code's own temp folder is the claude temp kind's, so not counted" "$(hasnt "$(note_of claude-user-temp)" "4 entries")"
+judge claude-user-temp "$DC_TMPDIR/claude-add-scope-0f6a3deac760.state"
+check "user temp judge: an entry is not offerable" "$(has "$JUDGED" "not offerable: ")"
+
+# ================================================================================================
 # Every kind keeps the 30 day floor (#2134), enumerated from the folder, so a kind added later
 # without it fails here (L613). The Trash is exempt by Dan's decision; Docker's floor reads
 # Docker's own times, since its targets are not files.
 # ================================================================================================
+# A kind that shows space and offers none (#3235) says so on a line of its own, "# offers: nothing";
+# such a module must then never set offerable at all, so the marker cannot hide a kind that does.
 for m in "$CATS"/*.sh; do
   case "${m##*/}" in trash.sh|docker.sh) continue ;; esac
-  check "floor: ${m##*/} applies dcs_floor" "$(grep -q 'dcs_floor "' "$m" && echo ok || echo "no dcs_floor call in $m")"
+  if grep -qx '# offers: nothing' "$m"; then
+    check "floor: ${m##*/} says it offers nothing, and sets offerable nowhere" "$(grep -n 'V=offerable\|V="offerable"\|echo offerable' "$m" | awk 'NR == 1 { print "it does: " $0; f = 1 } END { if (!f) print "ok" }')"
+  else
+    check "floor: ${m##*/} applies dcs_floor" "$(grep -q 'dcs_floor "' "$m" && echo ok || echo "no dcs_floor call in $m")"
+  fi
 done
-check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 13)"
+for c in transcript-extras claude-records claude-versions claude-user-temp gh-cache package-caches; do
+  check "titles: $c has a title in words, so the page never shows its code name" "$(t="$(dcr_title "$c")"; [ -n "$t" ] && [ "$t" != "$c" ] && echo ok || echo "titled '$t'")"
+done
+check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 19)"
+check "floor: exactly the three kinds that only show space say they offer nothing (a control on the marker)" \
+  "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-records.sh claude-user-temp.sh package-caches.sh ")"
 
 finish
