@@ -19,7 +19,10 @@
 #                          The rule is integer arithmetic in all three languages that draw sizes
 #                          (this shell, awk, and the review page's own script), never a float
 #                          format, which rounds a half differently in each; the review page suite
-#                          runs all three over the same values and fails on any difference
+#                          runs all three over the same values and fails on any difference. It
+#                          also holds dcu_commas(<n>), a count with its thousands marked ("5,979"),
+#                          the one way the review page and its checker write a count; the page's
+#                          own commas() follows the same rule (#3232)
 #   dcu_docker_kib <size>  a size as Docker prints it (decimal units: 1.2GB, 512kB, 0B) in KiB;
 #                          fails, printing nothing, on anything else
 #   DCU_AWK_TALLY          the one copy of how offerable items add up to a total and how that

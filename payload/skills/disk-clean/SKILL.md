@@ -114,7 +114,8 @@ bash ~/.claude/skills/disk-clean/review-check.sh --out <folder> --payload <folde
   that output.
 - **Exit 2**: the selection could not be checked (not what the page copies, or no scan or page to
   check it against). Tell Dan the reason in plain words and ask him to press Copy selection on the
-  page again and paste it; when it says there is no scan record, go back to step 1.
+  page again and paste it; when it says there is no scan record, go back to step 1. When it says
+  the summary could not be worked out, copying again cannot help: tell Dan that and stop.
 - **Exit 3**: a newer scan has replaced the one he reviewed. Nothing was planned. Go back to step 2,
   which renders the page for the newer scan.
 - **Exit 4**: the selection came from an older copy of the page, or was left on the clipboard from

@@ -37,7 +37,8 @@
 #   5  its count is not the number of ids it lists, so some were lost between the page and the chat
 #   7  it chose nothing
 #      (2 again: a whole kind not written as the page writes one, for a kind the page does not draw
-#      as one row, named twice, or beside an entry of its own kind listed alone)
+#      as one row, named twice, or beside an entry of its own kind listed alone; or the checker could
+#      not work its own summary out, sort or shasum failing)
 #   8  a whole kind's count or entries are not what the scan offers now: the scan changed after the
 #      page was drawn (an entry removed since), the page was drawn for another scan, or it was edited
 #   6  an id is not offerable in the scan now: never in it, or kept, unmeasured or already removed.
@@ -253,7 +254,7 @@ while IFS= read -r tok; do
   want="$(dcrv_whole_token "$WORK/items" "$LAST" "$k")" || want=""
   # An empty summary means the scan offers none of the kind now, unless it does, when the summary
   # itself could not be worked out (shasum or sort failed), which is said as that.
-  if [ -z "$want" ] && [ -n "$(dcrv_whole_entries "$WORK/items" "$k")" ]; then
+  if [ -z "$want" ] && [ "$(awk -F "$S" -v k="$k" '$2 == k && $5 == "offerable" { n++ } END { print n + 0 }' "$WORK/items")" -gt 0 ]; then
     refuse 2 "the summary of the $(dcr_title "$k") could not be worked out from the scan record (sort or shasum failed), so the selection cannot be checked, and nothing was planned."
   fi
   have="${want#all:*:}"; have="${have%%:*}"; [ -n "$want" ] || have=0
