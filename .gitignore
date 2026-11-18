@@ -38,6 +38,8 @@ state/
 .hook-tests
 .resolved/
 .send-suite-verdicts
+.send-suite-output/
+.send-holds-told
 .behind-skips
 .sent-over-untested
 .reconcile-outcome
