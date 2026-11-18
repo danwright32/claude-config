@@ -18933,6 +18933,139 @@ check "#1240 and it leads with why, before any file name" \
   "case \"\$we_note\" in 'test-we.sh fails here'*) true ;; *) false ;; esac"
 SYNC_NO_SEND_TESTS=1
 
+section "== a held suite's output is kept, and a standing hold is said once (claude-config#3176, #3179) =="
+# #3176. The gate removed the file a suite's output was captured in whatever the verdict was, so a
+# suite judged red left nothing behind but the word fail in .send-suite-verdicts, and the hold said
+# "Run it to see why", which helps only when a hand run fails too. On 2026-11-17 a suite was red in
+# the watcher on every run and green by hand on every run (#3175), and the cause had to be measured.
+# #3179. That day the watcher wrote the same hold to its log 227 times, and notified each time, for
+# one held file whose inputs never changed: the once per run guard covers one run, and each watcher
+# pass is a new run. The suite here fails, passes or stalls as the mode file says.
+unset SYNC_NO_SEND_TESTS
+KOB="$WORK/keptout-bare.git"; git init -q --bare "$KOB"
+KOR="$WORK/keptout-repo"; git clone -q "$KOB" "$KOR"
+KOH="$WORK/keptout-home"; mkdir -p "$KOH/hooks"
+echo '{"hooks":{}}' > "$KOH/settings.json"
+printf '# rules\n' > "$KOH/CLAUDE.md"
+KOMODE="$WORK/keptout-mode"; KOMARK="$WORK/keptout-stalled"; KOPID="$WORK/keptout-stall.pid"
+KOKEPT="$KOR/.send-suite-output/test-ko.sh.log"
+printf 'fail one\n' > "$KOMODE"
+printf '#!/usr/bin/env bash\necho ko one\n' > "$KOH/hooks/ko.sh"
+cat > "$KOH/hooks/test-ko.sh" <<EOS
+#!/usr/bin/env bash
+# covers ko.sh
+m="\$(cat '$KOMODE')"
+case "\$m" in
+  fail*) echo "KO-DIAG \$m"; echo "SUITE-RESULT passed=0 failed=1"; exit 1 ;;
+  stall) echo "KO-STALL printed before the deadline"; sleep 40 & echo \$! > '$KOPID'; : > '$KOMARK'; wait; exit 0 ;;
+esac
+echo "SUITE-RESULT passed=1 failed=0"
+EOS
+# The deadline's clock stands still until the stalled suite has printed, then jumps past it, so the
+# stop comes after the output it must keep and never races it (L290).
+KOCLOCK="$WORK/keptout-clock"
+printf '#!/usr/bin/env bash\nif [ -e %s ]; then echo 1000; else echo 0; fi\n' "'$KOMARK'" > "$KOCLOCK"
+chmod +x "$KOCLOCK"
+KOREC="$WORK/keptout-notify.rec"; KON="$WORK/keptout-notifier"; : > "$KOREC"
+cat > "$KON" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$KOREC"
+EOS
+chmod +x "$KON"
+KONOW=1900000000
+ko_send(){   # the watcher's send, with any extra assignments given -> its output
+  env -u SYNC_NO_SEND_TESTS -u SYNC_NO_HOOK_TESTS CLAUDE_HOME="$KOH" SYNC_REPO="$KOR" SYNC_IN_WATCH=1 \
+    SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$KON" SYNC_SEND_HOLD_NOW="$KONOW" "$@" bash "$SCRIPT" send 2>&1 || true
+}
+ko_notes(){ grep -c 'held back' "$KOREC" 2>/dev/null || true; }
+
+out_ko1="$(ko_send)"
+dbg "#3176 watcher send with a red suite: $out_ko1"
+check "#3176 the fixture's suite failed and its hook was held back (else the checks below prove nothing)" \
+  "line_has \"\$out_ko1\" 'NOT publishing' 'test-ko\\.sh fails here' && [ ! -e '$KOR/payload/hooks/ko.sh' ]"
+check "#3176 what the failed suite printed is kept" "grep -q 'KO-DIAG fail one' '$KOKEPT'"
+check "#3176 and the hold names where, on the same line as the suite" \
+  "line_has \"\$out_ko1\" 'NOT publishing' 'test-ko\\.sh fails here' '\\.send-suite-output/test-ko\\.sh\\.log'"
+check "#3179 the hold was notified once" "[ \"\$(ko_notes)\" = 1 ]"
+check "#3179 and recorded as told in the clone's own state" "grep -q 'test-ko' '$KOR/.send-holds-told'"
+
+out_ko2="$(ko_send)"
+dbg "#3179 the next watcher pass, nothing changed: $out_ko2"
+check "#3179 the next pass reused the verdict and still held the hook (else the next checks prove nothing)" \
+  "line_has \"\$out_ko2\" 'reused the remembered verdict' '1 suite' && grep -q '^SEND-OUTCOME withheld ' <<< \"\$out_ko2\" && [ ! -e '$KOR/payload/hooks/ko.sh' ]"
+check "#3179 a watcher pass whose hold has not changed does not say it again" "out_lacks \"\$out_ko2\" 'NOT publishing'"
+check "#3179 nor notify it again" "[ \"\$(ko_notes)\" = 1 ]"
+
+# A send a person runs answers them, so it is told what holds its edits whatever the watcher said.
+out_ko3="$(env -u SYNC_NO_SEND_TESTS -u SYNC_NO_HOOK_TESTS CLAUDE_HOME="$KOH" SYNC_REPO="$KOR" \
+  SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#3179 a typed send over the standing hold: $out_ko3"
+check "#3179 a send a person runs is still told the standing hold" \
+  "line_has \"\$out_ko3\" 'NOT publishing' 'test-ko\\.sh fails here'"
+check "#3176 and a reused verdict still names the output of the run that reached it" \
+  "line_has \"\$out_ko3\" 'NOT publishing' '\\.send-suite-output/test-ko\\.sh\\.log' && grep -q 'KO-DIAG fail one' '$KOKEPT'"
+
+# A hold nobody acts on is said again once a day, so it is never silenced for good (L523).
+out_ko4="$(KONOW=$(( KONOW + 86399 )); ko_send)"
+check "#3179 a hold standing for less than a day stays quiet" "out_lacks \"\$out_ko4\" 'NOT publishing'"
+KONOW=$(( KONOW + 86400 ))
+out_ko5="$(ko_send)"
+dbg "#3179 a day later: $out_ko5"
+check "#3179 a hold still standing a day after it was said is said again" \
+  "line_has \"\$out_ko5\" 'NOT publishing' 'test-ko\\.sh fails here'"
+check "#3179 and notified again" "[ \"\$(ko_notes)\" = 2 ]"
+out_ko6="$(KONOW=$(( KONOW + 1 )); ko_send)"
+check "#3179 and is then quiet for another day" "out_lacks \"\$out_ko6\" 'NOT publishing'"
+
+# New inputs are a new measurement: a fix tried and still red is news.
+printf 'fail two\n' > "$KOMODE"
+printf '#!/usr/bin/env bash\necho ko two\n' > "$KOH/hooks/ko.sh"
+out_ko7="$(ko_send)"
+dbg "#3179 the held hook edited and still red: $out_ko7"
+check "#3179 a hold whose inputs changed is said again" \
+  "line_has \"\$out_ko7\" 'NOT publishing' 'test-ko\\.sh fails here'"
+check "#3176 and the kept output is the new run's, replacing the old one" \
+  "grep -q 'KO-DIAG fail two' '$KOKEPT' && ! grep -q 'KO-DIAG fail one' '$KOKEPT'"
+
+# A suite stopped at its deadline keeps what it printed before it was stopped.
+printf 'stall\n' > "$KOMODE"
+printf '#!/usr/bin/env bash\necho ko three\n' > "$KOH/hooks/ko.sh"
+out_ko8="$(ko_send SYNC_TEST_SUITE_CLOCK="$KOCLOCK" SYNC_SEND_TESTS_TIMEOUT=30 SYNC_POLL_INTERVAL=0.1)"
+dbg "#3176 a suite stopped at its deadline: $out_ko8"
+ko_p="$(cat "$KOPID" 2>/dev/null)"
+case "$ko_p" in ''|*[!0-9]*) ;; *) case "$(ps -o command= -p "$ko_p" 2>/dev/null)" in *'sleep 40'*) kill -9 "$ko_p" 2>/dev/null ;; esac ;; esac
+check "#3176 the fixture's suite was stopped at its deadline (else the next check proves nothing)" \
+  "line_has \"\$out_ko8\" 'NOT publishing' 'test-ko\\.sh did not finish within SYNC_SEND_TESTS_TIMEOUT'"
+check "#3176 what a suite stopped at its deadline printed is kept, and the hold names where" \
+  "grep -q 'KO-STALL printed before the deadline' '$KOKEPT' && line_has \"\$out_ko8\" 'did not finish' '\\.send-suite-output/test-ko\\.sh\\.log'"
+
+# The hold clears: said once, and the kept output goes with it.
+printf 'pass\n' > "$KOMODE"
+printf '#!/usr/bin/env bash\necho ko four\n' > "$KOH/hooks/ko.sh"
+out_ko9="$(ko_send)"
+dbg "#3179 the suite passes: $out_ko9"
+ko_pub="$(git -C "$KOB" show HEAD:payload/hooks/ko.sh 2>/dev/null || true)"
+check "#3179 the hook goes out once its suite passes (else the next checks prove nothing)" \
+  "case \"\$ko_pub\" in *'ko four'*) true ;; *) false ;; esac"
+check "#3179 a hold that clears says so, naming the files and the suite" \
+  "line_has \"\$out_ko9\" 'no longer holding back' 'ko\\.sh' 'test-ko\\.sh passes here now'"
+check "#3176 and a green verdict removes the kept output" "[ ! -e '$KOKEPT' ]"
+check "#3179 and the record of told holds no longer names the suite" \
+  "! grep -q 'test-ko' '$KOR/.send-holds-told' 2>/dev/null"
+# Judged green again, so a hold cleared but still remembered would be said to clear again.
+printf '#!/usr/bin/env bash\necho ko five\n' > "$KOH/hooks/ko.sh"
+out_ko10="$(ko_send)"
+dbg "#3179 the suite passes again: $out_ko10"
+check "#3179 and a later pass that judges the suite green again says nothing more about it" \
+  "line_has \"\$out_ko10\" 'ran 1 suite' 'covering' && out_lacks \"\$out_ko10\" 'no longer holding back|NOT publishing'"
+
+# Both are this Mac's own bookkeeping and never travel. Asserted against the SHIPPED .gitignore, since
+# the fixtures here have none.
+_KOGI="$(dirname "$SCRIPT")/.gitignore"
+check "#3176 #3179 the shipped gitignore covers the kept output and the record of told holds" \
+  "grep -qx '\\.send-suite-output/' '$_KOGI' && grep -qx '\\.send-holds-told' '$_KOGI'"
+SYNC_NO_SEND_TESTS=1
+
 
 section "== a burst of edits is one send, and a session can hold the watcher off (#262) =="
 # Two costs with one cause: the watcher commits and pushes on every fswatch event. It takes the
