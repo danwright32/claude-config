@@ -14,6 +14,7 @@
 #   sc_hold_covers     is a hold in force that protects THIS session's writes: its own, or a terminal's
 #   sc_hold_others     the short names of the other sessions holding the watcher
 #   sc_payload_session the session a hook payload names
+#   sc_is_linked_worktree is this clone a linked worktree, not the primary checkout of its repository
 #   sc_is_own_worktree is this clone a linked worktree on its own branch, which nothing mirrors into
 #   sc_is_plain_copy   is this clone a copy of the tree with no repository around it, out of reach
 #
@@ -85,8 +86,9 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
 
 # Is this clone a LINKED worktree, rather than the primary checkout of its repository? Its own git
 # dir and the repository's common one are two places only in a linked worktree. Asked by
-# sc_is_own_worktree below, and by the payload write gate after a call, where a linked worktree whose
-# folder is gone was removed whole (claude-config#3165). Any question git cannot answer is a no.
+# sc_is_own_worktree below, and by the payload write gate before a call, which notes each linked
+# worktree so that the check after the call can read one whose folder is gone as removed whole
+# (claude-config#3165). Any question git cannot answer is a no.
 sc_is_linked_worktree(){ # sc_is_linked_worktree <clone root>
   local gd common cd
   gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1

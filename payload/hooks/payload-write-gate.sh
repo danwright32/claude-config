@@ -261,7 +261,11 @@ if [ "$event" = "PostToolUse" ]; then
     shown_lost="$(printf '%s\n' "$lost" | awk 'NR <= 20 { print "  " $0 }')"
     [ "$ln" -gt 20 ] && shown_lost="$shown_lost
   ... and $((ln - 20)) more"
-    where="$(printf '%s' "$gone" | sed '/^$/d' | paste -sd ',' - | sed 's/,/, /g')"
+    # Only the worktrees a lost file was in: a clean one removed by the same command lost nothing.
+    where="$(printf '%s\n' "$lost" | GONE="$gone" awk '
+      BEGIN { n = split(ENVIRON["GONE"], g, "\n") }
+      { for (i = 1; i <= n; i++) if (g[i] != "" && index($0, g[i] "/payload/") == 1 && !(g[i] in seen)) { seen[g[i]] = 1; o = o (o == "" ? "" : ", ") g[i] } }
+      END { print o }')"
     [ "$1" -eq 0 ] || printf '\n' >&2
     cat >&2 <<MSG
 claude-sync: $ln file(s) under payload/ had uncommitted changes when this command started, in a worktree whose folder is no longer there ($where):

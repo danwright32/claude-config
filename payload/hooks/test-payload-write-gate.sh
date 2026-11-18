@@ -1348,6 +1348,14 @@ says "#3165 and an untracked one" "$R/wt6/payload/hooks/new.sh"
 says "#3165 saying they had uncommitted changes" "had uncommitted changes when this command started"
 case "$OUT" in *"$R/wt6/payload/a.md"*) check "#3165 and only those, not its committed files" "it listed a.md" ;; *) check "#3165 and only those, not its committed files" ok ;; esac
 case "$OUT" in *"claude-sync hold 120"*) check "#3165 with no hold advice, which would protect nothing" "it advised a hold" ;; *) check "#3165 with no hold advice, which would protect nothing" ok ;; esac
+# One command removing a clean worktree and a dirty one names only the worktree the loss was in.
+mkwt wt8; mkwt wt9
+printf 'unsaved\n' > "$R/wt9/payload/b.md"
+prepost PreToolUse "git worktree remove --force $R/wt8/payload/../ $R/wt9/payload/../" "$R/primary" r10
+rmwt "$R/wt8"; rmwt --force "$R/wt9"
+prepost PostToolUse "git worktree remove --force $R/wt8/payload/../ $R/wt9/payload/../" "$R/primary" r10
+says "#3165 removing a clean and a dirty worktree together names the dirty one" "($R/wt9)"
+case "$OUT" in *"$R/wt8"*) check "#3165 and not the clean one, where nothing was lost" "it named $R/wt8" ;; *) check "#3165 and not the clean one, where nothing was lost" ok ;; esac
 # When git cannot say what was uncommitted before the call, nothing can be called safe: the
 # removed worktree's files are reported as they were before #3165 (L42).
 FAKEST="$FIX/fakestatus"; mkdir -p "$FAKEST"
