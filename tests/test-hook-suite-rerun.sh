@@ -198,7 +198,8 @@ rr_forge "$(date +%s)"; echo fail > "$RRT/mode"
 out8="$(rr_pull 1)"
 check "a rerun that fails is recorded as failed and said" \
   "[ \"\$(rr_runs)\" = 4 ] && grep -q '^outcome=failed' '$RRR/.hook-tests' && line_has \"\$out8\" 'hook suite FAILED here' 'exited 1'" "$out8"
-check "and notifies once" "[ \"\$(rr_told)\" = 2 ] && tail -1 '$RRT/told' | grep -q 'FAILED'" "$(cat "$RRT/told" 2>/dev/null)"
+rr_last_told="$(tail -1 "$RRT/told" 2>/dev/null)"
+check "and notifies once" "[ \"\$(rr_told)\" = 2 ] && [ \"\${rr_last_told#*FAILED}\" != \"\$rr_last_told\" ]" "$(cat "$RRT/told" 2>/dev/null)"
 out9="$(rr_pull 1)"
 check "a failed record is not run again by itself, and not notified again" \
   "[ \"\$(rr_runs)\" = 4 ] && [ \"\$(rr_told)\" = 2 ]" "$out9"
