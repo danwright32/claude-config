@@ -10,7 +10,9 @@ address. Measured through the gate on 2026-11-16: every renamed form in
 test-slack-drafts-code-loaders.sh passed.
 
 follow() reads three things from a script's syntax tree, the third being the names sys goes by
-beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow):
+beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow).
+Its phrase also says when a sys read off a value it does not follow is handed somewhere it is not
+followed, which sys_placed() reads (claude-config#3172). The first two:
 
 - The names a module, or anything reached from one by attributes, is bound to where the binding can
   be read: an assignment to a name (annotated or not, chained, or a tuple against a tuple of the
@@ -238,7 +240,7 @@ SYS_SAFE_CALLS = frozenset({"print", "round", "len", "str", "repr", "int", "floa
 SYS_DUNDERS_OK = frozenset({"__init__", "__repr__", "__str__", "__hash__", "__slots__", "__doc__"})
 
 
-def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere):
+def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
     """How the script puts a sys the gate cannot see is sys where it does not follow it, as a phrase,
     or None (claude-config#3172). follow() reads sys.path through each name sys is bound to, and
     py_acts reads it off any attribute called sys, but sys read off a value that is not followed
@@ -260,14 +262,23 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere):
     # An operand of arithmetic or a comparison is handed to the other operand's method (a module
     # has none, so sys + a calls a's __radd__ with sys, and `sys in a` its __contains__). So an
     # operand passes only where no class of the script binds a dunder method that is not
-    # SYS_DUNDERS_OK, none of which is handed another object.
-    operand_hooks = any(
-        isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and s.name.startswith("__") and s.name.endswith("__")
-        and s.name not in SYS_DUNDERS_OK
+    # SYS_DUNDERS_OK, none of which is handed another object. A class body is not the only place a
+    # hook is written (lessons review at d63d189): a class from one of the script's own modules,
+    # whose bodies are not among these nodes, type() given its methods as a dictionary, and setattr
+    # on a class each give one, so any of them counts as a hook too. (A dunder set by attribute,
+    # A.__radd__ = f, is refused by py_acts already, as any attribute starting with _ is.)
+    def hook(name):
+        return name.startswith("__") and name.endswith("__") and name not in SYS_DUNDERS_OK
+
+    operand_hooks = own_modules or any(
+        isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and hook(s.name)
         or isinstance(s, (ast.Assign, ast.AnnAssign)) and any(
-            isinstance(t, ast.Name) and t.id.startswith("__") and t.id.endswith("__") and t.id not in SYS_DUNDERS_OK
-            for t in (s.targets if isinstance(s, ast.Assign) else [s.target]))
-        for c in nodes if isinstance(c, ast.ClassDef) for s in c.body)
+            isinstance(t, ast.Name) and hook(t.id) for t in (s.targets if isinstance(s, ast.Assign) else [s.target]))
+        for c in nodes if isinstance(c, ast.ClassDef) for s in c.body) or any(
+        isinstance(n, ast.Name) and (n.id == "setattr" or n.id == "type" and not (
+            isinstance(parent.get(id(n)), ast.Call) and parent[id(n)].func is n and len(parent[id(n)].args) == 1
+            and not parent[id(n)].keywords))
+        for n in nodes)
     for node in nodes:
         if not isinstance(node, (ast.Name, ast.Attribute)) or not isinstance(node.ctx, ast.Load) or not sys_read(node):
             continue
@@ -279,7 +290,10 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere):
             if p.attr == "path":
                 return "changes where Python finds modules (sys.path)"
             continue
-        if id(at) in sys_bound or goes_nowhere(at, p):
+        # A chained assignment binds every target, and only a name's is followed: `q = h.m = lib.sys`
+        # puts the same sys on h.m (lessons review at d63d189).
+        unfollowed = isinstance(p, ast.Assign) and not all(isinstance(t, ast.Name) for t in p.targets)
+        if (id(at) in sys_bound and not unfollowed) or goes_nowhere(at, p):
             continue
         if isinstance(p, (ast.UnaryOp, ast.FormattedValue)) or (isinstance(p, ast.Subscript) and p.value is at) \
                 or (isinstance(p, (ast.BinOp, ast.Compare)) and not operand_hooks):
@@ -504,6 +518,6 @@ def make(inert):
             if is_module(value(node)):
                 phrase = f"puts the module {dotted(node)} where the gate does not follow it"
                 break
-        return renamed, phrase or sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere), as_sys
+        return renamed, phrase or sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, bool(local)), as_sys
 
     return follow

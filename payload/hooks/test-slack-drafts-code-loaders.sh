@@ -2140,8 +2140,21 @@ w72 operand-radd.py 'import lib_sys' 'class A:' '    def __radd__(self, m):' "  
   'print(lib_sys.sys + A())' 'import json'
 w72 operand-contains.py 'import lib_sys' 'class A:' '    def __contains__(self, m):' "        m$PATH72" '        return True' \
   'print(lib_sys.sys in A())' 'import json'
+# The lessons review at d63d189: a chained assignment that also stores sys on an attribute, and an
+# operand whose class's hook is written where the script's own class bodies do not show it (a module
+# of the script's own, type() given the methods, a method set on the class afterwards).
+w72 chain-attr.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'q = h.m = lib_sys.sys' "h.m$PATH72" 'import json'
+w72 lib_hook.py 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0'
+w72 operand-own-module.py 'import lib_sys, lib_hook' 'print(lib_sys.sys + lib_hook.A())' 'import json'
+w72 operand-type.py 'import lib_sys' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = type("A", (), {"__radd__": radd})' 'print(lib_sys.sys + A())' 'import json'
+w72 operand-set-later.py 'import lib_sys' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A.__radd__ = radd' 'print(lib_sys.sys + A())' 'import json'
+w72 operand-setattr.py 'import lib_sys' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'setattr(A, "__r" + "add__", radd)' 'print(lib_sys.sys + A())' 'import json'
 for route in go-call-chain.py go-own-module.py go-keyword.py go-name.py ifexp-name.py ifexp-chain.py ifexp-direct.py \
-  boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py; do
+  boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py \
+  chain-attr.py operand-own-module.py operand-type.py operand-set-later.py operand-setattr.py; do
   run_72 "python3 $route msg.json"
   read_refused "#3172 sys put where the gate does not follow it is refused: $route"
 done
@@ -2177,9 +2190,8 @@ done < "$D72/subs.txt"
 # rounded, formatted, compared and added, which is a field (PR #3161), also when a conditional picks
 # it into a name.
 cat > "$D72/reads-3172.py" <<'PY'
-import html.parser, json, sys
+import collections, html.parser, json, sys
 import sys as s
-from collections import abc
 from html.parser import HTMLParser
 from json.decoder import JSONDecodeError, scanstring
 class Times:
@@ -2194,7 +2206,7 @@ try:
 except JSONDecodeError as e:
     print(e, file=sys.stderr)
     sys.exit(1)
-print(json.dumps(data, indent=2), isinstance(data, abc.Iterable), scanstring('"a"', 1)[0], HTMLParser, html.parser.HTMLParser)
+print(json.dumps(data, indent=2), isinstance(data, collections.abc.Iterable), scanstring('"a"', 1)[0], HTMLParser, html.parser.HTMLParser)
 print(t.sys, round(t.sys), str(t.sys), f"{t.sys:.1f}", t.sys == 0.5, -t.sys, t.sys * 2, t.total(), round(q))
 json.dump(data, sys.stdout)
 s.stdout.write(s.argv[0] + "\n")
