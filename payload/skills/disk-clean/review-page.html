@@ -75,9 +75,11 @@ h2 { font-size: 15px; margin: 0; }
 .group-head.unmeasured { color: var(--kept); border-bottom-color: var(--rule); }
 .head-space { flex: 0 0 13px; margin-right: 15px; }
 .group-reason { color: var(--kept); text-align: right; }
+/* A kind's note: what the scan left out of it and why, one line under its heading (#3215). */
+.group-note { margin: 0; padding: 5px 0 5px 36px; font-size: 12.5px; color: var(--note); border-bottom: 1px solid var(--rule); }
 
 /* D5: a row is one line, path then note then marks, wrapping only when too long. */
-.item { display: grid; grid-template-columns: 28px 1fr 110px; align-items: start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
+.item { display: grid; grid-template-columns: 28px 1fr minmax(110px, max-content); align-items: start; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--rule); }
 .item.kept { color: var(--kept); }
 .tick { margin: 2px 0 0; accent-color: var(--tick); }
 .tick:not(:disabled) { cursor: pointer; }
@@ -91,7 +93,9 @@ h2 { font-size: 15px; margin: 0; }
 /* A mark that informs rather than warns about removing (partly kept only in iCloud): the row's
    grey note colours, never amber. */
 .flag.quiet { color: var(--note); background: transparent; border-color: var(--rule); }
-.size { text-align: right; font-variant-numeric: tabular-nums; }
+/* A size stays on one line, its column growing past 110px to fit: the Trash's one row is a sum, and
+   "At least 146.5 GB" wrapped in a fixed column (#3216). */
+.size { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .size.unknown { color: var(--kept); }
 
 /* D9: the foot bar, fixed, holding what is selected and Copy selection. */
@@ -103,7 +107,7 @@ h2 { font-size: 15px; margin: 0; }
 
 @media (max-width: 560px) {
   .page { padding: 20px 16px 104px; }
-  .item { grid-template-columns: 24px 1fr 84px; }
+  .item { grid-template-columns: 24px 1fr minmax(84px, max-content); }
   .bar { padding: 12px 16px; }
 }
 </style>
@@ -182,9 +186,18 @@ h2 { font-size: 15px; margin: 0; }
     for (var i = 0; i < ticks.length; i++) {
       var t = ticks[i];
       if (!t.checked || t.disabled) continue;
-      ids.push(t.getAttribute("data-id"));
-      var b = t.getAttribute("data-bytes");
-      if (b === "") unsized++; else bytes += Number(b);
+      var b = t.getAttribute("data-bytes"), many = t.getAttribute("data-ids");
+      if (many !== null) {
+        // A kind drawn as one row (the Trash, #3216): its box stands for every entry it lists, its
+        // bytes are their read sizes added up, and data-unsized counts the ones never read.
+        var each = many === "" ? [] : many.split(" ");
+        for (var j = 0; j < each.length; j++) ids.push(each[j]);
+        bytes += Number(b || 0);
+        unsized += Number(t.getAttribute("data-unsized") || 0);
+      } else {
+        ids.push(t.getAttribute("data-id"));
+        if (b === "") unsized++; else bytes += Number(b);
+      }
       if (t.getAttribute("data-partial") === "1") partial = true;
     }
     return { ids: ids, words: ids.length ? ids.length + " selected, " + totalWords(unsized, ids.length, bytes, partial) : "Nothing selected" };
