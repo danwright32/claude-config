@@ -7255,6 +7255,97 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             and not re.search(r"[$`'\"\\*?\[{~]", rest[0])
 
 
+# Where a judgement's time goes, for the suites that hold its cost (claude-config#3170). With
+# SLACK_GATE_PHASE_LOG naming a file, each of PHASES is timed, and one line is appended to that file
+# after the verdict is printed: each phase's time with the timed phases it called taken out ("self"),
+# its time as the outermost call of that name ("in"), and how many times it ran. Nothing else changes:
+# stdout carries the verdict as always, and nothing is written to stderr, which the wrapper reads
+# together with stdout (2>&1). Unset, nothing is timed at all. "Judge.x" names a method of Judge,
+# "sw.x" a function of the shell reader, and a bare name a function of this file; finer points are
+# added here, never with a profiler run beside the gate.
+PHASES = ("load_reader", "Judge.line", "Judge.judge_written", "Judge.sh_walk", "Judge.note_writes",
+          "Judge.script", "Judge.every_file", "Judge.acts", "Judge.py_acts", "Judge.shell_acts",
+          "Judge.content", "Judge.sh_known", "Judge.sh_bound_in", "Judge.made_from", "Judge.curl_defaults",
+          "sw.commands")
+
+
+class PhaseTimes:
+    """The timings PHASES asks for, kept while the gate runs and written once at the end."""
+
+    def __init__(self, log):
+        self.log = log
+        self.started, self.cpu = time.perf_counter(), time.process_time()
+        self.spent = {}  # name: [self seconds, outermost seconds, calls]
+        self.stack = []  # for each timed call running, the seconds its timed callees took
+        self.depth = {}  # name: how many calls of it are running
+
+    def wrap(self, name, fn):
+        spent, stack, depth = self.spent.setdefault(name, [0.0, 0.0, 0]), self.stack, self.depth
+        depth[name] = 0
+
+        @functools.wraps(fn)
+        def timed(*a, **k):
+            depth[name] += 1
+            stack.append(0.0)
+            t = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                took = time.perf_counter() - t
+                inner = stack.pop()
+                if stack:
+                    stack[-1] += took
+                spent[0] += took - inner
+                depth[name] -= 1
+                if not depth[name]:
+                    spent[1] += took
+                spent[2] += 1
+        return timed
+
+    def install(self):
+        for name in PHASES:
+            owner, _, attr = name.rpartition(".")
+            if owner == "Judge":
+                raw = vars(next(c for c in Judge.__mro__ if attr in vars(c)))[attr]
+                if isinstance(raw, staticmethod):
+                    setattr(Judge, attr, staticmethod(self.wrap(name, raw.__func__)))
+                else:
+                    setattr(Judge, attr, self.wrap(name, raw))
+            elif not owner:
+                globals()[attr] = self.wrap(name, globals()[attr])
+        load = globals()["load_reader"]
+
+        def load_timed():
+            sw = load()
+            for name in PHASES:
+                if name.startswith("sw."):
+                    setattr(sw, name[3:], self.wrap(name, getattr(sw, name[3:])))
+            return sw
+        globals()["load_reader"] = load_timed
+
+    def write(self):
+        rows = sorted(self.spent.items(), key=lambda kv: -kv[1][0])
+        self.log.write("phases: %.3f s, %.3f s of processor time; %s\n" % (
+            time.perf_counter() - self.started, time.process_time() - self.cpu,
+            "; ".join("%s self %.3f in %.3f n %d" % (n, s, o, c) for n, (s, o, c) in rows if c)))
+        self.log.close()
+
+
+def phase_times():
+    """The PhaseTimes this run keeps, installed, or None when SLACK_GATE_PHASE_LOG names no file. The
+    file is opened here, before any judgement starts, so the cache's recording never sees it."""
+    where = os.environ.get("SLACK_GATE_PHASE_LOG")
+    if not where:
+        return None
+    try:
+        log = open(where, "a", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    times = PhaseTimes(log)
+    times.install()
+    return times
+
+
 def main():
     # First, so all of the judging runs on a performance core when the Mac is busy (claude-config#2918),
     # and traced, so a suite reads the level the kernel really gave it.
@@ -7345,4 +7436,7 @@ def main():
 
 
 if __name__ == "__main__":
+    PHASE_TIMES = phase_times()
     main()
+    if PHASE_TIMES:
+        PHASE_TIMES.write()
