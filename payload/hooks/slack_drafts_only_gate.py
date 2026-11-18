@@ -7177,7 +7177,7 @@ def phase_times():
     if not where:
         return None
     try:
-        log = open(where, "a", encoding="utf-8")
+        log = open(where, "a", encoding="utf-8", errors="replace")
     except OSError:
         return None
     times = PhaseTimes(log)
