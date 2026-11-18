@@ -21,7 +21,8 @@
 #     chat.scheduleMessage, chat.postEphemeral, chat.meMessage or hooks.slack.com; inline code or a
 #     script fed on stdin holding one; a script file the command runs that holds one (a project's own
 #     alert scripts too), by any path and behind any runner (sudo, env, rtk, nohup, xargs, find
-#     -exec); a package script (npm run, pnpm, yarn) whose package.json command posts.
+#     -exec); a package script (npm run, pnpm, yarn) whose package.json command posts, read with the
+#     words after the script's name, so a file handed to it is judged as one handed to npx is (#3143).
 #     A command that only mentions an endpoint (grep, echo, a test) passes.
 #   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
 #   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy
