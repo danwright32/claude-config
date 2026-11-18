@@ -44,6 +44,10 @@ describe('which call a refusal was', () => {
     expect(callKey('Bash', { command: 'git commit -F n.txt', description: 'Commit' })).not.toBe(refused)
     expect(callKey('Write', { command: 'git commit -F m.txt', description: 'Commit' })).not.toBe(refused)
   })
+  test('a retry carrying requestMeta from a hook ahead is the same call as the refusal, which never carries it (#3219)', () => {
+    const refused = callKey('mcp__x__publish', { page: 'a.html' })
+    expect(callKey('mcp__x__publish', toolArgs({ tool: 'mcp__x__publish', tool_use_id: 't10', page: 'a.html', requestMeta: { 'anthropic/sources': 'relay' } }))).toBe(refused)
+  })
   test('rtk written in front of a command by the rewrite hook is the same call', () => {
     expect(callKey('Bash', { command: 'rtk git status' })).toBe(callKey('Bash', { command: 'git status' }))
     expect(callKey('Bash', { command: 'rtk proxy git status' })).not.toBe(callKey('Bash', { command: 'git status' }))
