@@ -5752,12 +5752,6 @@ export const register: Register = on => {
     const tool = String(e.tool)
     const toolUseId = String(input.tool_use_id ?? '')
     if (tool.startsWith(CHROME) && toolUseId) chromeCalls.set(toolUseId, { tool, input, at: await $.clock.now() })
-    // The same call as one the check gave no verdict on tonight (#3158), watched for its result.
-    if (refusedCalls.size && toolUseId) {
-      const args = toolArgs(input)
-      const key = callKey(tool, args)
-      if (refusedCalls.has(key)) redoing.set(toolUseId, { key, tool, what: whatOf(args) })
-    }
 
     if (tool === 'mcp__scope-modes__switch_to_build') {
       // Answered here and never passed down, so the guards beneath (the secret guard) are asked
@@ -5851,6 +5845,13 @@ export const register: Register = on => {
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
+      // The same call as one the check gave no verdict on tonight (#3158), watched for its result
+      // once nothing here or beneath turned it away; a refusal by the check still to come forgets it.
+      if (refusedCalls.size && toolUseId && !r.deny) {
+        const args = toolArgs(input)
+        const key = callKey(tool, args)
+        if (refusedCalls.has(key)) redoing.set(toolUseId, { key, tool, what: whatOf(args) })
+      }
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       // Notes a scope mode command left mid turn (#3136) reach the model with the main conversation's
       // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
@@ -6048,6 +6049,8 @@ export const register: Register = on => {
         $.ui.log(`scope-modes: a refused call could not be read for whether it only reads (${msg(err)}), so it is noted as not a read`, { to: 'debug' })
       }
       const note = refusalNote(e.tool_name, args, String(e.tool_use_id ?? ''), String(e.reason ?? ''), read)
+      // A call watched as a retry that the check refused in turn never ran (#3158).
+      redoing.delete(note.toolUseId)
       if (note.noVerdict && note.toolUseId) {
         const key = callKey(e.tool_name, args)
         refusedCalls.set(key, [...(refusedCalls.get(key) ?? []), note.toolUseId])

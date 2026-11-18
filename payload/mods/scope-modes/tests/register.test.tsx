@@ -6296,6 +6296,16 @@ test('a refusal with no verdict is noted with the call and whether it only read,
   expect(await call($ as never, { tool: 'Bash', command: 'git commit -F other.txt', description: 'x', tool_use_id: 'u4' } as never)).toBe('ran')
   await toolResult($ as never, 'u4', false)
   expect(notes().filter(n => n.kind === 'redone')).toHaveLength(1)
+  // Sent again and turned away, by this mod overnight or by the check once more, it never ran,
+  // whatever its result row says (lessons review of 6586834).
+  await deny('t5', 'git push --force origin x')
+  expect(await call($ as never, { tool: 'Bash', command: 'git push --force origin x', description: 'x', tool_use_id: 'u5' } as never)).toMatch(/^Refused: sleep mode is on/)
+  await toolResult($ as never, 'u5', false)
+  await deny('t6', 'mkdir -p out')
+  expect(await call($ as never, { tool: 'Bash', command: 'mkdir -p out', description: 'x', tool_use_id: 'u6' } as never)).toBe('ran')
+  await deny('u6', 'mkdir -p out')
+  await toolResult($ as never, 'u6', false)
+  expect(notes().filter(n => n.kind === 'redone')).toHaveLength(1)
 })
 
 test('a worker is told its prompts approve themselves and a refusal is final; a session that is not is not', withDeps, async ($, on) => {
