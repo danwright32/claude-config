@@ -3844,7 +3844,7 @@ test('#3036: an unread command inside a shell script the call runs is held on th
   expect(w.ran.length).toBe(passes.length)
 })
 
-test('#2855: a script named through a variable the command sets is read; one only the environment names is not', withKit, async ($, on) => {
+test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
   for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
@@ -3855,10 +3855,52 @@ test('#2855: a script named through a variable the command sets is read; one onl
   expect(refusalOf(await call($, { tool: 'Bash', command: `N=${NOTES}; python3 "$N/keys.py"` }))).toContain('was undone')
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
   w.ctl.shell = {}
-  // Left out, as neither can be judged precisely: a variable only the environment holds, and a
-  // loop's (most of the 313 script words not followed over 14 days of this Mac's commands).
-  const commands = [`N=${NOTES}; python3 "$N/data.py"`, 'python3 "$UNSET_DIR/gen.py"', `for d in ${NOTES}; do python3 "$d/gen.py"; done`]
+  // Left out, as it cannot be judged precisely: a loop's variable (most of the 313 script words not
+  // followed over 14 days of this Mac's commands). A variable only the environment holds was left
+  // out with it until #3214, which holds it, below.
+  const commands = [`N=${NOTES}; python3 "$N/data.py"`, `for d in ${NOTES}; do python3 "$d/gen.py"; done`]
   for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+})
+
+// #3214: `python3 $N/gen.py`, gen.py writing app/page.tsx and nothing in the command setting N, ran
+// unasked: the guard could not find the script, so it never read what it writes, and #2855 had left a
+// variable only the environment holds out as one it could not judge precisely. A script the guard
+// cannot find it cannot read, so it is held as could not check, as a script it cannot open is. Over
+// the 14 days to 2026-11-18 one of this Mac's 63,461 recorded Bash calls ran a script so.
+test('#3214: a script run through a variable the command never sets is held as could not check; one the command places, or names outright, is read as before', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/data.py`]: WRITE_DATA_PY, [`${NOTES}/run.sh`]: 'python3 "$TOOLS/gen.py"\n' } })
+  for (const [command, v] of [
+    ['python3 $N/gen.py', 'N'],
+    ['python3 "$UNSET_DIR/gen.py"', 'UNSET_DIR'],
+    ['cd /w/slate && node "${N}/gen.mjs" --dry', 'N'],
+    ['bash $SCRIPT', 'SCRIPT'],
+    [`D=${NOTES}; python3 $D/$NAME.py`, 'NAME'],
+    // What it writes is not known either way, so one that would write only data is held the same.
+    ['python3 $N/data.py', 'N'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes('the design round guard could not check where this call writes'), said: why.includes(`the command never sets ${v}, so where the script is could not be followed`) }).toEqual({ command, held: true, said: true })
+    expect(why).not.toContain('could not tell which issue or branch')
+  }
+  expect(w.ran).toEqual([])
+  // Not held: a folder the command sets to one literal, and a script named outright, each read and
+  // found to write data only. Nor, as before, one a shell script the command runs names through a
+  // variable its own text never sets (run.sh), which a file it sources or what runs it may set.
+  const passes = [`N=${NOTES}; python3 $N/data.py`, `N=${NOTES} && python3 "\${N}/data.py"`, `python3 ${NOTES}/data.py`, `cd ${NOTES} && python3 data.py`, `python3 $HOME/none.py`, `bash ${NOTES}/run.sh`]
+  for (const command of passes) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(passes.length)
+  // And one the command places is still held for the screen file its own code names.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `N=${NOTES}; python3 $N/gen.py` }))).toContain('which its own code names')
+})
+
+// #3214: the read only query #3144 let run names its script outright and spells only an argument
+// through a variable, so the hold on a script the guard cannot find leaves it alone.
+test('#3214: the read only query from #3144, its script named outright, still runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const CLI = '/opt/homebrew/Cellar/db-cli/3.27.0/libexec/bin/python -m db.cli._app sql -c c'
+  const passes = [`T=db.sc.tbl; ${CLI} -q "select count(*) as n from $T; select * from $T limit 8"`, 'T=db.sc.tbl; python3 scripts/q.py "select count(*) from $T"', 'T=db.sc.tbl; ./scripts/q.py "select count(*) from $T"']
+  for (const command of passes) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(passes.length)
 })
 
 test('#2855: a script the same command writes from a heredoc is read as the text it writes', withKit, async ($, on) => {
