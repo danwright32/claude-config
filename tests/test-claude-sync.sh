@@ -2248,6 +2248,19 @@ suite_load_said(){
   else printf 'load average of %s on %s cores (%s of it this suite'"'"'s own shards)' "$SUITE_LOAD_FIGURE" "$SUITE_LOAD_CORES" "${SUITE_JOBS:-1}"
   fi
 }
+# WHICH PROCESSOR the run was on, for a refusal to carry beside its figures (claude-config#3239).
+# CI's hosted runners are several processors, and on one tree, on one day, the section time ran from
+# 832s on an Intel Xeon 6975P-C to 1448s on an AMD EPYC 7763, every section slower by about the same
+# factor. Read as the tests workflow reads it for its own log (the first "model name" in
+# /proc/cpuinfo, else the Mac's brand string), so a red names the hardware it ran on and can be set
+# beside the job log's own line. SUITE_CPUINFO is a seam for the tests; an unreadable model is said
+# as such, never left blank (L90).
+suite_processor_said(){
+  local _ps_m=""
+  [ -r "${SUITE_CPUINFO:-/proc/cpuinfo}" ] && _ps_m="$(awk -F': *' '/^model name/ { print $2; exit }' "${SUITE_CPUINFO:-/proc/cpuinfo}" 2>/dev/null)"
+  [ -n "$_ps_m" ] || [ -n "${SUITE_CPUINFO:-}" ] || _ps_m="$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+  if [ -n "$_ps_m" ]; then printf '%s' "$_ps_m"; else printf 'a processor whose model could not be read'; fi
+}
 # Says a guard's red was not judged, on stderr and as a SUITE-PART-UNMEASURED line, which
 # run-all-tests.sh counts on this suite's line and names in its summary, where plain stderr and a
 # note saying UNMEASURED were dropped or read as a pass (claude-config#505, #1444).
@@ -2514,7 +2527,11 @@ suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor 
   # PREFIXED "FAIL:" because that prefix is read by code, not decoration (L199): run-all-tests.sh
   # prints only the lines matching FAIL or not ok, so a refusal without it exits non-zero with its
   # cause nowhere in the log. That cost three CI cycles for the guard above on 2026-09-19.
-  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), so it has grown rather than waited on a busy machine. Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
+  # NOT "it has grown" (claude-config#3239). The processor time rules out a busy machine and nothing
+  # more: on a slower processor the suite's own processor time rises with its wall clock (1332s of
+  # the 1448s red on an AMD EPYC 7763), so a slow runner and a suite that grew read alike here. The
+  # refusal names the processor and says it cannot tell those two apart (L11).
+  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), on $(suite_processor_said). Section time is counted in this runner's own seconds, so a suite that has grown and a slower processor read alike here, and this check cannot tell which it was: one tree cost 832s on an Intel Xeon 6975P-C and 1448s on an AMD EPYC 7763 (claude-config#3239). Sharding divides the wall clock and hides this, so it is measured undivided. Compare the section time a run on another processor reports; if the work itself has grown, find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
   return 1
 }
 
@@ -17826,6 +17843,24 @@ check "#492 and names what it measured and what it is allowed" \
 # slower" is not one.
 check "#492 and names something to do about it" \
   "case \"\$_wb_over\" in *SUITE_WORK_BUDGET_PCT*) true ;; *) false ;; esac"
+
+# WHICH PROCESSOR, and no claim the check cannot make (claude-config#3239). The processor time rules
+# out a busy machine and nothing more: the 2026-11-18 red, 1448s against 1440s with 1332s of it the
+# suite's own, was an AMD EPYC 7763, and the same tree cost 833s on its rerun on an Intel Xeon
+# 6975P-C. Replayed here at CI's ceiling with the model handed in through the cpuinfo seam (L290).
+_wb_cpuinfo="$WORK/cpuinfo-epyc-7763"
+printf 'processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7763 64-Core Processor\n' > "$_wb_cpuinfo"
+_wb_proc="$(SUITE_CPUINFO="$_wb_cpuinfo" _wb 1448 1800 1332)"; _wb_proc_rc=$?
+check "#3239 the 1448s red on an EPYC 7763 still fails" "[ '$_wb_proc_rc' -eq 1 ]"
+check "#3239 and names the processor it ran on" \
+  "case \"\$_wb_proc\" in *'on AMD EPYC 7763 64-Core Processor'*) true ;; *) false ;; esac"
+check "#3239 and no longer claims the suite has grown" \
+  "case \"\$_wb_proc\" in *'has grown rather than'*|*'so it has grown'*) false ;; *) true ;; esac"
+check "#3239 and says it cannot tell growth from a slower processor" \
+  "case \"\$_wb_proc\" in *'cannot tell'*) true ;; *) false ;; esac"
+_wb_noproc="$(SUITE_CPUINFO="$WORK/no-such-cpuinfo" _wb 1448 1800 1332)"
+check "#3239 an unreadable processor model is said, never left blank" \
+  "case \"\$_wb_noproc\" in *'model could not be read'*) true ;; *) false ;; esac"
 
 # THE BUDGET SCALES WITH THE CEILING. The same amount of work is fine under a big ceiling and
 # refused under a small one, which is what stops this being a number calibrated on one machine and
