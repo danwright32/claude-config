@@ -5658,7 +5658,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
-            if "<(" not in text and ">(" not in text and self.parses_only(name, words):
+            # The one reason the walker gives for a shell run on a file is that it runs the file
+            # (WHY_FILE); any other (a variable, an unclosed quote, input read) is judged as before.
+            if (not why or why.startswith(sw.WHY_FILE.split("%s")[0])) and "<(" not in text and ">(" not in text \
+                    and self.parses_only(name, words):
                 return None  # it parses the file and runs none of it (#3155); the rest of the line is judged apart
             # The shell by name, which decides how a file with a NUL in its first line is read (#2977).
             reason = self.every_file(words, d, depth, name)
@@ -7206,7 +7209,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         it ran with -n after it (an argument), and with +n or +o noexec after -n, which turn it off
         again, so any + option, any other letter (-c, -o, -i, -s), a long option and input read from
         a pipe or a redirection are each judged as before, as is a line holding a process
-        substitution (the caller's to ask), whose commands are not read apart as $( ) ones are. A
+        substitution (the caller's to ask), whose commands are not read apart as $( ) ones are, and a
+        command reached through a variable (why, the caller's too). A file word holding an expansion,
+        a quote or a pattern may become an option when it runs, and is judged as before. A
         redirection word is the shell's own."""
         if name not in SH_PARSE_ONLY:
             return False
@@ -7229,7 +7234,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             parsed = parsed or "n" in w
             k += 1
         rest = [w for w in words[k:] if not self.sw.REDIRECT_WORD.match(w)]
-        return parsed and bool(rest) and not rest[0].startswith(("-", "+"))
+        # The file word must be written out: one holding an expansion, a quote or a pattern can become
+        # +n or another option when it runs (`bash -n $OPT posts.sh`), so it is judged as before.
+        return parsed and bool(rest) and not rest[0].startswith(("-", "+")) \
+            and not re.search(r"[$`'\"\\*?\[{~]", rest[0])
 
 
 def main():

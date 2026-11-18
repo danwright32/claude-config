@@ -1570,7 +1570,8 @@ done
 for runs in "bash posts.sh" "bash sources.sh" "bash posts.sh -n" "bash -- -n posts.sh" "bash -n +n posts.sh" \
   "bash -n +o noexec posts.sh" "bash -n posts.sh; bash posts.sh" "bash -n posts.sh && sh posts.sh" \
   "bash -n posts.sh | bash" "bash -c '$POST' -n" "bash -n -c '$POST'" "bash -nc '$POST'" \
-  "bash -n posts.sh \$(bash posts.sh)" "bash -n posts.sh <(bash posts.sh)" "bash -n posts.sh > >(bash posts.sh)"; do
+  "bash -n posts.sh \$(bash posts.sh)" "bash -n posts.sh <(bash posts.sh)" "bash -n posts.sh > >(bash posts.sh)" \
+  "bash -n \$OPT posts.sh" "OPT=+n; bash -n \$OPT posts.sh" "bash -n \"\$(echo +n)\" posts.sh" "bash -n '+n' posts.sh"; do
   run_55 "$runs"
   read_refused "#3155 a script that posts is still refused where -n does not stop it, or with -c: $runs"
 done
