@@ -2652,17 +2652,17 @@ suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor 
   # two are worded differently so a reader can tell them apart.
   case "$cpu" in
     ''|*[!0-9]*)
-      echo "test suite: this run's sections cost ${work}s between them, past their ${budget}s budget, but the processor time could not be read, so whether that is the suite having grown or the machine being busy is NOT known. Not treated as a failure." >&2
+      echo "test suite: this run's sections cost ${work}s between them${raw_said}, past their ${budget}s budget, but the processor time could not be read, so whether that is the suite having grown or the machine being busy is NOT known. Not treated as a failure." >&2
       return 0 ;;
   esac
   if [ $(( cpu * 2 )) -lt "$work" ]; then
-    echo "test suite: note, this run's sections cost ${work}s between them, past their ${budget}s budget, but only ${cpu}s of that was the suite's own processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
+    echo "test suite: note, this run's sections cost ${work}s between them${raw_said}, past their ${budget}s budget, but only ${cpu}s of that was the suite's own processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
     return 0
   fi
   # And on a machine busier than its cores the processor time is no witness either: the 2026-10-16
   # red, 2536s past 2520s with 1379s of processor time at load 59.86 on 12 cores (#1259).
   if suite_load_busy; then
-    suite_load_unmeasured "this run's sections cost ${work}s between them, past their ${budget}s budget, with ${cpu}s of processor time"
+    suite_load_unmeasured "this run's sections cost ${work}s between them${raw_said}, past their ${budget}s budget, with ${cpu}s of processor time"
     return 0
   fi
   # PREFIXED "FAIL:" because that prefix is read by code, not decoration (L199): run-all-tests.sh
@@ -18049,6 +18049,12 @@ _rgrow_fast=$(( _rgrow * 64 / 100 ))
 _wb_growf="$(_wb "$_rgrow_fast" 1800 "$_rgrow_fast" "$_rfast")"; _wb_growf_rc=$?
 check "#3239 and the same grown work on the fast runner (${_rgrow_fast}s raw) fails too" \
   "[ '$_rgrow_fast' -lt '$_rb' ] && [ '$_wb_growf_rc' -eq 1 ]"
+# Every sentence that says the work was past its budget names the judged figure beside the raw one,
+# or on the fast runner it reports a raw figure under the budget as over it (L11). Here the busy
+# machine note, with the processor time saying the time was not the suite's own.
+_wb_fbusy="$(_wb "$_rgrow_fast" 1800 100 "$_rfast")"
+check "#3239 a busy machine note on the fast runner names what the work was judged as" \
+  "line_has \"\$_wb_fbusy\" 'busy' 'which is [0-9]+s of work at the reference speed'"
 # A WILD REFERENCE IS NEVER WHAT TURNS A RED GREEN. Figures set here, not measured: ten times the
 # nominal would shrink 1500s to 150s; outside the sane range the reading is UNMEASURED, said on a line CI carries, and the raw section
 # time is judged, so 1500s still fails.
