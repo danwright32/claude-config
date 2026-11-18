@@ -5843,8 +5843,15 @@ to him as one command; the skill never runs `sudo`. `test-disk-clean-skill.sh` d
 code each of those four scripts can return from its source and fails when the skill does not say what
 to tell Dan for one, and runs the review page and checker commands as written through the harness.
 
-`skills/disk-clean/scan.sh` is the read only half of that flow (claude-config#1806). It removes
-nothing. It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`skills/disk-clean/scan.sh` is the half of that flow that removes nothing (claude-config#1806). It
+is not write free: it writes the scan record, and the review page writes itself and its nonce into
+the folder it is given, which the skill names to Dan, and with `--clear-clipboard` empties the
+clipboard first. Inside the folders it judges it changes
+nothing, which is why the worktrees kind reads with `git --no-optional-locks status`: a plain
+`git status` refreshes the repository's index file as it reads (#3216). Project build folders that
+iCloud syncs (in Desktop or Documents while iCloud syncs them) are never offered, since removing one
+removes it from iCloud on every device: they are left out of the list, counted in the kind's note,
+and refused by its judge (#3215). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
