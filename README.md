@@ -6697,16 +6697,10 @@ idiom, by `ownFolderVar`, `ownFolderPath` and `withoutOwnFolder`) is read only t
 design round guard wrote it, and the area check, which could place no write into such a folder,
 held every checker copying into one); the scan fails a mod matching a bare `mktemp` substitution
 with a pattern, or naming `BASH_SOURCE`, by hand. `hooks/quoted.ts` holds `pythonText` too
-(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
-strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
-request it makes, a module it loads by a name given at run time) is read only through `fileReach`
-in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: a
-since retired guard kept its own lists of module names; no mod keeps a copy today). It counts a
-name only where the file imports or calls it, never in a string,
-a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
-`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
-The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
-inline code and counts a process word anywhere.
+(moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs
+no copy of `hooks/code.ts`. The file reader that move was made for, `hooks/reaches.ts`, was deleted
+in #3171 once the Slack alert guard, its last user, was retired (#3169); the scan's program-reader
+rule points a mod at `$.modkit.pipeline` alone.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
