@@ -1598,8 +1598,8 @@ for m in prefix-strip prefix-match; do
     || check "and names $m, pointing it at errorText" "$out"
 done
 case "$out" in *clean-asks-words*|*clean-reads-aborted*) check "a mod asking errorText, or reading an abandoned command, passes" "$out" ;; *) check "a mod asking errorText, or reading an abandoned command, passes" ok ;; esac
-# #2467: the design round guard read a TypeScript string to its closing quote itself, and the Slack
-# alert guard a YAML flow list and its '' escape, while mod-kit's command reader reads shell only. Both
+# #2467: the design round guard read a TypeScript string to its closing quote itself, and a since
+# retired guard a YAML flow list and its '' escape, while mod-kit's command reader reads shell only. Both
 # now read with quotedEnd, yamlScalar and yamlFlowList from the copy of mod-kit's hooks/quoted.ts, so a
 # mod undoing YAML's '' by hand, matching a single quoted scalar with a pattern, or walking a string to
 # the quote it opened with fails the run, pointed at that copy. A mod asking the copy passes, and so
@@ -1616,7 +1616,7 @@ for m in quoted-escape quoted-token quoted-walk; do
     || check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" "$out"
 done
 case "$out" in *clean-asks-quoted*) check "#2467: a mod asking the copy of hooks/quoted.ts passes" "$out" ;; *) check "#2467: a mod asking the copy of hooks/quoted.ts passes" ok ;; esac
-# #2992: scope modes and the Slack alert guard each read a patch's names, strip level, folder and hunks
+# #2992: scope modes and a since retired guard each read a patch's names, strip level, folder and hunks
 # their own way, and each got a case the other got right wrong. Both read with the copy of mod-kit's
 # hooks/patch.ts now, so a mod reading git's diff line, a +++ header, a hunk header or a binary patch
 # by hand fails the run, pointed at that copy (the spellings each copy used). A mod asking the copy

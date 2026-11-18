@@ -2,7 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { patchedPaths, patchFiles, patchPlacing, placedName, readPatch } from '../hooks/patch.ts'
 
-// The one patch reader every mod uses (#2992): scope modes and the Slack alert guard each kept one,
+// The one patch reader every mod uses (#2992): scope modes and a since retired guard each kept one,
 // and each read right a case the other read wrong.
 
 test('git diff lines, --- and +++ headers and hunks make one file each, hunks walked by their counts', () => {
