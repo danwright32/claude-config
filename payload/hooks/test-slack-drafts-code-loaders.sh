@@ -17,7 +17,9 @@
 # lib/py-aliases.py (#3102): a Python module given another name, or put where the gate does not
 # follow it, is read as the imported name is. And three more routes to os (#3119): string.Formatter,
 # a chain from a value the gate does not follow, and os under another name in a module the script
-# imports or a class body. Every other
+# imports or a class body. And three narrow passes, each with the cases beside it that stay refused:
+# a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
+# (#3146), and ast, io and gzip in a read only script (#3103). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -1743,6 +1745,8 @@ w85 gzip-from-file.py 'import sys' 'from gzip import GzipFile' "GzipFile(\"/tmp/
 w85 gzip-as.py 'import gzip as g, sys' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
 w85 gzip-renamed.py 'import gzip, sys' 'g = gzip' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
 w85 gzip-io-open.py 'import gzip, sys' "gzip.io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-io-passed.py 'import functools, gzip, sys' "functools.partial(gzip.io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 gzip-io-renamed.py 'import gzip, sys' 'opener = gzip.io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
 w85 gzip-main.py 'import gzip, sys' 'sys.argv = ["gzip", sys.argv[1]]' 'gzip.main()'
 w85 gzip-from-main.py 'import sys' 'from gzip import main' 'sys.argv = ["gzip", sys.argv[1]]' 'main()'
 w85 gzip-main-renamed.py 'import gzip, sys' 'g = gzip' 'sys.argv = ["gzip", sys.argv[1]]' 'g.main()'
@@ -1754,7 +1758,8 @@ w85 ast-compile.py 'import ast, sys' 'tree = ast.parse(open(sys.argv[1]).read())
 w85 shutil-copy.py 'import shutil, sys' 'shutil.copy(sys.argv[1], "/tmp/run.sh")'
 for acts in io-open-w.py io-open-kw.py io-open-var.py io-fileio-w.py io-fileio-plus.py io-from-open.py \
   io-from-open-as.py io-from-fileio.py io-passed.py io-renamed.py gzip-open-w.py gzip-open-kw.py gzip-file-w.py \
-  gzip-file-kw.py gzip-from-file.py gzip-as.py gzip-renamed.py gzip-io-open.py gzip-main.py gzip-from-main.py \
+  gzip-file-kw.py gzip-from-file.py gzip-as.py gzip-renamed.py gzip-io-open.py gzip-io-passed.py gzip-io-renamed.py \
+  gzip-main.py gzip-from-main.py \
   gzip-main-renamed.py gzip-main-passed.py gzip-builtins.py gzip-os.py ast-exec.py ast-compile.py shutil-copy.py; do
   run_85 "python3 $acts $RULES"
   read_refused "#3103 a script that writes, runs code or reaches past ast, io or gzip is still refused: $acts"

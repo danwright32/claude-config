@@ -3013,7 +3013,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         that is there, or of a missing declaration file, is left out too (erased_import,
         claude-config#2526, #2890). A PHP include is read by php_includes, tagged for a file's text
         (claude-config#2978). An import written as code in a test file, path, of a module that file
-        handed to vitest or jest replaces with a mock and a factory is left out (lib/js-mocks.py, #2359)."""
+        handed to vitest or jest replaces with a mock and a factory is left out (lib/js-mocks.py, #2359).
+        With held (modules()'s), a walk following strings still leaves out one that is the whole
+        argument of a matcher that only compares, on an expect() the file does not bind itself
+        (lib/data-names.py js_compared and js_expect_own, claude-config#3146), and sets
+        held["skipped"] so modules() can follow it after all where a file names a way to change what a
+        matcher does."""
         if kind == "php":
             yield from self.php_includes(text, cur_dir, root, tagged)
             return
@@ -6630,8 +6635,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     @staticmethod
     def py_opener_unread(nodes, called, modules, renamed):
         """How a Python script writes through io or gzip where its mode cannot be read, as a phrase, or
-        None (claude-config#3103): one of PY_OPENERS off an imported module (io.open, gzip.GzipFile)
-        named but not called, so handed on to be called with a mode the gate never sees; one imported
+        None (claude-config#3103): one of PY_OPENERS off an imported module or a chain from one
+        (io.open, gzip.GzipFile, gzip.io.open) named but not called, so handed on to be called with a mode the gate never sees; one imported
         out of io or gzip under another name, which the mode check cannot find by name; or one of
         PY_FILE_TOOLS (gzip.main), off the module by its own name, a name it is imported as, or a
         name it is bound to (renamed), or imported out of it."""
@@ -6654,12 +6659,26 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         for node in nodes:
             if isinstance(node, ast.Name) and node.id in openers and id(node) not in called:
                 return f"can write a file ({node.id}, passed on rather than called, with a mode the gate cannot read)"
-            if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+            if not isinstance(node, ast.Attribute):
                 continue
-            owner = node.value.id
-            if node.attr in tools.get(owner, ()) or (owner in renamed and node.attr in every_tool):
+            base = node.value  # the chain's first name: gzip.io.open is read off gzip as io.open is off io
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if not isinstance(base, ast.Name):
+                continue
+            # The chain's names, written out by hand: ast.unparse imports a module from the disk on its
+            # first use, which the judgement cache counts as a read it did not record (#2918).
+            parts, cur = [], node.value
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            owner = ".".join([base.id] + parts[::-1])
+            if node.attr in every_tool and (
+                    (isinstance(node.value, ast.Name) and node.value.id in tools)
+                    or (isinstance(node.value, ast.Name) and node.value.id in renamed)
+                    or (isinstance(node.value, ast.Attribute) and node.value.attr in PY_FILE_TOOLS)):
                 return f"can write a file ({owner}.{node.attr}, which writes the files on sys.argv)"
-            if owner in modules and node.attr in PY_OPENERS and id(node) not in called:
+            if base.id in modules and node.attr in PY_OPENERS and id(node) not in called:
                 return f"can write a file ({owner}.{node.attr}, passed on rather than called, with a mode the gate cannot read)"
         return None
 
