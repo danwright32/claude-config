@@ -65,6 +65,13 @@ printf '{"prependPlugins": []}\n' > "$SYNC_MANAGED_SETTINGS"
 export SYNC_CLAUDE_BIN="$WORK/no-such-claude" SYNC_GH="$WORK/no-such-gh" SYNC_RTK_BIN="$WORK/no-such-rtk"
 export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 export SYNC_LOG_FILE="$WORK/sync.log"
+# The environment claude-sync itself runs this suite in: its send gate starts every suite it picks
+# with both switches set, and this suite is picked whenever lib/suite-deadline.sh or
+# lib/load-average.sh is sent. SYNC_NO_HOOK_TESTS=1 makes a pull skip its hook suite, which is every
+# case here, so each claude-sync call below clears the two for itself, as test-claude-sync.sh's
+# send gate cases do. Set here on every run, so a call that forgets fails on a person's run too and
+# not only under the gate (claude-config#3195, the follow up to pull request #3199).
+export SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1
 
 RRH="$WORK/home"; mkdir -p "$RRH/hooks"; echo '{"hooks":{}}' > "$RRH/settings.json"
 RRR="$WORK/repo"; mkdir -p "$RRR/payload/hooks"
@@ -104,13 +111,14 @@ rr_arrive(){ printf '# marker %s\n' "$1" > "$RRR/payload/hooks/rr-marker.sh"; }
 # A pull as the receive timer or a person runs one, with the load set per call.
 rr_pull(){ # rr_pull <load> [env assignments...] -> the pull's output; its exit code in $RRT/rc
   local load="$1" rc=0; shift
-  env CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RRT/notifier" \
+  env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS \
+    CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RRT/notifier" \
     SYNC_POLL_INTERVAL=0.05 SYNC_HOOK_TESTS_TIMEOUT=1800 SYNC_SUITE_STOP_GRACE=1 \
     SYNC_TEST_SUITE_CLOCK="$RRT/clock" LOAD_AVERAGE_CMD="echo $load" LOAD_AVERAGE_CORES=12 \
     "$@" bash "$SCRIPT" pull 2>&1 || rc=$?
   echo "$rc" > "$RRT/rc"
 }
-rr_status(){ CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
+rr_status(){ env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1; }
 # A record as a stopped run writes one, owed since the time given.
 rr_forge(){ # rr_forge <owed since> [stopped]
   printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=%s\tstopped=%s\n' \
@@ -212,7 +220,7 @@ check "a record owed past the bound runs nothing and says it will not be run aga
 check "and that is one notification" "[ \"\$(rr_told)\" = 3 ] && [ -n \"\$(rr_field gave_up)\" ]" "$(cat "$RRT/told" 2>/dev/null)"
 out11="$(rr_pull 1)"
 check "and no later receive runs it or notifies again" "[ \"\$(rr_runs)\" = 4 ] && [ \"\$(rr_told)\" = 3 ]" "$out11"
-outr="$(CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" recheck 2>&1)"
+outr="$(env -u SYNC_NO_HOOK_TESTS -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" recheck 2>&1)"
 check "claude-sync recheck, the remedy it names, runs the suite and clears the record" \
   "[ \"\$(rr_runs)\" = 5 ] && grep -q '^outcome=passed' '$RRR/.hook-tests'" "$outr"
 
