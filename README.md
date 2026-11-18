@@ -7656,7 +7656,11 @@ text, and the guard reads `$((...))` as arithmetic, never as a command substitut
 a command substitution as a command's output. Over this Mac's
 distinct Bash commands (2026-09-26 to 2026-10-30) a
 run was handed such a name 431 times in 106,896 before mod-kit followed loops and marked quoted
-dollars, and 211 times in 107,428 after. Since #1954 an Edit or MultiEdit the guard would hold that
+dollars, and 211 times in 107,428 after. Since #3144 a word a run is handed that mod-kit places in
+a folder through variables the command sets, each to one literal value with no space
+(`T=<table>; <cli> -q "select * from $T"`), is judged by the name that spelling makes, as the same
+word written out is (rules.ts `spelledThrough`): a read only query runs, and a pattern that may name
+a look changing file is held as before. Since #1954 an Edit or MultiEdit the guard would hold that
 would not apply to the file as it stands (its text missing, or there more than once without
 `replace_all`, read past curly quotes as Claude Code's Edit matches them; rules.ts
 `editWouldNotApply`) is refused saying so, to be sent again with the file's own text, with no card
@@ -7667,7 +7671,7 @@ Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991
+#1954, #2261, #2830, #2845, #2847, #2855, #2924, #2991, #3144
 
 </td></tr>
 <tr><td>
