@@ -41,8 +41,7 @@ export type PythonText = { kind: 'comment' | 'string' | 'formatted'; from: numbe
  * raw string too), one with a single quote ends at its line, and one never closed runs to the end.
  * What each reader does with a span is its own rule: codeOnly blanks comments and blocks spanning
  * lines for the design round guard (#1165), ask before saving takes a mention of lasting memory in
- * text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText,
- * and the file reader (reaches.ts) counts nothing a string or comment holds (#2710).
+ * text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText.
  */
 export const pythonText = (code: string): PythonText[] => {
   const out: PythonText[] = []
