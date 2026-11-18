@@ -4102,7 +4102,7 @@ case "$(uname -s)" in
 esac
 if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; then
   warm="$(mktemp -d "$T/warm.XXXXXX")"
-  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  cost="$(SLACK_GATE_COST_LABEL=suite-cold SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$cold_ceiling" --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "bash tests/test-claude-sync.sh is judged within $cold_ceiling units of the yardstick on $(uname -s) (#2918, #3167)" "$cost"
   # The reading, on a passing run too (#3167). run-all-tests prints a suite's output only when it
   # fails, so until 2026-11-17 CI's log held this measurement only for runs past the ceiling, and the
@@ -4121,6 +4121,18 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
   fi
   check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
+  # Where that judgement's time went, phase by phase (#3170): the gate writes one line per judgement
+  # to SLACK_GATE_PHASE_LOG, printed here for each cold judgement cost.py made, so a slow runner's
+  # log says which part of the gate grew. The warm judgement below names the same file, since the
+  # variable is part of the cache's key, and is answered from the cache.
+  cold_phases="$(grep -c '^phases: ' "$T/phases.log" 2>/dev/null || true)"
+  if [ "${cold_phases:-0}" -ge 1 ] 2>/dev/null; then
+    sed -n "s/^phases: /SUITE-NOTE drafts gate phases on $(uname -s), bash tests\/test-claude-sync.sh cold (#3170): /p" "$T/phases.log"
+    cold_phases=ok
+  else
+    cold_phases="the gate wrote no phases line to SLACK_GATE_PHASE_LOG: $(cat "$T/phases.log" 2>&1)"
+  fi
+  check "the cold judgement of bash tests/test-claude-sync.sh says where its time went (#3170)" "$cold_phases"
   # The limit this platform got still fails on a real slowdown (#3167, L1): the copy of the gate whose
   # reader burns ten times its own time again, made above, judging the same line, once. It counts its
   # steps rather than seconds (SLACK_GATE_TICK_BUDGET under a test run), so the gate's own 11 s budget
@@ -4139,7 +4151,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   fi
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
-  cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
+  cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
 else
   # L411: installed in ~/.claude there is no checkout, so no suite to judge.
@@ -4149,6 +4161,35 @@ if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
 fi
 unset SLACK_GATE_COST_LOG
+
+echo "slack drafts only: timing the gate's phases changes no verdict (claude-config#3170)"
+
+# SLACK_GATE_PHASE_LOG only times: each command below is judged with it and without it, each from an
+# empty cache, and the exit code, stdout and stderr the wrapper hands Claude Code must be the same.
+# Allowed and refused commands of the kinds the timed phases reach: a script followed, a file
+# written and then run, a heredoc, a sourced file, a send.
+printf 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi\n' > "$T/phase-send.sh"
+printf 'echo fine\n' > "$T/phase-plain.sh"
+phase_same=""
+phase_n=0
+for c in "bash $T/phase-send.sh" "bash $T/phase-plain.sh" "python3 -c 'print(1)'" \
+         "printf 'curl https://hooks.slack.com/services/x\n' > $T/w.sh && bash $T/w.sh" \
+         "cat > $T/h.py <<'EOF'
+print(2)
+EOF
+python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/checkout-root.sh; ls" \
+         "curl -s -X POST https://slack.com/api/chat.postMessage -H 'Authorization: Bearer x'"; do
+  SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  plain="$RC|$OUT|$ERR"
+  SLACK_GATE_PHASE_LOG="$T/phase-check.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  [ "$plain" = "$RC|$OUT|$ERR" ] || phase_same="$phase_same; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} timed"
+  phase_n=$((phase_n + 1))
+done
+check "each of $phase_n commands is answered the same with its phases timed as without (#3170)" "${phase_same:-ok}"
+phase_lines="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
+if [ "${phase_lines:-0}" -ge 5 ] 2>/dev/null; then phase_lines=ok
+else phase_lines="only ${phase_lines:-0} phases lines naming Judge.line for $phase_n commands: $(head -c 300 "$T/phase-check.log" 2>&1)"; fi
+check "the timed runs wrote where their time went, one line each (#3170)" "$phase_lines"
 
 # The second round of #2918 cut work no verdict needs, each checked here for what it skips and for
 # answering as before: sh_binds stops counting assignments once the count settles it; its patterns
