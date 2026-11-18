@@ -129,16 +129,124 @@ else
   esac
 fi
 
-if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
-  # Off macOS there is nothing to raise: the gate still judges, and says so in its trace. The level
-  # itself is untaken here, said so in the one shape the runner counts, never passed (L411).
-  judge env
-  allowed "off macOS a plain script run is still judged and allowed"
-  case "$QOS_LINE" in
-    "qos: not raised: not macOS") check "and the gate traces that it did not raise its priority" ok ;;
-    *) check "and the gate traces that it did not raise its priority" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+# A python3 built without _ctypes has nothing to raise the priority with. lib/gate-qos.py imported
+# ctypes as it loaded, outside any try, and the gate loads it as it starts, so on such a python3
+# the gate failed before judging anything and every call it would judge was refused as one it could
+# not judge (claude-config#3151; measured 2026-11-17 by the cases below: exit 2, "No module named
+# '_ctypes'"). A _ctypes that raises as the missing one does stands in for that python3, in front
+# of the real one on the path. The gate must judge all the same, and say why it did not raise.
+mkdir -p "$T/noctypes"
+printf '%s\n' "raise ModuleNotFoundError(\"No module named '_ctypes'\")" > "$T/noctypes/_ctypes.py"
+if python3 -B -c 'import ctypes' 2>/dev/null && ! PYTHONPATH="$T/noctypes" python3 -B -c 'import ctypes' 2>/dev/null; then
+  if [ "$(uname -s)" = Darwin ]; then want_state="not raised"; want_line="qos: not raised: this python3 has no ctypes"
+  else want_state="not macOS"; want_line="qos: not raised: not macOS"; fi
+  lib_state="$(PYTHONPATH="$T/noctypes" python3 -B - "$QOS_LIB" 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate_qos", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+state, line = mod.raise_qos()
+print(f"{state}|{line}")
+PY
+)"
+  case "$lib_state" in
+    "$want_state|$want_line"*) check "with no ctypes, lib/gate-qos.py still loads and says why it did not raise" ok ;;
+    *) check "with no ctypes, lib/gate-qos.py still loads and says why it did not raise" "got: ${lib_state:0:400}" ;;
   esac
-  echo "SUITE-PART-UNMEASURED the gate's scheduling priority is read only on macOS with taskpolicy, and this is $(uname -s)"
+  judge env SLACK_GATE_CACHE_DIR="$T/gate-cache-noctypes" PYTHONPATH="$T/noctypes"
+  allowed "with no ctypes a plain script run is still judged and allowed"
+  case "$QOS_LINE" in
+    "$want_line"*) check "and the gate traces why it did not raise its priority" ok ;;
+    *) check "and the gate traces why it did not raise its priority" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+  esac
+  if [ "$(uname -s)" = Darwin ]; then
+    OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1 PYTHONPATH="$T/noctypes" bash "$HOOK" 2>"$T/err")"; RC=$?
+    ERR="$(cat "$T/err")"
+    refused "out of time with no ctypes is refused"
+    says "and the refusal says the gate could not raise its scheduling priority" "could not raise its scheduling priority"
+    says "and that this python3 has no ctypes" "this python3 has no ctypes"
+  fi
+else
+  echo "SUITE-PART-UNMEASURED the gate on a python3 with no ctypes, because a _ctypes in front of the real one did not stand in for that here"
+fi
+
+# priority_checks <label> <cache folder>: the level the gate judges at, which waits on the platform
+# alone, and the QoS clamp's failure path, which waits on taskpolicy as well. taskpolicy sets the
+# clamp and nothing else here needs it: the gate raises its priority with or without it. The suite
+# took its off macOS branch whenever taskpolicy was not on the PATH, and failed there on a Mac,
+# where the gate had raised its priority as it should (claude-config#3151; measured 2026-11-17 with
+# /usr/sbin off the PATH: 2 passed, 1 failed). So only the clamp's checks wait on it, and without it
+# they are said as unmeasured (L411). A function, so the same checks run a second time below with
+# taskpolicy taken off the PATH. Started under a clamp (CLAMPED, read above from the kernel's
+# ceiling), the check that needs a raise is skipped in both runs, since none can be seen there
+# (claude-config#3175). Sets OFF_MACOS and HAVE_CLAMP.
+priority_checks() {
+  local label="$1" cache="$2" got
+  OFF_MACOS=0
+  if [ "$(uname -s)" != Darwin ]; then
+    # Off macOS there is nothing to raise: the gate still judges, and says so in its trace. The level
+    # itself is untaken here, said so in the one shape the runner counts, never passed (L411).
+    OFF_MACOS=1
+    judge env SLACK_GATE_CACHE_DIR="$cache"
+    allowed "${label}off macOS a plain script run is still judged and allowed"
+    case "$QOS_LINE" in
+      "qos: not raised: not macOS") check "${label}and the gate traces that it did not raise its priority" ok ;;
+      *) check "${label}and the gate traces that it did not raise its priority" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+    esac
+    echo "SUITE-PART-UNMEASURED the gate's scheduling priority is read only on macOS, and this is $(uname -s)"
+    return 0
+  fi
+  HAVE_CLAMP=1
+  command -v taskpolicy >/dev/null 2>&1 || HAVE_CLAMP=0
+
+  case "$start" in ''|*[!0-9]*) check "${label}the suite reads the level a python3 it starts runs at" "read: $start" ;; esac
+  case "$ceiling" in ''|*[!0-9]*) check "${label}the suite reads the ceiling a python3 it starts runs under" "read: $ceiling" ;; esac
+
+  judge env SLACK_GATE_CACHE_DIR="$cache"
+  allowed "${label}the control: a plain script run is judged and allowed"
+  if [ "$CLAMPED" -eq 0 ]; then
+    case "$QOS_LINE" in
+      "qos: user-initiated, base priority "*)
+        got="${QOS_LINE##* }"
+        if [ "$got" -gt "${start:-99}" ] 2>/dev/null && [ "$got" -gt 31 ]; then
+          check "${label}the gate judges above the level it was started at ($start), read from the kernel" ok
+        else
+          check "${label}the gate judges above the level it was started at ($start), read from the kernel" "$QOS_LINE"
+        fi ;;
+      *) check "${label}the gate traces the priority it judges at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+    esac
+  fi
+
+  # The failure path: a QoS clamp is a ceiling nothing inside the process can lift (measured: under
+  # taskpolicy -c utility the base priority stays 20 after the raise). The gate still judges, and its
+  # trace says it could not raise, with the level it really ran at. A cache of its own, so the allow
+  # the control stored cannot answer it: the call is judged afresh at the clamped level (L159).
+  if [ "$HAVE_CLAMP" -eq 1 ]; then
+    judge env SLACK_GATE_CACHE_DIR="$cache-clamp" taskpolicy -c utility
+    allowed "${label}under a utility clamp the same call is still judged and allowed"
+    if grep -q '^miss: ' "$T/trace" && ! grep -qx 'hit' "$T/trace"; then
+      check "${label}and it was judged afresh under the clamp, not answered from the cache" ok
+    else
+      check "${label}and it was judged afresh under the clamp, not answered from the cache" "trace: $(tr '\n' '|' < "$T/trace")"
+    fi
+    case "$QOS_LINE" in
+      "qos: not raised"*"base priority 20") check "${label}and the gate says it could not raise its priority, naming the level it ran at" ok ;;
+      *) check "${label}and the gate says it could not raise its priority, naming the level it ran at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
+    esac
+    # Run out of time under the clamp, and the refusal says the gate could not raise its priority, the
+    # likeliest reason it ran out (L11). The step clock (SLACK_GATE_TICK_BUDGET) makes it run out at once.
+    OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1 taskpolicy -c utility bash "$HOOK" 2>"$T/err")"; RC=$?
+    ERR="$(cat "$T/err")"
+    refused "${label}out of time under the clamp is refused"
+    says "${label}and the refusal says the gate could not raise its scheduling priority" "could not raise its scheduling priority"
+    says "${label}naming the level it ran at" "base priority 20"
+  else
+    echo "SUITE-PART-UNMEASURED the gate under a QoS clamp, because taskpolicy, which sets one, is not on this PATH"
+  fi
+}
+
+priority_checks "" "$T/gate-cache"
+if [ "$OFF_MACOS" -eq 1 ]; then
   echo
   echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
@@ -146,47 +254,49 @@ if [ "$(uname -s)" != Darwin ] || ! command -v taskpolicy >/dev/null 2>&1; then
   exit
 fi
 
-case "$start" in ''|*[!0-9]*) check "the suite reads the level a python3 it starts runs at" "read: $start" ;; esac
-case "$ceiling" in ''|*[!0-9]*) check "the suite reads the ceiling a python3 it starts runs under" "read: $ceiling" ;; esac
+# Whether taskpolicy was on the PATH this suite was started with, which the run under a clamp at the
+# end needs as well; the second run below changes HAVE_CLAMP.
+HAVE_TASKPOLICY="$HAVE_CLAMP"
 
-judge env
-allowed "the control: a plain script run is judged and allowed"
-if [ "$CLAMPED" -eq 0 ]; then
-  case "$QOS_LINE" in
-    "qos: user-initiated, base priority "*)
-      got="${QOS_LINE##* }"
-      if [ "$got" -gt "${start:-99}" ] 2>/dev/null && [ "$got" -gt 31 ]; then
-        check "the gate judges above the level it was started at ($start), read from the kernel" ok
-      else
-        check "the gate judges above the level it was started at ($start), read from the kernel" "$QOS_LINE"
-      fi ;;
-    *) check "the gate traces the priority it judges at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
-  esac
-fi
-
-# The failure path: a QoS clamp is a ceiling nothing inside the process can lift (measured: under
-# taskpolicy -c utility the base priority stays 20 after the raise). The gate still judges, and its
-# trace says it could not raise, with the level it really ran at. A cache of its own, so the allow
-# the control stored cannot answer it: the call is judged afresh at the clamped level (L159).
-judge env SLACK_GATE_CACHE_DIR="$T/gate-cache-clamp" taskpolicy -c utility
-allowed "under a utility clamp the same call is still judged and allowed"
-if grep -q '^miss: ' "$T/trace" && ! grep -qx 'hit' "$T/trace"; then
-  check "and it was judged afresh under the clamp, not answered from the cache" ok
+# The same checks again with taskpolicy taken off the PATH, the run that failed on a Mac
+# (claude-config#3151): the raise must still be measured and pass, and only the clamp's checks may
+# go unmeasured. Where taskpolicy was never on the PATH, the run above was already that run. A cache
+# of its own, so the call is judged afresh. What the second run prints is kept in a file and only
+# its failures shown: its unmeasured line is expected, and the clamp was measured above. Started
+# under a clamp, no raise can be seen in either run, so there the second run passes only its control
+# and is judged on taking the macOS branch at all (claude-config#3175).
+if [ "$CLAMPED" -eq 1 ]; then
+  want_second=1; second_what="still takes its macOS branch on a Mac (1 check, the raise unmeasured under the clamp)"
 else
-  check "and it was judged afresh under the clamp, not answered from the cache" "trace: $(tr '\n' '|' < "$T/trace")"
+  want_second=2; second_what="still measures the raise on a Mac (2 checks)"
 fi
-case "$QOS_LINE" in
-  "qos: not raised"*"base priority 20") check "and the gate says it could not raise its priority, naming the level it ran at" ok ;;
-  *) check "and the gate says it could not raise its priority, naming the level it ran at" "trace: $(tr '\n' '|' < "$T/trace")" ;;
-esac
-
-# Run out of time under the clamp, and the refusal says the gate could not raise its priority, the
-# likeliest reason it ran out (L11). The step clock (SLACK_GATE_TICK_BUDGET) makes it run out at once.
-OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1 taskpolicy -c utility bash "$HOOK" 2>"$T/err")"; RC=$?
-ERR="$(cat "$T/err")"
-refused "out of time under the clamp is refused"
-says "and the refusal says the gate could not raise its scheduling priority" "could not raise its scheduling priority"
-says "naming the level it ran at" "base priority 20"
+if [ "$HAVE_CLAMP" -eq 1 ]; then
+  WITH_TASKPOLICY_PATH="$PATH"
+  bare_path=""
+  IFS=: read -r -a path_dirs <<< "$PATH"
+  for d in ${path_dirs[@]+"${path_dirs[@]}"}; do
+    [ -x "$d/taskpolicy" ] || bare_path="${bare_path:+$bare_path:}$d"
+  done
+  PATH="$bare_path"
+  if command -v taskpolicy >/dev/null 2>&1; then
+    check "taskpolicy is taken off the PATH for the second run" "still found: $(command -v taskpolicy)"
+  else
+    before_second=$pass
+    priority_checks "with taskpolicy off the PATH: " "$T/gate-cache-bare" > "$T/second.out"
+    grep '^FAIL' "$T/second.out"
+    if [ "$OFF_MACOS" -eq 0 ] && [ $((pass - before_second)) -eq "$want_second" ]; then
+      check "with taskpolicy off the PATH the suite $second_what" ok
+    else
+      check "with taskpolicy off the PATH the suite $second_what" "off macOS branch: $OFF_MACOS, passed there: $((pass - before_second)), said: $(tr '\n' '|' < "$T/second.out")"
+    fi
+    if [ "$HAVE_CLAMP" -eq 0 ] && grep -q '^SUITE-PART-UNMEASURED the gate under a QoS clamp' "$T/second.out"; then
+      check "and says the clamp's checks as unmeasured" ok
+    else
+      check "and says the clamp's checks as unmeasured" "said: $(tr '\n' '|' < "$T/second.out")"
+    fi
+  fi
+  PATH="$WITH_TASKPOLICY_PATH"
+fi
 OUT="$(payload Bash "$(bash_input "bash $T/run.sh")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1 bash "$HOOK" 2>"$T/err")"; RC=$?
 ERR="$(cat "$T/err")"
 refused "the control: out of time with no clamp is refused too"
@@ -225,8 +335,11 @@ esac
 # two that need a raise are said unmeasured, never failed (L411), and the helper's own is turned round
 # to require that it says it could not raise. Red there held this suite back from 227 sends in one day
 # while every hand run was green. Run once more under a utility clamp, unless this run is that one, or
-# is clamped already and so is the case itself.
-if [ -z "${SLACK_GATE_QOS_NESTED:-}" ] && [ "$CLAMPED" -eq 0 ]; then
+# is clamped already and so is the case itself. taskpolicy sets that clamp, so without it on the PATH
+# this run is said unmeasured (claude-config#3151, L411).
+if [ -z "${SLACK_GATE_QOS_NESTED:-}" ] && [ "$CLAMPED" -eq 0 ] && [ "$HAVE_TASKPOLICY" -eq 0 ]; then
+  echo "SUITE-PART-UNMEASURED this suite started under a QoS clamp, because taskpolicy, which sets one, is not on this PATH"
+elif [ -z "${SLACK_GATE_QOS_NESTED:-}" ] && [ "$CLAMPED" -eq 0 ]; then
   nested="$(SLACK_GATE_QOS_NESTED=1 taskpolicy -c utility bash "${BASH_SOURCE[0]}" 2>&1)"; nested_rc=$?
   if [ "$nested_rc" -eq 0 ]; then
     check "started under a utility clamp, this suite passes" ok
