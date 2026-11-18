@@ -97,6 +97,7 @@ import {
   relTo,
   shapeKind,
   shellVarPath,
+  spelledThrough,
   mentionedLookFiles,
   mentionsStore,
   namesScratchpad,
@@ -291,6 +292,9 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   rule reads (rules.ts nameFromVariable), as a command's output is; one the command sets to a plain
 //   name, or a for loop over plain words, is judged by each name mod-kit gives, a folder variable
 //   ($PWD, $HOME) names no file, and one mod-kit marks unexpanded (every $ quoted) holds no value.
+//   Since #3144 one the command sets to a pattern's part, each variable to one literal value with no
+//   space (`T=<table>; <cli> -q "select * from $T"`), is judged by the name that spelling makes
+//   (rules.ts spelledThrough), as the word written out is: a read only query runs.
 // - Since #1954: an Edit or MultiEdit the guard would hold that would not apply to the file as it
 //   stands (rules.ts editWouldNotApply) is told so, to be sent again with the file's own text, with
 //   no card and nothing asked of Dan, never held as a change it cannot read.
@@ -1647,6 +1651,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // in, none of which the guard reads. A folder variable ($PWD, $HOME) names no file.
     // One whose every $ is quoted or escaped (a regex 'x$', prose 'costs $5') holds no value at all.
     const variable = !output && ((!t.path && (t.run !== undefined || t.removes === true) && !t.unexpanded && nameFromVariable(t.word)) || filled === 'variable')
+    // #3144: a run's word mod-kit placed in a folder, a pattern once the variables the command sets
+    // are read (`T=<table>; <cli> -q "select * from $T"`), is judged by that spelling, as the same
+    // word written out is, wherever every variable in it has one literal value with no space.
+    const spelled = variable && t.run !== undefined && !t.removes && t.folder !== undefined ? spelledThrough(String(input.command ?? ''), t.word) : undefined
     if (tool === 'Bash' && (output || variable ||(t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
@@ -1660,7 +1668,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         }
         if (tree === null) continue
       }
-      const may = variable || folderFilled ? 'unread' : patternMayBeLook(t.word)
+      const may = spelled !== undefined ? patternMayBeLook(spelled) : variable || folderFilled ? 'unread' : patternMayBeLook(t.word)
       if (may === 'not') continue
       const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)
       // In a checkout, a pattern there waits on that issue's answer as a named file does, and one in a
