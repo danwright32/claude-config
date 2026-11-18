@@ -1285,6 +1285,7 @@ for where, script, seg in segments:
                 try:
                     to = shell_words.git_dir(shell_words.command_rest(shell_words.rejoin(toks))[0])
                 except Exception:
+                    # Unread, the add is judged where the script runs, as it was before this.
                     to = ""
                 if to:
                     where = to if (to.startswith("/") or not where) else os.path.join(where, to)
@@ -1298,8 +1299,9 @@ if mode == "takes":
         # of a fixture, or one that is no repository, never stands in for a real add later in the
         # script; with none in a repository, the first, which stages nothing anywhere.
         def in_repository(d):
-            d = os.path.abspath(d) if d else ""
-            if not d or not os.path.isdir(d):
+            # An empty directory is the session directory, never one that is no repository.
+            d = os.path.abspath(d or scripts_cwd or os.getcwd())
+            if not os.path.isdir(d):
                 return False
             while True:
                 if os.path.exists(os.path.join(d, ".git")):
