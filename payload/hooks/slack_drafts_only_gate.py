@@ -2822,7 +2822,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         A JavaScript walk first leaves out import text written inside a string literal, which nothing
         loads (claude-config#2484). Where any file it reaches can run a string as code (JS_SINK,
         JS_DYNAMIC), it starts again following every string, as every walk did before, and gives only
-        the modules the first walk had not, so each is still given once."""
+        the modules the first walk had not, so each is still given once. That second walk leaves out a
+        string a test's matcher only compares (held, lib/data-names.py js_compared, claude-config#3146);
+        where it left one out and a file it read names a way to change what a matcher does
+        (JS_MATCHER_CHANGED), a third walk follows every string and gives what the second had not."""
         if kind != "js":
             yield from self.walk(start, origin, root, body, kind, True)
             return
@@ -2835,20 +2838,34 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             yield item
         else:
             return
+        held = {"skipped": False, "changed": False}
+        for item in self.walk(start, origin, root, body, kind, True, held):
+            if item[2] in given:
+                continue
+            if item[0]:
+                yield item
+                return  # the walk could not go on, and says why
+            given.add(item[2])
+            yield item
+        if not (held["skipped"] and held["changed"]):
+            return
         for item in self.walk(start, origin, root, body, kind, True):
             if item[2] in given:
                 continue
             yield item
 
-    def walk(self, start, origin, root, body, kind, strings):
+    def walk(self, start, origin, root, body, kind, strings, held=None):
         """modules() with import text inside JavaScript strings followed or not (strings); not
-        following them, it gives SINK, and stops, on reaching a file that can run a string as code."""
+        following them, it gives SINK, and stops, on reaching a file that can run a string as code.
+        held, a dict, asks a walk following strings to leave out one a matcher only compares, and
+        to note in it whether it did (skipped) and whether a file it read can change what a matcher
+        does (changed)."""
         try:
-            yield from self.walk_modules(start, origin, root, body, kind, strings)
+            yield from self.walk_modules(start, origin, root, body, kind, strings, held)
         finally:
             self.past = None  # late() has already said how far the reading got, where it ran out
 
-    def walk_modules(self, start, origin, root, body, kind, strings):
+    def walk_modules(self, start, origin, root, body, kind, strings, held=None):
         """walk()'s reading. Each module reached is kept with how it was reached (seen), so that past
         IMPORT_MAX_FILES the one found outside the repository can be named (beyond)."""
         seen = {origin: start} if origin else {}
@@ -2870,8 +2887,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
                 yield SINK
                 return
+            elif held is not None and not held["changed"] and _data_names.JS_MATCHER_CHANGED.search(text):
+                held["changed"] = True
             for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings, cur is not None,
-                                                             path=cur):
+                                                             path=cur, held=held):
                 via = f"{chain}, which imports {spec}"
                 lead, first = first, None  # only the first import given can be that statement's
                 if targets == "path":
@@ -2975,7 +2994,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.unfollowed.append(why)
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
+                       held=None):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
@@ -2995,9 +3015,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 path, code, quoted, lambda s: self.resolve_import(s, cur_dir),
                 lambda: JS_SINK.search(text) or JS_DYNAMIC.search(code) or _data_names.js_computed(text, js_scan)) \
                 if getattr(self, "mock_runner", False) else set()
+            own_expect = None  # js_expect_own, asked once the file holds a string a matcher may compare
             for m in IMPORT_SPEC.finditer(code):
                 if not strings and quoted[m.start()] == 1:
                     continue
+                if held is not None and _data_names.js_compared(text, code, quoted, m.start()):
+                    own_expect = _data_names.js_expect_own(code, quoted) if own_expect is None else own_expect
+                    if own_expect:
+                        held["skipped"] = True
+                        continue  # a matcher only compares it (#3146); modules() decides whether that holds
                 spec = m.group(2)
                 if "${" in spec:
                     continue

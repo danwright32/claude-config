@@ -1574,6 +1574,108 @@ for runs in "bash posts.sh" "bash sources.sh" "bash posts.sh -n" "bash -- -n pos
 done
 
 echo
+echo "slack drafts only: import text a test only compares is not followed beside code that runs strings (claude-config#3146)"
+
+# Seen 2026-11-17 in a work repository: one test file run through vitest was refused as importing
+# ./src/index.ts, a module the gate cannot find, though it imports four node builtins, vitest and two
+# sibling scripts; the text was only an argument to expect(...).toContain(). Import text inside a
+# string has not been followed since #2484, except where any file the walk reaches names something
+# that can run a string as code (JS_SINK, JS_DYNAMIC), when every string is followed, and a test of a
+# build script names child_process. A string that is the whole argument of toBe, toContain or toMatch
+# on expect(...) is now left out even there, since the matcher only compares it, unless the file
+# binds expect any other way or a file in the walk names a way to change what a matcher does.
+D46="$T/d3146"
+mkdir -p "$D46/scripts" "$D46/node_modules/.bin" "$D46/node_modules/vitest/dist"
+printf '%s\n' '#!/usr/bin/env node' "import './dist/cli.js'" > "$D46/node_modules/vitest/vitest.mjs"
+printf '%s\n' "import { fork } from 'node:child_process'" 'for (const f of process.argv.slice(3)) fork(f)' > "$D46/node_modules/vitest/dist/cli.js"
+ln -s ../vitest/vitest.mjs "$D46/node_modules/.bin/vitest"
+printf '%s\n' 'export default {};' > "$D46/vitest.config.mjs"
+printf '%s\n' 'export function makeEntry(p) {' "  return \`export * from '\${p}';\\n\`;" '}' > "$D46/scripts/entry.mjs"
+printf '%s\n' 'import { readdirSync } from "node:fs";' 'export const listFiles = (d) => readdirSync(d);' > "$D46/scripts/list.mjs"
+printf '%s\n' 'export const post = (t) => fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: t });' > "$D46/scripts/poster.mjs"
+cat > "$D46/scripts/base.txt" <<'JS'
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test, expect } from "vitest";
+import { makeEntry } from "./entry.mjs";
+import { listFiles } from "./list.mjs";
+
+// export * from './src/commented.ts'
+/* import { gone } from "./src/block-comment.ts"; */
+const here = path.dirname(fileURLToPath(import.meta.url));
+test("the entry re-exports the source", () => {
+  execFileSync("node", [path.join(here, "entry.mjs")]);
+  const source = makeEntry("./src/index.ts");
+  expect(source).toContain("export * from './src/index.ts'");
+  expect(source).not.toContain(`import { gone } from "./src/missing.ts"`);
+  expect(source.trim()).toBe('export * from "./src/other.ts";');
+  expect(readFileSync(path.join(here, "entry.mjs"), "utf8")).toMatch("import x from './src/x.ts'");
+  expect(listFiles(here).length).toBeGreaterThan(0);
+});
+JS
+run_46() { run_raw "$(payload Bash "$(bash_input "$1")" "$D46")"; }
+vt46() { # vt46 <file name> <lines...>: the base test with these lines after it
+  local name="$1"
+  shift
+  { cat "$D46/scripts/base.txt"; printf '%s\n' "$@"; } > "$D46/scripts/$name"
+}
+vt46 a.node.test.mjs
+for runs in "./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs" \
+  "node scripts/entry.mjs && ./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs > out.txt 2>&1" \
+  "node scripts/a.node.test.mjs"; do
+  run_46 "$runs"
+  allowed "#3146 import text a matcher only compares, in strings, a template and comments, beside child_process: $runs"
+done
+# The controls. A real import of a module that posts or is not there, each way it can be written,
+# on its own line or after such a string on the same line, is still followed.
+VT46="./node_modules/.bin/vitest run -c vitest.config.mjs"
+n46=0
+for line in 'import { post } from "./poster.mjs";' 'export { post } from "./poster.mjs";' \
+  'const { post } = require("./poster.mjs");' 'await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'"); await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toBe("a"); export { post } from "./poster.mjs";'; do
+  n46=$((n46 + 1))
+  vt46 "real-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/real-$n46.node.test.mjs"
+  read_refused "#3146 a real import of a module that posts is still followed: $line"
+  says "#3146 and the refusal names it: $line" "poster.mjs"
+done
+vt46 missing.node.test.mjs 'import "./src/index.ts";'
+run_46 "$VT46 scripts/missing.node.test.mjs"
+read_refused "#3146 a real import of a module that is not there is still refused"
+says "#3146 and the refusal names it" "./src/index.ts, a module the gate cannot find"
+# A string anywhere else is still followed while something in the walk can run strings: held in a
+# name and handed on, built with +, an array's element, compared by a matcher with custom testers,
+# or beside a matcher or a string method the file changes.
+n46=0
+for line in 'const entry = "export * from '"'"'./src/index.ts'"'"'"; execFileSync("node", ["--input-type=module", "-e", entry]);' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'" + "");' \
+  'const cases = ["export * from '"'"'./src/index.ts'"'"'"];' \
+  'expect(makeEntry("x")).toEqual("export * from '"'"'./src/index.ts'"'"'");' \
+  'expect.extend({ toContain: (r, c) => execFileSync("node", ["--input-type=module", "-e", c]) });' \
+  'Object.defineProperty(String.prototype, "includes", { value: (c) => execFileSync("node", ["-e", c]) });'; do
+  n46=$((n46 + 1))
+  vt46 "held-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/held-$n46.node.test.mjs"
+  read_refused "#3146 import text in a string not only compared by a matcher is still followed: $line"
+  says "#3146 and the refusal names the module in the string: $line" "./src/index.ts"
+done
+# expect bound by the file itself, which may hand the string to anything.
+sed -e 's/^import { test, expect } from "vitest";$/import { test } from "vitest";/' "$D46/scripts/base.txt" > "$D46/scripts/own-expect.node.test.mjs"
+printf '%s\n' 'function expect(s) { return { toContain: (c) => execFileSync("node", ["-e", c]), not: {}, toBe() {}, toMatch() {}, toBeGreaterThan() {} }; }' >> "$D46/scripts/own-expect.node.test.mjs"
+run_46 "$VT46 scripts/own-expect.node.test.mjs"
+read_refused "#3146 a file that binds expect itself still has its strings followed"
+# A matcher changed in another module the test imports.
+printf '%s\n' 'import { expect } from "vitest";' 'import { execFileSync } from "node:child_process";' \
+  'expect.extend({ toContain: (r, c) => ({ pass: !!execFileSync("node", ["-e", c]), message: () => "" }) });' > "$D46/scripts/matchers.mjs"
+vt46 extended.node.test.mjs 'import "./matchers.mjs";'
+run_46 "$VT46 scripts/extended.node.test.mjs"
+read_refused "#3146 a matcher changed in a module the test imports leaves every string followed"
+says "#3146 and the refusal names the module in the string" "./src/index.ts"
+
+echo
 echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
 
 # The gate reads a module's attributes only from a name an import binds, so `q = pathlib` and then
