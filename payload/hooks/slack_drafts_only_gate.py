@@ -693,7 +693,7 @@ def js_code(text):
 def js_scan(text):
     """(code, quoted): a JavaScript or TypeScript file's text with each // and /* */ comment blanked
     to spaces, its newlines kept, so an import shown in a comment is not read as one
-    (claude-config#2397, the rule the alert guard got in #2368: a script is read by the code it runs,
+    (claude-config#2397, first settled in #2368: a script is read by the code it runs,
     never a comment); and, for each index of the text, whether it lies inside a string literal or a
     template literal's text (its quotes included, the code inside each ${...} not), so an import
     written inside a string can be told from one written as code (claude-config#2484): 1 there, and 2

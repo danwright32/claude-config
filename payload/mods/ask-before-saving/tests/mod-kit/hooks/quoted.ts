@@ -3,7 +3,8 @@
 // onto its words and knows nothing of YAML's '' escape. The design round guard read TypeScript
 // strings its own way (#1144) and a since retired guard GitLab's flow lists (#2448); both then read
 // with this. Python's strings and comments are read here too (pythonText, moved from code.ts in
-// #2710), so the file reader and a copy of it read them with no other file. Pure. Kept here once and copied byte for byte into each mod that reads with it
+// #2710), so a reader of them needs no copy of code.ts. Pure. Kept here once and copied byte for
+// byte into each mod that reads with it
 // (hooks/mod-kit/quoted.ts, which tools/check-mod-shared-parts.sh holds to this one), since a mod
 // cannot import another mod's files.
 
@@ -41,8 +42,7 @@ export type PythonText = { kind: 'comment' | 'string' | 'formatted'; from: numbe
  * raw string too), one with a single quote ends at its line, and one never closed runs to the end.
  * What each reader does with a span is its own rule: codeOnly blanks comments and blocks spanning
  * lines for the design round guard (#1165), ask before saving takes a mention of lasting memory in
- * text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText,
- * and the file reader (reaches.ts) counts nothing a string or comment holds (#2710).
+ * text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText.
  */
 export const pythonText = (code: string): PythonText[] => {
   const out: PythonText[] = []

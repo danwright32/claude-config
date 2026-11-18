@@ -834,8 +834,8 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
 }
 
 // Where a python program holds text rather than code is read by pythonText, which lives in
-// quoted.ts beside mod-kit's other readers of quoted strings, so the file reader (reaches.ts) and a
-// mod's byte for byte copy of it can read python's strings without this file (#2710).
+// quoted.ts beside mod-kit's other readers of quoted strings, so a reader of python's strings needs
+// no copy of this file (#2710).
 export { pythonText }
 // A one line literal that is only a path (#1194): one with no space in it, or one from the root, the
 // home folder or the folder the program runs in (`/Users/<name>/Documents - Dan Pro/...`, `~/...`,
