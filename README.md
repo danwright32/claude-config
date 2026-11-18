@@ -932,6 +932,41 @@ rather than reporting a suite "still running". It is recorded in `.hook-tests` a
 hook of its own; the change watcher does not, since every tick would queue behind the same run. A
 suite stopped at the deadline after waiting part of it for the slot says how long it waited.
 
+### A suite that could not finish is run again once the Mac is quiet (#3195)
+
+A run stopped at `SYNC_HOOK_TESTS_TIMEOUT` verified nothing, and the hooks it was checking are live
+either way. On 2026-11-17 a pull on the work MacBook landed a hook at 19:13 ET, its suite was
+stopped at 1800 seconds with the load average between 36 and 86 on 18 cores, and nothing ran it
+again. So that run is recorded in `.hook-tests` as `incomplete` and OWED a second run, with
+`owed_since` (when the first run that verified nothing was recorded) and `stopped` (how many runs
+since then were stopped at the deadline). The record is written by claude-sync once the runner has
+been stopped, never by the runner, and it is a file in the clone, so it survives a restart.
+
+- **Who runs it again.** Any receive that is not the change watcher and lands no hook of its own:
+  the receive timer's `sync`, which is the one on a schedule, and any `pull`. The watcher does not,
+  for the same reason it does not settle a `slotwait`: each tick would sit out a whole suite run.
+  A receive that lands a hook runs the suite as it always did, owed or not.
+- **When.** Only while the one minute load average is no higher than the core count, read through
+  `hooks/lib/load-average.sh`. On a busier Mac the receive runs nothing, says the load it read on
+  its closing line, and stamps `deferred_at` and `deferred_load` on the record. A load that cannot
+  be read does not hold the rerun back.
+- **Never twice at once.** The rerun runs with the sync lock released, like every verdict, so it
+  takes its own claim, `.hook-tests-rerun` (the lock in `hooks/lib/pid-lock.sh`). A receive that
+  finds it held by a live claude-sync names that run's pid and runs nothing. A claim whose pid has
+  gone, or is now some other program after a restart, is taken over.
+- **Who is told.** Nobody, for the first stopped run: a rerun usually clears it. A rerun that
+  passes replaces the record with the pass; one that FAILS is notified like any failed run. A
+  second run stopped at the deadline, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP`
+  (default `172800` seconds, two days, a product choice so the daily timer has had a try), gives up:
+  ONE desktop notification, `gave_up` stamped on the record, and nothing runs it again by itself.
+  `claude-sync recheck` then runs it and replaces the record.
+- **What status says.** `claude-sync status` says the run is owed and why it has not run (the load
+  the last try found), that it is being run again now by a named pid, or that it was given up on and
+  what to run.
+
+A pull whose suite could not be verified still exits 0. A nonzero exit would make the scheduled
+job report a condition that a quiet hour clears by itself, which is the alert this record replaces.
+
 ### A send names what it keeps back
 
 A path the shared repo has changed since this Mac last applied is held back from the send, because

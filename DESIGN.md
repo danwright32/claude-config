@@ -2461,6 +2461,55 @@ seen to fail it: no change check, a modification time check, a stamp made after 
 apply key), and a real pull and sync building each copy once. `tests/test-mirror-rsync.sh` holds
 skills' excludes to the per tree call on every rsync. Measured before and after in the pull request.
 
+## A hook suite that could not finish is owed a second run (#3195)
+
+A pull's hook suite stopped at `SYNC_HOOK_TESTS_TIMEOUT` used to be reported once, notified at once,
+and then forgotten: on 2026-11-17 a pull on the work MacBook landed a hook at 19:13 ET, the suite was
+stopped at 1800 seconds with the load average between 36 and 86 on 18 cores, and nothing ran it
+again once the Mac was quiet. The choices:
+
+- **The record is the existing `.hook-tests`, with fields added, written by claude-sync.** The step
+  that timed out is the runner; the record is written by the verdict after the runner is stopped,
+  so it does not depend on the thing that failed (L561), and it is a file in the clone, which a
+  restart does not clear. `owed_since` and `stopped` are carried from the record being replaced
+  while that one was owed too, which is what lets a second stopped run be told from a first.
+- **The rerun belongs to every receive except the change watcher.** Considered: the watcher, the
+  timer, the next pull. The watcher fires on every local change and would sit out a whole suite run
+  on each one, the reason #2758 kept it from settling a `slotwait`. A dedicated agent would be a
+  third launchd job for a rare event. The timer is the one receive on a schedule, and a pull, typed
+  or by the timer, already runs the verdict outside the lock, so the rerun is the verdict asked for
+  by the record rather than by a landed hook: no new path, and no lock held for a suite run.
+- **It waits for a quiet Mac, judged by `lib/load-average.sh`.** Busy is a one minute load average
+  above the core count, the predicate every other load judgement here uses (L370). Only an
+  `incomplete` record waits on it: a `slotwait` ran nothing, and the runner's own slot queue is its
+  gate.
+- **It takes a claim, not the sync lock.** Two receives can both find the record owed once the lock
+  is released. `.hook-tests-rerun` is `lib/pid-lock.sh`'s lock, taken with no wait, holding the pid
+  of the claude-sync that took it; a second receive names that pid and runs nothing. A claim whose
+  pid is gone, or alive but no longer a claude-sync (reused after a restart), is taken over through
+  the lib's break lock. Every write to the record during a rerun is made under the claim, and an
+  amendment (a deferral, a give up) is made only while the record's `at` is still the one read.
+- **It ends in one notification.** Nothing is notified for the first stopped run. A second stopped
+  run, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP` (two days, a product choice, so the
+  daily timer has had at least one try), notifies once and stamps `gave_up`, which makes the record
+  owed to nobody. Without that, a Mac whose suite never finishes would either loop silently or
+  notify every cycle (L36). `gave_up` is carried forward like the other fields, so a later stopped
+  run cannot notify again; `claude-sync recheck`, or any run that passes, replaces the record.
+- **The pull still exits 0.** An unverified pull is now recorded, said on its closing line and in
+  status, rerun, and notified when there is something to look into. A nonzero exit would make the
+  scheduled job report a busy hour that clears by itself.
+
+The lever not pulled (L308): starting the rerun the moment the load falls, rather than at the next
+receive. The receive timer is daily by default, so a record can wait up to a day for its rerun on a
+Mac nobody pulls on by hand. A watcher on the load would be a new long running process for a rare
+event, and the give up bound is sized to the timer instead.
+
+`tests/test-hook-suite-rerun.sh` holds it against a fixture home, with the deadline judged on a
+clock the suite moves and the load set through the shared reader's seams: the first stopped run
+owed and not notified, a busy Mac deferring, the watcher leaving it, a held claim respected and a
+dead one taken over, a second stopped run notifying once and then never running again, a rerun
+passing and one failing, and a record past the bound given up on.
+
 ## Things known to be wrong and left that way
 
 Markers are keyed on hostname, which is a mutable string. Renaming or reinstalling a Mac abandons
