@@ -90,8 +90,8 @@ if [ -n "$REAL" ]; then
     && check "the listing answered rather than refusing" ok \
     || check "the listing answered rather than refusing" "it printed $(printf '%s\n' "$out_list" | grep -c .) line(s)"
 else
-  # No repository above this file, which is what a deployed copy under the config directory looks
-  # like. The four checks above cannot be asked here, and this branch used to REFUSE, which is one
+  # This file is not in a claude-config checkout (lib/checkout-root.sh refused), which is what a
+  # deployed copy under the config directory looks like. The four checks above cannot be asked here, and this branch used to REFUSE, which is one
   # of the three failures that made the documented command report red on a tree where nothing was
   # wrong (claude-config#155). What is true here is asserted instead, so the branch still checks
   # something rather than only explaining why it cannot (L98).
