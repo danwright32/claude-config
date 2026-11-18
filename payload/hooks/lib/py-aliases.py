@@ -92,8 +92,9 @@ def load(name, spec, data):
     A module written in Python is run from data, the bytes of its file as found() read them, so
     its own file is never read around the stand ins. Any other (a compiled extension, or one built
     into the interpreter) is made by its own loader: a compiled file is read by the system's
-    loader, which nothing here can stand in for, so its bytes are the ones found() read a moment
-    before, and a kept judgement asks for them again.
+    loader, which nothing here can stand in for, with no event the audit hook sees. So the
+    recorder's module_from_spec (lib/judgement-cache.py) records that file's bytes as a read, the
+    ones found() read a moment before, and a kept judgement asks for them again.
 
     The module's own imports run as imports do. One that is loaded already costs nothing. One
     written in Python that is not is read by Python itself, which marks a judgement being kept as
