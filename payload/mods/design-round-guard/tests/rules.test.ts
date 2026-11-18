@@ -596,9 +596,10 @@ test("a name the shell spells through a variable lands where the command's own a
   expect(shellVarPath('XR=/a; x', text, 'R/screen.css')).toBe(undefined)
   expect(shellVarPath('R=/a', `${text}\nopen('R/screen.css')`, 'R/screen.css')).toBe(undefined)
   expect(shellVarPath('R=/a', text, 'screen.css')).toBe(undefined)
-  // #3144: a value the assignment only begins (`R=/a$X`, `R=/a"b"`) is not the value it is given.
-  expect(shellVarPath('R=/a$X; x', text, 'R/screen.css')).toBe(undefined)
-  expect(shellVarPath('R=/a"b"; x', text, 'R/screen.css')).toBe(undefined)
+  // Lessons review of #3144: read leniently, since a script it cannot place is not read at all. An
+  // assignment after `&&` or exported places it as before.
+  expect(shellVarPath('true && R=/a; x', text, 'R/screen.css')).toBe('/a/screen.css')
+  expect(shellVarPath('R=/a; export R; x', text, 'R/screen.css')).toBe('/a/screen.css')
 })
 
 // #3144: a word a command hands on, spelled through variables the command sets to one literal value
@@ -630,16 +631,37 @@ test('spelledThrough spells a word through the literal values the command gives 
 
 // Lessons review of #3144: a variable the command changes any other way than a whole literal
 // assignment holds another value, or none, when what it is handed runs, so it has no one value.
-test('literalValue reads only a variable every change of which is a whole literal assignment', () => {
-  expect(literalValue('T=txt; x "$T"', 'T')).toBe('txt')
-  expect(literalValue('export T=txt && x "${T}"', 'T')).toBe('txt')
+test('literalValue, asked for the value handed on, reads only a variable every change of which is a whole literal assignment', () => {
+  expect(literalValue('T=txt; x "$T"', 'T', true)).toBe('txt')
+  expect(literalValue('export T=txt && x "${T}"', 'T', true)).toBe('txt')
   for (const change of [
     'T+=sx', 'for T in tsx; do true; done', 'for T; do true; done', 'read T < f', 'read -r a T < f',
     'mapfile T < f', 'readarray -t T < f', 'printf -v T tsx', 'getopts ab T', 'unset T', 'unset -v T',
     'let T=txt', 'let "T = 1"', '((T=txt))', '(( T += 1 ))', 'declare T', 'declare -i T=txt', 'local T',
     'local T=txt', 'typeset T', 'readonly T=txt', 'export -n T', 'export T',
   ])
-    expect({ change, value: literalValue(`T=txt; ${change}; x "$T"`, 'T') }).toEqual({ change, value: undefined })
+    expect({ change, value: literalValue(`T=txt; ${change}; x "$T"`, 'T', true) }).toEqual({ change, value: undefined })
+  // Lessons review at d77d5c0: only an assignment standing whole at the top of the command, before
+  // its first use, after nothing that may not run, is the value the shell hands on.
+  expect(literalValue('T=.md\nx "$T"', 'T', true)).toBe('.md')
+  expect(literalValue('cd /w; T=.md && x "$T"', 'T', true)).toBe('.md')
+  for (const command of [
+    'x "$T"; T=.md',
+    'T=.md x "$T"',
+    '(T=.md); x "$T"',
+    '{ T=.md; }; x "$T"',
+    'false && T=.md; x "$T"',
+    'true || T=.md; x "$T"',
+    'T=.md & x "$T"',
+    'echo a | T=.md; x "$T"',
+    'if false; then T=.md; fi; x "$T"',
+    'while false; do T=.md; done; x "$T"',
+    'case a in b) T=.md;; esac; x "$T"',
+    'f() { T=.md; }; x "$T"',
+    'cat <<EOF\nT=.md\nEOF\nx "$T"',
+    'X=$(pwd); T=.md; x "$T"',
+  ])
+    expect({ command, value: literalValue(command, 'T', true) }).toEqual({ command, value: undefined })
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {

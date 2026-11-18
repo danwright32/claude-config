@@ -236,26 +236,97 @@ export const shellVarPath = (command: string, text: string, name: string): strin
 /**
  * The one value `command` gives the shell variable `v` (#1191, #3144): every assignment of it a
  * literal (bare, or in quotes with no `$` or backtick in it), each the same and not empty. Undefined
- * for a variable set nowhere, set to different values, or set by any assignment that is not wholly
- * such a literal: one built another way (`R="$X/y"`, `R=$(pwd)`), or one the literal only begins
- * (`R=/a$X`, `R=/a"b"`), whose value is more than the literal. Undefined too where the command
- * changes it any other way (lessons review of #3144), so it may hold another value, or none, when
- * what it is handed runs: its name anywhere but in a use (`$R`, `${R}`) or such an assignment
+ * for a variable set nowhere, set to different values, or built another way (`R="$X/y"`, `R=$(pwd)`).
+ *
+ * `handed` asks for the value the shell is sure to hand on (lessons reviews of #3144). Undefined
+ * then, too, for an assignment the literal only begins (`R=/a$X`, `R=/a"b"`); for a variable the
+ * command changes any other way: its name anywhere but in a use (`$R`, `${R}`) or an assignment
  * (`R+=x`, `for R in`, `read R`, `mapfile R`, `printf -v R`, `getopts ab R`, `unset R`, `declare R`,
- * `export -n R`, even `export R`), or an assignment let, `((`, declare, local, typeset or readonly
- * makes. A name the command only mentions in other text (`-q "select R"`) is read so too, and held.
+ * `export -n R`, even `export R`, or the name in other text, `-q "select R"`), or an assignment let,
+ * `((`, declare, local, typeset or readonly makes; and unless every assignment is a whole command of
+ * its own (`R=x`, `export R=x`) among plainTop's, before the first use of the variable, after only
+ * the start, a `;` or a new line, and followed by only one of those or `&&`. So not one after the
+ * use, in front of another command (`R=x cmd`), in a subshell, group, if, loop, case or function, or
+ * across a pipe, `&`, `||` or `&&` from what comes before. spelledThrough asks so, since a word with
+ * no value is held. shellVarPath does not: a script it cannot place is not read at all, so a
+ * stricter reading there lets a script that writes a screen file run unasked.
  */
-export const literalValue = (command: string, v: string): string | undefined => {
-  const starts = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=`, 'g'))].length
-  const assignment = new RegExp(`(^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))(?=$|[\\s;&|)])`, 'g')
-  const whole = [...command.matchAll(assignment)]
-  if (whole.length !== starts) return undefined
-  const rest = command.replace(assignment, '$1').replace(new RegExp(`\\$\\{${v}\\}|\\$${v}(?!\\w)`, 'g'), '')
-  if (new RegExp(`(?<![\\w$])${v}(?!\\w)`).test(rest)) return undefined
-  if (new RegExp(`(?:\\b(?:let|declare|local|typeset|readonly)\\b|\\(\\()[^;&|\\n]*(?<![\\w$])${v}(?!\\w)`).test(command)) return undefined
-  const values = new Set(whole.map(m => m[2] ?? m[3] ?? m[4] ?? ''))
+export const literalValue = (command: string, v: string, handed = false): string | undefined => {
+  const assignment = new RegExp(`(^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))`, 'g')
+  let found = [...command.matchAll(assignment)].map(m => m[2] ?? m[3] ?? m[4] ?? '')
+  // A value built another way (`R="$X/y"`, `R=$(pwd)`) is set too, and cannot be read.
+  if (new RegExp(`(?:^|[\\s;&|(])${v}=["]?[$\`]`).test(command)) return undefined
+  if (handed) {
+    const starts = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=`, 'g'))].length
+    const whole = new RegExp(`${assignment.source}(?=$|[\\s;&|)])`, 'g')
+    const rest = command.replace(whole, '$1').replace(new RegExp(`\\$\\{${v}\\}|\\$${v}(?!\\w)`, 'g'), '')
+    if (new RegExp(`(?<![\\w$])${v}(?!\\w)`).test(rest)) return undefined
+    if (new RegExp(`(?:\\b(?:let|declare|local|typeset|readonly)\\b|\\(\\()[^;&|\\n]*(?<![\\w$])${v}(?!\\w)`).test(command)) return undefined
+    const use = command.search(new RegExp(`\\$\\{${v}(?!\\w)|\\$${v}(?!\\w)`))
+    const alone = new RegExp(`^(?:export\\s+)?${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))$`)
+    found = plainTop(use < 0 ? command : command.slice(0, use)).flatMap(c => {
+      const m = alone.exec(c.text.trim())
+      return m && /^(?:|;|\n)$/.test(c.before) && /^(?:|;|\n|&&)$/.test(c.after) ? [m[1] ?? m[2] ?? m[3] ?? ''] : []
+    })
+    if (found.length !== starts) return undefined
+  }
+  const values = new Set(found)
   const [value] = [...values]
   return values.size === 1 && value ? value : undefined
+}
+
+// The words that open or continue a compound command, after which a `;` is no longer the top's.
+const COMPOUND_WORD = /^(?:if|then|else|elif|fi|while|until|for|select|do|done|case|esac|function|coproc|time|!)$/
+
+/**
+ * The simple commands at the very top of a shell text, each with the separator before and after it
+ * (`;`, a new line, `&&`, `||`, `|`, `&`, or nothing at either end), up to the first that is not a
+ * plain list of words: one opening a compound command, or holding, outside quotes, a parenthesis, a
+ * brace, a backtick, a `$(` or a heredoc. Past that the top cannot be told from what is nested, so
+ * nothing further is given (lessons review of #3144 at d77d5c0).
+ */
+export const plainTop = (text: string): { text: string; before: string; after: string }[] => {
+  const out: { text: string; before: string; after: string }[] = []
+  let cur = ''
+  let bare = ''
+  let before = ''
+  let quote = ''
+  const plain = () => !/[(){}`]|<<|\$\(/.test(bare) && !COMPOUND_WORD.test(bare.trim().split(/\s+/)[0] ?? '')
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (quote) {
+      cur += c
+      if (c === quote) quote = ''
+      else if (c === '\\' && quote === '"' && i + 1 < text.length) cur += text[++i]
+      continue
+    }
+    if (c === "'" || c === '"') {
+      quote = c
+      cur += c
+      bare += ' '
+      continue
+    }
+    if (c === '\\') {
+      cur += c + (text[i + 1] ?? '')
+      bare += ' '
+      i++
+      continue
+    }
+    if (/[;&|\n]/.test(c)) {
+      const sep = (c === '&' || c === '|') && text[i + 1] === c ? c + c : c
+      if (!plain()) return out
+      out.push({ text: cur, before, after: sep })
+      before = sep
+      cur = ''
+      bare = ''
+      i += sep.length - 1
+      continue
+    }
+    cur += c
+    bare += c
+  }
+  if (plain()) out.push({ text: cur, before, after: '' })
+  return out
 }
 
 /**
@@ -270,7 +341,7 @@ export const spelledThrough = (command: string, word: string): string | undefine
   let replaced = 0
   let unread = false
   const out = word.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, braced: string | undefined, bare: string | undefined) => {
-    const value = literalValue(command, (braced ?? bare) as string)
+    const value = literalValue(command, (braced ?? bare) as string, true)
     if (value === undefined || /[\s$`]/.test(value)) {
       unread = true
       return ''

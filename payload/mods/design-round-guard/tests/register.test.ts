@@ -3678,6 +3678,20 @@ test('#2847: a python or node script writing a screen file its own code names is
   expect(w.ran).toEqual([])
 })
 
+// Lessons review of #3144: a script whose folder a variable names is placed by the command's own
+// assignment of it, read leniently (shellVarPath), since one it cannot place is not read at all. A
+// stricter reading there, as spelledThrough's, let these run unasked.
+test('#3144: a script placed through a variable the command sets, however it sets it, is still read and held', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${NOTES}/gen.py`]: "open('/w/slate/app/page.tsx', 'w').write('<main/>')\n" } })
+  for (const command of [
+    `N=${NOTES}; python3 $N/gen.py`,
+    `true && N=${NOTES}; python3 $N/gen.py`,
+    `N=${NOTES}; export N; python3 $N/gen.py`,
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+})
+
 test('#2847: a script writing only files the guard does not judge, only reading a screen file, or leaving a mod hook file as it was runs', withKit, async ($, on) => {
   const w = world($, on, {
     files: {
@@ -5093,6 +5107,22 @@ test('#3144: a pattern spelled through a variable the command sets is judged by 
       'typeset T',
       'export -n T',
     ].map(change => `T=txt; ${change}; npx prettier --write "app/*.$T"`),
+    // Lessons review at d77d5c0: an assignment the tool is not handed the value of. Each spells
+    // `app/*.md` from the text, but the shell hands the tool `app/*` (T empty), or may.
+    ...[
+      'npx prettier --write "app/*$T"; T=.md',
+      'T=.md npx prettier --write "app/*$T"',
+      '(T=.md); npx prettier --write "app/*$T"',
+      '{ T=.md; }; npx prettier --write "app/*$T"',
+      'false && T=.md; npx prettier --write "app/*$T"',
+      'true || T=.md; npx prettier --write "app/*$T"',
+      'T=.md & npx prettier --write "app/*$T"',
+      'echo x | T=.md; npx prettier --write "app/*$T"',
+      'if false; then T=.md; fi; npx prettier --write "app/*$T"',
+      'while false; do T=.md; done; npx prettier --write "app/*$T"',
+      'case x in y) T=.md;; esac; npx prettier --write "app/*$T"',
+      'f() { T=.md; }; npx prettier --write "app/*$T"',
+    ],
   ]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') || why.includes('could not check') }).toEqual({ command, held: true })
