@@ -25,7 +25,7 @@ WHAT IT LOOKS FOR, in a suite file (a test-*.sh), three shapes:
 - A git question for the top level asked from the suite's own folder (`git -C "$DIR" rev-parse
   --show-toplevel`, `cd "$DIR/.." && git rev-parse --show-cdup`, `--show-prefix` the same),
   claude-config#3221. It is the same lookup by another route: it takes ANY repository above a copy
-  for this one (a home folder kept in git), which is the case the helper refuses, and twelve suites
+  for this one (a home folder under version control), which is the case the helper refuses; twelve suites
   carried it while the pre push scanners gate recognised a suite that walks the checkout only by its
   naming the helper. The suite's own folder is a variable the file sets from a `dirname` of
   BASH_SOURCE or $0, or such a `dirname` written in place; a git question about a fixture's
