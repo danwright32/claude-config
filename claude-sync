@@ -220,6 +220,15 @@ HOOK_TESTS_FILE="$SYNC_REPO/.hook-tests"
 # is. It exists to bound cost: the watcher fires a send on every file event, so without it a suite
 # that stays red is paid for again on every save, with the sync lock held throughout.
 SEND_VERDICTS_FILE="$SYNC_REPO/.send-suite-verdicts"
+# What the last run of each send-side suite printed, when it failed or was stopped at its deadline,
+# one file per suite, replaced by that suite's next run and removed when it passes (claude-config#3176).
+# A failure only the watcher sees cannot be reproduced by the hand run its hold used to suggest, so
+# the run that judged it is the only evidence, and it used to be deleted with the verdict kept.
+SEND_OUTPUT_DIR="$SYNC_REPO/.send-suite-output"
+# The holds the change watcher has already said, one line per suite: when it was said, the suite, the
+# files it held, and the hold as said (claude-config#3179). Each watcher pass is a new run, so the
+# once per run guard alone let one unchanged hold be written and notified 227 times in a day.
+SEND_HOLDS_TOLD_FILE="$SYNC_REPO/.send-holds-told"
 # Where a version dropped by an automatic conflict resolution is kept (claude-config#183). Outside
 # the mirrored config on purpose: under $CLAUDE_HOME it would become exactly the stale file nobody
 # deletes that #177 exists to stop leaving behind, and it would then travel to the other Mac.
@@ -11473,10 +11482,90 @@ send_hold_back_path(){   # $1 = path relative to the repo
   return 0
 }
 
+# The name a suite's verdict and kept output are filed under: its basename, and for one section of a
+# suite the basename and a short digest of the section's title (#809). One function, because the
+# verdict, the kept output and the hold that names that output must agree on it (claude-config#3176).
+send_suite_key(){   # $1 = suite path, or <suite path>::<section title>
+  local path="${1%%::*}" key
+  key="$(basename "$path")"
+  case "$1" in *::*) key="$key@$(printf '%s' "${1#*::}" | shasum -a 256 2>/dev/null | cut -c1-12)" ;; esac
+  printf '%s' "$key"
+}
+
+# How a suite is named in a sentence, and the command that runs it by hand: a section is named as the
+# check it is, inside its suite, with the command that runs it alone; a whole suite keeps the wording
+# it has always had (#809). Sets SEND_SUITE_NAME and SEND_SUITE_RERUN.
+send_suite_words(){   # $1 = suite path, or <suite path>::<section title>
+  local path="${1%%::*}" title
+  case "$1" in
+    *::*) title="${1#*::}"
+          SEND_SUITE_NAME="the check '$title' in $(basename "$path")"
+          SEND_SUITE_RERUN="SECTION_ONLY='$title' bash $path" ;;
+    *)    SEND_SUITE_NAME="$(basename "$path")"
+          case "$path" in
+            "$SYNC_REPO"/payload/hooks/*) SEND_SUITE_RERUN="bash $CLAUDE_HOME/hooks/$(basename "$path")" ;;
+            *) SEND_SUITE_RERUN="bash $path" ;;
+          esac ;;
+  esac
+}
+
+# Keep what a run printed when it failed or was stopped, replacing that suite's last kept output, and
+# remove it once the suite passes, so the store holds at most one file per suite and never outgrows
+# the suites there are (claude-config#3176). A run whose output could not be captured removes the
+# older file too: left in place, the hold would point at the output of a different run.
+send_output_keep(){   # $1 = suite key  $2 = the captured output, or /dev/null  $3 = pass|fail|timeout
+  local kept="$SEND_OUTPUT_DIR/$1.log"
+  if [ "$3" = pass ] || [ "$2" = /dev/null ]; then
+    rm -f "$kept" 2>/dev/null || true
+    [ "$2" = /dev/null ] || rm -f "$2" 2>/dev/null || true
+    return 0
+  fi
+  if mkdir -p "$SEND_OUTPUT_DIR" 2>/dev/null && mv -f "$2" "$kept" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$2" "$kept" 2>/dev/null || true
+  echo "claude-sync: could not keep what $1 printed in $SEND_OUTPUT_DIR, so the hold below cannot point at it." >&2
+  return 0
+}
+
+# A standing hold is said by the watcher once, then again only when the hold changes (the suite, the
+# reason, the files, or the inputs it was measured on), when it clears, or once a day while it stands,
+# so a hold nobody acts on is never silenced for good (claude-config#3179, L523). The clock is read
+# through SYNC_SEND_HOLD_NOW when a test sets it, and is the real clock otherwise.
+SEND_HOLD_RETELL_SECONDS=86400
+send_hold_now(){
+  case "${SYNC_SEND_HOLD_NOW:-}" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$SYNC_SEND_HOLD_NOW" ;; esac
+}
+send_hold_told_recently(){   # $1 = suite  $2 = the hold as said  $3 = now -> 0 when it was said within the day
+  local when
+  [ -f "$SEND_HOLDS_TOLD_FILE" ] || return 1
+  when="$(awk -F'\t' -v s="$1" -v k="$2" '$2 == s && $4 == k { print $1 }' "$SEND_HOLDS_TOLD_FILE" 2>/dev/null | tail -1)"
+  case "$when" in ''|*[!0-9]*) return 1 ;; esac
+  [ $(( $3 - when )) -lt "$SEND_HOLD_RETELL_SECONDS" ]
+}
+# One line per suite, REPLACED rather than appended, and a line older than the retell window is
+# dropped on every write: a hold still standing is said again within that window, which rewrites it,
+# so an older line belongs to a hold nobody is judging any more, and the file stays one line per
+# suite at most (L191).
+send_hold_told_write(){   # $1 = suite  $2 = now  $3 = files, unit separated  $4 = the hold as said; no $4 removes the suite
+  local tmp
+  tmp="$(scratch_file)" || return 0
+  if [ -f "$SEND_HOLDS_TOLD_FILE" ]; then
+    awk -F'\t' -v s="$1" -v now="$2" -v w="$SEND_HOLD_RETELL_SECONDS" \
+      '$2 != s && $1 ~ /^[0-9]+$/ && now - $1 < w' "$SEND_HOLDS_TOLD_FILE" > "$tmp" 2>/dev/null || : > "$tmp"
+  else
+    : > "$tmp"
+  fi
+  [ -z "${4:-}" ] || printf '%s\t%s\t%s\t%s\n' "$2" "$1" "$3" "$4" >> "$tmp"
+  mv -f "$tmp" "$SEND_HOLDS_TOLD_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 SEND_GATE_TOLD=""   # the holds this run has already said, one per line (claude-config#1403)
 send_hook_tests(){
   local f base suite out pairs rc=0 ran=0 reused=0 uncovered="" limit pid started now killed
   local digest verdict failed_suites="" timed_out_suites="" files p why
+  local passed_suites="" suite_digests="" told_now
   case "${SYNC_NO_SEND_TESTS:-0}${SYNC_NO_HOOK_TESTS:-0}" in *1*) return 0 ;; esac
 
   # What this send is about to publish. `add -A` first, so the comparison is against the index the
@@ -11589,8 +11678,7 @@ LOOP_INPUT
     # A section is <suite path>::<title>; anything else is a whole suite.
     path="${suite%%::*}"; title=""
     case "$suite" in *::*) title="${suite#*::}" ;; esac
-    key="$(basename "$path")"
-    [ -z "$title" ] || key="$key@$(printf '%s' "$title" | shasum -a 256 2>/dev/null | cut -c1-12)"
+    key="$(send_suite_key "$suite")"
     # A declared scan's verdict rests on everything in its scope and on its own text as well as on
     # the hooks, so its key folds those in; a scope change must re-run it (L40, L336).
     sdigest="$digest"
@@ -11602,6 +11690,10 @@ LOOP_INPUT
                     shasum -a 256 "$path" 2>/dev/null; } | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
       case "$sdigest" in ''|*[!0-9a-f]*) sdigest="" ;; esac
     fi
+    # What the hold below is said against: the same inputs the verdict is remembered against, so a
+    # changed input is a new hold and an unchanged one is the hold already said (claude-config#3179).
+    suite_digests="$suite_digests$suite	$sdigest
+"
     verdict="$(send_verdict_recall "$key" "$sdigest")"
     if [ -n "$verdict" ]; then
       reused=$(( reused + 1 ))
@@ -11647,7 +11739,7 @@ LOOP_INPUT
       else
         verdict=fail
       fi
-      [ "$out" = "/dev/null" ] || rm -f "$out" 2>/dev/null || true
+      send_output_keep "$key" "$out" "$verdict"
       # A stopped run is remembered and holds its hooks back like a failure, and deliberately so:
       # what the remembered verdict has to survive is a change to the inputs, and a deadline that
       # fired once will fire again on the same bytes on the same machine. It keeps its own word
@@ -11655,6 +11747,8 @@ LOOP_INPUT
       send_verdict_record "$key" "$sdigest" "$verdict"
     fi
     case "$verdict" in
+      pass) passed_suites="$passed_suites$suite
+" ;;
       fail) failed_suites="$failed_suites$suite
 " ;;
       timeout) failed_suites="$failed_suites$suite
@@ -11704,20 +11798,9 @@ HELD
       # different sentence naming the file cannot answer between them about which hook is waiting
       # (L178, L80). A suite stopped at its deadline says so in its own words: the remedy for one
       # that hung is not the remedy for one that is red (L11, #464).
-      # A section is named as the check it is, inside its suite, with the command that runs it
-      # alone; a whole suite keeps the wording it has always had (#809).
-      local name rerun
-      path="${suite%%::*}"
-      case "$suite" in
-        *::*) title="${suite#*::}"
-              name="the check '$title' in $(basename "$path")"
-              rerun="SECTION_ONLY='$title' bash $path" ;;
-        *)    name="$(basename "$path")"
-              case "$path" in
-                "$SYNC_REPO"/payload/hooks/*) rerun="bash $CLAUDE_HOME/hooks/$(basename "$path")" ;;
-                *) rerun="bash $path" ;;
-              esac ;;
-      esac
+      local name rerun kept seewhy
+      send_suite_words "$suite"
+      name="$SEND_SUITE_NAME"; rerun="$SEND_SUITE_RERUN"
       why="$name fails here"
       # Whole lines, so a suite whose path ends another's cannot answer for it.
       case "
@@ -11739,7 +11822,27 @@ $told_key
 "*) continue ;; esac
       SEND_GATE_TOLD="$SEND_GATE_TOLD
 $told_key"
-      echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
+      # And said once across the watcher's passes (claude-config#3179): a hold the watcher has said
+      # is said again only when it changes, which includes the inputs it was measured on, so a fix
+      # tried and still red is news, or once it has stood a day. A send a person runs is always told,
+      # because it is answering them, and it records nothing, so the watcher's log still gets the
+      # hold once. The hold itself is unchanged either way: only whether it is said again.
+      if [ "${SYNC_IN_WATCH:-0}" = "1" ]; then
+        local said_key
+        said_key="$told_key|$(awk -F'\t' -v s="$suite" '$1 == s { print $2; exit }' <<< "$suite_digests")"
+        [ -n "${told_now:-}" ] || told_now="$(send_hold_now)"
+        send_hold_told_recently "$suite" "$said_key" "$told_now" && continue
+        send_hold_told_write "$suite" "$told_now" "$(printf '%s' "$files" | tr '\n' '\037')" "$said_key"
+      fi
+      # What the run that judged it printed, kept by name (claude-config#3176). A remembered verdict
+      # points at the output of the run that reached it; with none kept, the hand run is all there is.
+      kept="$SEND_OUTPUT_DIR/$(send_suite_key "$suite").log"
+      if [ -f "$kept" ]; then
+        seewhy="What it printed is kept in $kept, and it runs again with: $rerun."
+      else
+        seewhy="Run it to see why: $rerun."
+      fi
+      echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. $seewhy The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
       # The reason FIRST and the files as a count after it: the banner shows a line or two, and the
       # file list in front pushed the reason off it: on 2026-10-16 it showed 27 lesson file names and
       # never a word that a test had failed (claude-config#1240, L79). The full list is on the line above, in the log.
@@ -11754,6 +11857,28 @@ $told_key"
     done <<FAILED
 $failed_suites
 FAILED
+  fi
+
+  # A hold the watcher said, whose suite passes now, is said to have cleared, once, and forgotten
+  # (claude-config#3179). Only a suite judged green in this run clears its hold: one this run did not
+  # judge may simply have had nothing staged in this pass, and calling that cleared would say so
+  # between the two commits of one send and then say the hold again on the next pass.
+  if [ -n "$passed_suites" ] && [ -s "$SEND_HOLDS_TOLD_FILE" ]; then
+    local told_lines rec_when rec_suite rec_files rec_key
+    told_lines="$(cat "$SEND_HOLDS_TOLD_FILE" 2>/dev/null)" || told_lines=""
+    while IFS="$(printf '\t')" read -r rec_when rec_suite rec_files rec_key; do
+      [ -n "$rec_suite" ] || continue
+      case "
+$passed_suites" in *"
+$rec_suite
+"*) ;; *) continue ;; esac
+      send_suite_words "$rec_suite"
+      [ -n "${told_now:-}" ] || told_now="$(send_hold_now)"
+      echo "claude-sync: $SEND_SUITE_NAME passes here now, so it is no longer holding back $(comma_list "$(printf '%s' "$rec_files" | tr '\037' '\n' | sed 's|^payload/||; s|^hooks/||')")."
+      send_hold_told_write "$rec_suite" "$told_now"
+    done <<TOLD
+$told_lines
+TOLD
   fi
 
   [ "$ran" -gt 0 ] && echo "claude-sync: ran $ran suite(s) covering the hook(s) in this send."

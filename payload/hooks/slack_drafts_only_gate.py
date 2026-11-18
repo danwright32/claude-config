@@ -884,10 +884,15 @@ PY_RUNS = frozenset({"exec", "eval", "compile", "execfile", "__import__", "break
 # Python finds modules, or evaluate a string as code: sys.modules, sys.path, a frame's f_globals,
 # typing's forward references, and string.Formatter, which reads the attributes a string names
 # ("{0.__globals__[os]}") and hands what it finds to get_field's caller or a subclass's format_field
-# (claude-config#3119). Any _private attribute and any dunder one counts too (py_acts).
+# (claude-config#3119). And three that ran on Python 3.14.4 (claude-config#3151): bltns, the name enum
+# binds builtins by (3.12 and later), which no reading by a module's own name sees (the code loaders
+# suite walks every inert module for the next such name); sys.breakpointhook, which imports and calls
+# whatever PYTHONBREAKPOINT names; and sys.remote_exec (3.14), which runs a file in a Python process,
+# the script's own included. Any _private attribute and any dunder one counts too (py_acts).
 PY_REACH = frozenset({"modules", "path_hooks", "meta_path", "path_importer_cache", "f_globals",
                       "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
-                      "get_type_hints", "ForwardRef", "evaluate_forward_ref", "Formatter"})
+                      "get_type_hints", "ForwardRef", "evaluate_forward_ref", "Formatter", "bltns",
+                      "breakpointhook", "remote_exec"})
 PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # Methods that write or move a file (pathlib's), beside open() and argparse.FileType with a mode
 # that writes.
@@ -6400,8 +6405,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
         It is unable to only when every module it imports from outside the script's own files is in
         PY_INERT, and it uses no builtin in PY_RUNS, no attribute in PY_REACH (or any _private or
-        dunder one bar PY_DUNDER_OK), no sys.path, no PY_WRITES method, and no open() or FileType
-        whose mode writes. A module given another name is read through that name as through the
+        dunder one bar PY_DUNDER_OK), no sys.path (by any name sys goes by, claude-config#3151), no
+        PY_WRITES method, and no open() or FileType whose mode writes. A module given another name
+        is read through that name as through the
         imported one, and a module put where the next use of it cannot be read counts as acting
         (py_follow, claude-config#3102). A local module it imports is not judged here: modules() reaches it and
         acts() judges it with this same reading, imported True, and an import placed nowhere is
@@ -6488,7 +6494,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # A name such a module is bound to beyond its import is read the same way, and a module put
         # where the gate does not follow it is refused once everything else has been read
         # (lib/py-aliases.py, claude-config#3102).
-        renamed, handed_on = py_follow(nodes, local)
+        renamed, handed_on, as_sys = py_follow(nodes, local)
         bound |= renamed
         exposed = _py_aliases.os_exposed(nodes, imported)
         if exposed:
@@ -6523,7 +6529,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return "can write a file (open, passed on rather than called)"
             elif isinstance(node, ast.Attribute):
                 a = node.attr
-                if isinstance(node.value, ast.Name) and node.value.id == "sys" and a == "path":
+                # sys.path by the name sys, by any other name sys goes by (`import sys as s`,
+                # `q = sys`), and read off anything's attribute called sys: glob.sys, and
+                # pathlib.PurePath("x").parser.sys from a value the gate does not follow
+                # (claude-config#3151). A field called sys is still a field: only its path is read.
+                if a == "path" and (
+                        (isinstance(node.value, ast.Name) and (node.value.id == "sys" or node.value.id in as_sys))
+                        or (isinstance(node.value, ast.Attribute) and node.value.attr == "sys")):
                     return "changes where Python finds modules (sys.path)"
                 if a in PY_REACH or (a.startswith("_") and a not in PY_DUNDER_OK):
                     return f"reaches past what the gate reads ({a})"

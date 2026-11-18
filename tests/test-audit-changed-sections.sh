@@ -93,6 +93,27 @@ grep -qi 'unchanged' <<< "$o1" \
   && check "and says it had nothing to run, not that everything passed" ok \
   || check "and says it had nothing to run, not that everything passed" "out=$o1"
 
+# --- only the file's mode changed (claude-config#3180 committed every suite as 100755): git diff
+#     lists the file, but no line of it changed, so there is no section to run. Dan's decision of
+#     2026-11-17: say so and pass, judged by the content's own fingerprint, never by the diff being
+#     empty of hunks, so a content change cannot pass this way.
+R1m="$(mkrepo modeonly)"
+chmod +x "$R1m/tests/test-claude-sync.sh"
+o1m="$(run "$R1m")"; c1m=$?
+[ "$c1m" -eq 0 ] && check "#3180 a suite whose mode alone changed exits clean" ok \
+                 || check "#3180 a suite whose mode alone changed exits clean" "exit=$c1m out=$o1m"
+grep -q 'only its mode changed' <<< "$o1m" \
+  && check "#3180 and says only its mode changed, not that sections passed" ok \
+  || check "#3180 and says only its mode changed, not that sections passed" "out=$o1m"
+# The control: a mode change with a content edit beside it still audits the edited section.
+R1c="$(mkrepo modeandedit)"
+chmod +x "$R1c/tests/test-claude-sync.sh"
+perl -pi -e 's/^echo b$/echo b-edited/' "$R1c/tests/test-claude-sync.sh"
+o1c="$(run "$R1c")"
+grep -q 'LISTED beta' <<< "$o1c" \
+  && check "#3180 a mode change beside a content edit still audits the edited section" ok \
+  || check "#3180 a mode change beside a content edit still audits the edited section" "out=$o1c"
+
 # --- one section edited: exactly that one is run, and the others are not.
 R2="$(mkrepo oneedit)"
 perl -pi -e 's/^echo b$/echo b-edited/' "$R2/tests/test-claude-sync.sh"
