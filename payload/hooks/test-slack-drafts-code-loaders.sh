@@ -19,7 +19,8 @@
 # a chain from a value the gate does not follow, and os under another name in a module the script
 # imports or a class body. And three narrow passes, each with the cases beside it that stay refused:
 # a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
-# (#3146), and ast, io and gzip in a read only script (#3103). Every other
+# (#3146), and ast, io and gzip in a read only script (#3103). And a command inside a process
+# substitution, or handed one as the file it runs (#3213). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -2480,6 +2481,94 @@ run_72 "python3 name-bltns.py msg.json"
 says "#3172 a name that is builtins is not said to evaluate a string" "reaches past what the gate reads (bltns)"
 run_72 "python3 name-forwardref.py msg.json"
 says "#3172 a typing name still says it evaluates a string as code" "can evaluate a string as code (ForwardRef)"
+
+echo
+echo "slack drafts only: a command inside a process substitution is judged as a command of its own (claude-config#3213)"
+
+# Measured 2026-11-18 on the branch for #3155: `cat <(bash posts.sh)`, `echo <(bash posts.sh)` and
+# `cat posts.sh > >(bash)` each passed, while `bash posts.sh` alone is refused. The shared reader
+# gave the gate no command for what is written inside <( ), >( ) or zsh's =( ), so nothing judged it.
+# Where each runs, measured the same day (bash 3.2.57, zsh 5.9): anywhere outside quotes in a
+# command's words, mid word and after an escaped backslash too, in an array's words, and in bash in
+# the word of an unquoted ${NAME:-word}; =( ) only at the start of a word. Inside double or single
+# quotes it is text. A shell inside one reads what feeds the command around it (`echo CODE | cat
+# <(bash)` ran CODE in bash), so a program that runs its input there reads text the gate cannot see.
+D13="$T/d3213"
+mkdir -p "$D13"
+run_13() { run_raw "$(payload Bash "$(bash_input "$1")" "$D13")"; }
+printf '%s\n' "$POST" > "$D13/posts.sh"
+printf '%s\n' 'echo ok' > "$D13/ok.sh"
+printf '%s\n' 'cat <(bash posts.sh)' > "$D13/runner.sh"
+printf '%s\n' 'cat posts.sh > >(bash)' > "$D13/feeder.sh"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"text=hi")' > "$D13/posts.py"
+printf '%s\n' 'url = "https://slack.com/api/chat.postMessage"' 'data = "text=hi"' > "$D13/curlrc"
+printf '%s\n' 'bash <(cat posts.sh)' > "$D13/handed.sh"
+printf '%s\n' 'source <(sort a.txt)' 'echo sourced' > "$D13/sourced.sh"
+printf '%s\n' 'import sys' 'print(open(sys.argv[1]).read())' > "$D13/ok.py"
+printf '%s\n' 'while read -r l; do echo "$l"; done < <(sort a.txt)' 'diff <(sort a.txt) <(sort b.txt) || true' > "$D13/reads.sh"
+printf '%s\n' 'b' 'a' > "$D13/a.txt"
+printf '%s\n' 'c' 'a' > "$D13/b.txt"
+run_13 "bash posts.sh"
+read_refused "#3213 the yardstick: the script that posts is refused run on its own"
+for runs in "cat <(bash posts.sh)" "echo <(bash posts.sh)" "diff <(bash posts.sh) <(echo x)" "diff <(echo x) <(bash posts.sh)" \
+  "echo hi | tee >(bash posts.sh)" "cat < <(bash posts.sh)" "while read -r l; do echo \"\$l\"; done < <(bash posts.sh)" \
+  "cat <(cat <(bash posts.sh))" "cat <($POST)" "cat <(echo x; bash posts.sh)" "cat <(echo x && bash posts.sh)" \
+  "a=( <(bash posts.sh) ); echo \"\${a[0]}\"" "echo \${x:-<(bash posts.sh)}" "cat =(bash posts.sh)" "a=( =(bash posts.sh) )" \
+  "echo x<(bash posts.sh)" "echo \\\\<(bash posts.sh)" "bash -c 'cat <(bash posts.sh)'" "bash runner.sh" \
+  "echo \"\$(cat <(bash posts.sh))\"" "(cat <(bash posts.sh))" "sort a.txt > >(bash posts.sh)" "cat <(sort a.txt) <(bash posts.sh) b.txt" \
+  "cat <(cat posts.sh | bash)" "cat <(bash < posts.sh)" "case \$x in <(bash posts.sh)) echo y ;; esac"; do
+  run_13 "$runs"
+  read_refused "#3213 a script that posts is refused run inside a process substitution: $runs"
+done
+# A shell or an interpreter with no script reads its input, and inside a process substitution that is
+# whatever feeds it or the command around it, which the gate does not work out: refused as unread.
+for runs in "cat posts.sh > >(bash)" "cat posts.sh > >(sh)" "cat posts.sh | tee >(bash)" "tee >(bash) < posts.sh" \
+  "cat posts.sh | cat <(bash)" "cat posts.sh > >(true; bash)" "cat posts.sh > >(bash -c 'bash')" "cat posts.sh > >(python3)" \
+  "bash feeder.sh" "cat curlrc > >(curl -K -)"; do
+  run_13 "$runs"
+  read_refused "#3213 a program that runs its input is refused inside a process substitution: $runs"
+  says "#3213 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# The wrapper in front of the rule starts python only for a payload that could post. A shell that
+# closes a ( ) has no space after it, so with a file of no extension nothing in the payload named a
+# script or a shell the wrapper knew, and the call never reached the rule.
+printf '%s\n' "$POST" > "$D13/posts"
+for runs in "cat posts > >(bash)" "cat posts > >(sh)" "cat posts | tee >(zsh)" "cat posts > >(true; bash )"; do
+  run_13 "$runs"
+  read_refused "#3213 a shell closing a process substitution reaches the rule with no script named: $runs"
+  says "#3213 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# A process substitution handed to a program as the file it runs or reads its request from: the
+# program runs what the commands inside print. One command the gate reads the output of, as it does
+# for a pipe (cat of a file, echo or printf of written text), is judged by that output.
+for runs in "bash <(cat posts.sh)" "source <(cat posts.sh)" ". <(cat posts.sh)" "bash < <(cat posts.sh)" "python3 <(cat posts.py)" \
+  "curl -K <(cat curlrc)" "zsh =(cat posts.sh)" "bash <(echo 'bash posts.sh')" "bash -x <(cat posts.sh)" "env bash <(cat posts.sh)" \
+  "bash handed.sh" "cat <(bash <(cat posts.sh))"; do
+  run_13 "$runs"
+  read_refused "#3213 a program handed a process substitution that prints a script that posts is refused: $runs"
+  says "#3213 and the refusal names what it prints: $runs" "prints"
+done
+# Anything else it prints cannot be read before it runs, and is refused as unread.
+for runs in "sh <(sort posts.sh)" "bash <(cat posts.sh | grep -v x)" "bash <(echo x; cat posts.sh)" "source <(sed 1q posts.sh)" \
+  "bash -c 'bash <(cat posts.sh)'" "bash <(cat <(cat posts.sh))"; do
+  run_13 "$runs"
+  read_refused "#3213 a program handed a process substitution whose output cannot be read is refused: $runs"
+  says "#3213 and the refusal says it cannot be read: $runs" "cannot be read before the command runs"
+done
+# The controls: what is run inside is judged by what it is, so a command that passes on its own still
+# passes inside one, and quoted text that only looks like one is text.
+run_13 "bash ok.sh"
+allowed "#3213 the control's yardstick: a script that posts nothing passes run on its own"
+for runs in "cat <(echo hi)" "diff <(sort a.txt) <(sort b.txt)" "cat <(bash ok.sh)" "echo hi | tee >(cat) > /dev/null" \
+  "sort a.txt > >(head -1)" "while read -r l; do echo \"\$l\"; done < <(sort a.txt)" "cat <(bash -n posts.sh)" \
+  "echo \"<(bash posts.sh)\"" "echo '<(bash posts.sh)'" "echo \"\${x:-<(bash posts.sh)}\"" "a=(one two); echo \"\${a[1]}\"" \
+  "cat =(sort a.txt)" "comm -12 <(sort a.txt) <(sort b.txt) | wc -l" "echo \$(( 3 < (2) ))" \
+  "cat <(cat ok.sh | bash)" "cat <(bash < ok.sh)" "bash reads.sh" \
+  "bash <(cat ok.sh)" "source <(cat ok.sh)" "bash < <(cat ok.sh)" "bash <(echo 'echo hi')" "python3 ok.py <(sort a.txt)" \
+  "bash ok.sh <(sort a.txt)" "python3 -c 'print(1)' <(sort a.txt)" "bash sourced.sh" "sort <(cat posts.sh)"; do
+  run_13 "$runs"
+  allowed "#3213 a process substitution that runs nothing that posts still passes: $runs"
+done
 
 echo
 

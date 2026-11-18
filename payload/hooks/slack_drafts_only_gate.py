@@ -1416,6 +1416,9 @@ SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec",
 SH_PARAM = re.compile(r"\$(?:\{([^{}]*)\}|([A-Za-z_]\w*|[0-9@*#?$!-]))")
 # Where a redirection starts in a command's text, its target the word after it.
 SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
+# Where the input of a program inside a process substitution comes from, when it is given no pipe or
+# file of its own there, as a refusal words it (fed_pieces, fed_reason; claude-config#3213).
+PROC_FEED = "what feeds the process substitution it is in"
 # A directory the resolver does not know (claude-config#2465): where a command runs when that is not
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
@@ -2212,8 +2215,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # pipe as what the program reads (lessons review at c6111a2).
         redirs = [(op, t) for op, t in self.redirections(text)[1] if re.fullmatch(r"0?(<<<|<<-|<<|<>|<&|<)", op)]
         ins = [op.lstrip("0") for op, _ in redirs]
-        if any(op in ("<<", "<<-") for op in ins) or not (ins or self.shell.get("after_pipe")):
+        fed = ins or self.shell.get("after_pipe")
+        # Inside a process substitution with no pipe or file of its own it reads what feeds the
+        # substitution, or the command around it, which is not worked out (claude-config#3213).
+        if any(op in ("<<", "<<-") for op in ins) or not (fed or self.shell.get("in_proc")):
             return False
+        if not fed:
+            return [("unknown", None, PROC_FEED)]
         pieces = self.stdin_of(d, text, whole, redirs)
         return [("unknown", None, "")] if pieces is None else pieces
 
@@ -2232,10 +2240,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             elif kind == "code":
                 hit = MARKER.search(value or "")
                 reason = f"{name} reads {label}, which names {hit.group(0)}" if hit else None
-            elif self.shell.get("on_disk"):
+            elif self.shell.get("on_disk") and label != PROC_FEED:
                 # In a script on disk, what cannot be worked out is the assembled-from-pieces case
                 # note_unreadable leaves alone; what such a script does with a file it is handed is
-                # judged where it is handed one (sh_stdin_acts).
+                # judged where it is handed one (sh_stdin_acts). Not what feeds a process
+                # substitution, which no reading here follows, on disk or typed (claude-config#3213).
                 continue
             elif unread:
                 reason = self.unfollow(unread(f", which comes from {label}" if label else ""))
@@ -5406,9 +5415,25 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # only over part of the text. every_command gives s's own commands in commands() order,
             # with a wrapper's commands after it at a depth of one or more; those take its place.
             try:
-                starts = [p["start"] for p in self.parsed(s, cwd)[1]]
+                parts = self.parsed(s, cwd)[1]
+                starts = [p["start"] for p in parts]
             except self.sw.Unreadable:
-                starts = []  # read by the crude cut, so no command's place is known
+                parts, starts = [], []  # read by the crude cut, so no command's place is known
+            # Where each process substitution of s is, <( ), >( ) or zsh's =( ) (claude-config#3213):
+            # the reader lists one with the substitutions of the command it is written in. A program
+            # inside one that runs its input reads what feeds it, or what feeds the command around it
+            # (`echo CODE | cat <(bash)` ran CODE in bash 3.2.57, measured 2026-11-18), which is not
+            # worked out here, so that input is unread (fed_pieces). And what the one command inside
+            # one prints is kept (proc_out), for a program handed it as the file it runs
+            # (handed_procs in lib/sh-walk-shapes.py): None for one holding more than one command.
+            procs = sorted({(a, b) for p in parts for a, b, _ in p["inner"] if s.startswith(("<(", ">(", "=("), a)})
+            outermost = []
+            for a, b in procs:
+                if not outermost or a >= outermost[-1][1]:
+                    outermost.append((a, b))
+            proc_starts = [a for a, _ in outermost]
+            proc_out = {}
+            in_proc, home = False, None
             k = 0
             # The positional parameters a `bash -c '...' _ a b` string's own commands see, while they
             # are being read (claude-config#2538): (the -c record's depth, its values), or None.
@@ -5418,6 +5443,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
+                    # Inside a process substitution, and so are the commands a wrapper in one runs,
+                    # which come after it at a depth of one or more (claude-config#3213). home is the
+                    # innermost one it is inside, and held what each one written in it prints.
+                    here = self.shell["at"]
+                    j = bisect.bisect_right(proc_starts, here) - 1 if procs and here is not None else -1
+                    in_proc = j >= 0 and here < outermost[j][1]
+                    home = max((p for p in procs if p[0] < here < p[1]), default=None) if in_proc else None
+                    held = None
+                    if procs and here is not None:
+                        held = [(s[a:b], proc_out.get((a, b))) for a, b in sorted(
+                            (a, b) for a, b, _ in parts[k - 1]["inner"] if s.startswith(("<(", "=("), a))]
+                    self.shell["procs_here"] = held
+                else:
+                    self.shell["procs_here"] = None
                 if pos and wdepth <= pos[0]:
                     pos = None  # past the string's commands
                 self.shell["positional"] = pos[1] if pos and wdepth == pos[0] + 1 else None
@@ -5444,6 +5483,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         fed = prev[0] < at and s[prev[0]:feeder].strip() == prev[1].strip()
                 self.shell["piped"] = fed
                 self.shell["after_pipe"] = after_pipe
+                self.shell["in_proc"] = in_proc
                 self.shell["outer"] = not wdepth
                 # A call of a function that evaluates its argument in this shell: what it evaluates,
                 # written out, is judged as a command line (#2912).
@@ -5455,6 +5495,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
+                    if home is not None:
+                        # What the process substitution it is in prints, where it is the only command
+                        # there: a second one, or one a wrapper runs, leaves that unknown (#3213).
+                        proc_out[home] = self.shell.get("last_out") if home not in proc_out else None
+                elif home is not None:
+                    proc_out[home] = None
                 if pos and wdepth == pos[0] + 1 and not self.sh_keeps_positional(text, d):
                     pos = (pos[0], [])  # shifted, set, or a sourced file that may do either
                 if wrapper.endswith(" -c") and wrapper.split()[0] in SHELLS:
@@ -5617,18 +5663,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not words:
             return None
         name = os.path.basename(words[0])
-        launcher = None
+        launcher, past = None, 0
         if name in LAUNCHERS or (name == "uv" and len(words) > 1 and words[1] == "run"):
             k = 2 if name == "uv" else 1
             launcher = name if name in LAUNCHERS else None
             while k < len(words) and words[k].startswith("-"):
                 k += 1
-            words = words[k:]
+            words, past = words[k:], k
             if not words:
                 return None
             if launcher:
                 words = [self.unversioned(words[0])] + words[1:]
             name = os.path.basename(words[0])
+        # A process substitution handed to the program as the file it runs (claude-config#3213).
+        reason = self.handed_procs(name, text, past, d, depth)
+        if reason:
+            return reason
         if name in PACKAGERS:
             return self.package(name, words, d, depth)
         if name == "bun" and words[1:2] == ["build"]:
@@ -7189,6 +7239,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return name
         return "js" if JS_RUNTIME.match(name) else None
 
+    def proc_runs(self, name):
+        """How the program name runs a file it is handed, for a process substitution written where
+        that file goes (handed_procs in lib/sh-walk-shapes.py, claude-config#3213): (which words,
+        whether it is read as shell commands, the language it is read as), or None for a program
+        that runs no file it is handed. The words are "script", the script word by the program's
+        option table and every word before it; "first", the file source or . reads; or "config",
+        the value of curl's -K or --config."""
+        if name in SHELLS:
+            return "script", True, None
+        if INTERPRETER.match(name):
+            return "script", False, "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else \
+                "php" if name == "php" else None
+        if name in ("source", "."):
+            return "first", True, None
+        if name in ("curl", "curlie"):
+            return "config", False, None
+        return None
+
     def operands(self, words, skipped=None):
         """(the script operand or None, the inline code or None, whether it reads its input).
 
@@ -7254,8 +7322,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         it ran with -n after it (an argument), and with +n or +o noexec after -n, which turn it off
         again, so any + option, any other letter (-c, -o, -i, -s), a long option and input read from
         a pipe or a redirection are each judged as before, as is a line holding a process
-        substitution (the caller's to ask), whose commands are not read apart as $( ) ones are, and a
-        command reached through a variable (why, the caller's too). A file word holding an expansion,
+        substitution (the caller's to ask), which stayed so when its commands came to be read apart
+        as $( ) ones are (claude-config#3213), and a command reached through a variable (why, the
+        caller's too). A file word holding an expansion,
         a quote or a pattern may become an option when it runs, and is judged as before. A
         redirection word is the shell's own."""
         if name not in SH_PARSE_ONLY:

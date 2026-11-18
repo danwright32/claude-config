@@ -84,6 +84,10 @@ RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])eval([^A-Za-z0-9_.]|$)'
 # curl handed a config file, which is the request it describes (claude-config#2887). Under nocasematch
 # -K also matches curl's -k, which only sends that call to python3.
 RUNS+='|\|&?[[:space:]]*(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_.-]|$)'
+# A shell that closes a ( ), which no space follows either: inside a process substitution it reads
+# what feeds that (`cat post > >(bash)`), and with a file of no extension nothing else in the payload
+# sent the call to python3 (claude-config#3213).
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([[:space:]]|\\[nrt])*\)'
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
 # call goes to python3 while one of the places curl reads one from holds a file, and so does a call
