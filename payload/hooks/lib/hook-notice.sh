@@ -20,21 +20,27 @@
 # Notification and SessionEnd as discarding it. So it is for PreToolUse, PostToolUse,
 # UserPromptSubmit, SessionStart, Stop and the like, never for those five.
 #
-# THAT RESTED ON THE DOCUMENTATION, NOT ON A SESSION WATCHED (claude-config#1924, #1949). Three
-# things it relies on were checked in real sessions on 2026-10-30:
-#   * A UserPromptSubmit systemMessage IS shown to the person. SEEN: suite-pile-notice's bad
-#     setting notice appeared on the first prompt as "UserPromptSubmit says: ..." and did not
-#     repeat on the second.
-#   * SessionEnd stderr with exit 2 at /clear: NOTHING WAS SHOWN, but that does not settle it. The
-#     check made ~/.claude-issue-spool read only (chmod 500) and /clear printed no
-#     issue-spool-session-end line. The stamp is written into its ended/ folder, which stayed
-#     writable, and both test sessions were stamped ended (18:10 and 18:11 ET), so the hook
-#     succeeded and had nothing to print. Whether exit 2 stderr reaches the person is still
-#     unseen, so issue-spool-session-end.sh no longer relies on it: it also leaves its failure for
-#     the next prompt to say, through hook_defer_notice and sync-stuck-notice.sh, which uses the
-#     channel that was seen. Checking it for real means making the ended/ folder read only.
-#   * Several PreToolUse hooks each giving a systemMessage on one call are all shown: NOT YET SEEN.
-#     The documentation is still the source for that one.
+# THAT RESTED ON THE DOCUMENTATION, UNTIL IT WAS WATCHED IN REAL SESSIONS (claude-config#1924,
+# #1949). Three things it relies on, each checked in a real session on the dates below:
+#   * A UserPromptSubmit systemMessage IS shown to the person. SEEN on 2026-10-30:
+#     suite-pile-notice's bad setting notice appeared on the first prompt as "UserPromptSubmit
+#     says: ..." and did not repeat on the second.
+#   * Several PreToolUse hooks each giving a systemMessage on one call are ALL shown. SEEN on
+#     2026-11-18 (Claude Code 2.1.327, Terminal, the personal MacBook): one push with
+#     SKIP_PR_REVIEW=1 drew five "PreToolUse:Bash says:" lines under the one call (the push gate's
+#     skip note, the bundle budget note, the duplication check note, the asset check note and the
+#     scanners' coverage line), and a second push drew the same five.
+#   * SessionEnd stderr with exit 2 at /clear is NOT SHOWN. Measured on 2026-11-18 on the same
+#     version. The first attempt, on 2026-10-30, could not settle it: it made ~/.claude-issue-spool
+#     read only, but the stamp is written into its ended/ folder, which stayed writable, so the
+#     hook succeeded and had nothing to print. The second, with ended/ itself made read only
+#     (chmod 500), showed no issue-spool-session-end line at a /clear at 11:00 AM ET, although the
+#     hook did fail (no stamp was written for that session). The failure marker was left, and the
+#     next prompt in another session said it once as a UserPromptSubmit systemMessage. So the
+#     stderr route reaches nobody at /clear and the marker route works: issue-spool-session-end.sh
+#     keeps its stderr line and exit 2, as the documentation directs and a later Claude Code may
+#     show, and leaves its failure for the next prompt to say through hook_defer_notice and
+#     sync-stuck-notice.sh.
 #
 # THE RULES IT KEEPS, each a way the call it allows could otherwise be refused once the hook carries
 # onFailure block (the documentation lists invalid output among the failures):
