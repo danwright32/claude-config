@@ -876,14 +876,87 @@ out="$(py render --record "$SLEEPDIR/ended/g22.json" 2>&1)"; rc=$?
 check_eq "a report path that cannot be read fails the render" 1 "$rc"
 has "naming the session" "aaaa1111" "$out"
 
+# ---- refusals with no verdict, folded into one counted line (#3158) ----
+# On the night of 16 Nov 2026 the report listed 340 rows of "Classifier unavailable", every one later
+# done, and the few that needed Dan would have been buried among them. The scope modes mod's refusal
+# note (classic.PermissionDenied in mods/scope-modes/hooks/register.ts) carries the reason as given,
+# noVerdict when auto mode's check gave none, the call's toolUseId, what it was and read when it only
+# reads; a redone note names the refusals a later identical call that ran made good. These lines are
+# shaped as that writer writes them.
+fold_at(){ echo $((SINCE + 60000 * $1)); }
+nv(){   # $1 = minute, $2 = tool use id, $3 = tool, $4 = what, $5 = ',"read":true' or ''
+  printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"%s","text":"the auto mode classifier refused %s: Classifier unavailable","reason":"Classifier unavailable","noVerdict":true,"toolUseId":"%s","what":"%s"%s,"generation":"%s"}\n' \
+    "$(fold_at "$1")" "$3" "$3" "$2" "$4" "$5" "$G"
+}
+G=g31
+record g31 '["aaaa1111"]' "$SLEEPDIR/ended/g31.json"
+{
+  nv 1 t1 Bash 'git status' ',"read":true'
+  nv 2 t2 Bash 'git log -5' ',"read":true'
+  nv 3 t3 Bash 'ls /r/repo' ',"read":true'
+  nv 4 t4 Bash 'mkdir -p /r/repo/out' ''
+  printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: [Git Destructive]","reason":"[Git Destructive]","toolUseId":"t5","what":"git reset --hard","generation":"g31"}\n' "$(fold_at 5)"
+  printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: [Git Destructive]","reason":"[Git Destructive]","toolUseId":"t5b","what":"git reset --hard","generation":"g31"}\n' "$(fold_at 5)"
+  printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: [Git Destructive]","reason":"[Git Destructive]","toolUseId":"t5c","what":"git reset --hard","generation":"g31"}\n' "$(fold_at 5)"
+  nv 6 t6 Bash 'cat a.txt' ',"read":true'
+  nv 7 t7 Bash 'git diff' ',"read":true'
+  nv 8 t8 Bash 'grep -n x a.txt' ',"read":true'
+  nv 9 t9 Bash 'git add a.txt' ''
+  nv 10 t10 Bash 'git commit -F msg.txt' ''
+  printf '{"v":1,"kind":"redone","at":%s,"by":"aaaa1111","tool":"Bash","redoes":["t4"],"text":"Bash ran after its refusal: mkdir -p /r/repo/out","generation":"g31"}\n' "$(fold_at 11)"
+  printf '{"v":1,"kind":"redone","at":%s,"by":"aaaa1111","tool":"Bash","redoes":["t9"],"text":"Bash ran after its refusal: git add a.txt","generation":"g31"}\n' "$(fold_at 12)"
+  nv 13 t13 Write '/r/repo/notes.txt' ''
+} > "$SLEEPDIR/notes/g31.jsonl"
+NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g31.json" >/dev/null 2>&1
+r="$(report_of g31)"
+pf="$(section_rows "$r" 'Parked and failed')"
+has "refusals with no verdict sharing one reason are one line: the reason, the count, the window and the kinds of call (#3158)" \
+  "10 calls were refused because auto mode's safety check gave no verdict (Classifier unavailable), from 11:43 PM ET to 11:55 PM ET: 9 commands and 1 file write. 6 only read and 2 were sent again unchanged and ran; the other 2 are listed next." "$pf"
+has "a refused commit never sent again is listed on its own, with what it was (#3158)" \
+  "Refused with no verdict at 11:52 PM ET and not sent again unchanged since: Bash: git commit -F msg.txt" "$pf"
+has "and so is a refused file write (#3158)" \
+  "Refused with no verdict at 11:55 PM ET and not sent again unchanged since: Write: /r/repo/notes.txt" "$pf"
+check_eq "a real refusal by the check is listed on its own as before, however many share its reason (#3158)" 3 \
+  "$(printf '%s\n' "$pf" | grep -c -x -F 'Failed a repo not named: the auto mode classifier refused Bash: [Git Destructive]')"
+check_eq "the section is the folded line, the two not done and the three real refusals, nothing else (#3158)" 6 "$(printf '%s\n' "$pf" | grep -c .)"
+lacks "a read is never listed on its own (#3158)" "git status" "$pf"
+lacks "a call sent again unchanged that ran is never listed on its own (#3158)" "git add a.txt" "$pf"
+lacks "a redone note is shown nowhere else (#3158)" "redone from" "$r"
+check_eq "the morning picker gets the same rows, folded the same way (#3158)" "$pf" \
+  "$(needs_rows "$SLEEPDIR/notes/g31.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
+has "the folded row carries the one session it came from (#3158)" "parked|aaaa1111||10 calls were refused" "$(needs_rows "$SLEEPDIR/notes/g31.needs.json")"
+
+# A night with one or two such refusals reads as it did before (#3158), each its own row.
+G=g32
+record g32 '["aaaa1111"]' "$SLEEPDIR/ended/g32.json"
+{
+  nv 1 u1 Bash 'git status' ',"read":true'
+  nv 2 u2 Bash 'git commit -F msg.txt' ''
+} > "$SLEEPDIR/notes/g32.jsonl"
+NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g32.json" >/dev/null 2>&1
+pf="$(section_rows "$(report_of g32)" 'Parked and failed')"
+check_eq "two refusals with no verdict are two rows, as before (#3158)" \
+  "Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable
+Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable" "$pf"
+
+# A note written before the mod recorded the reason (no noVerdict) is never folded, however many (#3158).
+G=g33
+record g33 '["aaaa1111"]' "$SLEEPDIR/ended/g33.json"
+for m in 1 2 3 4; do
+  printf '{"v":1,"kind":"failed","at":%s,"by":"aaaa1111","cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: Classifier unavailable","generation":"g33"}\n' "$(fold_at "$m")"
+done > "$SLEEPDIR/notes/g33.jsonl"
+NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g33.json" >/dev/null 2>&1
+check_eq "older refusal notes, with nothing to say whether each was done, are each still listed (#3158)" 4 \
+  "$(section_rows "$(report_of g33)" 'Parked and failed' | grep -c 'Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable')"
+
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 13 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 16 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
