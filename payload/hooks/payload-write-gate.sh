@@ -555,7 +555,9 @@ def copied_as_text(cmd):
 # (a function, alias, hash or PATH change) or wrapping (a compound command, exec, coproc, a process
 # substitution) anything, and every file it writes named plainly (no value or pattern only the shell
 # can work out) and not named again in the command. Where it writes, and a
-# redirect target written in quotes, are read as ever. Anything else keeps every line read.
+# redirect target written in quotes, are read as ever. Anything else keeps every line read. A
+# backquote inside the single quotes is text too, so only one outside them keeps the lines read
+# (claude-config#3184): Markdown text nearly always holds one.
 PRINTER = re.compile(r"\s*(?:printf|echo)(?=\s|$)")
 COMPOUND = re.compile(r"\s*(?:[{}]|then|do|done|fi|else|elif|if|while|until|for|case|esac|select|[A-Za-z_][A-Za-z0-9_-]*\s*\(\s*\))(?=\s|$|;|\()")
 RUNS_TEXT = re.compile(r"\b(?:eval|exec|coproc)\b|(?:^|[\s;&|(){}])(?:printf|echo)\s*\(\s*\)")
@@ -627,10 +629,17 @@ def printed_as_text(cmd):
         text = cmd[p["start"]:p["end"]]
         if p["scope"] != (0,) or p["inner"] or p["openers"] or not PRINTER.match(text):
             continue
-        if any(f in text for f in UNREAD_FORMS) or re.match(r"\s*printf(?:\s.*)?\s-v", text, re.S):
-            continue
         spans, files = single_quoted(text), written_files(text)
         if not spans or files is None:
+            continue
+        # A backquote inside single quotes is a character printed, not a substitution, so only one
+        # outside them stops the text being read as text (claude-config#3184). The other forms are
+        # looked for across the whole command, quotes included, as before.
+        unquoted = list(text)
+        for a, b in spans:
+            unquoted[a:b] = " " * (b - a)
+        if "`" in "".join(unquoted) or any(f in text for f in UNREAD_FORMS if f != "`") \
+                or re.match(r"\s*printf(?:\s.*)?\s-v", text, re.S):
             continue
         # A file named by a value or a pattern only the shell can work out may be the one run after.
         if any(re.search(r"[$`*?\[]", f) for f in files):
