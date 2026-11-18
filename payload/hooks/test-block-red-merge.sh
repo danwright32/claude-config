@@ -29,7 +29,19 @@ export MT_SIGNIN_LEDGER_DIR="$SLEEP_DIR/gh-signin"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "${BRM_SLEEP_LOG:-/dev/null}"\n' > "$SLEEP_DIR/fake-sleep"
 chmod +x "$SLEEP_DIR/fake-sleep"
 export BRM_SLEEP="$SLEEP_DIR/fake-sleep"
-unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS MWR_DELETE_BRANCH MT_GATE_READ_BUDGET_SECONDS 2>/dev/null || true
+unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS MWR_DELETE_BRANCH MT_GATE_READ_BUDGET_SECONDS 2>/dev/null || true
+# The retries' BUDGET is measured on the real clock from the hook's start (the shell's SECONDS), and
+# the fake sleep above stops none of that clock. So every case gets a budget no run of this suite can
+# spend, and a case counting retries counts retries, however loaded the Mac is (claude-config#3220:
+# at 7:27 PM ET on 2026-11-17 a loaded Mac spent the gate's own 12 seconds before a retry, and a case
+# expecting two waits saw one). The cases about the budget itself set it, unset it for the gate's
+# default, or set the hook's clock (clock_at, below), each saying which.
+export BRM_READ_BUDGET_SECONDS=3600
+# Starts the hook's clock N seconds in: bash reads BASH_ENV before the hook's first line, so SECONDS
+# there reads N plus the real time spent, and a budget can be tested spent without waiting for it.
+clock_at() {  # $1 = seconds ; prints a BASH_ENV file
+  printf 'SECONDS=%s\n' "$1" > "$SLEEP_DIR/clock-$1"; printf '%s' "$SLEEP_DIR/clock-$1"
+}
 passed=0
 failed=0
 
@@ -1537,6 +1549,29 @@ if denied "$out"; then pass; else fail "#1081 with no retry budget left a failed
 if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a retry was made past the budget ($(sleeps) waits)"; fi
 rm -f "$f"
 
+# The budget is TIME SPENT since the hook started, not a count (claude-config#3220). With the hook's
+# clock started 99 seconds into a 100 second budget, a 2 second retry would end past it and is not
+# made, whatever the speed of the Mac; the same read with the clock at its real start is asked again.
+# The pair is the control: without the clock, the first case's 0 is a 1.
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(BASH_ENV="$(clock_at 99)" BRM_READ_BUDGET_SECONDS=100 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && [ "$(sleeps)" = 0 ]; then pass; else fail "#3220 a retry was made with 99 of the budget's 100 seconds spent ($(sleeps) waits): $out"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(BRM_READ_BUDGET_SECONDS=100 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#3220 with the budget unspent a compare reset once refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#3220 with the budget unspent the compare was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+# The gate's own default, with no setting from the suite or the helper: a hook that has already spent
+# 11 seconds makes no 2 second retry, so the default is still at most 12 seconds of the hook's time.
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(unset BRM_READ_BUDGET_SECONDS; BASH_ENV="$(clock_at 11)" GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && [ "$(sleeps)" = 0 ]; then pass; else fail "#3220 the gate's default budget made a retry after 11 seconds spent ($(sleeps) waits): $out"; fi
+rm -f "$f"
+
 echo "block-red-merge: a refused sign in is asked again, and said as one (claude-config#1615)"
 # GitHub answering 401 to a request that carried no token, as it did to merge-when-ready.sh 1606 three
 # times at a load average of 342 on 2026-10-23, is asked again; one that outlasts the tries refuses in
@@ -1597,21 +1632,23 @@ rm -f "$f"
 
 echo "block-red-merge: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
 # Asked by merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a
-# retry 20 seconds out is refused inside this gate's own 12 and made inside 60, settings the test
-# chooses, not a measurement. A read that never answers still refuses either way.
+# retry 20 seconds out is refused inside this gate's own 12 and made inside the helper's, settings the
+# test chooses, not a measurement. A read that never answers still refuses either way. These cases
+# unset the suite's budget, so the gate's default and the helper's setting are what they read; the
+# helper's is 3600 here so that only the default, never the speed of the Mac, decides (#3220).
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
-out=$(BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+out=$(unset BRM_READ_BUDGET_SECONDS; BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
 if denied "$out" && [ "$(sleeps)" = 0 ]; then pass; else fail "#1615 a retry past the gate's own budget was made ($(sleeps) waits): $out"; fi
 rm -f "$f"
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
-out=$(MT_GATE_READ_BUDGET_SECONDS=60 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+out=$(unset BRM_READ_BUDGET_SECONDS; MT_GATE_READ_BUDGET_SECONDS=3600 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
 if denied "$out"; then fail "#1615 a retry inside the helper's budget was not made: $out"; else pass; fi
 if [ "$(sleeps)" = 1 ]; then pass; else fail "#1615 the retry inside the helper's budget was not waited for once ($(sleeps) waits)"; fi
 rm -f "$f"
 : > "$BRM_SLEEP_LOG"
-out=$(MT_GATE_READ_BUDGET_SECONDS=60 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAIL=1 run_hook "$dir" "$PINNED")
+out=$(unset BRM_READ_BUDGET_SECONDS; MT_GATE_READ_BUDGET_SECONDS=3600 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAIL=1 run_hook "$dir" "$PINNED")
 if denied "$out"; then pass; else fail "#1615 a compare that never answered was allowed inside the helper's budget: $out"; fi
 rm -rf "$dir"
 
