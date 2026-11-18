@@ -98,6 +98,8 @@ import {
   indexSource,
   scriptOf,
   scriptPath,
+  neverSetVariable,
+  scriptNeverSet,
   heredocFile,
   importedFiles,
   scriptsRunIn,
@@ -2842,6 +2844,65 @@ test('#2855: scriptPath follows a variable the command sets to one literal, and 
     ['x.sh', 'bash x.sh', undefined],
   ] as [string, string, string | undefined][])
     expect({ word, command, path: scriptPath(word, command, folder, '/h') }).toEqual({ word, command, path: undefined })
+})
+
+// #3214: `python3 $N/gen.py`, gen.py writing app/page.tsx and nothing in the command setting N, ran
+// unheld on 2026-11-18: scriptPath could not place the script, so the guard never read what it
+// writes. A script the guard cannot find it cannot read, so one spelled through a variable the
+// command never sets is given as unread, and the guard holds it as could not check.
+test('#3214: neverSetVariable names the variable a script word is spelled through that the command never sets', () => {
+  for (const [word, command] of [
+    ['$N/gen.py', 'python3 $N/gen.py'],
+    ['${N}/gen.py', 'cd /w && python3 "${N}/gen.py" --dry | sort -N'],
+    ['$N', 'bash $N'],
+    ['/n/$N/gen.py', 'python3 /n/$N/gen.py'],
+    ['$A/$N/gen.py', 'A=/n; python3 $A/$N/gen.py'],
+    ['${N:-/n}/gen.py', 'python3 "${N:-/n}/gen.py"'],
+    // A flag, a longer name and a value holding the name set nothing.
+    ['$N/gen.py', 'NN=/n; python3 $N/gen.py --N -N x=N'],
+  ] as [string, string][])
+    expect({ word, command, v: neverSetVariable(word, command) }).toEqual({ word, command, v: 'N' })
+  // Named outright, through HOME or PWD, through a parameter of the script, or through a variable
+  // the command names as a word of its own, so may set: to one literal (scriptPath places it), or
+  // any other way (a command's output, a loop, read, a default it assigns).
+  for (const [word, command] of [
+    ['/n/gen.py', 'python3 /n/gen.py'],
+    ['gen.py', 'cd "$SOMEWHERE" && python3 gen.py'],
+    ['$HOME/gen.py', 'python3 $HOME/gen.py'],
+    ['$PWD/gen.py', 'python3 $PWD/gen.py'],
+    ['$1', 'bash "$1"'],
+    ['$N/gen.py', 'N=/n; python3 $N/gen.py'],
+    ['$N/gen.py', 'export N=/n\npython3 "$N/gen.py"'],
+    ['$N/gen.py', 'N=$(pwd); python3 $N/gen.py'],
+    ['$N/gen.py', 'for N in /a /b; do python3 $N/gen.py; done'],
+    ['$N/gen.py', 'read -r N < f; python3 $N/gen.py'],
+    ['$N/gen.py', ': "${N:=/n}"; python3 $N/gen.py'],
+  ] as [string, string][])
+    expect({ word, command, v: neverSetVariable(word, command) }).toEqual({ word, command, v: undefined })
+})
+
+test('#3214: scriptsRunIn gives a script spelled through a variable the command never sets as unread, saying which', async () => {
+  const disk: Record<string, string> = { '/n/gen.py': "open('/w/app/page.tsx', 'w').write('x')\n", '/n/outer.sh': 'python3 "$TOOLS/gen.py"\n', '/n/set.sh': 'TOOLS=/n\npython3 "$TOOLS/gen.py"\n' }
+  const io: ScriptIo = {
+    pipeline: async (command, cwd) => pipelineIn(command, cwd, '/h'),
+    writes: async (command, cwd) => commandWrites(command, cwd, '/h'),
+    stat: async p => (p in disk ? { kind: 'file', size: (disk[p] ?? '').length } : undefined),
+    read: async p => disk[p] as string,
+  }
+  const said = async (command: string) => (await scriptsRunIn(io, command, '/w', '/h')).map(r => ('unread' in r ? `${r.word}: ${r.unread}` : `${r.word}: ${r.lang}`))
+  expect(await said('python3 $N/gen.py')).toEqual([`$N/gen.py: ${scriptNeverSet('$N/gen.py', 'N')}`])
+  expect(scriptNeverSet('$N/gen.py', 'N')).toBe('$N/gen.py could not be read for the files its own code writes (the command never sets N, so where the script is could not be followed)')
+  // Said once for a script run twice.
+  expect(await said('python3 "${N}/gen.py" && python3 "${N}/gen.py"')).toEqual([`\${N}/gen.py: ${scriptNeverSet('${N}/gen.py', 'N')}`])
+  // Still read: a folder the command, or the script, sets to one literal, and a script named outright.
+  expect(await said('N=/n; python3 $N/gen.py')).toEqual(['$N/gen.py: python'])
+  expect(await said('python3 /n/gen.py')).toEqual(['/n/gen.py: python'])
+  expect(await said('bash /n/set.sh')).toEqual(['/n/set.sh: shell', '$TOOLS/gen.py, which /n/set.sh runs,: python'])
+  // As before, not read and not given: a variable the command sets another way, a loop's, and one a
+  // shell script the command runs never sets in its own text (a file it sources, or what runs it, may).
+  expect(await said('N=$(pwd); python3 $N/gen.py')).toEqual([])
+  expect(await said('for d in /n; do python3 "$d/gen.py"; done')).toEqual([])
+  expect(await said('bash /n/outer.sh')).toEqual(['/n/outer.sh: shell'])
 })
 
 test('#2855: heredocFile gives the text cat writes from a heredoc into a file mod-kit places, and nothing it cannot be sure of', () => {

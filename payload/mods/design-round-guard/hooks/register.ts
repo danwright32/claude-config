@@ -719,7 +719,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // in such a script is not: over 14 days of this Mac's commands every one was usage text, a docstring
   // or a fixture for a scratch repository (make-switcher.py's `<out.html>`), never a write, where an
   // inline program's names are its own (#1151). A file its code names where the folder it runs in
-  // cannot be followed, or a script that cannot be read, is held as could not check. A script whose
+  // cannot be followed, or a script that cannot be read, is held as could not check, and so since
+  // #3214 is one that cannot be found, named through a variable the command never sets. A script whose
   // writes are not all named and whose text names the plugin store may write the guard's record,
   // refused as a command naming the store is.
   let scriptStore = false
