@@ -477,7 +477,7 @@ run "the same repo without the marker"  fire "$MERGE_CMD 42"
 # measurable where the suite runs from the claude-config checkout; the synced copy under
 # ~/.claude/hooks has no repo root above it, so there it says UNMEASURED rather than
 # passing or failing on a question it cannot answer (L411).
-own_root="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+own_root="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -n "$own_root" ] && [ -f "$own_root/payload/hooks/pr-merge-quiz.sh" ]; then
   if [ -f "$own_root/.no-pr-quiz" ]; then pass=$((pass+1)); else
     fail=$((fail+1)); echo "FAIL: claude-config does not carry .no-pr-quiz at its root"; fi

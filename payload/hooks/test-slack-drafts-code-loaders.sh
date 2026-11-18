@@ -20,7 +20,8 @@
 # imports or a class body. And three narrow passes, each with the cases beside it that stay refused:
 # a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
 # (#3146), and ast, io and gzip in a read only script (#3103). And a command inside a process
-# substitution, or handed one as the file it runs (#3213). Every other
+# substitution, or handed one as the file it runs (#3213). And a package script judged with the words
+# after its name (#3143). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -2576,6 +2577,124 @@ for runs in "cat <(echo hi)" "diff <(sort a.txt) <(sort b.txt)" "cat <(bash ok.s
   "bash ok.sh <(sort a.txt) ok.sh" "bash -o <(cat ok.sh) o"; do
   run_13 "$runs"
   allowed "#3213 a process substitution that runs nothing that posts still passes: $runs"
+done
+
+echo "slack drafts only: a package script is judged with the words after its name (claude-config#3143)"
+
+# Measured 2026-11-17 in a work repository: `npx playwright test --config c tests/x.spec.js` was refused,
+# the spec's imports reaching a module that names the webhook, while `npm run test:node -- tests/x.spec.js`,
+# whose script is that same `playwright test --config c`, passed. The words after a script's name were
+# never read, so a file handed to a package script ran unjudged. npm, pnpm and yarn add those words to
+# the end of the script's command, so the command is judged with them there as well as without, and a
+# program the script names bare, which the package manager finds in node_modules/.bin, is read for the
+# command they land in as npx reads it. Dan's decision, 2026-11-18: "Refuse both, then decide #3173".
+P43="$T/p3143"
+mkdir -p "$P43/tests" "$P43/scripts" "$P43/lib" "$T/q3143/tests"
+for d in "$P43" "$T/q3143"; do
+  printf '%s\n' '{"name": "fx", "version": "1.0.0", "scripts": {' \
+    '"test:node": "playwright test --config playwright.node.config.js",' \
+    '"test": "playwright test --config playwright.node.config.js",' \
+    '"test:own": "node scripts/run-tests.js",' \
+    '"check": "tsc --noEmit && playwright test",' \
+    '"ci": "npm run test:node --",' \
+    '"sub": "playwright test --config $(node scripts/noop.js)",' \
+    '"env": "cross-env NODE_ENV=test playwright test",' \
+    '"assign": "NODE_ENV=test playwright test",' \
+    '"own:spec": "playwright test tests/job.spec.js",' \
+    '"pretest:pre": "node scripts/run-tests.js", "test:pre": "node scripts/noop.js"}}' > "$d/package.json"
+  printf '%s\n' 'module.exports = { testDir: "tests" };' > "$d/playwright.node.config.js"
+  printf '%s\n' 'const { test } = require("@playwright/test");' 'test("adds", () => 1 + 1);' > "$d/tests/quiet.spec.js"
+done
+printf '%s\n' 'const url = process.env.SLACK_WEBHOOK;' \
+  'async function alert(t) { await fetch(url, { method: "POST", body: JSON.stringify({ text: t }) }); }' \
+  'module.exports = { alert };' > "$P43/lib/alert.js"
+printf '%s\n' 'const { alert } = require("./alert");' 'module.exports = { report: (t) => alert(t) };' > "$P43/lib/report.js"
+printf '%s\n' 'const { report } = require("../lib/report");' 'module.exports = { run: () => report("done") };' > "$P43/scripts/job.js"
+printf '%s\n' 'const { test } = require("@playwright/test");' 'const { run } = require("../scripts/job");' 'test("runs", () => run());' \
+  > "$P43/tests/job.spec.js"
+# The project's own test runner, started by node, which runs each file it is handed, and a script
+# that runs nothing it is handed.
+printf '%s\n' 'const path = require("path");' 'for (const f of process.argv.slice(2)) require(path.resolve(f));' > "$P43/scripts/run-tests.js"
+printf '%s\n' 'console.log(process.argv.length);' > "$P43/scripts/noop.js"
+run_p43() { run_raw "$(payload Bash "$(bash_input "$1")" "$P43")"; }
+# The two forms that were refused before and still are: the yardsticks every packager spelling is held to.
+for runs in "npx playwright test --config playwright.node.config.js tests/job.spec.js" "node scripts/run-tests.js tests/job.spec.js"; do
+  run_p43 "$runs"
+  read_refused "#3143 the yardstick: a spec whose imports reach code that posts is refused started this way: $runs"
+  says "#3143 and the refusal follows the imports to the module that posts: $runs" "alert.js"
+done
+# A bare runner handed the spec, in every spelling package() reads.
+for runs in "npm run test:node -- tests/job.spec.js" "npm run-script test:node -- tests/job.spec.js" "npm run test:node tests/job.spec.js" \
+  "npm test -- tests/job.spec.js" "npm --silent run test:node -- tests/job.spec.js" "npm --prefix $P43 run test:node -- tests/job.spec.js" \
+  "pnpm run test:node tests/job.spec.js" "pnpm test:node tests/job.spec.js" "pnpm run test:node -- tests/job.spec.js" \
+  "yarn test:node tests/job.spec.js" "yarn run test:node tests/job.spec.js" "cd $P43/tests && npm run test:node -- tests/job.spec.js"; do
+  run_p43 "$runs"
+  read_refused "#3143 a spec reaching code that posts is refused handed to a package script: $runs"
+  says "#3143 and the refusal follows the imports to the module that posts: $runs" "alert.js"
+  says "#3143 and it names the package script and the words after its name: $runs" "with the words after its name runs a command that posts: the package playwright, run by the package script test"
+done
+# The project's own runner started by node, the words landing in the last of two commands, a script
+# that hands them on to another, one with a substitution before them, a runner behind cross-env or an
+# assignment, and an option or another file before the file.
+for runs in "npm run test:own -- tests/job.spec.js" "pnpm test:own tests/job.spec.js" "yarn test:own tests/job.spec.js" \
+  "npm run check -- tests/job.spec.js" "npm run ci -- tests/job.spec.js" "pnpm test:node --headed tests/job.spec.js" \
+  "npm run sub -- tests/job.spec.js" "npm run env -- tests/job.spec.js" "yarn assign tests/job.spec.js" \
+  "npm run test:node -- --workers 1 tests/job.spec.js" "npm run test:node -- tests/quiet.spec.js tests/job.spec.js"; do
+  run_p43 "$runs"
+  read_refused "#3143 a spec reaching code that posts is refused in the other shapes a script takes: $runs"
+  says "#3143 and the refusal follows the imports to the module that posts: $runs" "alert.js"
+done
+# What still passes: the same spellings handed a spec that reaches nothing that posts, only an option,
+# or nothing at all (77 of the 478 runs measured on 2026-11-18 were handed only an option).
+for runs in "npx playwright test --config playwright.node.config.js tests/quiet.spec.js" \
+  "npm run test:node -- tests/quiet.spec.js" "npm run-script test:node -- tests/quiet.spec.js" "npm run test:node tests/quiet.spec.js" \
+  "npm test -- tests/quiet.spec.js" "npm --silent run test:node -- tests/quiet.spec.js" "npm --prefix $P43 run test:node -- tests/quiet.spec.js" \
+  "pnpm run test:node tests/quiet.spec.js" "pnpm test:node tests/quiet.spec.js" "pnpm run test:node -- tests/quiet.spec.js" \
+  "yarn test:node tests/quiet.spec.js" "yarn run test:node tests/quiet.spec.js" "cd $P43/tests && npm run test:node -- tests/quiet.spec.js" \
+  "npm run test:own -- tests/quiet.spec.js" "npm run check -- tests/quiet.spec.js" "npm run ci -- tests/quiet.spec.js" \
+  "npm run sub -- tests/quiet.spec.js" "npm run env -- tests/quiet.spec.js" "yarn assign tests/quiet.spec.js" \
+  "npm run test:node -- tests/quiet.spec.js > out.log 2>&1"; do
+  run_p43 "$runs"
+  allowed "#3143 a spec reaching nothing that posts still passes: $runs"
+done
+for runs in "npm run test:node -- --grep adds" "npm run-script test:node -- --headed" "npm test -- --reporter=list" \
+  "npm --silent run test:node -- --workers 1" "npm --prefix $P43 run test:node -- --headed" "npm run test:node --silent" \
+  "pnpm run test:node --headed" "pnpm test:node --grep adds" "pnpm run test:node -- --headed" "yarn test:node --headed" \
+  "yarn run test:node --workers 1" "cd $P43/tests && npm run test:node -- --headed" "npm run test:own -- --watch" \
+  "npm run check -- --headed" "npm run ci -- --headed"; do
+  run_p43 "$runs"
+  allowed "#3143 a package script handed only an option still passes: $runs"
+done
+for runs in "npm run test:node" "npm run-script test:node" "npm test" "npm --silent run test:node" "npm --prefix $P43 run test:node" \
+  "pnpm run test:node" "pnpm test:node" "yarn test:node" "yarn run test:node" "cd $P43/tests && npm run test:node" \
+  "npm run test:own" "npm run check" "npm run ci" "npm run test:pre" "npm run sub" "npm run env" "yarn assign"; do
+  run_p43 "$runs"
+  allowed "#3143 a package script handed nothing still passes: $runs"
+done
+# Only the words after the name are read as handed to a bare program: what the script's own command
+# writes after it is judged as it is with nothing after the name, so an option, or a spec reaching
+# nothing that posts, never changes the answer (lessons review at f916b1b: reading the whole command
+# refused `npm run own:spec -- --headed` over the spec own:spec itself names, which plain `npm run
+# own:spec` passed). The two are compared, so this holds whichever way that plain run is judged.
+run_p43 "npm run own:spec"
+plain_rc=$RC
+for runs in "npm run own:spec -- --headed" "pnpm own:spec --workers 1" "yarn own:spec --grep adds" \
+  "npm run own:spec -- tests/quiet.spec.js"; do
+  run_p43 "$runs"
+  if [ "$RC" -eq "$plain_rc" ]; then check "#3143 an option or a quiet spec after the name leaves the script's own words judged as before: $runs" ok
+  else check "#3143 an option or a quiet spec after the name leaves the script's own words judged as before: $runs" "exit $RC against $plain_rc for npm run own:spec alone, stderr: ${ERR:0:300}"; fi
+done
+run_p43 "npm run own:spec -- tests/job.spec.js"
+read_refused "#3143 and the same script handed the spec that reaches code that posts is refused"
+# The words go to the script itself, never to its pre script: pretest:pre is the runner that runs what
+# it is handed, and test:pre a script that runs nothing it is handed.
+run_p43 "npm run test:pre -- tests/job.spec.js"
+allowed "#3143 the words after the name are not handed to the pre script"
+# In a project whose specs reach nothing that posts, a whole suite run passes as before.
+for runs in "npm run test" "npm test" "npm run test:node" "npx playwright test --config playwright.node.config.js" \
+  "npm test -- tests/quiet.spec.js"; do
+  run_raw "$(payload Bash "$(bash_input "$runs")" "$T/q3143")"
+  allowed "#3143 a project whose specs reach nothing that posts passes as before: $runs"
 done
 
 echo

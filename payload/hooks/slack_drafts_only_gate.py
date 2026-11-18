@@ -21,7 +21,8 @@ Two routes are judged:
     BASH_SOURCE) is read as one named by a literal path is (claude-config#2678). A package script
     (`npm run digest`, pnpm, yarn,
     npm test) is followed through the nearest package.json, pre and post scripts included, and
-    judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
+    judged as the command line it runs, with the words after the script's name at its end
+    (claude-config#3143). The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
     judged the same way (claude-config#2318); an import written in a JavaScript or TypeScript comment
     is an example, not one (claude-config#2397). The variable name projects keep a webhook in is a name
@@ -1707,6 +1708,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # The shell that reads the next text line() reads, by name (None where it cannot be told), which
         # a file that text sources is read by (reading_shell, claude-config#2977).
         self.next_program = None
+        # Where the next text line() reads is a package script with the words after its name added to
+        # its end (package, claude-config#3143): (where those words start, what hands them), else None.
+        self.next_handed = None
         # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
@@ -5403,7 +5407,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # reader's words reached os.path and crashed the gate (claude-config#2892). Unfollowed:
             # no finding that it posts. A file bash refuses as binary never gets here (script_body).
             self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
-            self.next_zero = None
+            self.next_zero = self.next_handed = None
             return self.unfollow("it holds a NUL byte, which bash drops, zsh keeps inside a word and every "
                                  "program reads as the end of one, so what it runs cannot be worked out "
                                  "(claude-config#2892)")
@@ -5413,6 +5417,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.shell["zero"], self.next_zero = self.next_zero, None
         self.shell["parent"] = saved  # the text that runs this one, whose output carries it (#2913)
         self.next_script, self.next_cwd_known, self.next_on_disk, self.next_program = None, True, False, None
+        handed, self.next_handed = self.next_handed, None
         try:
             # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
             # only over part of the text. every_command gives s's own commands in commands() order,
@@ -5422,6 +5427,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 starts = [p["start"] for p in parts]
             except self.sw.Unreadable:
                 parts, starts = [], []  # read by the crude cut, so no command's place is known
+            # The command of a package script that the words after the script's name land in: the one
+            # they are written inside, as the shell reads text added to the end of a line, which a
+            # command inside a substitution earlier in it is not (script_handed, claude-config#3143).
+            # (where it starts, what hands the words, the words), else None.
+            landed = max((p["start"] for p in parts if p["start"] <= handed[0] < p["end"]), default=None) \
+                if handed else None
+            self.shell["handed"] = (landed,) + tuple(handed[1:]) if landed is not None else None
             # Where each process substitution of s is, <( ), >( ) or zsh's =( ) (claude-config#3213):
             # the reader lists one with the substitutions of the command it is written in. A program
             # inside one that runs its input reads what feeds it, or what feeds the command around it
@@ -5861,8 +5873,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 if reason:
                     return reason
             return None
-        if launcher:
-            reason = self.package_run(words, d, depth, launcher)
+        # In a package script, the program the words after the script's name land on, where the
+        # script names it bare, is handed them as a launcher's package is (script_handed, #3143).
+        lands = None if launcher else self.script_handed(words)
+        if launcher or lands:
+            reason = self.package_run(lands[1], d, depth, lands[0]) if lands else \
+                self.package_run(words, d, depth, launcher)
             if reason is not False:
                 return reason
         if "/" in words[0]:
@@ -7093,6 +7109,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         command, and that command, with its pre and post scripts, is judged as a command line run
         from the package's folder. repo-digest's CLAUDE.md documents `npm run digest` as a local
         command that posts to Slack. `npm exec`, `npm x` and `pnpm dlx` run their words as npx does.
+
+        The words after the script's name are the script's too (claude-config#3143): the package
+        manager adds them, each quoted, to the end of the script's own command, never to its pre or
+        post script. Before #3143 they were not read, so `npm run test:node -- tests/x.spec.js`,
+        whose script is `playwright test`, passed with a spec whose imports reach code that posts,
+        while `npx playwright test tests/x.spec.js` was refused. The command is judged as before
+        without them and then again with them at its end (script_words), so nothing refused before
+        passes now. In that second reading the program the words land on, where the script names it
+        bare, is handed them as a launcher's package is (script_handed): the package manager puts
+        node_modules/.bin in front of the PATH, so `playwright` there is the package npx would run.
+        The words the script itself writes after that program are judged as before, so a script
+        handed only an option gets the answer it gets handed nothing. Dan's decision, 2026-11-18:
+        "Refuse both, then decide #3173".
         """
         k, where = 1, d
         while k < len(words) and words[k].startswith("-"):
@@ -7140,19 +7169,72 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         except Exception:
             hit = MARKER.search(body)
             return f"{name} runs a script from a package.json it cannot read, which names {hit.group(0)}" if hit else None
+        handed = self.script_words(name, words[k + 1:])
         for key in ("pre" + script, script, "post" + script):
             cmd = scripts.get(key)
             if not isinstance(cmd, str) or depth >= MAX_DEPTH:
                 continue
-            try:
-                self.next_on_disk = True
-                inner = self.line(cmd, pkg_dir, depth + 1, cmd)
-            except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
-                hit = MARKER.search(cmd)
-                inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
-            if inner:
-                return f"the package script {key} runs a command that posts: {inner}"
+            # The script's command as it is written, and then, for the script itself, with the words
+            # after its name at its end (claude-config#3143).
+            readings = [(cmd, None)]
+            if handed and key == script:
+                base = cmd.rstrip()
+                readings.append((f"{base} {' '.join(shlex.quote(w) for w in handed)}",
+                                 (len(base) + 1, f"the package script {key}", tuple(handed))))
+            for text, lands in readings:
+                try:
+                    self.next_on_disk, self.next_handed = True, lands
+                    inner = self.line(text, pkg_dir, depth + 1, text)
+                except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
+                    hit = MARKER.search(text)
+                    inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
+                finally:
+                    self.next_handed = None
+                if inner:
+                    with_words = " with the words after its name" if lands else ""
+                    return f"the package script {key}{with_words} runs a command that posts: {inner}"
         return None
+
+    def script_words(self, name, after):
+        """The words a package manager hands a script, from the words after the script's name
+        (claude-config#3143). pnpm and yarn hand it every one of them, options included. npm keeps
+        the options before a `--` for itself and hands on the other words before it and every word
+        after it. The first `--` is the package manager's own. A redirection is the shell's, on the
+        package manager's own output or input, and no word of the script's."""
+        out, k, past = [], 0, False
+        while k < len(after):
+            w = after[k]
+            m = self.sw.REDIRECT_WORD.match(w)
+            if m:
+                k += 1 if m.group(1) else 2  # its target glued to it, or the next word
+                continue
+            k += 1
+            if w == "--" and not past:
+                past = True
+            elif past or name != "npm" or not w.startswith("-"):
+                out.append(w)
+        return out
+
+    def script_handed(self, words):
+        """(what hands them, the program and the words it is handed) where this command is the one
+        of a package script that the words after the script's name land in and its program is named
+        bare, else None (claude-config#3143). The package manager runs a script with
+        node_modules/.bin in front of the PATH, so a bare name there is the package a launcher
+        would run, and it is read as one handed those words (package_run): the files among them are
+        opened, where a program run by a bare name from the PATH has none of its files read.
+
+        Only the words after the script's name are read that way. The words the script itself
+        writes after the program are judged as before, with or without words after the name, so a
+        script handed only an option gets the answer it gets handed nothing (lessons review at
+        f916b1b: reading the whole command refused `npm test -- --headed` over a file the script's
+        own command names, which plain `npm test` passed). They are the last words of the command;
+        where they are not, a comment or a reading the gate did not expect having moved them, every
+        word of the command is read. Any other command of the script is judged as before."""
+        lands = self.shell.get("handed")
+        if not lands or lands[0] != self.shell.get("at") or "/" in words[0]:
+            return None
+        theirs = list(lands[2])
+        return lands[1], [words[0]] + (theirs if words[-len(theirs):] == theirs else words[1:])
 
     @staticmethod
     def package_json(where):
