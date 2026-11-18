@@ -10,7 +10,9 @@ address. Measured through the gate on 2026-11-16: every renamed form in
 test-slack-drafts-code-loaders.sh passed.
 
 follow() reads three things from a script's syntax tree, the third being the names sys goes by
-beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow):
+beyond its own, so that sys.path is read under each of them (claude-config#3151, said at follow).
+Its phrase also says when a sys read off a value it does not follow is handed somewhere it is not
+followed, which sys_placed() reads (claude-config#3172). The first two:
 
 - The names a module, or anything reached from one by attributes, is bound to where the binding can
   be read: an assignment to a name (annotated or not, chained, or a tuple against a tuple of the
@@ -228,6 +230,72 @@ def os_exposed(nodes, imported):
     return None
 
 
+# Builtins that, handed a module, return none of it and run nothing of the script's with it: what a
+# field called sys is printed, rounded or measured by (PR #3161), which sys handed to cannot use.
+SYS_SAFE_CALLS = frozenset({"print", "round", "len", "str", "repr", "int", "float", "bool", "abs", "hash",
+                            "id", "format", "ascii"})
+
+
+def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere):
+    """How the script puts a sys the gate cannot see is sys where it does not follow it, as a phrase,
+    or None (claude-config#3172). follow() reads sys.path through each name sys is bound to, and
+    py_acts reads it off any attribute called sys, but sys read off a value that is not followed
+    (pathlib.PurePath("x").parser.sys, lib.sys of the script's own module) and handed to a function,
+    put in a list, returned or chosen by a conditional went on to have its path changed unseen.
+
+    Such a read (sys_read) passes where it is read on by attribute (its path refused there), bound
+    to a name follow() reads on from, going nowhere, or used where a module cannot be handed on: an
+    operand of arithmetic or a comparison whose other operands are all literals, negated, formatted
+    into a string, indexed, or handed to one of SYS_SAFE_CALLS the script does not bind itself.
+    That keeps a field called sys printed, rounded, or added to or compared with a number as a
+    field, as PR #3161 chose. Anywhere else it is refused. An arm of a
+    choice and a walrus give it on to wherever they go, so they are read through."""
+    bound_here = {n.id for n in nodes if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)}
+    bound_here |= {n.name for n in nodes if isinstance(n, SCOPES) and not isinstance(n, ast.Lambda)}
+    bound_here |= {n.arg for n in nodes if isinstance(n, ast.arg)}
+    bound_here |= {(a.asname or a.name).split(".")[0] for n in nodes if isinstance(n, (ast.Import, ast.ImportFrom))
+                   for a in n.names}
+    # An operand of arithmetic or a comparison is handed to the other operand's method (a module
+    # has none, so sys + a calls a's __radd__ with sys, and `sys in a` its __contains__). So it
+    # passes only where every other operand is a literal, whose methods are the interpreter's own:
+    # a list of the ways a script can give a class such a method missed the next one in three
+    # reviews running (an if in the class body, type(), abc.ABCMeta with a built key), L96.
+    def literal(e):
+        if isinstance(e, ast.UnaryOp) and isinstance(e.op, (ast.USub, ast.UAdd)):
+            e = e.operand
+        return isinstance(e, ast.Constant)
+
+    def among_literals(at, p):
+        others = [p.left, p.right] if isinstance(p, ast.BinOp) else [p.left, *p.comparators]
+        return all(o is at or literal(o) for o in others)
+
+    for node in nodes:
+        if not isinstance(node, (ast.Name, ast.Attribute)) or not isinstance(node.ctx, ast.Load) or not sys_read(node):
+            continue
+        at, p = node, parent.get(id(node))
+        while (isinstance(p, ast.IfExp) and at is not p.test) or isinstance(p, ast.BoolOp) or \
+                (isinstance(p, ast.NamedExpr) and p.value is at):
+            at, p = p, parent.get(id(p))
+        if isinstance(p, ast.Attribute):
+            if p.attr == "path":
+                return "changes where Python finds modules (sys.path)"
+            continue
+        # A chained assignment binds every target, and only a name's is followed: `q = h.m = lib.sys`
+        # puts the same sys on h.m (lessons review at d63d189).
+        unfollowed = isinstance(p, ast.Assign) and not all(isinstance(t, ast.Name) for t in p.targets)
+        if (id(at) in sys_bound and not unfollowed) or goes_nowhere(at, p):
+            continue
+        if isinstance(p, (ast.UnaryOp, ast.FormattedValue)) or (isinstance(p, ast.Subscript) and p.value is at) \
+                or (isinstance(p, (ast.BinOp, ast.Compare)) and among_literals(at, p)):
+            continue
+        call = parent.get(id(p)) if isinstance(p, ast.keyword) else p
+        if isinstance(call, ast.Call) and call.func is not at and isinstance(call.func, ast.Name) \
+                and call.func.id in SYS_SAFE_CALLS and call.func.id not in bound_here:
+            continue
+        return f"puts {ast.unparse(node)[:80]}, which may be sys, where the gate does not follow it"
+    return None
+
+
 def make(inert):
     """follow(), given the names of the modules py_acts holds to be inert (PY_INERT)."""
     tops = frozenset(n.split(".")[0] for n in inert) | {"os"}
@@ -275,7 +343,8 @@ def make(inert):
     def follow(nodes, local):
         """(names, phrase, as_sys): the names a module, or something reached from one, is bound to
         beyond the ones an import binds; how the script puts a module where the gate does not
-        follow it, as a phrase, or None; and the names sys goes by beyond its own
+        follow it, or a sys it cannot see is sys (sys_placed, claude-config#3172), as a phrase, or
+        None; and the names sys goes by beyond its own
         (claude-config#3151). sys is not among the first (reaches): the only thing read off it by
         name is its path, which py_acts read as the name sys followed by path alone, so
         `import sys as s`, `q = sys` and `q = glob.sys` each changed where Python finds modules
@@ -321,15 +390,37 @@ def make(inert):
         renamed = set()  # each name bound to something that may lead to a module (reaches)
         changed = [True]
 
+        def sys_read(expr):
+            """Whether expr is a name for sys or an attribute called sys of a value that is not
+            followed or not known to be a module (claude-config#3151)."""
+            if isinstance(expr, ast.Name):
+                return expr.id in as_sys
+            if not (isinstance(expr, ast.Attribute) and expr.attr == "sys"):
+                return False
+            v = value(expr)
+            return v is NOTHING or v is UNKNOWN
+
+        def sys_like(expr):
+            """sys_read, or a choice one of whose arms is (`q = lib.sys if c else None`, `lib.sys or
+            None`, a walrus over one), which gives that sys to wherever it goes (claude-config#3172)."""
+            if isinstance(expr, ast.IfExp):
+                return sys_like(expr.body) or sys_like(expr.orelse)
+            if isinstance(expr, ast.BoolOp):
+                return any(sys_like(e) for e in expr.values)
+            if isinstance(expr, ast.NamedExpr):
+                return sys_like(expr.value)
+            return sys_read(expr)
+
+        sys_bound = set()  # id() of each sys_like expression bound to a name, which as_sys then holds
+
         def bind_name(name, expr, whole=True):
             """Whether expr's value was read, and so went to a name the gate reads on from."""
             v = value(expr)
-            if name not in as_sys and name != "sys" and (
-                    v is sys or (isinstance(expr, ast.Name) and expr.id in as_sys)
-                    or ((v is NOTHING or v is UNKNOWN)
-                        and isinstance(expr, ast.Attribute) and expr.attr == "sys")):
-                as_sys.add(name)
-                changed[0] = True  # a name bound to this one, read before it, is read again
+            if v is sys or sys_like(expr):
+                sys_bound.add(id(expr))
+                if name not in as_sys and name != "sys":
+                    as_sys.add(name)
+                    changed[0] = True  # a name bound to this one, read before it, is read again
             if v is NOTHING:
                 return False
             if whole:  # a walrus also gives its value to wherever it stands, which is read below
@@ -417,6 +508,6 @@ def make(inert):
             if is_module(value(node)):
                 phrase = f"puts the module {dotted(node)} where the gate does not follow it"
                 break
-        return renamed, phrase, as_sys
+        return renamed, phrase or sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere), as_sys
 
     return follow

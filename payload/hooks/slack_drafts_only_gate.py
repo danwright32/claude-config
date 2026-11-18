@@ -871,16 +871,22 @@ OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # every module it imports from outside the script's own files is in PY_INERT, modules that cannot
 # send, run code or write a file, and it uses none of PY_RUNS, PY_REACH or PY_WRITES (py_acts).
 # Anything else counts as able to act. A dotted entry allows only that submodule: `import os.path`
-# binds os, so os used for anything but os.path counts as acting.
+# binds os, so os used for anything but os.path counts as acting. A package's entry is the package
+# alone: each submodule is listed by its own dotted name or counts as acting, however it is imported
+# (claude-config#3172: json.tool, admitted as part of json, writes the file its sys.argv names). The
+# two submodules listed are the ones code here imports (skills/design-rounds/design_file.py imports
+# html.parser, lib/local-allow-rules.py json.decoder) and session scripts name, each read on Python
+# 3.14.4 and holding no way to send, run code or write.
 PY_INERT = frozenset({
     # Three Dan chose on 2026-11-16 (claude-config#3103). Unlike the rest, io and gzip can write a file;
     # that writing is held as open() is (PY_OPENERS, PY_FILE_TOOLS), so they count only while it is unused.
     "ast", "gzip", "io",
     "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
     "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",
-    "fractions", "functools", "glob", "hashlib", "heapq", "html", "itertools", "json", "math", "numbers",
-    "os.path", "pathlib", "pprint", "random", "re", "shlex", "statistics", "string", "struct", "sys",
-    "textwrap", "time", "typing", "unicodedata", "warnings", "zoneinfo"})
+    "fractions", "functools", "glob", "hashlib", "heapq", "html", "html.parser", "itertools", "json",
+    "json.decoder", "math", "numbers", "os.path", "pathlib", "pprint", "random", "re", "shlex",
+    "statistics", "string", "struct", "sys", "textwrap", "time", "typing", "unicodedata", "warnings",
+    "zoneinfo"})
 # Modules unable to send a request or run code unless the code names what turns that on: each module,
 # with the pattern that names it (py_inert_unless, claude-config#2844).
 PY_INERT_UNLESS = {"sqlite3": re.compile(r"load_extension")}
@@ -902,6 +908,8 @@ PY_REACH = frozenset({"modules", "path_hooks", "meta_path", "path_importer_cache
                       "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
                       "get_type_hints", "ForwardRef", "evaluate_forward_ref", "Formatter", "bltns",
                       "breakpointhook", "remote_exec"})
+# The ones of those that evaluate a string as code, which a refusal says of them and no other.
+PY_EVALS = frozenset({"get_type_hints", "ForwardRef", "evaluate_forward_ref"})
 PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # Methods that write or move a file (pathlib's), beside open() and argparse.FileType with a mode
 # that writes.
@@ -6458,6 +6466,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         catalog query handed a file sqlite3 wrote to code importing sqlite3 was refused."""
         return module in PY_INERT_UNLESS and not PY_INERT_UNLESS[module].search(text)
 
+    @staticmethod
+    def py_submodule(module, name):
+        """Whether name is a submodule of the inert package module (`from json import tool`), asked of
+        where Python finds module's files without importing anything (claude-config#3172). Only a
+        package named without a dot is asked: finding a dotted one would import its parent. What
+        cannot be answered counts as a submodule, so the import counts as acting."""
+        if "." in module:
+            return False
+        try:
+            spec = importlib.util.find_spec(module)
+            where = spec.submodule_search_locations if spec else None
+            return bool(where) and importlib.machinery.PathFinder.find_spec(name, list(where)) is not None
+        except (ImportError, ValueError):
+            return True
+
     def py_acts(self, text, cur, root, writes=True, ran=frozenset(), imported=False):
         """acts() for one Python file's text (cur its file, root the script's folder): how it can act
         on what it is handed, as a phrase, or None when it is seen unable to.
@@ -6525,7 +6548,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         continue
                     if self.py_inert_unless(a.name, text):
                         continue
-                    if a.name not in PY_INERT and top not in PY_INERT:
+                    if a.name not in PY_INERT:  # a submodule by its own name (claude-config#3172)
                         return f"imports {a.name}, {unknown}"
                     if not a.asname and top not in PY_INERT:
                         restricted.add((top, a.name.split(".")[1]))
@@ -6546,10 +6569,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return "changes where Python finds modules (sys.path)"
                 if module == "os" and all(n in os_may for n in names):
                     continue  # os's own calls by name: `from os import stat` is not the stat module
-                if not (not writes and module in PY_FILES) and \
-                        module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
+                if not (not writes and module in PY_FILES) and module not in PY_INERT and \
                         not all(f"{module}.{n}" in PY_INERT for n in names) and not self.py_inert_unless(module, text):
                     return f"imports {module}, {unknown}"
+                # `from json import tool` is `import json.tool` (claude-config#3172).
+                for n in names:
+                    if module in PY_INERT and f"{module}.{n}" not in PY_INERT and self.py_submodule(module, n):
+                        return f"imports {module}.{n}, {unknown}"
                 # `from glob import os` is glob.os written as an import (claude-config#3102). sys
                 # holds no module but sys.modules, and `from sys import platform` is a string. A
                 # module inline code may import for its files (PY_FILES) is read here like any other.
@@ -6589,7 +6615,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     used = f"{node.id}.{os_used[id(node)]}" if id(node) in os_used else f"{node.id}, handed on or renamed"
                     return f"uses {node.id} for more than reading files, paths and the environment ({used})"
                 if node.id in PY_REACH - {"modules"}:
-                    return f"can evaluate a string as code ({node.id})"
+                    # Only typing's names evaluate a string as code; the rest reach a namespace,
+                    # a frame or a hook (claude-config#3172).
+                    if node.id in PY_EVALS:
+                        return f"can evaluate a string as code ({node.id})"
+                    return f"reaches past what the gate reads ({node.id})"
                 if node.id in restricted_names and id(node) not in cleared:
                     return f"uses {node.id} for more than {', '.join(sorted(f'{t}.{s}' for t, s in restricted))}"
                 if writes and node.id == "open" and id(node) not in called:
