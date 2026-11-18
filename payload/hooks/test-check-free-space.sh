@@ -562,6 +562,11 @@ else
     "$([ "$(grep -ci 'could not keep a copy' <<< "$ro_msg")" = 1 ] && echo ok || echo "said: $ro_msg")"
   check "and the shell's own error does not spill into the warning" \
     "$(! grep -qi 'permission denied\|no such file' <<< "$ro_msg" && echo ok || echo "said: $ro_msg")"
+  # The control for the check above: a write into that folder does make the shell say those words,
+  # so their absence from the warning means they were kept out, not that they were never said.
+  ro_ctl="$( ( : > "$S_KRO/warnings/.control" ) 2>&1 || true)"
+  check "control: a write into that folder makes the shell say permission denied" \
+    "$(grep -qi 'permission denied' <<< "$ro_ctl" && echo ok || echo "said: ${ro_ctl:-nothing}")"
 fi
 # Once it can be written again, the same episode keeps its copy: a failed copy is retried.
 chmod 755 "$S_KRO/warnings"
@@ -573,6 +578,10 @@ S_KFILE="$TMPROOT/state-keep-file"; mkdir -p "$S_KFILE"; printf 'x\n' > "$S_KFIL
 probe "$((7 * GB))" "$T0" "$S_KFILE"
 check "a folder for copies that cannot be made is said in one line, with the warning intact" \
   "$([ "$PROBE_RC" -eq 3 ] && [ "$(grep -ci 'could not keep a copy' <<< "$PROBE_MSG")" = 1 ] && ! grep -qi 'not a directory\|file exists' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+# Its control: making that folder, or writing a file inside it, does make the system say those words.
+kf_ctl="$( { mkdir -p "$S_KFILE/warnings"; : > "$S_KFILE/warnings/x"; } 2>&1 || true)"
+check "control: making that folder or writing in it says file exists or not a directory" \
+  "$(grep -qi 'file exists\|not a directory' <<< "$kf_ctl" && echo ok || echo "said: ${kf_ctl:-nothing}")"
 # The episode record is claimed by creating it, then its time is written into it. On a disk too full
 # to write even that, the claim leaves the record empty, which is nobody's claim: read as another
 # session's, it stopped every copy, silently, for as long as the disk stayed full. The write is made
