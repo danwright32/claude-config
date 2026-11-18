@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L864. A shape filter must run on text in its output form, after every reshape, or the reshape rebuilds what it passed; test a second pass changes nothing.
 - L858. An answer to an outside caller carries a fixed failure message and a trace id, never the thrown error's text, which names vendors, fields and data.
 - L856. Key browser stored state by the signed in person as well as the record and clear it at sign out, or the next person sees it.
 - L851. A proxy marking its own answers must strip that marker from every answer it forwards, or the service behind it can set it and speak as the proxy.

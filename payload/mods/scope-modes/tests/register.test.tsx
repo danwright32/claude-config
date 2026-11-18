@@ -4467,6 +4467,22 @@ test('an action Dan bans while he sleeps, refused overnight, is put to Dan as a 
   expect(morningOf(w).length).toBe(1)
 })
 
+// #3190: a banned call that is not a shell command is kept as its tool and its own arguments, read
+// with mod-kit's toolArgs, so none of the keys Claude Code carries beside them reaches Dan's picker.
+test('a banned call that is not a shell command is kept for the morning by its own arguments, never the keys the engine carries beside them (#3190)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 3, tool_use_id: 'k1', consent: 'granted' } as never)).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps/)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain(`The call refused: ${CHROME}read_page {"tabId":3}`)
+  expect(m).not.toContain('tool_use_id')
+  expect(m).not.toContain('consent')
+})
+
 test("notes that cannot be read at a session's morning are said, never read as no question (#1285)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${myQuestion}\n` }, unreadableFiles: [PROPOSED_AT] })
   await start($ as never, clock)
@@ -6253,6 +6269,59 @@ test('a classifier refusal while asleep is noted as failed and never retried; aw
   delete w.files[CURRENT]
   const awake = (await $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: {}, tool_use_id: 't2', reason: 'x' } as never)) as { retry?: boolean }
   expect(awake.retry).toBe(true)
+})
+
+// #3158: the morning report folds refusals the check gave no verdict on, and lists on its own each
+// one it cannot show was done. So the note says which call it was and whether it only read, and the
+// same call run later without an error is noted redone, naming the refusals it made good.
+const toolResult = async ($: $T, id: string, isError: boolean) => {
+  await ($ as unknown as { session: { append: (e: never) => Promise<unknown> } }).session.append({
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'Bash' },
+    uuid: `row-${id}`,
+    message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: id, ...(isError ? { is_error: true } : {}), content: [{ type: 'text', text: 'out' }] }] },
+  } as never)
+}
+test('a refusal with no verdict is noted with the call and whether it only read, and the same call run later is noted redone (#3158)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, worker)
+  await start($ as never, clock)
+  const notes = () => w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>)
+  const deny = (id: string, command: string, reason = 'Classifier unavailable') =>
+    $.classic.PermissionDenied({ tool_name: 'Bash', tool_input: { command, description: 'x' }, tool_use_id: id, reason } as never)
+  await deny('t1', 'git commit -F m.txt')
+  await deny('t1b', 'git commit -F m.txt')
+  await deny('t2', 'git status')
+  await deny('t3', 'touch x.txt', '[Git Destructive]')
+  const failed = notes().filter(n => n.kind === 'failed')
+  expect(failed[0]).toMatchObject({ kind: 'failed', by: 's1', cwd: '/repo', tool: 'Bash', text: 'the auto mode classifier refused Bash: Classifier unavailable', reason: 'Classifier unavailable', noVerdict: true, toolUseId: 't1', what: 'git commit -F m.txt' })
+  expect(failed[0]?.read).toBeUndefined()
+  expect(failed[2]).toMatchObject({ toolUseId: 't2', noVerdict: true, read: true })
+  expect(failed[3]).toMatchObject({ toolUseId: 't3', reason: '[Git Destructive]' })
+  expect(failed[3]?.noVerdict).toBeUndefined()
+  // Sent again, the same input with the keys the engine adds: one that fails is not done.
+  expect(await call($ as never, { tool: 'Bash', command: 'git commit -F m.txt', description: 'x', tool_use_id: 'u1' } as never)).toBe('ran')
+  await toolResult($ as never, 'u1', true)
+  expect(notes().filter(n => n.kind === 'redone')).toEqual([])
+  // One that runs is noted once, for both refusals of that call.
+  expect(await call($ as never, { tool: 'Bash', command: 'git commit -F m.txt', description: 'x', tool_use_id: 'u2' } as never)).toBe('ran')
+  await toolResult($ as never, 'u2', false)
+  expect(notes().filter(n => n.kind === 'redone')).toEqual([expect.objectContaining({ kind: 'redone', by: 's1', tool: 'Bash', redoes: ['t1', 't1b'], text: 'Bash ran after its refusal: git commit -F m.txt' })])
+  // A refusal by the check itself is never made good this way, and a different call matches nothing.
+  expect(await call($ as never, { tool: 'Bash', command: 'touch x.txt', description: 'x', tool_use_id: 'u3' } as never)).toBe('ran')
+  await toolResult($ as never, 'u3', false)
+  expect(await call($ as never, { tool: 'Bash', command: 'git commit -F other.txt', description: 'x', tool_use_id: 'u4' } as never)).toBe('ran')
+  await toolResult($ as never, 'u4', false)
+  expect(notes().filter(n => n.kind === 'redone')).toHaveLength(1)
+  // Sent again and turned away, by this mod overnight or by the check once more, it never ran,
+  // whatever its result row says (lessons review of 6586834).
+  await deny('t5', 'git push --force origin x')
+  expect(await call($ as never, { tool: 'Bash', command: 'git push --force origin x', description: 'x', tool_use_id: 'u5' } as never)).toMatch(/^Refused: sleep mode is on/)
+  await toolResult($ as never, 'u5', false)
+  await deny('t6', 'mkdir -p out')
+  expect(await call($ as never, { tool: 'Bash', command: 'mkdir -p out', description: 'x', tool_use_id: 'u6' } as never)).toBe('ran')
+  await deny('u6', 'mkdir -p out')
+  await toolResult($ as never, 'u6', false)
+  expect(notes().filter(n => n.kind === 'redone')).toHaveLength(1)
 })
 
 test('a worker is told its prompts approve themselves and a refusal is final; a session that is not is not', withDeps, async ($, on) => {

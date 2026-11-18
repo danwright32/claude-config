@@ -52,7 +52,13 @@ report knows, and the fields each reads (every other field is kept, and shown no
                                             writer refuses one without an owner/name repo and
                                             a pr or issue (#2011)
   parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
-  failed     repo, issue?, text             could not be done (a refusal, an error)
+  failed     repo, issue?, text             could not be done (a refusal, an error); a refusal by auto
+                                            mode's check, as scope modes notes it, also has tool,
+                                            reason (as given), noVerdict (true when the check gave
+                                            none), toolUseId, what (the command or file) and read
+                                            (true when the call only reads) (#3158)
+  redone     tool, redoes, text             a call refused with no verdict was sent again unchanged
+                                            and ran: redoes lists the toolUseIds it made good (#3158)
   question   repo, issue, text, options     something only Dan can answer, asked before bed in a
                                             dialog, so options (at least two answers he can pick)
                                             are required (#1771) unless the note says why the
@@ -142,7 +148,7 @@ def claim_branch(issue):
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress", "redone") + ENDED
 # The notes the overnight check writes (#834, #2766): with none of them, a final report says it did not run.
 CHECK_KINDS = ("outward", "unmeasured", "checked")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -511,6 +517,89 @@ def questions_of(notes):
     return distinct_questions([q for q in asked if not not_a_question(q["text"], q.get("options"))])
 
 
+# ---- refusals with no verdict, folded (#3158) ----
+# On the night of 16 Nov 2026 auto mode's check was unavailable for hours and the report listed 340
+# rows of one reason, every one later done, burying any that needed Dan. A refusal the check gave no
+# verdict on (the scope modes mod writes noVerdict, from the reason's words, driver.ts startFailKind)
+# is folded with the others of the same reason once there are FOLD_AT of them. Only noVerdict is
+# folded: a real refusal by the check, or a note with nothing to say which it was (written before
+# #3158), is always listed on its own. Inside a fold, a refusal is listed on its own unless it only
+# read (`read`, judged by the mod and only ever when sure) or a redone note names its toolUseId,
+# written when the same tool with the same input later ran without an error. Anything the notes
+# cannot show was done stays listed.
+FOLD_AT = 3
+KIND_NOUNS = {"Bash": ("command", "commands"), "Write": ("file write", "file writes"),
+              "Edit": ("edit", "edits"), "MultiEdit": ("edit", "edits"), "NotebookEdit": ("edit", "edits"),
+              "Agent": ("agent launch", "agent launches"), "Task": ("agent launch", "agent launches"),
+              "SendMessage": ("message to another session", "messages to another session")}
+
+
+def kind_of_call(tool, count):
+    one, many = KIND_NOUNS.get(tool, ("%s call" % tool, "%s calls" % tool))
+    return "%d %s" % (count, one if count == 1 else many)
+
+
+def and_list(parts):
+    return parts[0] if len(parts) == 1 else "%s and %s" % (", ".join(parts[:-1]), parts[-1])
+
+
+def undone_row(n):
+    what = " ".join(str(n.get("what") or "").split())
+    tool = str(n.get("tool") or "a call not named")
+    return "Refused with no verdict at %s and not sent again unchanged since: %s%s" % (
+        et_time(n["at"]) if num(n.get("at")) else "an unknown time", tool, ": %s" % what if what else "")
+
+
+def no_verdict_folds(notes):
+    """Each failed note in a fold, by id(), mapped to its group: the first note of the group, the
+    folded line, the session and folder when one for all, and the refusals listed on their own."""
+    redone = set()
+    for n in notes:
+        if n["kind"] == "redone" and isinstance(n.get("redoes"), list):
+            redone.update(x for x in n["redoes"] if isinstance(x, str) and x)
+    groups = {}
+    for n in notes:
+        reason = n.get("reason")
+        if n["kind"] == "failed" and n.get("noVerdict") is True and isinstance(reason, str) and reason.strip():
+            groups.setdefault(" ".join(reason.split()), []).append(n)
+    folds = {}
+    for reason, members in groups.items():
+        if len(members) < FOLD_AT:
+            continue
+        undone = [n for n in members if n.get("read") is not True and not (isinstance(n.get("toolUseId"), str) and n["toolUseId"] in redone)]
+        reads = sum(1 for n in members if n.get("read") is True)
+        again = len(members) - reads - len(undone)
+        counts = {}
+        for n in members:
+            t = str(n.get("tool") or "unnamed")
+            counts[t] = counts.get(t, 0) + 1
+        kinds = and_list([kind_of_call(t, c) for t, c in sorted(counts.items(), key=lambda x: (-x[1], x[0]))])
+        times = [n["at"] for n in members if num(n.get("at"))]
+        window = ", from %s to %s" % (et_time(min(times)), et_time(max(times))) if times else ""
+        done = []
+        if reads:
+            done.append("%d only read" % reads)
+        if again:
+            done.append("%d %s sent again unchanged and ran" % (again, "was" if again == 1 else "were"))
+        if undone:
+            rest = "the other %d %s listed next" % (len(undone), "is" if len(undone) == 1 else "are")
+            tail = "%s; %s." % (and_list(done), rest) if done else "None was sent again unchanged since, so each is listed next."
+        else:
+            tail = "Every one only read or was sent again unchanged and ran."
+        line = "%d calls were refused because auto mode's safety check gave no verdict (%s)%s: %s. %s" % (
+            len(members), reason, window, kinds, tail[0].upper() + tail[1:])
+        where_ = {}
+        for k in ("by", "cwd"):
+            vals = {n.get(k) for n in members}
+            only = next(iter(vals))
+            if len(vals) == 1 and isinstance(only, str) and only:
+                where_[k] = only
+        fold = {"first": members[0], "line": line, "where": where_, "undone": undone}
+        for n in members:
+            folds[id(n)] = fold
+    return folds
+
+
 def build(record, notes, bad, final, now, github, session=None, all_notes=None, needs=None):
     """The report. `session`, since #1287, is the one session it covers: `notes` are then its own
     with the whole Mac's kinds, and `all_notes` every note, read for which sessions went quiet.
@@ -649,9 +738,25 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
             return False
         return any(d["kind"] == "done" and d.get("replaces") == n["kind"] and (d.get("repo"), d.get("issue"), d.get("by")) == key
                    and num(d.get("at")) and (d["at"], j) > (n["at"], i) for j, d in enumerate(notes))
+    folds = no_verdict_folds(notes)
     pf = []
     for i, n in enumerate(notes):
         if n["kind"] in ("parked", "failed") and replaced(i, n):
+            continue
+        fold = folds.get(id(n))
+        if fold is not None:
+            # A refusal with no verdict in a group of FOLD_AT or more (#3158): the group is one line
+            # where its first refusal falls, then each one neither a read nor later sent again
+            # unchanged and run, on its own; every other member is counted in the line, never listed.
+            if fold["first"] is n:
+                pf.append(fold["line"])
+                if needs is not None:
+                    needs.append(dict({"section": "parked", "text": fold["line"]}, **fold["where"]))
+                for u in fold["undone"]:
+                    row = undone_row(u)
+                    pf.append(row)
+                    if needs is not None:
+                        needs.append(dict({"section": "parked", "text": row}, **{k: u[k] for k in ("by", "repo", "cwd") if isinstance(u.get(k), str) and u[k]}))
             continue
         if n["kind"] == "parked":
             row = "Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n))

@@ -87,6 +87,7 @@ import {
 } from './rules.ts'
 import { currentText } from './mod-kit/inputs.ts'
 import { withoutOwnFolder } from './mod-kit/scriptvars.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import { declinedNote, engineFacts, namedReaders, type Named } from './named.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
@@ -1399,8 +1400,10 @@ export const register: Register = on => {
   on('tool.call', { tool: DECIDE_TOOL }, async ($, e) => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused
-    const { tool: _t, tool_use_id: decideId, agentId, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const agent = typeof agentId === 'string' ? agentId : null
+    const x = e as unknown as Record<string, unknown>
+    const input = toolArgs(x)
+    const decideId = x.tool_use_id
+    const agent = typeof x.agentId === 'string' ? x.agentId : null
     const call = String(input.call ?? '')
     const h = await heldOf($, call)
     // Only a held call, and only its own: no file can be cleared ahead of its edit.

@@ -110,8 +110,18 @@ checkout_parts(){
   # The recorded floor names exactly the suites selected here, so it can never again sit far below
   # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
   # named in the same change; one removed on purpose is taken out.
-  _real_sel="$(awk '{ print $2 }' <<< "$_sel" | sort -u)"
-  _real_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
+  # The walkers a push changing a suite adds (claude-config#3183) are named in the floor too, on lines
+  # of their own in the listing's form, `WHEN-A-SUITE-CHANGES <path>`; one that stops being recognised
+  # is as silent as a scanner that does. The bare paths are compared with what every push runs, read
+  # the way every gate before #3183 reads them, so a walker written there bare, which an older
+  # installed gate takes for a scanner it does not select and blocks every push on, fails here.
+  _real_sel="$(awk '/^(SUITE|SECTION) / { print $2 } /^WHEN-A-SUITE-CHANGES / { print }' <<< "$_sel" | sort -u)"
+  # The suite whose miss raised #3183 is a walker the gate adds when a push changes a suite, read
+  # from the real tree, so a change that moves it off what the gate recognises fails here by name.
+  grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-scan-absence-needles.sh' <<< "$_sel" \
+    && check "#3183 the real repo's absence needle scan is run when a push changes a suite" ok \
+    || check "#3183 the real repo's absence needle scan is run when a push changes a suite" "got=$_sel"
+  _real_floor="$(awk '/^[[:space:]]*#/ { next } $1 ~ /[.]sh$/ { print $1 } $1 == "WHEN-A-SUITE-CHANGES" { print $1 " " $2 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
   _real_n="$(grep -c . <<< "$_real_sel")"
   [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
     && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
@@ -1899,6 +1909,116 @@ out="$(H="$DL_NOLIB/scanners-before-push.sh" wn_fire "$RD" "git push -u origin d
   && check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" ok \
   || check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" "exit=$rc out=$out"
 git -C "$RD" checkout -q main
+
+# --- claude-config#3183: a push that adds or changes a test suite also runs the suites that WALK
+#     the checkout they sit in, which list no file through git and so were never selected. On
+#     2026-11-17 PR #3177 added two absence checks to a suite, this gate let the push through, and
+#     CI failed on test-scan-absence-needles.sh, which walks the tree with os.walk. A walker here is
+#     a suite whose code finds its checkout through lib/checkout-root.sh and walks a tree, itself or
+#     through a program beside it (or in its lib/) that its code names. Every walker in these
+#     fixtures FAILS when run, so a run of one is a refusal naming it and never a quiet pass.
+add_walker(){   # $1 = repo  $2 = name  $3 = how it walks: named (a program beside it) or inline
+  local f="$1/payload/hooks/test-$2.sh"
+  printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null)"\n' > "$f"
+  if [ "$3" = named ]; then
+    printf 'import os\nfor b, d, n in os.walk("."):\n    pass\n' > "$1/payload/hooks/walk-$2.py"
+    printf 'python3 "$DIR/walk-%s.py" >/dev/null 2>&1\n' "$2" >> "$f"
+  else
+    printf 'python3 - <<PY\nimport os\nfor b, d, n in os.walk("."):\n    pass\nPY\n' >> "$f"
+  fi
+  printf 'echo "walker %s ran"\nexit 1\n' "$2" >> "$f"
+  chmod +x "$f"
+}
+RW="$(pub_repo walkers)"
+add_walker "$RW" needles named
+add_walker "$RW" inwalk inline
+# Controls, each failing if run: one that finds its checkout and walks nothing, one that walks and
+# finds no checkout (a suite walking a scratch home of its own), and one that names both only in
+# comments, which are not code.
+printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\necho "rootonly ran"\nexit 1\n' > "$RW/payload/hooks/test-rootonly.sh"
+printf '#!/usr/bin/env bash\npython3 -c "import os; list(os.walk(\\"/tmp/x\\"))"\necho "walkonly ran"\nexit 1\n' > "$RW/payload/hooks/test-walkonly.sh"
+printf '#!/usr/bin/env bash\n# lib/checkout-root.sh\n# os.walk(\necho "commented ran"\nexit 1\n' > "$RW/payload/hooks/test-commented.sh"
+# A walk is a walk however it is spelled (L247): test-bad-byte-locale.sh reads every suite with a find
+# over the checkout that prunes .git, and was missed while os.walk was the only spelling read. A find
+# over a scratch folder of the suite's own, which prunes no .git, is not a walk of the checkout.
+printf '#!/usr/bin/env bash\nROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\nfind "$ROOT" \\( -name .git -o -name worktrees \\) -prune -o -type f -name "test-*.sh" -print >/dev/null\necho "findwalk ran"\nexit 1\n' > "$RW/payload/hooks/test-findwalk.sh"
+printf '#!/usr/bin/env bash\nROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\nfind "$STATE" -name "*.txt" -type f >/dev/null\necho "findscratch ran"\nexit 1\n' > "$RW/payload/hooks/test-findscratch.sh"
+# A published suite that arms its deadline, for a push that changes it.
+dl_armed "$RW/tests/test-published.sh" published
+pub_publish "$RW"
+# The listing says which walkers a push changing a suite would add, in a line of their own, so the
+# floor above (which names the scanners every push runs) is not read as covering them.
+_wl="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$RW" | SCANNERS_LIST=1 bash "$H" 2>&1)"
+grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-needles.sh' <<< "$_wl" \
+  && grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-inwalk.sh' <<< "$_wl" \
+  && check "#3183 the listing names each walker, through a program it names and inline, as run when a suite changes" ok \
+  || check "#3183 the listing names each walker, through a program it names and inline, as run when a suite changes" "got=$_wl"
+grep -q -x 'WHEN-A-SUITE-CHANGES payload/hooks/test-findwalk.sh' <<< "$_wl" \
+  && check "#3183 and a walker whose walk is a find over the checkout, pruning .git" ok \
+  || check "#3183 and a walker whose walk is a find over the checkout, pruning .git" "got=$_wl"
+grep -q -E 'test-(rootonly|walkonly|commented|findscratch)[.]sh' <<< "$_wl" \
+  && check "#3183 and none that only finds its checkout, only walks, names both in comments, or finds in a scratch folder" "got=$_wl" \
+  || check "#3183 and none that only finds its checkout, only walks, names both in comments, or finds in a scratch folder" ok
+grep -q -E '^SUITE payload/hooks/test-(needles|inwalk)[.]sh$' <<< "$_wl" \
+  && check "#3183 and never lists a walker among the scanners every push runs" "got=$_wl" \
+  || check "#3183 and never lists a walker among the scanners every push runs" ok
+# Control: a push changing no suite runs no walker, so each one failing changes nothing.
+pub_branch "$RW" docs; printf 'more\n' >> "$RW/README.md"; commit_all "$RW"
+out="$(wn_fire "$RW" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" \
+  && check "#3183 (control) a push changing no suite runs no walker" ok \
+  || check "#3183 (control) a push changing no suite runs no walker" "exit=$rc out=$out"
+# A push ADDING a suite runs both walkers, and their failure refuses it, naming each.
+pub_branch "$RW" add-suite; dl_armed "$RW/tests/test-added.sh" added; commit_all "$RW"
+out="$(wn_fire "$RW" "git push -u origin add-suite")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-needles.sh" <<< "$out" && grep -q -F "payload/hooks/test-inwalk.sh" <<< "$out" \
+  && grep -q -F "payload/hooks/test-findwalk.sh" <<< "$out" \
+  && check "#3183 a push adding a suite runs every walker, and one failing refuses it by name" ok \
+  || check "#3183 a push adding a suite runs every walker, and one failing refuses it by name" "exit=$rc out=$out"
+grep -q -E 'test-(rootonly|walkonly|commented|findscratch)[.]sh' <<< "$out" \
+  && check "#3183 and runs none of the controls" "out=$out" \
+  || check "#3183 and runs none of the controls" ok
+# A push CHANGING a published suite runs them too: it is the case #3177 was.
+pub_branch "$RW" change-suite; printf 'echo more\n' >> "$RW/tests/test-published.sh"; commit_all "$RW"
+out="$(wn_fire "$RW" "git push -u origin change-suite")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-needles.sh" <<< "$out" \
+  && check "#3183 a push changing a published suite runs the walkers too" ok \
+  || check "#3183 a push changing a published suite runs the walkers too" "exit=$rc out=$out"
+git -C "$RW" checkout -q main
+# A walker the floor names is held to it like a scanner (#1744): one that stops being recognised as
+# walking the checkout drops out of what a suite changing push runs, and nothing else would say so.
+RFW="$(mkrepo floorwalk)"; add_scanner "$RFW" alpha 0
+printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\npython3 - <<PY\nimport os\nfor b, d, n in os.walk("."):\n    pass\nPY\nexit 0\n' > "$RFW/payload/hooks/test-pwalk.sh"
+chmod +x "$RFW/payload/hooks/test-pwalk.sh"
+mkdir -p "$RFW/.claude"
+printf '# the whole tree scanners this repo expects\npayload/hooks/test-alpha.sh\nWHEN-A-SUITE-CHANGES payload/hooks/test-pwalk.sh\n' > "$RFW/.claude/scanners-floor.txt"
+commit_all "$RFW"
+out="$(fire "$RFW" "git push")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "floor of 2" <<< "$out" \
+  && check "#3183 a floor naming a walker the gate selects lets the push through" ok \
+  || check "#3183 a floor naming a walker the gate selects lets the push through" "exit=$rc out=$out"
+printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\nexit 0\n' > "$RFW/payload/hooks/test-pwalk.sh"; commit_all "$RFW"
+out="$(fire "$RFW" "git push")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-pwalk.sh" <<< "$out" \
+  && check "#3183 a named walker that stops walking the checkout blocks the push, naming it" ok \
+  || check "#3183 a named walker that stops walking the checkout blocks the push, naming it" "exit=$rc out=$out"
+# A walker that already passed on this exact tree is skipped like a scanner, and the line saying what
+# ran counts only the walkers that ran: a retry that ran none must not say it included them.
+RWP="$(pub_repo walkpass)"
+printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\npython3 - <<PY\nimport os\nfor b, d, n in os.walk("."):\n    pass\nPY\nexit 0\n' > "$RWP/payload/hooks/test-pwalk.sh"
+chmod +x "$RWP/payload/hooks/test-pwalk.sh"
+pub_publish "$RWP"
+pub_branch "$RWP" add-suite; dl_armed "$RWP/tests/test-added.sh" added; commit_all "$RWP"
+WPSTATE="$TMPROOT/walkpass-state"
+out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suite")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "1 of those walk the checkout" <<< "$out" \
+  && check "#3183 a push adding a suite says the walker it ran" ok \
+  || check "#3183 a push adding a suite says the walker it ran" "exit=$rc out=$out"
+out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suite")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "nothing was scanned" <<< "$out" && ! grep -q -F "walk the checkout" <<< "$out" \
+  && check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" ok \
+  || check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" "exit=$rc out=$out"
+git -C "$RWP" checkout -q main
 
 # --- claude-config#3160: the Slack alert guard is retired, and with it the step that ran its suite
 #     before any push changing a file in its folder (#2834). A branch cut before the retirement can

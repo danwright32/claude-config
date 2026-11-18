@@ -1,7 +1,8 @@
-"""Three readings for the Slack drafts gate: an endpoint a program only compares against or lists,
+"""Four readings for the Slack drafts gate: an endpoint a program only compares against or lists,
 told from one it sends to (claude-config#2913); the webhook's name where a file only declares it,
-told from where it is read (claude-config#3050); and the directory a script's cd moves to when the
-target is built from $0 or BASH_SOURCE (#2913).
+told from where it is read (claude-config#3050); the directory a script's cd moves to when the
+target is built from $0 or BASH_SOURCE (#2913); and import text a test's matcher only compares,
+told from a string that may run as code (js_compared, claude-config#3146, said where it is defined).
 
 Names held only as data. Dan decided on 2026-11-14 (#2913, "Teach the gate", no exemption list) that
 the gate should tell a Slack posting address that is only compared or listed, such as a refusal list
@@ -186,6 +187,86 @@ def js_held(text, code, quoted, a, b):
             # An array literal, not an index into something (`t["x"]`, `f()["x"]`).
             return not lead or lead[-1] in JS_ARRAY_AFTER or (word is not None and word.group(0) in JS_ARRAY_WORDS)
     return False
+
+
+# Import text a test only compares (claude-config#3146). Where a file a script's imports reach can run a
+# string as code, the gate follows import text in every string (#2484), since a string reaches that
+# code through names it cannot trace. One it can trace is the whole argument of a matcher on expect():
+# the matcher compares it with what expect() was handed and hands it nowhere. The matchers read are
+# those that only compare (Object.is, a substring or an element, a substring or a pattern), never
+# toEqual and its kin, which hand both values to any equality tester the run adds.
+JS_MATCHERS = re.compile(r"\.\s*(?:toBe|toContain|toMatch)\s*\(\Z")
+JS_MATCHER_MODIFIERS = re.compile(r"\.\s*(?:not|resolves|rejects)\s*\Z")
+# What can change what a matcher does with the value it is handed: expect.extend and equality testers,
+# chai's plugins and its Assertion's methods, a spy, Reflect, and a prototype or a property defined
+# (a String method a matcher calls). Read from a file's whole text, strings and comments included,
+# which can only follow more.
+JS_MATCHER_CHANGED = re.compile(r"\b(?:extend|addEqualityTesters|chai|Assertion|addMethod|overwriteMethod|"
+                                r"addProperty|overwriteProperty|addChainableMethod|overwriteChainableMethod|"
+                                r"defineProperty|defineProperties|spyOn|Reflect)\b|[Pp]rototype|__proto__")
+# Where expect is the test runner's when a file imports it by name.
+EXPECT_SOURCES = ("vitest", "@jest/globals", "bun:test")
+
+
+def js_expect_own(code, quoted):
+    """Whether expect, in a JavaScript file's code (js_scan's, comments blanked; quoted its marks), is
+    the test runner's wherever it is called: every use is a call or a member read, or its name alone
+    in an import list from EXPECT_SOURCES (claude-config#3146). Any other use (a declaration, a
+    parameter, a destructuring, an assignment, an import under another name or from anywhere else, a
+    member of something else) can bind it to anything, and gives False."""
+    lists = [(m.start(1), m.end(1)) for m in
+             re.finditer(r"\bimport\s*\{([^{}]*)\}\s*from\s*(['\"])([^'\"\n]+)\2", code)
+             if not quoted[m.start()] and m.group(3) in EXPECT_SOURCES]
+    for m in re.finditer(r"(?<![\w$])expect(?![\w$])", code):
+        p = m.start()
+        if quoted[p]:
+            continue
+        inside = next(((a, b) for a, b in lists if a <= p < b), None)
+        if inside:
+            if re.search(r"\bas\s*\Z", code[inside[0]:p]) or re.match(r"\s*as\b", code[m.end():inside[1]]):
+                return False
+            continue
+        before = code[:p].rstrip()
+        if before.endswith(".") or re.search(r"(?<![\w$])(?:function|class|const|let|var|import|export|as)\Z", before):
+            return False
+        if not re.match(r"\s*[(.]", code[m.end():]):
+            return False
+    return True
+
+
+def js_compared(text, code, quoted, at):
+    """Whether index at of a JavaScript file's text lies in a string that is the whole argument of a
+    matcher that only compares (JS_MATCHERS) on expect(...), with not, resolves or rejects between
+    (claude-config#3146): one string written out, quoted or a template with no ${...}, alone in the
+    call's parentheses. code and quoted are js_scan's. Whether expect is the runner's
+    (js_expect_own) and whether anything the walk reads changes what a matcher does
+    (JS_MATCHER_CHANGED) are the caller's to ask."""
+    if quoted[at] != 1:
+        return False
+    s, e = at, at
+    while s and quoted[s - 1] == 1:
+        s -= 1
+    while e < len(quoted) and quoted[e] == 1:
+        e += 1
+    lit = text[s:e]
+    if len(lit) < 2 or lit[0] not in "'\"`" or lit[-1] != lit[0] or (lit[0] == "`" and "${" in lit):
+        return False
+    if not code[e:].lstrip().startswith(")"):
+        return False
+    before = code[:s].rstrip()
+    m = JS_MATCHERS.search(before)
+    if not m:
+        return False
+    rest = before[:m.start()].rstrip()
+    mod = JS_MATCHER_MODIFIERS.search(rest)
+    while mod:
+        rest = rest[:mod.start()].rstrip()
+        mod = JS_MATCHER_MODIFIERS.search(rest)
+    j = len(rest) - 1
+    if j < 1 or rest[j] != ")" or quoted[j]:
+        return False
+    k = js_opener(code, quoted, j - 1)
+    return k is not None and code[k] == "(" and re.search(r"(?<![\w$.])expect\s*\Z", code[:k]) is not None
 
 
 def js_literal(text, quoted, at):

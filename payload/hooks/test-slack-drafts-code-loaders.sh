@@ -17,7 +17,10 @@
 # lib/py-aliases.py (#3102): a Python module given another name, or put where the gate does not
 # follow it, is read as the imported name is. And three more routes to os (#3119): string.Formatter,
 # a chain from a value the gate does not follow, and os under another name in a module the script
-# imports or a class body. Every other
+# imports or a class body. And three narrow passes, each with the cases beside it that stay refused:
+# a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
+# (#3146), and ast, io and gzip in a read only script (#3103). And a command inside a process
+# substitution, or handed one as the file it runs (#3213). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -1544,6 +1547,235 @@ read_refused "#3085 a shell script whose loop reads the file it is handed is sti
 says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
 
 echo
+echo "slack drafts only: a shell given -n reads its script and runs none of it (claude-config#3155)"
+
+# On 2026-11-17 the gate refused `bash -n payload/hooks/payload-write-gate.sh` because it could not
+# follow that script's source of a path built from a variable. -n only parses. Measured 2026-11-18
+# (bash 3.2.57, sh as bash in POSIX mode, zsh 5.9, dash, ksh), each handed a script that writes a
+# marker file: nothing was written under -n, -n with -x, -v, -e or -u, -n before --, nor with startup
+# files in HOME or BASH_ENV set; it was written with -n after the script (an argument to it), with
+# +n or +o noexec after -n (which turn it off again) and with -n after the -c code ($0). So bash, sh
+# or zsh given -n, among options of letters that take no value, before a script file, runs nothing
+# of that file; everything else on the line, and every other spelling, is judged as before.
+D55="$T/d3155"
+mkdir -p "$D55"
+run_55() { run_raw "$(payload Bash "$(bash_input "$1")" "$D55")"; }
+printf '%s\n' "$POST" > "$D55/posts.sh"
+printf '%s\n' '#!/bin/bash' '. "$HOOK_DIR_3155/lib/sync-clone.sh"' 'echo ok' > "$D55/sources.sh"
+for runs in "bash -n posts.sh" "sh -n posts.sh" "zsh -n posts.sh" "/bin/bash -n posts.sh" "bash -n $D55/posts.sh" \
+  "bash -n sources.sh" "bash -nx posts.sh" "bash -n -v posts.sh" "bash -e -n posts.sh" "bash -n -- posts.sh" \
+  "sh -n -u posts.sh" "bash -n posts.sh && echo parsed" "bash -n posts.sh 2>&1 | head -5" "zsh -n sources.sh"; do
+  run_55 "$runs"
+  allowed "#3155 a shell given -n runs nothing of a script that posts: $runs"
+done
+for runs in "bash posts.sh" "bash sources.sh" "bash posts.sh -n" "bash -- -n posts.sh" "bash -n +n posts.sh" \
+  "bash -n +o noexec posts.sh" "bash -n posts.sh; bash posts.sh" "bash -n posts.sh && sh posts.sh" \
+  "bash -n posts.sh | bash" "bash -c '$POST' -n" "bash -n -c '$POST'" "bash -nc '$POST'" \
+  "bash -n posts.sh \$(bash posts.sh)" "bash -n posts.sh <(bash posts.sh)" "bash -n posts.sh > >(bash posts.sh)" \
+  "bash -n \$OPT posts.sh" "OPT=+n; bash -n \$OPT posts.sh" "bash -n \"\$(echo +n)\" posts.sh" "bash -n '+n' posts.sh"; do
+  run_55 "$runs"
+  read_refused "#3155 a script that posts is still refused where -n does not stop it, or with -c: $runs"
+done
+
+echo
+echo "slack drafts only: import text a test only compares is not followed beside code that runs strings (claude-config#3146)"
+
+# Seen 2026-11-17 in a work repository: one test file run through vitest was refused as importing
+# ./src/index.ts, a module the gate cannot find, though it imports four node builtins, vitest and two
+# sibling scripts; the text was only an argument to expect(...).toContain(). Import text inside a
+# string has not been followed since #2484, except where any file the walk reaches names something
+# that can run a string as code (JS_SINK, JS_DYNAMIC), when every string is followed, and a test of a
+# build script names child_process. A string that is the whole argument of toBe, toContain or toMatch
+# on expect(...) is now left out even there, since the matcher only compares it, unless the file
+# binds expect any other way or a file in the walk names a way to change what a matcher does.
+D46="$T/d3146"
+mkdir -p "$D46/scripts" "$D46/node_modules/.bin" "$D46/node_modules/vitest/dist"
+printf '%s\n' '#!/usr/bin/env node' "import './dist/cli.js'" > "$D46/node_modules/vitest/vitest.mjs"
+printf '%s\n' "import { fork } from 'node:child_process'" 'for (const f of process.argv.slice(3)) fork(f)' > "$D46/node_modules/vitest/dist/cli.js"
+ln -s ../vitest/vitest.mjs "$D46/node_modules/.bin/vitest"
+printf '%s\n' 'export default {};' > "$D46/vitest.config.mjs"
+printf '%s\n' 'export function makeEntry(p) {' "  return \`export * from '\${p}';\\n\`;" '}' > "$D46/scripts/entry.mjs"
+printf '%s\n' 'import { readdirSync } from "node:fs";' 'export const listFiles = (d) => readdirSync(d);' > "$D46/scripts/list.mjs"
+printf '%s\n' 'export const post = (t) => fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: t });' > "$D46/scripts/poster.mjs"
+cat > "$D46/scripts/base.txt" <<'JS'
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test, expect } from "vitest";
+import { makeEntry } from "./entry.mjs";
+import { listFiles } from "./list.mjs";
+
+// export * from './src/commented.ts'
+/* import { gone } from "./src/block-comment.ts"; */
+const here = path.dirname(fileURLToPath(import.meta.url));
+test("the entry re-exports the source", () => {
+  execFileSync("node", [path.join(here, "entry.mjs")]);
+  const source = makeEntry("./src/index.ts");
+  expect(source).toContain("export * from './src/index.ts'");
+  expect(source).not.toContain(`import { gone } from "./src/missing.ts"`);
+  expect(source.trim()).toBe('export * from "./src/other.ts";');
+  expect(readFileSync(path.join(here, "entry.mjs"), "utf8")).toMatch("import x from './src/x.ts'");
+  expect(listFiles(here).length).toBeGreaterThan(0);
+});
+JS
+run_46() { run_raw "$(payload Bash "$(bash_input "$1")" "$D46")"; }
+vt46() { # vt46 <file name> <lines...>: the base test with these lines after it
+  local name="$1"
+  shift
+  { cat "$D46/scripts/base.txt"; printf '%s\n' "$@"; } > "$D46/scripts/$name"
+}
+vt46 a.node.test.mjs
+for runs in "./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs" \
+  "node scripts/entry.mjs && ./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs > out.txt 2>&1" \
+  "node scripts/a.node.test.mjs"; do
+  run_46 "$runs"
+  allowed "#3146 import text a matcher only compares, in strings, a template and comments, beside child_process: $runs"
+done
+# The controls. A real import of a module that posts or is not there, each way it can be written,
+# on its own line or after such a string on the same line, is still followed.
+VT46="./node_modules/.bin/vitest run -c vitest.config.mjs"
+n46=0
+for line in 'import { post } from "./poster.mjs";' 'export { post } from "./poster.mjs";' \
+  'const { post } = require("./poster.mjs");' 'await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'"); await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toBe("a"); export { post } from "./poster.mjs";'; do
+  n46=$((n46 + 1))
+  vt46 "real-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/real-$n46.node.test.mjs"
+  read_refused "#3146 a real import of a module that posts is still followed: $line"
+  says "#3146 and the refusal names it: $line" "poster.mjs"
+done
+vt46 missing.node.test.mjs 'import "./src/index.ts";'
+run_46 "$VT46 scripts/missing.node.test.mjs"
+read_refused "#3146 a real import of a module that is not there is still refused"
+says "#3146 and the refusal names it" "./src/index.ts, a module the gate cannot find"
+# A string anywhere else is still followed while something in the walk can run strings: held in a
+# name and handed on, built with +, an array's element, compared by a matcher with custom testers,
+# or beside a matcher or a string method the file changes.
+n46=0
+for line in 'const entry = "export * from '"'"'./src/index.ts'"'"'"; execFileSync("node", ["--input-type=module", "-e", entry]);' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'" + "");' \
+  'const cases = ["export * from '"'"'./src/index.ts'"'"'"];' \
+  'expect(makeEntry("x")).toEqual("export * from '"'"'./src/index.ts'"'"'");' \
+  'expect.extend({ toContain: (r, c) => execFileSync("node", ["--input-type=module", "-e", c]) });' \
+  'Object.defineProperty(String.prototype, "includes", { value: (c) => execFileSync("node", ["-e", c]) });'; do
+  n46=$((n46 + 1))
+  vt46 "held-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/held-$n46.node.test.mjs"
+  read_refused "#3146 import text in a string not only compared by a matcher is still followed: $line"
+  says "#3146 and the refusal names the module in the string: $line" "./src/index.ts"
+done
+# expect bound by the file itself, which may hand the string to anything.
+sed -e 's/^import { test, expect } from "vitest";$/import { test } from "vitest";/' "$D46/scripts/base.txt" > "$D46/scripts/own-expect.node.test.mjs"
+printf '%s\n' 'function expect(s) { return { toContain: (c) => execFileSync("node", ["-e", c]), not: {}, toBe() {}, toMatch() {}, toBeGreaterThan() {} }; }' >> "$D46/scripts/own-expect.node.test.mjs"
+run_46 "$VT46 scripts/own-expect.node.test.mjs"
+read_refused "#3146 a file that binds expect itself still has its strings followed"
+# A matcher changed in another module the test imports.
+printf '%s\n' 'import { expect } from "vitest";' 'import { execFileSync } from "node:child_process";' \
+  'expect.extend({ toContain: (r, c) => ({ pass: !!execFileSync("node", ["-e", c]), message: () => "" }) });' > "$D46/scripts/matchers.mjs"
+vt46 extended.node.test.mjs 'import "./matchers.mjs";'
+run_46 "$VT46 scripts/extended.node.test.mjs"
+read_refused "#3146 a matcher changed in a module the test imports leaves every string followed"
+says "#3146 and the refusal names the module in the string" "./src/index.ts"
+
+echo
+echo "slack drafts only: a read only script may use ast, io and gzip (claude-config#3103)"
+
+# Dan decided on 2026-11-16 (#3103): trust ast, io and gzip in a read only script; shutil stays
+# refused, with every module that can run code or send. Each was refused as a module the gate does
+# not know (ast 4, io 2 and gzip 2 of the refusals counted that day). What each offers that writes a
+# file is held as open() is: io.open, gzip.open, io.FileIO and gzip.GzipFile by their mode (the file
+# first, then the mode), any of them passed on or imported under another name, and gzip.main, which
+# writes name.gz beside each file on sys.argv. Running code (exec, compile) and the modules they
+# hold (gzip.os, gzip.builtins) are refused as before.
+cat > "$D85/reads-ast.py" <<'PY'
+import ast, sys
+text = open(sys.argv[1]).read()
+tree = ast.parse("total = 1 + 2")
+print(len(text), ast.dump(tree)[:20], ast.literal_eval("[1, 2]"), ast.unparse(tree), len(list(ast.walk(tree))))
+PY
+cat > "$D85/reads-io.py" <<'PY'
+import io, sys
+with io.open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read()
+print(len(io.StringIO(text).read()), len(io.FileIO(sys.argv[1]).read()), io.TextIOWrapper(io.BytesIO(b"x")).read())
+print(io.open(sys.argv[1], "r").readline()[:10], io.open(sys.argv[1], mode="rb").read(4), io.FileIO(sys.argv[1], "r").read(2))
+PY
+cat > "$D85/reads-gzip.py" <<'PY'
+import gzip, io, sys
+blob = gzip.compress(open(sys.argv[1], "rb").read())
+print(len(gzip.decompress(blob)))
+with gzip.open(io.BytesIO(blob), "rt") as f:
+    print(len(f.read()))
+print(len(gzip.GzipFile(fileobj=io.BytesIO(blob)).read()), len(gzip.GzipFile(fileobj=io.BytesIO(blob), mode="rb").read()))
+PY
+cat > "$D85/reads-from.py" <<'PY'
+import sys
+import gzip as gz
+from ast import literal_eval
+from gzip import compress, decompress
+from io import BytesIO, StringIO
+print(literal_eval("{'a': 1}"), len(decompress(compress(b"x"))), BytesIO(b"x").read(), StringIO("y").read())
+print(len(gz.open(BytesIO(compress(open(sys.argv[1], "rb").read()))).read()))
+PY
+for reads in reads-ast.py reads-io.py reads-gzip.py reads-from.py; do
+  run_85 "python3 $reads $RULES"
+  allowed "#3103 a read only script using ast, io or gzip, handed the real rules file: $reads"
+  run_85 "python3 $reads msg.json"
+  allowed "#3103 the same script handed a data file naming the endpoint: $reads"
+done
+# Everything they can write with, or reach past, is still refused. The paths hold none of w, a, x and
+# +, so a mode read from the wrong argument would let them through.
+WR03='.write(open(sys.argv[1]).read())'
+WB03='.write(open(sys.argv[1], "rb").read())'
+w85 io-open-w.py 'import io, sys' "io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-open-kw.py 'import io, sys' "io.open(file=\"/tmp/run.sh\", mode=\"a\")$WR03"
+w85 io-open-var.py 'import io, sys' 'mode = sys.argv[2]' "io.open(\"/tmp/run.sh\", mode)$WR03"
+w85 io-fileio-w.py 'import io, sys' "io.FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-fileio-plus.py 'import io, sys' "io.BufferedRandom(io.FileIO(\"/tmp/run.sh\", \"r+\"))$WB03"
+w85 io-from-open.py 'import sys' 'from io import open' "open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-open-as.py 'import sys' 'from io import open as io_open' "io_open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-fileio.py 'import sys' 'from io import FileIO' "FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-passed.py 'import functools, io, sys' "functools.partial(io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 io-renamed.py 'import io, sys' 'opener = io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-open-w.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-open-kw.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", mode=\"wt\")$WR03"
+w85 gzip-file-w.py 'import gzip, sys' "gzip.GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-file-kw.py 'import gzip, sys' "gzip.GzipFile(filename=\"/tmp/run.gz\", mode=\"w\")$WB03"
+w85 gzip-from-file.py 'import sys' 'from gzip import GzipFile' "GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-as.py 'import gzip as g, sys' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-renamed.py 'import gzip, sys' 'g = gzip' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-io-open.py 'import gzip, sys' "gzip.io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-io-passed.py 'import functools, gzip, sys' "functools.partial(gzip.io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 gzip-io-renamed.py 'import gzip, sys' 'opener = gzip.io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-main.py 'import gzip, sys' 'sys.argv = ["gzip", sys.argv[1]]' 'gzip.main()'
+w85 gzip-from-main.py 'import sys' 'from gzip import main' 'sys.argv = ["gzip", sys.argv[1]]' 'main()'
+w85 gzip-main-renamed.py 'import gzip, sys' 'g = gzip' 'sys.argv = ["gzip", sys.argv[1]]' 'g.main()'
+w85 gzip-main-passed.py 'import gzip, sys' 'run = gzip.main' 'run()'
+w85 gzip-builtins.py 'import gzip, sys' 'gzip.builtins.exec("import os; os.system(\"bash \" + sys.argv[1])")'
+w85 gzip-os.py 'import gzip, sys' 'gzip.os.system("bash " + sys.argv[1])'
+w85 ast-exec.py 'import ast, sys' 'exec(ast.literal_eval(repr(open(sys.argv[1]).read())))'
+w85 ast-compile.py 'import ast, sys' 'tree = ast.parse(open(sys.argv[1]).read())' 'exec(compile(tree, sys.argv[1], "exec"))'
+w85 shutil-copy.py 'import shutil, sys' 'shutil.copy(sys.argv[1], "/tmp/run.sh")'
+for acts in io-open-w.py io-open-kw.py io-open-var.py io-fileio-w.py io-fileio-plus.py io-from-open.py \
+  io-from-open-as.py io-from-fileio.py io-passed.py io-renamed.py gzip-open-w.py gzip-open-kw.py gzip-file-w.py \
+  gzip-file-kw.py gzip-from-file.py gzip-as.py gzip-renamed.py gzip-io-open.py gzip-io-passed.py gzip-io-renamed.py \
+  gzip-main.py gzip-from-main.py \
+  gzip-main-renamed.py gzip-main-passed.py gzip-builtins.py gzip-os.py ast-exec.py ast-compile.py shutil-copy.py; do
+  run_85 "python3 $acts $RULES"
+  read_refused "#3103 a script that writes, runs code or reaches past ast, io or gzip is still refused: $acts"
+done
+run_85 "python3 io-open-w.py $RULES"
+says "#3103 the refusal names the writing mode" "can write a file (open with a mode that writes"
+run_85 "python3 gzip-main.py $RULES"
+says "#3103 and gzip's command line" "can write a file (gzip.main"
+run_85 "python3 io-renamed.py $RULES"
+says "#3103 and an opener passed on" "can write a file (io.open, passed on rather than called"
+run_85 "python3 shutil-copy.py $RULES"
+says "#3103 shutil is still a module the gate does not know" "imports shutil, a module the gate does not know"
+
+echo
 echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
 
 # The gate reads a module's attributes only from a name an import binds, so `q = pathlib` and then
@@ -2071,7 +2303,7 @@ class Times:
     def __init__(self, path):
         self.path, self.sys, self.user = path, 0.5, 1.5
     def total(self):
-        return self.sys + self.user
+        return round(self.sys, 1) + self.user
 q = sys
 parser = argparse.ArgumentParser()
 parser.add_argument("path")
@@ -2091,6 +2323,260 @@ w51 lib_times.py 'class Times:' '    sys, user, path = 0.5, 1.5, "x"' 'now = Tim
 w51 own-module-field.py 'import lib_times' 'q = lib_times.now.sys' 'p = lib_times.now.path' 'print(q, round(q), p.upper())'
 run_51 "python3 own-module-field.py msg.json"
 allowed "#3151 and a field named sys read off one of the script's own modules into a name passes"
+
+echo "slack drafts only: a submodule of an inert package, and sys put where the gate does not follow it (claude-config#3172)"
+
+# Two more routes, each of which passed the gate as #3151 left it (measured 2026-11-17 by the cases
+# below, exit 0 and nothing said, handed a data file naming an endpoint). One: PY_INERT admitted any
+# submodule of a package on it, so `import json.tool` passed, and json.tool.main reads its output
+# path from sys.argv and writes it (on Python 3.14.4 it wrote out.py). Two: a sys read off a value the
+# gate does not follow was read on only through a name it was bound to, so the same sys handed to a
+# function, put in a list, returned, or chosen by a conditional changed where Python finds modules
+# unseen.
+D72="$T/d3172"
+mkdir -p "$D72/lib"
+cp "$D02/msg.json" "$D72/msg.json"
+run_72() { run_raw "$(payload Bash "$(bash_input "$1")" "$D72")"; }
+w72() { local name="$1"; shift; printf '%s\n' "$@" > "$D72/$name"; }
+ARGV72='sys.argv[1:] = [sys.argv[1], "out.py"]'
+w72 jt-import.py 'import json.tool, sys' "$ARGV72" 'json.tool.main()'
+w72 jt-as.py 'import json.tool as t, sys' "$ARGV72" 't.main()'
+w72 jt-from.py 'import sys' 'from json import tool' "$ARGV72" 'tool.main()'
+w72 jt-from-sub.py 'import sys' 'from json.tool import main' "$ARGV72" 'main()'
+w72 jt-main.py 'import sys' "$ARGV72" 'import json.__main__' 'json.tool.main()'
+for route in jt-import.py jt-as.py jt-from.py jt-from-sub.py jt-main.py; do
+  run_72 "python3 $route msg.json"
+  read_refused "#3172 a submodule of an inert package that is not itself on the list is refused: $route"
+done
+run_72 "python3 jt-import.py msg.json"
+says "#3172 the refusal names the submodule" "json.tool"
+PATH72='.path.insert(0, "lib")'
+w72 lib_sys.py 'import sys'
+w72 go-call-chain.py 'import pathlib' 'def go(m):' "    m$PATH72" 'go(pathlib.PurePath("x").parser.sys)' 'import json'
+w72 go-own-module.py 'import lib_sys' 'def go(m):' "    m$PATH72" 'go(lib_sys.sys)' 'import json'
+w72 go-keyword.py 'import lib_sys' 'def go(m=None):' "    m$PATH72" 'go(m=lib_sys.sys)' 'import json'
+w72 go-name.py 'import lib_sys' 'q = lib_sys.sys' 'def go(m):' "    m$PATH72" 'go(q)' 'import json'
+w72 ifexp-name.py 'import lib_sys, os' 'q = lib_sys.sys if os.sep else None' "q$PATH72" 'import json'
+w72 ifexp-chain.py 'import os, pathlib' 'q = pathlib.PurePath("x").parser.sys if os.sep else None' "q$PATH72" 'import json'
+w72 ifexp-direct.py 'import lib_sys, os' "(lib_sys.sys if os.sep else None)$PATH72" 'import json'
+w72 boolop-name.py 'import lib_sys' 'q = lib_sys.sys or None' "q$PATH72" 'import json'
+w72 list.py 'import lib_sys' 'qs = [lib_sys.sys]' "qs[0]$PATH72" 'import json'
+w72 returned.py 'import lib_sys' 'def f():' '    return lib_sys.sys' "f()$PATH72" 'import json'
+w72 cast.py 'import lib_sys, typing' "typing.cast(object, lib_sys.sys)$PATH72" 'import json'
+w72 walrus.py 'import lib_sys' 'def go(m):' "    m$PATH72" 'go((q := lib_sys.sys))' 'import json'
+w72 attr-store.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'h.m = lib_sys.sys' "h.m$PATH72" 'import json'
+w72 shadowed-print.py 'import lib_sys' 'def print(m):' "    m$PATH72" 'print(lib_sys.sys)' 'import json'
+# An operand hands sys to the other operand's method where the script writes one: a module has no
+# __add__, so sys + A() calls A.__radd__ with it, and `in` calls __contains__. Each case but the one
+# about the script's own module reads sys off pathlib, so that importing one of the script's own
+# modules (which refuses an operand by itself) is not what refuses it.
+SYS72='pathlib.PurePath("x").parser.sys'
+w72 operand-radd.py 'import pathlib' 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0' \
+  "print($SYS72 + A())" 'import json'
+w72 operand-contains.py 'import pathlib' 'class A:' '    def __contains__(self, m):' "        m$PATH72" '        return True' \
+  "print($SYS72 in A())" 'import json'
+# The lessons review at d63d189: a chained assignment that also stores sys on an attribute, and an
+# operand whose class's hook is written where the script's own class bodies do not show it (a module
+# of the script's own, type() given the methods, a method set on the class afterwards).
+w72 chain-attr.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'q = h.m = lib_sys.sys' "h.m$PATH72" 'import json'
+w72 lib_hook.py 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0'
+w72 operand-own-module.py 'import lib_sys, lib_hook' 'print(lib_sys.sys + lib_hook.A())' 'import json'
+w72 operand-type.py 'import pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = type("A", (), {"__radd__": radd})' "print($SYS72 + A())" 'import json'
+w72 operand-set-later.py 'import pathlib' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A.__radd__ = radd' "print($SYS72 + A())" 'import json'
+# (operand-set-later.py and operand-setattr.py were refused before #3172 too, by the rule on an
+# attribute starting with _ and by setattr being on PY_RUNS; they stay so a change to either is seen.)
+w72 operand-setattr.py 'import pathlib' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'setattr(A, "__r" + "add__", radd)' "print($SYS72 + A())" 'import json'
+# The lessons review at 510611e: a hook written inside an if or a try in the class body.
+w72 operand-in-if.py 'import os, pathlib' 'class A:' '    if os.sep:' '        def __radd__(self, m):' "            m$PATH72" \
+  '            return 0' "print($SYS72 + A())" 'import json'
+w72 operand-in-try.py 'import pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' 'class A:' '    try:' \
+  '        __radd__ = radd' '    except Exception:' '        pass' "print($SYS72 + A())" 'import json'
+# The lessons review at 54ccd1c: abc.ABCMeta makes a class from a dictionary whose key is built, or
+# from dict() with keywords. Three reviews each found a way to give a class a method the last list
+# missed, so an operand now passes only beside literals; one beside any other value is refused,
+# a field added to a field included (handed the other's __radd__ all the same).
+w72 operand-abcmeta-key.py 'import abc, pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = abc.ABCMeta("A", (), {"__r" + "add__": radd})' "print($SYS72 + A())" 'import json'
+w72 operand-abcmeta-kw.py 'import abc, pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = abc.ABCMeta("A", (), dict(__radd__=radd))' "print($SYS72 + A())" 'import json'
+w72 operand-field.py 'import pathlib' 'class T:' '    user = 1.5' 't = T()' "print($SYS72 + t.user)" 'import json'
+for route in go-call-chain.py go-own-module.py go-keyword.py go-name.py ifexp-name.py ifexp-chain.py ifexp-direct.py \
+  boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py \
+  chain-attr.py operand-own-module.py operand-type.py operand-set-later.py operand-setattr.py operand-in-if.py \
+  operand-in-try.py operand-abcmeta-key.py operand-abcmeta-kw.py operand-field.py; do
+  run_72 "python3 $route msg.json"
+  read_refused "#3172 sys put where the gate does not follow it is refused: $route"
+done
+run_72 "python3 go-call-chain.py msg.json"
+says "#3172 the refusal says sys went where the gate does not follow it" "where the gate does not follow it"
+# The class behind json.tool (L96): every submodule each package on the gate's list has on this
+# Python, found from the list itself (its names cut out of the gate's text), is either on the list
+# by its own dotted name or refused, so a submodule a later Python adds is refused until read.
+read -r -a INERT72 <<< "$(sed -n '/^PY_INERT = frozenset({/,/})/p' "$DIR/slack_drafts_only_gate.py" | grep -o '"[A-Za-z_.]*"' | tr -d '"' | tr '\n' ' ')"
+python3 -B - ${INERT72[@]+"${INERT72[@]}"} > "$D72/subs.txt" 2>"$D72/subs.err" <<'PY'
+import importlib, pkgutil, sys
+listed = set(sys.argv[1:])
+for name in sorted(listed):
+    try:
+        mod = importlib.import_module(name)
+    except ImportError:
+        continue
+    for sub in pkgutil.iter_modules(getattr(mod, "__path__", None) or []):
+        print(("listed " if f"{name}.{sub.name}" in listed else "unlisted ") + f"{name}.{sub.name}")
+PY
+if grep -qx 'unlisted json.tool' "$D72/subs.txt"; then check "#3172 the walk found json.tool among the inert packages' submodules" ok
+else check "#3172 the walk found json.tool among the inert packages' submodules" "it found: $(tr '\n' '|' < "$D72/subs.txt") $(head -c 300 "$D72/subs.err")"; fi
+while read -r kind sub; do
+  [ -n "$sub" ] || continue
+  w72 "sub-$sub.py" "import $sub, sys" 'print(len(open(sys.argv[1]).read()))'
+  run_72 "python3 sub-$sub.py msg.json"
+  if [ "$kind" = listed ]; then allowed "#3172 a submodule on the list by its own name passes: $sub"
+  else read_refused "#3172 a submodule not on the list by its own name is refused: $sub"; fi
+done < "$D72/subs.txt"
+# The controls: json read and written to the screen, its decoder and html's parser imported as real
+# code in this repository imports them (lib/local-allow-rules.py, skills/design-rounds/design_file.py),
+# html.parser also as `import html.parser`, sys used as scripts use it, and a field named sys read, printed,
+# rounded, formatted, compared and added, which is a field (PR #3161), also when a conditional picks
+# it into a name.
+cat > "$D72/reads-3172.py" <<'PY'
+import collections, html.parser, json, sys
+import sys as s
+from html.parser import HTMLParser
+from json.decoder import JSONDecodeError, scanstring
+class Times:
+    def __init__(self):
+        self.sys, self.user = 0.5, 1.5
+    def total(self):
+        return round(self.sys, 1) + self.user
+t = Times()
+q = t.sys if t.user else 0
+assert 0 < t.sys <= 1.5 and t.sys != -1 and t.sys + 1 > 1
+try:
+    data = json.load(open(sys.argv[1]))
+except JSONDecodeError as e:
+    print(e, file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(data, indent=2), isinstance(data, collections.abc.Iterable), scanstring('"a"', 1)[0], HTMLParser, html.parser.HTMLParser)
+print(t.sys, round(t.sys), str(t.sys), f"{t.sys:.1f}", t.sys == 0.5, -t.sys, t.sys * 2, t.total(), round(q))
+json.dump(data, sys.stdout)
+s.stdout.write(s.argv[0] + "\n")
+if __name__ == "__main__":
+    print(t.sys * 3)
+PY
+run_72 "python3 reads-3172.py msg.json"
+allowed "#3172 the control: json, its decoder, html.parser, collections' abc, sys and a field named sys used as scripts use them pass"
+run_72 "python3 reads-3172.py $RULES"
+allowed "#3172 and handed the real rules file"
+run_72 "python3 -m json.tool msg.json"
+allowed "#3172 and python3 -m json.tool printing a file, which the gate reads as a program, still passes"
+# A name on PY_REACH used as a plain name is refused with what that name does: only the typing
+# names evaluate a string as code; enum's builtins, sys's hooks and the rest reach past what the
+# gate reads (the message said "can evaluate a string as code" for all of them until #3172).
+w72 name-bltns.py 'import sys' 'def f(bltns):' '    return bltns' 'print(f(1), sys.argv[1])'
+w72 name-forwardref.py 'import sys' 'def f(ForwardRef):' '    return ForwardRef' 'print(f(1), sys.argv[1])'
+run_72 "python3 name-bltns.py msg.json"
+says "#3172 a name that is builtins is not said to evaluate a string" "reaches past what the gate reads (bltns)"
+run_72 "python3 name-forwardref.py msg.json"
+says "#3172 a typing name still says it evaluates a string as code" "can evaluate a string as code (ForwardRef)"
+
+echo
+echo "slack drafts only: a command inside a process substitution is judged as a command of its own (claude-config#3213)"
+
+# Measured 2026-11-18 on the branch for #3155: `cat <(bash posts.sh)`, `echo <(bash posts.sh)` and
+# `cat posts.sh > >(bash)` each passed, while `bash posts.sh` alone is refused. The shared reader
+# gave the gate no command for what is written inside <( ), >( ) or zsh's =( ), so nothing judged it.
+# Where each runs, measured the same day (bash 3.2.57, zsh 5.9): anywhere outside quotes in a
+# command's words, mid word and after an escaped backslash too, in an array's words, and in bash in
+# the word of an unquoted ${NAME:-word}; =( ) only at the start of a word. Inside double or single
+# quotes it is text. A shell inside one reads what feeds the command around it (`echo CODE | cat
+# <(bash)` ran CODE in bash), so a program that runs its input there reads text the gate cannot see.
+D13="$T/d3213"
+mkdir -p "$D13"
+run_13() { run_raw "$(payload Bash "$(bash_input "$1")" "$D13")"; }
+printf '%s\n' "$POST" > "$D13/posts.sh"
+printf '%s\n' 'echo ok' > "$D13/ok.sh"
+printf '%s\n' 'echo ok' > "$D13/o"
+printf '%s\n' 'cat <(bash posts.sh)' > "$D13/runner.sh"
+printf '%s\n' 'cat posts.sh > >(bash)' > "$D13/feeder.sh"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"text=hi")' > "$D13/posts.py"
+printf '%s\n' 'url = "https://slack.com/api/chat.postMessage"' 'data = "text=hi"' > "$D13/curlrc"
+printf '%s\n' 'bash <(cat posts.sh)' > "$D13/handed.sh"
+printf '%s\n' 'source <(sort a.txt)' 'echo sourced' > "$D13/sourced.sh"
+printf '%s\n' 'import sys' 'print(open(sys.argv[1]).read())' > "$D13/ok.py"
+printf '%s\n' 'while read -r l; do echo "$l"; done < <(sort a.txt)' 'diff <(sort a.txt) <(sort b.txt) || true' > "$D13/reads.sh"
+printf '%s\n' 'b' 'a' > "$D13/a.txt"
+printf '%s\n' 'c' 'a' > "$D13/b.txt"
+run_13 "bash posts.sh"
+read_refused "#3213 the yardstick: the script that posts is refused run on its own"
+for runs in "cat <(bash posts.sh)" "echo <(bash posts.sh)" "diff <(bash posts.sh) <(echo x)" "diff <(echo x) <(bash posts.sh)" \
+  "echo hi | tee >(bash posts.sh)" "cat < <(bash posts.sh)" "while read -r l; do echo \"\$l\"; done < <(bash posts.sh)" \
+  "cat <(cat <(bash posts.sh))" "cat <($POST)" "cat <(echo x; bash posts.sh)" "cat <(echo x && bash posts.sh)" \
+  "a=( <(bash posts.sh) ); echo \"\${a[0]}\"" "echo \${x:-<(bash posts.sh)}" "cat =(bash posts.sh)" "a=( =(bash posts.sh) )" \
+  "echo x<(bash posts.sh)" "echo \\\\<(bash posts.sh)" "bash -c 'cat <(bash posts.sh)'" "bash runner.sh" \
+  "echo \"\$(cat <(bash posts.sh))\"" "(cat <(bash posts.sh))" "sort a.txt > >(bash posts.sh)" "cat <(sort a.txt) <(bash posts.sh) b.txt" \
+  "cat <(cat posts.sh | bash)" "cat <(bash < posts.sh)" "case \$x in <(bash posts.sh)) echo y ;; esac"; do
+  run_13 "$runs"
+  read_refused "#3213 a script that posts is refused run inside a process substitution: $runs"
+done
+# A shell or an interpreter with no script reads its input, and inside a process substitution that is
+# whatever feeds it or the command around it, which the gate does not work out: refused as unread.
+for runs in "cat posts.sh > >(bash)" "cat posts.sh > >(sh)" "cat posts.sh | tee >(bash)" "tee >(bash) < posts.sh" \
+  "cat posts.sh | cat <(bash)" "cat posts.sh > >(true; bash)" "cat posts.sh > >(bash -c 'bash')" "cat posts.sh > >(python3)" \
+  "bash feeder.sh" "cat curlrc > >(curl -K -)"; do
+  run_13 "$runs"
+  read_refused "#3213 a program that runs its input is refused inside a process substitution: $runs"
+  says "#3213 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# The wrapper in front of the rule starts python only for a payload that could post. A shell that
+# closes a ( ) has no space after it, so with a file of no extension nothing in the payload named a
+# script or a shell the wrapper knew, and the call never reached the rule.
+printf '%s\n' "$POST" > "$D13/posts"
+for runs in "cat posts > >(bash)" "cat posts > >(sh)" "cat posts | tee >(zsh)" "cat posts > >(true; bash )"; do
+  run_13 "$runs"
+  read_refused "#3213 a shell closing a process substitution reaches the rule with no script named: $runs"
+  says "#3213 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# A process substitution handed to a program as the file it runs or reads its request from: the
+# program runs what the commands inside print. One command the gate reads the output of, as it does
+# for a pipe (cat of a file, echo or printf of written text), is judged by that output.
+for runs in "bash <(cat posts.sh)" "source <(cat posts.sh)" ". <(cat posts.sh)" "bash < <(cat posts.sh)" "python3 <(cat posts.py)" \
+  "curl -K <(cat curlrc)" "zsh =(cat posts.sh)" "bash <(echo 'bash posts.sh')" "bash -x <(cat posts.sh)" "env bash <(cat posts.sh)" \
+  "bash handed.sh" "cat <(bash <(cat posts.sh))" "bash -o <(cat posts.sh) o" "bash -o o -o <(cat posts.sh) o"; do
+  run_13 "$runs"
+  read_refused "#3213 a program handed a process substitution that prints a script that posts is refused: $runs"
+  says "#3213 and the refusal names what it prints: $runs" "prints"
+done
+# The last two: one given as an option's value, before a script whose name an earlier word holds
+# (`-o` holds `o`) or repeats. The script's place was found by searching the words for its text, which
+# stopped at that earlier word and left the substitution out of what is read (lessons review of
+# 9e299673b7). The file `o` posts nothing, so nothing else refuses the line.
+run_13 "bash o"
+allowed "#3213 the yardstick for those two: the script named o posts nothing and passes run on its own"
+# Anything else it prints cannot be read before it runs, and is refused as unread.
+for runs in "sh <(sort posts.sh)" "bash <(cat posts.sh | grep -v x)" "bash <(echo x; cat posts.sh)" "source <(sed 1q posts.sh)" \
+  "bash -c 'bash <(cat posts.sh)'" "bash <(cat <(cat posts.sh))" "bash -o <(sort posts.sh) o"; do
+  run_13 "$runs"
+  read_refused "#3213 a program handed a process substitution whose output cannot be read is refused: $runs"
+  says "#3213 and the refusal says it cannot be read: $runs" "cannot be read before the command runs"
+done
+# The controls: what is run inside is judged by what it is, so a command that passes on its own still
+# passes inside one, and quoted text that only looks like one is text.
+run_13 "bash ok.sh"
+allowed "#3213 the control's yardstick: a script that posts nothing passes run on its own"
+for runs in "cat <(echo hi)" "diff <(sort a.txt) <(sort b.txt)" "cat <(bash ok.sh)" "echo hi | tee >(cat) > /dev/null" \
+  "sort a.txt > >(head -1)" "while read -r l; do echo \"\$l\"; done < <(sort a.txt)" "cat <(bash -n posts.sh)" \
+  "echo \"<(bash posts.sh)\"" "echo '<(bash posts.sh)'" "echo \"\${x:-<(bash posts.sh)}\"" "a=(one two); echo \"\${a[1]}\"" \
+  "cat =(sort a.txt)" "comm -12 <(sort a.txt) <(sort b.txt) | wc -l" "echo \$(( 3 < (2) ))" \
+  "cat <(cat ok.sh | bash)" "cat <(bash < ok.sh)" "bash reads.sh" \
+  "bash <(cat ok.sh)" "source <(cat ok.sh)" "bash < <(cat ok.sh)" "bash <(echo 'echo hi')" "python3 ok.py <(sort a.txt)" \
+  "bash ok.sh <(sort a.txt)" "python3 -c 'print(1)' <(sort a.txt)" "bash sourced.sh" "sort <(cat posts.sh)" \
+  "bash ok.sh <(sort a.txt) ok.sh" "bash -o <(cat ok.sh) o"; do
+  run_13 "$runs"
+  allowed "#3213 a process substitution that runs nothing that posts still passes: $runs"
+done
 
 echo
 

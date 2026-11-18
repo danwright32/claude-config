@@ -259,8 +259,19 @@ def split(s, limit=None):
 # Quotes, $'...', ${ }, $(( )) and a plain ( ) that is not a subshell (a function's, an array's) hold
 # text. Each command frame keeps the directory its shell is in, copied from the shell that opened it,
 # and dropped when it closes, which is the shell's own rule: a cd inside ( ) or $( ) ends with it.
+#
+# A process substitution, <( ), >( ) or zsh's =( ), holds commands too (claude-config#3213): the
+# shell runs them, in a shell of their own, wherever it expands the word they are written in. Until
+# then it was read as a plain ( ), so `cat <(bash post.sh)` gave no command for the bash and nothing
+# that reads commands through here judged it. Measured 2026-11-18 (bash 3.2.57, zsh 5.9): <( and >(
+# run anywhere outside quotes in a command's words, mid word and after an escaped backslash too, in
+# an array's words, and in bash in the word of an unquoted ${NAME:-word}; =( runs only at the start
+# of a word; inside quotes each is text. One read where the shell runs none (an escaped <, a test's
+# comparison) only gives a command more than are there, the direction a gate needs.
 RESERVED = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time"}
-COMMAND_FRAMES = {"top", "sub", "subst", "tick"}
+COMMAND_FRAMES = {"top", "sub", "subst", "tick", "proc"}
+# What may stand before the = of zsh's =( ), which is one only at the start of a word.
+PROC_WORD_START = " \t\n;&|("
 # For each frame commands() reads as quoted text: (whether a character changes the reading there, a
 # search for the next one that does). Single quotes end only at a quote. Double quotes end at a quote
 # and hold a backslash, a $ (a substitution, an arithmetic or a parameter) and a backquote. An
@@ -281,13 +292,14 @@ def _stops(chars):
 # changes the reading only at these (commands()'s loop, branch by branch): in a frame holding commands,
 # a backslash, a quote ($' and $" too, at the $), a $ form, a backquote, a # that may start a comment,
 # a << or <<<, a separator (; & | and the line break, whose first character is the ; of the flattened
-# form's "; ") and a parenthesis; in ${ } its } as well as those it shares with quoted text; in $(( ))
+# form's "; ") and a parenthesis; in ${ } its } and a ( that may open a process substitution
+# (claude-config#3213) as well as those it shares with quoted text; in $(( ))
 # and a plain ( ) the parentheses, and a # in an array's. $'...' ends at its quote and holds backslash
 # escapes. The reader goes straight to the next of them, as it does in quoted text: stepping one
 # character at a time through commands was most of the reader's time judging the claude-sync suite,
 # 2.8 million characters with claude-sync (claude-config#2918).
 _HOLDS_TEXT = "\\'\"$`"
-FRAME_STOPS = dict(QUOTED_STOPS, ansi=_stops("'\\"), param=_stops("}" + _HOLDS_TEXT),
+FRAME_STOPS = dict(QUOTED_STOPS, ansi=_stops("'\\"), param=_stops("}(" + _HOLDS_TEXT),
                    arith=_stops("()" + _HOLDS_TEXT), paren=_stops("#()" + _HOLDS_TEXT),
                    **{k: _stops("#<|&;()\n" + _HOLDS_TEXT) for k in COMMAND_FRAMES})
 # A heredoc's opener up to its end marker word: <<, or <<- which strips leading tabs, and blanks.
@@ -468,6 +480,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
+    A process substitution's is read the same way (claude-config#3213).
     A subshell group is not part of the command around it. Heredoc bodies and comments are nobody's
     text, but the substitutions in the body of a heredoc whose end marker is unquoted are commands,
     since the shell expands that body and runs them (claude-config#2053); a quoted marker, in any
@@ -486,7 +499,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     text being s[start:end]; scope, the ids of the command frames enclosing it, outermost first and
     its own last (0 is s itself, and each subshell and substitution has an id of its own); inner, a
     (start, end, in_double_quotes) for each substitution written directly in it, start at its `$(`
-    or opening backquote and end just past its closing one; and openers, a (start, end) for each
+    or opening backquote and end just past its closing one, a process substitution among them, its
+    start at its `<(`, `>(` or `=(` (claude-config#3213); and openers, a (start, end) for each
     heredoc opener written directly in it, from its << to the end of its end marker word; and how,
     what ended it: ";" (a `;` or a line break), "&&", "||", "|" (a pipe, `|&` too), "&" (sent to
     the background), "#" (a comment), ")" (its subshell or substitution closing), "\\n" (the line
@@ -575,16 +589,22 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
         ids[0] += 1
         frame = {"k": kind, "start": start, "cwd": parent["cwd"], "old": parent["old"], "id": ids[0],
                  "inner": [], "openers": [],
-                 # Where it opened, at its $( or backquote, and whether that is inside double quotes
-                 # in the text of the command holding it.
+                 # Where it opened, at its $( or backquote, or a process substitution's <(, >( or
+                 # =(, and whether that is inside double quotes in the text of the command holding it.
                  "open": start - (1 if kind == "tick" else 2),
                  "dq": any(f["k"] == '"' for f in frames[at + 1:])}
         frames.append(frame)
 
+    def proc_opens(at):
+        """Whether the ( at `at` opens a process substitution where the reading is outside quotes:
+        after a < or a >, or after an = that starts a word (zsh's =( ), claude-config#3213)."""
+        before = s[at - 1:at]
+        return before in ("<", ">") or (before == "=" and (at == 1 or s[at - 2] in PROC_WORD_START))
+
     def close_commands(end):
         f = frames.pop()
         cut(f, end, ")")
-        if f["k"] in ("subst", "tick"):
+        if f["k"] in ("subst", "tick", "proc"):
             parent = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
             parent["inner"].append((f["open"], end + 1, f["dq"]))
         if f["k"] == "sub":
@@ -652,6 +672,14 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 frames.pop()
                 i += 1
                 continue
+            if c == "(":
+                # bash runs a <( ) or >( ) in the word of ${NAME:-word} unless the expansion is
+                # inside double quotes or a heredoc body, where it is text (claude-config#3213).
+                held = next(j for j in range(len(frames) - 1, -1, -1) if frames[j]["k"] in COMMAND_FRAMES)
+                if s[i - 1] in "<>" and not any(g["k"] in ('"', "hd") for g in frames[held + 1:]):
+                    open_commands("proc", i + 1)
+                i += 1
+                continue
         elif k == "paren":
             if c == "#" and f.get("array") and s[i - 1] in " \t\n(":
                 # A comment inside an array's ( ), as the shell reads one there too: an apostrophe in
@@ -662,7 +690,10 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 i = n if j < 0 else j
                 continue
             if c == "(":
-                frames.append({"k": "paren"})
+                if proc_opens(i):
+                    open_commands("proc", i + 1)  # in an array's words (claude-config#3213)
+                else:
+                    frames.append({"k": "paren"})
                 i += 1
                 continue
             if c == ")":
@@ -777,6 +808,13 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 f["start"] = i + 1
             i += 1
             continue
+        if c == "(" and proc_opens(i):
+            # A process substitution: its commands are commands of their own, and its text stays in
+            # the command holding it, as a command substitution's does (claude-config#3213). Read
+            # before a case pattern's ( is, since the shell expands one in a pattern too.
+            open_commands("proc", i + 1)
+            i += 1
+            continue
         if c == "(" and in_pattern(f, i):
             # A pattern written (y) opens no subshell, and the ) closing that leading ( ends the
             # pattern. Any other ( in a pattern, an extglob's +( or @(, closes inside it, and the
@@ -806,7 +844,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 frames.append({"k": "paren", "array": s[i - 1:i] == "="})
                 i += 1
             continue
-        if c == ")" and k in ("sub", "subst"):
+        if c == ")" and k in ("sub", "subst", "proc"):
             close_commands(i)
         i += 1
     if len(frames) > 1:

@@ -4,14 +4,30 @@
    for, with the window at the width the round is drawn at. It makes the page one self contained
    document: the markup as it renders now, every stylesheet the page uses inlined, every font and
    image those stylesheets name inlined as data, and every script taken out (the chrome is drawn,
-   never run). Two routes, by which browser tools the session has:
+   never run).
 
-   Playwright: browser_evaluate, with this file's text as the function. It answers with the document.
+   THE PAGE'S POLICY, AS csp (claude-config#2894). Every font, image and the page's own markup is read
+   with fetch(), which the page's content security policy governs, and a read the policy refuses is
+   reported to whoever it names, which can page Dan as the loopback post of #2774 did. Page script
+   cannot see a policy the server sent as a response header (measured 2026-11-17), so pass it: the text
+   of the page's Content-Security-Policy and Content-Security-Policy-Report-Only headers, joined by
+   ", ", or "" when its server sends neither. A policy in the page's meta tag is read here. A read every
+   policy allows is made; any other is named in the first comment and never attempted. Given no csp,
+   nothing is read over the network at all, and the first comment says so. Should the page refuse a read
+   anyway (the csp given was not its whole policy), every read after it is skipped and the refusal named.
+
+   Two routes, by which browser tools the session has:
+
+   Playwright: browser_evaluate, with this file's text wrapped as the function
+
+     () => (<this file's text>)({csp: "<the page's policy headers>"})
+
+   It answers with the document.
 
    Claude in Chrome (claude-config#2774): the javascript tool, in the tab the session opened, with this
    file's text wrapped as
 
-     await (<this file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html"})
+     await (<this file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html", csp: "<the page's policy headers>"})
 
    The page then saves the document itself, as a download into the Downloads folder, and answers with
    one line: the file name, its size in bytes, and the first comment below. Check the file is in
@@ -32,24 +48,106 @@
                 "slot": "#<the id of the element the round draws into>", "width": <the window width>}
 
    A stylesheet the page cannot read (another origin's, without CORS) and a font or image that cannot
-   be fetched are listed in the answer's first comment, never silently left out: a chrome missing its
-   font draws in a fallback font, and every picture compared against it differs.
+   be fetched, or that the page's policy does not allow reading, are listed in the answer's first
+   comment, never silently left out: a chrome missing its font draws in a fallback font, and every
+   picture compared against it differs.
 
    A theme on <html> (data-theme, a "dark" or "light" class, an inline color-scheme) that the page's
    own script set is taken out, so the chrome follows the same theme rule as the built page rather
    than whichever theme the capture ran in (claude-config#2045); one in the markup the server sent is
    kept. The first comment names either, and says so when the served markup could not be read. */
 async (options) => {
-  // Playwright calls this with nothing; the Chrome route passes {saveAs: "<a file name>.html"}.
-  const saveAs = options && typeof options === "object" && typeof options.saveAs === "string" ? options.saveAs : "";
-  if (options && typeof options === "object" && "saveAs" in options && !/^[A-Za-z0-9][A-Za-z0-9._ -]*\.html$/.test(saveAs)) {
-    throw new Error("saveAs must be a plain file name ending in .html, with no folder: " + JSON.stringify(options.saveAs));
+  // {csp: "<the page's policy headers>"} on both routes, and {saveAs: "<a file name>.html"} on the Chrome route.
+  const opts = options && typeof options === "object" ? options : {};
+  const saveAs = typeof opts.saveAs === "string" ? opts.saveAs : "";
+  if ("saveAs" in opts && !/^[A-Za-z0-9][A-Za-z0-9._ -]*\.html$/.test(saveAs)) {
+    throw new Error("saveAs must be a plain file name ending in .html, with no folder: " + JSON.stringify(opts.saveAs));
   }
+  if ("csp" in opts && typeof opts.csp !== "string") {
+    throw new Error("csp must be the text of the page's Content-Security-Policy and Content-Security-Policy-Report-Only " +
+      'response headers, or "" when its server sends neither: ' + JSON.stringify(opts.csp));
+  }
+  // What the page's content security policy lets this page connect to (claude-config#2894). Every read
+  // below is a fetch, which the policy's connect-src (or default-src) governs, and a read it refuses is
+  // reported to whoever the policy names, which can page Dan. Page script cannot see a policy the server
+  // sent by header, so the caller passes it as csp; one in a meta tag is read here. A report only policy
+  // reports what it would refuse just the same, so it counts as refusing. Each policy must allow a read.
+  const given = typeof opts.csp === "string";
+  const policies = [];
+  const addPolicy = (text, from) => {
+    const directives = {};
+    for (const part of text.split(";")) {
+      const tokens = part.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length && !(tokens[0].toLowerCase() in directives)) directives[tokens[0].toLowerCase()] = tokens.slice(1);
+    }
+    const list = directives["connect-src"] || directives["default-src"];
+    if (list) policies.push({ from, list });
+  };
+  if (given) for (const one of opts.csp.split(",")) addPolicy(one, "the header given as csp");
+  for (const meta of document.querySelectorAll("meta[http-equiv]")) {
+    if (meta.getAttribute("http-equiv").trim().toLowerCase() === "content-security-policy") {
+      addPolicy(meta.getAttribute("content") || "", "its meta tag");
+    }
+  }
+  const page = new URL(location.href);
+  const upgrades = (want, got) => want === got || (want === "http:" && got === "https:") || (want === "ws:" && got === "wss:");
+  // One source expression against one URL, as CSP matches them. Anything it does not recognise (a
+  // nonce, a hash, a keyword) allows nothing, so a policy it misreads refuses rather than permits.
+  const allows = (source, url) => {
+    const s = source.toLowerCase();
+    if (s === "*") return /^(https?|wss?):$/.test(url.protocol) || url.protocol === page.protocol;
+    if (s === "'self'") return url.origin === page.origin || (url.host === page.host && upgrades(page.protocol, url.protocol));
+    if (/^[a-z][a-z0-9+.-]*:$/.test(s)) return upgrades(s, url.protocol);
+    const m = /^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|(?:\*\.)?[a-z0-9.-]+)(?::(\d+|\*))?(\/[^?#]*)?$/i.exec(source);
+    if (!m) return false;
+    const scheme = m[1] ? m[1].toLowerCase() + ":" : page.protocol;
+    const host = m[2].toLowerCase();
+    if (!upgrades(scheme, url.protocol)) return false;
+    if (host !== "*" && (host.startsWith("*.") ? !url.hostname.endsWith(host.slice(1)) : url.hostname !== host)) return false;
+    if (m[3] ? m[3] !== "*" && url.port !== m[3] && !(url.port === "" && ({ "http:": "80", "https:": "443" })[url.protocol] === m[3])
+      : url.port !== "") return false;
+    if (m[4] && (m[4].endsWith("/") ? !url.pathname.startsWith(m[4]) : url.pathname !== m[4])) return false;
+    return true;
+  };
+  // A refusal the page reports anyway (a policy given that is not the page's whole policy) stops every
+  // read after it, so one wrong policy costs one report, never one for each font and image.
+  // Only a refusal of the URL being read counts: one the page's own scripts cause meanwhile is theirs.
+  // The listener lives only while one read is in flight, so no path out of the capture leaves it behind.
+  const refusedByPage = [];
+  const read = async (href) => {
+    if (!given) throw new Error("not read, no csp given");
+    if (refusedByPage.length) throw new Error("not read, after the page refused an earlier read");
+    const url = new URL(href);
+    const refusing = policies.find((p) => !p.list.some((source) => allows(source, url)));
+    if (refusing) throw new Error("not read, since the page's content security policy (" + refusing.from + ") does not allow connecting to it");
+    let refused = false;
+    const onRefused = (e) => {
+      const blocked = e.blockedURI || "";
+      if (blocked && (blocked === url.href || url.href.startsWith(blocked))) refused = true;
+    };
+    document.addEventListener("securitypolicyviolation", onRefused);
+    try {
+      // Credentials go only to the page's own origin (fetch's default): an asset host that answers any
+      // origin, as font hosts do, refuses a read that carries them. A redirect is not followed, since
+      // the policy is checked again wherever it lands.
+      const res = await fetch(href, { redirect: "manual" });
+      if (res.type === "opaqueredirect") throw new Error("not read: it redirects, and a redirect is not followed");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res;
+    } catch (e) {
+      // The page reports a refusal as an event after the read fails; wait for it before the next read.
+      await new Promise((ok) => setTimeout(ok, 50));
+      if (!refused) throw e;
+      refusedByPage.push(url.href);
+      throw new Error("refused by the page's content security policy");
+    } finally {
+      document.removeEventListener("securitypolicyviolation", onRefused);
+    }
+  };
   const missing = [];
   const toData = async (url) => {
     try {
-      const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) throw new Error("HTTP " + res.status);
+      const res = await read(url);
       const blob = await res.blob();
       return await new Promise((ok, no) => {
         const r = new FileReader();
@@ -102,9 +200,8 @@ async (options) => {
   let served = null;
   let unread = "";
   try {
-    const res = await fetch(location.href, { credentials: "include" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    served = new DOMParser().parseFromString(await res.text(), "text/html").documentElement;
+    const res = await read(location.href);
+    served =new DOMParser().parseFromString(await res.text(), "text/html").documentElement;
   } catch (e) {
     unread = String(e && e.message ? e.message : e);
   }
@@ -133,8 +230,16 @@ async (options) => {
   const style = document.createElement("style");
   style.textContent = css;
   root.querySelector("head").append(style);
+  const policyNote = !given
+    ? "; nothing was read over the network, the page's own markup included, because the content security policy the page's " +
+      'server sent was not given (pass the text of its Content-Security-Policy headers as csp, or "" when it sends none)'
+    : refusedByPage.length
+      ? "; the page's content security policy REFUSED reading " + refusedByPage.join(", ") +
+        ", so the csp given is not the page's whole policy, and nothing after it was read"
+      : "";
   const note = "<!-- captured from " + location.href + " at " + window.innerWidth + " wide on " + new Date().toISOString() +
-    (missing.length ? "; NOT inlined, so drawn without: " + missing.join("; ") : "; every stylesheet, font and image inlined") + themeNote + " -->";
+    (missing.length ? "; NOT inlined, so drawn without: " + missing.join("; ") : "; every stylesheet, font and image inlined") +
+    policyNote + themeNote + " -->";
   const doc = "<!doctype html>\n" + note + "\n" + root.outerHTML;
   if (!saveAs) return doc;
   // The Claude in Chrome route: the page saves the capture itself, as a download, so nothing is sent
