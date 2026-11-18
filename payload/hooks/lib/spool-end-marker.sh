@@ -5,9 +5,10 @@
 # sync-stuck-notice.sh, which says them once on a prompt and removes them. One place for the paths,
 # so the writer and the reader cannot drift apart; test-session-end-notice.sh drives both.
 #
-# Nothing a SessionEnd hook says has been seen to reach the person (lib/hook-notice.sh, "THAT
-# RESTED ON THE DOCUMENTATION"), while a UserPromptSubmit systemMessage has. So a failure at the
-# end of one session is said at the first prompt of the next.
+# What a SessionEnd hook says on stderr was seen not to reach the person on 2026-11-18
+# (lib/hook-notice.sh, "THAT RESTED ON THE DOCUMENTATION, UNTIL IT WAS WATCHED"), while a
+# UserPromptSubmit systemMessage was. So a failure at the end of one session is said at the first
+# prompt of the next.
 #
 #   sem_paths sets both, for the environment it is called in:
 #   SEM_SPOOL_FILE   in the spool root, beside what it reports on

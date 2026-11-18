@@ -2966,11 +2966,19 @@ export SYNC_ZSHRC="$WORK/zshrc-guard"
 # would never be reached (L322).
 export SYNC_SCRATCH_ROOT="$WORK/scratch-root"
 mkdir -p "$SYNC_SCRATCH_ROOT"
-# The send-side hook suite gate is ON in production and OFF for this suite, except in the one
-# section that tests it, which unsets this and sets it again afterwards (claude-config#244, #220).
+# The send-side hook suite gate is ON in production and OFF for this suite, except in the
+# sections that test it, which set this to 0 and back to 1 afterwards (claude-config#244, #220).
 # Without it every git-backed section that happens to touch a hook would start launching real test
 # suites inside this one, which is minutes of work proving nothing about the section it is in.
 export SYNC_NO_SEND_TESTS=1
+# The hook suite a pull runs is OFF here too, which is how claude-sync's send gate starts every
+# suite it picks, this one included (claude-config#3217). Set here rather than left to the caller,
+# so a section that drives the pull's hook suite or the send gate and forgets to turn it back on
+# fails on every run: 126 checks in 17 sections did on 2026-11-18, and only inside the gate,
+# because a hand run never carried it. Such a section sets it to 0 at its head and to 1 at its end. Never `unset`
+# either switch in a section: that drops the export, and the 1 assigned afterwards is then a shell
+# variable no claude-sync started later in the shard can see (a section may not export, #341).
+export SYNC_NO_HOOK_TESTS=1
 # A clone under a disposable directory is not registered or reported on (claude-config#295), and
 # EVERY fixture clone in this file lives under the real temp directory, so with the rule in force
 # the sections about clone discovery would have nothing to discover and would pass by finding
@@ -11552,6 +11560,7 @@ section "== the receive path records how long its suite took, and how much room 
 # The failure that shape produces is a deadline arriving with no warning, reported as "the hook
 # suite could NOT be completed here", which sends the reader to look for a HANG rather than for a
 # suite that simply got longer (L11).
+SYNC_NO_HOOK_TESTS=0
 HDH="$WORK/headroom-home"; mkdir -p "$HDH/hooks"
 echo '{"hooks":{}}' > "$HDH/settings.json"
 HDR="$WORK/headroom-repo"; mkdir -p "$HDR/payload/hooks"
@@ -11686,6 +11695,8 @@ printf 'outcome=passed\tat=%s\texit=0\tran=37\tnotrun=3\tseconds=200\n' "$(date 
 hd_st_un="$(CLAUDE_HOME="$HDH" SYNC_REPO="$hd_unnamed" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#250 a record that does not carry the names says so rather than reading as none" \
   "line_has \"\$hd_st_un\" 'hook suite: passed' 'does not name them'"
+
+SYNC_NO_HOOK_TESTS=1
 
 section "== every workflow job carries a timeout, above this suite's own deadline (#210) =="
 # A CI job with no `timeout-minutes` gets the platform default of six HOURS. A hang is worse than a
@@ -15647,6 +15658,7 @@ section "== every wait polls on one shared interval, and no deadline counts poll
 # up the sleeps (L226). That distinction is the whole risk in this change: the lock's ceiling used
 # to be counted in turns of its loop, so shortening the poll by twenty would have divided a 90
 # second wait by twenty with nothing anywhere saying so.
+SYNC_NO_HOOK_TESTS=0
 PIH="$WORK/poll-home"; mkdir -p "$PIH/hooks"
 echo '{"hooks":{}}' > "$PIH/settings.json"
 PIR="$WORK/poll-repo"; mkdir -p "$PIR/payload/hooks"
@@ -15843,6 +15855,8 @@ out_pig="$(CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
 case "$out_pig" in *SYNC_POLL_INTERVAL*) pi_quiet=0 ;; *) pi_quiet=1 ;; esac
 check "#205 and a well formed interval is not complained about" "[ '$pi_quiet' -eq 1 ]"
 
+SYNC_NO_HOOK_TESTS=1
+
 section "== a pull runs the hook suite it just installed (#178) =="
 # `claude-sync pull` printed its received-changes summary and ended with "Pulled shared config onto
 # this Mac" without executing anything it had just installed. The 2026-08-22 pull landed a hook
@@ -15854,6 +15868,7 @@ section "== a pull runs the hook suite it just installed (#178) =="
 # is the only way to make it pass, fail, or be missing on demand. It records the environment it was
 # given, because a pull that runs the suite while the suite's own fixtures run pulls would recurse
 # without end, so the guard against that is part of the behaviour rather than a detail.
+SYNC_NO_HOOK_TESTS=0
 unset SYNC_NO_GIT
 HTB="$WORK/hooktests-bare.git"; git init -q --bare "$HTB"
 HTRA="$WORK/hooktests-repoA"; git clone -q "$HTB" "$HTRA" 2>/dev/null
@@ -15998,6 +16013,8 @@ rm -f "$HTRB/.hook-tests"
 out_st5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#182 and no record at all says nothing" "! line_has \"\$out_st5\" 'hook suite' '(FAILED|unreadable|could NOT)'"
 
+SYNC_NO_HOOK_TESTS=1
+
 section "== a passing pull says how much of the suite actually ran (#185) =="
 # needs: a pull runs the hook suite it just installed
 # "the hook suite passed here" was printed whenever the runner exited 0. run-all-tests.sh exits 0
@@ -16014,6 +16031,7 @@ section "== a passing pull says how much of the suite actually ran (#185) =="
 # read one way would be satisfied by a parser that matched nothing and reported the pleasant
 # default (L98, L215): a runner that ran everything, one that could not run some of it, and one
 # whose report this cannot read at all each get their own words.
+SYNC_NO_HOOK_TESTS=0
 mkrunner_v(){   # mkrunner_v <exit status> <the verdict line it prints> -> Mac A's stub runner
   cat > "$HTHA/hooks/run-all-tests.sh" <<HTRUNNERV
 #!/usr/bin/env bash
@@ -16116,6 +16134,8 @@ check "#185 and a record from before the counts existed is still read" \
   "line_has \"\$out_cv6\" 'hook suite' 'FAILED' 'it exited 9\)'"
 rm -f "$HTRB/.hook-tests"
 
+SYNC_NO_HOOK_TESTS=1
+
 section "== every receive path runs the suite it installed, not only pull (#184) =="
 # #178 runs the suite after a pull that landed a hook, and #181 moved it outside the lock. Both
 # hung off do_pull. do_sync applies the payload through apply_payload_to_local and never reached
@@ -16135,6 +16155,7 @@ section "== every receive path runs the suite it installed, not only pull (#184)
 # Its own fixture rather than the #178 pair, and its counter lives OUTSIDE both homes: `sync` mirrors
 # the home upward, so a tally kept under hooks/ would travel to the other Mac and be overwritten by
 # it, and the count would then measure the sync rather than the suite.
+SYNC_NO_HOOK_TESTS=0
 unset SYNC_NO_GIT
 SYB="$WORK/synctests-bare.git"; git init -q --bare "$SYB"
 SYRA="$WORK/synctests-repoA"; git clone -q "$SYB" "$SYRA" 2>/dev/null
@@ -16250,6 +16271,8 @@ check "#184 a send that fell through to a reconcile really received the hook" \
 check "#184 and ran the suite on what it installed" "[ \"\$(sy_ran)\" -gt \"\$sy_before6\" ]"
 check "#184 and carried the verdict in its closing line" \
   "line_has \"\$out_sy6\" 'Synced \(' 'hook suite passed here'"
+
+SYNC_NO_HOOK_TESTS=1
 
 section "== status sees a verdict the other clone on this Mac recorded (#187) =="
 # .hook-tests lives in $SYNC_REPO, so it belongs to whichever clone did the work. This Mac has two
@@ -16369,6 +16392,7 @@ section "== the coverage figures agree with the real runner's own words (#188) =
 # Each scenario also asks the runner DIRECTLY what it said, in the same fixture. That control is the
 # point: if the wording moves, the control fails and names the side that moved, rather than leaving
 # a reader with a coverage figure that went quiet for no stated reason (L11, L159).
+SYNC_NO_HOOK_TESTS=0
 unset SYNC_NO_GIT
 AGB="$WORK/agree-bare.git"; git init -q --bare "$AGB"
 AGRA="$WORK/agree-repoA"; git clone -q "$AGB" "$AGRA" 2>/dev/null
@@ -16445,6 +16469,8 @@ check "#188 and records the one that ran and the one that could not" "[ \"\$(ag_
 # cannot both be satisfied by a reader that always answers unknown (L159).
 check "#188 neither scenario was answered with the unknown fallback" \
   "! line_has \"\$out_ag1\$(printf '\\n')\$out_ag2\" 'Pulled shared config' 'did not say how many of its suites ran'"
+
+SYNC_NO_HOOK_TESTS=1
 
 section "== the scratch sweep reads every mtime in one call (#191) =="
 # scratch_in_dir asked file_mtime for each matching entry, which is a stat PROCESS each.
@@ -18105,7 +18131,8 @@ section "== a send runs the suites covering the hooks it is about to publish (#2
 # Which suites are RELEVANT is derived the same way test-hook-coverage.sh derives coverage: a suite
 # covers a hook when the suite's text names it. Written twice, the two would drift, and the send
 # would verify a different set from the one the ratchet calls covered (L263, L41).
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 SDB="$WORK/sendtest-bare.git"; git init -q --bare "$SDB"
 SDR="$WORK/sendtest-repo"; git clone -q "$SDB" "$SDR"
 SDH="$WORK/sendtest-home"; mkdir -p "$SDH/hooks"
@@ -18172,6 +18199,7 @@ dbg "#244 send with no hook change: $out_244e"
 check "#244 a send that changes no hook runs no suite" \
   "case \"\$out_244e\" in *suite*|*SUITE*) false ;; *) true ;; esac"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 
 section "== a red suite holds back the hooks it covers, not the whole send (#269) =="
@@ -18186,7 +18214,8 @@ section "== a red suite holds back the hooks it covers, not the whole send (#269
 # same suite is re-run on every save for as long as it stays red, with the sync lock held
 # throughout. A verdict is therefore remembered against a digest of the staged hooks, and reused
 # while nothing they depend on has changed.
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 HDB="$WORK/holdback-bare.git"; git init -q --bare "$HDB"
 HDR="$WORK/holdback-repo"; git clone -q "$HDB" "$HDR"
 HDH="$WORK/holdback-home"; mkdir -p "$HDH/hooks"
@@ -18294,6 +18323,7 @@ check "#269 a new hook whose suite is red is not published at all" \
 check "#269 and the repo is not left holding a staged copy of it" \
   "! git -C '$HDR' ls-files --error-unmatch payload/hooks/gamma.sh >/dev/null 2>&1"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 section "== a red suite holds back both names of a hook it covers that was renamed (claude-config#1915) =="
 # The send listed the hooks it was about to publish with rename detection on, so a hook moved
@@ -18305,7 +18335,8 @@ section "== a red suite holds back both names of a hook it covers that was renam
 # #269 rule names.
 #
 # Run with no git identity and useConfigOnly, as the Linux runner has (the #1918 fixture).
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 HRNB="$WORK/hrn-bare.git"; git init -q --bare -b main "$HRNB"
 HRNR="$WORK/hrn-repo"; git clone -q "$HRNB" "$HRNR" 2>/dev/null
 git -C "$HRNR" config user.useConfigOnly true
@@ -18378,6 +18409,7 @@ dbg "#1915 send once the suite is green: $out_hrn4"
 check "#1915 once green the rename publishes, old name gone and new name there" \
   "git -C '$HRNB' cat-file -e main:payload/hooks/delta-new.sh && ! git -C '$HRNB' cat-file -e main:payload/hooks/delta-old.sh 2>/dev/null"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 
 section "== a send runs the whole tree scans its changes fall under (claude-config#809) =="
@@ -18388,7 +18420,8 @@ section "== a send runs the whole tree scans its changes fall under (claude-conf
 # were flakes, and none was a Linux only defect. So a suite, or one section of a suite, declares
 # what it scans with a `# send-gate: scans <paths>` line, and a send touching those paths runs it,
 # holding back the files in its scope when it fails, under the same remembered verdict as #269.
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 WTB="$WORK/wholetree-bare.git"; git init -q --bare "$WTB"
 WTR="$WORK/wholetree-repo"; git clone -q "$WTB" "$WTR"
 WTH="$WORK/wholetree-home"; mkdir -p "$WTH/hooks"
@@ -18571,6 +18604,7 @@ check "#809 and it runs to a verdict rather than refusing over another run's loc
 check "#809 every declared scope exists under payload/" \
   "[ -z '$_wt_missing' ] || { echo '    missing:$_wt_missing' >&2; false; }"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 section "== a send runs the runner's real tree scans, and holds back a suite printing an unmeasured part the runner cannot read (#2020) =="
 # #2007 moved the source scans of #1444 and #1452 into test-run-all-tests-real-tree.sh, which
@@ -18598,7 +18632,7 @@ python3 "$rt20_src/lib/install-hook-libs.py" "$rt20_src/lib" "$RT20H/hooks/lib" 
 mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/hooks/test-clean.sh"
-rt20_send(){ env -u SYNC_NO_SEND_TESTS CLAUDE_HOME="$RT20H" SYNC_REPO="$RT20R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1; }
+rt20_send(){ env -u SYNC_NO_SEND_TESTS -u SYNC_NO_HOOK_TESTS CLAUDE_HOME="$RT20H" SYNC_REPO="$RT20R" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1; }
 out_2020a="$(rt20_send)"
 dbg "#2020 first send: $out_2020a"
 check "#2020 fixture: the real tree suite is green on a clean tree, so the clean suite beside it publishes" \
@@ -18633,7 +18667,8 @@ section "== a suite past its deadline is stopped with everything it started, wit
 # child of its own, each writing its pid down so the check can ask whether it is still running. The
 # child sleeps 40s, so the defect this guards against costs the send 40s and the bound below is
 # less than half of that.
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 DLB="$WORK/deadline-bare.git"; git init -q --bare "$DLB"
 DLR="$WORK/deadline-repo"; git clone -q "$DLB" "$DLR"
 DLH="$WORK/deadline-home"; mkdir -p "$DLH/hooks"
@@ -18857,6 +18892,7 @@ check "#2778 and the pull does not report a deadline the test clock never reache
 check "#2778 and nothing the runner started is left running, within the bound (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ] && [ '$dl_held' -le 20000 ]"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 
 section "== a send judges a suite as a hand run would, whoever started the send (claude-config#1240) =="
@@ -18865,7 +18901,8 @@ section "== a send judges a suite as a hand run would, whoever started the send 
 # two way sync hit the watcher only CI gate and failed, so every section the gate ran was red in the
 # watcher and green by hand. From 2026-10-09 that held LESSONS.md back on the work MacBook 202 times
 # while every hand run passed (L439, L504). The suite here fails exactly when it can see the flag.
-unset SYNC_NO_SEND_TESTS
+SYNC_NO_SEND_TESTS=0
+SYNC_NO_HOOK_TESTS=0
 WEB="$WORK/watchenv-bare.git"; git init -q --bare "$WEB"
 WER="$WORK/watchenv-repo"; git clone -q "$WEB" "$WER"
 WEH="$WORK/watchenv-home"; mkdir -p "$WEH/hooks"
@@ -18932,6 +18969,7 @@ check "#1240 the hold back notification was posted" "[ -n \"\$we_note\" ]"
 check "#1240 and it leads with why, before any file name" \
   "case \"\$we_note\" in 'test-we.sh fails here'*) true ;; *) false ;; esac"
 SYNC_NO_SEND_TESTS=1
+SYNC_NO_HOOK_TESTS=1
 
 section "== a held suite's output is kept, and a standing hold is said once (claude-config#3176, #3179) =="
 # #3176. The gate removed the file a suite's output was captured in whatever the verdict was, so a
@@ -18941,7 +18979,8 @@ section "== a held suite's output is kept, and a standing hold is said once (cla
 # #3179. That day the watcher wrote the same hold to its log 227 times, and notified each time, for
 # one held file whose inputs never changed: the once per run guard covers one run, and each watcher
 # pass is a new run. The suite here fails, passes or stalls as the mode file says.
-unset SYNC_NO_SEND_TESTS
+# The hook suite switch is cleared in each of this section's own claude-sync calls instead.
+SYNC_NO_SEND_TESTS=0
 KOB="$WORK/keptout-bare.git"; git init -q --bare "$KOB"
 KOR="$WORK/keptout-repo"; git clone -q "$KOB" "$KOR"
 KOH="$WORK/keptout-home"; mkdir -p "$KOH/hooks"
@@ -20763,6 +20802,7 @@ section "== the pull hands the runner the checkout it can re-run from (#237) =="
 # green in its own suite while the feature silently stops, and the pull goes quietly back to
 # announcing an unverified gap on every run. The two halves are in different files, so nothing
 # else compares them.
+SYNC_NO_HOOK_TESTS=0
 CKR_HOME="$WORK/checkoutvar-home"; mkdir -p "$CKR_HOME/hooks"
 echo '{"hooks":{}}' > "$CKR_HOME/settings.json"
 CKR_REPO="$WORK/checkoutvar-repo"; mkdir -p "$CKR_REPO/payload/hooks"
@@ -20787,6 +20827,8 @@ check "#237 the pull tells the runner which checkout to re-run from" \
 # never launched it at all (L100).
 check "#237 and the runner was actually launched" "[ -f '$CKR_SEEN' ]"
 
+SYNC_NO_HOOK_TESTS=1
+
 section "== the runner a pull starts does not inherit the re-exec's own variables (claude-config#411) =="
 # A pull re-execs claude-sync with SYNC_REEXECED, SYNC_PULL_BASE, SYNC_REPO and SYNC_LOCK exported,
 # and the hook suite it then starts inherited all four. Two suites failed after every pull on
@@ -20794,6 +20836,7 @@ section "== the runner a pull starts does not inherit the re-exec's own variable
 # record through the inherited SYNC_REPO, and a held lock check saw the inherited SYNC_LOCK (L439).
 # So the variables are exported here BEFORE the pull, which is the state the runner is started in,
 # and the stub reports what it can see.
+SYNC_NO_HOOK_TESTS=0
 IEV_HOME="$WORK/inheritenv-home"; mkdir -p "$IEV_HOME/hooks"
 echo '{"hooks":{}}' > "$IEV_HOME/settings.json"
 IEV_REPO="$WORK/inheritenv-repo"; mkdir -p "$IEV_REPO/payload/hooks"
@@ -20814,6 +20857,8 @@ dbg "#411 the runner could see: ${iev_seen:-<none of them>}"
 # Launched at all, or the check below is satisfied by a pull that never started the runner (L100).
 check "#411 the pull really launched the runner" "[ -f '$IEV_SEEN' ]"
 check "#411 and the runner sees none of the re-exec's variables" "[ -z \"\$iev_seen\" ]"
+
+SYNC_NO_HOOK_TESTS=1
 
 section "== status says which automatic jobs this Mac runs, and which of them is gated (#280) =="
 # claude-config#221 gates the automatic receive on CI, and the answer to "is THIS Mac gated" was a
@@ -22012,6 +22057,7 @@ section "== a fixed failure can be cleared, by the command the message names (cl
 # that changed nothing, because the runner does not write the record. That is a message naming a
 # remedy that cannot clear the state it describes, which is the shape of L144 and L111, and the
 # remedy people actually reached for on 2026-09-03 was deleting the file by hand.
+SYNC_NO_HOOK_TESTS=0
 RCK_H="$WORK/recheck-home"; mkdir -p "$RCK_H/hooks"
 echo '{"hooks":{}}' > "$RCK_H/settings.json"
 RCK_R="$WORK/recheck-repo"; mkdir -p "$RCK_R/payload/hooks"
@@ -22069,6 +22115,8 @@ out_rck5="$(rck recheck)"
 dbg "#305 recheck with no runner said: $out_rck5"
 check "#305 with no runner it says so rather than recording anything" \
   "line_has \"\$out_rck5\" 'run-all-tests.sh' '(no|not)'"
+SYNC_NO_HOOK_TESTS=1
+
 section "== a checkout that has gone can be forgotten (claude-config#306) =="
 # register_this_clone appends to the register and deliberately never prunes: pruning would be a
 # read modify write over the one record saying where the other clones are. So a real checkout that
@@ -25608,6 +25656,7 @@ section "== a pull's hook suite waits for the full suite slot only as long as it
 # loaded this Mac is, and the order in which the two bounds are reached is set here, not raced
 # (L290, L524). The slot wait looks every fifth of a real second, so the runner's own 3600 second
 # bound, were it in force, would arrive three real seconds after the pull's 1800 had.
+SYNC_NO_HOOK_TESTS=0
 SWH="$WORK/slotwait-home"; mkdir -p "$SWH/hooks"; echo '{"hooks":{}}' > "$SWH/settings.json"
 SWR="$WORK/slotwait-repo"; mkdir -p "$SWR/payload/hooks"
 SWLOCK="$WORK/slotwait-lock"
@@ -25796,6 +25845,7 @@ kill "$SWHP2" 2>/dev/null || true
 dbg "#2765 clock reads that were not a number: $(cat "$SWT/empty-reads" 2>/dev/null)"
 check "#2765 (fixture) the shared clock answered every read with a number, so no pull fell back to the real clock" \
   "[ ! -s '$SWT/empty-reads' ] && ! grep -q 'SYNC_TEST_SUITE_CLOCK .* not a whole number' <<< \"\$out_sw0\$out_sw1\$out_sw2w\$out_sw5\$out_sw6\$out_sw7\$out_sw2\$out_sw3\$out_sw4\""
+SYNC_NO_HOOK_TESTS=1
 
 suite_profile
 echo ""
