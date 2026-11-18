@@ -138,7 +138,10 @@ def check(text, kind, urgent=False, apps=()):
 
     mention_needed = kind == "request" or (urgent and kind in ("alert", "reminder"))
     if mention_needed and not leading:
-        fail("mention", "open with a mention of the person who must act")
+        if kind == "request":
+            fail("mention", "a request opens with a mention of the person asked")
+        else:
+            fail("mention", "an urgent alert and its reminder open with <!here>, or with the person the project's CLAUDE.md names")
     if not mention_needed and ANY_MENTION.search(outside):
         fail("mention", "a mention is for an urgent alert, its reminder, or a request to a person")
 
