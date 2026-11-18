@@ -1265,9 +1265,14 @@ header { background: url("mark.svg"); }</style></head>
 <body><header>Larkspur</header><main id="main">x</main>
 <script>
 var refused = [], fetched = [], said = false;
-document.addEventListener("securitypolicyviolation", function (e) { refused.push(e.violatedDirective + " " + e.blockedURI); });
+document.addEventListener("securitypolicyviolation", function (e) {
+  if (e.blockedURI.indexOf("own-beacon") < 0) refused.push(e.violatedDirective + " " + e.blockedURI);
+});
 var realFetch = window.fetch;
 window.fetch = function (url) { fetched.push(String(url)); return realFetch.apply(this, arguments); };
+// The page's own script trips its policy while the capture runs, as a product's analytics can: that
+// refusal is the page's, and must neither stop the capture's reads nor be named as the capture's.
+setTimeout(function () { realFetch("%sown-beacon").catch(function () {}); }, 0);
 var run = (%s);
 var opts = (%s)[Number(new URLSearchParams(location.search).get("run"))];
 // A run that never settles is reported as stalled, with what it had recorded, rather than leaving the
@@ -1280,7 +1285,7 @@ var say = function (r) {
 setTimeout(function () { say({stalled: "the capture had not settled after 30 s"}); }, 30000);
 run(opts).then(function (doc) { return {doc: doc}; }, function (e) { return {threw: String(e && e.message || e)}; })
   .then(function (r) { setTimeout(function () { say(r); }, 100); });
-</script></body></html>""" % (head, other, other, snippet, json.dumps(runs)))
+</script></body></html>""" % (head, other, other, other, snippet, json.dumps(runs)))
 
     def policed_run(name, n):
         """What the capture did on one load of a page policed_page wrote, and what to show when it failed."""
@@ -1308,7 +1313,7 @@ run(opts).then(function (doc) { return {doc: doc}; }, function (e) { return {thr
           given.get("refused") == [] and "doc" in given and not any(other in u for u in given.get("fetched", [])), shown)
     check("#2894 and it still reads what the policy allows: the page's own image and its served markup",
           "data:image/svg+xml" in given.get("doc", "") and own + "policed-header.html?run=0" in given.get("fetched", [])
-          and "could not be read" not in note, note or shown)
+          and "could not be read" not in note and "REFUSED" not in note and "refused" not in note, note or shown)
     check("#2894 and it names the font it did not read, saying the page's policy does not allow connecting to it",
           "NOT inlined" in note and other + "brand.woff2" in note and "content security policy" in note
           and "does not allow" in note, note or shown)

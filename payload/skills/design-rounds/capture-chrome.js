@@ -111,14 +111,20 @@ async (options) => {
   };
   // A refusal the page reports anyway (a policy given that is not the page's whole policy) stops every
   // read after it, so one wrong policy costs one report, never one for each font and image.
+  // Only a refusal of the URL being read counts: one the page's own scripts cause meanwhile is theirs.
   const refusedByPage = [];
-  const onRefused = (e) => refusedByPage.push(e.blockedURI || "a read");
+  let reading = "";
+  const onRefused = (e) => {
+    const blocked = e.blockedURI || "";
+    if (reading && blocked && (blocked === reading || reading.startsWith(blocked))) refusedByPage.push(reading);
+  };
   document.addEventListener("securitypolicyviolation", onRefused);
   const read = async (href) => {
     if (!given) throw new Error("not read, no csp given");
     if (refusedByPage.length) throw new Error("not read, after the page refused an earlier read");
     const before = refusedByPage.length;
     const url = new URL(href);
+    reading = url.href;
     const refusing = policies.find((p) => !p.list.some((source) => allows(source, url)));
     if (refusing) throw new Error("not read, since the page's content security policy (" + refusing.from + ") does not allow connecting to it");
     try {
@@ -133,6 +139,8 @@ async (options) => {
       // The page reports a refusal as an event after the read fails; wait for it before the next read.
       await new Promise((ok) => setTimeout(ok, 50));
       throw refusedByPage.length > before ? new Error("refused by the page's content security policy") : e;
+    } finally {
+      reading = "";
     }
   };
   const missing = [];
