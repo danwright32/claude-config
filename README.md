@@ -959,7 +959,8 @@ been stopped, never by the runner, and it is a file in the clone, so it survives
   second run stopped at the deadline, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP`
   (default `172800` seconds, two days, a product choice so the daily timer has had a try), gives up:
   ONE desktop notification, `gave_up` stamped on the record, and nothing runs it again by itself.
-  `claude-sync recheck` then runs it and replaces the record.
+  `claude-sync recheck` then runs it and replaces the record. A hook landing later starts a new
+  chain, owed again, since the config it checks is not what was given up on.
 - **What status says.** `claude-sync status` says the run is owed and why it has not run (the load
   the last try found), that it is being run again now by a named pid, or that it was given up on and
   what to run.

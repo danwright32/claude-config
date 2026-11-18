@@ -2493,8 +2493,11 @@ again once the Mac was quiet. The choices:
   run, or a record still owed after `SYNC_HOOK_RERUN_GIVE_UP` (two days, a product choice, so the
   daily timer has had at least one try), notifies once and stamps `gave_up`, which makes the record
   owed to nobody. Without that, a Mac whose suite never finishes would either loop silently or
-  notify every cycle (L36). `gave_up` is carried forward like the other fields, so a later stopped
-  run cannot notify again; `claude-sync recheck`, or any run that passes, replaces the record.
+  notify every cycle (L36). The chain fields, `gave_up` included, are carried only by a rerun, so
+  a rerun never notifies twice. A run started because a hook landed, or by `claude-sync recheck`,
+  checks config the chain never saw and starts a chain of its own: carried there, a give up would
+  have left the new hooks owed to nobody, a `slotwait` included. Any run that passes replaces the
+  record.
 - **The pull still exits 0.** An unverified pull is now recorded, said on its closing line and in
   status, rerun, and notified when there is something to look into. A nonzero exit would make the
   scheduled job report a busy hour that clears by itself.
