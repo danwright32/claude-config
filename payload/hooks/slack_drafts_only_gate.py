@@ -873,7 +873,8 @@ OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # Anything else counts as able to act. A dotted entry allows only that submodule: `import os.path`
 # binds os, so os used for anything but os.path counts as acting.
 PY_INERT = frozenset({
-    # Three Dan chose on 2026-11-16 (claude-config#3103), whose writing is held as open() is (PY_OPENERS).
+    # Three Dan chose on 2026-11-16 (claude-config#3103). Unlike the rest, io and gzip can write a file;
+    # that writing is held as open() is (PY_OPENERS, PY_FILE_TOOLS), so they count only while it is unused.
     "ast", "gzip", "io",
     "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
     "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",

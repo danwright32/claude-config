@@ -1,7 +1,8 @@
-"""Three readings for the Slack drafts gate: an endpoint a program only compares against or lists,
+"""Four readings for the Slack drafts gate: an endpoint a program only compares against or lists,
 told from one it sends to (claude-config#2913); the webhook's name where a file only declares it,
-told from where it is read (claude-config#3050); and the directory a script's cd moves to when the
-target is built from $0 or BASH_SOURCE (#2913).
+told from where it is read (claude-config#3050); the directory a script's cd moves to when the
+target is built from $0 or BASH_SOURCE (#2913); and import text a test's matcher only compares,
+told from a string that may run as code (js_compared, claude-config#3146, said where it is defined).
 
 Names held only as data. Dan decided on 2026-11-14 (#2913, "Teach the gate", no exemption list) that
 the gate should tell a Slack posting address that is only compared or listed, such as a refusal list
