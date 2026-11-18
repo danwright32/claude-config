@@ -2002,6 +2002,23 @@ out="$(fire "$RFW" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-pwalk.sh" <<< "$out" \
   && check "#3183 a named walker that stops walking the checkout blocks the push, naming it" ok \
   || check "#3183 a named walker that stops walking the checkout blocks the push, naming it" "exit=$rc out=$out"
+# A walker that already passed on this exact tree is skipped like a scanner, and the line saying what
+# ran counts only the walkers that ran: a retry that ran none must not say it included them.
+RWP="$(pub_repo walkpass)"
+printf '#!/usr/bin/env bash\nREPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/..")"\npython3 - <<PY\nimport os\nfor b, d, n in os.walk("."):\n    pass\nPY\nexit 0\n' > "$RWP/payload/hooks/test-pwalk.sh"
+chmod +x "$RWP/payload/hooks/test-pwalk.sh"
+pub_publish "$RWP"
+pub_branch "$RWP" add-suite; dl_armed "$RWP/tests/test-added.sh" added; commit_all "$RWP"
+WPSTATE="$TMPROOT/walkpass-state"
+out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suite")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "1 of those walk the checkout" <<< "$out" \
+  && check "#3183 a push adding a suite says the walker it ran" ok \
+  || check "#3183 a push adding a suite says the walker it ran" "exit=$rc out=$out"
+out="$(SCANNERS_STATE_DIR="$WPSTATE" wn_fire "$RWP" "git push -u origin add-suite")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "nothing was scanned" <<< "$out" && ! grep -q -F "walk the checkout" <<< "$out" \
+  && check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" ok \
+  || check "#3183 and a retry that skipped it, having passed on this tree, does not say it was included" "exit=$rc out=$out"
+git -C "$RWP" checkout -q main
 
 # --- claude-config#3160: the Slack alert guard is retired, and with it the step that ran its suite
 #     before any push changing a file in its folder (#2834). A branch cut before the retirement can

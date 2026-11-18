@@ -1059,8 +1059,11 @@ _sc_walkers_run=0
 if [ -n "$_sc_new_suites" ] && [ -n "$walkers" ]; then
   while IFS= read -r s; do
     [ -n "$s" ] || continue
+    # Counted only when queued: one that already passed on this key is skipped, and a line saying
+    # the walkers were included must not count a walker that never ran.
+    _sc_n_before=$_sc_n
     start_one "$s" ""
-    _sc_walkers_run=$(( _sc_walkers_run + 1 ))
+    [ "$_sc_n" -gt "$_sc_n_before" ] && _sc_walkers_run=$(( _sc_walkers_run + 1 ))
   done <<EOF
 $walkers
 EOF
