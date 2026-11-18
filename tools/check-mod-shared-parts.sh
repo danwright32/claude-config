@@ -117,7 +117,12 @@
 #             (mktemp(?: -d)?), or its own folder by naming    hooks/mod-kit/scriptvars.ts (#3022: the
 #             BASH_SOURCE                                       design round guard read them itself and
 #                                                               the area check could not read them at all)
-#   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#   engine-keys                                                 toolArgs from the copy of hooks/toolargs.ts
+#             taking the keys Claude Code carries beside a     kept at hooks/mod-kit/toolargs.ts (#3190:
+#             call's own arguments off by hand (a line         eight mods did it by hand in twelve places,
+#             naming both agentId and consent: a destructure   so a key the engine added had to be learned
+#             or a list of the keys)                            by every copy). One key read alone passes.
+#   press  a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
 #                                                               cannot land (#939) is never answered by a
@@ -258,6 +263,10 @@ PARTS=(
   # #3022: a script's own variables read by hand, by the spellings the design round guard used: a bare
   # mktemp substitution matched by a pattern (mktemp(?: -d)?), or its own folder by naming BASH_SOURCE.
   "script-vars|mktemp\\(\\?: -d\\)\\?|BASH_SOURCE|tempWord, madeTemp, freshTemp, ownFolderPath and withoutOwnFolder from the copy of hooks/scriptvars.ts kept at hooks/mod-kit/scriptvars.ts"
+  # #3190: the keys Claude Code carries beside a call's own arguments, taken off by hand: a line naming
+  # both agentId and consent, as every copy did (a destructure, or a list of the keys). Reading one key
+  # alone, such as whether a call came from a subagent, is another question and passes.
+  "engine-keys|agentId.*consent|consent.*agentId|toolArgs (a key it takes off that is wanted, such as tool_use_id, read from the event itself) from the copy of hooks/toolargs.ts kept at hooks/mod-kit/toolargs.ts"
 )
 
 n=0

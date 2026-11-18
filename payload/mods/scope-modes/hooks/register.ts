@@ -1,7 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
-import { callKey, readsOnly, refusalNote, toolArgs, whatOf } from './refusals.ts'
+import { callKey, readsOnly, refusalNote, whatOf } from './refusals.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -2680,8 +2681,7 @@ const keepForWake = ($: EngineInterface, h: HeldItem) =>
 // merge is kept; whether it is kept at all is what the refusal tells Claude, so it never says so falsely.
 const keepBanned = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, what: string): Promise<boolean> => {
   if (tool === 'Bash' && !raw.trim()) return false
-  const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
-  const call = raw || `${tool} ${JSON.stringify(args)}`
+  const call = raw || `${tool} ${JSON.stringify(toolArgs(input))}`
   try {
     await keepForWake($, { label: what, call, banned: true })
     return true
@@ -5096,7 +5096,7 @@ type AskBeforeSavingNoun = { isApproved: (call: { tool: string; input: Record<st
 const lessonApproval = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<{ home: string; approved: boolean } | undefined> => {
   const home = (await $.env.get('HOME')) ?? ''
   if (input.agentId !== undefined || !lessonsEdit(tool, input, home)) return undefined
-  const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+  const args = toolArgs(input)
   try {
     // A noun of $ is spelled at its call site, as the engine requires.
     const r = await ($ as unknown as { askBeforeSaving: AskBeforeSavingNoun }).askBeforeSaving.isApproved({ tool, input: args })
@@ -5176,7 +5176,7 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
     const testBuild = target !== undefined && (await isTestBuild(target, await testBuildFs($)))
     const label = raw ? needsTheMac({ raw, commands, testBuild }) : heldTool(tool, input)
     if (label) {
-      const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+      const args = toolArgs(input)
       await hold($, label, `Do it now. What was held: ${raw || `${tool} ${JSON.stringify(args)}`}`)
       // Asleep, nothing is handed to Dan in its place (#1284): away's refusal says to publish a page.
       const held = asleep ? heldAsleep(label) : heldRefusal(label)
@@ -5909,7 +5909,7 @@ export const register: Register = on => {
     if (sleeping.state === 'asleep') {
       const label = deliveryOf(tool, input)
       if (label) {
-        const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+        const args = toolArgs(input)
         // Refused whatever the write does: a hook that throws is skipped, and the publish would run
         // (L42). The list is changed in memory before it is written, so a failed write keeps it for
         // this session's morning, losing it only to a reload (lessons review).

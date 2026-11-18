@@ -12,12 +12,6 @@ import { GIT_LOCAL_READS } from './overnight.ts'
 // identical call by callKey), what it was, and whether it only read. Every judgement here leans one
 // way: what is not certainly a read is not one, so a refusal that needs Dan stays listed.
 
-/** A call's own arguments: the tool.call event without the keys the engine carries beside them. */
-export const toolArgs = (e: Record<string, unknown>): Record<string, unknown> => {
-  const { tool: _t, tool_use_id: _i, agentId: _a, consent: _c, ...args } = e
-  return args
-}
-
 const canonical = (v: unknown): unknown =>
   Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical((v as Record<string, unknown>)[k])])) : v
 

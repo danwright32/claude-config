@@ -6,6 +6,7 @@ import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGo
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import { type Landing, linksThread, threadKey } from './threads.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
@@ -473,8 +474,9 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused
-    const { tool: _t, tool_use_id: toolUseId, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>
-    const input = raw as unknown as CardInput
+    const x = e as unknown as Record<string, unknown>
+    const toolUseId = x.tool_use_id
+    const input = toolArgs(x) as unknown as CardInput
     const why = reasonToRefuse(input)
     if (why) return { deny: `No card: ${why}` }
 
