@@ -112,21 +112,20 @@ async (options) => {
   // A refusal the page reports anyway (a policy given that is not the page's whole policy) stops every
   // read after it, so one wrong policy costs one report, never one for each font and image.
   // Only a refusal of the URL being read counts: one the page's own scripts cause meanwhile is theirs.
+  // The listener lives only while one read is in flight, so no path out of the capture leaves it behind.
   const refusedByPage = [];
-  let reading = "";
-  const onRefused = (e) => {
-    const blocked = e.blockedURI || "";
-    if (reading && blocked && (blocked === reading || reading.startsWith(blocked))) refusedByPage.push(reading);
-  };
-  document.addEventListener("securitypolicyviolation", onRefused);
   const read = async (href) => {
     if (!given) throw new Error("not read, no csp given");
     if (refusedByPage.length) throw new Error("not read, after the page refused an earlier read");
-    const before = refusedByPage.length;
     const url = new URL(href);
-    reading = url.href;
     const refusing = policies.find((p) => !p.list.some((source) => allows(source, url)));
     if (refusing) throw new Error("not read, since the page's content security policy (" + refusing.from + ") does not allow connecting to it");
+    let refused = false;
+    const onRefused = (e) => {
+      const blocked = e.blockedURI || "";
+      if (blocked && (blocked === url.href || url.href.startsWith(blocked))) refused = true;
+    };
+    document.addEventListener("securitypolicyviolation", onRefused);
     try {
       // Credentials go only to the page's own origin (fetch's default): an asset host that answers any
       // origin, as font hosts do, refuses a read that carries them. A redirect is not followed, since
@@ -138,9 +137,11 @@ async (options) => {
     } catch (e) {
       // The page reports a refusal as an event after the read fails; wait for it before the next read.
       await new Promise((ok) => setTimeout(ok, 50));
-      throw refusedByPage.length > before ? new Error("refused by the page's content security policy") : e;
+      if (!refused) throw e;
+      refusedByPage.push(url.href);
+      throw new Error("refused by the page's content security policy");
     } finally {
-      reading = "";
+      document.removeEventListener("securitypolicyviolation", onRefused);
     }
   };
   const missing = [];
@@ -229,7 +230,6 @@ async (options) => {
   const style = document.createElement("style");
   style.textContent = css;
   root.querySelector("head").append(style);
-  document.removeEventListener("securitypolicyviolation", onRefused);
   const policyNote = !given
     ? "; nothing was read over the network, the page's own markup included, because the content security policy the page's " +
       'server sent was not given (pass the text of its Content-Security-Policy headers as csp, or "" when it sends none)'
