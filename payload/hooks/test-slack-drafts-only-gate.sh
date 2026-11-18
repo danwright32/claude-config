@@ -4172,6 +4172,7 @@ printf 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi\n' > "$T/
 printf 'echo fine\n' > "$T/phase-plain.sh"
 phase_same=""
 phase_unopened=""
+phase_unwritten=""
 phase_n=0
 for c in "bash $T/phase-send.sh" "bash $T/phase-plain.sh" "python3 -c 'print(1)'" \
          "printf 'curl https://hooks.slack.com/services/x\n' > $T/w.sh && bash $T/w.sh" \
@@ -4182,8 +4183,11 @@ python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/check
          "curl -s -X POST https://slack.com/api/chat.postMessage -H 'Authorization: Bearer x'"; do
   SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
   plain="$RC|$OUT|$ERR"
+  had="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
   SLACK_GATE_PHASE_LOG="$T/phase-check.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
   [ "$plain" = "$RC|$OUT|$ERR" ] || phase_same="$phase_same; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} timed"
+  now="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
+  [ "${now:-0}" -eq $(( ${had:-0} + 1 )) ] 2>/dev/null || phase_unwritten="$phase_unwritten; ${c:0:60} (exit $RC) added $(( ${now:-0} - ${had:-0} )) lines"
   # A log the gate cannot open (its folder is not there) times nothing and changes nothing either.
   SLACK_GATE_PHASE_LOG="$T/no-such-folder/phase.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
   [ "$plain" = "$RC|$OUT|$ERR" ] || phase_unopened="$phase_unopened; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} with a log it cannot open"
@@ -4192,10 +4196,23 @@ done
 check "each of $phase_n commands is answered the same with its phases timed as without (#3170)" "${phase_same:-ok}"
 if [ -e "$T/no-such-folder" ]; then phase_unopened="$phase_unopened; the gate made the log's missing folder"; fi
 check "each of $phase_n commands is answered the same with a phase log the gate cannot open (#3170)" "${phase_unopened:-ok}"
-phase_lines="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
-if [ "${phase_lines:-0}" -ge 5 ] 2>/dev/null; then phase_lines=ok
-else phase_lines="only ${phase_lines:-0} phases lines naming Judge.line for $phase_n commands: $(head -c 300 "$T/phase-check.log" 2>&1)"; fi
-check "the timed runs wrote where their time went, one line each (#3170)" "$phase_lines"
+check "each of the $phase_n timed runs wrote one line saying where its time went (#3170)" "${phase_unwritten:-ok}"
+# The slow runner's case: a judgement that runs out of its budget is refused the same timed as
+# untimed, and still writes its phases line, since that line is wanted most exactly then (#3170).
+# The step clock (run_budget, one step) runs it out where the real clock would on a slow runner.
+run_budget 1 "bash $T/phase-plain.sh"
+oot_plain="$RC|$OUT|$ERR"
+SLACK_GATE_PHASE_LOG="$T/phase-oot.log" run_budget 1 "bash $T/phase-plain.sh"
+if [ "$oot_plain" != "$RC|$OUT|$ERR" ]; then
+  oot="answered ${oot_plain:0:160} untimed and $RC|${OUT:0:80}|${ERR:0:80} timed"
+elif [ "$RC" -ne 2 ] || [[ "$ERR" != *"ran out of time"* ]]; then
+  oot="not refused for its budget: exit $RC, ${ERR:0:200}"
+elif ! grep -q '^phases: ' "$T/phase-oot.log" 2>/dev/null; then
+  oot="refused for its budget with no phases line written: $(head -c 200 "$T/phase-oot.log" 2>&1)"
+else
+  oot=ok
+fi
+check "a judgement out of its budget is refused the same with phases timed, and writes its phases line (#3170)" "$oot"
 
 # The second round of #2918 cut work no verdict needs, each checked here for what it skips and for
 # answering as before: sh_binds stops counting assignments once the count settles it; its patterns
