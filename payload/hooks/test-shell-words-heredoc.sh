@@ -371,6 +371,47 @@ frames="$(python3 -B "$frames_py" "$SW" 2>&1)"
 rm -f "$frames_py"
 check "#2918 the reader goes straight through commands, \${ }, \$(( )), ( ) and \$'...', and splits quoted words as shlex does" "$frames"
 
+# ---- a process substitution: its commands are commands (claude-config#3213) ----
+# Until #3213 a <( ), >( ) or zsh's =( ) was read as a plain ( ), so the reader gave no command for
+# what the shell runs inside one. Where each runs was measured 2026-11-18 (bash 3.2.57, zsh 5.9).
+has 'cat <(echo INNER)' "$X" "#3213 a <( ) holds a command"
+has 'echo hi > >(echo INNER)' "$X" "#3213 a >( ) holds a command"
+has 'cat =(echo INNER)' "$X" "#3213 zsh's =( ) at the start of a word holds a command"
+has 'diff <(echo one) <(echo INNER)' "$X" "#3213 the second of two is read"
+has 'cat <(echo one; echo INNER)' "$X" "#3213 each command inside one is read"
+has 'cat <(cat <(echo INNER))' "$X" "#3213 one inside another is read"
+has 'a=( <(echo INNER) )' "$X" "#3213 one in an array's words is read"
+has 'echo ${x:-<(echo INNER)}' "$X" "#3213 one in the word of an unquoted \${ } is read"
+has 'echo x<(echo INNER)' "$X" "#3213 one in the middle of a word is read"
+has 'echo \\<(echo INNER)' "$X" "#3213 one after an escaped backslash is read"
+has 'echo "$(cat <(echo INNER))"' "$X" "#3213 one inside a quoted \$( ) is read"
+has 'case $x in <(echo INNER)) echo y ;; esac' "$X" "#3213 one in a case pattern is read"
+has 'cat <(echo INNER) b.txt' 'cat <(echo INNER) b.txt' "#3213 its text stays in the command that holds it"
+has 'cat <(cd /tmp; echo one); echo INNER' "$X" "#3213 the command after one is still read"
+# only <command text> <description>: the reader returns that text as its one command.
+only() {
+  local got
+  got="$(reading "$1")"
+  if [[ "$got" == "$1"$'\n'"rc=0" ]]; then check "$2" ok
+  else check "$2" "reading was [$(printf '%s' "$got" | tr '\n' '|')]"; fi
+}
+only 'echo "<(echo INNER)"' "#3213 control: inside double quotes it is text"
+only "echo '<(echo INNER)'" "#3213 control: inside single quotes it is text"
+only 'echo "${x:-<(echo INNER)}"' "#3213 control: in a double quoted \${ } it is text"
+only 'x=(echo INNER)' "#3213 control: an array assignment is no =( )"
+only 'echo $(( 3 <(2) ))' "#3213 control: a comparison in arithmetic is no <( )"
+only 'a=(one two)' "#3213 control: an array of plain words is read as before"
+# A cd inside one ends with it, as the shell's does: the command after runs where the line began.
+proc_dir="$(printf '%s' 'cat <(cd /tmp/elsewhere; echo one); git push' | python3 -B "$SW" commands | python3 -c '
+import sys
+recs = [r.split("\x1f", 1) for r in sys.stdin.read().split("\x1e") if r]
+print("|".join("%s:%s" % (d, t.strip()) for d, t in recs))')"
+if [[ "$proc_dir" == ":cd /tmp/elsewhere|/tmp/elsewhere:echo one|:cat <(cd /tmp/elsewhere; echo one)|:git push" ]]; then
+  check "#3213 a cd inside one moves only the commands inside it" ok
+else
+  check "#3213 a cd inside one moves only the commands inside it" "reading was [$proc_dir]"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

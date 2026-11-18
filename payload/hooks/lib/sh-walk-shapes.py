@@ -32,6 +32,9 @@ sh_source_target, sh_source_var, sh_cwd, sh_ctx_known, sh_eval_call, line, shell
 Since claude-config#3020 it also reads text handed to eval, to a shell's -c or to a function that
 evaluates its argument through a variable or a substitution (handed_text_reason, with the comment
 above it), using the Judge's sh_value, sh_word_end, pieces_of and pieces_reason as well.
+
+Since claude-config#3213 it reads a process substitution a program is handed as the file it runs
+(handed_procs), using the Judge's parsed, operands, proc_runs and pieces_reason.
 """
 import os
 import re
@@ -44,6 +47,10 @@ MAX_CHOICES = 64
 FILE_TEXT = re.compile(r'("?)(?:\$\(\s*(?:cat\s+|<\s*)([^()`]+?)\s*\)|`\s*(?:cat\s+|<\s*)([^()`]+?)\s*`)\1')
 # A word that is one variable or positional parameter and nothing else, in double quotes or not.
 LONE_NAME = re.compile(r'"?\$\{?([A-Za-z_]\w*|[0-9])\}?"?')
+# The plain word a process substitution is written as while a command's words are read
+# (handed_procs, claude-config#3213), by its place among those of the command, and how one is found.
+PROC_WORD = "__gate_process_substitution_%d__"
+PROC_MARK = re.compile(r"__gate_process_substitution_(\d+)__")
 
 
 def make(sh_special, sh_param, unknown_dir=None):
@@ -271,6 +278,97 @@ def make(sh_special, sh_param, unknown_dir=None):
                 return self.unfollow(unread(""))
             return self.pieces_reason(name, pieces, d, depth, True, None, "runs the text it is handed",
                                       "runs commands from the text it is handed", unread)
+
+        def handed_procs(self, name, text, past, d, depth):
+            """The reason a process substitution the program name is handed as the file it runs
+            posts, or cannot be read, or None (claude-config#3213). `bash <(cat post.sh)`, `source
+            <(cat post.sh)`, `bash < <(cat post.sh)`, `python3 <(cat post.py)`, zsh's `zsh =(cat
+            post.sh)` and `curl -K <(cat curlrc)` each passed on 2026-11-18: the program runs what
+            the commands inside print, and no word of the command names a file to read.
+
+            Which programs, and which of their words, is the Judge's proc_runs: one written where
+            the script goes, or before it, is read; one after the script or after code given by an
+            option is an argument, data to the script, and left as a pipe into that script is. past
+            is how many words judge() stepped over for a launcher. What one prints is what line()
+            kept for it (shell "procs_here"): the output of its one command where the gate works
+            that out, as it does for a pipe, a file by what it holds and text as the commands or
+            code it is. Anything else, more than one command inside, a program whose output the
+            gate does not read, a command a wrapper's string holds, is unread and refused, except
+            in a script on disk or the text one evaluates, where what cannot be read is left as it
+            is for a pipe there (handed_text_reason's rule)."""
+            if "<(" not in text and "=(" not in text:
+                return None
+            how = self.proc_runs(name)
+            if how is None:
+                return None
+            try:
+                tops = [p for p in self.parsed(text, "")[1] if p["scope"] == (0,)]
+            except self.sw.Unreadable:
+                return None
+            if len(tops) != 1:
+                return None
+            spans = sorted((a, b) for a, b, _ in tops[0]["inner"] if text.startswith(("<(", "=("), a))
+            if not spans:
+                return None
+            # The command with each one written as a single plain word, so the program's words are
+            # read as they are for any other command.
+            flat, at = [], 0
+            for n, (a, b) in enumerate(spans):
+                flat += [text[at:a], PROC_WORD % n]
+                at = b
+            words = self.words_of(self.rest_of("".join(flat) + text[at:])[0])[past:]
+            if len(words) < 2:
+                return None
+            slot, shell_hint, lang = how
+            if slot == "first":
+                run = words[1:2]
+            elif slot == "config":
+                run = [w for k, w in enumerate(words) if k and (
+                    re.match(r"--config=|-[A-Za-z]*K", w) or re.fullmatch(r"--config|-[A-Za-z]*K", words[k - 1]))]
+            else:
+                operand, inline, _ = self.operands(words)
+                if inline:
+                    run = inline[0]
+                elif operand and operand != "-":
+                    # The script's place is the first word at which the Judge's own reading finds
+                    # it, never a search of the words for its text: `-o` holds `o`, so in `bash -o
+                    # <(cat post.sh) o` the search stopped at the option and the substitution, its
+                    # value, was left out of what is read; and a word equal to the script can be an
+                    # earlier option's value or a later argument. With no place found, every word
+                    # is read.
+                    k = next((k for k in range(1, len(words)) if self.operands(words[:k + 1])[0] == operand), None)
+                    if k is None:
+                        run = words[1:]
+                    else:
+                        run = words[1:k + 1] if PROC_MARK.search(operand) else words[1:k]
+                else:
+                    run = words[1:]
+            held = self.shell.get("procs_here")
+            if held is None or len(held) != len(spans) or any(text[a:b] != t for (a, b), (t, _) in zip(spans, held)):
+                held = [(None, None)] * len(spans)  # not the command line() is reading: nothing kept
+            in_script = self.sh_in_script()
+            for n in sorted({int(n) for w in run for n in PROC_MARK.findall(w)}):
+                if n >= len(spans):
+                    continue
+                pieces = held[n][1]
+                if pieces is None:
+                    pieces = [("unknown", None, "")]
+                if in_script:
+                    pieces = [p for p in pieces if p[0] != "unknown"]
+                shown = text[spans[n][0]:spans[n][1]][:120]
+
+                def unread(came, shown=shown):
+                    return (f"{name} is handed {shown}, and what the commands inside it print cannot be read "
+                            f"before the command runs{came}, so whether it posts cannot be checked. Hand it the "
+                            "file by name, or write the commands out")
+
+                verb = "reads its request from what" if slot == "config" else "runs what"
+                what = "what" if slot == "config" else "the commands" if shell_hint else "the code"
+                reason = self.pieces_reason(name, pieces, d, depth, shell_hint, lang, f"{verb} {shown} prints",
+                                            f"{verb.rsplit(' ', 1)[0]} {what} {shown} prints", unread)
+                if reason:
+                    return reason
+            return None
 
         def sh_in_script(self):
             """Whether the text being read is a script on disk, or text one evaluates: a string its
