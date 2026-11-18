@@ -14,6 +14,7 @@
 #   sc_hold_covers     is a hold in force that protects THIS session's writes: its own, or a terminal's
 #   sc_hold_others     the short names of the other sessions holding the watcher
 #   sc_payload_session the session a hook payload names
+#   sc_is_linked_worktree is this clone a linked worktree, not the primary checkout of its repository
 #   sc_is_own_worktree is this clone a linked worktree on its own branch, which nothing mirrors into
 #   sc_is_plain_copy   is this clone a copy of the tree with no repository around it, out of reach
 #
@@ -83,6 +84,23 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
   return 1
 }
 
+# Is this clone a LINKED worktree, rather than the primary checkout of its repository? Its own git
+# dir and the repository's common one are two places only in a linked worktree. Asked by
+# sc_is_own_worktree below, and by the payload write gate before a call, which notes each linked
+# worktree so that the check after the call can read one whose folder is gone as removed whole
+# (claude-config#3165). Any question git cannot answer is a no.
+sc_is_linked_worktree(){ # sc_is_linked_worktree <clone root>
+  local gd common cd
+  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  # Read first and refused when empty: `cd ""` succeeds, so an unanswered lookup would otherwise
+  # resolve to the checkout itself and pass for a linked worktree.
+  common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$common" ] || return 1
+  cd="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$gd" ] && [ -n "$cd" ] || return 1
+  [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ]
+}
+
 # Is this clone somewhere the daemon can NOT overwrite (claude-config#800)? The daemon mirrors
 # ~/.claude over payload/ in its OWN clone and pushes to main; it never writes into a linked
 # worktree, and a branch other than the default reaches main only by a reviewed merge. So a linked
@@ -91,21 +109,15 @@ sc_is_this_clone(){ # sc_is_this_clone <clone root> <watcher command line>
 # Written as the reason for refusing rather than a list of exempt places (L615). Any question git
 # cannot answer counts as at risk (L42). The default branch is origin's, else main, else master.
 sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
-  local gd common cd br def
-  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
-  # Read first and refused when empty: `cd ""` succeeds, so an unanswered lookup would otherwise
-  # resolve to the checkout itself and pass for a linked worktree.
-  common="$(cd "$1" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
-  [ -n "$common" ] || return 1
-  cd="$(cd "$1" 2>/dev/null && cd "$common" 2>/dev/null && pwd -P)" || return 1
-  [ -n "$gd" ] && [ -n "$cd" ] || return 1
-  [ "$(cd "$gd" 2>/dev/null && pwd -P)" != "$cd" ] || return 1      # the primary checkout
+  local gd br def
+  sc_is_linked_worktree "$1" || return 1                           # the primary checkout
   # A rebase detaches HEAD, so mid rebase the branch is the one being rebased, read from the rebase
   # state in THIS worktree's own git dir (claude-config#904). Only a name under refs/heads/ counts:
   # a rebase of a detached HEAD records no branch, and stays judged as on no branch. With no rebase
   # in progress a detached HEAD is judged exactly as before.
   br="$(git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null)" || {
     local rb hn
+    gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
     for rb in rebase-merge rebase-apply; do
       [ -f "$gd/$rb/head-name" ] || continue
       hn="$(head -1 "$gd/$rb/head-name" 2>/dev/null)"
