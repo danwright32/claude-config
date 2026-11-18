@@ -1676,6 +1676,99 @@ read_refused "#3146 a matcher changed in a module the test imports leaves every 
 says "#3146 and the refusal names the module in the string" "./src/index.ts"
 
 echo
+echo "slack drafts only: a read only script may use ast, io and gzip (claude-config#3103)"
+
+# Dan decided on 2026-11-16 (#3103): trust ast, io and gzip in a read only script; shutil stays
+# refused, with every module that can run code or send. Each was refused as a module the gate does
+# not know (ast 4, io 2 and gzip 2 of the refusals counted that day). What each offers that writes a
+# file is held as open() is: io.open, gzip.open, io.FileIO and gzip.GzipFile by their mode (the file
+# first, then the mode), any of them passed on or imported under another name, and gzip.main, which
+# writes name.gz beside each file on sys.argv. Running code (exec, compile) and the modules they
+# hold (gzip.os, gzip.builtins) are refused as before.
+cat > "$D85/reads-ast.py" <<'PY'
+import ast, sys
+text = open(sys.argv[1]).read()
+tree = ast.parse("total = 1 + 2")
+print(len(text), ast.dump(tree)[:20], ast.literal_eval("[1, 2]"), ast.unparse(tree), len(list(ast.walk(tree))))
+PY
+cat > "$D85/reads-io.py" <<'PY'
+import io, sys
+with io.open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read()
+print(len(io.StringIO(text).read()), len(io.FileIO(sys.argv[1]).read()), io.TextIOWrapper(io.BytesIO(b"x")).read())
+print(io.open(sys.argv[1], "r").readline()[:10], io.open(sys.argv[1], mode="rb").read(4), io.FileIO(sys.argv[1], "r").read(2))
+PY
+cat > "$D85/reads-gzip.py" <<'PY'
+import gzip, io, sys
+blob = gzip.compress(open(sys.argv[1], "rb").read())
+print(len(gzip.decompress(blob)))
+with gzip.open(io.BytesIO(blob), "rt") as f:
+    print(len(f.read()))
+print(len(gzip.GzipFile(fileobj=io.BytesIO(blob)).read()), len(gzip.GzipFile(fileobj=io.BytesIO(blob), mode="rb").read()))
+PY
+cat > "$D85/reads-from.py" <<'PY'
+import sys
+import gzip as gz
+from ast import literal_eval
+from gzip import compress, decompress
+from io import BytesIO, StringIO
+print(literal_eval("{'a': 1}"), len(decompress(compress(b"x"))), BytesIO(b"x").read(), StringIO("y").read())
+print(len(gz.open(BytesIO(compress(open(sys.argv[1], "rb").read()))).read()))
+PY
+for reads in reads-ast.py reads-io.py reads-gzip.py reads-from.py; do
+  run_85 "python3 $reads $RULES"
+  allowed "#3103 a read only script using ast, io or gzip, handed the real rules file: $reads"
+  run_85 "python3 $reads msg.json"
+  allowed "#3103 the same script handed a data file naming the endpoint: $reads"
+done
+# Everything they can write with, or reach past, is still refused. The paths hold none of w, a, x and
+# +, so a mode read from the wrong argument would let them through.
+WR03='.write(open(sys.argv[1]).read())'
+WB03='.write(open(sys.argv[1], "rb").read())'
+w85 io-open-w.py 'import io, sys' "io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-open-kw.py 'import io, sys' "io.open(file=\"/tmp/run.sh\", mode=\"a\")$WR03"
+w85 io-open-var.py 'import io, sys' 'mode = sys.argv[2]' "io.open(\"/tmp/run.sh\", mode)$WR03"
+w85 io-fileio-w.py 'import io, sys' "io.FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-fileio-plus.py 'import io, sys' "io.BufferedRandom(io.FileIO(\"/tmp/run.sh\", \"r+\"))$WB03"
+w85 io-from-open.py 'import sys' 'from io import open' "open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-open-as.py 'import sys' 'from io import open as io_open' "io_open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-fileio.py 'import sys' 'from io import FileIO' "FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-passed.py 'import functools, io, sys' "functools.partial(io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 io-renamed.py 'import io, sys' 'opener = io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-open-w.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-open-kw.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", mode=\"wt\")$WR03"
+w85 gzip-file-w.py 'import gzip, sys' "gzip.GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-file-kw.py 'import gzip, sys' "gzip.GzipFile(filename=\"/tmp/run.gz\", mode=\"w\")$WB03"
+w85 gzip-from-file.py 'import sys' 'from gzip import GzipFile' "GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-as.py 'import gzip as g, sys' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-renamed.py 'import gzip, sys' 'g = gzip' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-io-open.py 'import gzip, sys' "gzip.io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-main.py 'import gzip, sys' 'sys.argv = ["gzip", sys.argv[1]]' 'gzip.main()'
+w85 gzip-from-main.py 'import sys' 'from gzip import main' 'sys.argv = ["gzip", sys.argv[1]]' 'main()'
+w85 gzip-main-renamed.py 'import gzip, sys' 'g = gzip' 'sys.argv = ["gzip", sys.argv[1]]' 'g.main()'
+w85 gzip-main-passed.py 'import gzip, sys' 'run = gzip.main' 'run()'
+w85 gzip-builtins.py 'import gzip, sys' 'gzip.builtins.exec("import os; os.system(\"bash \" + sys.argv[1])")'
+w85 gzip-os.py 'import gzip, sys' 'gzip.os.system("bash " + sys.argv[1])'
+w85 ast-exec.py 'import ast, sys' 'exec(ast.literal_eval(repr(open(sys.argv[1]).read())))'
+w85 ast-compile.py 'import ast, sys' 'tree = ast.parse(open(sys.argv[1]).read())' 'exec(compile(tree, sys.argv[1], "exec"))'
+w85 shutil-copy.py 'import shutil, sys' 'shutil.copy(sys.argv[1], "/tmp/run.sh")'
+for acts in io-open-w.py io-open-kw.py io-open-var.py io-fileio-w.py io-fileio-plus.py io-from-open.py \
+  io-from-open-as.py io-from-fileio.py io-passed.py io-renamed.py gzip-open-w.py gzip-open-kw.py gzip-file-w.py \
+  gzip-file-kw.py gzip-from-file.py gzip-as.py gzip-renamed.py gzip-io-open.py gzip-main.py gzip-from-main.py \
+  gzip-main-renamed.py gzip-main-passed.py gzip-builtins.py gzip-os.py ast-exec.py ast-compile.py shutil-copy.py; do
+  run_85 "python3 $acts $RULES"
+  read_refused "#3103 a script that writes, runs code or reaches past ast, io or gzip is still refused: $acts"
+done
+run_85 "python3 io-open-w.py $RULES"
+says "#3103 the refusal names the writing mode" "can write a file (open with a mode that writes"
+run_85 "python3 gzip-main.py $RULES"
+says "#3103 and gzip's command line" "can write a file (gzip.main"
+run_85 "python3 io-renamed.py $RULES"
+says "#3103 and an opener passed on" "can write a file (io.open, passed on rather than called"
+run_85 "python3 shutil-copy.py $RULES"
+says "#3103 shutil is still a module the gate does not know" "imports shutil, a module the gate does not know"
+
+echo
 echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
 
 # The gate reads a module's attributes only from a name an import binds, so `q = pathlib` and then

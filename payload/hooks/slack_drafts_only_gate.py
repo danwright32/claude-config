@@ -873,6 +873,8 @@ OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # Anything else counts as able to act. A dotted entry allows only that submodule: `import os.path`
 # binds os, so os used for anything but os.path counts as acting.
 PY_INERT = frozenset({
+    # Three Dan chose on 2026-11-16 (claude-config#3103), whose writing is held as open() is (PY_OPENERS).
+    "ast", "gzip", "io",
     "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
     "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",
     "fractions", "functools", "glob", "hashlib", "heapq", "html", "itertools", "json", "math", "numbers",
@@ -904,6 +906,13 @@ PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # that writes.
 PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "symlink_to",
                        "hardlink_to", "link_to", "chmod", "mkdir"})
+# What opens a file in the mode it is handed, in io and gzip (claude-config#3103): io.open and gzip.open
+# (open() again), io.FileIO and gzip.GzipFile, each the file first and then the mode, read as open()'s
+# is. One passed on rather than called, or imported under another name, is a mode the gate cannot read.
+PY_OPENERS = frozenset({"open", "FileIO", "GzipFile"})
+# What writes files whatever it is handed: gzip.main, gzip's command line, writes name.gz beside each
+# file on sys.argv (or name without .gz, with -d).
+PY_FILE_TOOLS = {"gzip": frozenset({"main"})}
 # A JavaScript or TypeScript script is judged the same way (claude-config#2434): a hand list of ways to
 # act (fetch, axios, child_process, ...) missed the request package, worker_threads and dns. So it
 # counts as unable to act only when every module it imports from outside its own files is in JS_INERT
@@ -6599,16 +6608,59 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
                 if isinstance(f, ast.Attribute) and name in PY_WRITES:
                     return f"can write a file ({name})"
-                if name in ("open", "FileType"):
+                if name == "FileType" or name in PY_OPENERS:
                     if any(k.arg is None for k in node.keywords) or any(isinstance(x, ast.Starred) for x in node.args):
                         return f"can write a file ({name} given its arguments unpacked)"
-                    at = 1 if isinstance(f, ast.Name) and name == "open" else 0
+                    # FileType and a method of a value (Path(p).open(mode)) take the mode first; open() and
+                    # PY_OPENERS called by name or off an imported module (io.open, gzip.GzipFile) take the
+                    # file first (claude-config#3103).
+                    base = f
+                    while isinstance(base, ast.Attribute):
+                        base = base.value
+                    off_module = isinstance(f, ast.Attribute) and isinstance(base, ast.Name) and base.id in bound - local
+                    at = 0 if name == "FileType" or (isinstance(f, ast.Attribute) and not off_module) else 1
                     mode = next((k.value for k in node.keywords if k.arg == "mode"),
                                 node.args[at] if len(node.args) > at else None)
                     if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
                                                  and not set(mode.value) & set("wax+")):
                         return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
-        return handed_on or unfollowed
+        return (self.py_opener_unread(nodes, called, bound - local, renamed) if writes else None) or handed_on or unfollowed
+
+    @staticmethod
+    def py_opener_unread(nodes, called, modules, renamed):
+        """How a Python script writes through io or gzip where its mode cannot be read, as a phrase, or
+        None (claude-config#3103): one of PY_OPENERS off an imported module (io.open, gzip.GzipFile)
+        named but not called, so handed on to be called with a mode the gate never sees; one imported
+        out of io or gzip under another name, which the mode check cannot find by name; or one of
+        PY_FILE_TOOLS (gzip.main), off the module by its own name, a name it is imported as, or a
+        name it is bound to (renamed), or imported out of it."""
+        tools = {}  # each name a module of PY_FILE_TOOLS goes by, to what it writes with
+        openers = set()  # each of PY_OPENERS imported out of io or gzip by its own name
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name in PY_FILE_TOOLS:
+                        tools[a.asname or a.name] = PY_FILE_TOOLS[a.name]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module in ("io", "gzip"):
+                for a in node.names:
+                    if a.name in PY_FILE_TOOLS.get(node.module, ()):
+                        return f"can write a file ({node.module}.{a.name}, which writes the files on sys.argv)"
+                    if a.name in PY_OPENERS and a.asname and a.asname != a.name:
+                        return f"can write a file ({node.module}.{a.name} imported as {a.asname}, whose mode the gate cannot read)"
+                    if a.name in PY_OPENERS:
+                        openers.add(a.name)
+        every_tool = frozenset().union(*PY_FILE_TOOLS.values())
+        for node in nodes:
+            if isinstance(node, ast.Name) and node.id in openers and id(node) not in called:
+                return f"can write a file ({node.id}, passed on rather than called, with a mode the gate cannot read)"
+            if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+                continue
+            owner = node.value.id
+            if node.attr in tools.get(owner, ()) or (owner in renamed and node.attr in every_tool):
+                return f"can write a file ({owner}.{node.attr}, which writes the files on sys.argv)"
+            if owner in modules and node.attr in PY_OPENERS and id(node) not in called:
+                return f"can write a file ({owner}.{node.attr}, passed on rather than called, with a mode the gate cannot read)"
+        return None
 
     def shell_acts(self, body, d, zero=False, depth=0):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what
