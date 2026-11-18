@@ -4171,6 +4171,7 @@ echo "slack drafts only: timing the gate's phases changes no verdict (claude-con
 printf 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi\n' > "$T/phase-send.sh"
 printf 'echo fine\n' > "$T/phase-plain.sh"
 phase_same=""
+phase_unopened=""
 phase_n=0
 for c in "bash $T/phase-send.sh" "bash $T/phase-plain.sh" "python3 -c 'print(1)'" \
          "printf 'curl https://hooks.slack.com/services/x\n' > $T/w.sh && bash $T/w.sh" \
@@ -4183,9 +4184,14 @@ python3 $T/h.py" "bash $DIR/lib/checkout-root.sh $DIR/.." "source $DIR/lib/check
   plain="$RC|$OUT|$ERR"
   SLACK_GATE_PHASE_LOG="$T/phase-check.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
   [ "$plain" = "$RC|$OUT|$ERR" ] || phase_same="$phase_same; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} timed"
+  # A log the gate cannot open (its folder is not there) times nothing and changes nothing either.
+  SLACK_GATE_PHASE_LOG="$T/no-such-folder/phase.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" run_bash "$c"
+  [ "$plain" = "$RC|$OUT|$ERR" ] || phase_unopened="$phase_unopened; ${c:0:60} answered ${plain:0:120} untimed and $RC|${OUT:0:60}|${ERR:0:60} with a log it cannot open"
   phase_n=$((phase_n + 1))
 done
 check "each of $phase_n commands is answered the same with its phases timed as without (#3170)" "${phase_same:-ok}"
+if [ -e "$T/no-such-folder" ]; then phase_unopened="$phase_unopened; the gate made the log's missing folder"; fi
+check "each of $phase_n commands is answered the same with a phase log the gate cannot open (#3170)" "${phase_unopened:-ok}"
 phase_lines="$(grep -c '^phases: .*Judge\.line self' "$T/phase-check.log" 2>/dev/null || true)"
 if [ "${phase_lines:-0}" -ge 5 ] 2>/dev/null; then phase_lines=ok
 else phase_lines="only ${phase_lines:-0} phases lines naming Judge.line for $phase_n commands: $(head -c 300 "$T/phase-check.log" 2>&1)"; fi
