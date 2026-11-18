@@ -5635,6 +5635,32 @@ free space jumped to 196 GB for about three minutes and settled at 105 to 106 GB
 projected that settling as 204.5 GB an hour for half an hour while nothing moved. The cost is that a
 fall beginning just as a recovery ends is projected up to 30 minutes later again.
 
+A warning's readings outlive that six hour window (claude-config#3157). On an exit 3 or 4 the check
+keeps a copy of the readings in the window, headed by the verdict line, its exit code and the
+settings it was judged by, as `free-space-warning-<volume>-<epoch>-exit<code>.readings` in
+`~/.claude/state/free-space-warnings` (`FREE_SPACE_WARNINGS_DIR`; beside the readings when
+`FREE_SPACE_STATE_DIR` moves them, as every suite does). Not `$TMPDIR`, which macOS empties at every
+restart. A warning starts a new file only when the newest one for the volume began a whole window
+ago or more (`FREE_SPACE_WINDOW_HOURS`, at least an hour), so at the default six hours a volume gets
+at most four files a day and 57 in 14 days, however often the disk crosses the floor. Every other
+warning adds to the newest file: the readings taken since its last one, those with room between
+dips included because they are behind the new verdict, and, when the verdict is new rather than
+carrying on, a `# exit N at <epoch>: <verdict>` line. So no reading behind any warning is lost. A
+file per warning episode, the first version, had no bound: a disk hovering at the floor dips on
+every build, and a day crossing it every 10 to 20 minutes wrote 58 files (the lessons review at
+baed01d, measured by the suite), where the same day now writes 4 holding every reading, 15,057
+bytes in all. `<readings>.warning-copy` beside the readings records the newest file; after a
+restart empties it, the newest file in the folder is found and added to. Each file is kept 14 days
+(`FREE_SPACE_WARNING_KEEP_DAYS`, Dan's decision on #3157) by its start, and then deleted by a run of
+the check, healthy or not, within an hour, since the sweep runs at most hourly; only a regular file
+whose whole name is that pattern is ever deleted. A copy made from this Mac's real window on
+2026-11-17, 25 readings, was 1,405 bytes. A copy that cannot be written or added to (a full disk is
+when this runs) leaves the warning and its exit code as they were and says so in one line, and the
+next warning tries again. `--report` on a warning names the newest file. To replay one, run the
+check once per reading line, oldest first, with that line as `FREE_SPACE_NOW` and
+`FREE_SPACE_BYTES`, the copy's settings and a `FREE_SPACE_STATE_DIR` of its own, as the #3153 tests
+replay 2026-11-16.
+
 When the verdict is 3 or 4 it names what it can. Swap first (claude-config#1770): swap lives on
 `/System/Volumes/VM`, which shares the disk and which no folder size reaches, and on 2026-10-26 95
 GB of it, held by two leaking processes, filled Daniels-MacBook-Pro-2. When `sysctl vm.swapusage`
