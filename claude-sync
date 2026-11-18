@@ -10159,9 +10159,15 @@ hook_suite_record_owed(){   # $1 = a record's first line
 # (a run the slot kept from starting stopped nothing). Carried from the record being replaced while
 # that one was owed too, and with them the record that the rerun was given up on, so a later stopped
 # run cannot notify a second time. A record from before these fields counts its own run.
+#
+# Carried only by a RERUN (HOOK_SUITE_RERUN=1, set by the verdict). A run started because a hook
+# landed, or by  claude-sync recheck, is checking config the chain never saw, so it starts a chain of
+# its own: a give up from an earlier chain must not leave the new hooks owed to nobody.
 hook_suite_chain_fields(){   # $1 = the outcome being recorded  $2 = now -> "<tab>owed_since=..<tab>stopped=..[...]"
   local prev="" po="" since="" stopped="" gave="" why=""
-  [ -f "$HOOK_TESTS_FILE" ] && { IFS= read -r prev < "$HOOK_TESTS_FILE" 2>/dev/null || prev=""; }
+  if [ "${HOOK_SUITE_RERUN:-0}" = "1" ] && [ -f "$HOOK_TESTS_FILE" ]; then
+    IFS= read -r prev < "$HOOK_TESTS_FILE" 2>/dev/null || prev=""
+  fi
   po="$(hook_suite_field "$prev" outcome)"
   case "$po" in
     incomplete|slotwait)
@@ -10273,8 +10279,9 @@ hook_rerun_give_up_after(){
 }
 
 # The start of a rerun the record is owed. Takes the claim and decides, under it, whether the suite
-# runs now. Exits 0 having printed the opening of the closing clause, the claim held, when it does;
-# exits 1 having printed the whole clause, the claim released, when it does not.
+# runs now. Exits 0 with the claim held and HOOK_RERUN_AGE set (how long ago the record became owed),
+# printing nothing, when it does; exits 1 having printed the whole clause, the claim released, when
+# it does not.
 hook_rerun_begin(){
   local line at since now bound age busy holder
   if ! hook_rerun_claim; then
@@ -10307,7 +10314,9 @@ hook_rerun_begin(){
     hook_rerun_release
     return 1
   fi
-  printf ', and the hook suite left unverified %s was run again' "$age"
+  # Said by the verdict once it has found the runner, so a rerun that cannot start is not reported as
+  # one that ran.
+  HOOK_RERUN_AGE="$age"
   return 0
 }
 
@@ -10356,19 +10365,30 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # A run that was stopped at its deadline is owed one as well (claude-config#3195), and an owed run
   # with no hook of its own arriving is a RERUN: it takes the rerun's claim and waits for a quiet Mac
   # (hook_rerun_begin). A hook arriving is checked as it always was, owed or not.
-  local rerun=0
+  # HOOK_SUITE_RERUN is local, so it reaches the record's writer (hook_suite_chain_fields) and
+  # nothing outside this verdict.
+  local HOOK_SUITE_RERUN=0
   if [ "${HOOK_SUITE_FORCE:-0}" != "1" ] && ! hook_suite_landed; then
     hook_suite_owed || return 0
-    rerun=1
+    HOOK_SUITE_RERUN=1
+    # Before the runner is looked for, so the give up bound still applies to a record whose runner
+    # has gone, and a rerun is never reported as hooks arriving.
+    hook_rerun_begin || return 0
   fi
   runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
   if [ ! -f "$runner" ]; then
+    if [ "$HOOK_SUITE_RERUN" = "1" ]; then
+      # Nothing arrived, so nothing is notified and the record stays owed, to be given up on at its
+      # bound like any other that cannot be cleared here.
+      printf ', and the hook suite left unverified %s could not be run again: there is no %s to run it with, so it is still owed' "${HOOK_RERUN_AGE:-earlier}" "$runner"
+      return 0
+    fi
     notify "hooks arrived with no run-all-tests.sh to check them"
     record_hook_suite_result notrun 0 "" "?" "?"
     printf ', and the hook suite could NOT be run here: hooks arrived and there is no %s to check them with, so nothing that just landed has been verified' "$runner"
     return 0
   fi
-  if [ "$rerun" -eq 1 ]; then hook_rerun_begin || return 0; fi
+  [ "$HOOK_SUITE_RERUN" = "1" ] && printf ', and the hook suite left unverified %s was run again' "${HOOK_RERUN_AGE:-earlier}"
   out="$(scratch_file)" || {
     printf ', and the hook suite could NOT be run here: no scratch file could be made to hold its output'
     return 0
@@ -13449,7 +13469,11 @@ HSREOF
     slotwait)
       # claude-config#2758: queued behind another full run for the whole of its bound, so it never
       # started. Its own words, never folded into "could not be completed", which reads as a hang.
-      echo "${prefix}did NOT run $age: it waited for this Mac's full suite slot, which another full run held, and ran nothing. Nothing that landed has been verified. The next pull runs it again, and  claude-sync recheck  runs it now and records what it says$(hook_suite_owed_words "$line" "${2:+$2/.hook-tests-rerun}" slotwait)" ;;
+      # "The next pull runs it again" only while that is true: a record given up on says what to run
+      # instead, in hook_suite_owed_words, and the two must not both be said (L11).
+      local sw_next="The next pull runs it again, and  claude-sync recheck  runs it now and records what it says"
+      [ -z "$(hook_suite_field "$line" gave_up)" ] || sw_next="claude-sync recheck  runs it and records what it says"
+      echo "${prefix}did NOT run $age: it waited for this Mac's full suite slot, which another full run held, and ran nothing. Nothing that landed has been verified. ${sw_next}$(hook_suite_owed_words "$line" "${2:+$2/.hook-tests-rerun}" slotwait)" ;;
   esac
   return 0
 }

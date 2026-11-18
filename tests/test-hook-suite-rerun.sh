@@ -216,6 +216,17 @@ outr="$(CLAUDE_HOME="$RRH" SYNC_REPO="$RRR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash 
 check "claude-sync recheck, the remedy it names, runs the suite and clears the record" \
   "[ \"\$(rr_runs)\" = 5 ] && grep -q '^outcome=passed' '$RRR/.hook-tests'" "$outr"
 
+# ---- a hook landing after a give up starts a chain of its own, owed again and not notified ----
+printf 'outcome=incomplete\tat=%s\texit=0\tran=?\tnotrun=?\tseconds=1800\tnotrun_names=?\towed_since=1000\tstopped=2\tgave_up=%s\tgave_up_why=twice\n' \
+  "$(date +%s)" "$(date +%s)" > "$RRR/.hook-tests"
+echo hang > "$RRT/mode"; rr_arrive two
+out12="$(rr_pull 50)"
+check "a hook landing after a give up is checked, and its stopped run starts a new chain" \
+  "[ \"\$(rr_runs)\" = 6 ] && [ \"\$(rr_field stopped)\" = 1 ] && [ -z \"\$(rr_field gave_up)\" ] && [ \"\$(rr_field owed_since)\" != 1000 ]" \
+  "$(head -1 "$RRR/.hook-tests" 2>/dev/null)"
+check "and it is owed a rerun again, with nobody notified" \
+  "line_has \"\$out12\" 'could NOT be completed here' 'runs it again' && [ \"\$(rr_told)\" = 3 ]" "$out12"
+
 # ---- where the writes landed (L322): the fixture, and nothing of this Mac's ----
 check "every record and claim this suite caused is inside the fixture clone" \
   "[ -f '$RRR/.hook-tests' ] && [ ! -e '$HERE/../.hook-tests-rerun' ]"
