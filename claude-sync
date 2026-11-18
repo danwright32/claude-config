@@ -10157,14 +10157,14 @@ hook_suite_record_owed(){   # $1 = a record's first line
 # The fields an owed record carries (claude-config#3195): owed_since, when the first run that
 # verified nothing was recorded, and stopped, how many runs since then were stopped at the deadline
 # (a run the slot kept from starting stopped nothing). Carried from the record being replaced while
-# that one was owed too, and with them the record that the rerun was given up on, so a later stopped
-# run cannot notify a second time. A record from before these fields counts its own run.
+# that one was owed too. A record from before these fields counts its own run.
 #
 # Carried only by a RERUN (HOOK_SUITE_RERUN=1, set by the verdict). A run started because a hook
 # landed, or by  claude-sync recheck, is checking config the chain never saw, so it starts a chain of
-# its own: a give up from an earlier chain must not leave the new hooks owed to nobody.
-hook_suite_chain_fields(){   # $1 = the outcome being recorded  $2 = now -> "<tab>owed_since=..<tab>stopped=..[...]"
-  local prev="" po="" since="" stopped="" gave="" why=""
+# its own: a give up from an earlier chain must not leave the new hooks owed to nobody. A rerun
+# never starts from a record given up on (hook_suite_record_owed), so gave_up is never carried.
+hook_suite_chain_fields(){   # $1 = the outcome being recorded  $2 = now -> "<tab>owed_since=..<tab>stopped=.."
+  local prev="" po="" since="" stopped=""
   if [ "${HOOK_SUITE_RERUN:-0}" = "1" ] && [ -f "$HOOK_TESTS_FILE" ]; then
     IFS= read -r prev < "$HOOK_TESTS_FILE" 2>/dev/null || prev=""
   fi
@@ -10174,15 +10174,12 @@ hook_suite_chain_fields(){   # $1 = the outcome being recorded  $2 = now -> "<ta
       since="$(hook_suite_field "$prev" owed_since)"
       [ -n "$since" ] || since="$(hook_suite_field "$prev" at)"
       stopped="$(hook_suite_field "$prev" stopped)"
-      if [ -z "$stopped" ] && [ "$po" = incomplete ]; then stopped=1; fi
-      gave="$(hook_suite_field "$prev" gave_up)"
-      why="$(hook_suite_field "$prev" gave_up_why)" ;;
+      if [ -z "$stopped" ] && [ "$po" = incomplete ]; then stopped=1; fi ;;
   esac
   case "$since" in ''|*[!0-9]*) since="$2" ;; esac
   case "$stopped" in ''|*[!0-9]*) stopped=0 ;; esac
   [ "$1" = incomplete ] && stopped=$(( stopped + 1 ))
   printf '\towed_since=%s\tstopped=%s' "$since" "$stopped"
-  [ -z "$gave" ] || printf '\tgave_up=%s\tgave_up_why=%s' "$gave" "${why:-?}"
   return 0
 }
 
@@ -10323,18 +10320,14 @@ hook_rerun_begin(){
 # What a run stopped at its deadline adds to its clause, once it is recorded (claude-config#3195):
 # owed a rerun, or, when the run before it was stopped too, given up on with the one notification.
 hook_suite_after_stopped(){
-  local line="" stopped gave at gave_age='earlier'
+  local line="" stopped at
   IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || line=""
   stopped="$(hook_suite_field "$line" stopped)"
-  gave="$(hook_suite_field "$line" gave_up)"
   at="$(hook_suite_field "$line" at)"
   case "$stopped" in ''|*[!0-9]*) stopped=1 ;; esac
-  # Worked out before the printf, never in a case inside a command substitution, which bash 3.2
-  # cannot parse (see the could not run names in hook_suite_verdict).
-  case "$gave" in ''|*[!0-9]*) : ;; *) gave_age="$(age_in_words "$(( $(date +%s) - gave ))")" ;; esac
-  if [ -n "$gave" ]; then
-    printf '. It was given up on %s, so it will not be run again by itself: run  claude-sync recheck  once this Mac is quieter' "$gave_age"
-  elif [ "$stopped" -ge 2 ]; then
+  # A record just written never carries gave_up (hook_suite_chain_fields), so two stopped runs in
+  # one chain notify exactly once, here.
+  if [ "$stopped" -ge 2 ]; then
     hook_suite_record_set "$at" "gave_up=$(date +%s)" "gave_up_why=twice" || true
     notify "the hook suite could not be completed after a pull, nor when it was run again, so what landed is unverified: run claude-sync recheck once the Mac is quieter"
     printf '. It could not be completed the time before either, so it will not be run again by itself: run  claude-sync recheck  once this Mac is quieter'
