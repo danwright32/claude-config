@@ -3809,12 +3809,13 @@ A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed throu
 `package.json`, its pre and post scripts included, and judged as the command line it runs. The words
 after the script's name are judged too (#3143): the package manager adds them to the end of the
 script's own command, so that command is read once as written and once with them there, and in the
-second reading the command they land in runs a program it names bare as `npx` would, since the
-package manager puts `node_modules/.bin` in front of the PATH. So `npm run test:node --
-tests/x.spec.js`, whose script is `playwright test`, gets the answer `npx playwright test
-tests/x.spec.js` gets: refused where the spec's imports reach code that posts. Handed only an option,
-or nothing, a script is judged as before. Whether a single test file that loads posting code may run
-at all is #3173.
+second reading the program they land on, where the script names it bare, is handed them as `npx`
+would hand them to it, since the package manager puts `node_modules/.bin` in front of the PATH. So
+`npm run test:node -- tests/x.spec.js`, whose script is `playwright test`, gets the answer `npx
+playwright test tests/x.spec.js` gets: refused where the spec's imports reach code that posts. The
+words the script itself writes after a bare program are judged as before, so handed only an option,
+or nothing, a script gets the answer it always got. Whether a single test file that loads posting
+code may run at all is #3173.
 
 A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
 `export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and

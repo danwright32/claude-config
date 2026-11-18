@@ -5430,10 +5430,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # The command of a package script that the words after the script's name land in: the one
             # they are written inside, as the shell reads text added to the end of a line, which a
             # command inside a substitution earlier in it is not (script_handed, claude-config#3143).
-            # (where it starts, what hands the words), else None.
+            # (where it starts, what hands the words, the words), else None.
             landed = max((p["start"] for p in parts if p["start"] <= handed[0] < p["end"]), default=None) \
                 if handed else None
-            self.shell["handed"] = (landed, handed[1]) if landed is not None else None
+            self.shell["handed"] = (landed,) + tuple(handed[1:]) if landed is not None else None
             # Where each process substitution of s is, <( ), >( ) or zsh's =( ) (claude-config#3213):
             # the reader lists one with the substitutions of the command it is written in. A program
             # inside one that runs its input reads what feeds it, or what feeds the command around it
@@ -5873,11 +5873,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 if reason:
                     return reason
             return None
-        # A package script's own command, in the command the words after the script's name land in,
-        # runs a program it names bare as a launcher does (script_handed, claude-config#3143).
-        launcher = launcher or self.script_handed(words)
-        if launcher:
-            reason = self.package_run(words, d, depth, launcher)
+        # In a package script, the program the words after the script's name land on, where the
+        # script names it bare, is handed them as a launcher's package is (script_handed, #3143).
+        lands = None if launcher else self.script_handed(words)
+        if launcher or lands:
+            reason = self.package_run(lands[1], d, depth, lands[0]) if lands else \
+                self.package_run(words, d, depth, launcher)
             if reason is not False:
                 return reason
         if "/" in words[0]:
@@ -7115,9 +7116,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         whose script is `playwright test`, passed with a spec whose imports reach code that posts,
         while `npx playwright test tests/x.spec.js` was refused. The command is judged as before
         without them and then again with them at its end (script_words), so nothing refused before
-        passes now. In that second reading the command the words land in runs a program it names
-        bare as a launcher does (script_handed): the package manager puts node_modules/.bin in front
-        of the PATH, so `playwright` there is the package npx would run. Dan's decision, 2026-11-18:
+        passes now. In that second reading the program the words land on, where the script names it
+        bare, is handed them as a launcher's package is (script_handed): the package manager puts
+        node_modules/.bin in front of the PATH, so `playwright` there is the package npx would run.
+        The words the script itself writes after that program are judged as before, so a script
+        handed only an option gets the answer it gets handed nothing. Dan's decision, 2026-11-18:
         "Refuse both, then decide #3173".
         """
         k, where = 1, d
@@ -7177,7 +7180,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             if handed and key == script:
                 base = cmd.rstrip()
                 readings.append((f"{base} {' '.join(shlex.quote(w) for w in handed)}",
-                                 (len(base) + 1, f"the package script {key}")))
+                                 (len(base) + 1, f"the package script {key}", tuple(handed))))
             for text, lands in readings:
                 try:
                     self.next_on_disk, self.next_handed = True, lands
@@ -7213,17 +7216,25 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         return out
 
     def script_handed(self, words):
-        """What hands this command the words after a package script's name, where it is the command
-        of the script they land in and its program is named bare, else None (claude-config#3143).
-        The package manager runs a script with node_modules/.bin in front of the PATH, so a bare
-        name there is the package a launcher would run, and it is read as one (package_run): the
-        files it is handed are opened, where a program run by a bare name from the PATH has none of
-        its files read. Any other command of the script, and the script read without those words,
-        is judged as before."""
+        """(what hands them, the program and the words it is handed) where this command is the one
+        of a package script that the words after the script's name land in and its program is named
+        bare, else None (claude-config#3143). The package manager runs a script with
+        node_modules/.bin in front of the PATH, so a bare name there is the package a launcher
+        would run, and it is read as one handed those words (package_run): the files among them are
+        opened, where a program run by a bare name from the PATH has none of its files read.
+
+        Only the words after the script's name are read that way. The words the script itself
+        writes after the program are judged as before, with or without words after the name, so a
+        script handed only an option gets the answer it gets handed nothing (lessons review at
+        f916b1b: reading the whole command refused `npm test -- --headed` over a file the script's
+        own command names, which plain `npm test` passed). They are the last words of the command;
+        where they are not, a comment or a reading the gate did not expect having moved them, every
+        word of the command is read. Any other command of the script is judged as before."""
         lands = self.shell.get("handed")
         if not lands or lands[0] != self.shell.get("at") or "/" in words[0]:
             return None
-        return lands[1]
+        theirs = list(lands[2])
+        return lands[1], [words[0]] + (theirs if words[-len(theirs):] == theirs else words[1:])
 
     @staticmethod
     def package_json(where):

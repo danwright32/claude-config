@@ -2600,6 +2600,7 @@ for d in "$P43" "$T/q3143"; do
     '"sub": "playwright test --config $(node scripts/noop.js)",' \
     '"env": "cross-env NODE_ENV=test playwright test",' \
     '"assign": "NODE_ENV=test playwright test",' \
+    '"own:spec": "playwright test tests/job.spec.js",' \
     '"pretest:pre": "node scripts/run-tests.js", "test:pre": "node scripts/noop.js"}}' > "$d/package.json"
   printf '%s\n' 'module.exports = { testDir: "tests" };' > "$d/playwright.node.config.js"
   printf '%s\n' 'const { test } = require("@playwright/test");' 'test("adds", () => 1 + 1);' > "$d/tests/quiet.spec.js"
@@ -2670,6 +2671,21 @@ for runs in "npm run test:node" "npm run-script test:node" "npm test" "npm --sil
   run_p43 "$runs"
   allowed "#3143 a package script handed nothing still passes: $runs"
 done
+# Only the words after the name are read as handed to a bare program: what the script's own command
+# writes after it is judged as it is with nothing after the name, so an option, or a spec reaching
+# nothing that posts, never changes the answer (lessons review at f916b1b: reading the whole command
+# refused `npm run own:spec -- --headed` over the spec own:spec itself names, which plain `npm run
+# own:spec` passed). The two are compared, so this holds whichever way that plain run is judged.
+run_p43 "npm run own:spec"
+plain_rc=$RC
+for runs in "npm run own:spec -- --headed" "pnpm own:spec --workers 1" "yarn own:spec --grep adds" \
+  "npm run own:spec -- tests/quiet.spec.js"; do
+  run_p43 "$runs"
+  if [ "$RC" -eq "$plain_rc" ]; then check "#3143 an option or a quiet spec after the name leaves the script's own words judged as before: $runs" ok
+  else check "#3143 an option or a quiet spec after the name leaves the script's own words judged as before: $runs" "exit $RC against $plain_rc for npm run own:spec alone, stderr: ${ERR:0:300}"; fi
+done
+run_p43 "npm run own:spec -- tests/job.spec.js"
+read_refused "#3143 and the same script handed the spec that reaches code that posts is refused"
 # The words go to the script itself, never to its pre script: pretest:pre is the runner that runs what
 # it is handed, and test:pre a script that runs nothing it is handed.
 run_p43 "npm run test:pre -- tests/job.spec.js"
