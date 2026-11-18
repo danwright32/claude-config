@@ -89,7 +89,7 @@ FIX="$(cd "$FIX" && pwd -P)" || exit 2
 trap 'rm -rf "$FIX"' EXIT
 
 # A throwaway repository holding the given suites. mk_repo <dir> <path:mode>...; mode is 755 or 644.
-# Committed, then the modes read back, so what the fixture holds is the committed state.
+# Committed here, and suite_mode_report reads the index afterwards, so what is judged is the committed state.
 mk_repo() {
   local d="$1" spec p m
   shift
