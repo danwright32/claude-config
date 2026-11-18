@@ -249,8 +249,9 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
 
     Such a read (sys_read) passes where it is read on by attribute (its path refused there), bound
     to a name follow() reads on from, going nowhere, or used where a module cannot be handed on: an
-    operand of arithmetic or a comparison (where no class of the script can be handed it as the
-    other operand), negated, formatted into a string, indexed, or handed to one of
+    operand of arithmetic or a comparison (where nothing in the script, and none of its own
+    modules, can write a method the other operand hands it to), negated, formatted into a string,
+    indexed, or handed to one of
     SYS_SAFE_CALLS the script does not bind itself. That keeps a field called sys, printed,
     rounded, added or compared, a field as PR #3161 chose. Anywhere else it is refused. An arm of a
     choice and a walrus give it on to wherever they go, so they are read through."""
@@ -261,23 +262,27 @@ def sys_placed(nodes, parent, sys_read, sys_bound, goes_nowhere, own_modules):
                    for a in n.names}
     # An operand of arithmetic or a comparison is handed to the other operand's method (a module
     # has none, so sys + a calls a's __radd__ with sys, and `sys in a` its __contains__). So an
-    # operand passes only where no class of the script binds a dunder method that is not
-    # SYS_DUNDERS_OK, none of which is handed another object. A class body is not the only place a
-    # hook is written (lessons review at d63d189): a class from one of the script's own modules,
-    # whose bodies are not among these nodes, type() given its methods as a dictionary, and setattr
-    # on a class each give one, so any of them counts as a hook too. (A dunder set by attribute,
-    # A.__radd__ = f, is refused by py_acts already, as any attribute starting with _ is.)
+    # operand passes only where the script writes no dunder name that is not SYS_DUNDERS_OK (none
+    # of which is handed another object) as a method: a function of that name anywhere, a name of
+    # that name bound anywhere in a class (its if or try included), or a string of that name as a
+    # dictionary key or an argument (type()'s dictionary of methods). Nor where a class can come
+    # from somewhere not read here: one of the script's own modules, or type() called with more
+    # than an object (lessons reviews at d63d189 and 510611e). The rest of the ways to give a class
+    # a method (setattr, vars, an attribute starting with _) are refused by py_acts already.
     def hook(name):
         return name.startswith("__") and name.endswith("__") and name not in SYS_DUNDERS_OK
 
+    def one_arg_type(n):
+        call = parent.get(id(n))
+        return isinstance(call, ast.Call) and call.func is n and len(call.args) == 1 and not call.keywords
+
+    in_class = {id(n) for c in nodes if isinstance(c, ast.ClassDef) for n in ast.walk(c)}
     operand_hooks = own_modules or any(
-        isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)) and hook(s.name)
-        or isinstance(s, (ast.Assign, ast.AnnAssign)) and any(
-            isinstance(t, ast.Name) and hook(t.id) for t in (s.targets if isinstance(s, ast.Assign) else [s.target]))
-        for c in nodes if isinstance(c, ast.ClassDef) for s in c.body) or any(
-        isinstance(n, ast.Name) and (n.id == "setattr" or n.id == "type" and not (
-            isinstance(parent.get(id(n)), ast.Call) and parent[id(n)].func is n and len(parent[id(n)].args) == 1
-            and not parent[id(n)].keywords))
+        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and hook(n.name)
+        or isinstance(n, ast.Name) and (id(n) in in_class and not isinstance(n.ctx, ast.Load) and hook(n.id)
+                                        or n.id == "type" and not one_arg_type(n))
+        or isinstance(n, ast.Constant) and isinstance(n.value, str) and hook(n.value)
+        and isinstance(parent.get(id(n)), (ast.Dict, ast.Call))
         for n in nodes)
     for node in nodes:
         if not isinstance(node, (ast.Name, ast.Attribute)) or not isinstance(node.ctx, ast.Load) or not sys_read(node):

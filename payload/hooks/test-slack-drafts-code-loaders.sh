@@ -2135,26 +2135,37 @@ w72 walrus.py 'import lib_sys' 'def go(m):' "    m$PATH72" 'go((q := lib_sys.sys
 w72 attr-store.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'h.m = lib_sys.sys' "h.m$PATH72" 'import json'
 w72 shadowed-print.py 'import lib_sys' 'def print(m):' "    m$PATH72" 'print(lib_sys.sys)' 'import json'
 # An operand hands sys to the other operand's method where the script writes one: a module has no
-# __add__, so lib_sys.sys + A() calls A.__radd__ with it, and `in` calls __contains__.
-w72 operand-radd.py 'import lib_sys' 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0' \
-  'print(lib_sys.sys + A())' 'import json'
-w72 operand-contains.py 'import lib_sys' 'class A:' '    def __contains__(self, m):' "        m$PATH72" '        return True' \
-  'print(lib_sys.sys in A())' 'import json'
+# __add__, so sys + A() calls A.__radd__ with it, and `in` calls __contains__. Each case but the one
+# about the script's own module reads sys off pathlib, so that importing one of the script's own
+# modules (which refuses an operand by itself) is not what refuses it.
+SYS72='pathlib.PurePath("x").parser.sys'
+w72 operand-radd.py 'import pathlib' 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0' \
+  "print($SYS72 + A())" 'import json'
+w72 operand-contains.py 'import pathlib' 'class A:' '    def __contains__(self, m):' "        m$PATH72" '        return True' \
+  "print($SYS72 in A())" 'import json'
 # The lessons review at d63d189: a chained assignment that also stores sys on an attribute, and an
 # operand whose class's hook is written where the script's own class bodies do not show it (a module
 # of the script's own, type() given the methods, a method set on the class afterwards).
 w72 chain-attr.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'q = h.m = lib_sys.sys' "h.m$PATH72" 'import json'
 w72 lib_hook.py 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0'
 w72 operand-own-module.py 'import lib_sys, lib_hook' 'print(lib_sys.sys + lib_hook.A())' 'import json'
-w72 operand-type.py 'import lib_sys' 'def radd(self, m):' "    m$PATH72" '    return 0' \
-  'A = type("A", (), {"__radd__": radd})' 'print(lib_sys.sys + A())' 'import json'
-w72 operand-set-later.py 'import lib_sys' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
-  'A.__radd__ = radd' 'print(lib_sys.sys + A())' 'import json'
-w72 operand-setattr.py 'import lib_sys' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
-  'setattr(A, "__r" + "add__", radd)' 'print(lib_sys.sys + A())' 'import json'
+w72 operand-type.py 'import pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A = type("A", (), {"__radd__": radd})' "print($SYS72 + A())" 'import json'
+w72 operand-set-later.py 'import pathlib' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'A.__radd__ = radd' "print($SYS72 + A())" 'import json'
+# (operand-set-later.py and operand-setattr.py were refused before #3172 too, by the rule on an
+# attribute starting with _ and by setattr being on PY_RUNS; they stay so a change to either is seen.)
+w72 operand-setattr.py 'import pathlib' 'class A:' '    pass' 'def radd(self, m):' "    m$PATH72" '    return 0' \
+  'setattr(A, "__r" + "add__", radd)' "print($SYS72 + A())" 'import json'
+# The lessons review at 510611e: a hook written inside an if or a try in the class body.
+w72 operand-in-if.py 'import os, pathlib' 'class A:' '    if os.sep:' '        def __radd__(self, m):' "            m$PATH72" \
+  '            return 0' "print($SYS72 + A())" 'import json'
+w72 operand-in-try.py 'import pathlib' 'def radd(self, m):' "    m$PATH72" '    return 0' 'class A:' '    try:' \
+  '        __radd__ = radd' '    except Exception:' '        pass' "print($SYS72 + A())" 'import json'
 for route in go-call-chain.py go-own-module.py go-keyword.py go-name.py ifexp-name.py ifexp-chain.py ifexp-direct.py \
   boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py \
-  chain-attr.py operand-own-module.py operand-type.py operand-set-later.py operand-setattr.py; do
+  chain-attr.py operand-own-module.py operand-type.py operand-set-later.py operand-setattr.py operand-in-if.py \
+  operand-in-try.py; do
   run_72 "python3 $route msg.json"
   read_refused "#3172 sys put where the gate does not follow it is refused: $route"
 done
@@ -2210,6 +2221,8 @@ print(json.dumps(data, indent=2), isinstance(data, collections.abc.Iterable), sc
 print(t.sys, round(t.sys), str(t.sys), f"{t.sys:.1f}", t.sys == 0.5, -t.sys, t.sys * 2, t.total(), round(q))
 json.dump(data, sys.stdout)
 s.stdout.write(s.argv[0] + "\n")
+if __name__ == "__main__":
+    print(t.sys * 3)
 PY
 run_72 "python3 reads-3172.py msg.json"
 allowed "#3172 the control: json, its decoder, html.parser, collections' abc, sys and a field named sys used as scripts use them pass"
