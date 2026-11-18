@@ -5836,7 +5836,8 @@ to tell Dan for one, and runs the review page and checker commands as written th
 
 `skills/disk-clean/scan.sh` is the half of that flow that removes nothing (claude-config#1806). It
 is not write free: it writes the scan record, and the review page writes itself and its nonce into
-the folder it is given, which the skill names to Dan. Inside the folders it judges it changes
+the folder it is given, which the skill names to Dan, and with `--clear-clipboard` empties the
+clipboard first. Inside the folders it judges it changes
 nothing, which is why the worktrees kind reads with `git --no-optional-locks status`: a plain
 `git status` refreshes the repository's index file as it reads (#3216). Project build folders that
 iCloud syncs (in Desktop or Documents while iCloud syncs them) are never offered, since removing one

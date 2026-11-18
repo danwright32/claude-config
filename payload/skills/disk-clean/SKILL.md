@@ -24,8 +24,9 @@ when one is missing here). Judge each run by its exit code, never by its last li
 - Claude never runs `sudo` itself. Anything that needs Dan's password is handed to him as one
   command in step 6.
 - Steps 1 and 2 remove nothing, but they are not write free, so never call them read only. They
-  write three things: the scan record `~/.claude/state/disk-clean/last-scan.json` (replacing the
-  last scan's), and in `<folder>` the review page and its nonce. They change nothing inside the
+  write the scan record `~/.claude/state/disk-clean/last-scan.json` (replacing the last scan's) and
+  in `<folder>` the review page and its nonce, and step 2's `--clear-clipboard` empties the
+  clipboard. They change nothing inside the
   folders they judge: a worktree's state is read with `git --no-optional-locks status`, since a
   plain `git status` refreshes the repository's index file as it reads it (#3216).
 
