@@ -3,7 +3,8 @@
 // onto its words and knows nothing of YAML's '' escape. The design round guard read TypeScript
 // strings its own way (#1144) and a since retired guard GitLab's flow lists (#2448); both then read
 // with this. Python's strings and comments are read here too (pythonText, moved from code.ts in
-// #2710), so the file reader and a copy of it read them with no other file. Pure. Kept here once and copied byte for byte into each mod that reads with it
+// #2710), so a reader of them needs no copy of code.ts. Pure. Kept here once and copied byte for
+// byte into each mod that reads with it
 // (hooks/mod-kit/quoted.ts, which tools/check-mod-shared-parts.sh holds to this one), since a mod
 // cannot import another mod's files.
 
