@@ -292,6 +292,24 @@ want_eq "#3187 two hand written copies of it are a finding" 1 "$rc"
 want_has "#3187 counted between the two hand written sites only" '2 copies of the same line' "$out"
 want_lacks "#3187 and never naming the section" 'src/db/guards.sql:' "$(printf '%s\n' "$out" | grep -v '^generated section')"
 
+# A file list that cannot be read is an error (exit 2), never a quiet fall back to asking the tree,
+# which would call a generator outside the source roots missing.
+T="$WORKDIR/gen-marked"
+out="$(python3 "$DETECTOR" compare "$GEN_EMPTY" "$T" --pushed-files 2>&1)"; rc=$?
+want_eq "#3187 --pushed-files with no file after it is an error" 2 "$rc"
+want_has "#3187 and says which flag" '--pushed-files needs a file after it' "$out"
+out="$(python3 "$DETECTOR" compare "$GEN_EMPTY" "$T" --base-files "$WORKDIR/no-such-list" 2>&1)"; rc=$?
+want_eq "#3187 a --base-files list that cannot be opened is an error" 2 "$rc"
+want_has "#3187 and says a file list could not be read" 'a file list could not be read' "$out"
+out="$(python3 "$DETECTOR" scan "$T" --repo-files "$WORKDIR/no-such-list" 2>&1)"; rc=$?
+want_eq "#3187 scan with a --repo-files list that cannot be opened is an error" 2 "$rc"
+# And a list that is read is what decides: one that lacks the generator refuses the marker even
+# though the file sits in the tree.
+printf '%s\n' src/db/guards.sql > "$WORKDIR/list-without-gen"
+out="$(python3 "$DETECTOR" compare "$GEN_EMPTY" "$T" --pushed-files "$WORKDIR/list-without-gen" 2>&1)"; rc=$?
+want_eq "#3187 the pushed file list, not the tree, says whether the generator is there" 1 "$rc"
+want_has "#3187 and the marker is refused for it" 'which is not in the repository' "$out"
+
 # The base honours the same markers, so a marked section already there is not new in this push.
 T="$WORKDIR/gen-marked"
 out="$(compare "$T" "$T")"; rc=$?
@@ -533,6 +551,27 @@ want_eq "#3187 a generator committed in the same command as its section is found
 want_notice "#3187 and the section is named as not compared" "generated section not compared: src/db/guards.sql:1-14" "$HOOK_OUT"
 run_hook "$W" "cd $W && git add src && git commit -qm gen && git push"
 want_eq "#3187 control: when that commit leaves the generator out, the section is read" 2 "$HOOK_RC"
+
+# A file list the hook cannot read skips OUT LOUD rather than judging without it. A git on the PATH
+# that fails only the listing call FAIL_LIST names (tree: the whole tree listing, index: the index
+# listing), and passes everything else to the real one.
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORKDIR/failing-git"
+cat > "$WORKDIR/failing-git/git" <<SHIM
+#!/usr/bin/env bash
+[ "\${FAIL_LIST:-}" = tree ] && [ "\$1" = ls-tree ] && [ "\$2" = -r ] && exit 128
+[ "\${FAIL_LIST:-}" = index ] && [ "\$1" = -C ] && [ "\$3" = ls-files ] && [ \$# -eq 3 ] && exit 128
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$WORKDIR/failing-git/git"
+W="$(mk_repo genlist src/clean.ts 'export const clean = 1;' tools/gen_guards.py 'print("guards")' src/db/guards.sql "$MARKED_SQL")"
+FAIL_LIST=tree PATH="$WORKDIR/failing-git:$PATH" run_hook "$W" "git push"
+want_eq "#3187 a file list that cannot be read lets the push through" 0 "$HOOK_RC"
+want_notice "#3187 and says it skipped and why" "duplication check: skipped, the file list at" "$HOOK_OUT"
+W="$(mk_repo genidx src/clean.ts 'export const clean = 1;')"
+FAIL_LIST=index PATH="$WORKDIR/failing-git:$PATH" run_hook "$W" "cd $W && git commit -q --allow-empty -m x && git push"
+want_eq "#3187 an index file list that cannot be read lets the push through" 0 "$HOOK_RC"
+want_notice "#3187 and says it skipped and why" "duplication check: skipped, the index file list could not be read" "$HOOK_OUT"
 
 # 11. The header carries the registration line the settings check compares against.
 grep -q 'Claude Code PreToolUse(Bash) hook' "$HOOK" && ok || bad "the hook header must declare Claude Code PreToolUse(Bash) hook"
