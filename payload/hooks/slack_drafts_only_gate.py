@@ -119,6 +119,12 @@ SEND_TOOLS = {"slack_send_message", "slack_schedule_message", "slack_post_messag
 SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
 INTERPRETER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|osascript)$")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# The shells that run nothing of a script file given -n, which only parses it (claude-config#3155),
+# and the option letters that may stand beside -n before the file: none takes a value, and with each
+# the file still ran nothing (parses_only). Measured 2026-11-18 on bash 3.2.57, sh and zsh 5.9, with -x,
+# -v, -e and -u each beside -n.
+SH_PARSE_ONLY = {"bash", "sh", "zsh"}
+SH_PARSE_LETTERS = frozenset("nxveu")
 LAUNCHERS = {"npx", "bunx", "pnpx"}
 # Options whose value is the next word, so it is never taken for the script.
 VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader", "-C", "--config", "-o"}
@@ -5611,6 +5617,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
+            if "<(" not in text and ">(" not in text and self.parses_only(name, words):
+                return None  # it parses the file and runs none of it (#3155); the rest of the line is judged apart
             # The shell by name, which decides how a file with a NUL in its first line is read (#2977).
             reason = self.every_file(words, d, depth, name)
             if reason:
@@ -7092,6 +7100,38 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if k < len(words):
             return words[k], None, False
         return None, None, True
+
+    def parses_only(self, name, words):
+        """Whether a shell run as words parses its script file and runs none of it (claude-config#3155):
+        bash, sh or zsh (SH_PARSE_ONLY) given -n before the file, with every option before it a run of
+        SH_PARSE_LETTERS or --, and a file after them. Measured 2026-11-18: the file ran nothing so;
+        it ran with -n after it (an argument), and with +n or +o noexec after -n, which turn it off
+        again, so any + option, any other letter (-c, -o, -i, -s), a long option and input read from
+        a pipe or a redirection are each judged as before, as is a line holding a process
+        substitution (the caller's to ask), whose commands are not read apart as $( ) ones are. A
+        redirection word is the shell's own."""
+        if name not in SH_PARSE_ONLY:
+            return False
+        parsed, k = False, 1
+        while k < len(words):
+            w = words[k]
+            m = self.sw.REDIRECT_WORD.match(w)
+            if m:
+                if re.match(r"0?<(?![<>&])", w):
+                    return False  # a file fed on stdin is the script the shell reads
+                k += 1 if m.group(1) else 2
+                continue
+            if w == "--":
+                k += 1
+                break
+            if not re.fullmatch(r"-[A-Za-z]+", w):
+                break
+            if not set(w[1:]) <= SH_PARSE_LETTERS:
+                return False
+            parsed = parsed or "n" in w
+            k += 1
+        rest = [w for w in words[k:] if not self.sw.REDIRECT_WORD.match(w)]
+        return parsed and bool(rest) and not rest[0].startswith(("-", "+"))
 
 
 def main():

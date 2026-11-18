@@ -1544,6 +1544,36 @@ read_refused "#3085 a shell script whose loop reads the file it is handed is sti
 says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
 
 echo
+echo "slack drafts only: a shell given -n reads its script and runs none of it (claude-config#3155)"
+
+# On 2026-11-17 the gate refused `bash -n payload/hooks/payload-write-gate.sh` because it could not
+# follow that script's source of a path built from a variable. -n only parses. Measured 2026-11-18
+# (bash 3.2.57, sh as bash in POSIX mode, zsh 5.9, dash, ksh), each handed a script that writes a
+# marker file: nothing was written under -n, -n with -x, -v, -e or -u, -n before --, nor with startup
+# files in HOME or BASH_ENV set; it was written with -n after the script (an argument to it), with
+# +n or +o noexec after -n (which turn it off again) and with -n after the -c code ($0). So bash, sh
+# or zsh given -n, among options of letters that take no value, before a script file, runs nothing
+# of that file; everything else on the line, and every other spelling, is judged as before.
+D55="$T/d3155"
+mkdir -p "$D55"
+run_55() { run_raw "$(payload Bash "$(bash_input "$1")" "$D55")"; }
+printf '%s\n' "$POST" > "$D55/posts.sh"
+printf '%s\n' '#!/bin/bash' '. "$HOOK_DIR_3155/lib/sync-clone.sh"' 'echo ok' > "$D55/sources.sh"
+for runs in "bash -n posts.sh" "sh -n posts.sh" "zsh -n posts.sh" "/bin/bash -n posts.sh" "bash -n $D55/posts.sh" \
+  "bash -n sources.sh" "bash -nx posts.sh" "bash -n -v posts.sh" "bash -e -n posts.sh" "bash -n -- posts.sh" \
+  "sh -n -u posts.sh" "bash -n posts.sh && echo parsed" "bash -n posts.sh 2>&1 | head -5" "zsh -n sources.sh"; do
+  run_55 "$runs"
+  allowed "#3155 a shell given -n runs nothing of a script that posts: $runs"
+done
+for runs in "bash posts.sh" "bash sources.sh" "bash posts.sh -n" "bash -- -n posts.sh" "bash -n +n posts.sh" \
+  "bash -n +o noexec posts.sh" "bash -n posts.sh; bash posts.sh" "bash -n posts.sh && sh posts.sh" \
+  "bash -n posts.sh | bash" "bash -c '$POST' -n" "bash -n -c '$POST'" "bash -nc '$POST'" \
+  "bash -n posts.sh \$(bash posts.sh)" "bash -n posts.sh <(bash posts.sh)" "bash -n posts.sh > >(bash posts.sh)"; do
+  run_55 "$runs"
+  read_refused "#3155 a script that posts is still refused where -n does not stop it, or with -c: $runs"
+done
+
+echo
 echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
 
 # The gate reads a module's attributes only from a name an import binds, so `q = pathlib` and then
