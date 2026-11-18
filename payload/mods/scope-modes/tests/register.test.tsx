@@ -4467,6 +4467,22 @@ test('an action Dan bans while he sleeps, refused overnight, is put to Dan as a 
   expect(morningOf(w).length).toBe(1)
 })
 
+// #3190: a banned call that is not a shell command is kept as its tool and its own arguments, read
+// with mod-kit's toolArgs, so none of the keys Claude Code carries beside them reaches Dan's picker.
+test('a banned call that is not a shell command is kept for the morning by its own arguments, never the keys the engine carries beside them (#3190)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, { tool: `${CHROME}read_page`, tabId: 3, tool_use_id: 'k1', consent: 'granted' } as never)).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps/)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain(`The call refused: ${CHROME}read_page {"tabId":3}`)
+  expect(m).not.toContain('tool_use_id')
+  expect(m).not.toContain('consent')
+})
+
 test("notes that cannot be read at a session's morning are said, never read as no question (#1285)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${myQuestion}\n` }, unreadableFiles: [PROPOSED_AT] })
   await start($ as never, clock)

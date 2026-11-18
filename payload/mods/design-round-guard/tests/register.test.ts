@@ -2704,6 +2704,18 @@ test('#1296: a shell write making a .ts file that drew nothing draw is undone an
   expect(w.files[KEYS]).toBe(DRAWN_KEYS)
 })
 
+// #3190: the call such a hold is kept under is its tool and its own arguments, read with mod-kit's
+// toolArgs, so Dan's Not a look change finds the same command sent again under a new call id.
+test('#3190: a shell write held for making a .ts file draw stands once Dan answers Not a look change, sent again under a new call id', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { ...SED, consent: 'granted' }))
+  expect(why).toContain('was undone')
+  expect(contextOf(await askSkip($, w, why, NOT_LOOK))).toContain('again now, unchanged')
+  expect(refusalOf(await call($, SED))).toBe('')
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+})
+
 test('#1296 (lessons review): a command writing one file twice is undone once, and what it printed is never repeated in the refusal', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH } })
   w.ctl.shell = { [KEYS]: DRAWN_KEYS }
