@@ -58,6 +58,13 @@ function dcu_h(k,    b, n) {
   n = int((b + 500) / 1000); if (n < 1 && b > 0) n = 1
   return sprintf("%d KB", n)
 }
+# A count with its thousands marked, "5,979": the one way a count is written on the review page and
+# in the checker that confirms it (#3232).
+function dcu_commas(x,    s) {
+  s = x ""
+  while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]($|,)/, ",&", s)
+  return s
+}
 '
 
 # UNREAD IS NEVER 0 (L90, L11). An offerable item with no bytes adds no KiB and is counted as
@@ -95,7 +102,7 @@ function dcu_tally_words(key,    kind, unread, w) {
   if (kind == "unknown") return dcu_h("")
   w = (kind == "lower" ? "at least " : "") dcu_h(dcu_tally_kib(key))
   unread = dcu_tally_unsized(key)
-  if (unread) w = w ", plus " unread " whose size was not read"
+  if (unread) w = w ", plus " dcu_commas(unread) " whose size was not read"
   return w
 }
 '

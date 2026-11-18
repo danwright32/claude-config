@@ -286,6 +286,120 @@ run_check
 check "one not offerable id among 2001 is still found" "$(eq "$RC" 6)"
 check "and named" "$(has "$OUT_TEXT" "$bad: not offerable")"
 
+# ================================================================================================
+# 6. The Trash chosen whole (#3232): the personal MacBook's dry run on 2026-11-17 listed 5,979 Trash
+# entries, and ticking its one row pasted about 70 KB of ids and printed 5,979 confirm lines. The
+# page now copies one summary for it, all:<kind>:<count>:<digest>, and the checker plans exactly the
+# entries the scan listed and still offers, refusing a summary that is not what the page drew.
+# ================================================================================================
+fresh
+TRASH_N=5979
+awk -v n="$TRASH_N" -v h="$H" -v s="$S" 'BEGIN {
+  for (i = 1; i <= n; i++) printf "trash-%d%strash%sdelete%s%s/.Trash/entry %d%s%d%sofferable%s1:%d%smeasured%s%s\n", i, s, s, s, h, i, s, i * 4096, s, s, i, s, s, s
+  printf "trash-%d%strash%sdelete%s%s/.Trash/went%s4096%snot offerable: it is no longer in the Trash%s1:%d%smeasured%s%s\n", n + 1, s, s, s, h, s, s, s, n + 1, s, s, s
+  printf "caches-1%scaches%sdelete%s%s/Library/Caches/com.big%s3221225472%sofferable%s1:%d%smeasured%s%s\n", s, s, s, h, s, s, s, n + 2, s, s, s
+  printf "caches-2%scaches%sdelete%s%s/Library/Caches/com.small%s1048576%sofferable%s1:%d%smeasured%s%s\n", s, s, s, h, s, s, s, n + 3, s, s, s
+}' > "$H/trash.txt"
+write_record "$H/trash.txt"
+mkdir -p "$H/.Trash"
+render_page() { OUT_TEXT="$(dc_run bash "$DIR/review-page.sh" --out "$OUT" 2>&1)"; RC=$?; N="$(awk '$1 == "nonce" { print $2 }' "$NONCE")"; }
+render_page
+check "a scan holding $TRASH_N Trash entries renders its review page" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(head -3 <<< "$OUT_TEXT")")"
+TOKEN="$(grep -oE 'data-all="[^"]*"' "$OUT/disk-clean-review.html" | sed 's/^data-all="//; s/"$//')"
+check "the Trash row carries one summary of what ticking it chooses" "$(grep -qE "^all:trash:$TRASH_N:[0-9a-f]{32}$" <<< "$TOKEN" && echo ok || echo "got '$TOKEN'")"
+# The pasted selection, as the page's Copy selection writes it, with the Trash and one cache ticked.
+payload "$SID" "$N" 2 "$TOKEN" caches-1
+paste_bytes="$(wc -c < "$H/payload.json" | tr -d ' ')"
+echo "  (the Trash's $TRASH_N entries and one cache paste as $paste_bytes bytes)"
+check "the pasted selection for $TRASH_N Trash entries is short: under 300 bytes" "$([ "$paste_bytes" -lt 300 ] && echo ok || echo "$paste_bytes bytes")"
+# An entry put in the Trash after the scan is not in the record, so no summary can reach it.
+printf 'later\n' > "$H/.Trash/put there after the scan"
+printf 'keep me\n' > "$PLAN"
+run_check
+check "the summary is accepted with exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(head -3 <<< "$OUT_TEXT")")"
+want_items="$(awk -F "$S" '($2 == "trash" && $6 == "offerable") || $1 == "caches-1" { print "item " $1 }' "$H/trash.txt" | LC_ALL=C sort)"
+got_items="$(grep '^item ' "$PLAN" | LC_ALL=C sort)"
+check "the plan takes exactly the Trash entries the scan listed and offers, and the cache ticked" \
+  "$([ "$got_items" = "$want_items" ] && echo ok || echo "the plan differs: $(diff <(printf '%s\n' "$want_items") <(printf '%s\n' "$got_items") | grep '^[<>]' | head -3 | tr '\n' ' ')")"
+check "and says how many" "$(eq "$(sed -n 2p "$PLAN")" "count $((TRASH_N + 1))")"
+check "never the entry that cannot go" "$(grep -qx "item trash-$((TRASH_N + 1))" "$PLAN" && echo "it is in the plan" || echo ok)"
+check "never the summary itself" "$(grep -q 'all:' "$PLAN" && echo "the summary is in the plan" || echo ok)"
+check "the confirm step says the Trash in one line, its count and total" "$(grep -qxF "Trash: 5,979 items, 73.2 GB" <<< "$OUT_TEXT" && echo ok || echo "said: $(grep '^Trash' <<< "$OUT_TEXT")")"
+check "with no Trash entry listed by path" "$(hasnt "$OUT_TEXT" "/.Trash/entry 1")"
+check "and says how to list them" "$(has "$OUT_TEXT" "--entries trash --plan $PLAN")"
+check "the confirm step is short: under 15 lines" "$([ "$(wc -l <<< "$OUT_TEXT")" -lt 15 ] && echo ok || echo "$(wc -l <<< "$OUT_TEXT") lines")"
+check "a kind ticked entry by entry still lists its entries by path" "$(has "$OUT_TEXT" "$H/Library/Caches/com.big")"
+plan_before="$(cat "$PLAN")"
+checker --entries trash --plan "$PLAN"
+check "on request, the Trash entries the plan takes are listed, with exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(head -3 <<< "$OUT_TEXT")")"
+check "every one by path" "$(eq "$(grep -c "$H/.Trash/entry " <<< "$OUT_TEXT")" "$TRASH_N")"
+check "and nothing the plan does not take" "$(hasnt "$OUT_TEXT" "put there after the scan")"
+check "listing writes nothing to the plan" "$(eq "$(cat "$PLAN")" "$plan_before")"
+
+# The refusals. Each leaves the plan as it was.
+printf 'keep me\n' > "$PLAN"
+digest="${TOKEN##*:}"
+payload "$SID" "$N" 1 "all:trash:$((TRASH_N + 1)):$digest"
+run_check
+check "a summary whose count is not the scan's is refused with exit 8" "$(eq "$RC" 8)"
+check "saying both numbers" "$(has "$OUT_TEXT" "5,980 Trash entries")"
+check "and the scan's" "$(has "$OUT_TEXT" "offers 5,979")"
+payload "$SID" "$N" 1 "all:trash:$TRASH_N:0123456789abcdef0123456789abcdef"
+run_check
+check "a summary of the right count but other entries is refused with exit 8" "$(eq "$RC" 8)"
+check "saying they are not the entries the page drew" "$(has "$OUT_TEXT" "not the ones the scan offers now")"
+CACHES_TOKEN="$(dc_run bash -c '. "$1" && . "$2" || exit 99; dcr_review_items "$3" > "$4"; dcrv_whole_token "$4" "$5" caches' lib "$LIB_SH" "$DIR/../../hooks/lib/disk-clean-record.sh" "$REC" "$H/ri.txt" "$SID" 2>&1)"
+check "the library can sum up any kind, the caches included" "$(grep -qE '^all:caches:2:[0-9a-f]{32}$' <<< "$CACHES_TOKEN" && echo ok || echo "got '$CACHES_TOKEN'")"
+payload "$SID" "$N" 1 "$CACHES_TOKEN"
+run_check
+check "a summary of a kind not drawn as one row is refused with exit 2, even with the scan's own digest" "$(eq "$RC" 2)"
+check "saying the page draws only the Trash as one row" "$(has "$OUT_TEXT" "only the Trash")"
+payload "$SID" "$N" 2 "$TOKEN" trash-3
+run_check
+check "a summary beside one of its own entries is refused with exit 2" "$(eq "$RC" 2)"
+check "naming the entry" "$(has "$OUT_TEXT" "trash-3")"
+payload "$SID" "$N" 2 "$TOKEN" "all:trash:$((TRASH_N - 1)):$digest"
+run_check
+check "the Trash summed up twice is refused with exit 2" "$(eq "$RC" 2)"
+for badtok in "all:trash" "all:trash:5979" "all:trash:x:$digest" "all:trash:5979:XYZ" "all::5979:$digest"; do
+  payload "$SID" "$N" 1 "$badtok"
+  run_check
+  check "a summary not in the page's form ($badtok) is refused with exit 2" "$(eq "$RC" 2)"
+done
+payload "scan-1700000000-1" "$N" 1 "$TOKEN"
+run_check
+check "a summary from another scan is refused with exit 3" "$(eq "$RC" 3)"
+check "after every refusal the plan is untouched" "$(eq "$(cat "$PLAN")" "keep me")"
+
+# A summary from another scan pasted with this scan's id and this page's nonce: a new scan of the same
+# Trash gives its entries the same ids, so the summary is bound to the scan, never to the ids alone.
+OLD_TOKEN="$TOKEN"
+SID="scan-1761700000-5151"
+write_record "$H/trash.txt"
+render_page
+NEW_TOKEN="$(grep -oE 'data-all="[^"]*"' "$OUT/disk-clean-review.html" | sed 's/^data-all="//; s/"$//')"
+check "a new scan of the same Trash draws a summary of its own" "$([ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "$OLD_TOKEN" ] && echo ok || echo "same summary '$NEW_TOKEN'")"
+payload "$SID" "$N" 1 "$OLD_TOKEN"
+run_check
+check "the older scan's summary is refused with exit 8 under the new scan's id and nonce" "$(eq "$RC" 8)"
+check "the plan is still untouched" "$(eq "$(cat "$PLAN")" "keep me")"
+
+# The record changed after the page was drawn: one entry was removed since, so the scan offers one
+# fewer than the summary chooses, and nothing is planned rather than the rest.
+printf 'trash-5%sremoved\n' "$S" > "$H/marks.txt"
+dcr_mark "$REC" "$SID" "$H/marks.txt"
+payload "$SID" "$N" 1 "$NEW_TOKEN"
+run_check
+check "a summary of entries one of which has gone since is refused with exit 8" "$(eq "$RC" 8)"
+check "saying the scan now offers fewer" "$(has "$OUT_TEXT" "offers 5,978")"
+checker --entries trash --plan "$H/no-such-plan.txt"
+check "listing from a plan that is not there is refused with exit 2" "$(eq "$RC" 2)"
+printf 'scan_id scan-1700000000-1\ncount 1\nitem trash-1\n' > "$H/old-plan.txt"
+checker --entries trash --plan "$H/old-plan.txt"
+check "listing from a plan for another scan is refused with exit 2" "$(eq "$RC" 2)"
+check "saying it is not the last scan" "$(has "$OUT_TEXT" "not the last scan")"
+SID="scan-1761600000-4242"
+
 check "the category table names categories in words" "$(eq "$(dcr_title large-files)|$(dcr_title unknown-x)" "Large personal files|unknown-x")"
 
 finish

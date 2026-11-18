@@ -5833,6 +5833,14 @@ the verified per item total beside `df -m` before and after. Anything needing Da
 to him as one command; the skill never runs `sudo`. `test-disk-clean-skill.sh` derives every exit
 code each of those four scripts can return from its source and fails when the skill does not say what
 to tell Dan for one, and runs the review page and checker commands as written through the harness.
+The Trash is drawn as one row, and ticking it copies one summary, `all:trash:<count>:<digest>`,
+never an id per entry: the personal MacBook's 5,979 entries were about 70 KB of ids in the chat and
+5,979 lines of the confirm step (#3232). The digest (`review-lib.sh`, `dcrv_whole_token`) covers the
+scan id and every entry's id, path and device and inode, so the checker plans the summary only when
+working it out again from the record gives the same one, then as exactly those entries; an entry put
+in the Trash after the scan, a count or digest that differs, or a summary of any other kind is refused.
+The confirm step says the Trash in one line, its count and total, and
+`review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 
 `skills/disk-clean/scan.sh` is the half of that flow that removes nothing (claude-config#1806). It
 is not write free: it writes the scan record, and the review page writes itself and its nonce into

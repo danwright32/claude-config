@@ -506,18 +506,25 @@ awk -v n="$TRASH_N" -v h="$H" -v s="$S" 'BEGIN {
   printf "trash-%d%strash%sdelete%s%s/.Trash/went%s4096%snot offerable: it is no longer in the Trash%s1:%d%smeasured%s%s\n", n + 1, s, s, s, h, s, s, s, n + 1, s, s, s
   printf "trash-%d%strash%sdelete%s%s/.Trash/went too%s8192%snot offerable: it is no longer in the Trash%s1:%d%smeasured%s%s\n", n + 2, s, s, s, h, s, s, s, n + 2, s, s, s
   printf "caches-1%scaches%sdelete%s%s/Library/Caches/a%s4096%sofferable%s1:%d%smeasured%s%s\n", s, s, s, h, s, s, s, n + 3, s, s, s
+  printf "trash-%d%strash%sdelete%s%s/.Trash/late%s4096%snot offerable: it was not in the Trash when the scan ran%s1:%d%smeasured%s%s\n", n + 3, s, s, s, h, s, s, s, n + 4, s, s, s
+  printf "trash-%d%strash%sdelete%s%s/.Trash/odd%s%sunmeasured: its device and inode could not be read%s%s%sunread%s%s\n", n + 4, s, s, s, h, s, s, s, s, s, s, s
 }' > "$H/trash.txt"
 write_record "$H/trash.txt" "trash caches"
 render --out "$OUT"
 check "a Trash of $TRASH_N entries renders with exit 0" "$(eq "$RC" 0)"
 trash_boxes="$(grep -oE '<input class="tick" [^>]*data-category="trash"[^>]*>' <<< "$HTML")"
-check "the Trash is drawn as one row that can be ticked, plus one greyed row for the reason two cannot" "$(eq "$(grep -c . <<< "$trash_boxes")" 2)"
+check "the Trash is drawn as one row that can be ticked, plus one greyed row per reason the rest cannot" "$(eq "$(grep -c . <<< "$trash_boxes")" 4)"
 check "no Trash entry has a row of its own" "$(hasnt "$HTML" "entry 4242")"
 check "its row names the Trash folder" "$(has "$(row trash)" '<span class="path">~/.Trash</span>')"
 check "and how many entries it holds" "$(has "$(row trash)" "<span class=\"note\">5,979 entries</span>")"
-ids_on_row="$(grep -oE 'data-ids="[^"]*"' <<< "$(row trash)" | sed 's/^data-ids="//; s/"$//' | tr ' ' '\n' | grep -c .)"
-check "its box carries every entry it ticks" "$(eq "$ids_on_row" "$TRASH_N")"
-check "and never one that cannot be ticked" "$(grep -oE 'data-ids="[^"]*"' <<< "$(row trash)" | grep -qE "trash-($((TRASH_N + 1))|$((TRASH_N + 2)))( |\")" && echo "a kept entry is on the row" || echo ok)"
+# Its box carries one summary of what it chooses, never an id per entry (#3232): the 5,979 ids were
+# about 70 KB on the clipboard. The summary's digest is the review library's, over the entries the
+# scan offers, so the checker can tell it is the set the page drew.
+token_on_row="$(grep -oE 'data-all="[^"]*"' <<< "$(row trash)" | sed 's/^data-all="//; s/"$//')"
+check "its box carries one summary of the entries it ticks, their count included" "$(grep -qE "^all:trash:$TRASH_N:[0-9a-f]{32}$" <<< "$token_on_row" && echo ok || echo "got '$token_on_row'")"
+check "and no id per entry" "$(grep -q 'data-ids=' <<< "$(row trash)" && echo "the row still lists its ids" || echo ok)"
+lib_token="$(dc_run bash -c '. "$1" && . "$2" || exit 99; dcr_review_items "$3" > "$4"; dcrv_whole_token "$4" "$5" trash' lib "$DIR/review-lib.sh" "$DIR/../../hooks/lib/disk-clean-record.sh" "$REC" "$H/ri.txt" "$SID" 2>&1)"
+check "the summary is the one the checker works out from the scan" "$(eq "$token_on_row" "$lib_token")"
 trash_total="$(grep -oE '<span class="group-total">[^<]*' <<< "$(awk -v c='data-category="trash"' 'index($0, c) && /class="group-head/ { print; exit }' <<< "$HTML")" | sed 's/.*>//')"
 check "its size is the kind's total" "$(has "$(row trash)" "<span class=\"size\">$trash_total</span>")"
 check "and that total is a lower bound, since one entry was unread and one partly read" "$(has "$trash_total" "At least ")"
@@ -525,7 +532,13 @@ check "and that total is a lower bound, since one entry was unread and one partl
 # in the fixed 110px size column: the size never wraps, and its column grows to fit it.
 check "a size is never wrapped onto two lines" "$(grep -qE '^\.size \{[^}]*white-space: nowrap' <<< "$HTML" && echo ok || echo "the .size rule does not keep it on one line")"
 check "and the size column grows to fit the longest" "$(grep -qE '^\.item \{[^}]*grid-template-columns: 28px 1fr minmax\(110px, max-content\)' <<< "$HTML" && echo ok || echo "the size column is a fixed width")"
-check "what cannot be ticked is one greyed row saying how many and why" "$(grep -qF '<span class="note">2 entries: it is no longer in the Trash</span>' <<< "$HTML" && grep -qE '<div class="item kept"[^>]*><input [^>]*data-category="trash"[^>]* disabled' <<< "$HTML" && echo ok || echo "no such row")"
+# The scan writes each reason about one entry ("it is no longer in the Trash"), and on a row of the
+# Trash folder "it" reads as the Trash itself, so the row says the reason without that subject, which
+# reads right for one entry and for many (#3232).
+check "what cannot be ticked is one greyed row saying how many and why" "$(grep -qF '<span class="note">2 entries: no longer in the Trash</span>' <<< "$HTML" && grep -qE '<div class="item kept"[^>]*><input [^>]*data-category="trash"[^>]* disabled' <<< "$HTML" && echo ok || echo "no such row: $(grep -oE '<span class="note">[0-9,]+ entr[^<]*' <<< "$HTML" | tr '\n' '|')")"
+check "and a reason for one entry reads right too" "$(has "$HTML" '<span class="note">1 entry: not in the Trash when the scan ran</span>')"
+check "as does one whose subject is its device and inode" "$(has "$HTML" '<span class="note">1 entry: device and inode could not be read</span>')"
+check "no greyed Trash row says it" "$(grep -qE '<span class="note">[0-9,]+ entr(y|ies): it' <<< "$HTML" && echo "one still does" || echo ok)"
 check "another kind still has its rows" "$(has "$(row caches-1)" '<span class="path">~/Library/Caches/a</span>')"
 page_bytes="$(wc -c < "$PAGE" | tr -d ' ')"
 echo "  ($TRASH_N Trash entries drawn in a page of $page_bytes bytes)"
@@ -539,14 +552,22 @@ if command -v node >/dev/null 2>&1; then
       boxes.push({ checked: a["data-id"] === "trash" && !/ disabled/.test(tag), disabled: / disabled/.test(tag), getAttribute: function (k) { return k in a ? a[k] : null; } });
     });
     var ticks = boxes, sel = selection();
+    var list = { getAttribute: function (k) { return k === "data-scan-id" ? "'"$SID"'" : "0123456789abcdef0123456789abcdef"; } };
+    '"$(awk '/function payloadText\(sel\)/ { p = 1 } p { print } p && /^  }$/ { exit }' <<< "$HTML")"'
     console.log(sel.words);
-    console.log(sel.ids.join(" "));' "$PAGE" 2>&1)"
+    console.log(sel.ids.join(" "));
+    console.log(payloadText(sel).length);' "$PAGE" 2>&1)"
+  # The count is written with its thousands marked, as the row writes it, on the page and in the
+  # terminal alike (#3232: the bar said 5979 selected beside a row saying 5,979 entries).
   tally_trash="$(awk -F "$S" "${DCU_AWK_LIB:-}${DCU_AWK_TALLY:-}${DCU_AWK_WORDS:-}"'
     $2 == "trash" && $6 == "offerable" { n++; dcu_tally("s", $5, $8) }
-    END { print n " selected, " dcu_tally_words("s") }' "$H/trash.txt")"
+    END { print dcu_commas(n) " selected, " dcu_tally_words("s") }' "$H/trash.txt")"
   check "ticking the Trash row selects every entry, worded as the shared tally words it" "$(eq "$(sed -n 1p <<< "$trash_words")" "$tally_trash")"
-  check "and the selection lists each entry's own id" "$(eq "$(sed -n 2p <<< "$trash_words" | awk '{ print NF }')" "$TRASH_N")"
+  check "the bar writes the count as the row does" "$(has "$(sed -n 1p <<< "$trash_words")" "5,979 selected")"
+  check "and the selection carries the Trash as its one summary" "$(eq "$(sed -n 2p <<< "$trash_words")" "$token_on_row")"
   check "never the row's own name" "$(grep -qE '(^| )trash( |$)' <<< "$(sed -n 2p <<< "$trash_words")" && echo "the row's name is in the selection" || echo ok)"
+  echo "  (ticking the Trash's $TRASH_N entries copies $(sed -n 3p <<< "$trash_words") characters)"
+  check "what Copy selection copies for $TRASH_N Trash entries is under 300 characters" "$([ "$(sed -n 3p <<< "$trash_words")" -lt 300 ] 2>/dev/null && echo ok || echo "$(sed -n 3p <<< "$trash_words")")"
 else
   echo "SUITE-PART-UNMEASURED ticking the Trash row against the shared tally: node is not on PATH"
 fi
