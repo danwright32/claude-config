@@ -1552,7 +1552,8 @@ rm -f "$f"
 # The budget is TIME SPENT since the hook started, not a count (claude-config#3220). With the hook's
 # clock started 99 seconds into a 100 second budget, a 2 second retry would end past it and is not
 # made, whatever the speed of the Mac; the same read with the clock at its real start is asked again.
-# The pair is the control: without the clock, the first case's 0 is a 1.
+# The pair is the control: without the clock, the first case's 0 is a 1. Every number here is a
+# setting the case chooses, not a measurement.
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
 out=$(BASH_ENV="$(clock_at 99)" BRM_READ_BUDGET_SECONDS=100 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
@@ -1565,7 +1566,8 @@ if denied "$out"; then fail "#3220 with the budget unspent a compare reset once 
 if [ "$(sleeps)" = 1 ]; then pass; else fail "#3220 with the budget unspent the compare was not asked again after one wait ($(sleeps) waits)"; fi
 rm -f "$f"
 # The gate's own default, with no setting from the suite or the helper: a hook that has already spent
-# 11 seconds makes no 2 second retry, so the default is still at most 12 seconds of the hook's time.
+# 11 seconds makes no 2 second retry, so the default is still at most 12 seconds of the hook's time
+# (the 11 is a setting this case chooses, not a measurement).
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
 out=$(unset BRM_READ_BUDGET_SECONDS; BASH_ENV="$(clock_at 11)" GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
