@@ -234,7 +234,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
   # their ids, their count and the tally of their sizes; what cannot be ticked is one greyed row
   # per reason, saying how many. The Trash held 5,979 entries on the personal MacBook.
   function fold(r, f, st, b, ok,    t, k, nf, fl) {
-    if (gr != r) { gr = r; gn = 0; gids = ""; gu = 0; gp = 0; gflags = ""; nko = 0; split("", kc); split("", ko); split("", seenf) }
+    if (gr != r) { gr = r; gn = 0; gids = ""; gp = 0; gflags = ""; nko = 0; split("", kc); split("", ko); split("", seenf) }
     if (gdir == "") { t = f[4]; sub(/\/[^\/]*$/, "", t); gdir = t }
     if (ok) {
       gn++; gids = gids (gids == "" ? "" : " ") f[1]
