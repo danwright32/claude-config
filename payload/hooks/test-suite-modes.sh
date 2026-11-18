@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # A whole tree scan: every tracked test-*.sh suite is committed as mode 100755 (claude-config#3180).
 #
-# #3142 added payload/hooks/test-slack-drafts-gate-qos.sh as 100644, the only one of 202 in
-# payload/hooks that was not 100755. The installed copy was executable, so the sync watcher read the
+# #3142 added payload/hooks/test-slack-drafts-gate-qos.sh as 100644, the only suite in
+# payload/hooks that was not 100755 (measured 2026-11-17). The installed copy was executable, so the sync watcher read the
 # mode as a change to send on every pass, which is how #3175 surfaced. Nothing checked the mode of a
 # suite, and a mode that is wrong looks like a file that is fine: run-all-tests starts every suite
 # as `bash <suite>`, so a 100644 suite runs and passes (L100).
@@ -169,7 +169,8 @@ echo "suite modes: and the real tree it ships to guard"
 run "$REPO"
 check "every tracked test-*.sh in this repository is committed as 100755" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
 _judged="$(printf '%s\n' "$OUT" | sed -n 's/^JUDGED \([0-9]*\)$/\1/p')"
-# A scan that judged nothing agrees with everything (L98); the tree has well over 300 suites.
+# A scan that judged nothing agrees with everything (L98); the floor is 300 because the tree held 329
+# suites on 2026-11-17, and it is a floor, not the count.
 check "and it really judged the repository's suites, rather than few or none" "$([ "${_judged:-0}" -gt 300 ] && echo ok || echo "judged ${_judged:-0}")"
 printf 'info: %s other tracked .sh files under payload/hooks are not 100755 and are not judged here\n' \
   "$(printf '%s\n' "$OUT" | sed -n 's/^OTHER \([0-9]*\)$/\1/p')"
