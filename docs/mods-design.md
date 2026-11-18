@@ -3692,7 +3692,11 @@ retired the guard that once held it.
   variable it does not set to one value, a pattern or a command's output (a test's fixture folder,
   or the script's own arguments, which #1586 judges already), and what git puts back there; a script
   named by a loop's variable or one only the environment holds (313 of the 548 script words named
-  through a variable in those 14 days, nearly all `for s in ...; do bash payload/hooks/test-$s.sh`);
+  through a variable in those 14 days, nearly all `for s in ...; do bash payload/hooks/test-$s.sh`;
+  since #3214 one the command itself names through a variable it never sets is held as could not
+  check, 1 of 63,461 recorded Bash calls in the 14 days to 2026-11-18, while a variable the command
+  sets some other way, 206 calls, and one a shell script it runs never sets in its own text, 156 of
+  63,505 calls with the hold built there too, stay left out as noisy);
   a script the command writes some other way (tee, an append, a body the shell may change), still
   read as it stands on disk (12); a module found
   only through a changed `sys.path` or an installed package; and a file run by its own name with no
