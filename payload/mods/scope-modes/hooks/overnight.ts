@@ -361,7 +361,7 @@ export const runsGit = runsFrom('git', runsGitFrom)
 // writing or reaching a remote, nothing before it but -C and its folder or an option that only quiets
 // git, and no --output after it. Anything else (git alone in its string with its subcommand joined on
 // later, a subcommand in a variable, -c, any other option) is not a read, so the code stays refused.
-const GIT_LOCAL_READS: ReadonlySet<string> = new Set(['show', 'cat-file', 'log', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'merge-base', 'show-ref', 'for-each-ref', 'blame', 'describe', 'shortlog'])
+export const GIT_LOCAL_READS: ReadonlySet<string> = new Set(['show', 'cat-file', 'log', 'diff', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'merge-base', 'show-ref', 'for-each-ref', 'blame', 'describe', 'shortlog'])
 const GIT_QUIET: ReadonlySet<string> = new Set(['--no-pager', '-P', '--no-optional-locks', '--literal-pathspecs', '--no-replace-objects'])
 // The word an argument known only when the code runs stands as: no subcommand and no option.
 const UNREAD_ARG = '<unread>'

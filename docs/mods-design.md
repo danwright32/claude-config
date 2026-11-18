@@ -1441,7 +1441,12 @@ the ban list knowing that an action it does not name is approved.
   run before this step, and a decision beneath is never overridden. Awake, a record that cannot be
   read, or a session that is not a worker: the prompt waits for Dan as always.
 - `classic.PermissionDenied`: while asleep, a `failed` line naming the classifier's reason goes in
-  `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered.
+  `notes/<generation>.jsonl`, and `retry` is taken off whatever beneath answered. Since #3158 the
+  line also carries the reason as given, `noVerdict` when the check gave none, the call's
+  `toolUseId`, `what` it was and `read` when it only reads (`hooks/refusals.ts`), and the same call
+  (tool and input, rtk in front of a command aside) run later without an error writes a `redone`
+  line naming those refusals, so the morning report folds the refusals with no verdict into one
+  counted line and lists on its own each one it cannot show was done.
 - The ban list (`hooks/overnight.ts`), judged by effect through mod-kit's readers and by the
   repository a call reaches, and refused at `tool.call` in every session while asleep: issue,
   label and milestone writes by gh or gh api. Every other gh call is judged by two short lists,

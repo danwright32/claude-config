@@ -8958,7 +8958,10 @@ anything that could not be checked, and any session or claim that went quiet wit
 then Questions for you; below it Parked and failed, Proposed issues, Proposed lessons, Progress
 toward goals, Findings, and Limits and usage (each wait on a limit, the usage readings and paid
 usage). Its header says which sessions had no goal, and so did no work, and each worker's row at the
-end gives its goal.
+end gives its goal. Three or more calls auto mode's check refused with no verdict for one reason
+(the check unavailable, a call not reviewed) are one line in Parked and failed, with the count, the
+time window and the kinds of call, followed by each of them that did more than read and was never
+sent again unchanged and run (#3158); a real refusal by the check is always its own row.
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,

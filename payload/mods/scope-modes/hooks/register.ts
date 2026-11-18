@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
+import { callKey, readsOnly, refusalNote, toolArgs, whatOf } from './refusals.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -1323,6 +1324,31 @@ const lookOf = ($: EngineInterface): Look => ({
 // the session's own. Each Chrome call is remembered by its tool_use_id until its result row arrives.
 const CHROME = 'mcp__claude-in-chrome__'
 const chromeCalls = new Map<string, { tool: string; input: Record<string, unknown>; at: number }>()
+// The calls auto mode's check gave no verdict on tonight (#3158), by callKey, each with the
+// toolUseIds of its refusals, and a later identical call by its tool_use_id until its result row
+// arrives: run without an error, it is noted redone. Kept in memory only, so a refusal made before a
+// restart is never matched and stays listed in the morning, which is the side to err on.
+const refusedCalls = new Map<string, string[]>()
+const redoing = new Map<string, { key: string; tool: string; what: string }>()
+// A watched call's result (#3158): run without an error while still asleep, it is noted redone once,
+// naming the refusals it made good. An error, a woken Mac or a note that cannot be written notes
+// nothing, and the refusal stays listed.
+const noteRedone = async ($: EngineInterface, toolUseId: string, isError: boolean) => {
+  const r = redoing.get(toolUseId)
+  if (!r) return
+  redoing.delete(toolUseId)
+  const ids = refusedCalls.get(r.key)
+  if (isError || !ids) return
+  try {
+    if ((await sleepNow($)).state !== 'asleep') return
+    await sleepNote($, (await sleepPaths($)).current, {
+      kind: 'redone', at: await $.clock.now(), by: await $.session.id(), tool: r.tool, redoes: ids, text: `${r.tool} ran after its refusal${r.what ? `: ${r.what}` : ''}`,
+    })
+    refusedCalls.delete(r.key)
+  } catch (err) {
+    $.ui.log(`scope-modes: a refused call that later ran could not be noted (${msg(err)}), so the morning report lists it as not done`, { to: 'debug' })
+  }
+}
 // How long a Chrome call still waiting on its result counts as possibly moving its tab: calls sent
 // at once are judged within moments of each other, and a call refused elsewhere, whose result row
 // may never reach this mod, must not hold its tab for ever.
@@ -5710,8 +5736,9 @@ export const register: Register = on => {
   // count too: its tabs are the session's, in the same tab group.
   on('session.append', { door: 'tool-result' }, async ($, e, next) => {
     for (const b of e.message.content) {
-      const block = b as { type?: string; tool_use_id?: unknown; content?: unknown }
+      const block = b as { type?: string; tool_use_id?: unknown; content?: unknown; is_error?: unknown }
       if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+      await noteRedone($, block.tool_use_id, block.is_error === true)
       const made = chromeCalls.get(block.tool_use_id)
       if (!made) continue
       chromeCalls.delete(block.tool_use_id)
@@ -5818,6 +5845,13 @@ export const register: Register = on => {
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
+      // The same call as one the check gave no verdict on tonight (#3158), watched for its result
+      // once nothing here or beneath turned it away; a refusal by the check still to come forgets it.
+      if (refusedCalls.size && toolUseId && !r.deny) {
+        const args = toolArgs(input)
+        const key = callKey(tool, args)
+        if (refusedCalls.has(key)) redoing.set(toolUseId, { key, tool, what: whatOf(args) })
+      }
       if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       // Notes a scope mode command left mid turn (#3136) reach the model with the main conversation's
       // next tool result; a subagent's result is not the main conversation's, and a refusal carries none.
@@ -6004,13 +6038,29 @@ export const register: Register = on => {
     const reading = await sleepNow($)
     if (reading.state !== 'asleep') return next(e)
     try {
+      // Which call it was and whether it only read (#3158), so the morning report can fold the
+      // refusals the check gave no verdict on. A call that cannot be read is not a read.
+      const args = (e.tool_input ?? {}) as Record<string, unknown>
+      const raw = e.tool_name === 'Bash' ? String(args.command ?? '') : ''
+      let read = false
+      try {
+        read = readsOnly(e.tool_name, raw ? await readCommands($, raw) : [], raw ? await readWrites($, raw) : NO_WRITES)
+      } catch (err) {
+        $.ui.log(`scope-modes: a refused call could not be read for whether it only reads (${msg(err)}), so it is noted as not a read`, { to: 'debug' })
+      }
+      const note = refusalNote(e.tool_name, args, String(e.tool_use_id ?? ''), String(e.reason ?? ''), read)
+      // A call watched as a retry that the check refused in turn never ran (#3158).
+      redoing.delete(note.toolUseId)
+      if (note.noVerdict && note.toolUseId) {
+        const key = callKey(e.tool_name, args)
+        refusedCalls.set(key, [...(refusedCalls.get(key) ?? []), note.toolUseId])
+      }
       await sleepNote($, (await sleepPaths($)).current, {
         kind: 'failed',
         at: await $.clock.now(),
         by: await $.session.id(),
         cwd: await $.session.cwd(),
-        tool: e.tool_name,
-        text: `the auto mode classifier refused ${e.tool_name}: ${e.reason}`,
+        ...note,
       })
     } catch (err) {
       $.ui.toast(`Sleep mode: a refused call could not be noted for the report (${msg(err)})`)
