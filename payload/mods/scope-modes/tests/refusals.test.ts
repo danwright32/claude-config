@@ -1,6 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { callKey, readsOnly, refusalNote, toolArgs } from '../hooks/refusals.ts'
+import { callKey, readsOnly, refusalNote } from '../hooks/refusals.ts'
+import { toolArgs } from '../hooks/mod-kit/toolargs.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { readCommands } from './read.ts'
 

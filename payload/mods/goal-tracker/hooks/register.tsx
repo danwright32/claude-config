@@ -4,6 +4,7 @@ import type { GoalTracker } from '../types/index.d.ts'
 import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
 import { empty, FAIL_STREAK, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 
 // Goal tracker (claude-config#612). Each session's task list, its goal text, its last activity and
 // whether it waits on Dan go into the shared session registry, where the /goals pane (below)
@@ -178,7 +179,6 @@ const withWaiting = (p: Progress): Progress => {
 // clear it early (#694).
 const running = new Map<string, { tool: string; args: Record<string, unknown> }>()
 let unnamed = 0
-const argsOf = ({ tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args }: Record<string, unknown>) => args
 const sameArgs = (args: Record<string, unknown>, asked: unknown): boolean => {
   if (!asked || typeof asked !== 'object') return false
   const named = asked as Record<string, unknown>
@@ -745,7 +745,7 @@ export const register: Register = on => {
     const input = e as unknown as Record<string, unknown>
     // Recorded before anything else, so a permission prompt raised inside it is matched to it (#694).
     const id = typeof input.tool_use_id === 'string' ? input.tool_use_id : `call-${++unnamed}`
-    running.set(id, { tool: e.tool, args: argsOf(input) })
+    running.set(id, { tool: e.tool, args: toolArgs(input) })
     // A clock that cannot be read leaves this call untracked, never broken; Claude is told once,
     // until the clock reads again (lessons review of c4ae14f).
     let now: number

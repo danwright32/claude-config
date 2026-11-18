@@ -4,6 +4,7 @@ import { CACHE_WARN_MS, checksOf, compactLines, lookParts, unpushedOf } from './
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { whileHeld } from './mod-kit/held.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
@@ -243,15 +244,14 @@ const COMPACT_TOOL_SPEC = {
 // under it (a claude-config transcript, 2026-11-02), then reading a refusal that named no parameter
 // as a fault in the path. Either name's path is judged exactly as note's always was.
 const NOTE_KEYS = ['note', 'handoff'] as const
-// Fields Claude Code puts on a tool call beside the model's own arguments.
-const CALL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])
 const notePath = (e: Record<string, unknown>): { note: string } | { deny: string } => {
   const given = [...new Set(NOTE_KEYS.map(k => e[k]).filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim()))]
   if (given.length > 1) return { deny: `Pass the handoff note's path once, as note: this call gave both ${given.join(' and ')}.` }
   const note = given[0]
   if (note === undefined) {
     // A blank note or handoff is no path, so it is not reported as one passed.
-    const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && !(NOTE_KEYS as readonly string[]).includes(k) && e[k] !== undefined)
+    const args = toolArgs(e)
+    const others = Object.keys(args).filter(k => !(NOTE_KEYS as readonly string[]).includes(k) && args[k] !== undefined)
     return { deny: `Pass the absolute path of handoff.md in this session's notes folder as note, ${NOTE_WHERE}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
   }
   if (!note.startsWith('/') || !note.endsWith(`/${NOTE_NAME}`)) return { deny: `The handoff note is handoff.md in this session's notes folder: pass its absolute path as note, ${NOTE_WHERE}, not ${note}.` }

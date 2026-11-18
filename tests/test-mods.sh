@@ -1649,6 +1649,23 @@ for m in vars-mktemp vars-own-folder; do
     || check "#3022: and names $m, pointing it at the copy of hooks/scriptvars.ts" "$out"
 done
 case "$out" in *clean-asks-vars*) check "#3022: a mod asking the copy of hooks/scriptvars.ts passes" "$out" ;; *) check "#3022: a mod asking the copy of hooks/scriptvars.ts passes" ok ;; esac
+# #3190: eight mods took the keys Claude Code carries beside a call's own arguments off by hand, in
+# twelve places, so a key the engine adds had to be learned by every copy. They read with toolArgs from the
+# copy of mod-kit's hooks/toolargs.ts now, so a mod naming those keys itself, in a destructure or a
+# list of them, fails the run, pointed at that copy. A mod asking the copy, or reading one key alone
+# (whether a call came from a subagent), passes.
+M9K="$TMPROOT/m9-engine-keys"
+mkmodsrc "$M9K" clean-asks-args "const args = toolArgs(input); const id = String(input.tool_use_id ?? ''); if (e.agentId !== undefined) return next(e)"
+mkmodsrc "$M9K" keys-destructure "const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input"
+mkmodsrc "$M9K" keys-kept "const { tool: _t, tool_use_id: toolUseId, agentId: _a, consent: _c, ...raw } = e as unknown as Record<string, unknown>"
+mkmodsrc "$M9K" keys-list "const CALL_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'consent'])"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#3190: a mod taking the engine's keys off a call by hand fails the run" ok || check "#3190: a mod taking the engine's keys off a call by hand fails the run" "exit=$code out=$out"
+for m in keys-destructure keys-kept keys-list; do
+  printf '%s\n' "$out" | grep "$m keeps its own engine-keys" | grep -q 'hooks/mod-kit/toolargs.ts' && check "#3190: and names $m, pointing it at the copy of hooks/toolargs.ts" ok \
+    || check "#3190: and names $m, pointing it at the copy of hooks/toolargs.ts" "$out"
+done
+case "$out" in *clean-asks-args*) check "#3190: a mod asking the copy of hooks/toolargs.ts, or reading one key alone, passes" "$out" ;; *) check "#3190: a mod asking the copy of hooks/toolargs.ts, or reading one key alone, passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
