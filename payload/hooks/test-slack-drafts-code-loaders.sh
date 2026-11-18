@@ -17,7 +17,9 @@
 # lib/py-aliases.py (#3102): a Python module given another name, or put where the gate does not
 # follow it, is read as the imported name is. And three more routes to os (#3119): string.Formatter,
 # a chain from a value the gate does not follow, and os under another name in a module the script
-# imports or a class body. Every other
+# imports or a class body. And three narrow passes, each with the cases beside it that stay refused:
+# a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
+# (#3146), and ast, io and gzip in a read only script (#3103). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -1542,6 +1544,235 @@ SH
 run_85 "bash routes.sh commands.txt"
 read_refused "#3085 a shell script whose loop reads the file it is handed is still refused: the gate does not follow the loop"
 says "#3085 and the refusal says that is why" "a loop or block whose reads the gate does not follow"
+
+echo
+echo "slack drafts only: a shell given -n reads its script and runs none of it (claude-config#3155)"
+
+# On 2026-11-17 the gate refused `bash -n payload/hooks/payload-write-gate.sh` because it could not
+# follow that script's source of a path built from a variable. -n only parses. Measured 2026-11-18
+# (bash 3.2.57, sh as bash in POSIX mode, zsh 5.9, dash, ksh), each handed a script that writes a
+# marker file: nothing was written under -n, -n with -x, -v, -e or -u, -n before --, nor with startup
+# files in HOME or BASH_ENV set; it was written with -n after the script (an argument to it), with
+# +n or +o noexec after -n (which turn it off again) and with -n after the -c code ($0). So bash, sh
+# or zsh given -n, among options of letters that take no value, before a script file, runs nothing
+# of that file; everything else on the line, and every other spelling, is judged as before.
+D55="$T/d3155"
+mkdir -p "$D55"
+run_55() { run_raw "$(payload Bash "$(bash_input "$1")" "$D55")"; }
+printf '%s\n' "$POST" > "$D55/posts.sh"
+printf '%s\n' '#!/bin/bash' '. "$HOOK_DIR_3155/lib/sync-clone.sh"' 'echo ok' > "$D55/sources.sh"
+for runs in "bash -n posts.sh" "sh -n posts.sh" "zsh -n posts.sh" "/bin/bash -n posts.sh" "bash -n $D55/posts.sh" \
+  "bash -n sources.sh" "bash -nx posts.sh" "bash -n -v posts.sh" "bash -e -n posts.sh" "bash -n -- posts.sh" \
+  "sh -n -u posts.sh" "bash -n posts.sh && echo parsed" "bash -n posts.sh 2>&1 | head -5" "zsh -n sources.sh"; do
+  run_55 "$runs"
+  allowed "#3155 a shell given -n runs nothing of a script that posts: $runs"
+done
+for runs in "bash posts.sh" "bash sources.sh" "bash posts.sh -n" "bash -- -n posts.sh" "bash -n +n posts.sh" \
+  "bash -n +o noexec posts.sh" "bash -n posts.sh; bash posts.sh" "bash -n posts.sh && sh posts.sh" \
+  "bash -n posts.sh | bash" "bash -c '$POST' -n" "bash -n -c '$POST'" "bash -nc '$POST'" \
+  "bash -n posts.sh \$(bash posts.sh)" "bash -n posts.sh <(bash posts.sh)" "bash -n posts.sh > >(bash posts.sh)" \
+  "bash -n \$OPT posts.sh" "OPT=+n; bash -n \$OPT posts.sh" "bash -n \"\$(echo +n)\" posts.sh" "bash -n '+n' posts.sh"; do
+  run_55 "$runs"
+  read_refused "#3155 a script that posts is still refused where -n does not stop it, or with -c: $runs"
+done
+
+echo
+echo "slack drafts only: import text a test only compares is not followed beside code that runs strings (claude-config#3146)"
+
+# Seen 2026-11-17 in a work repository: one test file run through vitest was refused as importing
+# ./src/index.ts, a module the gate cannot find, though it imports four node builtins, vitest and two
+# sibling scripts; the text was only an argument to expect(...).toContain(). Import text inside a
+# string has not been followed since #2484, except where any file the walk reaches names something
+# that can run a string as code (JS_SINK, JS_DYNAMIC), when every string is followed, and a test of a
+# build script names child_process. A string that is the whole argument of toBe, toContain or toMatch
+# on expect(...) is now left out even there, since the matcher only compares it, unless the file
+# binds expect any other way or a file in the walk names a way to change what a matcher does.
+D46="$T/d3146"
+mkdir -p "$D46/scripts" "$D46/node_modules/.bin" "$D46/node_modules/vitest/dist"
+printf '%s\n' '#!/usr/bin/env node' "import './dist/cli.js'" > "$D46/node_modules/vitest/vitest.mjs"
+printf '%s\n' "import { fork } from 'node:child_process'" 'for (const f of process.argv.slice(3)) fork(f)' > "$D46/node_modules/vitest/dist/cli.js"
+ln -s ../vitest/vitest.mjs "$D46/node_modules/.bin/vitest"
+printf '%s\n' 'export default {};' > "$D46/vitest.config.mjs"
+printf '%s\n' 'export function makeEntry(p) {' "  return \`export * from '\${p}';\\n\`;" '}' > "$D46/scripts/entry.mjs"
+printf '%s\n' 'import { readdirSync } from "node:fs";' 'export const listFiles = (d) => readdirSync(d);' > "$D46/scripts/list.mjs"
+printf '%s\n' 'export const post = (t) => fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: t });' > "$D46/scripts/poster.mjs"
+cat > "$D46/scripts/base.txt" <<'JS'
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { test, expect } from "vitest";
+import { makeEntry } from "./entry.mjs";
+import { listFiles } from "./list.mjs";
+
+// export * from './src/commented.ts'
+/* import { gone } from "./src/block-comment.ts"; */
+const here = path.dirname(fileURLToPath(import.meta.url));
+test("the entry re-exports the source", () => {
+  execFileSync("node", [path.join(here, "entry.mjs")]);
+  const source = makeEntry("./src/index.ts");
+  expect(source).toContain("export * from './src/index.ts'");
+  expect(source).not.toContain(`import { gone } from "./src/missing.ts"`);
+  expect(source.trim()).toBe('export * from "./src/other.ts";');
+  expect(readFileSync(path.join(here, "entry.mjs"), "utf8")).toMatch("import x from './src/x.ts'");
+  expect(listFiles(here).length).toBeGreaterThan(0);
+});
+JS
+run_46() { run_raw "$(payload Bash "$(bash_input "$1")" "$D46")"; }
+vt46() { # vt46 <file name> <lines...>: the base test with these lines after it
+  local name="$1"
+  shift
+  { cat "$D46/scripts/base.txt"; printf '%s\n' "$@"; } > "$D46/scripts/$name"
+}
+vt46 a.node.test.mjs
+for runs in "./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs" \
+  "node scripts/entry.mjs && ./node_modules/.bin/vitest run -c vitest.config.mjs scripts/a.node.test.mjs > out.txt 2>&1" \
+  "node scripts/a.node.test.mjs"; do
+  run_46 "$runs"
+  allowed "#3146 import text a matcher only compares, in strings, a template and comments, beside child_process: $runs"
+done
+# The controls. A real import of a module that posts or is not there, each way it can be written,
+# on its own line or after such a string on the same line, is still followed.
+VT46="./node_modules/.bin/vitest run -c vitest.config.mjs"
+n46=0
+for line in 'import { post } from "./poster.mjs";' 'export { post } from "./poster.mjs";' \
+  'const { post } = require("./poster.mjs");' 'await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'"); await import("./poster.mjs");' \
+  'expect(makeEntry("x")).toBe("a"); export { post } from "./poster.mjs";'; do
+  n46=$((n46 + 1))
+  vt46 "real-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/real-$n46.node.test.mjs"
+  read_refused "#3146 a real import of a module that posts is still followed: $line"
+  says "#3146 and the refusal names it: $line" "poster.mjs"
+done
+vt46 missing.node.test.mjs 'import "./src/index.ts";'
+run_46 "$VT46 scripts/missing.node.test.mjs"
+read_refused "#3146 a real import of a module that is not there is still refused"
+says "#3146 and the refusal names it" "./src/index.ts, a module the gate cannot find"
+# A string anywhere else is still followed while something in the walk can run strings: held in a
+# name and handed on, built with +, an array's element, compared by a matcher with custom testers,
+# or beside a matcher or a string method the file changes.
+n46=0
+for line in 'const entry = "export * from '"'"'./src/index.ts'"'"'"; execFileSync("node", ["--input-type=module", "-e", entry]);' \
+  'expect(makeEntry("x")).toContain("export * from '"'"'./src/index.ts'"'"'" + "");' \
+  'const cases = ["export * from '"'"'./src/index.ts'"'"'"];' \
+  'expect(makeEntry("x")).toEqual("export * from '"'"'./src/index.ts'"'"'");' \
+  'expect.extend({ toContain: (r, c) => execFileSync("node", ["--input-type=module", "-e", c]) });' \
+  'Object.defineProperty(String.prototype, "includes", { value: (c) => execFileSync("node", ["-e", c]) });'; do
+  n46=$((n46 + 1))
+  vt46 "held-$n46.node.test.mjs" "$line"
+  run_46 "$VT46 scripts/held-$n46.node.test.mjs"
+  read_refused "#3146 import text in a string not only compared by a matcher is still followed: $line"
+  says "#3146 and the refusal names the module in the string: $line" "./src/index.ts"
+done
+# expect bound by the file itself, which may hand the string to anything.
+sed -e 's/^import { test, expect } from "vitest";$/import { test } from "vitest";/' "$D46/scripts/base.txt" > "$D46/scripts/own-expect.node.test.mjs"
+printf '%s\n' 'function expect(s) { return { toContain: (c) => execFileSync("node", ["-e", c]), not: {}, toBe() {}, toMatch() {}, toBeGreaterThan() {} }; }' >> "$D46/scripts/own-expect.node.test.mjs"
+run_46 "$VT46 scripts/own-expect.node.test.mjs"
+read_refused "#3146 a file that binds expect itself still has its strings followed"
+# A matcher changed in another module the test imports.
+printf '%s\n' 'import { expect } from "vitest";' 'import { execFileSync } from "node:child_process";' \
+  'expect.extend({ toContain: (r, c) => ({ pass: !!execFileSync("node", ["-e", c]), message: () => "" }) });' > "$D46/scripts/matchers.mjs"
+vt46 extended.node.test.mjs 'import "./matchers.mjs";'
+run_46 "$VT46 scripts/extended.node.test.mjs"
+read_refused "#3146 a matcher changed in a module the test imports leaves every string followed"
+says "#3146 and the refusal names the module in the string" "./src/index.ts"
+
+echo
+echo "slack drafts only: a read only script may use ast, io and gzip (claude-config#3103)"
+
+# Dan decided on 2026-11-16 (#3103): trust ast, io and gzip in a read only script; shutil stays
+# refused, with every module that can run code or send. Each was refused as a module the gate does
+# not know (ast 4, io 2 and gzip 2 of the refusals counted that day). What each offers that writes a
+# file is held as open() is: io.open, gzip.open, io.FileIO and gzip.GzipFile by their mode (the file
+# first, then the mode), any of them passed on or imported under another name, and gzip.main, which
+# writes name.gz beside each file on sys.argv. Running code (exec, compile) and the modules they
+# hold (gzip.os, gzip.builtins) are refused as before.
+cat > "$D85/reads-ast.py" <<'PY'
+import ast, sys
+text = open(sys.argv[1]).read()
+tree = ast.parse("total = 1 + 2")
+print(len(text), ast.dump(tree)[:20], ast.literal_eval("[1, 2]"), ast.unparse(tree), len(list(ast.walk(tree))))
+PY
+cat > "$D85/reads-io.py" <<'PY'
+import io, sys
+with io.open(sys.argv[1], encoding="utf-8") as f:
+    text = f.read()
+print(len(io.StringIO(text).read()), len(io.FileIO(sys.argv[1]).read()), io.TextIOWrapper(io.BytesIO(b"x")).read())
+print(io.open(sys.argv[1], "r").readline()[:10], io.open(sys.argv[1], mode="rb").read(4), io.FileIO(sys.argv[1], "r").read(2))
+PY
+cat > "$D85/reads-gzip.py" <<'PY'
+import gzip, io, sys
+blob = gzip.compress(open(sys.argv[1], "rb").read())
+print(len(gzip.decompress(blob)))
+with gzip.open(io.BytesIO(blob), "rt") as f:
+    print(len(f.read()))
+print(len(gzip.GzipFile(fileobj=io.BytesIO(blob)).read()), len(gzip.GzipFile(fileobj=io.BytesIO(blob), mode="rb").read()))
+PY
+cat > "$D85/reads-from.py" <<'PY'
+import sys
+import gzip as gz
+from ast import literal_eval
+from gzip import compress, decompress
+from io import BytesIO, StringIO
+print(literal_eval("{'a': 1}"), len(decompress(compress(b"x"))), BytesIO(b"x").read(), StringIO("y").read())
+print(len(gz.open(BytesIO(compress(open(sys.argv[1], "rb").read()))).read()))
+PY
+for reads in reads-ast.py reads-io.py reads-gzip.py reads-from.py; do
+  run_85 "python3 $reads $RULES"
+  allowed "#3103 a read only script using ast, io or gzip, handed the real rules file: $reads"
+  run_85 "python3 $reads msg.json"
+  allowed "#3103 the same script handed a data file naming the endpoint: $reads"
+done
+# Everything they can write with, or reach past, is still refused. The paths hold none of w, a, x and
+# +, so a mode read from the wrong argument would let them through.
+WR03='.write(open(sys.argv[1]).read())'
+WB03='.write(open(sys.argv[1], "rb").read())'
+w85 io-open-w.py 'import io, sys' "io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-open-kw.py 'import io, sys' "io.open(file=\"/tmp/run.sh\", mode=\"a\")$WR03"
+w85 io-open-var.py 'import io, sys' 'mode = sys.argv[2]' "io.open(\"/tmp/run.sh\", mode)$WR03"
+w85 io-fileio-w.py 'import io, sys' "io.FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-fileio-plus.py 'import io, sys' "io.BufferedRandom(io.FileIO(\"/tmp/run.sh\", \"r+\"))$WB03"
+w85 io-from-open.py 'import sys' 'from io import open' "open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-open-as.py 'import sys' 'from io import open as io_open' "io_open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 io-from-fileio.py 'import sys' 'from io import FileIO' "FileIO(\"/tmp/run.sh\", \"w\")$WB03"
+w85 io-passed.py 'import functools, io, sys' "functools.partial(io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 io-renamed.py 'import io, sys' 'opener = io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-open-w.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-open-kw.py 'import gzip, sys' "gzip.open(\"/tmp/run.gz\", mode=\"wt\")$WR03"
+w85 gzip-file-w.py 'import gzip, sys' "gzip.GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-file-kw.py 'import gzip, sys' "gzip.GzipFile(filename=\"/tmp/run.gz\", mode=\"w\")$WB03"
+w85 gzip-from-file.py 'import sys' 'from gzip import GzipFile' "GzipFile(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-as.py 'import gzip as g, sys' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-renamed.py 'import gzip, sys' 'g = gzip' "g.open(\"/tmp/run.gz\", \"wb\")$WB03"
+w85 gzip-io-open.py 'import gzip, sys' "gzip.io.open(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-io-passed.py 'import functools, gzip, sys' "functools.partial(gzip.io.open, mode=\"w\")(\"/tmp/run.sh\")$WR03"
+w85 gzip-io-renamed.py 'import gzip, sys' 'opener = gzip.io.open' "opener(\"/tmp/run.sh\", \"w\")$WR03"
+w85 gzip-main.py 'import gzip, sys' 'sys.argv = ["gzip", sys.argv[1]]' 'gzip.main()'
+w85 gzip-from-main.py 'import sys' 'from gzip import main' 'sys.argv = ["gzip", sys.argv[1]]' 'main()'
+w85 gzip-main-renamed.py 'import gzip, sys' 'g = gzip' 'sys.argv = ["gzip", sys.argv[1]]' 'g.main()'
+w85 gzip-main-passed.py 'import gzip, sys' 'run = gzip.main' 'run()'
+w85 gzip-builtins.py 'import gzip, sys' 'gzip.builtins.exec("import os; os.system(\"bash \" + sys.argv[1])")'
+w85 gzip-os.py 'import gzip, sys' 'gzip.os.system("bash " + sys.argv[1])'
+w85 ast-exec.py 'import ast, sys' 'exec(ast.literal_eval(repr(open(sys.argv[1]).read())))'
+w85 ast-compile.py 'import ast, sys' 'tree = ast.parse(open(sys.argv[1]).read())' 'exec(compile(tree, sys.argv[1], "exec"))'
+w85 shutil-copy.py 'import shutil, sys' 'shutil.copy(sys.argv[1], "/tmp/run.sh")'
+for acts in io-open-w.py io-open-kw.py io-open-var.py io-fileio-w.py io-fileio-plus.py io-from-open.py \
+  io-from-open-as.py io-from-fileio.py io-passed.py io-renamed.py gzip-open-w.py gzip-open-kw.py gzip-file-w.py \
+  gzip-file-kw.py gzip-from-file.py gzip-as.py gzip-renamed.py gzip-io-open.py gzip-io-passed.py gzip-io-renamed.py \
+  gzip-main.py gzip-from-main.py \
+  gzip-main-renamed.py gzip-main-passed.py gzip-builtins.py gzip-os.py ast-exec.py ast-compile.py shutil-copy.py; do
+  run_85 "python3 $acts $RULES"
+  read_refused "#3103 a script that writes, runs code or reaches past ast, io or gzip is still refused: $acts"
+done
+run_85 "python3 io-open-w.py $RULES"
+says "#3103 the refusal names the writing mode" "can write a file (open with a mode that writes"
+run_85 "python3 gzip-main.py $RULES"
+says "#3103 and gzip's command line" "can write a file (gzip.main"
+run_85 "python3 io-renamed.py $RULES"
+says "#3103 and an opener passed on" "can write a file (io.open, passed on rather than called"
+run_85 "python3 shutil-copy.py $RULES"
+says "#3103 shutil is still a module the gate does not know" "imports shutil, a module the gate does not know"
 
 echo
 echo "slack drafts only: a module given another name is still followed (claude-config#3102)"
