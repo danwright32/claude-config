@@ -5042,3 +5042,42 @@ test('#3022: taking away a folder of untracked screen files asks git once for th
   expect(refusalOf(await call($, { tool: 'Bash', command: `rm ${ONEMOD}/screens/s3/page.tsx ${ONEMOD}/screens/s4/page.tsx` }))).toContain('page.tsx')
   expect(w.ran.length).toBe(1)
 })
+
+// #3144: on 2026-11-17 a read only query run through a database command line tool as a python
+// module (`T=<table>; <python> -m <cli> sql -q "select count(*) as n from $T; select * from $T limit
+// 8"`) was held as changing how the screen looks. Measured through this file on 2026-11-18: neither
+// the word select, the two statements nor the shell variable alone was held; the `*` and a variable
+// the command sets, together, were. mod-kit follows the variable to its literal value and places the
+// pattern that makes in the command's folder, but hands the word on as written, and the guard read
+// a word holding `$T` as a name no rule reads. Spelled through the value the command gives the
+// variable, it is judged as the same word written out is: a pattern naming no look changing file
+// runs, one that may name one is held as before.
+test('#3144: a pattern spelled through a variable the command sets is judged by its value: a read only query runs, a look changing pattern is still held', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const CLI = '/opt/homebrew/Cellar/db-cli/3.27.0/libexec/bin/python -m db.cli._app sql -c c'
+  for (const command of [
+    `T=db.sc.tbl; ${CLI} -q "select count(*) as n from $T; select * from $T limit 8"`,
+    `T=db.sc.tbl; ${CLI} -q "select count(*) as n from $T"`,
+    `T=db.sc.tbl && ${CLI} -q "select * from \${T} limit 8"`,
+    `T=db.sc.tbl; python3 scripts/q.py "select count(*) from $T"`,
+    `T=db.sc.tbl; npx db-cli query "select * from $T"`,
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(5)
+  // The nearest look changes written the same way are still held: a pattern whose value may name a
+  // screen or style file, a glob the variable holds (#1953), and a variable the command never sets,
+  // sets twice, or builds from another value.
+  for (const command of [
+    `T=tsx; ${CLI} "app/*.$T"`,
+    `T=.css; npx prettier --write "app/*$T"`,
+    `A=app; B=css; npx prettier --write "$A/*.$B"`,
+    `P='app/*page*'; python3 scripts/gen.py $P`,
+    `${CLI} -q "select * from $T"`,
+    `T=a; T=.tsx; npx prettier --write "app/*$T"`,
+    `T="$X.css"; npx prettier --write "app/*$T"`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') || why.includes('could not check') }).toEqual({ command, held: true })
+  }
+  expect(w.ran.length).toBe(5)
+})

@@ -229,13 +229,47 @@ export const shellVarPath = (command: string, text: string, name: string): strin
     seen = true
   }
   if (!seen) return undefined
-  const values = new Set<string>()
-  for (const m of command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))`, 'g'))) values.add(m[1] ?? m[2] ?? m[3] ?? '')
-  // A value built another way (`R="$X/y"`, `R=$(pwd)`) is set too, and cannot be read.
-  if (new RegExp(`(?:^|[\\s;&|(])${v}=["]?[$\`]`).test(command)) return undefined
+  const value = literalValue(command, v)
+  return value === undefined ? undefined : `${value.replace(/\/+$/, '')}/${name.slice(slash + 1)}`
+}
+
+/**
+ * The one value `command` gives the shell variable `v` (#1191, #3144): every assignment of it a
+ * literal (bare, or in quotes with no `$` or backtick in it), each the same and not empty. Undefined
+ * for a variable set nowhere, set to different values, or set by any assignment that is not wholly
+ * such a literal: one built another way (`R="$X/y"`, `R=$(pwd)`), or one the literal only begins
+ * (`R=/a$X`, `R=/a"b"`), whose value is more than the literal.
+ */
+export const literalValue = (command: string, v: string): string | undefined => {
+  const starts = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=`, 'g'))].length
+  const whole = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))(?=$|[\\s;&|)])`, 'g'))]
+  if (whole.length !== starts) return undefined
+  const values = new Set(whole.map(m => m[1] ?? m[2] ?? m[3] ?? ''))
   const [value] = [...values]
-  if (values.size !== 1 || !value) return undefined
-  return `${value.replace(/\/+$/, '')}/${name.slice(slash + 1)}`
+  return values.size === 1 && value ? value : undefined
+}
+
+/**
+ * A word a command hands on, spelled as the shell spells it from the values the command itself
+ * gives its variables (#3144): each `$T` or `${T}` in it replaced by literalValue's one value, which
+ * holds no space, so no shell splits it. Undefined where the word holds no variable, or one the
+ * command gives no such value, or any other expansion (`${T:-x}`, `$1`, `$(...)`, a backtick, `\$`).
+ * mod-kit follows the same assignments to place the word; this gives the guard the name it placed.
+ */
+export const spelledThrough = (command: string, word: string): string | undefined => {
+  if (/\\\$|`/.test(word)) return undefined
+  let replaced = 0
+  let unread = false
+  const out = word.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, braced: string | undefined, bare: string | undefined) => {
+    const value = literalValue(command, (braced ?? bare) as string)
+    if (value === undefined || /[\s$`]/.test(value)) {
+      unread = true
+      return ''
+    }
+    replaced++
+    return value
+  })
+  return unread || !replaced || /[$`]/.test(out) ? undefined : out
 }
 
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */

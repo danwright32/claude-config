@@ -67,6 +67,7 @@ import {
   shellBraces,
   afterVariable,
   shellVarPath,
+  spelledThrough,
   tempRoots,
   ROUND_FILES,
   checked,
@@ -594,6 +595,36 @@ test("a name the shell spells through a variable lands where the command's own a
   expect(shellVarPath('XR=/a; x', text, 'R/screen.css')).toBe(undefined)
   expect(shellVarPath('R=/a', `${text}\nopen('R/screen.css')`, 'R/screen.css')).toBe(undefined)
   expect(shellVarPath('R=/a', text, 'screen.css')).toBe(undefined)
+  // #3144: a value the assignment only begins (`R=/a$X`, `R=/a"b"`) is not the value it is given.
+  expect(shellVarPath('R=/a$X; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a"b"; x', text, 'R/screen.css')).toBe(undefined)
+})
+
+// #3144: a word a command hands on, spelled through variables the command sets to one literal value
+// each, is read as the shell spells it; anything else it holds the guard cannot read.
+test('spelledThrough spells a word through the literal values the command gives its variables, and nothing it cannot be sure of', () => {
+  const sql = 'select count(*) as n from $T; select * from $T limit 8'
+  expect(spelledThrough(`T=db.sc.tbl; python -m tool -q "${sql}"`, sql)).toBe('select count(*) as n from db.sc.tbl; select * from db.sc.tbl limit 8')
+  expect(spelledThrough(`T='db.sc.tbl' && python -m tool -q "x * \${T}"`, 'x * ${T}')).toBe('x * db.sc.tbl')
+  expect(spelledThrough("P='app/*push*'; python3 /tmp/sweep.py $P", '$P')).toBe('app/*push*')
+  expect(spelledThrough('A=app; B=css; npx prettier --write "$A/*.$B"', '$A/*.$B')).toBe('app/*.css')
+  // Set nowhere, twice to different values, built from another value, only begun, holding a space,
+  // or spelled in a form other than $T and ${T}: not read.
+  for (const [command, word] of [
+    ['python -m tool -q "x * $T"', 'x * $T'],
+    ['T=a; T=b; python -m tool -q "x * $T"', 'x * $T'],
+    ['T="$HOME/x"; python -m tool -q "x * $T"', 'x * $T'],
+    ['T=$(pwd); python -m tool -q "x * $T"', 'x * $T'],
+    ['T=a$X; python -m tool -q "x * $T"', 'x * $T'],
+    ["T='a b'; python -m tool -q \"x * $T\"", 'x * $T'],
+    ['T=a; python -m tool -q "x * ${T:-b}"', 'x * ${T:-b}'],
+    ['T=a; python -m tool -q "x * $1 $T"', 'x * $1 $T'],
+    ['T=a; python -m tool -q "x * \\$T"', 'x * \\$T'],
+    ["T='$Y'; python -m tool -q \"x * $T\"", 'x * $T'],
+    ['T=a; python -m tool -q "x * $(cat f) $T"', 'x * $(cat f) $T'],
+    ['T=a; python -m tool -q "x * plain"', 'x * plain'],
+  ])
+    expect({ command, spelled: spelledThrough(command as string, word as string) }).toEqual({ command, spelled: undefined })
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {
