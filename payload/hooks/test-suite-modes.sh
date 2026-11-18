@@ -79,7 +79,13 @@ suite_mode_report() {
     }'
 }
 
-FIX="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/suite-modes.XXXXXXXX")" && pwd -P)"
+# A failed mktemp must not leave FIX as the current directory or the home folder, which the EXIT
+# trap would then delete: refuse to run instead.
+FIX="$(mktemp -d "${TMPDIR:-/tmp}/suite-modes.XXXXXXXX")" || FIX=""
+case "${FIX%/}" in
+  ''|/|"${HOME%/}") echo "test-suite-modes: refusing to run: throwaway directory came back as '$FIX'." >&2; exit 2 ;;
+esac
+FIX="$(cd "$FIX" && pwd -P)" || exit 2
 trap 'rm -rf "$FIX"' EXIT
 
 # A throwaway repository holding the given suites. mk_repo <dir> <path:mode>...; mode is 755 or 644.
