@@ -153,7 +153,9 @@ check "and that nothing goes until the selection is copied back" "$(has "$HTML" 
 # read of a data file moves only on the first read after each change, so "run", never "opened".
 check "it says the 30 day rule, the Trash apart" "$(has "$HTML" "Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.")"
 
-check "every item has a tick box" "$(eq "$(count_of "$HTML" 'class="tick"')" "$(fixture_items | wc -l | tr -d ' ')")"
+# The fixture's three Trash entries can all be ticked, so the Trash is one row (#3216): every other
+# item has its own box, and the Trash has one.
+check "every item has a tick box, the Trash one for all its entries" "$(eq "$(count_of "$HTML" 'class="tick"')" "$(( $(fixture_items | awk -F "$S" '$2 != "trash"' | wc -l) + 1 ))")"
 check "nothing is ticked" "$(grep -qE '<input[^>]* checked' <<< "$HTML" && echo "an input is ticked" || echo ok)"
 check "the browser is asked not to restore ticks on reload" "$(has "$HTML" 'autocomplete="off"')"
 check "the foot bar opens on Nothing selected (D9)" "$(has "$HTML" ">Nothing selected<")"
@@ -270,22 +272,22 @@ printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4194304${S
   "caches-2${S}caches${S}delete${S}$H/Library/Caches/b${S}${S}offerable${S}1:2${S}denied${S}${S}" \
   "caches-3${S}caches${S}delete${S}$H/Library/Caches/c${S}1536${S}offerable${S}1:3${S}denied${S}${S}" \
   "caches-4${S}caches${S}delete${S}$H/Library/Caches/d${S}1500${S}offerable${S}1:4${S}reported${S}${S}" \
-  "trash-1${S}trash${S}delete${S}$H/.Trash/e${S}${S}offerable${S}1:5${S}unread${S}${S}" \
-  "trash-2${S}trash${S}delete${S}$H/.Trash/f${S}1048576${S}offerable${S}1:6${S}partial${S}${S}" \
+  "caches-7${S}caches${S}delete${S}$H/Library/Caches/e${S}${S}offerable${S}1:5${S}unread${S}${S}" \
+  "caches-8${S}caches${S}delete${S}$H/Library/Caches/f${S}1048576${S}offerable${S}1:6${S}partial${S}${S}" \
   "caches-5${S}caches${S}delete${S}$H/Library/Caches/g${S}2560${S}offerable${S}1:7${S}measured${S}${S}" \
   "caches-6${S}caches${S}delete${S}$H/Library/Caches/h${S}3584${S}offerable${S}1:8${S}measured${S}${S}" > "$H/items.txt"
 write_record "$H/items.txt" "trash caches"
 render --out "$OUT"
 selections="caches-2
-caches-2 trash-1
+caches-2 caches-7
 caches-1 caches-2
 caches-3
 caches-4
 caches-1
-trash-2
+caches-8
 caches-5
 caches-6
-caches-1 caches-2 caches-3 caches-4 trash-1 trash-2
+caches-1 caches-2 caches-3 caches-4 caches-7 caches-8
 "
 . "$DIR/../../hooks/lib/disk-clean-units.sh" || check "the units library is there to source" "could not source it"
 tally_words="$(while IFS= read -r s; do
@@ -487,5 +489,88 @@ big_verdict="$(awk '
   }
   END { print (msg == "" ? "ok" : msg) }' <<< "$HTML")"
 check "at the real count the rows are still in order" "$big_verdict"
+
+# ================================================================================================
+# 7. The Trash is one row, at the real count (#3216): the personal MacBook's dry run drew its 5,979
+# entries as 5,979 rows on a 2.3 MB page. Its row carries every entry it ticks, its count and the
+# shared tally's total, and anything in the Trash that cannot be ticked is one greyed row per reason.
+# ================================================================================================
+fresh
+TRASH_N=5979
+awk -v n="$TRASH_N" -v h="$H" -v s="$S" 'BEGIN {
+  for (i = 1; i <= n; i++) {
+    sz = (i == 7) ? "unread" : ((i == 9) ? "partial" : "measured")
+    b = (i == 7) ? "" : (i * 104729) % 50000000
+    printf "trash-%d%strash%sdelete%s%s/.Trash/entry %d%s%s%sofferable%s1:%d%s%s%s%s\n", i, s, s, s, h, i, s, b, s, s, i, s, sz, s, s
+  }
+  printf "trash-%d%strash%sdelete%s%s/.Trash/went%s4096%snot offerable: it is no longer in the Trash%s1:%d%smeasured%s%s\n", n + 1, s, s, s, h, s, s, s, n + 1, s, s, s
+  printf "trash-%d%strash%sdelete%s%s/.Trash/went too%s8192%snot offerable: it is no longer in the Trash%s1:%d%smeasured%s%s\n", n + 2, s, s, s, h, s, s, s, n + 2, s, s, s
+  printf "caches-1%scaches%sdelete%s%s/Library/Caches/a%s4096%sofferable%s1:%d%smeasured%s%s\n", s, s, s, h, s, s, s, n + 3, s, s, s
+}' > "$H/trash.txt"
+write_record "$H/trash.txt" "trash caches"
+render --out "$OUT"
+check "a Trash of $TRASH_N entries renders with exit 0" "$(eq "$RC" 0)"
+trash_boxes="$(grep -oE '<input class="tick" [^>]*data-category="trash"[^>]*>' <<< "$HTML")"
+check "the Trash is drawn as one row that can be ticked, plus one greyed row for the reason two cannot" "$(eq "$(grep -c . <<< "$trash_boxes")" 2)"
+check "no Trash entry has a row of its own" "$(hasnt "$HTML" "entry 4242")"
+check "its row names the Trash folder" "$(has "$(row trash)" '<span class="path">~/.Trash</span>')"
+check "and how many entries it holds" "$(has "$(row trash)" "<span class=\"note\">5,979 entries</span>")"
+ids_on_row="$(grep -oE 'data-ids="[^"]*"' <<< "$(row trash)" | sed 's/^data-ids="//; s/"$//' | tr ' ' '\n' | grep -c .)"
+check "its box carries every entry it ticks" "$(eq "$ids_on_row" "$TRASH_N")"
+check "and never one that cannot be ticked" "$(grep -oE 'data-ids="[^"]*"' <<< "$(row trash)" | grep -qE "trash-($((TRASH_N + 1))|$((TRASH_N + 2)))( |\")" && echo "a kept entry is on the row" || echo ok)"
+trash_total="$(grep -oE '<span class="group-total">[^<]*' <<< "$(awk -v c='data-category="trash"' 'index($0, c) && /class="group-head/ { print; exit }' <<< "$HTML")" | sed 's/.*>//')"
+check "its size is the kind's total" "$(has "$(row trash)" "<span class=\"size\">$trash_total</span>")"
+check "and that total is a lower bound, since one entry was unread and one partly read" "$(has "$trash_total" "At least ")"
+# A folded row's size is a sum, "At least 146.5 GB" at the real count, which wrapped onto two lines
+# in the fixed 110px size column: the size never wraps, and its column grows to fit it.
+check "a size is never wrapped onto two lines" "$(grep -qE '^\.size \{[^}]*white-space: nowrap' <<< "$HTML" && echo ok || echo "the .size rule does not keep it on one line")"
+check "and the size column grows to fit the longest" "$(grep -qE '^\.item \{[^}]*grid-template-columns: 28px 1fr minmax\(110px, max-content\)' <<< "$HTML" && echo ok || echo "the size column is a fixed width")"
+check "what cannot be ticked is one greyed row saying how many and why" "$(grep -qF '<span class="note">2 entries: it is no longer in the Trash</span>' <<< "$HTML" && grep -qE '<div class="item kept"[^>]*><input [^>]*data-category="trash"[^>]* disabled' <<< "$HTML" && echo ok || echo "no such row")"
+check "another kind still has its rows" "$(has "$(row caches-1)" '<span class="path">~/Library/Caches/a</span>')"
+page_bytes="$(wc -c < "$PAGE" | tr -d ' ')"
+echo "  ($TRASH_N Trash entries drawn in a page of $page_bytes bytes)"
+check "the page stays small: under 200 KB with $TRASH_N Trash entries" "$([ "$page_bytes" -lt 200000 ] && echo ok || echo "$page_bytes bytes")"
+if command -v node >/dev/null 2>&1; then
+  js_sel="$(awk '/function human\(bytes\)/ { p = 1 } p { print } p && /function selection\(\)/ { s = 1 } s && /^  }$/ { exit }' <<< "$HTML")"
+  trash_words="$(node -e "$js_sel"'
+    var fs = require("fs"), html = fs.readFileSync(process.argv[1], "utf8"), boxes = [];
+    (html.match(/<input class="tick" [^>]*>/g) || []).forEach(function (tag) {
+      var a = {}; tag.replace(/(data-[a-z]+)="([^"]*)"/g, function (m, k, v) { a[k] = v; });
+      boxes.push({ checked: a["data-id"] === "trash" && !/ disabled/.test(tag), disabled: / disabled/.test(tag), getAttribute: function (k) { return k in a ? a[k] : null; } });
+    });
+    var ticks = boxes, sel = selection();
+    console.log(sel.words);
+    console.log(sel.ids.join(" "));' "$PAGE" 2>&1)"
+  tally_trash="$(awk -F "$S" "${DCU_AWK_LIB:-}${DCU_AWK_TALLY:-}${DCU_AWK_WORDS:-}"'
+    $2 == "trash" && $6 == "offerable" { n++; dcu_tally("s", $5, $8) }
+    END { print n " selected, " dcu_tally_words("s") }' "$H/trash.txt")"
+  check "ticking the Trash row selects every entry, worded as the shared tally words it" "$(eq "$(sed -n 1p <<< "$trash_words")" "$tally_trash")"
+  check "and the selection lists each entry's own id" "$(eq "$(sed -n 2p <<< "$trash_words" | awk '{ print NF }')" "$TRASH_N")"
+  check "never the row's own name" "$(grep -qE '(^| )trash( |$)' <<< "$(sed -n 2p <<< "$trash_words")" && echo "the row's name is in the selection" || echo ok)"
+else
+  echo "SUITE-PART-UNMEASURED ticking the Trash row against the shared tally: node is not on PATH"
+fi
+
+# ================================================================================================
+# 8. A kind's note is one line under its heading (#3215): the build folders iCloud syncs are left
+# out of the list and counted in the note, so leaving them out is visible on the page, even when
+# nothing else of the kind is listed.
+# ================================================================================================
+fresh
+LEFT_OUT="98 build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device."
+printf '%s\n' "build-folders-1${S}build-folders${S}delete${S}$H/Apps/a/node_modules${S}4096${S}not offerable: the project's own files changed within 30 days (src/a.ts)${S}1:1${S}measured${S}${S}" \
+  "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4096${S}offerable${S}1:2${S}measured${S}${S}" > "$H/items.txt"
+EXTRA_NOTES="note.build-folders${S}$LEFT_OUT" write_record "$H/items.txt" "caches build-folders"
+render --out "$OUT"
+check "a kind's note is drawn as one line right under its heading" "$(awk -v c='data-category="build-folders"' 'index($0, c) && /class="group-head/ { getline nx; print nx; exit }' <<< "$HTML" | grep -qF "<p class=\"group-note\">$LEFT_OUT</p>" && echo ok || echo "the line after the heading is not the note")"
+check "and said once" "$(eq "$(count_of "$HTML" "build folders were left out")" 1)"
+check "the note line has a style of its own, not the browser's paragraph" "$(has "$HTML" ".group-note {")"
+check "a kind without a note has no note line" "$(eq "$(count_of "$HTML" 'class="group-note"')" 1)"
+printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4096${S}offerable${S}1:2${S}measured${S}${S}" > "$H/items.txt"
+EXTRA_NOTES="note.build-folders${S}$LEFT_OUT" write_record "$H/items.txt" "caches build-folders"
+render --out "$OUT"
+check "a kind with nothing listed but a note is still drawn" "$(has "$HTML" '<div class="group-head" data-category="build-folders">')"
+check "with its note" "$(has "$HTML" "<p class=\"group-note\">$LEFT_OUT</p>")"
+check "and nothing to tick" "$(grep -qE '<input class="tick head-tick"[^>]* disabled' <<< "$(awk -v c='data-category="build-folders"' 'index($0, c) && /class="group-head/ { print; exit }' <<< "$HTML")" && echo ok || echo "its heading box can be ticked")"
 
 finish
