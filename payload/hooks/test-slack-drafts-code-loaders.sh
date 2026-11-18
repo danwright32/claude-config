@@ -2092,6 +2092,128 @@ w51 own-module-field.py 'import lib_times' 'q = lib_times.now.sys' 'p = lib_time
 run_51 "python3 own-module-field.py msg.json"
 allowed "#3151 and a field named sys read off one of the script's own modules into a name passes"
 
+echo "slack drafts only: a submodule of an inert package, and sys put where the gate does not follow it (claude-config#3172)"
+
+# Two more routes, each of which passed the gate as #3151 left it (measured 2026-11-17 by the cases
+# below, exit 0 and nothing said, handed a data file naming an endpoint). One: PY_INERT admitted any
+# submodule of a package on it, so `import json.tool` passed, and json.tool.main reads its output
+# path from sys.argv and writes it (on Python 3.14.4 it wrote out.py). Two: a sys read off a value the
+# gate does not follow was read on only through a name it was bound to, so the same sys handed to a
+# function, put in a list, returned, or chosen by a conditional changed where Python finds modules
+# unseen.
+D72="$T/d3172"
+mkdir -p "$D72/lib"
+cp "$D02/msg.json" "$D72/msg.json"
+run_72() { run_raw "$(payload Bash "$(bash_input "$1")" "$D72")"; }
+w72() { local name="$1"; shift; printf '%s\n' "$@" > "$D72/$name"; }
+ARGV72='sys.argv[1:] = [sys.argv[1], "out.py"]'
+w72 jt-import.py 'import json.tool, sys' "$ARGV72" 'json.tool.main()'
+w72 jt-as.py 'import json.tool as t, sys' "$ARGV72" 't.main()'
+w72 jt-from.py 'import sys' 'from json import tool' "$ARGV72" 'tool.main()'
+w72 jt-from-sub.py 'import sys' 'from json.tool import main' "$ARGV72" 'main()'
+w72 jt-main.py 'import sys' "$ARGV72" 'import json.__main__' 'json.tool.main()'
+for route in jt-import.py jt-as.py jt-from.py jt-from-sub.py jt-main.py; do
+  run_72 "python3 $route msg.json"
+  read_refused "#3172 a submodule of an inert package that is not itself on the list is refused: $route"
+done
+run_72 "python3 jt-import.py msg.json"
+says "#3172 the refusal names the submodule" "json.tool"
+PATH72='.path.insert(0, "lib")'
+w72 lib_sys.py 'import sys'
+w72 go-call-chain.py 'import pathlib' 'def go(m):' "    m$PATH72" 'go(pathlib.PurePath("x").parser.sys)' 'import json'
+w72 go-own-module.py 'import lib_sys' 'def go(m):' "    m$PATH72" 'go(lib_sys.sys)' 'import json'
+w72 go-keyword.py 'import lib_sys' 'def go(m=None):' "    m$PATH72" 'go(m=lib_sys.sys)' 'import json'
+w72 go-name.py 'import lib_sys' 'q = lib_sys.sys' 'def go(m):' "    m$PATH72" 'go(q)' 'import json'
+w72 ifexp-name.py 'import lib_sys, os' 'q = lib_sys.sys if os.sep else None' "q$PATH72" 'import json'
+w72 ifexp-chain.py 'import os, pathlib' 'q = pathlib.PurePath("x").parser.sys if os.sep else None' "q$PATH72" 'import json'
+w72 ifexp-direct.py 'import lib_sys, os' "(lib_sys.sys if os.sep else None)$PATH72" 'import json'
+w72 boolop-name.py 'import lib_sys' 'q = lib_sys.sys or None' "q$PATH72" 'import json'
+w72 list.py 'import lib_sys' 'qs = [lib_sys.sys]' "qs[0]$PATH72" 'import json'
+w72 returned.py 'import lib_sys' 'def f():' '    return lib_sys.sys' "f()$PATH72" 'import json'
+w72 cast.py 'import lib_sys, typing' "typing.cast(object, lib_sys.sys)$PATH72" 'import json'
+w72 walrus.py 'import lib_sys' 'def go(m):' "    m$PATH72" 'go((q := lib_sys.sys))' 'import json'
+w72 attr-store.py 'import lib_sys' 'class H:' '    pass' 'h = H()' 'h.m = lib_sys.sys' "h.m$PATH72" 'import json'
+w72 shadowed-print.py 'import lib_sys' 'def print(m):' "    m$PATH72" 'print(lib_sys.sys)' 'import json'
+# An operand hands sys to the other operand's method where the script writes one: a module has no
+# __add__, so lib_sys.sys + A() calls A.__radd__ with it, and `in` calls __contains__.
+w72 operand-radd.py 'import lib_sys' 'class A:' '    def __radd__(self, m):' "        m$PATH72" '        return 0' \
+  'print(lib_sys.sys + A())' 'import json'
+w72 operand-contains.py 'import lib_sys' 'class A:' '    def __contains__(self, m):' "        m$PATH72" '        return True' \
+  'print(lib_sys.sys in A())' 'import json'
+for route in go-call-chain.py go-own-module.py go-keyword.py go-name.py ifexp-name.py ifexp-chain.py ifexp-direct.py \
+  boolop-name.py list.py returned.py cast.py walrus.py attr-store.py shadowed-print.py operand-radd.py operand-contains.py; do
+  run_72 "python3 $route msg.json"
+  read_refused "#3172 sys put where the gate does not follow it is refused: $route"
+done
+run_72 "python3 go-call-chain.py msg.json"
+says "#3172 the refusal says sys went where the gate does not follow it" "where the gate does not follow it"
+# The class behind json.tool (L96): every submodule each package on the gate's list has on this
+# Python, found from the list itself (its names cut out of the gate's text), is either on the list
+# by its own dotted name or refused, so a submodule a later Python adds is refused until read.
+read -r -a INERT72 <<< "$(sed -n '/^PY_INERT = frozenset({/,/})/p' "$DIR/slack_drafts_only_gate.py" | grep -o '"[A-Za-z_.]*"' | tr -d '"' | tr '\n' ' ')"
+python3 -B - ${INERT72[@]+"${INERT72[@]}"} > "$D72/subs.txt" 2>"$D72/subs.err" <<'PY'
+import importlib, pkgutil, sys
+listed = set(sys.argv[1:])
+for name in sorted(listed):
+    try:
+        mod = importlib.import_module(name)
+    except ImportError:
+        continue
+    for sub in pkgutil.iter_modules(getattr(mod, "__path__", None) or []):
+        print(("listed " if f"{name}.{sub.name}" in listed else "unlisted ") + f"{name}.{sub.name}")
+PY
+if grep -qx 'unlisted json.tool' "$D72/subs.txt"; then check "#3172 the walk found json.tool among the inert packages' submodules" ok
+else check "#3172 the walk found json.tool among the inert packages' submodules" "it found: $(tr '\n' '|' < "$D72/subs.txt") $(head -c 300 "$D72/subs.err")"; fi
+while read -r kind sub; do
+  [ -n "$sub" ] || continue
+  w72 "sub-$sub.py" "import $sub, sys" 'print(len(open(sys.argv[1]).read()))'
+  run_72 "python3 sub-$sub.py msg.json"
+  if [ "$kind" = listed ]; then allowed "#3172 a submodule on the list by its own name passes: $sub"
+  else read_refused "#3172 a submodule not on the list by its own name is refused: $sub"; fi
+done < "$D72/subs.txt"
+# The controls: json read and written to the screen, its decoder and html's parser imported as real
+# hook code imports them (lib/local-allow-rules.py, lib/html-blocks.py), collections.abc, sys used
+# as scripts use it, and a field named sys read, printed, rounded, formatted, compared and added,
+# which is a field (PR #3161), also when a conditional picks it into a name.
+cat > "$D72/reads-3172.py" <<'PY'
+import collections.abc, json, sys
+import sys as s
+from collections.abc import Iterable
+from html.parser import HTMLParser
+from json.decoder import JSONDecodeError, scanstring
+class Times:
+    def __init__(self):
+        self.sys, self.user = 0.5, 1.5
+    def total(self):
+        return self.sys + self.user
+t = Times()
+q = t.sys if t.user else 0
+try:
+    data = json.load(open(sys.argv[1]))
+except JSONDecodeError as e:
+    print(e, file=sys.stderr)
+    sys.exit(1)
+print(json.dumps(data, indent=2), isinstance(data, Iterable), scanstring('"a"', 1)[0], HTMLParser)
+print(t.sys, round(t.sys), str(t.sys), f"{t.sys:.1f}", t.sys == 0.5, -t.sys, t.sys * 2, t.total(), round(q))
+json.dump(data, sys.stdout)
+s.stdout.write(s.argv[0] + "\n")
+PY
+run_72 "python3 reads-3172.py msg.json"
+allowed "#3172 the control: json, its decoder, html.parser, collections.abc, sys and a field named sys used as scripts use them pass"
+run_72 "python3 reads-3172.py $RULES"
+allowed "#3172 and handed the real rules file"
+run_72 "python3 -m json.tool msg.json"
+allowed "#3172 and python3 -m json.tool printing a file, which the gate reads as a program, still passes"
+# A name on PY_REACH used as a plain name is refused with what that name does: only the typing
+# names evaluate a string as code; enum's builtins, sys's hooks and the rest reach past what the
+# gate reads (the message said "can evaluate a string as code" for all of them until #3172).
+w72 name-bltns.py 'import sys' 'def f(bltns):' '    return bltns' 'print(f(1), sys.argv[1])'
+w72 name-forwardref.py 'import sys' 'def f(ForwardRef):' '    return ForwardRef' 'print(f(1), sys.argv[1])'
+run_72 "python3 name-bltns.py msg.json"
+says "#3172 a name that is builtins is not said to evaluate a string" "reaches past what the gate reads (bltns)"
+run_72 "python3 name-forwardref.py msg.json"
+says "#3172 a typing name still says it evaluates a string as code" "can evaluate a string as code (ForwardRef)"
+
 echo
 
 echo "passed: $pass, failed: $fail"
