@@ -2974,8 +2974,8 @@ export SYNC_NO_SEND_TESTS=1
 # The hook suite a pull runs is OFF here too, which is how claude-sync's send gate starts every
 # suite it picks, this one included (claude-config#3217). Set here rather than left to the caller,
 # so a section that drives the pull's hook suite or the send gate and forgets to turn it back on
-# fails on every run: 126 checks in 17 sections did, and only inside the gate, because a hand run
-# never carried it. Such a section sets it to 0 at its head and to 1 at its end. Never `unset`
+# fails on every run: 126 checks in 17 sections did on 2026-11-18, and only inside the gate,
+# because a hand run never carried it. Such a section sets it to 0 at its head and to 1 at its end. Never `unset`
 # either switch in a section: that drops the export, and the 1 assigned afterwards is then a shell
 # variable no claude-sync started later in the shard can see (a section may not export, #341).
 export SYNC_NO_HOOK_TESTS=1
@@ -18979,6 +18979,7 @@ section "== a held suite's output is kept, and a standing hold is said once (cla
 # #3179. That day the watcher wrote the same hold to its log 227 times, and notified each time, for
 # one held file whose inputs never changed: the once per run guard covers one run, and each watcher
 # pass is a new run. The suite here fails, passes or stalls as the mode file says.
+# The hook suite switch is cleared in each of this section's own claude-sync calls instead.
 SYNC_NO_SEND_TESTS=0
 KOB="$WORK/keptout-bare.git"; git init -q --bare "$KOB"
 KOR="$WORK/keptout-repo"; git clone -q "$KOB" "$KOR"
