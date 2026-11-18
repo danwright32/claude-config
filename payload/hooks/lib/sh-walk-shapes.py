@@ -330,8 +330,17 @@ def make(sh_special, sh_param, unknown_dir=None):
                 if inline:
                     run = inline[0]
                 elif operand and operand != "-":
-                    k = next((k for k, w in enumerate(words) if k and operand in w), len(words) - 1)
-                    run = words[1:k + 1] if PROC_MARK.search(operand) else words[1:k]
+                    # The script's place is the first word at which the Judge's own reading finds
+                    # it, never a search of the words for its text: `-o` holds `o`, so in `bash -o
+                    # <(cat post.sh) o` the search stopped at the option and the substitution, its
+                    # value, was left out of what is read; and a word equal to the script can be an
+                    # earlier option's value or a later argument. With no place found, every word
+                    # is read.
+                    k = next((k for k in range(1, len(words)) if self.operands(words[:k + 1])[0] == operand), None)
+                    if k is None:
+                        run = words[1:]
+                    else:
+                        run = words[1:k + 1] if PROC_MARK.search(operand) else words[1:k]
                 else:
                     run = words[1:]
             held = self.shell.get("procs_here")

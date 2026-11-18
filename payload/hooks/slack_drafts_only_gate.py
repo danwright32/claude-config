@@ -2209,8 +2209,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     def fed_pieces(self, d, text, whole):
         """What one command reads on its input, as stdin_of gives it, with an unreadable piece where
-        that is not known; False where nothing feeds it (no pipe before it, no file or here string
-        given), or a heredoc does, which the caller reads where the command is (fed)."""
+        that is not known; False where a heredoc feeds it, which the caller reads where the command
+        is (fed), or where nothing does (no pipe before it, no file or here string given) and it is
+        not inside a process substitution. Inside one with no pipe or file of its own it reads what
+        feeds the substitution or the command around it, and the answer is one unreadable piece
+        labelled PROC_FEED (claude-config#3213)."""
         # Only a redirection of the input itself: `3< clean.sh` opens another descriptor, and leaves the
         # pipe as what the program reads (lessons review at c6111a2).
         redirs = [(op, t) for op, t in self.redirections(text)[1] if re.fullmatch(r"0?(<<<|<<-|<<|<>|<&|<)", op)]

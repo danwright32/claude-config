@@ -2498,6 +2498,7 @@ mkdir -p "$D13"
 run_13() { run_raw "$(payload Bash "$(bash_input "$1")" "$D13")"; }
 printf '%s\n' "$POST" > "$D13/posts.sh"
 printf '%s\n' 'echo ok' > "$D13/ok.sh"
+printf '%s\n' 'echo ok' > "$D13/o"
 printf '%s\n' 'cat <(bash posts.sh)' > "$D13/runner.sh"
 printf '%s\n' 'cat posts.sh > >(bash)' > "$D13/feeder.sh"
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"text=hi")' > "$D13/posts.py"
@@ -2543,14 +2544,20 @@ done
 # for a pipe (cat of a file, echo or printf of written text), is judged by that output.
 for runs in "bash <(cat posts.sh)" "source <(cat posts.sh)" ". <(cat posts.sh)" "bash < <(cat posts.sh)" "python3 <(cat posts.py)" \
   "curl -K <(cat curlrc)" "zsh =(cat posts.sh)" "bash <(echo 'bash posts.sh')" "bash -x <(cat posts.sh)" "env bash <(cat posts.sh)" \
-  "bash handed.sh" "cat <(bash <(cat posts.sh))"; do
+  "bash handed.sh" "cat <(bash <(cat posts.sh))" "bash -o <(cat posts.sh) o" "bash -o o -o <(cat posts.sh) o"; do
   run_13 "$runs"
   read_refused "#3213 a program handed a process substitution that prints a script that posts is refused: $runs"
   says "#3213 and the refusal names what it prints: $runs" "prints"
 done
+# The last two: one given as an option's value, before a script whose name an earlier word holds
+# (`-o` holds `o`) or repeats. The script's place was found by searching the words for its text, which
+# stopped at that earlier word and left the substitution out of what is read (lessons review of
+# 9e299673b7). The file `o` posts nothing, so nothing else refuses the line.
+run_13 "bash o"
+allowed "#3213 the yardstick for those two: the script named o posts nothing and passes run on its own"
 # Anything else it prints cannot be read before it runs, and is refused as unread.
 for runs in "sh <(sort posts.sh)" "bash <(cat posts.sh | grep -v x)" "bash <(echo x; cat posts.sh)" "source <(sed 1q posts.sh)" \
-  "bash -c 'bash <(cat posts.sh)'" "bash <(cat <(cat posts.sh))"; do
+  "bash -c 'bash <(cat posts.sh)'" "bash <(cat <(cat posts.sh))" "bash -o <(sort posts.sh) o"; do
   run_13 "$runs"
   read_refused "#3213 a program handed a process substitution whose output cannot be read is refused: $runs"
   says "#3213 and the refusal says it cannot be read: $runs" "cannot be read before the command runs"
@@ -2565,7 +2572,8 @@ for runs in "cat <(echo hi)" "diff <(sort a.txt) <(sort b.txt)" "cat <(bash ok.s
   "cat =(sort a.txt)" "comm -12 <(sort a.txt) <(sort b.txt) | wc -l" "echo \$(( 3 < (2) ))" \
   "cat <(cat ok.sh | bash)" "cat <(bash < ok.sh)" "bash reads.sh" \
   "bash <(cat ok.sh)" "source <(cat ok.sh)" "bash < <(cat ok.sh)" "bash <(echo 'echo hi')" "python3 ok.py <(sort a.txt)" \
-  "bash ok.sh <(sort a.txt)" "python3 -c 'print(1)' <(sort a.txt)" "bash sourced.sh" "sort <(cat posts.sh)"; do
+  "bash ok.sh <(sort a.txt)" "python3 -c 'print(1)' <(sort a.txt)" "bash sourced.sh" "sort <(cat posts.sh)" \
+  "bash ok.sh <(sort a.txt) ok.sh" "bash -o <(cat ok.sh) o"; do
   run_13 "$runs"
   allowed "#3213 a process substitution that runs nothing that posts still passes: $runs"
 done
