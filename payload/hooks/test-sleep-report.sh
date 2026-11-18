@@ -935,9 +935,9 @@ record g32 '["aaaa1111"]' "$SLEEPDIR/ended/g32.json"
 } > "$SLEEPDIR/notes/g32.jsonl"
 NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g32.json" >/dev/null 2>&1
 pf="$(section_rows "$(report_of g32)" 'Parked and failed')"
-check_eq "two refusals with no verdict are two rows, as before (#3158)" \
-  "Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable
-Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable" "$pf"
+check_eq "two refusals with no verdict are two rows, as before (#3158)" 2 \
+  "$(printf '%s\n' "$pf" | grep -c -x -F 'Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable')"
+check_eq "and nothing else (#3158)" 2 "$(printf '%s\n' "$pf" | grep -c .)"
 
 # A note written before the mod recorded the reason (no noVerdict) is never folded, however many (#3158).
 G=g33

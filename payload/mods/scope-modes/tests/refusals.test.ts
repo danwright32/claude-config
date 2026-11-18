@@ -11,7 +11,7 @@ import { readCommands } from './read.ts'
 // certainly a read is not one, so a refusal that needs Dan stays listed.
 
 const CWD = '/r/repo'
-const HOME = '/Users/x'
+const HOME = '/r/home'
 const bashReads = (command: string) => readsOnly('Bash', readCommands(command), commandWrites(command, CWD, HOME))
 
 describe('which refused calls only read', () => {
