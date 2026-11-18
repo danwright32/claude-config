@@ -2249,7 +2249,7 @@ suite_load_said(){
   fi
 }
 # WHICH PROCESSOR the run was on, for a refusal to carry beside its figures (claude-config#3239).
-# CI's hosted runners are several processors, and on one tree, on one day, the section time ran from
+# CI's hosted runners are several processors, and on one tree, on 2026-11-18, the section time ran from
 # 832s on an Intel Xeon 6975P-C to 1448s on an AMD EPYC 7763, every section slower by about the same
 # factor. Read as the tests workflow reads it for its own log (the first "model name" in
 # /proc/cpuinfo, else the Mac's brand string), so a red names the hardware it ran on and can be set
@@ -2390,8 +2390,10 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # NOT per runner kind, which was looked at: the processor the log names does not decide the group.
 # Every AMD EPYC 7763 run was slower (135 of 135), but so were 15 of 89 on the AMD EPYC 9V74 and 2
 # of 15 on the Xeon 8370C, so a budget fitted to a processor's usual speed turns those red. The
-# lever NOT pulled (L308) is still judging the work against the runner's own speed measured in the
-# same run, which would let the faster group be held as tightly as the slower.
+# lever this left unpulled (L308), judging the work against the runner's own speed measured in the
+# same run, was pulled by #3239 (below, above suite_work_report): the budget now holds the section
+# time at the speed of the runner it was set on, and the raw section time only when this runner's
+# speed could not be read. These readings and the bounds below still set the raw budget.
 #
 # MEASURED AGAINST THAT BUDGET 2026-09-20, with tools/measure-section-time.sh, which takes several
 # readings and records the machine state beside each one (claude-config#517). The two figures that
@@ -2460,14 +2462,22 @@ fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards 
 # suite directly and not in the job log. What IS enforced on CI is the refusal, which carries the
 # FAIL: prefix and therefore does get through. Making the number itself reach the job log means
 # changing run-all-tests.sh, which every suite shares, and that was not done here (L308).
-fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling
-  local work="$1" ceiling="$2"
+fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling   $3 = reference milliseconds, or empty
+  local work="$1" ceiling="$2" ref="${3-}"
   case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
   [ "$ceiling" -gt 0 ] || return 0
   case "$SUITE_WORK_BUDGET_PCT" in ''|*[!0-9]*) return 0 ;; esac
   case "$work" in
     ''|*[!0-9]*) printf '; section time could not be totalled, so its budget was not checked' ;;
-    *) printf '; %ss of section time against a %ss budget' "$work" "$(( ceiling * SUITE_WORK_BUDGET_PCT / 100 ))" ;;
+    *) printf '; %ss of section time against a %ss budget' "$work" "$(( ceiling * SUITE_WORK_BUDGET_PCT / 100 ))"
+      # And what it was judged as (#3239), after the figures tools/measure-section-time.sh and
+      # tools/ci-section-time-readings.sh read, so both go on reading the same two numbers.
+      suite_work_judge "$work" "$ref"
+      if [ -z "$SUITE_REFERENCE_WHY" ]; then
+        printf ', judged as %ss of work at the reference speed the budget is calibrated at (%s)' "$SUITE_WORK_JUDGED" "$(suite_reference_phrase "$ref")"
+      else
+        printf ", judged raw because the runner's speed was not measured (%s)" "$SUITE_REFERENCE_WHY"
+      fi ;;
   esac
   return 0
 }
@@ -2476,16 +2486,137 @@ fan_work_note(){   # $1 = section seconds or empty   $2 = the ceiling
 # headline this derives from is printed by the suite and dropped by the runner, so without this the
 # budget is invisible on the only machine it was calibrated for. Derived from fan_work_note rather
 # than written out again, so the two can never say different things about one run (L41, L107).
-fan_work_note_line(){   # $1 = section seconds or empty   $2 = the ceiling
+fan_work_note_line(){   # $1 = section seconds or empty   $2 = the ceiling   $3 = reference milliseconds, or empty
   local phrase
-  phrase="$(fan_work_note "$1" "$2")"
+  phrase="$(fan_work_note "$1" "$2" "${3-}")"
   [ -n "$phrase" ] || return 0
   printf 'SUITE-NOTE %s' "${phrase#; }"
   return 0
 }
 
-suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor seconds, or empty
-  local work="$1" ceiling="$2" cpu="${3-}" budget
+# THE RUNNER'S OWN SPEED, measured in the same run (claude-config#3239), the lever the paragraph
+# above SUITE_WORK_BUDGET_PCT named and left unpulled (L308). Section time is counted in the runner's
+# own seconds, and CI's runners are several processors: on 2026-11-18 one tree of 3639 checks cost
+# 832s to 854s on an Intel Xeon 6975P-C and 1354s to 1448s on an AMD EPYC 7763, every section slower
+# by about the same factor. So a fixed piece of REFERENCE WORK is timed in the same run, and the
+# section time is judged at a fixed reference speed: section time times SUITE_REFERENCE_NOMINAL_MS
+# over this run's reading. A slow processor and a fast one are then held to the same amount of work,
+# and the fast ones stop passing at a size the slow ones fail.
+#
+# WHAT THE REFERENCE IS, chosen from readings, 2026-11-18. Three candidates were timed in the same
+# runs on CI (a bash arithmetic loop, 1,200 short processes, 40 git commits) across 22 runs of one
+# tree on five processors, by dispatching the tests workflow on a probe branch and rerunning the part
+# that ran this suite. Spread across the 22, as standard deviation over mean, and highest over lowest:
+#
+#   raw section time               0.172   1.696   (823s to 1396s)
+#   per bash loop                  0.181   1.755
+#   per 40 git commits             0.061   1.207
+#   per 1,200 short processes      0.042   1.149   <- the reference
+#
+# The bash loop tracks the suite worst (the EPYC 9V45 runs it nearly twice as fast as the 7763 and
+# the suite only a third faster); the short processes track it best and are what this suite mostly
+# does. By processor, raw section time then the judged figure at the nominal below:
+#
+#   EPYC 7763     7 runs  1308s to 1396s, reference 2.71s   judged about 1205s
+#   EPYC 9V45     7 runs   951s to 1210s, reference 2.11s   judged about 1199s
+#   EPYC 9V74     3 runs  1107s to 1169s, reference 2.21s   judged about 1247s
+#   Xeon 8573C    1 run    986s,          reference 1.84s   judged about 1296s
+#   Xeon 6975P-C  4 runs   823s to  850s, reference 1.54s   judged about 1307s
+#
+# THE NOMINAL is set by the rule #2614 set the budget by, applied to the judged figure: the budget
+# (1440s at CI's ceiling) sits at the judged readings' mean plus four standard deviations, so the
+# nominal is 1440 over that. The 22 runs cost 508 seconds of section time per second of reference
+# work, standard deviation 21.5, so the nominal is 1440 / (508 + 4 x 21.5) = 2.424s. It is NOT the
+# 7763's own reading (2.71s): the 6975P-C runs this suite about 8% slower than the reference
+# predicts, so judging at the 7763's speed would put it over the budget on every run. The budget's
+# number is unchanged; the highest judged reading of the 22 was 1327s.
+#
+# The reading is PROCESSOR time (user plus system) of the reference, never its wall clock, so a busy
+# neighbour stretches it less, and the faster of two readings is kept: contention only ever slows a
+# reading, and a slower reading is the direction that would excuse a suite (L648). Taken after the
+# shards, outside the wall clock and processor time the guards above read.
+#
+# A reading outside SUITE_REFERENCE_SANE_LO_MS to SUITE_REFERENCE_SANE_HI_MS, or none at all, is
+# UNMEASURED and said so on a SUITE-PART-UNMEASURED line, and the RAW section time is judged as it
+# was before: a slow reference must never be what turns a red green (a reading ten times the nominal
+# would shrink 1500s to 150s).
+#
+# The work is FIXED: its nominal was measured on exactly this function, so the section below holds
+# its text to SUITE_REFERENCE_CKSUM, and a change to it fails there until the nominal is measured
+# again. On a Mac it runs too, uncalibrated (another processor, another OS), where it read 2.32s on
+# 2026-11-18 and the local ceiling makes the budget twice CI's, so it is judged the same way.
+#
+# The sane range runs from 1.0s, under two thirds of the fastest CI reading (1.52s on a 6975P-C), to
+# 3.1s, about 7% over the slowest (2.90s on a 7763): a reading slower than any runner seen is the one
+# that would excuse a suite, so the top is kept close.
+SUITE_REFERENCE_NOMINAL_MS=2424
+SUITE_REFERENCE_SANE_LO_MS=1000
+SUITE_REFERENCE_SANE_HI_MS=3100
+SUITE_REFERENCE_CKSUM="4121963057"
+SUITE_REFERENCE_MS=""
+# suite-reference-work: begin
+suite_reference_work(){   # $1 = an empty scratch directory of its own
+  local d="$1" i=0
+  printf 'x\n' > "$d/f.txt"
+  while [ "$i" -lt 400 ]; do /usr/bin/env true; awk 'BEGIN{x=1}'; sed -n 1p "$d/f.txt" > /dev/null; i=$(( i + 1 )); done
+}
+# suite-reference-work: end
+# "1.234" -> 1234, or nothing for anything that is not seconds with three decimals (L90).
+_ref_ms(){
+  case "$1" in [0-9]*.[0-9][0-9][0-9]) ;; *) return 0 ;; esac
+  case "${1%.*}" in *[!0-9]*) return 0 ;; esac
+  printf '%s' $(( 10#${1%.*} * 1000 + 10#${1#*.} ))
+}
+# Sets SUITE_REFERENCE_MS to the faster of two readings, in milliseconds of processor time, or to
+# nothing when neither could be read.
+suite_reference_read(){
+  local _rr_n=0 _rr_d _rr_w _rr_u _rr_s _rr_um _rr_sm LC_ALL=C
+  SUITE_REFERENCE_MS=""
+  while [ "$_rr_n" -lt 2 ]; do
+    _rr_n=$(( _rr_n + 1 ))
+    _rr_d="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")" || continue
+    { TIMEFORMAT='%3R %3U %3S'; time ( suite_reference_work "$_rr_d" > /dev/null 2>&1 ); } 2> "$_rr_d.t"
+    _rr_w=""; _rr_u=""; _rr_s=""
+    read -r _rr_w _rr_u _rr_s < "$_rr_d.t" 2>/dev/null
+    rm -rf "$_rr_d" "$_rr_d.t"
+    _rr_um="$(_ref_ms "$_rr_u")"; _rr_sm="$(_ref_ms "$_rr_s")"
+    [ -n "$_rr_um" ] && [ -n "$_rr_sm" ] || continue
+    if [ -z "$SUITE_REFERENCE_MS" ] || [ $(( _rr_um + _rr_sm )) -lt "$SUITE_REFERENCE_MS" ]; then
+      SUITE_REFERENCE_MS=$(( _rr_um + _rr_sm ))
+    fi
+  done
+  return 0
+}
+# Milliseconds as seconds with three decimals, for a sentence.
+_ref_said(){ printf '%s.%03ds' $(( $1 / 1000 )) $(( $1 % 1000 )); }
+# Judges a reference reading. Sets SUITE_WORK_JUDGED to the section time at the reference speed, rounded to the nearest second, and SUITE_REFERENCE_WHY to nothing; or, when the reading
+# cannot be used, SUITE_WORK_JUDGED to the raw section time and SUITE_REFERENCE_WHY to why.
+suite_work_judge(){   # $1 = section seconds  $2 = reference milliseconds, or empty
+  local work="$1" ref="${2-}"
+  SUITE_WORK_JUDGED="$work"; SUITE_REFERENCE_WHY=""
+  case "$ref" in
+    ''|*[!0-9]*) SUITE_REFERENCE_WHY="the runner's reference work could not be timed" ; return 0 ;;
+  esac
+  case "$SUITE_REFERENCE_NOMINAL_MS$SUITE_REFERENCE_SANE_LO_MS$SUITE_REFERENCE_SANE_HI_MS" in
+    *[!0-9]*) SUITE_REFERENCE_WHY="the reference's calibration is not a number" ; return 0 ;;
+  esac
+  if [ "$SUITE_REFERENCE_NOMINAL_MS" -le 0 ] || [ "$SUITE_REFERENCE_SANE_LO_MS" -le 0 ] || [ "$SUITE_REFERENCE_SANE_HI_MS" -le "$SUITE_REFERENCE_SANE_LO_MS" ]; then
+    SUITE_REFERENCE_WHY="the reference has no calibration" ; return 0
+  fi
+  if [ "$ref" -lt "$SUITE_REFERENCE_SANE_LO_MS" ] || [ "$ref" -gt "$SUITE_REFERENCE_SANE_HI_MS" ]; then
+    SUITE_REFERENCE_WHY="the runner's reference work took $(_ref_said "$ref") of processor time, outside the $(_ref_said "$SUITE_REFERENCE_SANE_LO_MS") to $(_ref_said "$SUITE_REFERENCE_SANE_HI_MS") a sane reading falls in"
+    return 0
+  fi
+  SUITE_WORK_JUDGED=$(( (work * SUITE_REFERENCE_NOMINAL_MS + ref / 2) / ref ))
+  return 0
+}
+# The runner's speed as a phrase, for the note and the refusal.
+suite_reference_phrase(){   # $1 = reference milliseconds (judged usable)
+  printf "this runner's reference work took %s of processor time, against the %s the budget is calibrated at" "$(_ref_said "$1")" "$(_ref_said "$SUITE_REFERENCE_NOMINAL_MS")"
+}
+
+suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor seconds, or empty  $4 = reference milliseconds, or empty
+  local work="$1" ceiling="$2" cpu="${3-}" ref="${4-}" budget judged raw_said
   case "$ceiling" in ''|*[!0-9]*) return 0 ;; esac
   # A ceiling of zero turns the deadline off, and it turns this off with it rather than refusing
   # every run against a budget of nothing.
@@ -2501,7 +2632,17 @@ suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor 
       return 0 ;;
   esac
   budget=$(( ceiling * SUITE_WORK_BUDGET_PCT / 100 ))
-  [ "$work" -gt "$budget" ] || return 0
+  # The work at the reference speed the budget is calibrated at (#3239), or the raw section
+  # time, loudly, when this run's reference reading cannot be used.
+  suite_work_judge "$work" "$ref"; judged="$SUITE_WORK_JUDGED"
+  if [ -n "$SUITE_REFERENCE_WHY" ]; then
+    echo "test suite: UNMEASURED: the runner's speed, so its ${work}s of section time was judged raw against the ${budget}s budget: ${SUITE_REFERENCE_WHY} (claude-config#3239)." >&2
+    printf 'SUITE-PART-UNMEASURED the runner speed the section time budget is judged at: %s, so the raw section time was judged (claude-config#3239)\n' "$SUITE_REFERENCE_WHY"
+    raw_said=""
+  else
+    raw_said=", which is ${judged}s of work at the reference speed the budget is calibrated at ($(suite_reference_phrase "$ref"))"
+  fi
+  [ "$judged" -gt "$budget" ] || return 0
   # Section times are WALL CLOCK per section, so they inflate when something else is using the
   # machine: measured 2026-09-19, the same tree gave 759s idle and 892s with a profile running
   # beside it, an 18% swing with nothing changed in it. Failing on that would be reporting the
@@ -2530,8 +2671,13 @@ suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor 
   # NOT "it has grown" (claude-config#3239). The processor time rules out a busy machine and nothing
   # more: on a slower processor the suite's own processor time rises with its wall clock (1332s of
   # the 1448s red on an AMD EPYC 7763), so a slow runner and a suite that grew read alike here. The
-  # refusal names the processor and says it cannot tell those two apart (L11).
-  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), on $(suite_processor_said). Section time is counted in this runner's own seconds, so a suite that has grown and a slower processor read alike here, and this check cannot tell which it was: one tree cost 832s on an Intel Xeon 6975P-C and 1448s on an AMD EPYC 7763 (claude-config#3239). Sharding divides the wall clock and hides this, so it is measured undivided. Compare the section time a run on another processor reports; if the work itself has grown, find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
+  # refusal names the processor and says it cannot tell those two apart (L11). Once the runner's
+  # speed is measured and the work judged at the budget's speed, it can, and says so.
+  if [ -z "$SUITE_REFERENCE_WHY" ]; then
+    echo "FAIL: test suite: this run's sections cost ${work}s of section time between them${raw_said}, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), on $(suite_processor_said). Judged at the same speed whatever processor ran it, that is more work than the budget allows, so the suite has grown past it (claude-config#3239). Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
+    return 1
+  fi
+  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), on $(suite_processor_said). The runner's speed was not measured (${SUITE_REFERENCE_WHY}), and section time is counted in this runner's own seconds, so a suite that has grown and a slower processor read alike here, and this check cannot tell which it was: one tree cost 832s on an Intel Xeon 6975P-C and 1448s on an AMD EPYC 7763 (claude-config#3239). Sharding divides the wall clock and hides this, so it is measured undivided. Compare the section time a run on another processor reports; if the work itself has grown, find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
   return 1
 }
 
@@ -2659,22 +2805,24 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   # of it and gets the note, because only 262s of it was this suite's own work.
   _fan_elapsed=$SECONDS
   suite_cpu_read; _fan_cpu="$SUITE_CPU_SECONDS"
+  # The runner's speed, read after both figures above so its own seconds are in neither (#3239).
+  suite_reference_read; _fan_ref="$SUITE_REFERENCE_MS"
   suite_headroom_report "$_fan_elapsed" "$_fan_cpu" "$SUITE_TIMEOUT" || _fan_rc=1
   # And how much WORK the shards did between them, which is the quantity the line above divides by
   # the shard count and therefore cannot see grow (claude-config#492). A shard that emitted no
   # SUITE-WORK line makes the whole total unreadable rather than smaller: adding in a silent shard
   # as a zero would report a suite that had shrunk by however much that shard cost (L90, L98).
-  suite_work_report "$_fan_work" "$SUITE_TIMEOUT" "$_fan_cpu" || _fan_rc=1
+  suite_work_report "$_fan_work" "$SUITE_TIMEOUT" "$_fan_cpu" "$_fan_ref" || _fan_rc=1
   # The headline: every section once (#146). The sum of the shards' own totals is still worked out
   # above, and it is used here as a SECOND reading of the same run: the raw sum has to be the
   # headline plus everything that was run over again. The two are arrived at differently, one from
   # each shard's result line and one from its buckets, so an identity that fails means the shards
   # are contradicting themselves and neither number can be trusted (L70 is about the opposite
   # case, two sides of one lookup; these really are two lookups).
-  _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s$(fan_work_note "$_fan_work" "$SUITE_TIMEOUT")"
+  _fan_note="$SUITE_JOBS shards in ${_fan_elapsed}s$(fan_work_note "$_fan_work" "$SUITE_TIMEOUT" "$_fan_ref")"
   # The same figure again, in the shape the runner carries to CI. Printed rather than folded into
   # the headline because the runner reads it by its own prefix (claude-config#505).
-  _fan_marked="$(fan_work_note_line "$_fan_work" "$SUITE_TIMEOUT")"
+  _fan_marked="$(fan_work_note_line "$_fan_work" "$SUITE_TIMEOUT" "$_fan_ref")"
   [ -n "$_fan_marked" ] && printf '%s\n' "$_fan_marked"
   if [ "$_fan_tot_rc" -eq 0 ] && [ -z "$_fan_missing" ]; then
     _fan_hp="$(printf '%s' "$_fan_tot" | awk '{print $1}')"
@@ -17819,7 +17967,9 @@ section "== how much WORK this run is, against a budget that scales with its cei
 # neighbour's variable passes until the day the deal changes.
 # A quiet machine, set rather than measured, so a check below cannot turn on how busy this Mac is
 # (L290, L411): the budget now asks the load average whether its reading can be trusted (#1259).
-_wb(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "${3-2000}" 2>&1; }
+# The runner's speed is handed in too, at the nominal unless a check says otherwise, so these replay
+# a runner as fast as the one the budget was set on (#3239).
+_wb(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "${3-2000}" "${4-$SUITE_REFERENCE_NOMINAL_MS}" 2>&1; }
 # The budget at a local ceiling of 3600, from the fraction in force, so a deliberate change to it
 # (#1667) moves these expectations with it rather than leaving a number nobody recomputed.
 _wb_local=$(( 3600 * SUITE_WORK_BUDGET_PCT / 100 ))
@@ -17847,10 +17997,11 @@ check "#492 and names something to do about it" \
 # WHICH PROCESSOR, and no claim the check cannot make (claude-config#3239). The processor time rules
 # out a busy machine and nothing more: the 2026-11-18 red, 1448s against 1440s with 1332s of it the
 # suite's own, was an AMD EPYC 7763, and the same tree cost 833s on its rerun on an Intel Xeon
-# 6975P-C. Replayed here at CI's ceiling with the model handed in through the cpuinfo seam (L290).
+# 6975P-C. Replayed here at CI's ceiling with the model handed in through the cpuinfo seam (L290),
+# as that run was: with no reading of the runner's speed, so the raw section time is what is judged.
 _wb_cpuinfo="$WORK/cpuinfo-epyc-7763"
 printf 'processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD EPYC 7763 64-Core Processor\n' > "$_wb_cpuinfo"
-_wb_proc="$(SUITE_CPUINFO="$_wb_cpuinfo" _wb 1448 1800 1332)"; _wb_proc_rc=$?
+_wb_proc="$(SUITE_CPUINFO="$_wb_cpuinfo" _wb 1448 1800 1332 '')"; _wb_proc_rc=$?
 check "#3239 the 1448s red on an EPYC 7763 still fails" "[ '$_wb_proc_rc' -eq 1 ]"
 check "#3239 and names the processor it ran on" \
   "case \"\$_wb_proc\" in *'on AMD EPYC 7763 64-Core Processor'*) true ;; *) false ;; esac"
@@ -17858,9 +18009,91 @@ check "#3239 and no longer claims the suite has grown" \
   "case \"\$_wb_proc\" in *'has grown rather than'*|*'so it has grown'*) false ;; *) true ;; esac"
 check "#3239 and says it cannot tell growth from a slower processor" \
   "case \"\$_wb_proc\" in *'cannot tell'*) true ;; *) false ;; esac"
-_wb_noproc="$(SUITE_CPUINFO="$WORK/no-such-cpuinfo" _wb 1448 1800 1332)"
+_wb_noproc="$(SUITE_CPUINFO="$WORK/no-such-cpuinfo" _wb 1448 1800 1332 '')"
 check "#3239 an unreadable processor model is said, never left blank" \
   "case \"\$_wb_noproc\" in *'model could not be read'*) true ;; *) false ;; esac"
+
+# JUDGED AT THE RUNNER'S OWN SPEED (claude-config#3239). The section time is scaled by the reference
+# work's reading against its nominal, so the SAME WORK gets the same verdict on a fast runner and a
+# slow one, and a fast runner no longer passes at a size a slow one fails. Every reading is handed in
+# (L290): nothing here times anything.
+_rn="$SUITE_REFERENCE_NOMINAL_MS"
+_rb=$(( 1800 * SUITE_WORK_BUDGET_PCT / 100 ))
+check "#3239 the reference is calibrated: a nominal inside its sane range ($SUITE_REFERENCE_SANE_LO_MS < $_rn < $SUITE_REFERENCE_SANE_HI_MS ms)" \
+  "[ '$_rn' -gt '$SUITE_REFERENCE_SANE_LO_MS' ] && [ '$_rn' -lt '$SUITE_REFERENCE_SANE_HI_MS' ] && [ '$SUITE_REFERENCE_SANE_LO_MS' -gt 0 ]"
+# The fastest processor measured 2026-11-18, the Xeon 6975P-C, read about 0.64 of the nominal: the
+# work that costs 1300s at the nominal is a raw 832s there, judged as 1300s, inside the budget.
+_rfast=$(( _rn * 64 / 100 ))
+_wb_fast="$(_wb 832 1800 800 "$_rfast")"; _wb_fast_rc=$?
+check "#3239 a fast runner's 832s at 0.64 of the nominal reference passes, and says nothing" \
+  "[ '$_wb_fast_rc' -eq 0 ] && [ -z \"\$_wb_fast\" ]"
+suite_work_judge 832 "$_rfast"; _rj_fast="$SUITE_WORK_JUDGED"
+suite_work_judge 1300 "$_rn"; _rj_nom="$SUITE_WORK_JUDGED"
+check "#3239 and it is judged as the same work as 1300s at the nominal, within 1% ($_rj_fast against $_rj_nom)" \
+  "[ \$(( $_rj_fast - $_rj_nom )) -le \$(( $_rj_nom / 100 )) ] && [ \$(( $_rj_nom - $_rj_fast )) -le \$(( $_rj_nom / 100 )) ]"
+# A runner SLOWER than the nominal, inside the sane range, at unchanged work: its raw section time is
+# past the budget, its judged one is not, so it is green and silent.
+_rslow=$(( _rn * 112 / 100 ))
+_rslow_raw=$(( 1300 * 112 / 100 ))
+_wb_slow="$(_wb "$_rslow_raw" 1800 "$_rslow_raw" "$_rslow")"; _wb_slow_rc=$?
+check "#3239 a slower runner (${_rslow}ms) at unchanged work, ${_rslow_raw}s raw against the ${_rb}s budget, passes" \
+  "[ '$_rslow_raw' -gt '$_rb' ] && [ '$_wb_slow_rc' -eq 0 ] && [ -z \"\$_wb_slow\" ]"
+# GROWTH STILL FAILS at a fixed runner speed: the same runner, 6% more work than the budget, red,
+# on the nominal runner and on the fast one, where the raw figure alone is far inside the budget.
+_rgrow=$(( _rb * 106 / 100 ))
+_wb_grow="$(SUITE_CPUINFO="$_wb_cpuinfo" _wb "$_rgrow" 1800 "$_rgrow" "$_rn")"; _wb_grow_rc=$?
+check "#3239 grown work (${_rgrow}s) at the nominal speed fails" "[ '$_wb_grow_rc' -eq 1 ]"
+check "#3239 and says so where the runner prints it, with the processor and the speed it was judged at" \
+  "case \"\$_wb_grow\" in FAIL:*) true ;; *) false ;; esac && line_has \"\$_wb_grow\" 'AMD EPYC 7763' 'reference work took' 'has grown past it'"
+_rgrow_fast=$(( _rgrow * 64 / 100 ))
+_wb_growf="$(_wb "$_rgrow_fast" 1800 "$_rgrow_fast" "$_rfast")"; _wb_growf_rc=$?
+check "#3239 and the same grown work on the fast runner (${_rgrow_fast}s raw) fails too" \
+  "[ '$_rgrow_fast' -lt '$_rb' ] && [ '$_wb_growf_rc' -eq 1 ]"
+# A WILD REFERENCE IS NEVER WHAT TURNS A RED GREEN. Figures set here, not measured: ten times the
+# nominal would shrink 1500s to 150s; outside the sane range the reading is UNMEASURED, said on a line CI carries, and the raw section
+# time is judged, so 1500s still fails.
+_wb_wild="$(_wb 1500 1800 1500 $(( _rn * 10 )))"; _wb_wild_rc=$?
+check "#3239 a reference ten times the nominal does not excuse 1500s: it fails on the raw figure" \
+  "[ '$_wb_wild_rc' -eq 1 ] && case \"\$_wb_wild\" in *'FAIL: test suite'*'1500s of section time'*) true ;; *) false ;; esac"
+check "#3239 and it says the runner's speed was UNMEASURED, on the line CI carries" \
+  "line_has \"\$_wb_wild\" '^SUITE-PART-UNMEASURED ' 'sane reading'"
+check "#3239 and the refusal does not claim growth it could not measure" \
+  "case \"\$_wb_wild\" in *'cannot tell'*) true ;; *) false ;; esac"
+_wb_wildq="$(_wb 900 1800 900 $(( _rn * 10 )))"; _wb_wildq_rc=$?
+check "#3239 a wild reference under budget passes, but loudly" \
+  "[ '$_wb_wildq_rc' -eq 0 ] && line_has \"\$_wb_wildq\" '^SUITE-PART-UNMEASURED ' 'sane reading'"
+for _rw in 0 1 '' abc; do
+  suite_work_judge 1500 "$_rw"
+  check "#3239 a reference reading of '$_rw' is not used, and the raw 1500s stands" \
+    "[ -n \"\$SUITE_REFERENCE_WHY\" ] && [ '$SUITE_WORK_JUDGED' -eq 1500 ]"
+done
+check "#3239 the reading parser takes seconds with three decimals" "[ \"\$(_ref_ms 4.205)\" = 4205 ] && [ \"\$(_ref_ms 0.034)\" = 34 ]"
+check "#3239 and gives nothing for a locale's comma or a blank, never a zero" \
+  "[ -z \"\$(_ref_ms 4,205)\" ] && [ -z \"\$(_ref_ms '')\" ] && [ -z \"\$(_ref_ms 4.2)\" ]"
+# The note CI's log carries says what the work was judged as, after the two figures the readers of
+# that line parse, and never carries the word that makes the runner fail a note (#1444).
+_rnote="$(fan_work_note_line 843 1800 "$_rfast")"
+check "#3239 the note carries the raw figure, the budget and what it was judged as" \
+  "line_has \"\$_rnote\" '^SUITE-NOTE 843s of section time against a ${_rb}s budget, judged as [0-9]+s of work' 'reference work took'"
+_rnote_w="$(fan_work_note_line 843 1800 '')"
+check "#3239 and says when it was judged raw" \
+  "line_has \"\$_rnote_w\" '^SUITE-NOTE 843s of section time against a ${_rb}s budget, judged raw' 'not measured'"
+check "#3239 and neither note carries the word UNMEASURED" \
+  "case \"\$_rnote\$_rnote_w\" in *UNMEASURED*) false ;; *) true ;; esac"
+# BUILT IS WIRED (L3): the reader times what it is handed and comes back with milliseconds, on a
+# trivial stand-in for the work so this waits on nothing.
+_rread="$( suite_reference_work(){ :; }; suite_reference_read; printf '%s' "$SUITE_REFERENCE_MS" )"
+check "#3239 the reference reader returns whole milliseconds ($_rread)" \
+  "case '$_rread' in ''|*[!0-9]*) false ;; *) true ;; esac"
+# THE WORK IS THE WORK THE NOMINAL WAS MEASURED ON. Its text between the markers is held to the
+# checksum recorded beside the nominal, so a change to it fails here until the nominal is measured
+# again, and the control shows a one character change moves the sum (L1).
+_rsrc="$(awk '/^# suite-reference-work: begin$/{on=1; next} /^# suite-reference-work: end$/{on=0} on' "$SCRIPT_SELF")"
+_rsum="$(printf '%s\n' "$_rsrc" | cksum | awk '{print $1}')"
+check "#3239 the reference work is the one its nominal was measured on (checksum $_rsum)" \
+  "[ -n \"\$_rsrc\" ] && [ '$_rsum' = '$SUITE_REFERENCE_CKSUM' ]"
+check "#3239 and a one character change to it moves the checksum" \
+  "[ \"\$(printf '%s\n' \"\${_rsrc/-lt 400/-lt 401}\" | cksum | awk '{print \$1}')\" != '$SUITE_REFERENCE_CKSUM' ] && [ \"\${_rsrc/-lt 400/-lt 401}\" != \"\$_rsrc\" ]"
 
 # THE BUDGET SCALES WITH THE CEILING. The same amount of work is fine under a big ceiling and
 # refused under a small one, which is what stops this being a number calibrated on one machine and
@@ -17995,7 +18228,7 @@ check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_n
 # counts, since its own work competing with itself is what the budget exists to see (L411). The
 # load is SET here through the shared reader's seam, never measured (L290).
 # Judged at 70%, the fraction that run was judged against, so its figures stay a replay of it.
-_wbl(){ SUITE_WORK_BUDGET_PCT=70 LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" 2>&1; }
+_wbl(){ SUITE_WORK_BUDGET_PCT=70 LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" "$SUITE_REFERENCE_NOMINAL_MS" 2>&1; }
 _wbl_busy="$(_wbl 2536 3600 1379 59.86)"; _wbl_busy_rc=$?
 check "#1259 the 2026-10-16 run, past budget at load 59.86 on 12 cores, does not fail" "[ '$_wbl_busy_rc' -eq 0 ]"
 check "#1259 and it is not dressed as a failure" "! line_has \"\$_wbl_busy\" '^FAIL:' 'test suite'"
