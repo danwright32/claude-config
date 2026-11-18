@@ -1034,6 +1034,24 @@ for again on every save, with the sync lock held throughout. Any hook edit, or a
 changes the digest and retires every entry, so a remembered verdict can never outlive a change to
 what it judged, and the send says how many verdicts it reused rather than saving the time silently.
 
+What a suite printed on a run that failed or was stopped at its deadline is kept in
+`.send-suite-output/<suite>.log` in the clone, one file per suite, replaced by that suite's next run
+and removed once it passes, and the NOT publishing line names that file. It used to be deleted
+whatever the verdict, and the line said only "Run it to see why", which helps only when a hand run
+fails too: on 2026-11-17 a suite was red in the watcher on every run and green by hand on every run,
+and the cause had to be found by measuring the watcher's scheduling priority (#3175, #3176). A
+reused verdict points at the output of the run that reached it.
+
+The change watcher says a hold once. Each watcher pass is a new run, so a guard that only stopped one
+run saying a hold twice let one unchanged hold be logged and notified 227 times on 2026-11-17
+(#3179). Now a hold the watcher has said, recorded in `.send-holds-told`, is said again only when it
+changes (the suite, the reason, the held files, or the inputs its verdict was measured on, so a fix
+tried and still red is said), once a day while it stands, so a hold nobody acts on is never silenced
+for good, and once when its suite passes, as "passes here now, so it is no longer holding back".
+In between, each pass still logs its one dated "NOT sent ... held back" line, because the log has to
+show every outcome (#196); only the explanation and the notification stop repeating. A send a person
+runs is always told the hold, whatever the watcher has said.
+
 Every suite the send or the pull runs gets the environment a person's own run would give it: every
 `SYNC_` variable is removed before the suite starts, apart from the switches the gate sets on
 purpose. Without that, the watcher's `SYNC_IN_WATCH` reached `test-claude-sync.sh`, whose fake two
@@ -3956,7 +3974,16 @@ level of a module the script imports), with `os` imported out of one of the scri
 held to `os`'s reads. A field named like another module (`args.email`, `e.code`, `self.queue`) is a
 field: such a value gets a module only from a class's attributes, and on Python 3.14.4 those lead
 on to `os` only by its name. Measured 2026-11-17 the same way over 4,210 texts: 1,033 passed before
-and 1,033 after, the same texts. The Python
+and 1,033 after, the same texts. Three more since claude-config#3151, each of which ran on Python
+3.14.4 and passed: `enum.bltns`, the name `enum` binds `builtins` by, refused wherever it is named
+(the code loaders suite walks every inert module for the next module held under a name that is not
+its own); `sys.breakpointhook`, which imports and calls whatever `PYTHONBREAKPOINT` names, and
+`sys.remote_exec`, which runs a file in a Python process; and `sys.path` under any other name `sys`
+goes by (`import sys as s`, `q = sys`) or read off an attribute called `sys` (`glob.sys.path`,
+`pathlib.PurePath("x").parser.sys.path`). A field called `sys` is still a field, so one read off a
+value the gate does not follow and handed on, with its `path` changed where it lands, is not
+followed. Measured the same way over the 4,227 texts stamped before anyone tried these routes:
+1,036 passed before and 1,036 after, the same texts. The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
 `re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
@@ -9405,6 +9432,43 @@ absent means every relevant suite runs, which is the pre-#269 behaviour and only
 entry is keyed on a digest of the whole staged hook set, so any hook edit retires it; a verdict is
 never reused across a change to what it judged. A `fail` is remembered exactly like a `pass`,
 because what it saves is re-running a red suite on every keystroke while the sync lock is held
+
+</td></tr>
+<tr><td>
+
+`.send-suite-output/`
+
+</td><td>
+
+a send whose suite failed or was stopped at its deadline, one `<suite>.log` per suite
+
+</td><td>
+
+a person, from the path the NOT publishing line names
+
+</td><td>
+
+absent means no suite the send ran is red. Each file is replaced by that suite's next run and
+removed once it passes, so it holds one file per red suite at most (#3176)
+
+</td></tr>
+<tr><td>
+
+`.send-holds-told`
+
+</td><td>
+
+the change watcher's send, when it says a hold: when, the suite, the held files, and the hold as said
+
+</td><td>
+
+the next watcher send, to decide whether a hold is news, and to say once that it cleared
+
+</td><td>
+
+absent means every hold is said on the next watcher pass, which is the pre-#3179 behaviour. One line
+per suite; a line older than a day is dropped on the next write, since a hold still standing has
+been said again by then (#3179)
 
 </td></tr>
 <tr><td>

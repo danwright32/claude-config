@@ -1242,6 +1242,134 @@ runbash "cd $P2128/pri && bash -c 'touch payload/LESSONS.md'" "$WT2128"
 refused "#2128 with the wrapped reading failing, a wrapped write after a cd into the primary checkout is refused"
 HOOK="$HOOK_SAVED"
 
+echo "payload write gate: the files of a worktree a command removed are not edits at risk (claude-config#3165)"
+
+# On 2026-11-17 a session ran git worktree remove on a detached worktree of main under
+# .claude/worktrees/, and the check after it reported 1398 files changed under payload/ and told it
+# to take a 120 minute hold before anything else. Every one was a file of that worktree ceasing to
+# exist, with nothing uncommitted: there is nothing left there for the daemon to revert, and a hold
+# protects nothing. A detached worktree is at risk while it exists (#800 lets through only one on
+# its own branch), so the note before the call covers it; what changes is the reading afterwards.
+R="$FIX/rm3165"
+mkdir -p "$R"
+git init -q "$R/primary" 2>/dev/null
+GG "$R/primary" symbolic-ref HEAD refs/heads/main
+mkdir -p "$R/primary/payload/hooks"
+: > "$R/primary/claude-sync"
+printf 'a\n' > "$R/primary/payload/a.md"
+printf 'b\n' > "$R/primary/payload/b.md"
+printf 'h\n' > "$R/primary/payload/hooks/h.sh"
+GG "$R/primary" add claude-sync payload
+GG "$R/primary" commit -q -m seed
+# The installed config holds every one of those files, with other bytes, as ~/.claude did: a file
+# it lacked would already be left out as a removal with nothing to revert (claude-config#1211).
+printf 'installed a\n' > "$INST/a.md"; printf 'installed b\n' > "$INST/b.md"
+mkdir -p "$INST/hooks"; printf 'installed h\n' > "$INST/hooks/h.sh"
+mkwt(){ GG "$R/primary" worktree add -q --detach "$R/$1" main 2>/dev/null; }
+rmwt(){ GG "$R/primary" worktree remove "$@" 2>/dev/null; }
+rm -f "$HOLD"
+mkwt wt1
+[ -f "$R/wt1/payload/hooks/h.sh" ] && check "#3165 the detached worktree fixture was built" ok \
+  || check "#3165 the detached worktree fixture was built" "no worktree at $R/wt1"
+# Run from inside the worktree, as the session was, so the note covers it by where the command runs.
+prepost PreToolUse "git -C $R/primary worktree remove $R/wt1" "$R/wt1" r1
+rmwt "$R/wt1"
+[ ! -e "$R/wt1" ] && check "#3165 git worktree remove left nothing of the worktree" ok \
+  || check "#3165 git worktree remove left nothing of the worktree" "$R/wt1 is still there"
+prepost PostToolUse "git -C $R/primary worktree remove $R/wt1" "$R/wt1" r1
+allowed "#3165 removing a clean detached worktree is silent afterwards"
+# Named by a payload path in the command's words instead, from the primary checkout.
+mkwt wt2
+prepost PreToolUse "cat $R/wt2/payload/a.md; git worktree remove $R/wt2" "$R/primary" r2
+rmwt "$R/wt2"
+prepost PostToolUse "cat $R/wt2/payload/a.md; git worktree remove $R/wt2" "$R/primary" r2
+allowed "#3165 and so is one the command names, run from the primary checkout"
+
+# What still warns, exactly as before.
+# A real edit to the checkout, alone, and then the same edit in the same command as a removal: the
+# two warnings must be the same text, so the removal hides nothing and changes no word.
+prepost PreToolUse "python3 $FIX/w.py" "$R/primary" r3
+printf 'edited\n' > "$R/primary/payload/a.md"
+prepost PostToolUse "python3 $FIX/w.py" "$R/primary" r3
+ALONE_RC="$RC"; ALONE="$OUT"
+GG "$R/primary" checkout -q -- payload/a.md
+mkwt wt3
+prepost PreToolUse "python3 $FIX/w.py; git worktree remove $R/wt3/payload/../" "$R/primary" r4
+printf 'edited\n' > "$R/primary/payload/a.md"
+rmwt "$R/wt3"
+prepost PostToolUse "python3 $FIX/w.py; git worktree remove $R/wt3/payload/../" "$R/primary" r4
+if [ "$ALONE_RC" -eq 2 ] && [ "$RC" -eq 2 ]; then check "#3165 a real edit made with a worktree removal still warns" ok
+else check "#3165 a real edit made with a worktree removal still warns" "alone exit $ALONE_RC, with removal exit $RC, said: ${OUT:0:160}"; fi
+says "#3165 naming the edited file" "$R/primary/payload/a.md"
+says "#3165 with the hold advice" "claude-sync hold 120"
+if [ "$OUT" = "$ALONE" ]; then check "#3165 and its warning is word for word the one the edit alone gives" ok
+else check "#3165 and its warning is word for word the one the edit alone gives" "alone: ${ALONE:0:200} / with removal: ${OUT:0:200}"; fi
+GG "$R/primary" checkout -q -- payload/a.md
+# A file removed from the checkout itself, in the same command as a removal, is still reported.
+mkwt wt4
+prepost PreToolUse "python3 $FIX/w.py; git worktree remove $R/wt4/payload/../" "$R/primary" r5
+rm -f "$R/primary/payload/b.md"
+rmwt "$R/wt4"
+prepost PostToolUse "python3 $FIX/w.py; git worktree remove $R/wt4/payload/../" "$R/primary" r5
+says "#3165 a file removed from the checkout in the same command is still reported" "$R/primary/payload/b.md"
+case "$OUT" in *"$R/wt4/"*) check "#3165 while the removed worktree's files are not" "it listed $R/wt4" ;; *) check "#3165 while the removed worktree's files are not" ok ;; esac
+says "#3165 and counts only the checkout's file" "1 file(s) changed"
+GG "$R/primary" checkout -q -- payload/b.md
+# Files removed from a worktree that is still there are still reported, all of payload/ included:
+# the worktree remains for the daemon to reach.
+mkwt wt5
+prepost PreToolUse "python3 $FIX/w.py" "$R/wt5" r6
+rm -rf "$R/wt5/payload"
+prepost PostToolUse "python3 $FIX/w.py" "$R/wt5" r6
+if [ "$RC" -eq 2 ]; then check "#3165 a worktree's payload removed while the worktree stays is still reported" ok
+else check "#3165 a worktree's payload removed while the worktree stays is still reported" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3165 naming its files" "$R/wt5/payload/hooks/h.sh"
+# The checkout the daemon mirrors is never a worktree that went away, even when the whole folder is
+# gone: only a LINKED worktree is read as removed whole.
+git clone -q "$R/primary" "$R/devclone" 2>/dev/null
+prepost PreToolUse "python3 $FIX/w.py" "$R/devclone" r7
+rm -rf "$R/devclone"
+prepost PostToolUse "python3 $FIX/w.py" "$R/devclone" r7
+if [ "$RC" -eq 2 ]; then check "#3165 a primary checkout deleted whole is still reported" ok
+else check "#3165 a primary checkout deleted whole is still reported" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3165 with the hold advice as before" "claude-sync hold 120"
+# Uncommitted work in a worktree removed by force is a real loss. It is still spoken for, in words of
+# its own: a hold cannot bring back a file that no longer exists, so it is not advised.
+mkwt wt6
+printf 'unsaved\n' > "$R/wt6/payload/b.md"
+printf 'new\n' > "$R/wt6/payload/hooks/new.sh"
+prepost PreToolUse "git worktree remove --force $R/wt6/payload/../" "$R/primary" r8
+rmwt --force "$R/wt6"
+prepost PostToolUse "git worktree remove --force $R/wt6/payload/../" "$R/primary" r8
+if [ "$RC" -eq 2 ]; then check "#3165 uncommitted files of a worktree removed by force are still reported" ok
+else check "#3165 uncommitted files of a worktree removed by force are still reported" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3165 naming a modified one" "$R/wt6/payload/b.md"
+says "#3165 and an untracked one" "$R/wt6/payload/hooks/new.sh"
+says "#3165 saying they had uncommitted changes" "had uncommitted changes when this command started"
+case "$OUT" in *"$R/wt6/payload/a.md"*) check "#3165 and only those, not its committed files" "it listed a.md" ;; *) check "#3165 and only those, not its committed files" ok ;; esac
+case "$OUT" in *"claude-sync hold 120"*) check "#3165 with no hold advice, which would protect nothing" "it advised a hold" ;; *) check "#3165 with no hold advice, which would protect nothing" ok ;; esac
+# One command removing a clean worktree and a dirty one names only the worktree the loss was in.
+mkwt wt8; mkwt wt9
+printf 'unsaved\n' > "$R/wt9/payload/b.md"
+prepost PreToolUse "git worktree remove --force $R/wt8/payload/../ $R/wt9/payload/../" "$R/primary" r10
+rmwt "$R/wt8"; rmwt --force "$R/wt9"
+prepost PostToolUse "git worktree remove --force $R/wt8/payload/../ $R/wt9/payload/../" "$R/primary" r10
+says "#3165 removing a clean and a dirty worktree together names the dirty one" "($R/wt9)"
+case "$OUT" in *"$R/wt8"*) check "#3165 and not the clean one, where nothing was lost" "it named $R/wt8" ;; *) check "#3165 and not the clean one, where nothing was lost" ok ;; esac
+# When git cannot say what was uncommitted before the call, nothing can be called safe: the
+# removed worktree's files are reported as they were before #3165 (L42).
+FAKEST="$FIX/fakestatus"; mkdir -p "$FAKEST"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "status" ] && exit 1; done\nexec %s "$@"\n' "$(command -v git)" > "$FAKEST/git"
+chmod +x "$FAKEST/git"
+mkwt wt7
+PATH="$FAKEST:$PATH" prepost PreToolUse "git worktree remove $R/wt7/payload/../" "$R/primary" r9
+rmwt "$R/wt7"
+prepost PostToolUse "git worktree remove $R/wt7/payload/../" "$R/primary" r9
+if [ "$RC" -eq 2 ]; then check "#3165 with git status failing before the call, the removed worktree's files are reported as before" ok
+else check "#3165 with git status failing before the call, the removed worktree's files are reported as before" "exit $RC, said: ${OUT:0:160}"; fi
+says "#3165 with the hold advice as before" "claude-sync hold 120"
+says "#3165 naming them" "$R/wt7/payload/hooks/h.sh"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
