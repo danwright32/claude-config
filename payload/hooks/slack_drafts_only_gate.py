@@ -119,6 +119,12 @@ SEND_TOOLS = {"slack_send_message", "slack_schedule_message", "slack_post_messag
 SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
 INTERPRETER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|osascript)$")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# The shells that run nothing of a script file given -n, which only parses it (claude-config#3155),
+# and the option letters that may stand beside -n before the file: none takes a value, and with each
+# the file still ran nothing (parses_only). Measured 2026-11-18 on bash 3.2.57, sh and zsh 5.9, with -x,
+# -v, -e and -u each beside -n.
+SH_PARSE_ONLY = {"bash", "sh", "zsh"}
+SH_PARSE_LETTERS = frozenset("nxveu")
 LAUNCHERS = {"npx", "bunx", "pnpx"}
 # Options whose value is the next word, so it is never taken for the script.
 VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader", "-C", "--config", "-o"}
@@ -872,6 +878,9 @@ OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # html.parser, lib/local-allow-rules.py json.decoder) and session scripts name, each read on Python
 # 3.14.4 and holding no way to send, run code or write.
 PY_INERT = frozenset({
+    # Three Dan chose on 2026-11-16 (claude-config#3103). Unlike the rest, io and gzip can write a file;
+    # that writing is held as open() is (PY_OPENERS, PY_FILE_TOOLS), so they count only while it is unused.
+    "ast", "gzip", "io",
     "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
     "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",
     "fractions", "functools", "glob", "hashlib", "heapq", "html", "html.parser", "itertools", "json",
@@ -906,6 +915,13 @@ PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # that writes.
 PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "symlink_to",
                        "hardlink_to", "link_to", "chmod", "mkdir"})
+# What opens a file in the mode it is handed, in io and gzip (claude-config#3103): io.open and gzip.open
+# (open() again), io.FileIO and gzip.GzipFile, each the file first and then the mode, read as open()'s
+# is. One passed on rather than called, or imported under another name, is a mode the gate cannot read.
+PY_OPENERS = frozenset({"open", "FileIO", "GzipFile"})
+# What writes files whatever it is handed: gzip.main, gzip's command line, writes name.gz beside each
+# file on sys.argv (or name without .gz, with -d).
+PY_FILE_TOOLS = {"gzip": frozenset({"main"})}
 # A JavaScript or TypeScript script is judged the same way (claude-config#2434): a hand list of ways to
 # act (fetch, axios, child_process, ...) missed the request package, worker_threads and dns. So it
 # counts as unable to act only when every module it imports from outside its own files is in JS_INERT
@@ -2824,7 +2840,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         A JavaScript walk first leaves out import text written inside a string literal, which nothing
         loads (claude-config#2484). Where any file it reaches can run a string as code (JS_SINK,
         JS_DYNAMIC), it starts again following every string, as every walk did before, and gives only
-        the modules the first walk had not, so each is still given once."""
+        the modules the first walk had not, so each is still given once. That second walk leaves out a
+        string a test's matcher only compares (held, lib/data-names.py js_compared, claude-config#3146);
+        where it left one out and a file it read names a way to change what a matcher does
+        (JS_MATCHER_CHANGED), a third walk follows every string and gives what the second had not."""
         if kind != "js":
             yield from self.walk(start, origin, root, body, kind, True)
             return
@@ -2837,20 +2856,34 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             yield item
         else:
             return
+        held = {"skipped": False, "changed": False}
+        for item in self.walk(start, origin, root, body, kind, True, held):
+            if item[2] in given:
+                continue
+            if item[0]:
+                yield item
+                return  # the walk could not go on, and says why
+            given.add(item[2])
+            yield item
+        if not (held["skipped"] and held["changed"]):
+            return
         for item in self.walk(start, origin, root, body, kind, True):
             if item[2] in given:
                 continue
             yield item
 
-    def walk(self, start, origin, root, body, kind, strings):
+    def walk(self, start, origin, root, body, kind, strings, held=None):
         """modules() with import text inside JavaScript strings followed or not (strings); not
-        following them, it gives SINK, and stops, on reaching a file that can run a string as code."""
+        following them, it gives SINK, and stops, on reaching a file that can run a string as code.
+        held, a dict, asks a walk following strings to leave out one a matcher only compares, and
+        to note in it whether it did (skipped) and whether a file it read can change what a matcher
+        does (changed)."""
         try:
-            yield from self.walk_modules(start, origin, root, body, kind, strings)
+            yield from self.walk_modules(start, origin, root, body, kind, strings, held)
         finally:
             self.past = None  # late() has already said how far the reading got, where it ran out
 
-    def walk_modules(self, start, origin, root, body, kind, strings):
+    def walk_modules(self, start, origin, root, body, kind, strings, held=None):
         """walk()'s reading. Each module reached is kept with how it was reached (seen), so that past
         IMPORT_MAX_FILES the one found outside the repository can be named (beyond)."""
         seen = {origin: start} if origin else {}
@@ -2872,8 +2905,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
                 yield SINK
                 return
+            elif held is not None and not held["changed"] and _data_names.JS_MATCHER_CHANGED.search(text):
+                held["changed"] = True
             for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings, cur is not None,
-                                                             path=cur):
+                                                             path=cur, held=held):
                 via = f"{chain}, which imports {spec}"
                 lead, first = first, None  # only the first import given can be that statement's
                 if targets == "path":
@@ -2977,7 +3012,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.unfollowed.append(why)
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
+                       held=None):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
@@ -2985,7 +3021,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         that is there, or of a missing declaration file, is left out too (erased_import,
         claude-config#2526, #2890). A PHP include is read by php_includes, tagged for a file's text
         (claude-config#2978). An import written as code in a test file, path, of a module that file
-        handed to vitest or jest replaces with a mock and a factory is left out (lib/js-mocks.py, #2359)."""
+        handed to vitest or jest replaces with a mock and a factory is left out (lib/js-mocks.py, #2359).
+        With held (modules()'s), a walk following strings still leaves out one that is the whole
+        argument of a matcher that only compares, on an expect() the file does not bind itself
+        (lib/data-names.py js_compared and js_expect_own, claude-config#3146), and sets
+        held["skipped"] so modules() can follow it after all where a file names a way to change what a
+        matcher does."""
         if kind == "php":
             yield from self.php_includes(text, cur_dir, root, tagged)
             return
@@ -2997,9 +3038,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 path, code, quoted, lambda s: self.resolve_import(s, cur_dir),
                 lambda: JS_SINK.search(text) or JS_DYNAMIC.search(code) or _data_names.js_computed(text, js_scan)) \
                 if getattr(self, "mock_runner", False) else set()
+            own_expect = None  # js_expect_own, asked once the file holds a string a matcher may compare
             for m in IMPORT_SPEC.finditer(code):
                 if not strings and quoted[m.start()] == 1:
                     continue
+                if held is not None and _data_names.js_compared(text, code, quoted, m.start()):
+                    own_expect = _data_names.js_expect_own(code, quoted) if own_expect is None else own_expect
+                    if own_expect:
+                        held["skipped"] = True
+                        continue  # a matcher only compares it (#3146); modules() decides whether that holds
                 spec = m.group(2)
                 if "${" in spec:
                     continue
@@ -3155,7 +3202,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """Whether a top level Python module is the standard library or an installed package: built
         in, named in this python's standard library list, or found (not imported) on its own sys.path
         past this hooks folder, in the site-packages of a virtual environment the command's
-        interpreter belongs to, the session's VIRTUAL_ENV, or the nearest .venv or venv folder above
+        interpreter belongs to (typed, or the #! of a script run by its path, claude-config#3144),
+        the session's VIRTUAL_ENV, or the nearest .venv or venv folder above
         the script or the command's directory."""
         if top in sys.builtin_module_names or top in getattr(sys, "stdlib_module_names", ()):
             return True
@@ -5619,6 +5667,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     return reason
             if inline or (wrapper.endswith(" -c") and why):
                 return f"{name} -c runs a string naming {hit.group(0)}" if hit else None
+            # The one reason the walker gives for a shell run on a file is that it runs the file
+            # (WHY_FILE); any other (a variable, an unclosed quote, input read) is judged as before.
+            if (not why or why.startswith(sw.WHY_FILE.split("%s")[0])) and "<(" not in text and ">(" not in text \
+                    and self.parses_only(name, words):
+                return None  # it parses the file and runs none of it (#3155); the rest of the line is judged apart
             # The shell by name, which decides how a file with a NUL in its first line is read (#2977).
             reason = self.every_file(words, d, depth, name)
             if reason:
@@ -5778,7 +5831,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # Nothing there, or no script: a path it cannot work out is refused with the switch on.
                 return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else self.php_lang(first)
-            return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+            # Run by its path, a Python script is started by the python its #! names, so what it runs
+            # is judged as that python typed in the command is: its imports are placed in that
+            # python's environment too (placed(), claude-config#3144: a tool Homebrew installs in a
+            # virtual environment of its own was refused, the same package run with -m passed). Only
+            # an absolute path to a Python runtime counts; env, a relative path or another program
+            # leaves the command as it was. record() sets py_cmd afresh for each command, so a script
+            # this one's commands run is placed by its own #!.
+            bang = re.match(r"#!\s*(/\S+)", first) if lang == "py" else None
+            saved = self.py_cmd
+            if bang and PY_RUNTIME.match(os.path.basename(bang.group(1))):
+                self.py_cmd = dict(saved, interp=bang.group(1))
+            try:
+                return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+            finally:
+                self.py_cmd = saved
         # A program named by a variable alone (`$cmd`, `"$gh" pr view`) is left as it was: it is how a
         # function runs the command it is handed and a suite its stand in, and refusing it too newly
         # refused 261 more of this repository's 546 scripts on 2026-11-12 (claude-config#2683).
@@ -6595,16 +6662,73 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
                 if isinstance(f, ast.Attribute) and name in PY_WRITES:
                     return f"can write a file ({name})"
-                if name in ("open", "FileType"):
+                if name == "FileType" or name in PY_OPENERS:
                     if any(k.arg is None for k in node.keywords) or any(isinstance(x, ast.Starred) for x in node.args):
                         return f"can write a file ({name} given its arguments unpacked)"
-                    at = 1 if isinstance(f, ast.Name) and name == "open" else 0
+                    # FileType and a method of a value (Path(p).open(mode)) take the mode first; open() and
+                    # PY_OPENERS called by name or off an imported module (io.open, gzip.GzipFile) take the
+                    # file first (claude-config#3103).
+                    base = f
+                    while isinstance(base, ast.Attribute):
+                        base = base.value
+                    off_module = isinstance(f, ast.Attribute) and isinstance(base, ast.Name) and base.id in bound - local
+                    at = 0 if name == "FileType" or (isinstance(f, ast.Attribute) and not off_module) else 1
                     mode = next((k.value for k in node.keywords if k.arg == "mode"),
                                 node.args[at] if len(node.args) > at else None)
                     if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
                                                  and not set(mode.value) & set("wax+")):
                         return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
-        return handed_on or unfollowed
+        return (self.py_opener_unread(nodes, called, bound - local, renamed) if writes else None) or handed_on or unfollowed
+
+    @staticmethod
+    def py_opener_unread(nodes, called, modules, renamed):
+        """How a Python script writes through io or gzip where its mode cannot be read, as a phrase, or
+        None (claude-config#3103): one of PY_OPENERS off an imported module or a chain from one
+        (io.open, gzip.GzipFile, gzip.io.open) named but not called, so handed on to be called with a mode the gate never sees; one imported
+        out of io or gzip under another name, which the mode check cannot find by name; or one of
+        PY_FILE_TOOLS (gzip.main), off the module by its own name, a name it is imported as, or a
+        name it is bound to (renamed), or imported out of it."""
+        tools = {}  # each name a module of PY_FILE_TOOLS goes by, to what it writes with
+        openers = set()  # each of PY_OPENERS imported out of io or gzip by its own name
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name in PY_FILE_TOOLS:
+                        tools[a.asname or a.name] = PY_FILE_TOOLS[a.name]
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module in ("io", "gzip"):
+                for a in node.names:
+                    if a.name in PY_FILE_TOOLS.get(node.module, ()):
+                        return f"can write a file ({node.module}.{a.name}, which writes the files on sys.argv)"
+                    if a.name in PY_OPENERS and a.asname and a.asname != a.name:
+                        return f"can write a file ({node.module}.{a.name} imported as {a.asname}, whose mode the gate cannot read)"
+                    if a.name in PY_OPENERS:
+                        openers.add(a.name)
+        every_tool = frozenset().union(*PY_FILE_TOOLS.values())
+        for node in nodes:
+            if isinstance(node, ast.Name) and node.id in openers and id(node) not in called:
+                return f"can write a file ({node.id}, passed on rather than called, with a mode the gate cannot read)"
+            if not isinstance(node, ast.Attribute):
+                continue
+            base = node.value  # the chain's first name: gzip.io.open is read off gzip as io.open is off io
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if not isinstance(base, ast.Name):
+                continue
+            # The chain's names, written out by hand: ast.unparse imports a module from the disk on its
+            # first use, which the judgement cache counts as a read it did not record (#2918).
+            parts, cur = [], node.value
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            owner = ".".join([base.id] + parts[::-1])
+            if node.attr in every_tool and (
+                    (isinstance(node.value, ast.Name) and node.value.id in tools)
+                    or (isinstance(node.value, ast.Name) and node.value.id in renamed)
+                    or (isinstance(node.value, ast.Attribute) and node.value.attr in PY_FILE_TOOLS)):
+                return f"can write a file ({owner}.{node.attr}, which writes the files on sys.argv)"
+            if base.id in modules and node.attr in PY_OPENERS and id(node) not in called:
+                return f"can write a file ({owner}.{node.attr}, passed on rather than called, with a mode the gate cannot read)"
+        return None
 
     def shell_acts(self, body, d, zero=False, depth=0):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what
@@ -7123,6 +7247,134 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return words[k], None, False
         return None, None, True
 
+    def parses_only(self, name, words):
+        """Whether a shell run as words parses its script file and runs none of it (claude-config#3155):
+        bash, sh or zsh (SH_PARSE_ONLY) given -n before the file, with every option before it a run of
+        SH_PARSE_LETTERS or --, and a file after them. Measured 2026-11-18: the file ran nothing so;
+        it ran with -n after it (an argument), and with +n or +o noexec after -n, which turn it off
+        again, so any + option, any other letter (-c, -o, -i, -s), a long option and input read from
+        a pipe or a redirection are each judged as before, as is a line holding a process
+        substitution (the caller's to ask), whose commands are not read apart as $( ) ones are, and a
+        command reached through a variable (why, the caller's too). A file word holding an expansion,
+        a quote or a pattern may become an option when it runs, and is judged as before. A
+        redirection word is the shell's own."""
+        if name not in SH_PARSE_ONLY:
+            return False
+        parsed, k = False, 1
+        while k < len(words):
+            w = words[k]
+            m = self.sw.REDIRECT_WORD.match(w)
+            if m:
+                if re.match(r"0?<(?![<>&])", w):
+                    return False  # a file fed on stdin is the script the shell reads
+                k += 1 if m.group(1) else 2
+                continue
+            if w == "--":
+                k += 1
+                break
+            if not re.fullmatch(r"-[A-Za-z]+", w):
+                break
+            if not set(w[1:]) <= SH_PARSE_LETTERS:
+                return False
+            parsed = parsed or "n" in w
+            k += 1
+        rest = [w for w in words[k:] if not self.sw.REDIRECT_WORD.match(w)]
+        # The file word must be written out: one holding an expansion, a quote or a pattern can become
+        # +n or another option when it runs (`bash -n $OPT posts.sh`), so it is judged as before.
+        return parsed and bool(rest) and not rest[0].startswith(("-", "+")) \
+            and not re.search(r"[$`'\"\\*?\[{~]", rest[0])
+
+
+# Where a judgement's time goes, for the suites that hold its cost (claude-config#3170). With
+# SLACK_GATE_PHASE_LOG naming a file, each of PHASES is timed, and one line is appended to that file
+# after the verdict is printed: each phase's time with the timed phases it called taken out ("self"),
+# its time as the outermost call of that name ("in"), and how many times it ran. Nothing else changes:
+# stdout carries the verdict as always, and nothing is written to stderr, which the wrapper reads
+# together with stdout (2>&1). Unset, nothing is timed at all. "Judge.x" names a method of Judge,
+# "sw.x" a function of the shell reader, and a bare name a function of this file; finer points are
+# added here, never with a profiler run beside the gate.
+PHASES = ("load_reader", "Judge.line", "Judge.judge_written", "Judge.sh_walk", "Judge.note_writes",
+          "Judge.script", "Judge.every_file", "Judge.acts", "Judge.py_acts", "Judge.shell_acts",
+          "Judge.content", "Judge.sh_known", "Judge.sh_bound_in", "Judge.made_from", "Judge.curl_defaults",
+          "sw.commands")
+
+
+class PhaseTimes:
+    """The timings PHASES asks for, kept while the gate runs and written once at the end."""
+
+    def __init__(self, log):
+        self.log = log
+        self.started, self.cpu = time.perf_counter(), time.process_time()
+        self.spent = {}  # name: [self seconds, outermost seconds, calls]
+        self.stack = []  # for each timed call running, the seconds its timed callees took
+        self.depth = {}  # name: how many calls of it are running
+
+    def wrap(self, name, fn):
+        spent, stack, depth = self.spent.setdefault(name, [0.0, 0.0, 0]), self.stack, self.depth
+        depth[name] = 0
+
+        @functools.wraps(fn)
+        def timed(*a, **k):
+            depth[name] += 1
+            stack.append(0.0)
+            t = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                took = time.perf_counter() - t
+                inner = stack.pop()
+                if stack:
+                    stack[-1] += took
+                spent[0] += took - inner
+                depth[name] -= 1
+                if not depth[name]:
+                    spent[1] += took
+                spent[2] += 1
+        return timed
+
+    def install(self):
+        for name in PHASES:
+            owner, _, attr = name.rpartition(".")
+            if owner == "Judge":
+                raw = vars(next(c for c in Judge.__mro__ if attr in vars(c)))[attr]
+                if isinstance(raw, staticmethod):
+                    setattr(Judge, attr, staticmethod(self.wrap(name, raw.__func__)))
+                else:
+                    setattr(Judge, attr, self.wrap(name, raw))
+            elif not owner:
+                globals()[attr] = self.wrap(name, globals()[attr])
+        load = globals()["load_reader"]
+
+        def load_timed():
+            sw = load()
+            for name in PHASES:
+                if name.startswith("sw."):
+                    setattr(sw, name[3:], self.wrap(name, getattr(sw, name[3:])))
+            return sw
+        globals()["load_reader"] = load_timed
+
+    def write(self):
+        rows = sorted(self.spent.items(), key=lambda kv: -kv[1][0])
+        self.log.write("phases: %.3f s, %.3f s of processor time; %s\n" % (
+            time.perf_counter() - self.started, time.process_time() - self.cpu,
+            "; ".join("%s self %.3f in %.3f n %d" % (n, s, o, c) for n, (s, o, c) in rows if c)))
+        self.log.close()
+
+
+def phase_times():
+    """The PhaseTimes this run keeps, installed, or None when SLACK_GATE_PHASE_LOG names no file. The
+    file is opened here, before any judgement starts, so the cache's recording never sees it."""
+    where = os.environ.get("SLACK_GATE_PHASE_LOG")
+    if not where:
+        return None
+    try:
+        log = open(where, "a", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    times = PhaseTimes(log)
+    times.install()
+    return times
+
 
 def main():
     # First, so all of the judging runs on a performance core when the Mac is busy (claude-config#2918),
@@ -7214,4 +7466,7 @@ def main():
 
 
 if __name__ == "__main__":
+    PHASE_TIMES = phase_times()
     main()
+    if PHASE_TIMES:
+        PHASE_TIMES.write()

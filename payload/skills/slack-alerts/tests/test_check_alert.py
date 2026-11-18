@@ -32,6 +32,8 @@ DOT = chr(0x2022) + " "
 FENCE = "```"
 LINK = "<https://example.com/runs/88|View run>"
 MENTION = "<@U012ABCDEF>"
+# The default mention on an urgent alert and its reminder (Dan, 2026-11-17: "@here").
+HERE_MENTION = "<!here>"
 
 # name: (kind, urgent, the message)
 GOOD = {
@@ -54,7 +56,7 @@ GOOD = {
         LINK,
     ])),
     "an urgent alert with a full list and an overflow line": ("alert", True, "\n".join([
-        MENTION + " *6 times offered for 4:30 PM ET, Oct 14 have no free advisor*",
+        HERE_MENTION + " *6 times offered for 4:30 PM ET, Oct 14 have no free advisor*",
         DOT + "North team: none of its 12 advisors is free",
         DOT + "South team: nobody is on its rota",
         DOT + "East team: none of its 9 advisors is free",
@@ -64,8 +66,12 @@ GOOD = {
         "<https://example.com/logs|Open slot logs>",
     ])),
     "a reminder": ("reminder", True, "\n".join([
-        MENTION + " *Still open after 2 hours: 6 offered times have no free advisor*",
+        HERE_MENTION + " *Still open after 2 hours: 6 offered times have no free advisor*",
         "<https://example.com/logs|Open slot logs>",
+    ])),
+    "an urgent alert mentioning the person a project's CLAUDE.md names": ("alert", True, "\n".join([
+        MENTION + " *3 of 40 invoices were not sent this morning*",
+        "<https://example.com/invoices|View failed invoices>",
     ])),
     "a recovery with no link": ("recovery", False, "*Recovered: every offered time has a free advisor*"),
     "a recovery with a time range": ("recovery", False, "\n".join([
@@ -208,6 +214,22 @@ class Coverage(unittest.TestCase):
         self.assertIn("200", said)
         self.assertTrue(any(ch.isdigit() for ch in said.replace("200", "")), said)
 
+    def test_the_urgent_mention_failure_names_here_as_the_default(self):
+        # Dan, 2026-11-17, asked who an urgent alert mentions: "@here". The failure says so, so the
+        # fix it prompts is the default rather than a hunt for one person.
+        for kind in ("alert", "reminder"):
+            text = alert(STILL.split(" ", 1)[1]) if kind == "reminder" else alert(LEAD)
+            said = dict(check_alert.check(text, kind, urgent=True)).get("mention", "")
+            self.assertIn(HERE_MENTION, said, kind)
+            self.assertIn("CLAUDE.md", said, kind)
+
+    def test_the_request_mention_failure_names_the_person_asked_not_here(self):
+        # A request still goes to the person asked (Dan, 2026-11-17).
+        text = alert("*Priya asks you to approve a refund of $240 on order 1038*")
+        said = dict(check_alert.check(text, "request")).get("mention", "")
+        self.assertIn("person asked", said)
+        self.assertNotIn(HERE_MENTION, said)
+
     def test_an_unknown_kind_is_refused_by_the_function_too(self):
         with self.assertRaises(ValueError):
             check_alert.check(LEAD, "banner")
@@ -327,6 +349,25 @@ class TheSkill(unittest.TestCase):
     def test_it_shows_an_example_of_every_kind(self):
         headings = [heading for heading, _ in skill_examples(self.skill)]
         self.assertEqual([kind for kind in check_alert.KINDS if not any(f"`{kind}`" in h for h in headings)], [])
+
+    def test_its_urgent_examples_open_with_here_and_its_request_with_the_person_asked(self):
+        # The examples teach the rule (L562): an urgent alert and its reminder show the default,
+        # <!here>, and a request shows a mention of one person.
+        examples = skill_examples(self.skill)
+        urgent = [text for heading, text in examples if heading.startswith("Urgent") or "`reminder`" in heading]
+        requests = [text for heading, text in examples if "`request`" in heading]
+        self.assertGreaterEqual(len(urgent), 2)
+        self.assertEqual([text.split("\n")[0] for text in urgent if not text.startswith(HERE_MENTION + " ")], [])
+        self.assertEqual(len(requests), 1)
+        self.assertRegex(requests[0], r"^<@U[A-Z0-9]+> ")
+
+    def test_it_says_an_alert_rewrite_merges_on_its_checks_without_coming_back_to_dan(self):
+        # Dan, 2026-11-17: a rewrite of a repo's existing alerts needs no approval from him.
+        # Read with its line breaks folded, so rewrapping the paragraph does not fail it, and with
+        # assertTrue, not assertIn, so a failure does not print the whole skill (L445).
+        flat = " ".join(self.skill.split())
+        for words in ("merges when its checks and the lessons review pass", "without me"):
+            self.assertTrue(words in flat, f'the skill does not say "{words}"')
 
     def test_every_example_it_shows_passes_the_checker(self):
         examples = skill_examples(self.skill)

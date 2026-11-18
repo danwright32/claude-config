@@ -97,6 +97,7 @@ import {
   relTo,
   shapeKind,
   shellVarPath,
+  spelledThrough,
   mentionedLookFiles,
   mentionsStore,
   namesScratchpad,
@@ -136,6 +137,7 @@ import {
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
+import { toolArgs } from './mod-kit/toolargs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
 import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
@@ -291,6 +293,9 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   rule reads (rules.ts nameFromVariable), as a command's output is; one the command sets to a plain
 //   name, or a for loop over plain words, is judged by each name mod-kit gives, a folder variable
 //   ($PWD, $HOME) names no file, and one mod-kit marks unexpanded (every $ quoted) holds no value.
+//   Since #3144 one the command sets to a pattern's part, each variable to one literal value with no
+//   space (`T=<table>; <cli> -q "select * from $T"`), is judged by the name that spelling makes
+//   (rules.ts spelledThrough), as the word written out is: a read only query runs.
 // - Since #1954: an Edit or MultiEdit the guard would hold that would not apply to the file as it
 //   stands (rules.ts editWouldNotApply) is told so, to be sent again with the file's own text, with
 //   no card and nothing asked of Dan, never held as a change it cannot read.
@@ -381,12 +386,6 @@ const message = (err: unknown) => errorText(err, 'design-round-guard')
 // The catches' refusal when even naming the guard's own failure throws, built once here, so a catch
 // always ends in a refusal and never in a throw, which the engine reads as no hook at all (#2039).
 const HELD = cannotCheck('unknown failure')
-
-// The arguments the tool takes, without the keys the engine carries beside them.
-const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
-  const { tool: _t, tool_use_id: _i, agentId: _a, consent: _c, ...input } = e
-  return input
-}
 
 // `session`, the session's id, and `temps`, the temp folders Claude Code may keep it under, which
 // together name its scratchpad (#1191).
@@ -1647,6 +1646,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // in, none of which the guard reads. A folder variable ($PWD, $HOME) names no file.
     // One whose every $ is quoted or escaped (a regex 'x$', prose 'costs $5') holds no value at all.
     const variable = !output && ((!t.path && (t.run !== undefined || t.removes === true) && !t.unexpanded && nameFromVariable(t.word)) || filled === 'variable')
+    // #3144: a run's word mod-kit placed in a folder, a pattern once the variables the command sets
+    // are read (`T=<table>; <cli> -q "select * from $T"`), is judged by that spelling, as the same
+    // word written out is, wherever every variable in it has one literal value with no space.
+    const spelled = variable && t.run !== undefined && !t.removes && t.folder !== undefined ? spelledThrough(String(input.command ?? ''), t.word) : undefined
     if (tool === 'Bash' && (output || variable ||(t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
@@ -1660,7 +1663,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         }
         if (tree === null) continue
       }
-      const may = variable || folderFilled ? 'unread' : patternMayBeLook(t.word)
+      const may = spelled !== undefined ? patternMayBeLook(spelled) : variable || folderFilled ? 'unread' : patternMayBeLook(t.word)
       if (may === 'not') continue
       const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)
       // In a checkout, a pattern there waits on that issue's answer as a named file does, and one in a
@@ -2315,7 +2318,7 @@ export const register: Register = on => {
     if (e.agentId === undefined || e.tool === 'AskUserQuestion') return next(e)
     const raw = e as unknown as Record<string, unknown>
     const id = String(raw.tool_use_id ?? '')
-    const input = argsOf(raw)
+    const input = toolArgs(raw)
     const v = await judge($, e.tool, input, id)
     // An empty id names no call to wait under: refused as a check with no id is (lessons review of #991).
     if (!('pass' in v)) return { deny: id ? await refuse($, v, { id, tool: e.tool, agent: true, called: await keyOf($, e.tool, input) }) : previewed(v) }
@@ -2340,7 +2343,7 @@ export const register: Register = on => {
   // long command ran) replays what the call settled to, outside neverThrows: it already ran, so a
   // refusal saying it was stopped would be untrue and could have Claude run it twice (#2726, #2039).
   // One before is answered as the hook would answer it where that needs no reading (caughtCall).
-  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, argsOf(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, toolArgs(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -2358,7 +2361,7 @@ export const register: Register = on => {
     }
     if (!watch) return r
     try {
-      return await afterShell($, r, watch, { id, tool: e.tool, agent: false, input: argsOf(e as unknown as Record<string, unknown>) })
+      return await afterShell($, r, watch, { id, tool: e.tool, agent: false, input: toolArgs(e as unknown as Record<string, unknown>) })
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }

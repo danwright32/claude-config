@@ -9943,10 +9943,15 @@ record_hook_suite_result(){   # $1 = outcome  $2 = exit status  $3 = a file of o
                               # $4 = suites that ran  $5 = suites that could not; number or ?
                               # $6 = how many seconds it took, or ? when it was never timed
                               # $7 = the suites that could not run, comma separated, or ?
-  local tmp
+  local tmp now chain=""
+  now="$(date +%s)"
+  # A run that verified nothing is OWED a run (claude-config#3195), and the record says since when
+  # and how many runs were stopped, carried on from the record it replaces, so a later receive can
+  # tell a first stopped run from a second one. Read before the file is replaced, never after.
+  case "$1" in incomplete|slotwait) chain="$(hook_suite_chain_fields "$1" "$now")" ;; esac
   tmp="$(scratch_file)" || return 0
-  printf 'outcome=%s\tat=%s\texit=%s\tran=%s\tnotrun=%s\tseconds=%s\tnotrun_names=%s\n' \
-    "$1" "$(date +%s)" "$2" "${4:-?}" "${5:-?}" "${6:-?}" "${7:-?}" > "$tmp"
+  printf 'outcome=%s\tat=%s\texit=%s\tran=%s\tnotrun=%s\tseconds=%s\tnotrun_names=%s%s\n' \
+    "$1" "$now" "$2" "${4:-?}" "${5:-?}" "${6:-?}" "${7:-?}" "$chain" > "$tmp"
   # Capped: the point is the reason, not a transcript, and this file is read by a person.
   [ -n "${3:-}" ] && [ -f "$3" ] && tail -50 "$3" >> "$tmp"
   mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || rm -f "$tmp"
@@ -10130,12 +10135,213 @@ stop_suite_tree(){   # $1 = pid of the suite  [$2 = noclock: the clock has alrea
 # no hook of its own. Not in the change watcher: it receives on every local change, and each tick
 # would wait out the same queue the last run gave up on, holding up the sends it exists for. A
 # pull, typed or scheduled, or  claude-sync recheck  settles it.
-hook_suite_owed_by_slot_wait(){
+#
+# A run STOPPED at its deadline is owed the same way (claude-config#3195). On 2026-11-17 a pull
+# landed a hook at 19:13 ET on the work MacBook, its suite was stopped at 1800 seconds with the load
+# average between 36 and 86 on 18 cores, and nothing ran it again once the Mac was quiet. The rerun
+# belongs to the receives that are not the change watcher, for the reason above: the receive timer's
+# sync, which is the one that runs on a schedule, and any pull. Once a rerun has been given up on
+# (gave_up, below), it is owed to nobody: it ends in the one notification, not a run every cycle.
+hook_suite_owed(){
   local line
   [ "${SYNC_IN_WATCH:-0}" = "1" ] && return 1
   [ -f "$HOOK_TESTS_FILE" ] || return 1
   IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || return 1
-  [ "$(hook_suite_field "$line" outcome)" = "slotwait" ]
+  hook_suite_record_owed "$line"
+}
+hook_suite_record_owed(){   # $1 = a record's first line
+  case "$(hook_suite_field "$1" outcome)" in incomplete|slotwait) ;; *) return 1 ;; esac
+  [ -z "$(hook_suite_field "$1" gave_up)" ]
+}
+
+# The fields an owed record carries (claude-config#3195): owed_since, when the first run that
+# verified nothing was recorded, and stopped, how many runs since then were stopped at the deadline
+# (a run the slot kept from starting stopped nothing). Carried from the record being replaced while
+# that one was owed too. A record from before these fields counts its own run.
+#
+# Carried only by a RERUN (HOOK_SUITE_RERUN=1, set by the verdict). A run started because a hook
+# landed, or by  claude-sync recheck, is checking config the chain never saw, so it starts a chain of
+# its own: a give up from an earlier chain must not leave the new hooks owed to nobody. A rerun
+# never starts from a record given up on (hook_suite_record_owed), so gave_up is never carried.
+hook_suite_chain_fields(){   # $1 = the outcome being recorded  $2 = now -> "<tab>owed_since=..<tab>stopped=.."
+  local prev="" po="" since="" stopped=""
+  if [ "${HOOK_SUITE_RERUN:-0}" = "1" ] && [ -f "$HOOK_TESTS_FILE" ]; then
+    IFS= read -r prev < "$HOOK_TESTS_FILE" 2>/dev/null || prev=""
+  fi
+  po="$(hook_suite_field "$prev" outcome)"
+  case "$po" in
+    incomplete|slotwait)
+      since="$(hook_suite_field "$prev" owed_since)"
+      [ -n "$since" ] || since="$(hook_suite_field "$prev" at)"
+      stopped="$(hook_suite_field "$prev" stopped)"
+      if [ -z "$stopped" ] && [ "$po" = incomplete ]; then stopped=1; fi ;;
+  esac
+  case "$since" in ''|*[!0-9]*) since="$2" ;; esac
+  case "$stopped" in ''|*[!0-9]*) stopped=0 ;; esac
+  [ "$1" = incomplete ] && stopped=$(( stopped + 1 ))
+  printf '\towed_since=%s\tstopped=%s' "$since" "$stopped"
+  return 0
+}
+
+# Sets fields on the record's first line, keeping the rest of the file (the runner's own words), and
+# only while the record is still the one the caller read: its `at` is the check, so a verdict written
+# meanwhile by another run is never stamped with this one's deferral or give up.
+hook_suite_record_set(){   # $1 = the record's `at` as the caller read it  $2.. = key=value
+  local want="$1" line tmp kv k rest pair out
+  shift
+  [ -f "$HOOK_TESTS_FILE" ] || return 1
+  IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || return 1
+  [ "$(hook_suite_field "$line" at)" = "$want" ] || return 1
+  for kv in "$@"; do
+    k="${kv%%=*}"; rest="$line"; out=""
+    while [ -n "$rest" ]; do
+      pair="${rest%%$'\t'*}"
+      case "$pair" in "$k="*) ;; *) out="${out:+$out$'\t'}$pair" ;; esac
+      case "$rest" in *$'\t'*) rest="${rest#*$'\t'}" ;; *) rest="" ;; esac
+    done
+    line="$out"$'\t'"$kv"
+  done
+  tmp="$(scratch_file)" || return 1
+  { printf '%s\n' "$line"; tail -n +2 "$HOOK_TESTS_FILE" 2>/dev/null || true; } > "$tmp"
+  mv "$tmp" "$HOOK_TESTS_FILE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# THE RERUN'S CLAIM (claude-config#3195). The verdict runs with the sync lock released, so two
+# receives can both find the record owed: the timer's sync and a pull typed in the same minute. The
+# one that takes this claim runs the suite again; the other says which run is doing it and runs
+# nothing. It is lib/pid-lock.sh's lock, holding the pid of the claude-sync that took it (the verdict
+# runs in a command substitution, where $$ is still that run), so a run killed mid suite leaves a
+# claim whose pid has gone, and the next receive takes it over rather than waiting on it for ever. A
+# pid that is alive but is not a claude-sync is one reused since that run ended, a restart in
+# between, and is taken over the same way, serialised through the lib's own break lock.
+HOOK_RERUN_CLAIM="$SYNC_REPO/.hook-tests-rerun"
+hook_rerun_holder(){   # [$1 = the claim file] -> the pid of a live claude-sync holding it, or nothing
+  local f="${1:-$HOOK_RERUN_CLAIM}" p
+  p="$(cat "$f" 2>/dev/null || true)"
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  kill -0 "$p" 2>/dev/null || return 0
+  case "$(ps -o command= -p "$p" 2>/dev/null || true)" in *claude-sync*) printf '%s' "$p" ;; esac
+  return 0
+}
+hook_rerun_claim(){   # -> 0 once this run holds the claim
+  local p
+  # No wait: a held claim is a run already acting on the record, and waiting out a whole suite
+  # behind it would verify nothing it does not. Twice, because a takeover of a dead holder's claim
+  # spends the first attempt.
+  take_pid_lock "$HOOK_RERUN_CLAIM" 0 && return 0
+  if [ -z "$(hook_rerun_holder)" ]; then
+    p="$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)"
+    case "$p" in
+      ''|*[!0-9]*) : ;;
+      *) if kill -0 "$p" 2>/dev/null && mkdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null; then
+           [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$p" ] && [ -z "$(hook_rerun_holder)" ] && rm -f "$HOOK_RERUN_CLAIM"
+           rmdir "$HOOK_RERUN_CLAIM.break" 2>/dev/null || true
+         fi ;;
+    esac
+  fi
+  take_pid_lock "$HOOK_RERUN_CLAIM" 0
+}
+hook_rerun_release(){
+  [ "$(cat "$HOOK_RERUN_CLAIM" 2>/dev/null || true)" = "$$" ] && rm -f "$HOOK_RERUN_CLAIM"
+  return 0
+}
+
+# Whether the Mac is too busy for the rerun, through lib/load-average.sh, the one reader every
+# load judgement uses (L370): busy is a one minute load average above the core count. Prints the
+# figure when busy. A figure that cannot be read is NOT busy, so the rerun goes ahead rather than
+# waiting on a reading that may never come; its own deadline still bounds it.
+hook_rerun_busy(){   # -> "<load> on <cores> cores", exit 0 when busy
+  local lib="$SYNC_SELF_PAYLOAD/hooks/lib/load-average.sh"
+  [ -f "$lib" ] || lib="$CLAUDE_HOME/hooks/lib/load-average.sh"
+  [ -f "$lib" ] || return 1
+  (
+    # shellcheck source=payload/hooks/lib/load-average.sh
+    . "$lib" 2>/dev/null || exit 1
+    l="$(load_average_one_minute)"; c="$(load_average_cores)"
+    load_average_busy "$l" "$c" || exit 1
+    printf '%s on %s cores' "$l" "$c"
+  )
+}
+
+# How long a record may stay owed before the rerun is given up on and said once (claude-config#3195).
+# Two days: the receive timer runs daily, so at least one scheduled try has had its chance, and a
+# Mac too busy for a suite run for two days running needs a person, not another automatic try.
+# A product choice, like SYNC_INTERVAL, not a measurement.
+hook_rerun_give_up_after(){
+  case "${SYNC_HOOK_RERUN_GIVE_UP:-}" in
+    ''|*[!0-9]*) printf '172800' ;;
+    *) printf '%s' "$SYNC_HOOK_RERUN_GIVE_UP" ;;
+  esac
+}
+
+# The start of a rerun the record is owed. Takes the claim and decides, under it, whether the suite
+# runs now. Exits 0 with the claim held and HOOK_RERUN_AGE set (how long ago the record became owed),
+# printing nothing, when it does; exits 1 having printed the whole clause, the claim released, when
+# it does not.
+hook_rerun_begin(){
+  local line at since now bound age busy holder
+  if ! hook_rerun_claim; then
+    holder="$(hook_rerun_holder)"
+    printf ', and the hook suite left unverified by an earlier run was not run again here: another run (pid %s) is running it again now' "${holder:-unknown}"
+    return 1
+  fi
+  # Read again under the claim: the run that held it may have settled the record meanwhile.
+  line=""; IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || line=""
+  if ! hook_suite_record_owed "$line"; then hook_rerun_release; return 1; fi
+  at="$(hook_suite_field "$line" at)"
+  since="$(hook_suite_field "$line" owed_since)"
+  case "$since" in ''|*[!0-9]*) since="$at" ;; esac
+  case "$since" in ''|*[!0-9]*) since="$(date +%s)" ;; esac
+  now="$(date +%s)"
+  [ "$now" -ge "$since" ] || since="$now"
+  age="$(age_in_words "$(( now - since ))")"
+  bound="$(hook_rerun_give_up_after)"
+  if [ "$(( now - since ))" -ge "$bound" ]; then
+    hook_suite_record_set "$at" "gave_up=$now" "gave_up_why=age" || true
+    notify "the hook suite has not verified what a pull installed, which has been waiting since a run $age, and it will not be run again by itself: run claude-sync recheck once the Mac is quieter"
+    printf ', and the hook suite has been unverified since a run %s, longer than the %s a rerun is given, so it will not be run again by itself: run  claude-sync recheck  once this Mac is quieter' \
+      "$age" "$(duration_in_words "$bound")"
+    hook_rerun_release
+    return 1
+  fi
+  if [ "$(hook_suite_field "$line" outcome)" = incomplete ] && busy="$(hook_rerun_busy)"; then
+    hook_suite_record_set "$at" "deferred_at=$now" "deferred_load=$busy" || true
+    printf ', and the hook suite left unverified %s was not run again yet: load average %s is more than this Mac has cores. The next pull or the receive timer'"'"'s sync tries again' "$age" "$busy"
+    hook_rerun_release
+    return 1
+  fi
+  # Said by the verdict once it has found the runner, so a rerun that cannot start is not reported as
+  # one that ran.
+  HOOK_RERUN_AGE="$age"
+  return 0
+}
+
+# What a run stopped at its deadline adds to its clause, once it is recorded (claude-config#3195):
+# owed a rerun, or, when the run before it was stopped too, given up on with the one notification.
+hook_suite_after_stopped(){
+  local line="" stopped at
+  IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || line=""
+  stopped="$(hook_suite_field "$line" stopped)"
+  at="$(hook_suite_field "$line" at)"
+  case "$stopped" in ''|*[!0-9]*) stopped=1 ;; esac
+  # A record just written never carries gave_up (hook_suite_chain_fields), so two stopped runs in
+  # one chain notify exactly once, here.
+  if [ "$stopped" -ge 2 ]; then
+    hook_suite_record_set "$at" "gave_up=$(date +%s)" "gave_up_why=twice" || true
+    notify "the hook suite could not be completed after a pull, nor when it was run again, so what landed is unverified: run claude-sync recheck once the Mac is quieter"
+    printf '. It could not be completed the time before either, so it will not be run again by itself: run  claude-sync recheck  once this Mac is quieter'
+  else
+    printf '. It is owed: the next pull or the receive timer'"'"'s sync runs it again once this Mac'"'"'s load average is no higher than its core count, and you are told only if that run fails or cannot finish either'
+  fi
+  return 0
+}
+
+# Whether this run's apply wrote a hook. The log is kind<TAB>path, so the tab is part of the match:
+# without it a file merely NAMED hooks/something in a label would answer for one.
+hook_suite_landed(){
+  [ -n "${APPLIED_LOG:-}" ] && [ -s "$APPLIED_LOG" ] || return 1
+  grep -q "$(printf '\t')hooks/" "$APPLIED_LOG" 2>/dev/null
 }
 
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
@@ -10149,20 +10355,33 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # A run the full suite slot kept from running is OWED too (claude-config#2758): nothing that landed
   # with it was verified, and a receive carrying no hook would otherwise leave that standing until
   # the next hook happened to arrive.
-  if [ "${HOOK_SUITE_FORCE:-0}" != "1" ] && ! hook_suite_owed_by_slot_wait; then
-    [ -n "${APPLIED_LOG:-}" ] || return 0
-    [ -s "$APPLIED_LOG" ] || return 0
-    # The log is kind<TAB>path, so the tab is part of the match: without it a file merely NAMED
-    # hooks/something in a label would answer for one.
-    grep -q "$(printf '\t')hooks/" "$APPLIED_LOG" 2>/dev/null || return 0
+  # A run that was stopped at its deadline is owed one as well (claude-config#3195), and an owed run
+  # with no hook of its own arriving is a RERUN: it takes the rerun's claim and waits for a quiet Mac
+  # (hook_rerun_begin). A hook arriving is checked as it always was, owed or not.
+  # HOOK_SUITE_RERUN is local, so it reaches the record's writer (hook_suite_chain_fields) and
+  # nothing outside this verdict.
+  local HOOK_SUITE_RERUN=0
+  if [ "${HOOK_SUITE_FORCE:-0}" != "1" ] && ! hook_suite_landed; then
+    hook_suite_owed || return 0
+    HOOK_SUITE_RERUN=1
+    # Before the runner is looked for, so the give up bound still applies to a record whose runner
+    # has gone, and a rerun is never reported as hooks arriving.
+    hook_rerun_begin || return 0
   fi
   runner="$CLAUDE_HOME/hooks/run-all-tests.sh"
   if [ ! -f "$runner" ]; then
+    if [ "$HOOK_SUITE_RERUN" = "1" ]; then
+      # Nothing arrived, so nothing is notified and the record stays owed, to be given up on at its
+      # bound like any other that cannot be cleared here.
+      printf ', and the hook suite left unverified %s could not be run again: there is no %s to run it with, so it is still owed' "${HOOK_RERUN_AGE:-earlier}" "$runner"
+      return 0
+    fi
     notify "hooks arrived with no run-all-tests.sh to check them"
     record_hook_suite_result notrun 0 "" "?" "?"
     printf ', and the hook suite could NOT be run here: hooks arrived and there is no %s to check them with, so nothing that just landed has been verified' "$runner"
     return 0
   fi
+  [ "$HOOK_SUITE_RERUN" = "1" ] && printf ', and the hook suite left unverified %s was run again' "${HOOK_RERUN_AGE:-earlier}"
   out="$(scratch_file)" || {
     printf ', and the hook suite could NOT be run here: no scratch file could be made to hold its output'
     return 0
@@ -10257,7 +10476,9 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   took=$(( $(date +%s) - started ))
   [ "$took" -ge 0 ] || took=0
   if [ "$killed" -eq 1 ]; then
-    notify "the hook suite was still running after ${limit}s and was stopped"
+    # Not notified here (claude-config#3195): a run stopped on a busy Mac is owed a rerun, which
+    # usually clears it by itself, and the notification is kept for the rerun that cannot finish
+    # either (hook_suite_after_stopped), so it fires when there is something to look into.
     record_hook_suite_result incomplete 0 "$out" "?" "?" "$took"
     # Whether part of the deadline went on the full suite slot's queue, from the runner's own lines,
     # which come first in its output and so are gone from the record's tail (claude-config#2758). A
@@ -10272,6 +10493,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
     else
       printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
     fi
+    hook_suite_after_stopped
     return 0
   fi
   # Refused by the full suite slot (claude-config#2758): the runner waited the bound handed to it
@@ -10426,7 +10648,11 @@ flush_pending_report(){
   [ -n "$stem" ] || return 0
   # A failed read of the suite clock ends the verdict's run having said so (claude-config#2778), and
   # this run with it: the closing line would otherwise report a verdict that was never reached.
-  verdict="$(hook_suite_verdict)" || exit 1
+  verdict="$(hook_suite_verdict)" || { hook_rerun_release; exit 1; }
+  # A rerun's claim was taken inside that command substitution, where $$ is still this run, and is
+  # released here once its verdict is recorded (claude-config#3195). A run that holds none removes
+  # nothing.
+  hook_rerun_release
   echo "${stem}${verdict}."
   return 0
 }
@@ -13232,12 +13458,48 @@ HSREOF
     notrun)
       echo "${prefix}could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
     incomplete)
-      echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1, and  claude-sync recheck  runs them again and records what they say" ;;
+      echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1, and  claude-sync recheck  runs them again and records what they say$(hook_suite_owed_words "$line" "${2:+$2/.hook-tests-rerun}" incomplete)" ;;
     slotwait)
       # claude-config#2758: queued behind another full run for the whole of its bound, so it never
       # started. Its own words, never folded into "could not be completed", which reads as a hang.
-      echo "${prefix}did NOT run $age: it waited for this Mac's full suite slot, which another full run held, and ran nothing. Nothing that landed has been verified. The next pull runs it again, and  claude-sync recheck  runs it now and records what it says" ;;
+      # "The next pull runs it again" only while that is true: a record given up on says what to run
+      # instead, in hook_suite_owed_words, and the two must not both be said (L11).
+      local sw_next="The next pull runs it again, and  claude-sync recheck  runs it now and records what it says"
+      [ -z "$(hook_suite_field "$line" gave_up)" ] || sw_next="claude-sync recheck  runs it and records what it says"
+      echo "${prefix}did NOT run $age: it waited for this Mac's full suite slot, which another full run held, and ran nothing. Nothing that landed has been verified. ${sw_next}$(hook_suite_owed_words "$line" "${2:+$2/.hook-tests-rerun}" slotwait)" ;;
   esac
+  return 0
+}
+
+# What status adds about an owed run (claude-config#3195): being run again now, given up on, or
+# waiting for a quiet Mac, with the load the last try found. Each answer starts with a full stop
+# and ends without one, or is nothing.
+hook_suite_owed_words(){   # $1 = the record's first line  $2 = its clone's claim file, or empty for this one  $3 = the outcome
+  local gave why holder dat dload now bound
+  gave="$(hook_suite_field "$1" gave_up)"
+  now="$(date +%s)"
+  if [ -n "$gave" ]; then
+    why="$(hook_suite_field "$1" gave_up_why)"
+    bound="$(duration_in_words "$(hook_rerun_give_up_after)")"
+    case "$why" in
+      twice) why="it could not be completed when it was run again either" ;;
+      age) why="it stayed unverified for longer than the $bound a rerun is given" ;;
+      *) why="the rerun was given up on" ;;
+    esac
+    case "$gave" in ''|*[!0-9]*) gave="at a time this record does not say" ;; *) gave="$(age_in_words "$(( now - gave ))")" ;; esac
+    printf '. It will not be run again by itself, because %s, and that was notified once, %s: run  claude-sync recheck  once this Mac is quieter' "$why" "$gave"
+    return 0
+  fi
+  holder="$(hook_rerun_holder "${2:-$HOOK_RERUN_CLAIM}")"
+  if [ -n "$holder" ]; then
+    printf '. It is being run again now, by pid %s' "$holder"
+    return 0
+  fi
+  [ "$3" = incomplete ] || return 0
+  printf '. It is owed a second run: the next pull or the receive timer'"'"'s sync runs it once the load average is no higher than the core count, and you are told only if that run fails or cannot finish either'
+  dat="$(hook_suite_field "$1" deferred_at)"; dload="$(hook_suite_field "$1" deferred_load)"
+  case "$dat" in ''|*[!0-9]*) return 0 ;; esac
+  printf '. The last try, %s, found load average %s, so it waited' "$(age_in_words "$(( now - dat ))")" "${dload:-that could not be read}"
   return 0
 }
 

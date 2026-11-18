@@ -21,7 +21,7 @@ webhook and an HTTP 503 are, and they have never seen your code.
 
 | Slot | What goes in it |
 |---|---|
-| 1. First line | One bold sentence that says what happened and names the thing, with its numbers. On an urgent message the mention of the one person who must act comes first, on the same line. |
+| 1. First line | One bold sentence that says what happened and names the thing, with its numbers. On an urgent message a mention comes first, on the same line: `<!here>`, or the one person the project's CLAUDE.md names instead. |
 | 2. One sentence | The one fact that neither the first line nor the error block carries: a cause, or a next step that is specific. Empty on most alerts. Slots 1 and 2 together come to 200 characters at most. |
 | 3. List | The affected things, one per line, up to 5 lines, then `and N more`. |
 | 4. Error block | What the other system answered, as it sent it, in one code block of up to 500 characters cut on a word boundary. |
@@ -35,8 +35,8 @@ again, the retry schedule, the runbook) already has a home in the code and the r
 
 | Kind | First line | Slot 2 | Mention | Link |
 |---|---|---|---|---|
-| `alert` | what happened | 0 or 1 sentence | urgent only | always |
-| `reminder` | `Still open after 2 hours: ` then the alert's first line, shortened | empty | the same person | always |
+| `alert` | what happened | 0 or 1 sentence | urgent only: `<!here>`, or the person the project's CLAUDE.md names | always |
+| `reminder` | `Still open after 2 hours: ` then the alert's first line, shortened | empty | the same as its alert | always |
 | `recovery` | `Recovered: ` then what works again | 0 or 1 sentence: how long it lasted and what it cost | none | when there is something to open |
 | `digest` | the count that makes it worth opening | 0 or 1 sentence | none | always |
 | `request` | who asks the person for what | up to 2: the asker's note in quotes, and the one fact needed to decide | the person asked | always |
@@ -65,7 +65,7 @@ Internal `alert`, the usual size:
 
 Urgent `alert` with a list and an error block, which already says why:
 
-    <@U012ABCDEF> *3 of 40 invoices were not sent this morning*
+    <!here> *3 of 40 invoices were not sent this morning*
     • Invoice 1042, Ridgeway Dental
     • Invoice 1043, Corner Bakery
     • Invoice 1047, Elm Street Books
@@ -74,7 +74,7 @@ Urgent `alert` with a list and an error block, which already says why:
 
 `reminder`:
 
-    <@U012ABCDEF> *Still open after 2 hours: 3 invoices have not been sent*
+    <!here> *Still open after 2 hours: 3 invoices have not been sent*
     <https://shop.example.com/admin/invoices?status=failed|View failed invoices>
 
 `recovery`:
@@ -112,9 +112,10 @@ problem is urgent: read the rendered message once for those.
 
 ## Around the message
 
-- **The project's CLAUDE.md** records the bot and channel, which alerts are urgent, who is
-  mentioned, and any alert that keeps its own layout, named with the date it was approved. An
-  alert recorded there is left exactly as it posts.
+- **The project's CLAUDE.md** records the bot and channel, which alerts are urgent, the one person
+  an urgent alert mentions in place of `<!here>` when there is one, and any alert that keeps its
+  own layout, named with the date it was approved. An alert recorded there is left exactly as it
+  posts. Asked who an urgent alert mentions, Dan answered "@here" (2026-11-17).
 - **The project's tests** run the checker over every message the code can render. CI has no
   Claude config folder, so the project keeps its own copy of `check_alert.py`, with a test that
   runs where this one exists and fails when the two differ (Dan, 2026-11-17).
@@ -123,5 +124,7 @@ problem is urgent: read the rendered message once for those.
   an app webhook.
 - **A monitor in a vendor's tool** is drawn by the vendor. Write its name as a first line and its
   description as slot 2.
-- **Rewriting a repo's existing alerts** ends with one page showing each alert before and after,
-  for Dan to read before the change merges.
+- **Rewriting a repo's existing alerts** is one issue per repo, and the change merges when its
+  checks and the lessons review pass, with nothing brought back to Dan to approve. His words,
+  2026-11-17: "This shouldn't require my approval on them at all. it should literally just go
+  through in every repo (separate issues for each repo) and update all alerts without me".
