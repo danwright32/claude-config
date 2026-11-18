@@ -180,14 +180,14 @@ grep -qi 'home directory' <<< "$out_home"   && check "and it says that is what i
 # The real repository, last. This is the assertion that keeps working after the fixtures above
 # have proved the guard can fail.
 #
-# The tree comes from GIT rather than from counting directories upwards, so the installed copy,
-# which sits in no repository, reports that it had nothing to measure instead of walking whatever
-# happens to be above it (L411, L668).
+# The tree comes from lib/checkout-root.sh rather than from counting directories upwards or asking
+# git from here, so the installed copy, which sits in no checkout, reports that it had nothing to
+# measure instead of walking whatever repository happens to be above it (L411, L668, #3221).
 # ---------------------------------------------------------------------------
-ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -z "$ROOT" ]; then
   # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
-  echo "SUITE-PART-UNMEASURED the real tree case, because this copy of the suite is not inside a git checkout, so there is no repository to parse"
+  echo "SUITE-PART-UNMEASURED the real tree case, because this copy of the suite is not in a claude-config checkout, so there is no repository to parse"
 else
 out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
 [ "$code_real" -eq 0 ] \

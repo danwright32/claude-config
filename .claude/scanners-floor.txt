@@ -54,4 +54,7 @@ WHEN-A-SUITE-CHANGES payload/hooks/test-headless-claude-config.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-ratchet.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-scan-absence-needles.sh
 WHEN-A-SUITE-CHANGES payload/hooks/test-scan-subshell-globals.sh
+WHEN-A-SUITE-CHANGES payload/hooks/test-skill-helper-exits.sh
+WHEN-A-SUITE-CHANGES payload/hooks/test-skill-integrity.sh
+WHEN-A-SUITE-CHANGES payload/hooks/test-skill-python-tests.sh
 WHEN-A-SUITE-CHANGES payload/skills/design-rounds/test-headless-chrome.sh

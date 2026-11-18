@@ -18621,13 +18621,15 @@ while [ "$rt20_i" -le 50 ]; do
   rt20_i=$((rt20_i + 1))
 done
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20R/tools/test-tool.sh"
-git -C "$RT20R" add tests tools && git -C "$RT20R" -c user.name=t -c user.email=t@e commit -q -m fillers 2>/dev/null && git -C "$RT20R" push -q origin main 2>/dev/null
+# A sync clone carries claude-sync at its top, which is what lib/checkout-root.sh asks of it (#3221).
+printf '#!/usr/bin/env bash\n' > "$RT20R/claude-sync"
+git -C "$RT20R" add tests tools claude-sync && git -C "$RT20R" -c user.name=t -c user.email=t@e commit -q -m fillers 2>/dev/null && git -C "$RT20R" push -q origin main 2>/dev/null
 RT20H="$WORK/rt2020-home"; mkdir -p "$RT20H/hooks/lib"
 echo '{"hooks":{}}' > "$RT20H/settings.json"; printf '# rules\n' > "$RT20H/CLAUDE.md"
 rt20_src="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
 cp "$rt20_src/test-run-all-tests-real-tree.sh" "$rt20_src/run-all-tests.sh" "$RT20H/hooks/"
 python3 "$rt20_src/lib/install-hook-libs.py" "$rt20_src/lib" "$RT20H/hooks/lib" suite-deadline.sh suite-isolation.sh \
-  recorded-pid.sh repo-files.sh whole-number.sh load-average.sh >/dev/null \
+  recorded-pid.sh repo-files.sh whole-number.sh load-average.sh checkout-root.sh >/dev/null \
   || bad "#2204 the runner's helpers could not be installed into the #2020 home"
 mkskill "$RT20H/skills/milestone/SKILL.md" 'a skill holding a suite'
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$RT20H/skills/milestone/test-ms.sh"

@@ -216,7 +216,7 @@ check_eq "#2147 a listed suite that cannot be read stops the scan with exit 2 an
 
 # ---- and no suite anywhere copies a Python, shell or JavaScript helper by hand ----
 # Every suite in the repository, read from the files git ships rather than a list of names (L96).
-SELF_TOP="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+SELF_TOP="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 FILES="$(bash "$DIR/lib/repo-files.sh" "$SELF_TOP" 2>/dev/null || true)"
 if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ -n "$FILES" ]; then
   found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$SELF_TOP" 2>&1)"; found_rc=$?
