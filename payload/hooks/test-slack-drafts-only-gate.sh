@@ -696,6 +696,96 @@ printf '%s\n' 'home = /usr/bin' > "$T/py/ok/.venv/pyvenv.cfg"
 run_bash "python3 $T/py/ok/main.py"
 allowed "a Python script importing the standard library, a package and a helper that only saves a draft"
 
+echo "slack drafts only: a script run by its path finds its imports where the python its first line names does (claude-config#3144)"
+# A command line tool installed by Homebrew in its own virtual environment is a script whose first
+# line names that environment's python by its absolute path, with its package installed there. Run by
+# its path it was refused, its package placed nowhere, while the same package run as `<that python>
+# -m <module>` passed. Each environment here is a folder holding pyvenv.cfg, bin/python (a link to
+# python3) and, where one is named, a package in lib/python3.12/site-packages that only prints.
+PY3="$(command -v python3)"
+sv_env() { # sv_env <folder> [package]
+  mkdir -p "$1/bin" "$1/lib/python3.12/site-packages"
+  printf '%s\n' 'home = /usr/bin' > "$1/pyvenv.cfg"
+  ln -sf "$PY3" "$1/bin/python"
+  if [ -n "${2:-}" ]; then
+    mkdir -p "$1/lib/python3.12/site-packages/$2/_app"
+    : > "$1/lib/python3.12/site-packages/$2/__init__.py"
+    : > "$1/lib/python3.12/site-packages/$2/_app/__init__.py"
+    printf '%s\n' 'def main():' '    print("select 1")' > "$1/lib/python3.12/site-packages/$2/_app/__main__.py"
+  fi
+}
+sv_tool() { # sv_tool <file> <first line> [module]: an entry point script, as pip writes one
+  printf '%s\n' "$2" 'import sys' "from ${3:-fakecli._app.__main__} import main" 'sys.exit(main())' > "$1"
+  chmod +x "$1"
+}
+SV="$T/sv"
+sv_env "$SV/env" fakecli
+sv_env "$SV/bare"
+sv_tool "$SV/env/bin/fake" "#!$SV/env/bin/python"
+mkdir -p "$SV/brew/bin" "$SV/other/bin"
+ln -s "$SV/env/bin/fake" "$SV/brew/bin/fake"
+run_bash "$SV/env/bin/python -m fakecli._app sql -q 'select 1'"
+allowed "the control: the package run with -m by its environment's own python"
+run_bash "$SV/env/bin/fake sql -q 'select 1'"
+allowed "the package's entry point script, run by its path, whose first line names that python"
+run_bash "$SV/brew/bin/fake sql -q 'select 1' --format json"
+allowed "the same script reached through a link, as Homebrew puts one on the PATH"
+run_bash "cd $SV/env && bin/fake sql"
+allowed "the same script run by a relative path"
+printf '%s\n' '#!/bin/bash' "$SV/env/bin/fake sql" > "$SV/run.sh"
+run_bash "bash $SV/run.sh"
+allowed "the same script run by its path from a shell script"
+# What stays refused. The first line counts only where the script is run by its own path, so the
+# kernel starts the python it names; a python typed in the command ignores it.
+run_bash "python3 $SV/env/bin/fake sql"
+refused "the same script handed to python3, which ignores its first line"
+sv_tool "$SV/env/bin/fake-missing" "#!$SV/env/bin/python" "no_such_pkg_3144.cli"
+run_bash "$SV/env/bin/fake-missing sql"
+refused "a script importing a package its first line's environment does not hold"
+says "that refusal names the package placed nowhere" "no_such_pkg_3144"
+sv_tool "$SV/other/bin/fake" "#!$SV/bare/bin/python"
+run_bash "$SV/other/bin/fake sql"
+refused "a script whose first line names an environment without the package"
+# Each script's first line places its own imports only: not the other script's in the same command,
+# nor one run after it by a shell script.
+run_bash "$SV/env/bin/fake sql; $SV/other/bin/fake sql"
+refused "two scripts in one command, the second's first line naming an environment without the package"
+printf '%s\n' '#!/bin/bash' "$SV/env/bin/fake sql" "$SV/other/bin/fake sql" > "$SV/run-both.sh"
+run_bash "bash $SV/run-both.sh"
+refused "the same two scripts run from a shell script"
+sv_tool "$SV/env/bin/fake-relative" "#!env/bin/python"
+run_bash "cd $SV && env/bin/fake-relative sql"
+refused "a first line naming the python by a relative path"
+ln -sf "$PY3" "$SV/env/bin/python-wrapper"
+sv_tool "$SV/env/bin/fake-wrapper" "#!$SV/env/bin/python-wrapper"
+run_bash "$SV/env/bin/fake-wrapper sql"
+refused "a first line naming a program whose name is not a Python runtime's"
+sv_tool "$SV/env/bin/fake-env" "#!/usr/bin/env python3"
+run_bash "$SV/env/bin/fake-env sql"
+refused "a first line having env find python3 on the PATH, as before"
+sv_tool "$SV/env/bin/fake-env-path" "#!/usr/bin/env $SV/env/bin/python"
+run_bash "$SV/env/bin/fake-env-path sql"
+refused "a first line having env run the environment's python, as before"
+printf '%s\n' 'import urllib.request' 'def go():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' \
+  > "$SV/env/bin/notify_3144.py"
+printf '%s\n' "#!$SV/env/bin/python" 'from fakecli._app.__main__ import main' 'import notify_3144' 'notify_3144.go()' \
+  > "$SV/env/bin/fake-posts"
+chmod +x "$SV/env/bin/fake-posts"
+run_bash "$SV/env/bin/fake-posts sql"
+refused "a script whose package is installed there and which imports a helper beside it that posts"
+says "that refusal names the helper" "notify_3144"
+# An installed package is not read, on either route: one naming the endpoint, installed in the
+# environment, passes with -m today, and so through the script whose first line names that python.
+# Recorded so the reach of an installed package is a decision, not a surprise.
+sv_env "$SV/env" fakepost
+printf '%s\n' 'import urllib.request' 'def main():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' \
+  > "$SV/env/lib/python3.12/site-packages/fakepost/_app/__main__.py"
+sv_tool "$SV/env/bin/fake-installed" "#!$SV/env/bin/python" "fakepost._app.__main__"
+run_bash "$SV/env/bin/python -m fakepost._app"
+allowed "an installed package is not read when run with -m (as before)"
+run_bash "$SV/env/bin/fake-installed"
+allowed "nor when its entry point script is run by its path"
+
 echo "slack drafts only: a Python import is placed through PYTHONPATH and sys.path, or refused (claude-config#2358)"
 
 # A helper that posts, found only through PYTHONPATH or a sys.path change: the #2357 gate looked for
@@ -5381,6 +5471,28 @@ printf "$POSTS\n" >> "$JC/big.sh"
 jc_run "bash $JC/big.sh --again"
 refused "once the large script posts, the same command is refused"
 traced "its changed text does not find the kept parse" "parse miss: no entry"
+# A script run by its path places its imports where the python its first line names does (#3144), so
+# a kept judgement is not used once that environment's package, or the first line, has changed.
+JSV="$JC/sv"
+sv_env "$JSV/env" fakecli
+sv_env "$JSV/bare"
+sv_tool "$JSV/env/bin/fake" "#!$JSV/env/bin/python"
+jc_run "$JSV/env/bin/fake sql"
+allowed "a script whose package is installed where its first line's python finds it is allowed"
+traced "its judgement is kept" "stored"
+jc_run "$JSV/env/bin/fake sql"
+traced "judged again with nothing changed, it is answered from the cache" "hit"
+mv "$JSV/env/lib/python3.12/site-packages/fakecli" "$JSV/fakecli.was"
+jc_run "$JSV/env/bin/fake sql"
+refused "once the package has gone from that environment, the same command is refused"
+traced "the kept judgement is not used once the package has gone" "miss: " "answers differently now"
+mv "$JSV/fakecli.was" "$JSV/env/lib/python3.12/site-packages/fakecli"
+jc_run "$JSV/env/bin/fake sql"
+allowed "with the package put back, it is allowed"
+sv_tool "$JSV/env/bin/fake" "#!$JSV/bare/bin/python"
+jc_run "$JSV/env/bin/fake sql"
+refused "once its first line names an environment without the package, it is refused"
+traced "the kept judgement is not used once the first line has changed" "miss: " "answers differently now"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.

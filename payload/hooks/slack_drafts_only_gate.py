@@ -3194,7 +3194,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         """Whether a top level Python module is the standard library or an installed package: built
         in, named in this python's standard library list, or found (not imported) on its own sys.path
         past this hooks folder, in the site-packages of a virtual environment the command's
-        interpreter belongs to, the session's VIRTUAL_ENV, or the nearest .venv or venv folder above
+        interpreter belongs to (typed, or the #! of a script run by its path, claude-config#3144),
+        the session's VIRTUAL_ENV, or the nearest .venv or venv folder above
         the script or the command's directory."""
         if top in sys.builtin_module_names or top in getattr(sys, "stdlib_module_names", ()):
             return True
@@ -5822,7 +5823,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # Nothing there, or no script: a path it cannot work out is refused with the switch on.
                 return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else self.php_lang(first)
-            return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+            # Run by its path, a Python script is started by the python its #! names, so what it runs
+            # is judged as that python typed in the command is: its imports are placed in that
+            # python's environment too (placed(), claude-config#3144: a tool Homebrew installs in a
+            # virtual environment of its own was refused, the same package run with -m passed). Only
+            # an absolute path to a Python runtime counts; env, a relative path or another program
+            # leaves the command as it was. record() sets py_cmd afresh for each command, so a script
+            # this one's commands run is placed by its own #!.
+            bang = re.match(r"#!\s*(/\S+)", first) if lang == "py" else None
+            saved = self.py_cmd
+            if bang and PY_RUNTIME.match(os.path.basename(bang.group(1))):
+                self.py_cmd = dict(saved, interp=bang.group(1))
+            try:
+                return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+            finally:
+                self.py_cmd = saved
         # A program named by a variable alone (`$cmd`, `"$gh" pr view`) is left as it was: it is how a
         # function runs the command it is handed and a suite its stand in, and refusing it too newly
         # refused 261 more of this repository's 546 scripts on 2026-11-12 (claude-config#2683).
