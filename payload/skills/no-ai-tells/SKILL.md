@@ -8,6 +8,10 @@ args:
     required: false
 ---
 
+## What it does not cover
+
+A message to another Claude session is not checked: a SendMessage to an agent or a teammate, a brief for a subagent, a note left for another session. Its reader is a model, not a person, and Dan chose to exempt it (2026-11-18: "1.1 File: exempt them", claude-config#3238). When that is the only text in the turn, stop here and skip the first step below. The prose hook cannot make this call, because it sees only the words of the prompt, not where the text will go.
+
 ## MANDATORY FIRST STEP: read the whole list
 
 Before producing any output, read every part of the Wikipedia list of AI writing signs:
