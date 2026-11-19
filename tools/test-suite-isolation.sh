@@ -67,7 +67,7 @@ armed="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
 eq "arming on its own sets a value for every listed variable" "$NV" "$(printf '%s\n' "$armed" | grep -c '=.')"
 lacks "no seam armed on its own points under HOME" "$W/home1" "$armed"
 iso="$(printf '%s\n' "$armed" | sed -n 's/^CLAUDE_ISSUE_SPOOL_DIR=\(.*\)\/issue-spool$/\1/p')"
-says "the seams sit in one throwaway folder the scratch sweep reclaims" "$W/tmp/claude-sync-suite-work.isolated." "$iso"
+says "the seams sit in one throwaway folder, named so the scratch sweep reclaims one left behind" "$W/tmp/claude-sync-suite-work.isolated." "$iso"
 eq "every seam sits in that same folder" "$((NV - 1))" "$(printf '%s\n' "$armed" | grep -c -F "=$iso/")"
 eq "the claude binary is one that does not exist" "SYNC_CLAUDE_BIN=$SUITE_ISOLATION_NO_CLAUDE" "$(printf '%s\n' "$armed" | grep '^SYNC_CLAUDE_BIN=')"
 
@@ -275,6 +275,72 @@ out="$(HOME="$W/realhome" bash "$W/nocheck/tools/suite-home-writes.sh" "$W/test-
 eq "the check with no lib/suite-isolation.sh could not run (2)" 2 "$rc"
 says "and says the seams to clear are unknown" "the seams to clear are unknown" "$out"
 eq "the refusals never wrote under the HOME they were started with" "" "$(find "$W/realhome" -mindepth 1 2>/dev/null)"
+
+# ---- 5. the folder goes with the suite ----
+# Last, after every fixture that sources a path through an argument, since the waits below go
+# through lib/hang-wait.sh, whose eval the Slack drafts gate cannot follow past.
+# The folder goes with the suite that made it (claude-config#3253). On 2026-11-19 this Mac's temp
+# folder held 1,687 of them, all empty, because nothing removed one but claude-sync's daily sweep of
+# scratch four hours old: one section of test-claude-sync.sh run on its own, passing, left one. So
+# every way a suite can end is tried here, the ones its own EXIT trap never sees included, and a
+# folder still in use is shown to be kept.
+iso_suite(){ # iso_suite <temp folder> <deadline seconds, 0 for none> <body>
+  mkdir -p "$1"
+  env "${unsets[@]}" HOME="$W/home1" TMPDIR="$1" SUITE_WALL_TIMEOUT="$2" SUITE_WALL_POLL=0.2 bash -c '
+    . "$1/lib/suite-deadline.sh" || exit 9
+    suite_deadline_arm || exit 8
+    '"$3" _ "$HOOKS" "$W"
+}
+isos(){ find "$1" -maxdepth 1 -name 'claude-sync-suite-work.isolated.*' 2>/dev/null; }
+# Waits on the folder itself, with the one ceiling only a hang reaches (lib/hang-wait.sh, L290).
+. "$HOOKS/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+gone(){ hang_wait "[ -z \"\$(isos '$1')\" ]" 0.2; }
+ended(){ # ended <description> <name>: the suite recorded the folder it made, and that folder went
+  local made; made="$(cat "$W/made-$2" 2>/dev/null)"
+  case "$made" in
+    "$W/tmp-$2/claude-sync-suite-work.isolated."*) ;;
+    *) bad "$1 (the suite made no folder to measure, it recorded '$made')"; return ;;
+  esac
+  if gone "$W/tmp-$2"; then ok; else bad "$1 (still there after ${HANG_S}s: $(isos "$W/tmp-$2"))"; fi
+}
+rec='ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/made-$3"'
+iso_suite "$W/tmp-pass" 0 "set -- \"\$1\" \"\$2\" pass; $rec; exit 0"
+ended "a suite that passed leaves no folder behind" pass
+iso_suite "$W/tmp-fail" 0 "set -- \"\$1\" \"\$2\" fail; $rec; exit 3"
+ended "a suite that failed leaves no folder behind" fail
+iso_suite "$W/tmp-trap" 0 "set -- \"\$1\" \"\$2\" trap; $rec; trap 'echo own trap' EXIT; exit 0" >/dev/null
+ended "a suite with an EXIT trap of its own leaves no folder behind" trap
+iso_suite "$W/tmp-deadline" 60 "set -- \"\$1\" \"\$2\" deadline; $rec; exit 0"
+ended "a suite armed with a deadline leaves no folder behind" deadline
+iso_suite "$W/tmp-killed" 0 "set -- \"\$1\" \"\$2\" killed; $rec; kill -KILL \$\$" 2>/dev/null
+ended "a suite killed outright, which no trap of its own can see, leaves no folder behind" killed
+# Kept while the suite runs: the folder is read while the suite waits on a file, several polls on.
+iso_suite "$W/tmp-live" 0 'ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/live-iso"; until [ -e "$2/live-go" ]; do sleep 0.2; done' &
+live_pid=$!
+hang_wait '[ -s "$W/live-iso" ]' 0.2 || bad "the running suite never said which folder it made"
+live_dir="$(cat "$W/live-iso" 2>/dev/null)"
+# A window the passing case runs out, five of the waiter's polls: a waiter that removed a live
+# suite's folder would have done it inside them.
+window_wait 1 "[ ! -d '$live_dir' ]" 0.2; live_ww=$?
+if [ -n "$live_dir" ] && [ "$live_ww" = 1 ]; then ok
+else bad "the folder of a suite still running is kept (got '$live_dir', window_wait ended $live_ww where 1, ran out, was wanted)"; fi
+touch "$W/live-go"; wait "$live_pid"
+gone "$W/tmp-live" && ok || bad "and removed once that suite ends ($(isos "$W/tmp-live"))"
+# A suite stopped at its deadline: the watchdog stops it, waits for it to go, and takes its folder.
+iso_suite "$W/tmp-expired" 1 "set -- \"\$1\" \"\$2\" expired; $rec; while :; do sleep 0.2; done" >/dev/null 2>&1
+ended "a suite stopped at its deadline leaves no folder behind" expired
+# A watchdog signalled while its suite still runs leaves that suite's folder alone: the folder is
+# the suite's records, in use, and the watchdog's own end is not the suite's.
+SUITE_WALL_PIDFILE="$W/sig.wd" iso_suite "$W/tmp-sig" 60 'ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/sig-iso"; until [ -e "$2/sig-go" ]; do sleep 0.2; done' &
+sig_pid=$!
+hang_wait '[ -s "$W/sig-iso" ] && [ -s "$W/sig.wd" ]' 0.2 || bad "the signalled watchdog case never started (no folder or watchdog pid)"
+sig_dir="$(cat "$W/sig-iso" 2>/dev/null)"; sig_wd="$(head -1 "$W/sig.wd" 2>/dev/null)"
+case "$sig_wd" in ''|*[!0-9]*) bad "the watchdog wrote no pid ('$sig_wd')" ;; *) kill -TERM "$sig_wd" 2>/dev/null ;; esac
+hang_wait "! kill -0 '$sig_wd' 2>/dev/null" 0.2 || bad "the signalled watchdog did not end"
+window_wait 1 "[ ! -d '$sig_dir' ]" 0.2; sig_ww=$?
+if [ -n "$sig_dir" ] && [ "$sig_ww" = 1 ]; then ok
+else bad "a watchdog signalled while its suite runs leaves the suite's folder (got '$sig_dir', window_wait ended $sig_ww where 1, ran out, was wanted)"; fi
+touch "$W/sig-go"; wait "$sig_pid"
 
 echo
 echo "passed: $pass, failed: $fail"

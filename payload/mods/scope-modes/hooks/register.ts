@@ -1289,17 +1289,22 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
     // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
     found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, worked, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
-    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '' }
+    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null }
   }
   found.unmeasured.unshift(...unread)
   const at = await $.clock.now()
   const by = await $.session.id()
+  // #3240: a stop at the limit keeps its facts as data on its own note (`limit`), and every run keeps
+  // each GitHub read's part and time on the check's one line (`steps`), so the limit can be set from
+  // real nights rather than guessed.
+  const stopped = found.stopped
+  const limit = stopped ? (({ text: _said, ...facts }) => facts)(stopped) : null
   try {
     for (const text of found.hits) await sleepNote($, recordPath, { kind: 'outward', at, by, text })
-    for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text })
+    for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text, ...(limit && text === stopped?.text ? { limit } : {}) })
     // What it read and left out as healthy (#2766), every time it runs: the report says it under
     // Needs a look, and a final report with no note of the check at all says it did not run.
-    if (found.checked) await sleepNote($, recordPath, { kind: 'checked', at, by, text: found.checked })
+    if (found.checked) await sleepNote($, recordPath, { kind: 'checked', at, by, text: found.checked, steps: found.steps })
   } catch (err) {
     $.ui.toast(`The overnight check could not write its notes: ${msg(err)}`)
   }

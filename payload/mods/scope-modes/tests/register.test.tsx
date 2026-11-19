@@ -3966,7 +3966,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   // The overnight check's one line goes first, every night, so the report can tell it ran (#2766).
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([
-    [moved, { kind: 'checked', at: T0, by: 's1', text: expect.stringMatching(/^The overnight check read /) }],
+    [moved, { kind: 'checked', at: T0, by: 's1', text: expect.stringMatching(/^The overnight check read /), steps: expect.any(Array) }],
     [moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }],
   ])
   expect(w.reports.map(x => x.op)).toEqual(['note', 'note', 'render'])
@@ -4432,7 +4432,7 @@ test("what the report says needs Dan that cannot be read is said in the morning,
   await start($ as never, clock)
   await command($ as never, 'wake')
   await clock.settle()
-  expect(morningOf(w)[0]).toMatch(/What the night's report says needs Dan could not be read here \(.+\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed\./)
+  expect(morningOf(w)[0]).toMatch(/What the night's report says needs Dan could not be read here \(.+\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed, rows in the same words together in one picker/)
 })
 
 test('a report whose wake render did not finish has its earlier rows handed over, and says Needs a look may lack the end of the night (#1665)', withDeps, async ($, on) => {
@@ -6410,8 +6410,18 @@ test('the wake check times its 30 s GitHub budget on the engine clock, so a slow
   const { w, clock } = world(on, { ...worker, nightReadMs: 25_000 })
   await start($ as never, clock)
   await command($ as never, 'wake')
-  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
-  expect(notes.filter(n => n.kind === 'unmeasured').map(n => n.text)).toContain('the overnight check stopped at its 30 s limit, so the rest of GitHub was not read')
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string; limit?: Record<string, unknown>; steps?: { part: number; step: string; ms: number }[] })
+  // #3240: the stop is one note naming its part, its reads and how far it got, with the facts kept as data too.
+  const stops = notes.filter(n => n.kind === 'unmeasured' && /limit/.test(n.text))
+  expect(stops).toHaveLength(1)
+  expect(stops[0]?.text).toMatch(/^the overnight check stopped at its 30 s limit, [\d.]+ s after it began, in part 3 of 6 \(the issues created overnight\): the last read it made, page 1 of the GitHub events, took 25\.0 s/)
+  expect(stops[0]?.limit).toMatchObject({ limitMs: 30_000, part: 3, parts: 6, last: { step: 'page 1 of the GitHub events', ms: 25_000 }, next: 'the issues created overnight', slowest: [{ part: 1, step: 'the GitHub login', ms: 25_000 }, { part: 2, step: 'page 1 of the GitHub events', ms: 25_000 }] })
+  expect(stops[0]?.limit).not.toHaveProperty('text')
+  // Each read's time is kept on the check's one line, every night, so the limit can be set from real nights.
+  expect(notes.find(n => n.kind === 'checked')?.steps).toEqual([
+    { part: 1, step: 'the GitHub login', ms: 25_000 },
+    { part: 2, step: 'page 1 of the GitHub events', ms: 25_000 },
+  ])
   // Two reads use the 30 s (login and events); nothing on GitHub after them is read.
   expect(w.runs.some(r => r.join(' ').startsWith('gh search issues'))).toBe(false)
 })

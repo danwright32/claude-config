@@ -5245,8 +5245,10 @@ its own throwaway folder, whatever was inherited. A suite typed straight into a 
 none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
 from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
 `suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
-in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
-claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`. The suite's
+watchdog, or a small waiter when it has no deadline, removes that folder once the suite's process
+has gone, however it ended (claude-config#3253); claude-sync's scratch sweep, which reclaims one
+after four hours, is only the backstop now. Under the runner every one is already set,
 so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
@@ -8185,7 +8187,21 @@ needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot s
 passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
-not run. A failed, cancelled or timed out run is listed. What may merge and
+not run. A failed, cancelled or timed out run is listed. The check runs once a night, when sleep
+mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
+limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
+parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
+file's changes, the milestones in each repository, then the deploy runs in each repository. Every
+read it makes is kept with its part and how long it took, as `steps` on the one line it always
+writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
+stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same
+values its sentence is built from: the part it stopped in (`part`, `parts`, `partName`), how long
+after it began (`elapsedMs`) against the limit (`limitMs`), the last read made and how long it took
+(`last`), the first read not made (`next`), how far it got (`pages` of events read, for a stop among
+the events, or `done` of `total` repositories, in a part read one repository at a time), and its
+three slowest reads (`slowest`, each with its part and time).
+The line also says that the parts after it were not read and that nothing read them later, since no
+later pass runs that night, so it stays under Needs a look. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
@@ -9183,8 +9199,14 @@ toward goals, Findings, and Limits and usage (each wait on a limit, the usage re
 usage). Its header says which sessions had no goal, and so did no work, and each worker's row at the
 end gives its goal. Three or more calls auto mode's check refused with no verdict for one reason
 (the check unavailable, a call not reviewed) are one line in Parked and failed, with the count, the
-time window and the kinds of call, followed by each of them that did more than read and was never
-sent again unchanged and run (#3158); a real refusal by the check is always its own row.
+time window in ET, the issues being worked while they fell and the kinds of call (#3158, #3223).
+Listed after it on its own is each of them that stopped work: one that did more than read, was
+never sent again unchanged and run, and after which its session did not finish the work it held
+(#3223). That work counts as finished when every issue the session had claimed by then, and not yet
+ended, was noted done afterwards; a session holding no claim finished its work when it later noted
+something done or a step of progress. A real refusal by the check is always
+its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
+are (#3223).
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,
