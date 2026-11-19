@@ -1026,11 +1026,13 @@ def command_rest(text, passed=None):
     return _command_rest(text, passed, True)
 
 
-def _command_rest(text, passed, glue_read):
+def _command_rest(text, passed, glue_read, headers=True):
     """command_rest, or with glue_read False the same reading without the space spaced() writes,
-    for glued_script alone, which asks how a command read before claude-config#3252. Kept apart
-    from command_rest, whose two arguments are what a caller wrapping it passes on: the Slack
-    drafts gate puts a wrapper of exactly that shape in its place to read each text once."""
+    for glued_script alone, which asks how a command read before claude-config#3252, or with
+    headers False the same reading with no function's header passed over, for headed_string
+    alone, which asks the same of a header. Kept apart from command_rest, whose two arguments are
+    what a caller wrapping it passes on: the Slack drafts gate puts a wrapper of exactly that shape
+    in its place to read each text once."""
     s = text.lstrip()
     # A subshell or group opening a command the crude cut left whole, `( cd x && git push )` or
     # `(git push)`, is not part of it (claude-config#439): an opener glued to the name is peeled off,
@@ -1042,7 +1044,7 @@ def _command_rest(text, passed, glue_read):
         if not m or m.group(1) not in RESERVED:
             # A function's header stands before its body's first command as a reserved word stands
             # before a command, and the { after it is one (claude-config#3252).
-            header = FUNC_HEAD.match(s)
+            header = FUNC_HEAD.match(s) if headers else None
             if header:
                 s = s[header.end():]
                 continue
@@ -2087,6 +2089,26 @@ def glued_script(text):
         return ""
     old = _script_run(word, rest)
     return old[2] if old and old[0] == "direct" else ""
+
+
+def headed_string(text):
+    """(the wrapper, its string) for one command that hands a shell or eval a string and is read
+    as that only because a function's header is passed over (claude-config#3252), else None.
+
+    `f() { bash -c "..."` is the first command of f's body. Before #3252 it was a program named
+    f(), so its string's commands were given to no caller, and they are records of their own now.
+    A caller that reads such a string another way than as written (the Slack drafts gate, which
+    fills in what the outer shell fills in) asks here which commands those are, so that what it
+    sets aside is only ever a reading nobody had before. None for a command with no header in
+    front, for one whose string cannot be read, and for one that was a wrapper with the header
+    left where it is (a function named as a wrapper is, `eval () { ...`, read before as eval's
+    string): what was read before stays every caller's to read as it did."""
+    if wrapped(_command_rest(text, None, True, False)[0]) is not None:
+        return None
+    found = wrapped(command_rest(text)[0])
+    if found is None or found[1] is None or found[2]:
+        return None
+    return found[0], found[1]
 
 
 def _records(s, cwd, depth, scripts=None, fields=True):

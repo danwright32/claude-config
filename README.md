@@ -4489,6 +4489,19 @@ a quote or a backslash, which named no shell or script as written. Left open, ea
 issue of its own: `turbo`, `nx` and `lerna`, and a loop over the words of a file (`for w in $(cat
 f); do $w; done`). Suite: `test-slack-drafts-unread-shapes.sh`.
 
+Since claude-config#3252 the shared reader passes a function's header over, so the first command of
+a body written on the header's own line (`busy(){ bash -c ". '$DIR/lib.sh' && f"; }`) is read, and
+with it the commands of a string it hands a shell. Read as written, that string sources a file named
+`$DIR/lib.sh` from a folder nobody knows, which is refused as a path that cannot be worked out. In a
+script on disk such a string is read as the inner shell gets it instead (`headed_filled`, by the
+steps of the reading above): every variable and substitution the outer shell fills in is replaced
+by the value the gate works out for it, so the file is the one in the script's folder, and one that
+posts is refused as posting. That reading stands in for the string's commands as written only where
+every value is worked out and the text it gives can be followed, and only for a command whose string
+no reading was given before #3252 (the reader's `headed_string`); the command itself is then judged
+as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
+command, a body over several lines, the same string at a script's top level, and anything typed.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite

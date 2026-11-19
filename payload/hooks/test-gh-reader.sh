@@ -484,6 +484,27 @@ check_eq "#3252 control: and written so it stays with its redirection" "echo,2>o
 check_eq "#3252 control: zsh's numeric range is a word" "ls,file<1-10>.txt" "$(words_of 'ls file<1-10>.txt')"
 check_eq "#3252 the empty parentheses after the function keyword open no body, and the braces' first command is read" "$G|push|| ; - ; -" "$(each_tool "function f () { $G push; }; f")"
 check_eq "#3252 control: a call of a function is no definition" "-" "$(each_tool 'f')"
+# A string the first command of a function's body hands a shell is one nobody read before the
+# header was passed over. headed_string says which commands those are, for a caller that reads such
+# a string another way (the Slack drafts gate), and names no command whose string was read before.
+headed(){ # headed <one command's text>: wrapper|string where only the header hid its string, else -
+  python3 -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+found = sw.headed_string(sys.argv[2])
+print("|".join(found) if found else "-")' "$SW" "$1"
+}
+check_eq "#3252 a string handed a shell behind a function's header" "bash -c|echo hi" "$(headed 'f() { bash -c "echo hi"')"
+check_eq "#3252 and behind the function keyword" "sh -c|echo hi" "$(headed 'function f { sh -c "echo hi"')"
+check_eq "#3252 and where the body is the one command, as zsh takes it" "bash -c|echo hi" "$(headed 'f() bash -c "echo hi"')"
+check_eq "#3252 and behind a runner inside the body" "bash -c|echo hi" "$(headed 'f() { sudo bash -c "echo hi"')"
+check_eq "#3252 control: the same command with no header was always read" "-" "$(headed 'bash -c "echo hi"')"
+check_eq "#3252 control: and behind a reserved word alone" "-" "$(headed '{ bash -c "echo hi"')"
+check_eq "#3252 control: a header before a command that hands no string" "-" "$(headed "f() { $G push")"
+check_eq "#3252 control: a header before a shell handed a file, whose commands are not in the command" "-" "$(headed 'f() { bash ./x.sh')"
+check_eq "#3252 control: a function named as eval is, whose words were read before as eval's string" "-" "$(headed 'eval () { bash -c "echo hi"')"
 
 mkdir -p "$WORK/empty"
 scan "$WORK/empty"
