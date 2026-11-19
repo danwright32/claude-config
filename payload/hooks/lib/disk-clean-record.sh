@@ -74,7 +74,7 @@ DCR_MAX_SCAN_AGE=3600
 # review page on 2026-10-28 (docs/design/disk-clean-review-page.html). The 180 is scan-lib.sh's
 # DCS_TOOL_DAYS. Rows are name|title separated by
 # semicolons, on one line, because BSD awk refuses a -v value holding a newline.
-DCR_TITLES='trash|Trash;caches|App caches;xcode|Xcode build caches;build-folders|Project build folders;docker|Docker;playwright|Playwright browsers;claude-temp|Claude Code temporary folders;worktrees|Finished worktrees;forgotten-worktrees|Worktrees whose repository is gone;transcripts|Old transcripts;runaway-logs|Runaway logs;forgotten-tools|Tools not used in 180 days;large-files|Large personal files;named|Named by disk-full'
+DCR_TITLES='trash|Trash;caches|App caches;xcode|Xcode build caches;build-folders|Project build folders;docker|Docker;playwright|Playwright browsers;claude-temp|Claude Code temporary folders;worktrees|Finished worktrees;forgotten-worktrees|Worktrees whose repository is gone;transcripts|Old transcripts;transcript-extras|Tool output beside transcripts;claude-records|Records Claude Code and this config keep;claude-versions|Old Claude Code versions;claude-user-temp|Claude items in the user temp folder;gh-cache|GitHub command line cache;package-caches|npm and pnpm caches;runaway-logs|Runaway logs;forgotten-tools|Tools not used in 180 days;large-files|Large personal files;named|Named by disk-full'
 # dcr_t(<name>, <the table>): the lookup, for any awk program handed DCR_TITLES with -v.
 DCR_AWK_TITLES='
 function dcr_t(name, table,    n, i, rows, k) {

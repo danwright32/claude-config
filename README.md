@@ -332,7 +332,7 @@ lists the security default in it. Set `SYNC_MANAGED_SETTINGS` to check another p
 
 ## Automatic sync
 
-`install-autosync` sets up two launchd agents (and retires older ones), and installs
+`install-autosync` sets up three launchd agents (and retires older ones), and installs
 the `claudesync` shell alias:
 
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
@@ -344,6 +344,43 @@ the `claudesync` shell alias:
   sync, not a measurement, which is why it has no row in DESIGN.md's measured
   numbers table; what holds it honest is that it appears here on the line that names
   the setting, and the suite requires the two to agree.
+- **`com.claudesync.leftovers`**, once a day, runs `claude-sync remove-leftovers`: the two keep
+  rules Dan set on 2026-11-18 (claude-config#3235), described under "Removing old leftovers by
+  itself" below.
+
+### Removing old leftovers by itself (#3235)
+
+Dan's three decisions, each from a picker on 2026-11-18: session notes "Drop bulky leftovers, keep
+notes"; transcripts "Shorten only agent and test runs", kept "7 days" (his own sessions stay at
+Claude Code's 30); and it runs "By itself, with a log". The rules are `hooks/lib/keep_rules.py`, whose
+header is the checkable statement of both. In short:
+
+- **Session notes** (`~/.claude/state/session-notes/<project>/<session>/`). A session has ended
+  when the session registry does not show it open AND no file in its notes folder was written for 3
+  days. Then each folder inside a task folder taking 1 MB or more goes, unless it is a git checkout
+  or mostly images or documents, and so do tar files. Every other file (handoff.md, evidence.md,
+  tests.txt, pr-body.md, logs) stays, every folder under 1 MB stays, and a link is never followed or
+  removed. A folder not named like a session id is never touched.
+- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 7 days ago: subagent
+  transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and, in a
+  project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
+  `/private/tmp` (`-private-tmp`), the session transcript `<session>.jsonl` and every file in the
+  session's own folder. A `memory` folder is never touched.
+
+Where it is said: each removed item, with its size in bytes, is a line in
+`~/.claude/state/keep-rules/removed.log` (kept to about 5 MB, one older file beside it), and the last
+run's outcome is `~/.claude/state/keep-rules/last-run`. A clean run says nothing anywhere. A failed
+run posts a desktop notification, and a failed or missed run (none finished for two days) is said
+once per session by the per prompt sync notice, from `claude-sync stuck`. `claude-sync status` has a
+"removal of leftovers" line.
+
+- See what it would remove, changing nothing: `claude-sync leftovers`
+- Run it now: `claude-sync remove-leftovers`
+- Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
+  long as the file is there; delete the file to switch it back on). That folder is this Mac's own
+  state and is never synced, so the other Mac is unaffected.
+- Install it on a Mac: `claude-sync install-autosync`, run once on each Mac, since a launch agent
+  is a copy. Until it is installed, `claude-sync stuck` says so in every session on that Mac.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):
@@ -1996,7 +2033,18 @@ and log, and waited on like any other run. A run whose jobs ran and failed is ne
 already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
 left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
 gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
-has to pass `block-red-merge.sh`. A job that waited for a runner is said (claude-config#2714): GitHub
+has to pass `block-red-merge.sh`. A head GitHub has not yet given a run, or whose finished run's
+checks it has not yet listed, is waited on rather than stopped on (claude-config#3254): on
+2026-11-18 the helper updated #3242 at 14:36 ET and stopped at 14:40:28 on "PR has NO checks at all",
+one second before GitHub created the head's tests run, which went green. Over 455 updates from
+2026-11-08 to 11-18 GitHub created the run within 8 seconds 95 times in 100, and in up to 388 seconds
+for the rest. So with no checks listed and no run for the head, the helper says "no workflow run
+created for this head yet" and waits up to `MWR_NO_CHECKS_GRACE_SECONDS` (600, sized from that spread, counted
+from its first look at the head) before asking the gates, which decide on the empty list as before:
+in a repository that runs pull request workflows they refuse it and name why. With no checks listed and a run for the head finished other than as a failure, it says GitHub
+has not listed its checks yet and waits up to `MWR_CHECKS_LIST_SECONDS` (300, a setting, not a
+measurement), then says so, naming the run, and the gates decide on the empty list exactly as before.
+Only how long it waits changed, never what the gates allow. A job that waited for a runner is said (claude-config#2714): GitHub
 runs at most 20 jobs at once on the Free plan's hosted runners (docs.github.com/en/actions/reference/limits),
 and on 2026-11-10 that pool was full twice and 15 jobs waited over a minute, up to 6.6 minutes, which
 read in the merge logs as slow tests. Once every run of the head has finished, each run the helper
@@ -4205,6 +4253,27 @@ a pipe, and refused as unread where it does not (`bash <(curl -s https://example
 except inside a script on disk, where what cannot be read is left as it is for a pipe there. One
 handed to a script as an argument is data to that script and is judged only by its own commands.
 
+Since claude-config#3229 a shell or an interpreter given no script and no pipe or file of its own
+is read by what the text around it hands it, since that is what it runs: a pipe into the subshell,
+group, `if`, loop or `case` it is in (`cat post.sh | (cd x && bash)`), a file, here string or heredoc
+given to that (`{ bash; } < post.sh`), what feeds the shell whose `-c` string, `eval` or `find -exec`
+it is in or a pipe written inside that string (`cat post.sh | bash -c bash`, `bash -c 'cat post.sh |
+bash'`), what feeds the command holding the command substitution it is in, and an `exec < file`
+earlier in the text. The feed is read as a pipe straight into the program is: a file or written text
+is judged, and anything else is refused as unread when typed and left alone in a script on disk. A
+function's body is fed by whatever calls it, and not every way of calling one is worked out, so a
+program that runs its input there is always unread, and typed it is refused even where nothing
+feeds the call (of 376 past commands defining a function on this Mac, measured 2026-11-18, none
+changed verdict). In a script on disk, where an unread feed is left alone, what each direct call of
+the function and its definition are given is read too, so `f() { bash; }` then `cat post.sh | f` is
+refused there. A redirection glued to a command's name or to its file is read as the same
+command with spaces (`bash<post`, `bash <post`, `bash 0<post`, `'bash'<post`): the shared reader
+splits a command's words on white space alone, so before this only `bash < post` had its file read.
+The wrapper sends a call to the rule for a shell's name followed by anything that ends the name, not
+only a space. Left open, each recorded for an issue of its own: `/dev/stdin` named as the script, a
+shell named by a variable, `xargs` building the command from its input, and a line read and then
+run.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -4832,6 +4901,10 @@ bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
 It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
 main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
 suite ran in: its section time and check count, and that runner's core count, processor and region.
+Since #3256 it also records the runner's reference reading (`reference_ms`) and the judged figure
+(`judged_seconds`), the number the budget now decides on, both read from the same note: a run whose
+speed was not read records `unmeasured` and its raw time, a run from before #3239 records `unknown`
+for both, and a record written before those columns existed is read with its rows marked `unknown`.
 A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
 lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
 middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
@@ -5868,7 +5941,9 @@ never an id per entry: the personal MacBook's 5,979 entries in its dry run on 20
 `dcrv_whole_token`) covers the scan id and every entry's id, path and device and inode, so the
 checker plans the summary only when working it out again from the record gives the same one, then as
 exactly those entries. An entry put in the Trash after the scan is not in the record, so the summary
-never reaches it; a count or digest that differs, or a summary of any other kind, is refused.
+never reaches it; a count or digest that differs, or a summary of a kind not drawn as one row, is
+refused. The GitHub command line cache (`gh-cache`, 2,095 entries on the personal MacBook on
+2026-11-18) is drawn and summed up the same way (#3235); `DCRV_WHOLE` in `review-lib.sh` lists both.
 The confirm step says the Trash in one line, its count and total, and
 `review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 
@@ -5885,9 +5960,30 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
-files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
-again just before removing anything.
+worktrees whose repository is gone, transcripts, the kinds below for what Claude Code sessions leave
+behind, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+What a session leaves on disk, measured on the personal MacBook on 2026-11-18 (claude-config#3235),
+has a kind each. Offered, past each kind's own rule and the 30 day floor below: tool output beside
+transcripts (`transcript-extras.sh`: a session's `tool-results` folder once its transcript is gone
+and no live session owns it, to the Trash), old Claude Code versions (`claude-versions.sh`: never the
+one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
+cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
+Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
+copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
+download cache, its logs and the pnpm store are shown there and never offered), and in build
+folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
+project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
+stays refused). Shown and never offered, each row saying why: `claude-records.sh` (session notes,
+Claude Code's file history, the finding spool and its backups, and the folders this config's hooks
+keep in the home folder, with the rest of `~/.claude/state` counted in its note) and
+`claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
+rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
+this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
+nowhere instead of keeping the floor, and pins the marker to exactly these two kinds.
+Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate daily
+job; this skill only shows session notes.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so

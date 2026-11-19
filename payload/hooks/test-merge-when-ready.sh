@@ -1512,6 +1512,99 @@ check "#2537 naming GitHub's answer" "HTTP 403" "$out"
 check_eq "#2537 nothing was merged" "0" "$(count gh-calls 'pr merge')"
 
 # =================================================================================================
+# 9c. A head whose run GitHub has not created yet, or whose checks it has not listed yet, is waited
+#     on for a bounded time (claude-config#3254). On 2026-11-18 this helper updated #3242 at 14:36:13
+#     ET and stopped at 14:40:28 on block-red-merge.sh's "PR has NO checks at all": GitHub created
+#     the head's tests run (44382714174) at 14:40:29, 256 seconds after the update, one second after
+#     the stop, and the run went green. Over the 455 updates of 2026-11-08 to 11-18 GitHub created the
+#     run within 8 seconds for 95 in 100, and in up to 388 seconds for the rest (evidence in the
+#     issue's working notes). These sections run on the helper's own default waits, never the suite's
+#     zero, and every wait is crossed on the injected clock.
+# =================================================================================================
+# tick: run on every sleep, it moves GitHub along by the time since the update, as 2026-11-18 went:
+# nothing for created-at seconds, then the run in progress, then green after finished-at.
+lag_tick(){ # lag_tick <created-at> <finished-at>: writes the step every sleep runs
+  cat > "$ST/tick" <<EOT
+u="\$(head -1 "\$ST/update-times" 2>/dev/null)"; c=""; read -r c < "\$ST/clock"
+if [ -n "\$u" ] && [ \$(( c - u )) -ge $2 ]; then
+  printf '%s' '$GREEN' > "\$ST/rollup"; printf '%s' '$(fs_runs 44382714174 completed success 1)' > "\$ST/runs"; : > "\$ST/red-gate-deny"
+elif [ -n "\$u" ] && [ \$(( c - u )) -ge $1 ]; then
+  printf '%s' '$PENDING' > "\$ST/rollup"; printf '%s' '$(fs_runs 44382714174 in_progress '' 1)' > "\$ST/runs"
+fi
+EOT
+  local i; for i in $(seq 1 120); do printf '%s\n' '. "$ST/tick"'; done > "$ST/on-sleep"
+}
+elapsed_since_update(){ local c u; read -r c < "$ST/clock"; u="$(head -1 "$ST/update-times")"; printf '%s' "$(( c - u ))"; }
+
+# The 2026-11-18 stop, reproduced: the run is created 256 seconds after the update and finishes green.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; printf '[]' > "$ST/rollup-after-update"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+lag_tick 256 1156
+out="$(MWR_NO_CHECKS_GRACE_SECONDS= run 7 --squash)"; rc=$?
+check_eq "#3254 a run GitHub creates 256s after the update is waited for, and the head merges" "0" "$rc"
+check_not "#3254 it never stops on an empty check list GitHub has not filled yet" "PR has NO checks at all" "$out"
+check "#3254 the wait says no run has been created for the head yet" "no workflow run created for this head yet" "$out"
+check_eq "#3254 the checks gate was asked once, after the checks were green" "1" "$(grep -c 'gh pr merge' "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+check "#3254 pinned to the updated head" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+
+# A head whose run never starts (Actions disabled, a workflow that will not parse): it still stops on
+# the checks gate's own refusal, once the bounded wait is spent and not long after.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; printf '[]' > "$ST/rollup-after-update"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+out="$(MWR_NO_CHECKS_GRACE_SECONDS= run 7 --squash)"; rc=$?
+check_eq "#3254 a head whose run never starts stops" "1" "$rc"
+check "#3254 on block-red-merge.sh's own refusal, naming why" "PR has NO checks at all" "$out"
+check_eq "#3254 nothing was merged" "0" "$(count gh-calls 'pr merge')"
+el="$(elapsed_since_update)"
+[ "$el" -ge 600 ] && ok || bad "#3254 it waited out the 10 minute wait for a run first (stopped ${el}s after the update)"
+[ "$el" -le 700 ] && ok || bad "#3254 and stopped soon after it (stopped ${el}s after the update)"
+
+# Checks reported late: the head's run has finished green, and GitHub has not listed its checks on
+# the pull request yet. Waited on, with no grace for a run to be created (the suite's zero).
+fresh "$OLD" 0 '[]'
+fs_runs 44382714174 completed success 1 > "$ST/runs"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+printf '%s\n' : : : "printf '%s' '$GREEN' > \"\$ST/rollup\"; : > \"\$ST/red-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3254 a finished run whose checks GitHub lists late is waited for, then merges" "0" "$rc"
+check "#3254 saying GitHub has not listed the finished run's checks yet" "GitHub has not listed its checks" "$out"
+check_eq "#3254 the checks gate was asked once, after they were listed" "1" "$(grep -c 'gh pr merge' "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+
+# Checks never listed for a run that finished green: after a bounded wait it says so, naming the run,
+# and the checks gate decides on the empty list exactly as it did before this wait existed.
+fresh "$OLD" 0 '[]'
+fs_runs 44382714174 completed success 1 > "$ST/runs"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+read -r t0 < "$ST/clock"
+out="$(run 7 --squash)"; rc=$?
+read -r t1 < "$ST/clock"
+check_eq "#3254 a finished run whose checks are never listed stops" "1" "$rc"
+check "#3254 naming the run and that GitHub listed no checks for it" "Head ${OLD:0:7}: workflow run tests finished, but GitHub has listed no checks on #7 after 5m" "$out"
+check "#3254 on the checks gate's own refusal" "PR has NO checks at all" "$out"
+check_eq "#3254 nothing was merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#3254 the gates were asked once, after the wait" "1" "$(grep -c 'gh pr merge' "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+[ $(( t1 - t0 )) -ge 300 ] && [ $(( t1 - t0 )) -le 400 ] && ok || bad "#3254 after the 5 minute wait for a listing and not long after ($(( t1 - t0 ))s)"
+
+# And where the checks gate allows an empty list (a repository with no pull request workflows, whose
+# head carries some other finished run), the wait changes nothing it decides: it still merges.
+fresh "$OLD" 0 '[]'
+fs_runs 44382714174 completed success 1 > "$ST/runs"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3254 control: an empty list the gate allows still merges after the wait" "0" "$rc"
+check_eq "#3254 control: exactly one merge" "1" "$(count gh-calls 'pr merge')"
+
+# Control: a run that FAILED, with an empty check list, is no listing delay: the gate decides at once.
+fresh "$OLD" 0 '[]'
+fs_runs 4209 completed failure 1 > "$ST/runs"; printf '3' > "$ST/jobs-4209"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3254 control: a failed run with no checks listed stops as before" "1" "$rc"
+check_not "#3254 control: with no wait for a listing" "has not listed its checks" "$out"
+check "#3254 control: on the gate's own refusal" "PR has NO checks at all" "$out"
+
+# =================================================================================================
 # 10. The changelog record gate is asked too (claude-config#1178). Nine Slate pull requests merged
 #     through this helper between 2026-10-07 and 2026-10-12 with no changelog/* label: the helper
 #     asked only the checks and review gates, and the typed command that started it is not a merge
