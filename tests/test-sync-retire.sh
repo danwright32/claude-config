@@ -4,7 +4,7 @@
 # A Mac being cleared for trade in kept com.claudesync.watch and com.claudesync.timer running, so
 # every file deleted from its ~/.claude by hand was sent on as a change to the shared config and
 # removed from every other Mac. retire is the inverse of install-autosync: it records the Mac as
-# retired, unloads and removes both agents, and reads launchd back to confirm neither is loaded.
+# retired, unloads and removes all three agents, and reads launchd back to confirm none is loaded.
 #
 # Everything runs as a planted Mac: HOME is a throwaway inside WORK and CLAUDE_HOME is its own
 # ~/.claude, so claude-sync treats it as the user's own config and calls launchctl, which here is a
@@ -109,7 +109,7 @@ tree_of(){ (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do
 remote_head(){ git -C "$BARE" rev-parse main 2>/dev/null; }
 loaded(){ LC_ALL=C sort "$LOADED" | paste -sd ' ' -; }
 
-# ==== 1. the controls: install-autosync loads both agents, and a push from this Mac does reach the shared repo ====
+# ==== 1. the controls: install-autosync loads all three agents, and a push from this Mac does reach the shared repo ====
 plant mac-a
 # A Mac that is not retired reads as it always has (claude-config#2633): no retired notice, and
 # the agents it lacks are offered through install-autosync, which here runs.
@@ -118,7 +118,7 @@ check "control: status on a Mac not retired says nothing of retiring" lacks "$ou
 check "control: status on a Mac not retired skips no check" lacks "$out" "Not checked while this Mac is retired"
 check "control: status on a Mac not retired still offers install-autosync" has "$out" "Install both with: claude-sync install-autosync"
 out="$(run install-autosync)"
-check "control: install-autosync wrote both agents" test -f "$AGENTS/com.claudesync.timer.plist" -a -f "$AGENTS/com.claudesync.watch.plist"
+check "control: install-autosync wrote all three agents" test -f "$AGENTS/com.claudesync.timer.plist" -a -f "$AGENTS/com.claudesync.watch.plist" -a -f "$AGENTS/com.claudesync.leftovers.plist"
 check "control: install-autosync loaded all three agents" same "$(loaded)" "com.claudesync.leftovers com.claudesync.timer com.claudesync.watch"
 before_push="$(remote_head)"
 out="$(run push)"; rc=$?
@@ -133,9 +133,9 @@ out="$(run retire)"; rc=$?
 check "preview: exits 2, so nothing reads it as done" same "$rc" 2
 check "preview: says nothing was changed" has "$out" "Nothing was changed"
 check "preview: names the confirming flag" has "$out" "claude-sync retire --yes"
-check "preview: names both agents it would remove" has "$out" "com.claudesync.timer, com.claudesync.watch"
+check "preview: names all three agents it would remove" has "$out" "com.claudesync.timer, com.claudesync.watch, com.claudesync.leftovers"
 check "preview: writes no retired record" test ! -e "$RECORD"
-check "preview: both agents are still installed" test -f "$AGENTS/com.claudesync.timer.plist" -a -f "$AGENTS/com.claudesync.watch.plist"
+check "preview: all three agents are still installed" test -f "$AGENTS/com.claudesync.timer.plist" -a -f "$AGENTS/com.claudesync.watch.plist" -a -f "$AGENTS/com.claudesync.leftovers.plist"
 check "preview: all three agents are still loaded" same "$(loaded)" "com.claudesync.leftovers com.claudesync.timer com.claudesync.watch"
 check "preview: unloads nothing" lacks "$(cat "$LCLOG")" "unload"
 
@@ -147,11 +147,12 @@ check "retire: exits 0" same "$rc" 0
 check "retire: writes the retired record outside ~/.claude" test -f "$RECORD"
 check "retire: unloads the timer" grep -q "^unload $AGENTS/com.claudesync.timer.plist" "$LCLOG"
 check "retire: unloads the watcher" grep -q "^unload $AGENTS/com.claudesync.watch.plist" "$LCLOG"
+check "retire: unloads the daily removal of leftovers" grep -q "^unload $AGENTS/com.claudesync.leftovers.plist" "$LCLOG"
 check "retire: removes every plist, the daily removal of leftovers (#3235) included" test ! -e "$AGENTS/com.claudesync.timer.plist" -a ! -e "$AGENTS/com.claudesync.watch.plist" -a ! -e "$AGENTS/com.claudesync.leftovers.plist"
-check "retire: neither agent is loaded afterwards" same "$(loaded)" ""
+check "retire: no agent is loaded afterwards" same "$(loaded)" ""
 check "retire: reads launchd back rather than trusting unload" grep -q '^list$' "$LCLOG"
 check "retire: says it confirmed none is loaded" has "$out" "launchctl list shows none of com.claudesync.timer, com.claudesync.watch, com.claudesync.leftovers loaded"
-check "retire: says what it removed" has "$out" "Unloaded and removed: com.claudesync.timer, com.claudesync.watch"
+check "retire: says what it removed" has "$out" "Unloaded and removed: com.claudesync.timer, com.claudesync.watch, com.claudesync.leftovers"
 check "retire: says what it left" has "$out" "Left alone:"
 check "retire: names the way back" has "$out" "rm $RECORD"
 check "retire: ~/.claude is untouched" same "$(tree_of "$OWN")" "$OWN_BEFORE"
