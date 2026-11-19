@@ -323,6 +323,45 @@ A one-off migration that MOVED the old leftovers into the new directory was cons
 nothing: finding them to move them is the same expensive read, and it would still leave nothing
 watching the location an un-upgraded copy keeps writing to.
 
+### The daily removal of leftovers (#3235)
+
+What is removed, and when, is README "Removing old leftovers by itself"; the rules are
+`hooks/lib/keep_rules.py`. The choices behind them, measured on the personal MacBook on
+2026-11-18 (notes 5.1 GB in nine days, transcripts 11.8 GB, of which agent and test runs 4.8 GB in
+worktree and /private/tmp folders plus 5.1 GB of subagent transcripts):
+
+- **Its own launch agent, written by install-autosync.** The repository already schedules through
+  launchd agents that install-autosync writes from one definition (`agent_labels`), which status
+  compares against what is installed, and retire removes. A third label there gets all three for
+  nothing. Running it inside a sync instead would have tied it to the sync lock and to a sync that
+  dies early, and a removal of gigabytes inside the lock blocks the watcher.
+- **Ended is read from two sources.** The session registry alone can be wrong (a session it never
+  recorded, a mod that stopped stamping), and quiet alone cannot tell an idle open session from an
+  ended one, so either one keeps the folder (L345). Quiet is read from files only: a folder's own
+  time moves when this job removes something in it, which would make every ended session look
+  written to after its first partial run.
+- **Bulky is a folder of 1 MB or more inside a task folder, or a tar file.** Measured: 475 such
+  folders held 4,237 MB of the 5,142 MB of notes, and the 288 under 1 MB held 55 MB, so the
+  threshold costs little and keeps any small folder of written notes. A folder that is itself a git
+  checkout is kept (it may hold unpushed work); a .git deeper inside is a test fixture's repository
+  and does not count, since one fixtures folder of 562 MB is full of them. A folder mostly of images
+  or documents is kept and left to Dan: 26 of them, 987 MB, are photo exports and downloaded pages.
+- **A folder is renamed before it is removed**, to `.keep-rules-removing.<name>`, so a run killed
+  half way leaves a name the next run finishes whatever is left of it, rather than a remnant under
+  1 MB that the size rule would keep for ever. A lock makes a second concurrent run stop and say so.
+- **This script writes the run record, not the job**, so a job that crashes still leaves a failed
+  run on record (L561); a missed run is judged from that record and the agent's install time by
+  `claude-sync stuck`, a different process from the job (L71).
+- **Readers of the transcripts at 7 days.** The subagent issue harvest reads a transcript within
+  seconds of the agent ending; the issue spool releases a session's records after a week either way
+  (CLAIM_AFTER), so a transcript gone at 7 days strands nothing; verification.py looks back 3 days;
+  audit-sessions reads 14 days of top level transcripts and already skips worktree folders, so it
+  loses days 8 to 14 of /private/tmp runs only; cache-usage defaults to 7 days. Shortened by it:
+  agent-cap-report and wrapped-refusal-followups (subagent windows longer than 7 days come back
+  short), and lesson-citations (60 days), which loses days 8 to 60 of worktree and headless sessions
+  in other repositories. disk-clean's transcripts kind offers only past 90 days, unreachable since
+  Claude Code's own 30, and still unreachable (L174).
+
 ### Keeping the test runner's boundary at one directory
 
 Rejected for #120, and it is what the runner did for its whole life.
