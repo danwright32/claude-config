@@ -568,6 +568,22 @@ one with each such library taken away. A library a gate loads with a stand in fu
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
 
+Before a Bash call the write gate also notes what an at risk `payload/` holds, in
+`~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
+command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
+read back and removed when the call succeeds or fails (`PostToolUse`, `PostToolUseFailure`), and
+removed unread for a Monitor call, whose command runs on after it returns, and for a call auto mode
+refuses before it runs (`PermissionDenied`). A refusal by another gate and an interrupt reach no
+event, and Claude Code promises none for a refusal by a mod, so the gate still sweeps notes a day
+old whenever it takes a new one. On `PermissionDenied` the hook only removes that one call's note:
+it prints nothing and decides nothing. `tests/test-sleep-silence.sh` holds every hook on that event
+to the sleep predicate or to an exempt entry with a reason, and this hook has the entry, which Dan
+signed off on 2026-11-19 (asked "This hook only deletes its own note and prints nothing. Sign off
+an exempt entry for it?", he answered "Sign off the entry"). The entry covers that and nothing
+wider. That suite and `hooks/test-payload-write-gate.sh` both run the hook on a refused call, the
+first against an asleep record and an awake one, and fail if it writes one byte to stdout or
+stderr or removes any note but the refused call's.
+
 Every hook takes its payload through `ps_read_payload` in `hooks/lib/push-scope.sh`, or cleans a raw
 capture with `ps_clean_payload` before anything parses it, because jq rejects a whole payload holding
 one lone surrogate escape such as `\ud800`, and six merge gates once let a merge through on one
@@ -8078,7 +8094,8 @@ reflection and issue review, the PR quiz, the lesson fan out notice and claude-s
 can reach Dan (settings hooks on turn end and waiting events, every mod's notifier, sound, question
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
 that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
-route asleep and awake. The night's report (#835), `~/Downloads/Sleep report <night>.md`, is written
+route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
+prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835), `~/Downloads/Sleep report <night>.md`, is written
 from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
