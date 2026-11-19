@@ -3080,7 +3080,7 @@ lesson_short_form_pairs(){   # $1 = the full lessons file
   return 0
 }
 
-# ONE reading of a lessons file, in three shapes. The walk, the wrap joining and the SHORT: scan are
+# ONE reading of a lessons file, in five shapes. The walk, the wrap joining and the SHORT: scan are
 # the fiddly parts and they are written once: the index, the drift check and the repeated entry
 # check cannot come to different ideas of what a lesson's rule sentence is (L370, L70).
 #   index     every index line, across every section, as one stream

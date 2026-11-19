@@ -68,6 +68,7 @@ echo "lesson check lines: well formed lines are accepted"
 lessons "- **L1. A rule a guard holds in full.** body
   (claude-config#1, 2026-01-01)
   CHECK: hooks/real-guard.sh (full)
+  SHORT: A rule a guard holds in full.
 - **L2. A rule a guard holds only in part.** body
   CHECK: hooks/real-guard.sh, danwright32/Ovation:scripts/lint.sh (partial)
 - **L3. A rule nothing can check by machine.** body
@@ -79,8 +80,12 @@ silent "and lesson-faults says nothing about them" "$out"
 
 # The index renders the rule, never the check line, so the generated files and the budgets are
 # unchanged by any check line (the entries render exactly as they did before).
+# L1 carries its SHORT line AFTER its CHECK line, so the pairing must step over the check line to
+# find it: the first check proves the pairing read the entry at all, which is what lets the second
+# one fail (an empty reading would pass it).
 idx="$(CLAUDE_HOME="$H" bash "$SYNC" lesson-short-forms "$H/LESSONS.md" 2>&1)"
-never_says "a CHECK line is never read as a short form" "$idx" "real-guard"
+says "a SHORT line after a CHECK line is still paired with its lesson" "$idx" "A rule a guard holds in full."
+never_says "and the CHECK line is never read as a short form" "$idx" "real-guard"
 
 echo "lesson check lines: a malformed line is refused like any other entry fault"
 
