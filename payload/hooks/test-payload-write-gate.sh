@@ -750,13 +750,13 @@ echo "payload write gate: what no command text can show is caught after it runs 
 # those write, so the destination is checked instead. Before the call the gate notes what payload/
 # holds; after it, anything written, added or removed there while nothing protected it is named.
 STATE="$FIX/state"
-prepost(){ # prepost <event> <command> <cwd> <tool use id> [pid file]
+prepost(){ # prepost <event> <command> <cwd> <tool use id> [pid file] [tool name]
   local pidf="${5:-$PIDF}"
   OUT="$(python3 -c '
 import json, sys
-print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": "Bash", "cwd": sys.argv[3],
+print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": sys.argv[6], "cwd": sys.argv[3],
                   "tool_use_id": sys.argv[4], "session_id": sys.argv[5], "tool_input": {"command": sys.argv[2]}}))
-' "$1" "$2" "$3" "$4" "$SID" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
+' "$1" "$2" "$3" "$4" "$SID" "${6:-Bash}" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
 }
 # The installed config the report compares against, empty until a case fills it, so every case
 # above the next section is judged as it was before a file could match (claude-config#1211).
@@ -1037,6 +1037,72 @@ edit "$G/wt/payload/a.md" "$G/wt"
 refused "a linked worktree mid rebase of a detached HEAD is still refused"
 GG "$G/wt" rebase --abort 2>/dev/null
 GG "$G/wt" checkout -q feat 2>/dev/null
+
+echo "payload write gate: its notes go however a call ends, and stay while a call is in flight (claude-config#3253)"
+
+# On 2026-11-18 its notes folder held the notes of 261 calls whose end the gate never heard: 135
+# refused by auto mode, 25 denied by a mod, 49 that exited non zero (Claude Code reports those as
+# PostToolUseFailure, never PostToolUse) and 48 Monitor calls, which run the Bash hooks before they
+# start and are reported afterwards as Monitor. Each note holds the whole payload/ listing, about
+# 145 KB, and only the sweep of notes a day old ever removed them.
+rm -f "$HOLD"; SID=""
+notes(){ find "$STATE" -type f -name "$1.*" 2>/dev/null | wc -l | tr -d ' '; }
+aged(){ # aged <hours> <tool use id>: back date that call's notes, as if it were taken that long ago
+  python3 -c '
+import glob, os, sys, time
+t = time.time() - float(sys.argv[1]) * 3600
+for p in glob.glob(os.path.join(sys.argv[2], sys.argv[3] + ".*")):
+    os.utime(p, (t, t))
+' "$1" "$STATE" "$2"
+}
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f1
+if [ "$(notes f1)" -gt 0 ]; then check "a call let through has its note taken" ok
+else check "a call let through has its note taken" "no note for it in $STATE"; fi
+printf 'failed partway\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUseFailure "python3 $FIX/w.py" "$FIX/dev" f1
+if [ "$RC" -eq 2 ]; then check "a call that exited non zero is still checked afterwards, since it may have written first" ok
+else check "a call that exited non zero is still checked afterwards, since it may have written first" "exit $RC, said: ${OUT:0:160}"; fi
+says "and the report names what it changed" "$FIX/dev/payload/LESSONS.md"
+if [ "$(notes f1)" = 0 ]; then check "and that failed call's note is removed" ok
+else check "and that failed call's note is removed" "$(notes f1) files left"; fi
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f2
+prepost PermissionDenied "python3 $FIX/w.py" "$FIX/dev" f2
+allowed "a call refused before it ran says nothing afterwards"
+if [ "$(notes f2)" = 0 ]; then check "and the refused call's note is removed" ok
+else check "and the refused call's note is removed" "$(notes f2) files left"; fi
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f3
+printf 'while a monitor starts\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f3 "$PIDF" Monitor
+allowed "a Monitor call is not judged when it returns, since its command runs on after that"
+if [ "$(notes f3)" = 0 ]; then check "and the Monitor call's note is removed" ok
+else check "and the Monitor call's note is removed" "$(notes f3) files left"; fi
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f4
+prepost PostToolUseFailure "python3 $FIX/w.py" "$FIX/dev" f4 "$PIDF" Monitor
+allowed "a Monitor call that failed says nothing afterwards"
+if [ "$(notes f4)" = 0 ]; then check "and its note is removed" ok
+else check "and its note is removed" "$(notes f4) files left"; fi
+# A note is needed until its own call ends, and a call can wait on a permission prompt for hours:
+# the longest Bash or Monitor call in a week of this Mac's transcripts, measured on 2026-11-19,
+# returned 258 minutes after it was issued. So a note five hours old outlives other calls' sweeps.
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f5
+aged 5 f5
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f6
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f6
+if [ "$(notes f5)" -gt 0 ]; then check "a note five hours old, for a call still in flight, survives other calls starting and ending" ok
+else check "a note five hours old, for a call still in flight, survives other calls starting and ending" "it was removed"; fi
+printf 'after a long wait\n' > "$FIX/dev/payload/LESSONS.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f5
+says "and is still read when that call ends" "$FIX/dev/payload/LESSONS.md"
+if [ "$(notes f5)" = 0 ]; then check "and removed once read" ok
+else check "and removed once read" "$(notes f5) files left"; fi
+# A call whose end nothing reports (a refusal by another gate, an interrupt) is the case only age can
+# settle.
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f7
+aged 25 f7
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f8
+if [ "$(notes f7)" = 0 ]; then check "a note over a day old, for a call whose end never came, is removed by the next call" ok
+else check "a note over a day old, for a call whose end never came, is removed by the next call" "$(notes f7) files left"; fi
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f8
 
 # Its own bookkeeping is removed once read, so the state it keeps cannot grow with calls (#603).
 left="$(find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' ')"

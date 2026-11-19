@@ -48,8 +48,10 @@ import os
 import re
 import sys
 
-HEADER = re.compile(r"Claude Code (PreToolUse|PostToolUse)\(([^)]*)\) hook")
-TOOL_EVENTS = ("PreToolUse", "PostToolUse")
+# Every event whose matcher names tools, so a hook registered under the two added for
+# claude-config#3253 is held to its header like the rest (L96).
+TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied")
+HEADER = re.compile(r"Claude Code (PreToolUse|PostToolUseFailure|PostToolUse|PermissionDenied)\(([^)]*)\) hook")
 
 
 def names(cmd):

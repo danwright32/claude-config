@@ -100,6 +100,58 @@ none="$(env "${unsets[@]}" "${full[@]}" HOME="$W/home1" TMPDIR="$W/tmp-full" SUI
   ls "$TMPDIR"' _ "$HOOKS")"
 eq "with every seam already set, arming makes no folder" "" "$none"
 
+# The folder goes with the suite that made it (claude-config#3253). On 2026-11-19 this Mac's temp
+# folder held 1,687 of them, all empty, because nothing removed one but claude-sync's daily sweep of
+# scratch four hours old: one section of test-claude-sync.sh run on its own, passing, left one. So
+# every way a suite can end is tried here, the ones its own EXIT trap never sees included, and a
+# folder still in use is shown to be kept.
+iso_suite(){ # iso_suite <temp folder> <deadline seconds, 0 for none> <body>
+  mkdir -p "$1"
+  env "${unsets[@]}" HOME="$W/home1" TMPDIR="$1" SUITE_WALL_TIMEOUT="$2" SUITE_WALL_POLL=0.2 bash -c '
+    . "$1/lib/suite-deadline.sh" || exit 9
+    suite_deadline_arm || exit 8
+    '"$3" _ "$HOOKS" "$W"
+}
+isos(){ find "$1" -maxdepth 1 -name 'claude-sync-suite-work.isolated.*' 2>/dev/null; }
+gone_within(){ # gone_within <seconds> <temp folder>: waits on the folder itself, never a fixed time (L290)
+  local until=$(( $(date +%s) + $1 ))
+  while [ "$(date +%s)" -le "$until" ]; do
+    [ -z "$(isos "$2")" ] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+ended(){ # ended <description> <name>: the suite recorded the folder it made, and that folder went
+  local made; made="$(cat "$W/made-$2" 2>/dev/null)"
+  case "$made" in
+    "$W/tmp-$2/claude-sync-suite-work.isolated."*) ;;
+    *) bad "$1 (the suite made no folder to measure, it recorded '$made')"; return ;;
+  esac
+  if gone_within 60 "$W/tmp-$2"; then ok; else bad "$1 (still there a minute later: $(isos "$W/tmp-$2"))"; fi
+}
+rec='ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/made-$3"'
+iso_suite "$W/tmp-pass" 0 "set -- \"\$1\" \"\$2\" pass; $rec; exit 0"
+ended "a suite that passed leaves no folder behind" pass
+iso_suite "$W/tmp-fail" 0 "set -- \"\$1\" \"\$2\" fail; $rec; exit 3"
+ended "a suite that failed leaves no folder behind" fail
+iso_suite "$W/tmp-trap" 0 "set -- \"\$1\" \"\$2\" trap; $rec; trap 'echo own trap' EXIT; exit 0" >/dev/null
+ended "a suite with an EXIT trap of its own leaves no folder behind" trap
+iso_suite "$W/tmp-deadline" 60 "set -- \"\$1\" \"\$2\" deadline; $rec; exit 0"
+ended "a suite armed with a deadline leaves no folder behind" deadline
+iso_suite "$W/tmp-killed" 0 "set -- \"\$1\" \"\$2\" killed; $rec; kill -KILL \$\$" 2>/dev/null
+ended "a suite killed outright, which no trap of its own can see, leaves no folder behind" killed
+# Kept while the suite runs: the folder is read while the suite waits on a file, several polls on.
+iso_suite "$W/tmp-live" 0 'ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/live-iso"; until [ -e "$2/live-go" ]; do sleep 0.2; done' &
+live_pid=$!
+live_until=$(( $(date +%s) + 60 ))
+until [ -s "$W/live-iso" ] || [ "$(date +%s)" -gt "$live_until" ]; do sleep 0.2; done
+sleep 1   # five of its polls, so a reaper that removed a live suite's folder would have done it
+live_dir="$(cat "$W/live-iso" 2>/dev/null)"
+if [ -n "$live_dir" ] && [ -d "$live_dir" ]; then ok
+else bad "the folder of a suite still running is kept (got '$live_dir')"; fi
+touch "$W/live-go"; wait "$live_pid"
+gone_within 60 "$W/tmp-live" && ok || bad "and removed once that suite ends ($(isos "$W/tmp-live"))"
+
 # The library refuses to point the seams at nothing, the root or HOME.
 r="$(HOME="$W/home1" bash -c '. "$1"; suite_isolate "$HOME" every' _ "$LIB" 2>&1)"; rc=$?
 eq "suite_isolate refuses HOME as the throwaway folder" 2 "$rc"

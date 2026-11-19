@@ -124,8 +124,19 @@ _suite_deadline_stop(){
   exit 124
 }
 
+# The throwaway folder arming made, removed once the suite that armed it has gone
+# (claude-config#3253). Only a folder carrying the name arming gives one, so a path that came back
+# empty or wrong can never take anything else with it.
+_suite_deadline_remove_isolated(){
+  case "${1:-}" in
+    */claude-sync-suite-work.isolated.*) [ -d "$1" ] && [ ! -L "$1" ] && rm -rf "$1" ;;
+  esac
+  return 0
+}
+
 suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is not SUITE_WALL_DEFAULT
   local limit="${SUITE_WALL_TIMEOUT-${1:-$SUITE_WALL_DEFAULT}}" poll="${SUITE_WALL_POLL:-2}" started="${SUITE_WALL_STARTED:-}"
+  local isolated=""
   local pidfile="${SUITE_WALL_PIDFILE:-}"
   unset SUITE_WALL_TIMEOUT SUITE_WALL_POLL SUITE_WALL_STARTED SUITE_WALL_PIDFILE
   _suite_deadline_label="$(basename "$0")"
@@ -163,26 +174,45 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
   # check is about bytecode unsets it after arming.
   suite_isolation_no_bytecode
   if ! suite_isolation_complete; then
-    local isolated
     isolated="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-suite-work.isolated.XXXXXXXX" 2>/dev/null)" || isolated=""
     suite_isolate "$isolated" unset || {
+      _suite_deadline_remove_isolated "$isolated"
       echo "$_suite_deadline_label: no throwaway folder could be made for its records ('$isolated'), so this suite would write into the real ones. Refusing to run." >&2
       return 2
     }
   fi
-  [ "$limit" -eq 0 ] && return 0
+  # The folder is removed by a process of its own once the suite has gone, never by a trap in the
+  # suite (claude-config#3253): a suite sets its own EXIT trap after arming, which would replace one
+  # set here, and no trap runs for a suite killed outright. Until this, nothing but claude-sync's
+  # sweep of scratch four hours old removed one, and this Mac held 1,687 on 2026-11-19. With a
+  # deadline the watchdog below does it as it ends; with none, a waiter that kills nothing does.
+  if [ "$limit" -eq 0 ]; then
+    [ -n "$isolated" ] && ( bash "$_suite_deadline_dir/suite-deadline.sh" --reap "$$" "$isolated" "$poll" \
+      </dev/null >/dev/null 2>&1 & )
+    return 0
+  fi
   _suite_deadline_limit="$limit"
   trap '_suite_deadline_expired' USR1
   # Safe as it is (#1989): started by a subshell that ends at once, so the watchdog is never the
   # suite's child and its exit cannot interrupt anything the suite writes (L1035).
-  ( bash "$_suite_deadline_dir/suite-deadline.sh" --watch "$$" "$limit" "$started" "$poll" "$pidfile" \
+  ( bash "$_suite_deadline_dir/suite-deadline.sh" --watch "$$" "$limit" "$started" "$poll" "$pidfile" "$isolated" \
       </dev/null >/dev/null 2>&1 & )
   return 0
 }
 
+# The waiter for a suite with no deadline, when this file is RUN rather than sourced: it waits for
+# the suite to go and removes the folder arming made for it, and touches nothing else.
+if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--reap" ]; then
+  while kill -0 "$2" 2>/dev/null; do sleep "${4:-2}"; done
+  _suite_deadline_remove_isolated "${3:-}"
+  exit 0
+fi
+
 # The watchdog itself, when this file is RUN rather than sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
-  target="$2"; limit="$3"; started="$4"; poll="$5"; pidfile="${6:-}"
+  target="$2"; limit="$3"; started="$4"; poll="$5"; pidfile="${6:-}"; isolated="${7:-}"
+  # However the watch ends, the suite is gone by then, so its throwaway folder goes too (#3253).
+  trap '_suite_deadline_remove_isolated "$isolated"' EXIT
   # Seconds a stopped suite is given at each step of the escalation below, what twenty polls were at
   # the default poll of 2. Not tied to the poll, which tests shorten (claude-config#1454).
   grace=40
