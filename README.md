@@ -8378,7 +8378,11 @@ restart never repeats it; this is the one notification sent while asleep (#1545)
 does not give changes nothing and is logged, and a notifier that fails is logged and never ends
 sleep mode. While asleep (#834, phase 3, Dan's "everything not banned"), a worker session's own
 permission prompts are approved, never a question or the plan approval and never over a decision
-beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
+beneath; a classifier refusal is noted as `failed` and never retried by the mod, which drops any
+hook's request beneath it to run the call again (whether the session itself may send the call again
+is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
+a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
+session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
