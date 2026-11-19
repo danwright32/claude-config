@@ -772,7 +772,12 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
     if (ours.length === 0 || ours.length === e.props.rows.length) return next(e)
     return next({ ...e, props: { ...e.props, rows: ours } })
   }) as never)
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+  // #3285: the pane is opened by the mod publishing it (manual steps opens its own with $.ui.open),
+  // and Claude Code names that mod as the pane's owner. A Pane hook naming no owner hears its own
+  // mod's panes alone (some Claude Code between 2.1.310 and 2.1.323), so this one names every owner
+  // and draws only a pane held in mod-kit's record, passing every other mod's pane on untouched.
+  // The types the mods are checked against (2.1.310) predate the owner key, hence the cast.
+  on('ui.render', { component: 'Pane', plugin: '*' } as { component: 'Pane' }, async ($, e, next) => {
     const pane = ((await read($, panes)) ?? []).find(p => p.id === e.requestId)
     if (!pane) return next(e)
     return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e, isAppleTerminalTrusted, holdsButton(pane.lines)))
