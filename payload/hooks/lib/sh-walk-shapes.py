@@ -1102,8 +1102,9 @@ def make(sh_special, sh_param, unknown_dir=None):
             is filled in where the gate works it out (sh_inner_text). Where it does not, the text
             the inner shell gets is not known: typed, the string is read with that part as a word of
             unknown value, and in a script on disk it is left as before, as every reading there
-            leaves what cannot be worked out (this repository's own test-pr-review.sh sources two
-            files by `'$DIR/lib/...'` in such a string)."""
+            leaves what cannot be worked out (this repository's own test-pr-review.sh sourced two
+            files by `'$DIR/lib/...'` in such a string, until claude-config#3252 wrote those paths
+            in double quotes)."""
             if not ESCAPED_SUBST.search(text):
                 return None
             found, code = self.string_code(text, rest)

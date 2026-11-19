@@ -4475,7 +4475,8 @@ double quoted `-c` or `eval` string holding a `$` or a backquote behind a backsl
 again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
 shell fills in replaced by the value the gate works out for it; where it works none out, the typed
 string is read with that part as a word of unknown value and a script on disk is left as before
-(this repository's `test-pr-review.sh` sources two files by `'$DIR/lib/...'` in such a string).
+(this repository's `test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string,
+until #3252 wrote those paths in double quotes).
 Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
