@@ -4205,6 +4205,23 @@ a pipe, and refused as unread where it does not (`bash <(curl -s https://example
 except inside a script on disk, where what cannot be read is left as it is for a pipe there. One
 handed to a script as an argument is data to that script and is judged only by its own commands.
 
+Since claude-config#3229 a shell or an interpreter given no script and no pipe or file of its own
+is read by what the text around it hands it, since that is what it runs: a pipe into the subshell,
+group, `if`, loop or `case` it is in (`cat post.sh | (cd x && bash)`), a file, here string or heredoc
+given to that (`{ bash; } < post.sh`), what feeds the shell whose `-c` string, `eval` or `find -exec`
+it is in or a pipe written inside that string (`cat post.sh | bash -c bash`, `bash -c 'cat post.sh |
+bash'`), what feeds the command holding the command substitution it is in, and an `exec < file`
+earlier in the text. The feed is read as a pipe straight into the program is: a file or written text
+is judged, and anything else is refused as unread when typed and left alone in a script on disk. A
+function's body is fed by whatever calls it, which is not worked out, so a program that runs its
+input there is unread. A redirection glued to a command's name or to its file is read as the same
+command with spaces (`bash<post`, `bash <post`, `bash 0<post`, `'bash'<post`): the shared reader
+splits a command's words on white space alone, so before this only `bash < post` had its file read.
+The wrapper sends a call to the rule for a shell's name followed by anything that ends the name, not
+only a space. Left open, each recorded for an issue of its own: `/dev/stdin` named as the script, a
+shell named by a variable, `xargs` building the command from its input, and a line read and then
+run.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite

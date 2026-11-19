@@ -56,7 +56,8 @@ shopt -s nocasematch
 MARKERS='chat[._](postmessage|schedulemessage|postephemeral|memessage)|hooks\.slack\.com|slack_webhook|slack_(send|schedule|post)_message|slack_reply_to_thread'
 SCRIPTS='\.(py|sh|bash|zsh|js|mjs|cjs|ts|mts|rb|pl|php|command)([^A-Za-z0-9_]|$)'
 # A shell running a script by name (followed by a space, so the payload's own "tool_name":"Bash" does
-# not send every call to python3 under nocasematch). A package manager, whose scripts are followed.
+# not send every call to python3 under nocasematch; since claude-config#3229 by anything else that ends
+# the name too, further down). A package manager, whose scripts are followed.
 # Where a command starts (the JSON's "command":", or after ; & | ( { ` or an escaped newline), past
 # any NAME=value assignments: a first word holding a slash at all (/abs, ~/x, ./x, bin/x, a leading
 # redirect), so a script with no extension is still read; and any runner or reserved word the shared
@@ -89,6 +90,15 @@ RUNS+='|\|&?[[:space:]]*(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_.-]|$)'
 # what feeds that (`cat post > >(bash)`), and with a file of no extension nothing else in the payload
 # sent the call to python3 (claude-config#3213).
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([[:space:]]|\\[nrt])*\)'
+# A shell's name with anything after it that cannot carry the name on, a redirection, a ; or & or |,
+# a quote, the end of the command: `bash<post`, `cat post | { true; bash; }` and `exec < post; bash`
+# each named a shell with no space after it, so with a file of no extension the call never reached
+# python3 (claude-config#3229). A double quote after the name counts only where none stands right
+# before it: the payload's own "tool_name":"Bash" has one on both sides, and would otherwise send
+# every call there. The one command that leaves out is a shell's bare name as the whole command,
+# which nothing in the command feeds.
+RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_."-]|$)'
+RUNS+='|(^|[^A-Za-z0-9_"]|\\[nrt])(bash|sh|zsh|dash|ksh)"'
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
 # call goes to python3 while one of the places curl reads one from holds a file, and so does a call

@@ -21,7 +21,8 @@
 # a shell given -n (#3155), import text a test's matcher only compares beside code that runs strings
 # (#3146), and ast, io and gzip in a read only script (#3103). And a command inside a process
 # substitution, or handed one as the file it runs (#3213). And a package script judged with the words
-# after its name (#3143). Every other
+# after its name (#3143). And a shell handed its input by the group, loop, subshell, substitution or
+# string it is in, or by a redirection glued to its name or its file (#3229). Every other
 # judgement of the gate is in test-slack-drafts-only-gate.sh,
 # whose helpers below are copied as they are, so a case here is driven the same way: a hook payload
 # piped into slack-drafts-only-gate.sh, exit 0 allowed and 2 refused, the reason on stderr.
@@ -2695,6 +2696,129 @@ for runs in "npm run test" "npm test" "npm run test:node" "npx playwright test -
   "npm test -- tests/quiet.spec.js"; do
   run_raw "$(payload Bash "$(bash_input "$runs")" "$T/q3143")"
   allowed "#3143 a project whose specs reach nothing that posts passes as before: $runs"
+done
+
+echo
+echo "slack drafts only: a shell handed its input by what is around it is read as one fed directly (claude-config#3229)"
+
+# Measured 2026-11-18 on main at 31cb0890, through this harness: `cat posts.sh | bash` is refused, and
+# each command of the refused lists below exited 0. A shell or an interpreter given no script reads
+# what the shell around it is reading (bash 3.2.57 and zsh 5.9 ran the fed text in every form below,
+# but for `echo $(bash)` behind a pipe, which only bash runs, and `x=$(bash) < file`, which only zsh
+# does). The gate asked only whether a pipe stood right before the program's own name, or a
+# redirection among its own words, so one fed through a group, a loop, a subshell, a command
+# substitution or a string a shell is handed was taken to read nothing. And a redirection glued to a
+# name or to its file was no redirection to the words reading: `bash <gen` passed where `bash < gen`
+# is refused, and `bash<gen` was a program nobody knew, which with a file of no extension never
+# reached the rule at all, as `cat posts | { true; bash; }` did not (no space follows the name).
+D29="$T/d3229"
+mkdir -p "$D29"
+run_29() { run_raw "$(payload Bash "$(bash_input "$1")" "$D29")"; }
+printf '%s\n' "$POST" > "$D29/posts.sh"
+printf '%s\n' "$POST" > "$D29/posts"
+printf '%s\n' 'echo ok' > "$D29/ok.sh"
+printf '%s\n' 'echo ok' > "$D29/ok"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"text=hi")' > "$D29/posts.py"
+printf '%s\n' 'print("ok")' > "$D29/ok.py"
+printf '%s\n' 'cat posts.sh | (true; bash)' > "$D29/group.sh"
+printf '%s\n' 'bash -c "cat posts.sh | bash"' > "$D29/string.sh"
+printf '%s\n' 'bash<posts' > "$D29/glued.sh"
+printf '%s\n' 'cat ok.sh | (true; bash)' > "$D29/okgroup.sh"
+printf '%s\n' 'sort ok.sh | bash' > "$D29/unread-direct.sh"
+printf '%s\n' 'sort ok.sh | (true; bash)' > "$D29/unread-group.sh"
+NL='
+'
+run_29 "cat posts.sh | bash"
+read_refused "#3229 the yardstick: a shell a pipe feeds a script that posts is refused"
+says "#3229 and the yardstick's refusal names the file it runs" "runs what it reads on its input"
+# A feed the gate cannot read is refused typed, as it is for a pipe straight into the shell, and left
+# alone in a script on disk, as that is (unread-direct.sh and unread-group.sh, among the twins below).
+run_29 "sort ok.sh | bash"
+read_refused "#3229 the yardstick for an unread feed: a shell fed what sort prints is refused typed"
+for runs in "sort ok.sh | (true; bash)" "sort ok.sh | { true; bash; }" "sort ok.sh | bash -c bash" "bash -c 'sort ok.sh | bash'" \
+  "sort ok.sh | echo \$(bash)" "sort ok.sh | while true; do bash; break; done" "cat ok.sh | tee copy.txt | (true; bash)" \
+  "f() { bash; }; cat ok.sh | f" "f() { bash; }; f"; do
+  run_29 "$runs"
+  read_refused "#3229 a shell handed a feed the gate cannot read by what is around it is refused typed: $runs"
+  says "#3229 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# The last two: a function's body is fed by whatever calls it, which is not worked out, so a program
+# that runs its input there is unread even where nothing feeds the call: the cost of the function case.
+#
+# A script that posts, handed to a shell or an interpreter by what is around it. In turn: a pipe into
+# the subshell, group, if, loop or case it is in; a file, a here string or a heredoc given to that; a
+# pipe into, or a file given to, a shell running a string, eval and find -exec with them, and a pipe
+# inside the string; a command substitution in a command that is fed; a redirection glued to the
+# name or to the file, with a file of no extension so nothing but the shell's name sends the call to
+# the rule; `exec < file` before the shell and a redirection before its name; a function called with
+# a feed; and the forms that were refused before, which still are; then scripts on disk holding one.
+for runs in "cat posts.sh | (true; bash)" "cat posts.sh | (bash)" "cat posts.sh | { true; bash; }" "cat posts.sh | { bash; }" \
+  "cat posts.sh | (true; (true; bash))" "cat posts.sh | { true && bash; }" "cat posts.sh | if true; then bash; fi" \
+  "cat posts.sh | while true; do bash; break; done" "cat posts.sh | for i in 1; do bash; done" \
+  "cat posts.sh | case x in x) bash ;; esac" "cat posts.sh | (true; sh)" "cat posts.sh | (true; env bash)" \
+  "cat posts.sh | (exec bash)" "cat posts.sh | (true; bash -s)" "cat posts.sh | time (bash)" "cat posts.sh | { (bash); }" \
+  "cat posts.py | (true; python3)" "cat posts.py | (true; python3 -)" "cat posts.sh | time bash" \
+  "cat posts.sh | (true; bash > /dev/null)" "cat posts.sh | (bash &)" \
+  "cat posts.sh | (true${NL}bash${NL})" "cat posts.sh | {${NL}true${NL}bash${NL}}" \
+  "(bash) < posts.sh" "{ bash; } < posts.sh" "{ true; bash; } < posts.sh" "if true; then bash; fi < posts.sh" \
+  "while true; do bash; break; done < posts.sh" "for i in 1; do bash; done < posts.sh" \
+  "(true; bash) <<< \"\$(cat posts.sh)\"" "(true; bash) <<'EOF'${NL}${POST}${NL}EOF" "{ true; bash; } <<'EOF'${NL}${POST}${NL}EOF" \
+  "cat <<'EOF' | (true; bash)${NL}${POST}${NL}EOF" "(if true; then bash; fi < posts.sh)" "( { true; bash; } < posts.sh )" \
+  "cat posts.sh | bash -c \"bash\"" "cat posts.sh | bash -c 'true; bash'" "cat posts.sh | bash -c \"bash -c bash\"" \
+  "cat posts.sh | sh -c 'sh'" "cat posts.sh | eval bash" "cat posts.sh | eval \"true; bash\"" "bash -c \"bash\" < posts.sh" \
+  "bash -c \"cat posts.sh | bash\"" "bash -c \"cat posts.sh | (true; bash)\"" "bash -c \"bash < posts.sh\"" \
+  "bash -c \"bash<posts\"" "bash -c 'cat posts.sh > >(bash)'" "eval \"cat posts.sh | bash\"" \
+  "cat posts.py | bash -c \"python3\"" "sh -c \"cat posts.py | python3\"" "bash>out.txt -c 'bash posts.sh'" \
+  "cat posts.sh | find . -maxdepth 0 -exec bash \\;" "bash -c bash <<'EOF'${NL}${POST}${NL}EOF" \
+  "bash -c 'bash' <<< \"\$(cat posts.sh)\"" "cat posts.sh | (true; bash -c bash)" "bash -c \"(true; bash) < posts.sh\"" \
+  "cat posts.sh | echo \$(bash)" "cat posts.sh | echo \`bash\`" "cat posts.sh | x=\$(bash) env" "cat posts.sh | (echo \$(bash))" \
+  "echo \$(cat posts.sh | bash)" "echo \$(bash < posts.sh)" "x=\$(bash) < posts.sh" \
+  "echo \$(cat posts.sh | (true; bash))" "cat posts.sh | echo \"\$(bash)\"" \
+  "bash<posts" "bash<posts.sh" "sh<posts" "zsh<posts" "bash 0<posts" "(bash<posts)" "true;bash<posts" "bash<posts>out.txt" \
+  "bash <posts" "bash <posts.sh" "bash <posts>out.txt" "python3<posts.py" "python3 <posts.py" "env bash<posts" "< posts bash" "<posts bash" \
+  "bash>out.txt<posts" "bash<<<\"\$(cat posts)\"" "cat posts | { true; bash; }" "cat posts | {${NL}true${NL}bash${NL}}" \
+  "cat posts | (true${NL}bash${NL})" "exec < posts; bash" "cat posts | (true; bash>out.txt)" "cat posts | (true; bash;)" \
+  "cat posts | (true; bash&)" "true < posts; cat posts | (true;bash)" "\"bash\" posts" "\"bash\" < posts" "'bash' < posts" \
+  "'bash'<posts" \
+  "exec < posts.sh; bash" "exec < posts.sh${NL}bash" "exec 3< posts.sh; bash <&3" "bash 3< posts.sh <&3" \
+  "f() { bash; }; cat posts.sh | f" "f() { bash; }; f < posts.sh" "f() { bash; } < posts.sh; f" \
+  "cat posts.sh | bash -s" "cat posts.sh | bash -" "bash /dev/stdin < posts.sh" \
+  "cat posts.sh | env bash" "cat posts.sh | exec bash" "cat posts.sh | command bash" "cat posts.sh | nohup bash" \
+  "cat posts.sh | cat | bash" "cat posts.sh | tee /dev/null | bash" "{ cat posts.sh; } | bash" "(cat posts.sh) | bash" \
+  "cat posts.sh | { cat; } | bash" "cat posts.sh | (cat | bash)" "cat posts.sh |& bash" \
+  "cat posts.sh | bash -c 'read -r l; eval \"\$l\"'" "cat posts.sh | (read -r l; eval \"\$l\")" \
+  "cat posts.sh | while read -r l; do eval \"\$l\"; done" \
+  "bash group.sh" "bash string.sh" "bash glued.sh"; do
+  run_29 "$runs"
+  read_refused "#3229 a shell handed a script that posts by what is around it is refused: $runs"
+done
+# What it costs, each beside the shape it is the harmless twin of. A shell handed a file that posts
+# nothing through any of these still passes, the file being read as it is for `cat ok.sh | bash`.
+run_29 "cat ok.sh | bash"
+allowed "#3229 the twins' yardstick: a shell a pipe feeds a script that posts nothing passes"
+for runs in "cat ok.sh | (true; bash)" "cat ok.sh | { true; bash; }" "cat ok.sh | if true; then bash; fi" \
+  "cat ok.sh | while true; do bash; break; done" "cat ok.py | (true; python3)" "(bash) < ok.sh" "{ true; bash; } < ok.sh" \
+  "(true; bash) <<< 'echo ok'" "(true; bash) <<'EOF'${NL}echo ok${NL}EOF" "cat ok.sh | bash -c \"bash\"" "bash -c \"bash\" < ok.sh" \
+  "bash -c \"cat ok.sh | bash\"" "bash -c bash <<'EOF'${NL}echo ok${NL}EOF" "cat ok.sh | eval bash" "cat ok.sh | echo \$(bash)" \
+  "bash<ok" "bash<ok.sh" "bash <ok" "bash 0<ok" "'bash'<ok" "bash<ok>out.txt" "python3 <ok.py" "< ok.sh bash" "exec < ok.sh; bash" \
+  "bash okgroup.sh" "bash unread-direct.sh" "bash unread-group.sh"; do
+  run_29 "$runs"
+  allowed "#3229 a shell handed a script that posts nothing by what is around it still passes: $runs"
+done
+# And nothing around a program is taken to feed it that does not: a shell with no input at all, one
+# given its own file or script, a program that runs none of its input, a pipe that ended before the
+# group, a descriptor other than the input, a < inside a quoted word.
+for runs in "(true; bash)" "{ true; bash; }" "bash -c bash" "echo \$(bash)" "(true; bash --version)" \
+  "cat posts.sh | (true; cat)" "cat posts.sh | bash -c \"cat\"" "cat posts.sh | echo \$(cat)" "cat posts.sh | (cd . && wc -l)" \
+  "echo hi | bash -c 'cat > out.txt'" "cat posts.sh | while read -r l; do echo \"\$l\"; done" "(true; bash ok.sh)" \
+  "cat posts.sh | (true; bash ok.sh)" "cat posts.sh | bash -c 'bash ok.sh'" "bash -c \"cat posts.sh | wc -l\"" \
+  "cat posts.sh | (true; bash -c 'echo hi')" "cat posts.sh | (true; python3 -c 'print(1)')" "cat posts.sh | (true; python3 ok.py)" \
+  "cat posts.sh | (true; bash < ok.sh)" "cat posts.sh | bash -c 'bash < ok.sh'" "cat posts.sh | (true; cat ok.sh | bash)" \
+  "cat posts.sh > /dev/null; (true; bash)" "cat posts.sh | wc -l; (true; bash)" "cat posts.sh | wc -l; bash -c bash" \
+  "exec 3< posts.sh; bash" "true < posts.sh; bash" "cat posts.sh | grep -c bash" "echo bash<posts" "wc -l<posts" "cat <posts.sh" \
+  "python3 -c 'print(1<2)'" "echo \"a<b\" posts" "sort <ok.sh >out.txt" "du -sh" "bash ok"; do
+  run_29 "$runs"
+  allowed "#3229 a program nothing feeds, or that runs none of its input, passes as before: $runs"
 done
 
 echo

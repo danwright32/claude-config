@@ -35,6 +35,11 @@ above it), using the Judge's sh_value, sh_word_end, pieces_of and pieces_reason 
 
 Since claude-config#3213 it reads a process substitution a program is handed as the file it runs
 (handed_procs), using the Judge's parsed, operands, proc_runs and pieces_reason.
+
+Since claude-config#3229 it finds what a program that runs its input is handed by the text around
+it, a pipe into the group, loop, subshell, substitution or string it is in or a file that is given
+(held_input, with the comment above it), using the Judge's parsed, sh_struct_of, redirections,
+input_redirs, stdin_of, sh_value, sh_prints and rest_of.
 """
 import os
 import re
@@ -51,6 +56,16 @@ LONE_NAME = re.compile(r'"?\$\{?([A-Za-z_]\w*|[0-9])\}?"?')
 # (handed_procs, claude-config#3213), by its place among those of the command, and how one is found.
 PROC_WORD = "__gate_process_substitution_%d__"
 PROC_MARK = re.compile(r"__gate_process_substitution_(\d+)__")
+# Where a program's input comes from, as a refusal words it, when it is handed by what is written
+# around the program and that could not be worked out (held_input, claude-config#3229).
+HELD_FEED = "what feeds the group, loop, function, string or substitution it is in"
+# What may stand between a pipe and the first command of what it feeds, read backwards from that
+# command with the white space taken off (sh_pipe_into): the ( or { that opens a subshell or a group,
+# and a word that opens or carries on a compound command.
+PIPE_LEAD = re.compile(r"(?:(?<![\w$.-])(?:if|while|until|time)|[!({])\Z")
+# The most texts inside one another held_feed reads, a subshell or a substitution each being read
+# as a text of its own: past it the input is not worked out, and refused.
+MAX_HELD = 8
 
 
 def make(sh_special, sh_param, unknown_dir=None):
@@ -380,6 +395,225 @@ def make(sh_special, sh_param, unknown_dir=None):
                     return True
                 sh = sh.get("parent")
             return False
+
+        # What the text around a program hands it as its input (claude-config#3229). A shell or an
+        # interpreter given no script, and no pipe or file of its own, reads whatever the shell
+        # around it is reading: measured 2026-11-18 in bash 3.2.57 and zsh 5.9, `cat F | (true;
+        # bash)`, `cat F | { true; bash; }`, `cat F | while true; do bash; break; done`, `{ bash; }
+        # < F`, `cat F | bash -c bash`, `bash -c 'cat F | bash'` and `cat F | echo $(bash)` (bash
+        # only) each ran F's text. The gate asked only whether a pipe stood right before the
+        # program's own name, so each passed where `cat F | bash` is refused. held_input finds what
+        # feeds the nearest thing around the program that is fed, and fed_pieces reads it as the
+        # program's own input is read.
+
+        @staticmethod
+        def held_unknown(label=HELD_FEED):
+            return [("unknown", None, label)]
+
+        def sh_given(self, d, text, start, whole):
+            """What the redirections of one command's text give it as its input, as pieces, or None
+            where it has none: a file, a here string or a heredoc, read as stdin_of reads the
+            command being judged. start is where the command is in the text line() is reading, so
+            its words are worked out with the variables as they stand there; None for a command of
+            a wrapper's string, read where the wrapper is."""
+            redirs = self.input_redirs(text)
+            if not redirs:
+                return None
+            saved = self.shell.get("at")
+            if start is not None:
+                self.shell["at"] = start
+            try:
+                pieces = self.stdin_of(d, text, whole, redirs, own=False)
+            finally:
+                self.shell["at"] = saved
+            return self.held_unknown() if pieces is None else pieces
+
+        def sh_printed(self, d, text, start, whole):
+            """What one command sends down the pipe after it, as pieces: exactly its words or the
+            files it names for printf, echo and cat (the Judge's sh_prints), and one unreadable
+            piece named after the program for anything else, a process substitution among its
+            words, or an output sent somewhere else. start as sh_given takes it."""
+            args, redirs, odd = self.redirections(text)
+            saved = self.shell.get("at")
+            if start is not None:
+                self.shell["at"] = start
+            try:
+                vals = [self.sh_value(a, d) for a in args]
+                name = os.path.basename(vals[0]) if vals and vals[0] is not None else None
+                while name in ("builtin", "command") and len(vals) > 1 and not args[1].startswith("-"):
+                    args, vals = args[1:], vals[1:]
+                    name = os.path.basename(vals[0]) if vals[0] is not None else None
+                out = None
+                if not odd and name and not any(re.fullmatch(r"(?:1|&)?(?:>>|>\||>&|>)", op) for op, _ in redirs):
+                    out = self.sh_prints(name, args, vals, d, self.stdin_of(d, text, whole, redirs, own=False))
+            finally:
+                self.shell["at"] = saved
+            return self.held_unknown(name or "a command") if out is None else out
+
+        def sh_pipe_into(self, s, items, x, base, whole):
+            """What a pipe feeds the command, group or subshell starting at x in s, as pieces, or
+            None where no pipe stands before it. The pipe is looked for past the ( or { and the
+            words that open a compound command, since the first command of `cat F | { (bash); }`
+            and of `cat F | time (bash)` starts after them. What it carries is what the command
+            ending at the pipe prints (sh_printed); where a group or a subshell ends there, that is
+            not worked out. items are s's commands as parsed gives them, base where s starts in
+            the text line() is reading (None for a wrapper's string)."""
+            end = x
+            while True:
+                while end and s[end - 1].isspace():
+                    end -= 1
+                m = PIPE_LEAD.search(s, max(0, end - 8), end)
+                if not m:
+                    break
+                end = m.start()
+            if s.endswith("|&", 0, end):
+                pipe = end - 2
+            elif s.endswith("|", 0, end) and not s.endswith("||", 0, end):
+                pipe = end - 1
+            else:
+                return None
+            feeder = None
+            for (fd, ft), fp in items:
+                if fp["how"] == "|" and fp["end"] <= pipe and (feeder is None or fp["end"] > feeder[2]["end"]):
+                    feeder = (fd, ft, fp)
+            if feeder is None or s[feeder[2]["end"]:pipe].strip():
+                return self.held_unknown()
+            fd, ft, fp = feeder
+            return self.sh_printed(fd, ft, None if base is None else base + fp["start"], whole)
+
+        def held_feed(self, s, cwd, k, base, whole, hops=0):
+            """What the text s hands its command k (by its place in parsed's order) as its input,
+            from what is written around the command, as pieces, or None where nothing there feeds
+            it. Nearest first: the subshell or command substitution it is in, read as a text of its
+            own and then by the file its closing ) is given, the pipe into it, or for a
+            substitution what feeds the command holding it; then each group, loop, if or case
+            around that (the Judge's sh_struct), by the file its closing word is given or the pipe
+            into its opening one; then an `exec < file` earlier in s, which gives every later
+            command that file. A function's body is fed by whatever calls it, which is not worked
+            out, and neither is a structure that cannot be read: one unreadable piece. base is
+            where s starts in the text line() is reading, None for a wrapper's string."""
+            cmds, parts = self.parsed(s, cwd)
+            items = list(zip(cmds, parts))
+            p = parts[k]
+            lo_i = hi_i = k
+
+            def placed(x):
+                return None if base is None else base + x
+
+            if len(p["scope"]) > 1:
+                frame = p["scope"][1]
+                while lo_i and len(parts[lo_i - 1]["scope"]) > 1 and parts[lo_i - 1]["scope"][1] == frame:
+                    lo_i -= 1
+                while hi_i + 1 < len(parts) and len(parts[hi_i + 1]["scope"]) > 1 and parts[hi_i + 1]["scope"][1] == frame:
+                    hi_i += 1
+                lo = min(q["start"] for q in parts[lo_i:hi_i + 1])
+                hi = max(q["end"] for q in parts[lo_i:hi_i + 1])
+                o = lo - 1
+                while o >= 0 and s[o].isspace():
+                    o -= 1
+                if o < 0 or s[o] not in "(`" or hops >= MAX_HELD:
+                    return self.held_unknown()
+                inner = s[o + 1:hi]
+                ik = next((j for j, q in enumerate(self.parsed(inner, cmds[k][0])[1])
+                           if q["start"] == p["start"] - o - 1 and q["end"] == p["end"] - o - 1), None)
+                if ik is None:
+                    return self.held_unknown()
+                got = self.held_feed(inner, cmds[k][0], ik, placed(o + 1), whole, hops + 1)
+                if got is not None:
+                    return got
+                after = next((j for j in range(hi_i + 1, len(parts)) if len(parts[j]["scope"]) == 1), None)
+                if s[o] == "`" or s[o - 1:o] == "$":
+                    # A command substitution reads what the command it is written in reads.
+                    if after is None or not any(a <= o and hi <= b for a, b, _ in parts[after]["inner"]):
+                        return self.held_unknown()
+                    got = self.sh_given(cmds[after][0], cmds[after][1], placed(parts[after]["start"]), whole)
+                    if got is None:
+                        got = self.sh_pipe_into(s, items, parts[after]["start"], base, whole)
+                    if got is not None:
+                        return got
+                    lo_i = hi_i = after
+                elif s[o - 1:o] in ("<", ">", "="):
+                    return self.held_unknown()  # a process substitution, whose input is not worked out (#3213)
+                else:
+                    # A subshell: the redirections written straight after its ), then the pipe into it.
+                    region = s[hi:parts[after]["start"] if after is not None else len(s)]
+                    m = re.match(r"[\s;&]*\)", region)
+                    if not m:
+                        return self.held_unknown()
+                    if after is not None and m.end() == len(region):
+                        got = self.sh_given(cmds[after][0], cmds[after][1], placed(parts[after]["start"]), whole)
+                        if got is not None:
+                            return got
+                    got = self.sh_pipe_into(s, items, o, base, whole)
+                    if got is not None:
+                        return got
+            struct = self.sh_struct_of(s, cwd, items)
+            if struct is None:
+                return self.held_unknown()
+            around = [(b["open"], n, b) for n, b in enumerate(struct[1]) if b["open"] <= lo_i and hi_i < b["close"]]
+            for _, _, b in sorted(around, key=lambda x: x[:2], reverse=True):
+                if b["kind"] == "func":
+                    return self.held_unknown()
+                got = self.sh_given(cmds[b["close"]][0], cmds[b["close"]][1], placed(parts[b["close"]]["start"]), whole)
+                if got is None:
+                    got = self.sh_pipe_into(s, items, parts[b["open"]]["start"], base, whole)
+                if got is not None:
+                    return got
+            if "exec" in s:
+                for j in range(lo_i - 1, -1, -1):
+                    if "exec" in cmds[j][1] and self.written_redirs(cmds[j][1])[0] == ["exec"]:
+                        got = self.sh_given(cmds[j][0], cmds[j][1], placed(parts[j]["start"]), whole)
+                        if got is not None:
+                            return got
+            return None
+
+        def held_input(self, whole):
+            """What a program that runs its input, given no pipe or file of its own, is handed by
+            what is written around it, as pieces fed_pieces reads as it reads the program's own, or
+            None where nothing around it feeds it (claude-config#3229). The command is the one
+            line() is reading (shell "where"). For a command of a string a wrapper runs (a shell's
+            -c, eval, find -exec), innermost string first: the pipe before it in the string, what
+            is around it there (held_feed), then what the wrapper itself is given, a file or a
+            pipe, or handed by what is around the wrapper. For a command of the text itself: what
+            is around it (held_feed). Anything of this that cannot be read is one unreadable piece,
+            refused as a pipe the gate cannot read is."""
+            where = self.shell.get("where")
+            if not where:
+                return None
+            k, wraps = where
+            s, cwd = self.shell["text"], self.shell["cwd"]
+            try:
+                for i in range(len(wraps) - 1, -1, -1):
+                    _, wtext, wd, n = wraps[i]
+                    found = self.sw.wrapped(self.rest_of(wtext)[0])
+                    string = found[1] if found else None
+                    if string is None:
+                        return self.held_unknown()
+                    cmds, parts = self.parsed(string, wd)
+                    if not 0 <= n < len(parts):
+                        return self.held_unknown()
+                    if i < len(wraps) - 1:
+                        got = self.sh_given(wraps[i + 1][2], wraps[i + 1][1], None, string)
+                        if got is not None:
+                            return got
+                    got = self.sh_pipe_into(string, list(zip(cmds, parts)), parts[n]["start"], None, string)
+                    if got is None:
+                        got = self.held_feed(string, wd, n, None, string)
+                    if got is not None:
+                        return got
+                if wraps:
+                    got = self.sh_given(wraps[0][2], wraps[0][1], self.shell.get("at"), whole)
+                    if got is not None:
+                        return got
+                    if k is None:
+                        return self.held_unknown()
+                    cmds, parts = self.parsed(s, cwd)
+                    got = self.sh_pipe_into(s, list(zip(cmds, parts)), parts[k]["start"], 0, whole)
+                    if got is not None:
+                        return got
+                return None if k is None else self.held_feed(s, cwd, k, 0, whole)
+            except self.sw.Unreadable:
+                return self.held_unknown()
 
 
     return ShWalkShapes

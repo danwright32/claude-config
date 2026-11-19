@@ -1420,6 +1420,18 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # Where the input of a program inside a process substitution comes from, when it is given no pipe or
 # file of its own there, as a refusal words it (fed_pieces, fed_reason; claude-config#3213).
 PROC_FEED = "what feeds the process substitution it is in"
+# A command's name with a redirection glued to its end, `bash<post`, `'bash'<post`, `sh>out`: the
+# name, quoted or not, up to the operator (Judge.judge_unglued, claude-config#3229). A process
+# substitution glued there is a word of the command, and a name built from a variable is not read.
+SH_GLUED_NAME = re.compile(r"""((?:[^\s'"\\<>&|;()`$]|\\.|'[^']*'|"(?:[^"\\$`]|\\.)*")+)(?=&>|[<>](?!\())""", re.S)
+# Where a command's text has a file given as its input with no space before the file's name, `<post`
+# or `0<post` (Judge.judge_unglued, claude-config#3229): not a heredoc, a here string, a descriptor
+# copied, `<>` or a process substitution, whose glued forms are read where the input is.
+SH_GLUED_INPUT = re.compile(r"(?<!<)<(?![<(&>\s])")
+# The redirections that give a command its input (Judge.input_redirs).
+SH_INPUT_OP = re.compile(r"0?(<<<|<<-|<<|<>|<&|<)")
+# The programs whose output is exactly their words or the files they name (Judge.sh_prints).
+SH_PRINTERS = frozenset({"printf", "gprintf", "echo", "gecho", "cat", "gcat"})
 # A directory the resolver does not know (claude-config#2465): where a command runs when that is not
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
@@ -1709,7 +1721,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # a file that text sources is read by (reading_shell, claude-config#2977).
         self.next_program = None
         # Where the next text line() reads is a package script with the words after its name added to
-        # its end (package, claude-config#3143): (where those words start, what hands them), else None.
+        # its end (package, claude-config#3143): (where those words start, what hands them, the words),
+        # else None.
         self.next_handed = None
         # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
         # a script run or sourced from inside a function starts wherever that function was called.
@@ -2078,24 +2091,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             else:
                 self.note_copy(name, vals[1:], d)
             out = []
-        elif name in ("printf", "gprintf"):
-            out = self.text_piece(printf_text(vals[1:]), "printf's text")
-        elif name in ("echo", "gecho"):
-            out = self.text_piece(echo_text(vals[1:]), "echo's text")
-        elif name in ("cat", "gcat"):
-            operands = [(a, v) for a, v in zip(args[1:], vals[1:]) if v is None or v == "-" or not v.startswith("-")]
-            out = []
-            for a, v in operands or [("-", "-")]:
-                if v == "-":
-                    if stdin is None:
-                        out = None
-                        break
-                    out += stdin
-                elif v is None:
-                    out = None
-                    break
-                else:
-                    out += self.pieces_of(v, d)
+        elif name in SH_PRINTERS:
+            out = self.sh_prints(name, args, vals, d, stdin)
         elif name in ("tee", "gtee"):
             append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
             for a, v in zip(args[1:], vals[1:]):
@@ -2135,6 +2132,59 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             out = []
         if self.shell.get("outer", True):
             self.shell["last_out"] = out
+
+    def sh_prints(self, name, args, vals, d, stdin):
+        """What printf, echo or cat (SH_PRINTERS) prints, as pieces, or None where a word of it
+        cannot be worked out, or for any other program: the text of literal words, the files cat
+        names, and for cat with no file or with `-` what it reads on its input (stdin, None where
+        that is not known). It notes nothing, so it is asked of the command being read
+        (note_writes) and of one that feeds another through what is written around it (sh_printed
+        in lib/sh-walk-shapes.py, claude-config#3229)."""
+        if name in ("printf", "gprintf"):
+            return self.text_piece(printf_text(vals[1:]), "printf's text")
+        if name in ("echo", "gecho"):
+            return self.text_piece(echo_text(vals[1:]), "echo's text")
+        if name not in ("cat", "gcat"):
+            return None
+        operands = [(a, v) for a, v in zip(args[1:], vals[1:]) if v is None or v == "-" or not v.startswith("-")]
+        out = []
+        for a, v in operands or [("-", "-")]:
+            if v == "-":
+                if stdin is None:
+                    return None
+                out += stdin
+            elif v is None:
+                return None
+            else:
+                out += self.pieces_of(v, d)
+        return out
+
+    def written_redirs(self, text):
+        """(the words, the redirections as (operator, target or None)) of one command's text read
+        as it is written, past only the words that open a compound command. redirections() reads
+        from the command's name on, so it is given none of the redirections written before the
+        name (`< post.sh bash`, which the shell reads as `bash < post.sh`), none of a text that is
+        only redirections (what follows a subshell's closing parenthesis), and none after exec,
+        which the shared reader reads through to the command it runs (claude-config#3229)."""
+        toks = self.sh_tokens(self.sh_strip_openers(text))
+        words, redirs, k = [], [], 0
+        while k < len(toks):
+            kind, t = toks[k]
+            if kind == "op" and SH_REDIRECT.fullmatch(t):
+                target = toks[k + 1][1] if k + 1 < len(toks) and toks[k + 1][0] == "word" else None
+                redirs.append((t, target))
+                k += 2 if target is not None else 1
+                continue
+            if kind == "word":
+                words.append(t)
+            k += 1
+        return words, redirs
+
+    def input_redirs(self, text):
+        """The redirections of one command's text that give it its input, as (operator, target),
+        wherever in it they are written (written_redirs): `3< clean.sh` opens another descriptor,
+        and leaves the input as it was (lessons review at c6111a2)."""
+        return [(op, t) for op, t in self.written_redirs(text)[1] if SH_INPUT_OP.fullmatch(op)]
 
     def redirections(self, text):
         """(its words as written, its redirections as (operator, target or None), whether it holds an
@@ -2183,11 +2233,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def text_piece(text, label):
         return None if text is None else [("text", text, label)]
 
-    def stdin_of(self, d, text, whole, redirs):
+    def stdin_of(self, d, text, whole, redirs, own=True):
         """What this command reads on its input, as pieces, or None where that is not known: a heredoc,
         a here-string or a file it is given, else what the command before it in a pipeline printed
-        where line() found that certain (piped), else not known."""
-        stdin = self.shell.get("last_out") if self.shell.get("piped") else None
+        where line() found that certain (piped), else not known. own=False asks it of a command
+        other than the one being read, whose pipe line() says nothing about (claude-config#3229)."""
+        stdin = self.shell.get("last_out") if own and self.shell.get("piped") else None
         for op, target in redirs:
             kind = re.sub(r"^\d+", "", op)
             if kind == "<<<":
@@ -2217,18 +2268,23 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         is (fed), or where nothing does (no pipe before it, no file or here string given) and it is
         not inside a process substitution. Inside one with no pipe or file of its own it reads what
         feeds the substitution or the command around it, and the answer is one unreadable piece
-        labelled PROC_FEED (claude-config#3213)."""
-        # Only a redirection of the input itself: `3< clean.sh` opens another descriptor, and leaves the
-        # pipe as what the program reads (lessons review at c6111a2).
-        redirs = [(op, t) for op, t in self.redirections(text)[1] if re.fullmatch(r"0?(<<<|<<-|<<|<>|<&|<)", op)]
+        labelled PROC_FEED (claude-config#3213). Anywhere else with none of its own it reads what
+        the text around it hands it, a pipe into the group, loop, subshell, substitution or string
+        it is in, or a file that is given (held_input in lib/sh-walk-shapes.py, claude-config#3229):
+        those pieces, read as its own would be."""
+        # Only a redirection of the input itself (input_redirs).
+        redirs = self.input_redirs(text)
         ins = [op.lstrip("0") for op, _ in redirs]
         fed = ins or self.shell.get("after_pipe")
-        # Inside a process substitution with no pipe or file of its own it reads what feeds the
-        # substitution, or the command around it, which is not worked out (claude-config#3213).
-        if any(op in ("<<", "<<-") for op in ins) or not (fed or self.shell.get("in_proc")):
+        if any(op in ("<<", "<<-") for op in ins):
             return False
         if not fed:
-            return [("unknown", None, PROC_FEED)]
+            # Inside a process substitution with no pipe or file of its own it reads what feeds the
+            # substitution, or the command around it, which is not worked out (claude-config#3213).
+            if self.shell.get("in_proc"):
+                return [("unknown", None, PROC_FEED)]
+            held = self.held_input(whole)
+            return False if held is None else held
         pieces = self.stdin_of(d, text, whole, redirs)
         return [("unknown", None, "")] if pieces is None else pieces
 
@@ -5453,8 +5509,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # The positional parameters a `bash -c '...' _ a b` string's own commands see, while they
             # are being read (claude-config#2538): (the -c record's depth, its values), or None.
             pos = None
+            # Where the command being read is, for held_input (claude-config#3229): its place among
+            # s's commands, or its wrapper's, and the wrappers it is inside, outermost first, each as
+            # [its depth, its text, its directory, which of its string's commands is being read].
+            wraps = []
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 d = self.settled_dir(d)  # a cd built from $0 or BASH_SOURCE, worked out (#2913)
+                while wraps and wraps[-1][0] >= wdepth:
+                    wraps.pop()
+                if wraps:
+                    wraps[-1][3] += 1
+                place = k if not wdepth else k - 1
+                self.shell["where"] = (place if 0 <= place < len(starts) else None, wraps)
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
@@ -5508,6 +5574,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason
+                if wrapper:
+                    wraps.append([wdepth, text, d, -1])
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                     if home is not None:
@@ -5620,7 +5688,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         file as written, so a script run through a variable was never read, where the same file run
         by a literal path was. The second reading comes after the first and only where the first
         found nothing, so it can refuse a command the first let through and never the reverse."""
-        reason = self.judge_written(d, text, wrapper, why, depth, whole)
+        reason = self.judge_written(d, text, wrapper, why, depth, whole) or self.judge_unglued(d, text, depth, whole)
         if reason:
             return reason
         placed = self.sh_placed(text, d)
@@ -5631,6 +5699,43 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return self.judge_written(d, placed, wrapper, why, depth, whole, text)
         finally:
             self.placing = was
+
+    def judge_unglued(self, d, text, depth, whole):
+        """The reason a command with a redirection glued to its name, or a file glued to the < that
+        gives it, posts, or None (claude-config#3229). The shell reads `bash<post`, `bash <post`
+        and `bash 0<post` as bash given post on its input. The command's words are split on white
+        space alone, so `bash<post` was the name of a program no rule knows, and `<post` a word
+        naming no file: the file was read only as `bash < post`, where it is a word of its own
+        (measured 2026-11-18 with a file written by a program the gate does not read: `bash < gen`
+        refused, `bash <gen`, `bash 0<gen`, `bash<gen` and `python3<gen` passed). The command is
+        judged again with a space each side of every redirection (sh_tokens), as the reader gives
+        that text: a string a shell whose name was glued is handed (`bash>log -c '...'`) as a
+        command line, since the reader gave its commands to nobody, and the rest by judge_written
+        with what feeds it found by the words as written. Another reading after the first, so it
+        can refuse a command the first let through and never the reverse."""
+        rest = self.rest_of(text)[0]
+        named = SH_GLUED_NAME.match(rest)
+        if named and named.group(1).isdigit():
+            named = None
+        if not named and not SH_GLUED_INPUT.search(rest):
+            return None
+        toks = self.sh_tokens(rest)
+        if all(kind == "word" or SH_REDIRECT.fullmatch(t) for kind, t in toks):
+            spaced = " ".join(t for _, t in toks)
+            if spaced.split() == rest.split():
+                return None  # the < is inside a quoted word: nothing is glued
+        elif named:
+            spaced = named.group(1) + " " + rest[named.end(1):]  # a process substitution among its words
+        else:
+            return None
+        wrapper, string, why = self.sw.wrapped(spaced) or ("", None, "")
+        if named and string is not None and not why:
+            if depth >= MAX_DEPTH:
+                return self.unfollow(f"{named.group(1)} runs a string more than {MAX_DEPTH} deep, which is not read")
+            inner = self.line(string, d, depth + 1, string)
+            if inner:
+                return f"{wrapper} runs a string, one of whose commands posts: {inner}"
+        return self.judge_written(d, spaced, wrapper, why, depth, whole, text)
 
     def sh_placed(self, text, d):
         """One command's text with each word that holds a variable or a substitution written out,
