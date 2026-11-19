@@ -5856,9 +5856,26 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
-files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
-again just before removing anything.
+worktrees whose repository is gone, transcripts, the kinds below for what Claude Code sessions leave
+behind, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+What a session leaves on disk, measured on the personal MacBook on 2026-11-18 (claude-config#3235),
+has a kind each. Offered, past each kind's own rule and the 30 day floor below: tool output beside
+transcripts (`transcript-extras.sh`: a session's `tool-results` folder once its transcript is gone
+and no live session owns it, to the Trash), old Claude Code versions (`claude-versions.sh`: never the
+one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
+cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open), and in build folders a Swift
+`.build` beside its `Package.swift` and a build folder inside a home dotfolder whose project is a git
+worktree (a `.git` file). Shown and never offered, each row saying why: `claude-records.sh` (every
+entry of `~/.claude/state`, session notes among them, Claude Code's file history, the finding spool
+and its backups, and the folders this config's hooks keep in the home folder), `package-caches.sh`
+(npm's cache and npx copies and the pnpm store: only partly Claude's, so Dan's call) and
+`claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
+rather than listed). A kind that offers nothing carries the line `# offers: nothing`, and
+`test-disk-clean-categories.sh` then requires it to set offerable nowhere instead of keeping the floor.
+Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate daily
+job; this skill only shows session notes.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so

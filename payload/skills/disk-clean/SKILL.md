@@ -65,6 +65,13 @@ Report what it printed, in plain words, in this order:
 4. Every note the scan printed under a kind, in plain words. Under Project build folders it says
    how many build folders were left out because iCloud syncs them: none of those is ever offered,
    since removing one would remove it from iCloud on every device (#3215).
+5. Three kinds show where space is and never offer anything (#3235): Records Claude Code and this
+   config keep (its state, session notes among them, file history, the finding spool and its
+   backups, the home folders its hooks write), npm and pnpm caches, and Claude items in the user
+   temp folder, whose note gives their count and size. Say each one's largest rows by size, as
+   shown, not as space that can be freed. What Claude Code sessions leave that can go is under Tool
+   output beside transcripts, Old Claude Code versions, GitHub command line cache and Project build
+   folders (which now include Swift .build folders).
 
 - **Exit 0**: the scan was written, unmeasured kinds included. Report it as above and go on to step 2.
 - **Exit 2**: it refused, or its record could not be written, so there is nothing to review. Tell
@@ -131,7 +138,7 @@ count and total, and under the Trash, Worktrees whose repository is gone, Large 
 Tools not used in 180 days every item by path, with its size, any mark it carries (Holds a
 credential, Removes it from iCloud on every device) and, for a worktree, the date it last changed.
 Say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
-personal files and Tools not used in 180 days are moved to the Trash, which frees nothing until it
+personal files, Tools not used in 180 days and Tool output beside transcripts are moved to the Trash, which frees nothing until it
 is emptied (a worktree git has forgotten can still hold work nothing else has); everything else is
 deleted because it regenerates, or, for a log a program holds open, emptied in place. Two options:
 remove them, or keep everything. On keep everything, say nothing was removed and stop.
