@@ -703,15 +703,26 @@ def make(sh_special, sh_param, unknown_dir=None):
             if not UNREAD_HINT.search(text) or self.reshaping >= 4:
                 return None
             rest = self.sw.join_continuations(self.rest_of(text)[0])
+            noted = len(self.unfollowed)
             self.reshaping += 1
             try:
-                return (self.named_shell(d, text, rest, depth, whole)
-                        or self.stdin_named(d, text, rest, depth, whole)
-                        or self.line_run(d, text, rest, depth, whole)
-                        or self.xargs_built(d, text, rest, depth, whole)
-                        or self.escaped_string(d, text, rest, depth))
+                reason = (self.named_shell(d, text, rest, depth, whole)
+                          or self.stdin_named(d, text, rest, depth, whole)
+                          or self.line_run(d, text, rest, depth, whole)
+                          or self.xargs_built(d, text, rest, depth, whole)
+                          or self.escaped_string(d, text, rest, depth))
             finally:
                 self.reshaping -= 1
+            if reason and self.sh_in_script() and any(u in reason for u in self.unfollowed[noted:]):
+                # In a script on disk only a finding that something posts stands. A reading here
+                # puts a command together and reads it as a line of its own, which knows none of
+                # the script's variables or of the words a -c string is handed, so there it can
+                # fail to read what the script's own reading reads: this repository's
+                # test-merge-target.sh runs `"$BASH" -c '. "$0/lib/merge-target.sh"; ...'
+                # "$HOOK_DIR"`, and read as a line the string's $0 is nobody's.
+                del self.unfollowed[noted:]
+                return None
+            return reason
 
         reshaping = 0  # how many of these readings are inside one another
         reads_memo = {}  # the read commands of each text, for read_feed (one Judge runs in a process)

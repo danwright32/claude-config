@@ -1184,12 +1184,15 @@ def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
             matches before the program starts, and a runner handed a quoted one expands it itself,
             so either way the matches are what runs. A pattern is a word holding * ? [ or { that
             names no file as it stands; an option, a word holding a variable and a pattern matching
-            nothing stay as written, as the shell leaves a pattern with no match."""
+            nothing stay as written, as the shell leaves a pattern with no match. So does a word
+            holding white space or a parenthesis, which is code or text a program is handed
+            (`x[0] = f(*a)`, `SELECT * FROM t`) far more often than a path, and would otherwise
+            have the folder listed, and a typed command refused in a very large one, for nothing."""
             if not any(PATTERN_CHARS.search(w) for w in words[1:]):
                 return words, None
             out = [words[0]]
             for w in words[1:]:
-                if w[:1] in "-+" or not PATTERN_CHARS.search(w) or re.search(r"[$`<>]", w) \
+                if w[:1] in "-+" or not PATTERN_CHARS.search(w) or re.search(r"[$`<>\s()]", w) \
                         or self.is_file(self.resolve(w, d)):
                     out.append(w)
                     continue

@@ -581,12 +581,12 @@ eval "echo \$(bash ok.sh)"
 bash -c "\$SHELL ok"
 bash -c "echo \"\$(cat posts.sh)\""
 EOF
-# A string that also holds a variable the outer shell fills in is not read again here: taking its
-# quotes off would leave `$DIR` inside the single quotes the string writes, a path no reading can
-# work out, where the inner shell is handed the folder. Seen on the first build of this reading, which
-# refused this repository's own test-pr-review.sh for `bash -c ". '$DIR/lib/merge-turn.sh' && .
-# '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"`. Such a string is judged by the
-# reading there was (#3020), with the value the gate works out for the variable.
+# A string that also holds a variable the outer shell fills in: taking its quotes off alone would
+# leave `$DIR` inside the single quotes the string writes, a path no reading can work out, where the
+# inner shell is handed the folder. Seen on the first build of this reading, which refused this
+# repository's own test-pr-review.sh for `bash -c ". '$DIR/lib/merge-turn.sh' && .
+# '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"`. The variable is filled in with the
+# value the gate works out for it; where it works none out, a script on disk is left as before.
 printf '%s\n' 'f() { echo ok; }' > "$S/lib-ok.sh"
 printf '%s\n' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
   'busy(){ bash -c ". '"'"'$DIR/lib-ok.sh'"'"' && . '"'"'$DIR/lib-ok.sh'"'"' && f \$(date +%s)"; }' \
@@ -600,6 +600,24 @@ each read_refused "#3251 and one whose escaped substitution runs what posts is r
 bash mixed-posts.sh
 D=.; bash -c "cd $D && echo \$(bash posts.sh)"
 EOF
+
+echo
+echo "slack drafts only: in a script on disk these readings refuse only what posts (claude-config#3251)"
+
+# Each reading here puts a command together and reads it as a line of its own, which knows none of
+# the script's variables or of the words a -c string is handed. Seen on the first push of this
+# branch, where the whole repository scan refused this repository's own test-merge-target.sh for
+# `"$BASH" -c '. "$0/lib/merge-target.sh"; ...' "$HOOK_DIR"`: read as a line, the string's $0 is
+# nobody's, so the file it sources could not be worked out. In a script on disk a reading that only
+# fails to read something is dropped, and one that finds a post stands.
+printf '%s\n' 'HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+  'out="$("$BASH" -c '"'"'. "$0/lib-ok.sh"; f'"'"' "$HOOK_DIR" 2>/dev/null)"' \
+  '$SHELL -c '"'"'. "$1/lib-ok.sh"; f'"'"' _ "$HOOK_DIR"' > "$S/named-ok.sh"
+printf '%s\n' '"$BASH" -c '"'"'bash posts.sh'"'"' "$0"' > "$S/named-posts.sh"
+run_here 'bash named-ok.sh'
+allowed "#3251 a script whose shell, named by a variable, sources a file by the words its string is handed passes"
+run_here 'bash named-posts.sh'
+read_refused "#3251 and one whose string runs what posts is refused"
 
 echo
 

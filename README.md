@@ -3885,8 +3885,8 @@ folder, while any other selector (a pattern, `...name`) chooses them all, which 
 runs and never less. A plain selector matching nothing runs nothing and passes. Where these cannot
 be read with certainty the typed command is refused as unread: a pattern matching more than 200
 files or sitting in a folder of more than 4,000 entries, and a workspace root holding more than
-6,000 entries outside `node_modules`. In a script on disk each is left alone, as an unread feed is
-there.
+6,000 entries outside `node_modules` (limits the code sets, not measured). In a script on disk each
+is left alone, as an unread feed is there.
 
 A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
 `export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
