@@ -5866,7 +5866,9 @@ never an id per entry: the personal MacBook's 5,979 entries in its dry run on 20
 `dcrv_whole_token`) covers the scan id and every entry's id, path and device and inode, so the
 checker plans the summary only when working it out again from the record gives the same one, then as
 exactly those entries. An entry put in the Trash after the scan is not in the record, so the summary
-never reaches it; a count or digest that differs, or a summary of any other kind, is refused.
+never reaches it; a count or digest that differs, or a summary of a kind not drawn as one row, is
+refused. The GitHub command line cache (`gh-cache`, 2,095 entries on the personal MacBook on
+2026-11-18) is drawn and summed up the same way (#3235); `DCRV_WHOLE` in `review-lib.sh` lists both.
 The confirm step says the Trash in one line, its count and total, and
 `review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 

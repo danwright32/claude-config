@@ -353,7 +353,7 @@ check "the library can sum up any kind, the caches included" "$(grep -qE '^all:c
 payload "$SID" "$N" 1 "$CACHES_TOKEN"
 run_check
 check "a summary of a kind not drawn as one row is refused with exit 2, even with the scan's own digest" "$(eq "$RC" 2)"
-check "saying the page draws only the Trash as one row" "$(has "$OUT_TEXT" "only the Trash")"
+check "saying the page draws only the Trash and the GitHub command line cache as one row" "$(has "$OUT_TEXT" "only the Trash and the GitHub command line cache as one row")"
 payload "$SID" "$N" 2 "$TOKEN" trash-3
 run_check
 check "a summary beside one of its own entries is refused with exit 2" "$(eq "$RC" 2)"
