@@ -108,7 +108,8 @@ rsync -a "$WORK/calibrate/src/" "$WORK/calibrate/claude-sync-expand.calibrate/"
 if [ "$(builds)" = 1 ]; then
   ok "the counting rsync counts one copy as one build"
 else
-  bad "the counting rsync counts one copy as one build" "builds=$(builds) under $("$REAL_RSYNC" --version 2>&1 | head -1): $(cat "$WORK/builds")"
+  rsync_version="$("$REAL_RSYNC" --version 2>&1)"
+  bad "the counting rsync counts one copy as one build" "builds=$(builds) under ${rsync_version%%$'\n'*}: $(cat "$WORK/builds")"
 fi
 
 CLAUDE_HOME="$WORK/home"
