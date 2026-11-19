@@ -1863,7 +1863,7 @@ mt_view_class() {  # $1 = the envelope mt_pr_view printed
 # $3, the account that could see the pull request, when one is named.
 mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empty
   local slug="$1" sha="$2" account="${3:-}" token="" errf out rc
-  MT_RUNS_PENDING=""; MT_RUNS_FAILED=""; MT_RUNS_ERR=""
+  MT_RUNS_PENDING=""; MT_RUNS_FAILED=""; MT_RUNS_DONE=""; MT_RUNS_ERR=""
   if [ -z "$slug" ] || [ -z "$sha" ]; then MT_RUNS_ERR="no repository or commit to ask about"; return 1; fi
   errf=$(mktemp "${TMPDIR:-/tmp}/mt-runs.XXXXXX" 2>/dev/null) || errf=/dev/null
   if [ -n "$account" ]; then
@@ -1890,6 +1890,10 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
   # (claude-config#2537): merge-when-ready.sh reads them for a start that never began. Nothing here
   # judges them, so block-red-merge.sh, which reads only MT_RUNS_PENDING, is unchanged by it.
   MT_RUNS_FAILED=$(printf '%s' "$out" | jq -rs '.[].workflow_runs[] | select((.status // "") == "completed" and (.conclusion // "") == "failure" and (.id | type) == "number") | "\(.id)\t\(.run_attempt // 1)\t\(.name // "a workflow")"' 2>/dev/null)
+  # The names of the runs that finished any other way, joined with ", " (claude-config#3254):
+  # merge-when-ready.sh reads them to tell a head whose checks GitHub has not LISTED yet from one
+  # with no run at all. Like MT_RUNS_FAILED it judges nothing, and block-red-merge.sh never reads it.
+  MT_RUNS_DONE=$(printf '%s' "$out" | jq -rs '[.[].workflow_runs[] | select((.status // "") == "completed" and (.conclusion // "") != "failure") | (.name // "a workflow")] | unique | join(", ")' 2>/dev/null)
   return 0
 }
 

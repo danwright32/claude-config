@@ -201,8 +201,12 @@
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
 # epoch seconds, the clock's seam, honoured only with HOOK_TESTS_RUNNING=1, claude-config#2399),
-# MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
-# reported yet is waited on before the checks gate is asked whether the repository runs any),
+# MWR_NO_CHECKS_GRACE_SECONDS (600: how long a fresh head with no checks reported and no workflow
+# run created yet is waited on, from the first look at it, before the checks gate is asked whether
+# the repository runs any; sized from GitHub's measured delay creating a run, claude-config#3254, see
+# no_checks_wait), MWR_CHECKS_LIST_SECONDS (300: how long a head whose run has finished, with no
+# checks listed on the pull request, is waited on before the gates are asked; a setting, not a
+# measurement),
 # MWR_HEARTBEAT_SECONDS (120: how often a wait that has not changed is said again, with how long it
 # has lasted, see wait_a_look), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
 # may lag its branch's tip before the base is set again to resync it, and how long after that before
@@ -267,7 +271,8 @@ LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="$(mwr_script "${MWR_NOW:-}" "")"
-GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
+GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 600)"
+LIST_WAIT="$(num_or "${MWR_CHECKS_LIST_SECONDS:-}" 300)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 TURN_HOLD="$(num_or "${MWR_TURN_HOLD_SECONDS:-}" 3600)"
@@ -698,7 +703,7 @@ read_pr(){   # sets view_env
 read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
-  runs_pending="$MT_RUNS_PENDING"; runs_failed="$MT_RUNS_FAILED"; read_err="$MT_RUNS_ERR"
+  runs_pending="$MT_RUNS_PENDING"; runs_failed="$MT_RUNS_FAILED"; runs_done="${MT_RUNS_DONE:-}"; read_err="$MT_RUNS_ERR"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$read_err" && return 5
   return "$rc"
 }
@@ -744,6 +749,46 @@ rerun_failed_start(){
     return 0
   done <<< "$runs_failed"
   return 1
+}
+# A HEAD GITHUB HAS NOT CAUGHT UP WITH (claude-config#3254). On 2026-11-18 this helper updated #3242
+# at 14:36:13 ET and stopped at 14:40:28 on block-red-merge.sh's "PR has NO checks at all": GitHub
+# created the head's tests run at 14:40:29, 256 seconds after the update, and it went green. Over the
+# 455 updates of 2026-11-08 to 11-18 it created the run within 8 seconds 95 times in 100, and in up to
+# 388 seconds for the rest, in bursts. So a head with no check listed and no run unfinished is told
+# apart by what the runs read found for it, and each case waits for a bounded time:
+#   no run at all: GitHub has not created one yet, or never will (Actions disabled, a workflow that
+#     will not parse). Waited on for GRACE from the first look at the head, then the checks gate is
+#     asked and decides exactly as before: in a repository with pull request workflows it refuses
+#     the empty list in its own words, naming why.
+#   a run finished other than as a failure: GitHub has not LISTED its checks on the pull request yet.
+#     Waited on for LIST_WAIT from the first look that found it so, then said, naming the run, and
+#     the gates decide on the empty list exactly as before. They decide rather than this stopping,
+#     because a repository whose finished run is not a pull request workflow's is one the checks gate
+#     lets merge with no checks, and this wait changes how long, never what is allowed.
+#   a run that failed: no wait beyond GRACE; rerun_failed_start has had its say and the gate decides.
+# Nothing here is a green reading: a head leaves this wait only by GitHub listing its checks, which
+# every gate then judges, or by its wait running out, when the gates decide as they always have.
+# Sets waiting, or leaves it empty for the gates; called only with no check listed and no run
+# unfinished.
+runs_done=""; list_for=""; list_since=0
+no_checks_wait(){
+  local noun="workflow run" its="its"
+  if [ -n "$runs_done" ] && [ -z "$runs_failed" ]; then
+    case "$runs_done" in *", "*) noun="workflow runs"; its="their" ;; esac
+    [ "$list_for" = "$head" ] || { list_for="$head"; list_since="$(now)"; }
+    if [ $(( $(now) - list_since )) -lt "$LIST_WAIT" ]; then
+      waiting="$noun $runs_done finished, and GitHub has not listed $its checks on #$pr yet"
+      return 0
+    fi
+    say_once "list:$head" "Head ${head:0:7}: $noun $runs_done finished, but GitHub has listed no checks on #$pr after $(mins "$LIST_WAIT"), so the merge gates decide on the empty list, as they always have."
+    return 0
+  fi
+  [ $(( $(now) - head_since )) -lt "$GRACE" ] || return 0
+  if [ -z "$runs_done$runs_failed" ]; then
+    waiting="no workflow run created for this head yet (waiting up to $(mins "$GRACE") for GitHub to create one)"
+  else
+    waiting="checks still running (none reported yet)"
+  fi
 }
 # A JOB THAT WAITED FOR A RUNNER (claude-config#2714). GitHub runs at most a fixed number of jobs at
 # once on its hosted runners for an account's plan (20 on the Free plan, "Total concurrent jobs" on
@@ -2116,8 +2161,8 @@ EOF_VIEW
       waiting="checks still running (workflow runs not finished: $runs_pending)"
     elif rerun_failed_start; then
       waiting="checks still running ($rerun_said)"
-    elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
-      waiting="checks still running (none reported yet)"
+    elif [ "$checks_total" -eq 0 ]; then
+      no_checks_wait
     fi
     # Every run of the head has finished: say any of its jobs that waited for a runner.
     [ -n "$waiting" ] || pool_note
