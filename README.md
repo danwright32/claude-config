@@ -6695,8 +6695,11 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   repository's worktree folders and any folder it was in before a move; check which folders it
   matched before comparing two runs. A part starting with a dash is written `--project=-...`.
   It can be repeated, or left out to read every project. Its INPUT line says how many
-  files and requests it read, and a file it cannot read or a line that is not JSON is named on
-  its own line, with `complete=no` on END.
+  files and requests it read. A file it cannot open, a folder it cannot list, and a file whose
+  read fails part way are each named on an UNREADABLE line; from the last, nothing is counted.
+  A line that is not JSON, is nested too deep to parse, or carries an id that is not a string is
+  counted on its file's MALFORMED line, and the rest of that file is read. Any of these puts
+  `complete=no` on END.
 - Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
   `tools/test-transcript-shares.sh`.
 

@@ -301,7 +301,8 @@ absent "no traceback" "Traceback" "$out"
 # A folder that cannot be listed. Root can list it anyway, so that case is reported as unmeasured.
 chmod 000 "$Q/-fx-locked/s9"
 if ls "$Q/-fx-locked/s9" >/dev/null 2>&1; then
-  echo "UNMEASURED: an unlistable folder cannot be made here (running as root?)"
+  # Running as a user chmod cannot lock out (root): the unlistable folder case cannot be built here.
+  echo "SUITE-PART-UNMEASURED a folder with no permissions is still listable by this user, so the folder that cannot be listed was not tested"
 else
   out="$(python3 "$TOOL" --root "$Q" --project fx-locked --project fx-io --since 2026-03-02 --until 2026-03-09 2>&1)"
   check "a folder that cannot be listed is named" $'UNREADABLE\t'"$Q/-fx-locked/s9"$'\t' "$out"
