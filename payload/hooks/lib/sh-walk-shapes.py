@@ -39,7 +39,7 @@ Since claude-config#3213 it reads a process substitution a program is handed as 
 Since claude-config#3229 it finds what a program that runs its input is handed by the text around
 it, a pipe into the group, loop, subshell, substitution or string it is in or a file that is given
 (held_input, with the comment above it), using the Judge's parsed, sh_struct_of, redirections,
-input_redirs, stdin_of, sh_value, sh_prints and rest_of.
+written_redirs, input_redirs, stdin_of, sh_value, sh_prints and rest_of.
 """
 import os
 import re
@@ -481,7 +481,7 @@ def make(sh_special, sh_param, unknown_dir=None):
             fd, ft, fp = feeder
             return self.sh_printed(fd, ft, None if base is None else base + fp["start"], whole)
 
-        def held_calls(self, s, cwd, items, b, base, whole, hops):
+        def held_calls(self, s, cwd, items, b, base, whole, hops, seen):
             """What the body of the function b (a block of the Judge's sh_struct) is handed as its
             input, as pieces that always end with one unreadable piece. A function's body reads
             what each call of it is given, and every way a function can be called is not worked
@@ -494,13 +494,19 @@ def make(sh_special, sh_param, unknown_dir=None):
             on the function's definition (`f() { bash; } < post.sh`), and for each command of s
             outside the body whose first word is the function's name, what that call is given, the
             pipe into it, or what is around it (held_feed: a group, a subshell, an if, another
-            function that calls it). items, base and whole as held_feed takes them."""
+            function that calls it). Each function's calls are read once for one program (seen,
+            the functions already read, by their text and where they open): functions that call
+            each other end there, and a script of many functions calling many others is not read
+            once for every path through them. items, base and whole as held_feed takes them."""
             def placed(x):
                 return None if base is None else base + x
 
             def readable(got):
                 return [piece for piece in got or () if piece[0] != "unknown"]
 
+            if (s, b["open"]) in seen:
+                return self.held_unknown()
+            seen.add((s, b["open"]))
             (cd, ct), cp = items[b["close"]]
             pieces = readable(self.sh_given(cd, ct, placed(cp["start"]), whole))
             name = b.get("name")
@@ -516,11 +522,11 @@ def make(sh_special, sh_param, unknown_dir=None):
                 if got is None:
                     got = self.sh_pipe_into(s, items, jp["start"], base, whole)
                 if got is None:
-                    got = self.held_feed(s, cwd, j, base, whole, hops + 1)
+                    got = self.held_feed(s, cwd, j, base, whole, hops + 1, seen)
                 pieces += readable(got)
             return pieces + self.held_unknown()
 
-        def held_feed(self, s, cwd, k, base, whole, hops=0):
+        def held_feed(self, s, cwd, k, base, whole, hops=0, seen=None):
             """What the text s hands its command k (by its place in parsed's order) as its input,
             from what is written around the command, as pieces, or None where nothing there feeds
             it. Nearest first: the subshell or command substitution it is in, read as a text of its
@@ -536,6 +542,7 @@ def make(sh_special, sh_param, unknown_dir=None):
             items = list(zip(cmds, parts))
             p = parts[k]
             lo_i = hi_i = k
+            seen = set() if seen is None else seen
 
             def placed(x):
                 return None if base is None else base + x
@@ -558,7 +565,7 @@ def make(sh_special, sh_param, unknown_dir=None):
                            if q["start"] == p["start"] - o - 1 and q["end"] == p["end"] - o - 1), None)
                 if ik is None:
                     return self.held_unknown()
-                got = self.held_feed(inner, cmds[k][0], ik, placed(o + 1), whole, hops + 1)
+                got = self.held_feed(inner, cmds[k][0], ik, placed(o + 1), whole, hops + 1, seen)
                 if got is not None:
                     return got
                 after = next((j for j in range(hi_i + 1, len(parts)) if len(parts[j]["scope"]) == 1), None)
@@ -588,12 +595,12 @@ def make(sh_special, sh_param, unknown_dir=None):
                     if got is not None:
                         return got
             struct = self.sh_struct_of(s, cwd, items)
-            if struct is None:
+            if struct is None or any(b["close"] is None for b in struct[1]):
                 return self.held_unknown()
             around = [(b["open"], n, b) for n, b in enumerate(struct[1]) if b["open"] <= lo_i and hi_i < b["close"]]
             for _, _, b in sorted(around, key=lambda x: x[:2], reverse=True):
                 if b["kind"] == "func":
-                    return self.held_calls(s, cwd, items, b, base, whole, hops)
+                    return self.held_calls(s, cwd, items, b, base, whole, hops, seen)
                 got = self.sh_given(cmds[b["close"]][0], cmds[b["close"]][1], placed(parts[b["close"]]["start"]), whole)
                 if got is None:
                     got = self.sh_pipe_into(s, items, parts[b["open"]]["start"], base, whole)

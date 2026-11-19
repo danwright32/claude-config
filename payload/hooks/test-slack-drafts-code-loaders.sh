@@ -2737,6 +2737,9 @@ printf '%s\n' 'function f {' '  bash' '}' 'if true; then f < posts.sh; fi' > "$D
 printf '%s\n' 'f() { bash; }' 'cat ok.sh | f' 'f < ok.sh' 'f' > "$D29/fn-ok.sh"
 printf '%s\n' 'f() { bash; }' 'sort ok.sh | f' > "$D29/fn-unread.sh"
 printf '%s\n' 'f() { cat; }' 'cat posts.sh | f' 'g() { bash ok.sh; }' 'g < posts.sh' > "$D29/fn-reads-none.sh"
+# Two functions that call each other, fed a script that posts and one that does not.
+printf '%s\n' 'f() { bash; g; }' 'g() { f; }' 'cat posts.sh | g' > "$D29/fn-loop.sh"
+printf '%s\n' 'f() { bash; g; }' 'g() { f; }' 'cat ok.sh | g' 'g < ok.sh' > "$D29/fn-loop-ok.sh"
 NL='
 '
 run_29 "cat posts.sh | bash"
@@ -2811,15 +2814,61 @@ done
 # is called, or on its definition, is read like any other feed, through a group, a subshell, an if
 # or another function that calls it.
 for runs in "bash fn-pipe.sh" "bash fn-file.sh" "bash fn-def.sh" "bash fn-group.sh" "bash fn-sub.sh" "bash fn-nest.sh" \
-  "bash fn-if.sh"; do
+  "bash fn-if.sh" "bash fn-loop.sh"; do
   run_29 "$runs"
   read_refused "#3229 a function fed a script that posts, in a script on disk, is refused: $runs"
   says "#3229 and the refusal names the file the function's program runs: $runs" "posts.sh"
 done
-for runs in "bash fn-ok.sh" "bash fn-unread.sh" "bash fn-reads-none.sh"; do
+for runs in "bash fn-ok.sh" "bash fn-unread.sh" "bash fn-reads-none.sh" "bash fn-loop-ok.sh"; do
   run_29 "$runs"
   allowed "#3229 a function fed nothing that posts, or running none of its input, passes on disk as before: $runs"
 done
+# Not covered here, and not by this gate at all: a function whose body is a subshell, `f() ( bash )`.
+# The shared reader gives the whole definition as one command, so the commands of its body are read
+# by nobody (measured 2026-11-18 with harmless files: `f() ( sort ok.sh | bash ); f` exits 0 where
+# `f() { sort ok.sh | bash; }; f` and `( sort ok.sh | bash )` are refused). Recorded for an issue of
+# its own against lib/shell-words.py, which every guard reads through.
+#
+# Where the reading of what is around a program cannot be finished, the answer is an unread feed,
+# never that nothing feeds it: a group or an if left open, subshells past the depth that is read,
+# functions that call each other. Each is fed a file that posts nothing here, so the refusal is the
+# reading giving up, not the file.
+for runs in "cat ok.sh | { true; bash" "cat ok.sh | if true; then bash" \
+  "cat ok.sh | (true; (true; (true; (true; (true; (true; (true; (true; (true; (true; bash))))))))))" \
+  "f() { bash; g; }; g() { f; }; cat ok.sh | g"; do
+  run_29 "$runs"
+  read_refused "#3229 a reading of what feeds a program that cannot be finished is refused typed: $runs"
+  says "#3229 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
+done
+# The same for a reading that fails part way: the gate's own code, with the one step that looks for
+# the pipe into a group made to fail as the shared reader fails on text it cannot read. The control
+# is the same copy judging the same shape without the word that makes it fail.
+mkdir -p "$D29/failing"
+cp "$HOOK" "$D29/failing/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$D29/failing/lib"
+cat > "$D29/failing/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os
+spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE_3229"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real = gate.Judge.sh_pipe_into
+def failing(self, s, *a, **k):
+    if "UNREADABLE-3229" in s:
+        raise self.sw.Unreadable("made to fail by the suite")
+    return real(self, s, *a, **k)
+gate.Judge.sh_pipe_into = failing
+gate.main()
+PY
+run_failing() { # run_failing <command>: judged by the copy whose look for a pipe fails on UNREADABLE-3229
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$1")" "$D29" | REAL_GATE_3229="$DIR/slack_drafts_only_gate.py" bash "$D29/failing/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_failing "cat ok.sh | { echo plain; bash; }"
+allowed "#3229 the copy made to fail judges a fed group as the gate does where nothing fails"
+run_failing "cat ok.sh | { echo UNREADABLE-3229; bash; }"
+read_refused "#3229 a reading of what feeds a program that fails part way is refused, not taken as nothing feeding it"
+says "#3229 and that refusal says its input cannot be read" "what that holds cannot be read"
 # What it costs, each beside the shape it is the harmless twin of. A shell handed a file that posts
 # nothing through any of these still passes, the file being read as it is for `cat ok.sh | bash`.
 run_29 "cat ok.sh | bash"
