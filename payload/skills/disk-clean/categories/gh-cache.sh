@@ -68,9 +68,13 @@ do_scan() {
   kept=$((recent + used + other))
   local why="" note=""
   if [ "$kept" -gt 0 ]; then
-    [ "$recent" -gt 0 ] && why="$recent changed or opened within $DCS_UNUSED_DAYS days"
-    [ "$used" -gt 0 ] && why="${why:+$why, }$used in use"
-    [ "$other" -gt 0 ] && why="${why:+$why, }$other gone or changed since they were listed"
+    # Each reason carries its own count only when there is more than one, so a single reason never
+    # repeats the total (1,051 entries on the personal MacBook on 2026-11-19, every one recent).
+    local n=""
+    [ "$recent" -eq "$kept" ] || [ "$used" -eq "$kept" ] || [ "$other" -eq "$kept" ] || n=1
+    [ "$recent" -gt 0 ] && why="${n:+$recent }changed or opened within $DCS_UNUSED_DAYS days"
+    [ "$used" -gt 0 ] && why="${why:+$why, }${n:+$used }in use"
+    [ "$other" -gt 0 ] && why="${why:+$why, }${n:+$other }gone or changed since they were listed"
     note="$kept $([ "$kept" -eq 1 ] && echo "entry is" || echo "entries are") kept: $why."
   fi
   [ "$unjudged" -eq 0 ] || note="${note:+$note }$unjudged $([ "$unjudged" -eq 1 ] && echo "entry" || echo "entries") could not be judged, so none of them is offered."

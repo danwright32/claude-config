@@ -944,6 +944,10 @@ check "gh cache: the note counts what is kept and why" "$(has "$(note_of gh-cach
 check "gh cache: only offerable entries are rows" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "gh-cache" && $5 != "offerable"' | wc -l | tr -d ' ')" 0)"
 check "gh cache: an idle cache folder is offerable" "$(eq "$(state_of "$G/56")" offerable)"
 check "gh cache: a link is not listed" "$(eq "$(item_of "$G/a-link")" "")"
+dc_stub lsof 'exit 1'
+run_scan --only gh-cache
+check "gh cache: with one reason only, the note does not repeat the count" "$(eq "$(note_of gh-cache)" "1 entry is kept: changed or opened within 30 days.")"
+dc_stub lsof "printf 'p10\ncgh\nf3\nn%s\n' $(printf %q "$G/22/abc")"
 judge gh-cache "$G/56"
 check "gh cache judge: an idle entry is offerable" "$(eq "$JUDGED" offerable)"
 floor_checks gh-cache "$G/56" "$G/56/def" folder
