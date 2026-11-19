@@ -143,15 +143,84 @@ session_works_in() { # <folder> <what to call it>
 # one (leftover_rules). One no list names is not offerable, and unmeasured while a list that might
 # have named it cannot be read.
 notes_rules() { # <target>
-  local t="${1%/}" why=""
+  local t="${1%/}" why="" open_why=""
   REC_METHOD=trash
   if ! dc_notes_folder "$t" "$HOME" "$DCS_HOME"; then V="not offerable: $DC_NOTES_WHY"; return; fi
   if list_names readable-folders "$t"; then readable_rules "$t"; return; fi
   why="$LIST_WHY"
   if list_names open-leftovers "$t"; then leftover_rules "$t"; return; fi
+  open_why="$LIST_WHY"
+  # Only a folder holding a .git can be on the list of checkouts, so that list is asked of no other.
+  if [ -e "$t/.git" ] || [ -L "$t/.git" ]; then checkout_listed "$t" && return; fi
   if [ -n "$why" ]; then V="unmeasured: $why"; return; fi
-  if [ -n "$LIST_WHY" ]; then V="unmeasured: whether it is one of the $OPEN_WHAT is not known: $LIST_WHY"; return; fi
-  V="not offerable: the daily keep rules run does not list it, as an ended session's folder of mostly images or documents or as a bulky leftover in a session still open"
+  if [ -n "$open_why" ]; then V="unmeasured: whether it is one of the $OPEN_WHAT is not known: $open_why"; return; fi
+  V="not offerable: the daily keep rules run does not list it, as an ended session's folder of mostly images or documents or git checkout, or as a bulky leftover in a session still open"
+}
+
+# Sets V for a session's task folder: never offerable unless it is itself a git checkout holding
+# its own repository (dc_notes_checkout, which disk-remove.sh holds it to) that the keep rules list.
+task_rules() { # <target>
+  local t="${1%/}"
+  REC_METHOD=trash
+  if ! dc_notes_checkout "$t" "$HOME" "$DCS_HOME"; then V="not offerable: $DC_NOTES_WHY"; return; fi
+  checkout_listed "$t" && return
+  V="not offerable: the daily keep rules run does not list it as a git checkout an ended session keeps"
+}
+
+# Succeeds, V set, when the list of kept checkouts names <target> (checkout_rules then judges it)
+# or cannot be read (unmeasured). Fails, V untouched, when the list is whole and does not name it.
+checkout_listed() { # <target>
+  if list_names kept-checkouts "$1"; then checkout_rules "$1"; return 0; fi
+  [ -n "$LIST_WHY" ] || return 1
+  V="unmeasured: whether it is one of the $CHECKOUT_WHAT is not known: $LIST_WHY"
+}
+
+# A git checkout the keep rules keep in an ENDED session's notes, which their list names (Dan,
+# 2026-11-19, recorded on #3235: "Offer when git says safe"). They keep it because it may hold work
+# that exists nowhere else, so it is offered only when git says none does. In order:
+#   its session is not open now (the list can be a day old), and no live session is working in it;
+#   its .git is a real folder, so the repository git answers for is the one inside it. A .git file
+#   names a repository somewhere else (a worktree, a submodule), and git here would answer for that;
+#   the 30 day floor, before git runs, since git status reads files. Files inside .git are read by
+#   git on every look, so only their change times count, as for a worktree's .git file;
+#   dcs_git_merged, the worktrees kind's own test: nothing uncommitted or untracked, on a branch,
+#   and a merged pull request whose head is exactly its HEAD;
+#   no stash, which lives in this folder's own repository and would go with it;
+#   no commit on any other branch or tag that no remote has (HEAD's own are the merged pull
+#   request's): a worktree leaves its other branches behind in its repository, and this does not;
+#   the floor again, so a file git had to read just now is never offered as unopened.
+checkout_rules() { # <target>
+  local t="$1" rest sid out n err="$DCS_WORK/rec.git.err.$$"
+  rest="${t#*/.claude/state/session-notes/}"; rest="${rest#*/}"; sid="${rest%%/*}"
+  sessions_read || return
+  if grep -qxF -- "$sid" "$DCS_WORK/rec.nd.ids"; then V="not offerable: its session is open now"; return; fi
+  session_works_in "$t" it && return
+  if [ ! -d "$t/.git" ] || [ -L "$t/.git" ]; then
+    V="not offerable: its .git is not a folder of its own, so it is a worktree or submodule of a repository elsewhere, and git here would answer for that one"; return
+  fi
+  V=offerable
+  dcs_floor "$t" .gitignore .gitattributes "$t/.git/*"
+  [ "$V" = offerable ] || return
+  dcs_git_merged "$t"
+  [ "$V" = offerable ] || return
+  out="$(git -C "$t" stash list 2> "$err" </dev/null)" || { V="unmeasured: git stash list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  [ -z "$out" ] || { V="not offerable: it holds a stash"; rm -f "$err"; return; }
+  n="$(git -C "$t" rev-list --count --branches --tags --not --remotes HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  rm -f "$err"
+  case "$n" in
+    0) ;;
+    ''|*[!0-9]*) V="unmeasured: git rev-list did not give a count of the commits no remote has ($n)"; return ;;
+    *) V="not offerable: it holds $n commit(s) on another branch or tag that no remote has"; return ;;
+  esac
+  dcs_floor "$t" .gitignore .gitattributes "$t/.git/*"
+  case "$V" in
+    offerable)
+      REC_DETAIL="a git checkout an ended session kept: nothing uncommitted, no stash, $D"
+      out="$(dcs_credential "$t")"
+      [ -z "$out" ] || { REC_FLAGS=credential; REC_DETAIL="$REC_DETAIL; holds ${out#"$t"/}"; } ;;
+    "not offerable: opened within "*)
+      V="not offerable: asking git about it just now read files in it, which counts as opening them, so it waits $DCS_UNUSED_DAYS days from today" ;;
+  esac
 }
 
 # A folder of images or documents the list names: offerable only when its session is not open now

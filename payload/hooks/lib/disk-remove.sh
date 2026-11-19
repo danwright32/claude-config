@@ -164,14 +164,24 @@ allowed_root() { # <physical path>
 # exactly four levels under session-notes (session-notes/<project>/<session>/<task>/<folder>, the
 # shape lib/disk-clean-predicates.sh's dc_notes_shape reads) is let past this list to its judge when
 # path_checks set NOTES_OK for the item, and NOTES_USED then says the exception was taken. Nothing
-# else under the state folder is: session-notes itself, a project, a session, a task folder, and
-# anything five or more levels down stay refused here.
+# else under the state folder is: session-notes itself, a project, a session, a task folder (but
+# for the second exception below), and anything five or more levels down stay refused here.
 #
 # THE SAME SHAPE, FOR A SESSION STILL OPEN (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle
 # days"). That decision signs off a task folder's bulky folders, in a session still open, reaching
 # their judge. They are folders of this same four level shape, so no path is let past this list
 # that was not before: what changed is which of them the judge takes. This list never asked whether
 # a session had ended; the judge did, and still does for a folder of images or documents.
+#
+# A SECOND EXCEPTION, a task folder that is a git checkout (Dan, 2026-11-19, recorded on #3235:
+# "Offer when git says safe"). The daily keep rules keep a git checkout in an ended session's notes,
+# since it may hold work that exists nowhere else, and keep a task folder whole when it is one
+# itself. A checkout in a task folder is the four level shape above. A task folder that is one is
+# exactly three levels under session-notes (dc_notes_task_shape), and is let past this list on the
+# same terms: only for the claude-records kind going to the Trash, and path_checks then holds it to
+# dc_notes_checkout, a real folder reached by its own path with a real .git folder at its top. So a
+# task folder that is not a checkout stays refused here, whatever a judge would say. Whether its
+# session has ended and whether git calls it safe are the judge's to say.
 STATE_DENY="it is Claude Code's own state, this tool's records among it"
 # The category whose judge answers for a session notes folder (categories/claude-records.sh). It
 # takes one only when the daily keep rules list it, by their own rules: as an ended session's folder
@@ -205,10 +215,12 @@ deny_reason() { # <path>
     "$H/.pcloud"|"$H/.pcloud/"*|"$H/pCloud Drive"|"$H/pCloud Drive/"*) DENY='it is the store of pCloud, a sync client'; return 0 ;;
     "$H/.ssh"|"$H/.ssh/"*|"$H/.gnupg"|"$H/.gnupg/"*) DENY='it holds keys and credentials'; return 0 ;;
     "$H/.claude/state"|"$H/.claude/state/"*)
-      # The one exception (Dan, 2026-11-19, recorded on #3235: "Allow it"): a folder exactly four
-      # levels under session-notes, and only for an item path_checks opened it to (NOTES_OK). It is
-      # not removed by this: it reaches its judge, and path_checks then holds it to dc_notes_folder.
-      if [ -n "$NOTES_OK" ] && dc_notes_shape "$p" "$H"; then NOTES_USED=1
+      # The two exceptions (Dan, 2026-11-19, recorded on #3235: "Allow it" and "Offer when git says
+      # safe"): a folder exactly four levels under session-notes, or a task folder exactly three,
+      # and only for an item path_checks opened them to (NOTES_OK). Neither is removed by this: it
+      # reaches its judge, and path_checks then holds it to dc_notes_item, which takes a task
+      # folder only when it is a git checkout with a .git folder of its own.
+      if [ -n "$NOTES_OK" ] && { dc_notes_shape "$p" "$H" || dc_notes_task_shape "$p" "$H"; }; then NOTES_USED=1
       else DENY="$STATE_DENY"; return 0; fi ;;
     "$H/.local"|"$H/.cache"|"$H/.config"|"$H/.claude"|"$H/.docker"|"$H/.Trash"|"$H/.vscode"|"$H/.nvm"|"$H/.cargo"|"$H/.rustup")
       DENY="it is the dotfolder ${p##*/} itself, which this tool never removes whole"; return 0 ;;
@@ -389,7 +401,7 @@ path_checks() { # <target> [<category> <method>]
   PHYS="$(dc_resolve "$t")" || { WHY='where it lies could not be read'; return 1; }
   if deny_reason "$PHYS"; then WHY="never removed: $DENY"; return 1; fi
   if [ -n "$NOTES_USED" ] && { [ -e "$t" ] || [ -L "$t" ]; }; then
-    dc_notes_folder "$t" "$HOME" "$HOME_PHYS" || { WHY="never removed: $STATE_DENY, and $DC_NOTES_WHY"; return 1; }
+    dc_notes_item "$t" "$HOME" "$HOME_PHYS" || { WHY="never removed: $STATE_DENY, and $DC_NOTES_WHY"; return 1; }
   fi
   allowed_root "$PHYS" || { WHY="it is outside the folders this tool removes from ($PHYS)"; return 1; }
   return 0

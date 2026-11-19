@@ -403,6 +403,61 @@ item g1 claude-records trash "$NT/already-gone"; record s1 10; plan "$H/plan" s1
 run --plan "$H/plan"
 check "notes: a four level folder that is already gone is reported as gone" "$(has "$OUT_TEXT" "it was already gone")"
 
+# Dan, 2026-11-19, recorded on #3235: "Offer when git says safe". The second shape that reaches the
+# claude-records judge: a task folder (three levels under session-notes) that is itself a git
+# checkout holding its own repository, a real .git folder at its top. A task folder that is not one
+# stays refused here, whatever a judge would say of it.
+tshape() { if dc_notes_task_shape "$1" "$PH" 2>/dev/null; then echo yes; else echo no; fi; }
+check "task shape: a folder three levels under session-notes is the shape" "$(eq "$(tshape "$B/p/s/t")" yes)"
+check "task shape: two levels is not" "$(eq "$(tshape "$B/p/s")" no)"
+check "task shape: four levels is not" "$(eq "$(tshape "$B/p/s/t/f")" no)"
+check "task shape: an empty level does not count as one" "$(eq "$(tshape "$B/p//t")" no)"
+check "task shape: a .. level is refused" "$(eq "$(tshape "$B/p/s/..")" no)"
+check "task shape: a trailing slash is refused rather than read" "$(eq "$(tshape "$B/p/s/t/")" no)"
+check "task shape: the same shape under another home is not" "$(eq "$(tshape "$OUT/.claude/state/session-notes/p/s/t")" no)"
+checkout_tree() {
+  notes_tree
+  mkdir -p "$NS/repo-task/.git" "$NS/repo-task/src" "$NS/wt-task" "$NT/clone/.git" "$H/w/outside-repo/.git" "$NS/linked-git"
+  printf 'ref\n' > "$NS/repo-task/.git/HEAD"; printf 'x\n' > "$NS/repo-task/src/a"; printf 'x\n' > "$NT/clone/.git/HEAD"
+  printf 'gitdir: /elsewhere/.git/worktrees/w\n' > "$NS/wt-task/.git"; printf 'x\n' > "$NS/wt-task/a"
+  ln -s "$H/w/outside-repo/.git" "$NS/linked-git/.git"
+  ln -s "$NS/repo-task" "$NS/repo-link"
+  ln -s "$NP" "$NOTES/proj-link"
+}
+checkout_tree
+item d1 claude-records trash "$NT"
+item d2 claude-records trash "$NS/wt-task"
+item d3 claude-records trash "$NS/linked-git"
+item d4 claude-records trash "$NS/repo-link"
+item d5 claude-records delete "$NS/repo-task"
+item d6 fixture trash "$NS/repo-task"
+item d7 named trash "$NS/repo-task"
+item d8 claude-records trash "$NOTES/proj-link/${NS##*/}/repo-task"
+item d9 claude-records trash "$NS"
+item c1 claude-records trash "$NS/repo-task"
+item c2 claude-records trash "$NT/clone"
+record s1 10; plan "$H/plan" s1 d1 d2 d3 d4 d5 d6 d7 d8 d9 c1 c2
+run --plan "$H/plan"
+check "checkout: a task folder that is a git checkout reaches its judge and is moved to the Trash" "$(gone "$NS/repo-task")"
+check "checkout: and so does a checkout four levels down, by the first shape" "$(gone "$NT/clone")"
+check "checkout: the judge was asked about exactly those two" \
+  "$(eq "$(calls_of judge | sort | tr '\n' '|')" "$(printf 'judge judge %q\n' "$NS/repo-task" "$NT/clone" | sort | tr '\n' '|')")"
+check "checkout: both went through trash, never rm" "$(eq "$(calls_of trash | wc -l | tr -d ' ')" 2)"
+check "checkout: an INTENT was written for each of the two, and for nothing refused" "$(eq "$(intents "$(LOGF s1)" '^c[12]$')|$(intents "$(LOGF s1)" '^d')" "2|0")"
+for pair in "a task folder that is no checkout|$NT:" "a task folder whose .git is a file, a worktree of a repository elsewhere|$NS/wt-task:" \
+  "a task folder whose .git is a link|$NS/linked-git:" "a session folder|$NS:"; do
+  check "checkout: ${pair%%|*} stays refused as Claude Code's own state" "$(has "$(line_of "${pair#*|}")" "never removed: it is Claude Code's own state")"
+done
+check "checkout: a link to a checkout task folder is refused as a link" "$(has "$(line_of "$NS/repo-link:")" "symbolic link")"
+check "checkout: one reached through a link above it does not reach the judge" "$(has "$(line_of "$NOTES/proj-link/")" "never removed: it is Claude Code's own state")"
+check "checkout: the same task folder under another kind, by deleting, or named, stays refused" "$(eq "$(grep -c "skipped.*$NS/repo-task: never removed: it is Claude Code's own state" <<< "$OUT_TEXT")" 3)"
+check "checkout: everything refused is still there" \
+  "$(for f in "$NT/evidence.md" "$NS/wt-task/a" "$NS/linked-git" "$NS/handoff.md" "$H/w/outside-repo/.git"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; [ -L "$NS/repo-link" ] && echo ok || echo "the link is gone")"
+checkout_tree
+run --propose trash "$NS/repo-task"
+check "checkout: --propose refuses a checkout task folder, since its judge is not git's" "$(has "$OUT_TEXT" "refused  $NS/repo-task: never removed: it is Claude Code's own state")"
+check "checkout: and it is still there" "$(there "$NS/repo-task/src/a")"
+
 # ================================================================================================
 # 5. Symbolic links and the allowed root
 # ================================================================================================

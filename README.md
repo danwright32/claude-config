@@ -381,6 +381,18 @@ each kind offers). It is written whole on every run, never added to, and a run t
 it fails and says so, while its removals still happen. With the job switched off on a Mac the list
 is not written there, and `/disk-clean` says those folders are unmeasured.
 
+Two more lists are written beside it on every run, in the same shape, for two things the job never
+removes and `/disk-clean` offers with a tick (Dan, 2026-11-19, both recorded on #3235):
+
+- `open-leftovers.tsv` ("Offer after 7 idle days"): in each session the registry shows open, the
+  folders the notes rule would remove had the session ended. One function, `judge_folder`, is the
+  definition of bulky for the rule that removes and for this list. A task folder that is a git
+  checkout is left out, and so is one that is, or holds, the working folder an open session's
+  registry record names. When a record that may be an open session's cannot be read, the list
+  says unmeasured.
+- `kept-checkouts.tsv` ("Offer when git says safe"): in each ended session, every task folder and
+  every folder in one that the notes rule keeps because it is a git checkout.
+
 - See what it would remove, changing nothing: `claude-sync leftovers`
 - Run it now: `claude-sync remove-leftovers`
 - Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
@@ -6204,8 +6216,10 @@ rather than listed). A kind that offers nothing carries the line `# offers: noth
 this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
 nowhere instead of keeping the floor, and pins the marker to exactly that one kind.
 
-Folders of images and documents in session notes are the one thing `claude-records.sh` offers.
-Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
+`claude-records.sh` offers three things, all folders in session notes that the daily keep rules
+list and never remove: folders of images and documents in ended sessions, bulky leftovers in
+sessions still open, and git checkouts in ended sessions. The first is described here and the other
+two after it. Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
 daily job, and they keep an ended session's folder when more than half of it is images or
 documents (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup"). Each such folder is a row here,
 offered once nothing in it was changed or opened in 30 days, and ticking it moves it to the Trash.
@@ -6229,11 +6243,47 @@ Two decisions of 2026-11-19, both recorded on #3235, are behind that:
   by its own path (no link at any level, no `..`, no empty level), and only when it is a real
   folder. The judge then still requires that the keep rules' list names it and that the 30 day
   floor holds. Everything else under the state folder stays refused: `session-notes` itself, a
-  project, a session, a task folder, a file, and anything five or more levels down. So does the
+  project, a session, a task folder (unless it is a git checkout, below), a file, and anything
+  five or more levels down. So does the
   same four level folder under any other kind, by any method but the Trash, or named to
   `--propose`, whose only check is that the item is the one proposed. The shape is one predicate,
   `dc_notes_shape` and `dc_notes_folder` in `hooks/lib/disk-clean-predicates.sh`, read by both the
   page and the remover, so a row is offered only where the remover takes it.
+
+Two more decisions of 2026-11-19, recorded on #3235, each from its own picker:
+
+- **Bulky leftovers in a session still open: "Offer after 7 idle days".** The daily rule removes a
+  session's bulky leftovers only once it has ended, and an orchestrator session can stay open for
+  weeks (on the work MacBook one held 82.7 GB on 2026-11-19). The job lists them in
+  `open-leftovers.tsv` and the page offers each to the Trash when all of these hold on the day it
+  is asked: the list names it; it holds no `.git` at its top; no live session's working folder
+  (`~/.claude/sessions`) is its task folder or inside it; and nothing in its task folder was
+  changed or opened for 7 days (`OPEN_IDLE_DAYS`). The 7 days are read as the 30 day floor is, by
+  `dcs_idle` in `scan-lib.sh`, which the floor itself now calls: the modification time of
+  everything in the task folder and the access time of its files, the notes beside the leftover
+  included. A folder's access time is never read, and listing folders is all the daily job and
+  the scan do there, so neither moves a time this reads. A program that reads the files, a backup
+  say, moves a file's access time only on the first read after each change, so it can delay an
+  offer once and never bring one forward. The task folder's own modification time is left out,
+  because moving one ticked leftover to the Trash moves it just before the next one in the same
+  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  The remover lets no new path through for this: these are the same four level folders, and what
+  changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
+  files and are not offered.
+- **Git checkouts in ended sessions' notes: "Offer when git says safe".** The keep rules keep a
+  checkout because it may hold work that exists nowhere else, and list each in
+  `kept-checkouts.tsv`. The page offers one to the Trash only when its session is not open now, no
+  live session is working in it, its `.git` is a folder of its own, the 30 day floor holds (git's
+  own files' access times apart, since every look reads them), and git says it is safe: nothing
+  uncommitted or untracked, on a branch whose merged pull request head is exactly its HEAD
+  (`dcs_git_merged` in `scan-lib.sh`, the one test the Finished worktrees kind uses), no stash, and
+  no commit on another branch or tag that no remote has. A checkout whose `.git` is a file is a
+  worktree or submodule of a repository elsewhere, and is not offered. A checkout in a task folder
+  is the four level shape. A task folder that is itself a checkout is three levels under
+  `session-notes`, which needed the remover's second exception: `dc_notes_task_shape` and
+  `dc_notes_checkout` let it reach the judge only as a `claude-records` item going to the Trash,
+  by its own path, with a real `.git` folder at its top, so a task folder that is not a checkout
+  stays refused whatever a judge says. A checkout in an open session is never offered.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
@@ -6292,8 +6342,8 @@ an hour old (exit 3) and when its scan is not the last scan (exit 4), with a mes
 
 Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive, app packages,
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
-under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the one
-session notes folder shape described above, and the home folder's standard folders and listed
+under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
+session notes folder shapes described above, and the home folder's standard folders and listed
 dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last

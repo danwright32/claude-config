@@ -605,6 +605,48 @@ dcs_gitdir() { # <dir>
     s = ""; for (i = 1; i <= n; i++) s = s "/" p[i]; print (s == "" ? "/" : s) }')"
   case "${g%/*}" in */worktrees) printf '%s\n' "$g" ;; *) return 1 ;; esac
 }
+# owner/name of a GitHub remote URL; fails for anything else.
+dcs_github_repo() { # <url>
+  local u="$1"
+  case "$u" in
+    https://github.com/*) u="${u#https://github.com/}" ;;
+    git@github.com:*) u="${u#git@github.com:}" ;;
+    ssh://git@github.com/*) u="${u#ssh://git@github.com/}" ;;
+    *) return 1 ;;
+  esac
+  u="${u%.git}"; u="${u%/}"
+  case "$u" in */*/*|/*|*/|'') return 1 ;; */*) printf '%s\n' "$u" ;; *) return 1 ;; esac
+}
+# The one test of whether everything in a git checkout is somewhere else too, so removing the
+# folder loses no work (the worktrees kind's, #1806, moved here when a second kind needed it,
+# #3235; L261). Sets V to offerable, and D to what it found, only when ALL of these hold, in order:
+#   `git --no-optional-locks status --porcelain --untracked-files=all` is empty, untracked files
+#   included (optional locks off: a plain git status refreshes the index file it reads, which is a
+#   write, and the scan writes nothing in the folders it judges, #3216)
+#   it is on a branch, and gh finds a MERGED pull request for that branch whose head is exactly the
+#   checkout's HEAD, so nothing in it is unpushed or unmerged. Asked of gh because squash merges
+#   leave no merged branch git could see locally (L642)
+# Any git or gh failure is unmeasured, never merged. A caller keeps its 30 day floor BEFORE this,
+# since git status reads files and so moves their access times.
+dcs_git_merged() { # <checkout>
+  local t="${1%/}" st br head url repo out err="$DCS_WORK/git.err.$$" n oid
+  D=""
+  st="$(git -C "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
+  br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
+  [ -n "$br" ] || { V="not offerable: it is on no branch, so no pull request can be matched to it"; rm -f "$err"; return; }
+  head="$(git -C "$t" rev-parse HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-parse failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  url="$(git -C "$t" remote get-url origin 2>/dev/null </dev/null)" || { V="not offerable: it has no origin remote, so no pull request can say it merged"; rm -f "$err"; return; }
+  repo="$(dcs_github_repo "$url")" || { V="not offerable: its repository is not on GitHub ($url), so no pull request can say it merged"; rm -f "$err"; return; }
+  out="$(gh pr list --repo "$repo" --head "$br" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2> "$err" </dev/null)" || {
+    V="unmeasured: gh could not say whether its pull request merged ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  rm -f "$err"
+  [ -n "$out" ] || { V="not offerable: no merged pull request for its branch $br"; return; }
+  while read -r n oid; do
+    [ "$oid" = "$head" ] && { V=offerable; D="branch $br, merged in pull request #$n at its HEAD"; return; }
+  done <<< "$out"
+  V="not offerable: it has commits its merged pull request #$(printf '%s\n' "$out" | awk 'NR == 1 { print $1 }') does not"
+}
 # Joins flags and details: <flags var value> <new flag>
 dcs_join() { if [ -n "$1" ]; then printf '%s,%s' "$1" "$2"; else printf '%s' "$2"; fi; }
 
