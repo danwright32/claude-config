@@ -88,8 +88,8 @@ lines="$(named_fact LINES)"
 # edit above one of these lines moves it, and the suite then names the line it is now on.
 KNOWN_BYVALUE='tools/check-mods.sh:470 $tsc TSC_BIN
 tools/check-mods.sh:545 $bin CLAUDE_BIN
-tools/check-mods.sh:580 $bin CLAUDE_BIN
-tools/check-mods.sh:595 $bin CLAUDE_BIN
+tools/check-mods.sh:593 $bin CLAUDE_BIN
+tools/check-mods.sh:614 $bin CLAUDE_BIN
 tools/lib/pinned-compiler.sh:323 $PINNED_TS_TEST_BEFORE_REMOVE PINNED_TS_TEST_BEFORE_REMOVE
 tools/lib/pinned-compiler.sh:361 $PINNED_TS_TEST_BEFORE_LINK PINNED_TS_TEST_BEFORE_LINK
 payload/hooks/lib/load-average.sh:32 $cmd LOAD_AVERAGE_CMD'
