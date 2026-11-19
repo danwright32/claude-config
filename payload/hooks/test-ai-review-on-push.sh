@@ -1640,7 +1640,7 @@ check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$pla
 # ===========================================================================
 # The forms an origin is written in, each read to owner/name and never kept whole, since a URL can
 # carry a credential. A local path has no owner/name, so the main checkout's folder stands in.
-repository_of(){ bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repository \"\$1\"" _ "$1"; }
+repository_of(){ bash -c ". \"$DIR/lib/ai-review-common.sh\"; ar_repository \"\$1\"" _ "$1"; }
 repo_of_url(){ # repo_of_url <origin url or empty> -> what a checkout with that origin records
   local d="$WORKDIR/url-probe"
   rm -rf "$d"; git init -q "$d"
