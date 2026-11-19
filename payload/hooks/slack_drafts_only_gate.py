@@ -44,9 +44,10 @@ Two routes are judged:
     be unable to send or run code (SH_INERT), to its own functions, or to scripts seen unable to act
     (claude-config#2434). The one script let through is /nudge, at skills/nudge/nudge.py beside this
     hooks folder, by its real path; a copy anywhere else is refused like any other script that posts.
-    And one command is let through unread: a command whose first word is the installed no network
-    wrapper, no-network-run.sh beside this file, by the same real path test, since what runs under it
-    cannot reach the network (lib/no-network-route.py; Dan, 2026-11-18, claude-config#3173).
+    And one call is let through unread: one that is the installed no network wrapper,
+    no-network-run.sh beside this file by the same real path test, and the command it runs, and
+    nothing else, with one `cd <folder> &&` in front at most, since what runs under it cannot reach
+    the network while it runs there (lib/no-network-route.py; Dan, 2026-11-18, claude-config#3173).
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
 through a path alias (`@/lib/x`), a Python module in the standard library or installed (whether
