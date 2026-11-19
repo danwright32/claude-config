@@ -23,7 +23,9 @@
 # of its own only when it is measured to need a different one, and that number gets its own row.
 #
 # Arming starts a watchdog, OUTSIDE the suite's process tree, that does two things and exits by
-# itself once the suite has gone however it went.
+# itself once the suite has gone however it went, removing the throwaway folder arming made for the
+# suite's records as it does (claude-config#3253). A suite with no deadline gets a waiter instead,
+# which kills nothing and only removes that folder once the suite has gone.
 #
 # It stops the suite once its wall clock passes the limit. It cannot simply signal it, and that is
 # the whole difficulty: bash defers a trapped signal until the foreground command returns, and the
@@ -54,7 +56,8 @@
 #
 # Environment, each read once and then removed, because it describes THIS run and a suite started
 # by this one would otherwise read an injected start as its own (L169):
-#   SUITE_WALL_TIMEOUT   seconds before the suite is stopped. 0 turns the watchdog off entirely.
+#   SUITE_WALL_TIMEOUT   seconds before the suite is stopped. 0 turns the watchdog off entirely,
+#                        leaving only the waiter that removes the throwaway folder, if one was made.
 #                        Defaults to the number the suite passes, or SUITE_WALL_DEFAULT when it
 #                        passes none; DESIGN.md records and derives both.
 #   SUITE_WALL_POLL      how often the watchdog looks (default 2, the same granularity as the sync
@@ -163,7 +166,8 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
   # three suites failed overnight on the live sleep record (claude-config#1729), and
   # test-gates-fail-closed.sh wrote 123 fixture rows into the real record of wrapped command
   # refusals (#2126, #2156). So arming hands a suite the same seams, each one nothing has set yet,
-  # in one folder of its own named so claude-sync's scratch sweep reclaims it. Under the runner every
+  # in one folder of its own, removed once the suite has gone (below), and named so claude-sync's
+  # scratch sweep still reclaims one that outlives that. Under the runner every
   # seam is already set and no folder is made. A suite ABOUT one of them unsets it after arming.
   # Here rather than at source time: only suites arm, and claude-sync sources this file too.
   . "${BASH_SOURCE[0]%suite-deadline.sh}./suite-isolation.sh" || {

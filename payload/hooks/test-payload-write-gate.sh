@@ -1149,6 +1149,11 @@ says "and the refusal names the reader that is missing" "python3"
 OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
   | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
 allowed "with no python3 the check after a call stays quiet rather than refusing what already ran"
+for after_ev in PostToolUseFailure PermissionDenied; do
+  OUT="$(printf '{"hook_event_name":"%s","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$after_ev" "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+    | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
+  allowed "with no python3, $after_ev stays quiet too, since that call is over (#3253)"
+done
 
 # Only the state that loses work, exactly as with a reader present. A write that names nothing
 # under payload/ is not this gate's business whatever is missing from PATH (L54, L324).
@@ -1228,6 +1233,12 @@ for gone in sync-clone.sh push-scope.sh; do
   OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
     | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
   allowed "with lib/$gone missing, the check after a call refuses nothing, since the call already ran"
+  # Nor after a call that failed, which already ran, or one refused, which never will (#3253).
+  for after_ev in PostToolUseFailure PermissionDenied; do
+    OUT="$(printf '{"hook_event_name":"%s","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$after_ev" "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
+      | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+    allowed "with lib/$gone missing, $after_ev refuses nothing, since that call is over"
+  done
 done
 HOOK="$SAVED_HOOK"
 

@@ -71,9 +71,20 @@ payload="$(cat 2>/dev/null || true)"
 # its raw payload names payload/ at all, since nothing here can read more than that, and the
 # refusal names the file. A library that sources but lacks the function asked for (an empty or cut
 # short file) is the same failure. After a call there is nothing left to refuse.
+# Is this payload one sent after a call has ended, or once it was refused, read from its raw text
+# because the readers below may be what failed? Every such event, never only PostToolUse: a failed
+# call (PostToolUseFailure) has already run and a refused one (PermissionDenied) never will, so
+# neither has anything left to refuse (claude-config#3253).
+after_call(){
+  case "$payload" in
+    *'"hook_event_name":"PostToolUse'*|*'"hook_event_name": "PostToolUse'*) return 0 ;;
+    *'"hook_event_name":"PermissionDenied"'*|*'"hook_event_name": "PermissionDenied"'*) return 0 ;;
+  esac
+  return 1
+}
 unloaded(){   # $1 = the library file that could not be loaded
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
-  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
+  after_call && exit 0
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   cat >&2 <<MSG
 claude-sync: REFUSED a write that may be under a development checkout's payload/.
@@ -143,7 +154,7 @@ refuse_unread(){
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
   # After a call there is nothing left to refuse, and the check made then needs the note this
   # branch never took.
-  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
+  after_call && exit 0
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   unreadable_root="$(sc_clone_root_of "$PWD" 2>/dev/null || true)"
   unreadable_watcher="$(sc_watcher_cmd || true)"
@@ -209,7 +220,8 @@ state_key="$(printf '%s' "$use_id" | tr -c 'A-Za-z0-9_.-' '_')"
 # command that has barely started: its note is dropped. A refusal by another gate before this one, or
 # an interrupt nothing reports, still reaches no event, and the sweep is what removes those.
 case "$event" in
-  PostToolUse|PostToolUseFailure) [ "$tool" = "Bash" ] || { rm -f "$STATE_DIR/$state_key".*; exit 0; } ;;
+  PostToolUse|PostToolUseFailure)
+    [ "$tool" = "Bash" ] || { [ "$use_id" = "-" ] || rm -f "$STATE_DIR/$state_key".*; exit 0; } ;;
   PermissionDenied) [ "$use_id" = "-" ] || rm -f "$STATE_DIR/$state_key".*; exit 0 ;;
 esac
 
