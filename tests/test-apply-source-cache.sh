@@ -83,9 +83,15 @@ scratch_file(){ mktemp "$WORK/scratch/claude-sync-work.XXXXXXXX"; }
 # An rsync that writes down every expanded copy it is asked to build, then runs the real one. A
 # file named in $WORK/during is appended to once the copy is made, the way an edit landing mid
 # build would.
+#
+# The receiving half of a copy is not a second build. openrsync (macOS's rsync since 15) starts that
+# half by running the rsync on PATH again, as `rsync --server ... . <destination>/`, so this wrapper
+# saw every copy twice and every count below read double on a Mac while passing on Linux, whose
+# rsync forks itself instead (claude-config#3068). claude-sync never passes --server itself.
 REAL_RSYNC="$(command -v rsync)"; mkdir -p "$WORK/bin"
 cat > "$WORK/bin/rsync" <<EOF
 #!/bin/sh
+[ "\${1:-}" = --server ] && exec "$REAL_RSYNC" "\$@"
 for a in "\$@"; do last="\$a"; done
 case "\$last" in *claude-sync-expand*) echo "\$last" >> "$WORK/builds" ;; esac
 "$REAL_RSYNC" "\$@"; rc=\$?
@@ -95,6 +101,15 @@ EOF
 chmod +x "$WORK/bin/rsync"
 PATH="$WORK/bin:$PATH"
 builds(){ local n; n="$(grep -c . "$WORK/builds" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+# Every count below is only as true as this counter, so it is checked first against a copy made
+# exactly once (claude-config#3068).
+mkdir -p "$WORK/calibrate/src"; echo c > "$WORK/calibrate/src/f"; : > "$WORK/builds"
+rsync -a "$WORK/calibrate/src/" "$WORK/calibrate/claude-sync-expand.calibrate/"
+if [ "$(builds)" = 1 ]; then
+  ok "the counting rsync counts one copy as one build"
+else
+  bad "the counting rsync counts one copy as one build" "builds=$(builds) under $("$REAL_RSYNC" --version 2>&1 | head -1): $(cat "$WORK/builds")"
+fi
 
 CLAUDE_HOME="$WORK/home"
 PAYLOAD="$WORK/payload"
