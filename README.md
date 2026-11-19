@@ -4521,8 +4521,13 @@ not run its words and is not known to be unable to (`git add`, `sed`, `docker ps
 when the words after it happen to spell a command the gate refuses. Left open: a word that names
 a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
 and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
-quoted word (`hyperfine 'node x.js'`); and more than six words that could each start a command,
-which a typed command is refused for as unread. Suite: `test-slack-drafts-unknown-program.sh`.
+quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+is refused as unread and a script on disk is left alone: more than six words that could each
+start a command, and more than three of these readings inside one another, which only strings a
+shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
+such program), since the words of one command are read once however many programs stand among
+them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
+program's words were allowed unread. Suite: `test-slack-drafts-unknown-program.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same

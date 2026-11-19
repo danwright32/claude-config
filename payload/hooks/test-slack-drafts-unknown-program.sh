@@ -464,6 +464,29 @@ gate_says allowed "#3277 and the same number of them behind a program known to b
 echo node node node node node node node node node --test test/notify.test.js
 EOF
 
+echo "slack drafts only: more of these readings inside one another than the rule reads (claude-config#3277)"
+
+# Each string a shell runs holds the next program the gate does not know, so the last command is
+# a word of no reading but the innermost. Past three readings inside one another the rule read
+# nothing and said nothing, which allowed the fourth (the lessons review of this branch, 2026-11-19).
+gate_says refused "#3277 a typed command four such programs deep, each in a string a shell runs, is refused as unread" "inside one another" 3<<EOF
+op run -- bash -c 'op run -- bash -c "op run -- bash -c \"op run -- node --test test/notify.test.js\""'
+EOF
+gate_says refused "#3277 and three deep the test file is still read and refused for what it imports" "$KNOWS" 3<<EOF
+op run -- bash -c 'op run -- bash -c "op run -- node --test test/notify.test.js"'
+EOF
+gate_says allowed "#3277 and three deep in front of a test file that imports nothing is allowed" 3<<EOF
+op run -- bash -c 'op run -- bash -c "op run -- node --test test/plain.test.js"'
+EOF
+# With no string between them the programs are words of one command, read once however many
+# there are: nothing there is unread, so nothing is refused as unread.
+gate_says refused "#3277 four such programs as the words of one command are one reading, and the test file is read" "$KNOWS" 3<<EOF
+op run -- env A=1 op run -- env A=1 op run -- env A=1 op run -- node --test test/notify.test.js
+EOF
+gate_says allowed "#3277 and the same in front of a test file that imports nothing is allowed, not refused as unread" 3<<EOF
+op run -- env A=1 op run -- env A=1 op run -- env A=1 op run -- node --test test/plain.test.js
+EOF
+
 echo "slack drafts only: the refusal, as a session's call gets it through the hook (claude-config#3277)"
 
 run_here "op run -- node --test test/notify.test.js"

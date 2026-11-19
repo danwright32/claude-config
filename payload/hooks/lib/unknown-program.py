@@ -54,13 +54,20 @@ of which spells a refused command. The gate's own verdict on each was not taken:
 gate refused the script that asks it (the pull request says what was and was not measured).
 
 More than MAX_STARTS words that could each start a command are not all read: a typed command is
-refused as unread there, and a script on disk is left alone, as an unread feed is.
+refused as unread there, and a script on disk is left alone, as an unread feed is. The same holds
+past MAX_NESTED of these readings inside one another, so that a reading of a reading ends. Only a
+string a shell runs adds one (`op run -- bash -c 'op run -- bash -c "op run -- bash -c \\"op run --
+node x.js\\""'`): the words one reading judges as a command are not read by the rule again, since
+each word of them that could start a command is a start of that first reading's own, however many
+programs stand between (`op run -- env A=1 op run -- env A=1 op run -- node x.js` is one reading).
+Until the lessons review of 2026-11-19 the cap returned nothing, and the fourth program's words
+were allowed unread.
 """
 import os
 import re
 
 # How many words of one command are each read as the start of a command, and how many of these
-# readings may stand inside one another (a runner in front of a second unknown program).
+# readings may stand inside one another (a string a shell runs that holds a second unknown program).
 MAX_STARTS = 6
 MAX_NESTED = 3
 # A pattern nothing matches: no word of a typed command is "what the script was handed".
@@ -73,6 +80,7 @@ def make(judged_by_name, sh_redirect):
 
     class UnknownProgram:
         behind = 0  # how many of these readings are inside one another
+        suffix = None  # the words the reading around this one is judging as a command (judge_as_run)
         starts_memo = {}  # {a word: whether it can start a command the gate reads}, one Judge a process
         funcs_memo = {}  # {a text: the names of the functions it defines}
 
@@ -118,7 +126,9 @@ def make(judged_by_name, sh_redirect):
             the words is looked for under the command they were written in (`run_slow python`,
             a function handed a name in this repository's own suite, is fed nothing, where the
             lone word `python` is written on many of that suite's lines)."""
-            if wrapper not in ("", "direct") or self.behind >= MAX_NESTED:
+            if wrapper not in ("", "direct") or text is self.suffix:
+                # The words an enclosing reading is judging as a command: each word of them that
+                # could start one is a start of that reading's own, so they are read there.
                 return None
             rest = self.rest_of(text)[0]
             words = self.words_of(rest)
@@ -141,6 +151,13 @@ def make(judged_by_name, sh_redirect):
                       and self.starts_command(self.word_value(toks[k][1]) or "")]
             if not starts:
                 return None
+            if self.behind >= MAX_NESTED:
+                # Asked only here, once there are words to read: an unread cap that says nothing
+                # allows what stands past it (the lessons review of this branch, 2026-11-19).
+                return self.unread_typed(
+                    f"the words after {words[0]} could start a command, and they stand {MAX_NESTED} such readings "
+                    f"inside one another, more than the gate reads, and it does not know {name} to be unable to "
+                    "run them, so whether the command posts cannot be checked")
             if len(starts) > MAX_STARTS:
                 return self.unread_typed(
                     f"{len(starts)} of the words after {words[0]} could each start a command, more than the "
@@ -179,6 +196,10 @@ def make(judged_by_name, sh_redirect):
                 inner = self.inner_line(string, d, depth)
                 if inner:
                     return f"{wrapper} runs a string, one of whose commands posts: {inner}"
-            return self.judge(d, new, wrapper, why, depth, whole, fed_by)
+            was, self.suffix = self.suffix, new
+            try:
+                return self.judge(d, new, wrapper, why, depth, whole, fed_by)
+            finally:
+                self.suffix = was
 
     return UnknownProgram
