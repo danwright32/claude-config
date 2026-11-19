@@ -20,6 +20,10 @@ The words inside the code fence are not judged, since that text belongs to the o
 its length, and that there is one closed block, are. What no script can
 judge (whether the first line is true, whether the link opens the failed thing) stays with the
 skill and with whoever reviews the wording.
+
+A message may carry several links, each on a closing line of its own or on the list line of the
+thing it opens. Of several links the checker checks only that their targets differ: whether each
+is a page the reader must visit to act, and not a reference, is the writer's to judge.
 """
 import argparse
 import datetime
@@ -37,7 +41,7 @@ LINK_REQUIRED = ("alert", "reminder", "digest", "request")
 RULES = (
     "empty", "first-line-bold", "first-line-title", "recovery-opening", "reminder-opening",
     "app-name", "mention", "wording-length", "sentences", "labelled-lines", "list-length",
-    "error-block", "link-missing", "link-count", "link-last", "link-label", "bare-url",
+    "error-block", "link-missing", "link-count", "link-last", "link-label", "link-repeat", "bare-url",
     "time-format", "emoji", "dash", "capitals", "machine-plural", "issue-ref", "raw-id", "filler",
 )
 
@@ -276,17 +280,45 @@ def check(text, kind, urgent=False, apps=(), *, record=None, alert=None):
         fail("list-length", f"{len(items)} list lines; show {LIST_LIMIT} and end with \"and {len(items) - LIST_LIMIT} more\"")
 
     every_link = ANY_LINK.findall(outside)
-    if kind in LINK_REQUIRED and not links:
-        fail("link-missing", f"a {kind} ends with one labelled link to the thing itself")
-    if len(every_link) > 1 or (every_link and not links):
-        fail("link-count", f"{len(every_link)} links, or a link inside a sentence; one link stands alone on the last line")
-    if links:
-        last = [line.strip() for line in text.split("\n") if line.strip()][-1]
-        if last != links[-1]:
-            fail("link-last", "the link is not the last line")
-        label = LINK_LINE.match(links[-1]).group(2)
-        if not LINK_LABEL.match(label):
-            fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+    every_line = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(every_link) <= 1:
+        # One link is judged exactly as it was before several were allowed.
+        if kind in LINK_REQUIRED and not links:
+            fail("link-missing", f"a {kind} ends with one labelled link to the thing itself")
+        if every_link and not links:
+            fail("link-count", "a link inside a sentence; one link stands alone on the last line")
+        if links:
+            if every_line[-1] != links[-1]:
+                fail("link-last", "the link is not the last line")
+            label = LINK_LINE.match(links[-1]).group(2)
+            if not LINK_LABEL.match(label):
+                fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+    else:
+        # Dan, 18 Nov 2026 (#3226): "Multiple links are fine if they genuinely link to different
+        # pages and I have to go to each of them to fix the problem." Only the first half can be
+        # measured: each target differs. The second half is the writer's.
+        listed = [line for line in items if ANY_LINK.search(line)]
+        placed = len(links) + len(listed)
+        if kind in LINK_REQUIRED and not placed:
+            fail("link-missing", f"a {kind} ends with a labelled link to the thing itself, or links each listed thing to its own page")
+        if any(len(ANY_LINK.findall(line)) > 1 for line in listed) or placed != len(every_link):
+            fail("link-count", "a link inside a sentence or the first line, or two on one list line; each link "
+                               "stands alone on a closing line or on the list line of the thing it opens")
+        if links:
+            if every_line[-len(links):] != links:
+                fail("link-last", "the links on lines of their own are not the closing lines")
+            for line in links:
+                label = LINK_LINE.match(line).group(2)
+                if not LINK_LABEL.match(label):
+                    fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+                    break
+        opened = {}
+        for link in every_link:
+            target = link[1:-1].split("|")[0].split("#")[0].rstrip("/")
+            if target in opened:
+                fail("link-repeat", f"two links open {target}; several links are for different pages the reader must visit")
+                break
+            opened[target] = link
     if any("|" not in link for link in every_link) or "://" in ANY_LINK.sub("", outside):
         fail("bare-url", "a bare address; give the link a label")
 

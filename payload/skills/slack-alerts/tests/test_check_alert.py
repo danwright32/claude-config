@@ -95,6 +95,26 @@ GOOD = {
         "*The nightly export last ran at 3:05 PM ET, Nov 14*",
         LINK,
     ])),
+    # Several links, each to a different page the reader must visit (Dan, 18 Nov 2026, #3226).
+    "an alert naming four bookings each linked to its own page": ("alert", False, "\n".join([
+        "*4 bookings for Nov 21 have no advisor assigned*",
+        DOT + "<https://example.com/bookings/1041|Booking 1041>, Ridgeway Dental",
+        DOT + "<https://example.com/bookings/1042|Booking 1042>, Corner Bakery",
+        DOT + "<https://example.com/bookings/1047|Booking 1047>, Elm Street Books",
+        DOT + "<https://example.com/bookings/1050|Booking 1050>, Harbor Florist",
+    ])),
+    "an alert naming three people each linked to their own page": ("alert", False, "\n".join([
+        "*3 advisors have no shifts set for next week*",
+        DOT + "<https://example.com/people/12|Maya Ortiz>",
+        DOT + "<https://example.com/people/31|Sam Whitfield>",
+        DOT + "<https://example.com/people/47|Priya Nolan>",
+    ])),
+    "linked list lines and a closing link to a different page": ("alert", False, "\n".join([
+        "*2 advisors have no shifts set for next week*",
+        DOT + "<https://example.com/people/12|Maya Ortiz>",
+        DOT + "<https://example.com/people/31|Sam Whitfield>",
+        "<https://example.com/rota|Open rota>",
+    ])),
 }
 
 
@@ -121,7 +141,14 @@ BAD = [
     ("two error blocks", "alert", False, (), alert(LEAD, FENCE + "HTTP 503" + FENCE, FENCE + "HTTP 500" + FENCE), "error-block"),
     ("an alert with no link", "alert", False, (), alert(LEAD, link=None), "link-missing"),
     ("a link that is not the last line", "alert", False, (), "\n".join([LEAD, LINK, "A CI re-run finished without reporting its result."]), "link-last"),
-    ("two links", "alert", False, (), alert(LEAD, "<https://example.com/a|Open runbook>"), "link-count"),
+    # Two links once failed whatever they opened. Dan reversed that on 18 Nov 2026 (#3226): several
+    # links are fine when each opens a different page, so two to the same page is what fails now.
+    ("two links to the same page", "alert", False, (), alert(LEAD, "<https://example.com/runs/88/|Open run log>"), "link-repeat"),
+    ("two links on one list line", "alert", False, (), alert(LEAD, DOT + "<https://example.com/p/1|Maya Ortiz> and <https://example.com/p/2|Sam Whitfield>"), "link-count"),
+    ("a link in the first line beside a closing link", "alert", False, (), alert("*Pull request <https://example.com/pulls/641|641> has a check stuck on pending*"), "link-count"),
+    ("a single link on a list line", "alert", False, (), alert(LEAD, DOT + "<https://example.com/p/1|Maya Ortiz>", link=None), "link-count"),
+    ("a sentence after two closing links", "alert", False, (), "\n".join([LEAD, "<https://example.com/rota|Open rota>", LINK, "A CI re-run finished without reporting its result."]), "link-last"),
+    ("a one word label on the first of two closing links", "alert", False, (), alert(LEAD, "<https://example.com/rota|rota>"), "link-label"),
     ("a link inside a sentence", "alert", False, (), alert(LEAD, "Start with the <https://example.com/a|runbook section>."), "link-count"),
     ("an arrow in the link label", "alert", False, (), alert(LEAD, link=f"<https://example.com/x|View execution {ARROW}>"), "link-label"),
     ("a one word link label", "alert", False, (), alert(LEAD, link="<https://example.com/x|open>"), "link-label"),
@@ -514,6 +541,40 @@ class ProjectRecord(unittest.TestCase):
         self.assertEqual(check_alert.check(text, "alert", urgent=False, apps=()), [])
 
 
+OWNER_ON_LINKS = ("Multiple links are fine if they genuinely link to different pages and I have to go "
+                  "to each of them to fix the problem.")
+
+
+class SeveralLinks(unittest.TestCase):
+    """Several links pass when each opens a different page (Dan, 18 Nov 2026, #3226). Whether each is
+    a page the reader must act on is the writer's to judge: the checker sees only the targets."""
+
+    def test_the_repeat_failure_names_the_target_after_trimming_a_slash_and_a_fragment(self):
+        for second in ("https://example.com/runs/88/", "https://example.com/runs/88#logs", "https://example.com/runs/88/#logs"):
+            with self.subTest(second=second):
+                said = dict(check_alert.check(alert(LEAD, f"<{second}|Open run log>"), "alert")).get("link-repeat", "")
+                self.assertIn("https://example.com/runs/88", said)
+
+    def test_a_different_query_or_path_is_a_different_page(self):
+        text = alert(LEAD, "<https://example.com/runs/88?attempt=2|Open second attempt>",
+                     "<https://example.com/runs/89|View next run>")
+        self.assertEqual(check_alert.check(text, "alert"), [])
+
+    def test_a_bare_address_still_fails_beside_several_links(self):
+        text = "\n".join([GOOD["an alert naming three people each linked to their own page"][2],
+                          DOT + "https://example.com/people/52"])
+        self.assertIn("bare-url", rules_failed(text, "alert"))
+
+    def test_the_owners_words_sit_beside_the_rule_in_the_checker(self):
+        with open(os.path.join(SKILL_DIR, "check_alert.py"), encoding="utf-8") as handle:
+            source = " ".join(line.strip().lstrip("#").strip() for line in handle)
+        self.assertTrue(OWNER_ON_LINKS in source, "the checker does not quote the owner's words")
+        self.assertTrue("18 Nov 2026" in source)
+
+    def test_the_checker_says_it_checks_only_that_the_targets_differ(self):
+        self.assertIn("only that their targets differ", " ".join(check_alert.__doc__.split()))
+
+
 def skill_text():
     path = os.path.join(SKILL_DIR, "SKILL.md")
     with open(path, encoding="utf-8") as handle:
@@ -584,6 +645,12 @@ class TheSkill(unittest.TestCase):
         flat = " ".join(self.skill.split())
         for words in ("merges when its checks and the lessons review pass", "without me"):
             self.assertTrue(words in flat, f'the skill does not say "{words}"')
+
+    def test_it_quotes_the_owner_on_several_links_and_leaves_the_judgement_to_the_writer(self):
+        flat = " ".join(self.skill.split())
+        for words in (OWNER_ON_LINKS, "18 Nov 2026", "only that their targets differ"):
+            self.assertTrue(words in flat, f'the skill does not say "{words}"')
+        self.assertFalse("one link straight to" in flat, "the skill still says one link")
 
     def test_it_says_how_a_project_records_each_allowance(self):
         # The record is the one place a project names them, so the skill must teach its form.

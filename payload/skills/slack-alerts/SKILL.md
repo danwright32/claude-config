@@ -25,7 +25,7 @@ webhook and an HTTP 503 are, and they have never seen your code.
 | 2. One sentence | The one fact that neither the first line nor the error block carries: a cause, or a next step that is specific. Empty on most alerts. Slots 1 and 2 together come to 200 characters at most. |
 | 3. List | The affected things, one per line, up to 5 lines, then `and N more`. |
 | 4. Error block | What the other system answered, as it sent it, in one code block of up to 500 characters cut on a word boundary. |
-| 5. Link | The last line: one link straight to the failed thing, labelled with a verb and the thing it opens (`View run`, `Open sync page`). |
+| 5. Link | The last line: a link straight to the failed thing, labelled with a verb and the thing it opens (`View run`, `Open sync page`). When the reader has to open several pages to fix it, each listed thing links its own page instead, or more closing lines do. |
 
 A brief usually holds more facts than the message has slots. Fill the slots, and the message is
 finished: every other fact (what it means for customers, how the check decides, when it posts
@@ -43,6 +43,12 @@ again, the retry schedule, the runbook) already has a home in the code and the r
 
 - An internal alert posts once, and again only when it changes. An urgent alert gets reminders.
 - A recovery is a new message in the channel.
+- Several links are allowed when each opens a different page and the reader has to visit every
+  one of them to act. Dan, 18 Nov 2026: "Multiple links are fine if they genuinely link to
+  different pages and I have to go to each of them to fix the problem." Each link goes on the
+  list line of the thing it opens, or on a closing line of its own. The checker checks only that
+  their targets differ; whether each is a page to act on, and not a runbook or other reference,
+  is yours to judge before it posts.
 - A request carries buttons when pressing one does the thing (Approve, Decline).
 - A thread reply exists to add a diagnosis the message lacks, in projects that opted in.
 
@@ -71,6 +77,13 @@ Urgent `alert` with a list and an error block, which already says why:
     • Invoice 1047, Elm Street Books
     ```HTTP 413 {"message":"Attachment exceeds 10 MB"}```
     <https://shop.example.com/admin/invoices?status=failed|View failed invoices>
+
+Internal `alert` where each listed thing has its own page to fix:
+
+    *3 bookings for Nov 21 have no advisor assigned*
+    • <https://shop.example.com/admin/bookings/1041|Booking 1041>, Ridgeway Dental
+    • <https://shop.example.com/admin/bookings/1042|Booking 1042>, Corner Bakery
+    • <https://shop.example.com/admin/bookings/1047|Booking 1047>, Elm Street Books
 
 `reminder`:
 
