@@ -18,7 +18,7 @@ The faults:
                entry's `if`, because the same hook scoped to two different commands is deliberate.
   UNWIRED      a hook whose header declares `Claude Code <Event>(<tools>) hook` is not run for one
                of those tools under that event.
-  EXTRA        such a hook is run for a tool its header does not declare, under that event or the
+  EXTRA        such a hook is run for a tool its header does not declare, under that event or any
                other tool event. The header says EXACTLY which tools the hook is for, so the Edit
                gate folded into the Bash group next to its own (the 2026-09-17 shape) is a fault even
                though the Edit group is still there.
@@ -48,8 +48,10 @@ import os
 import re
 import sys
 
-HEADER = re.compile(r"Claude Code (PreToolUse|PostToolUse)\(([^)]*)\) hook")
-TOOL_EVENTS = ("PreToolUse", "PostToolUse")
+# Every event whose matcher names tools, so a hook registered under the one added for
+# claude-config#3253 is held to its header like the rest (L96).
+TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+HEADER = re.compile(r"Claude Code (PreToolUse|PostToolUseFailure|PostToolUse)\(([^)]*)\) hook")
 
 
 def names(cmd):
@@ -138,8 +140,8 @@ def faults_for(settings, hooks_dir):
             continue
         with open(path, errors="replace") as f:
             head = "".join(f.readline() for _ in range(8))
-        # A hook may declare both tool events, one header line each (claude-config#647), and is held
-        # to each declaration under its own event.
+        # A hook may declare any of the tool events, one header line each (claude-config#647, #3253),
+        # and is held to each declaration under its own event.
         decl = {}
         for m in HEADER.finditer(head):
             decl.setdefault(m.group(1), m.group(2))

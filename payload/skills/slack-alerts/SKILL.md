@@ -25,7 +25,7 @@ webhook and an HTTP 503 are, and they have never seen your code.
 | 2. One sentence | The one fact that neither the first line nor the error block carries: a cause, or a next step that is specific. Empty on most alerts. Slots 1 and 2 together come to 200 characters at most. |
 | 3. List | The affected things, one per line, up to 5 lines, then `and N more`. |
 | 4. Error block | What the other system answered, as it sent it, in one code block of up to 500 characters cut on a word boundary. |
-| 5. Link | The last line: one link straight to the failed thing, labelled with a verb and the thing it opens (`View run`, `Open sync page`). |
+| 5. Link | The last line: a link straight to the failed thing, labelled with a verb and the thing it opens (`View run`, `Open sync page`). When the reader has to open several pages to fix it, each listed thing links its own page instead, or more closing lines do. |
 
 A brief usually holds more facts than the message has slots. Fill the slots, and the message is
 finished: every other fact (what it means for customers, how the check decides, when it posts
@@ -43,6 +43,12 @@ again, the retry schedule, the runbook) already has a home in the code and the r
 
 - An internal alert posts once, and again only when it changes. An urgent alert gets reminders.
 - A recovery is a new message in the channel.
+- Several links are allowed when each opens a different page and the reader has to visit every
+  one of them to act. Dan, 18 Nov 2026: "Multiple links are fine if they genuinely link to
+  different pages and I have to go to each of them to fix the problem." Each link goes on the
+  list line of the thing it opens, or on a closing line of its own. The checker checks only that
+  their targets differ; whether each is a page to act on, and not a runbook or other reference,
+  is yours to judge before it posts.
 - A request carries buttons when pressing one does the thing (Approve, Decline).
 - A thread reply exists to add a diagnosis the message lacks, in projects that opted in.
 
@@ -71,6 +77,13 @@ Urgent `alert` with a list and an error block, which already says why:
     • Invoice 1047, Elm Street Books
     ```HTTP 413 {"message":"Attachment exceeds 10 MB"}```
     <https://shop.example.com/admin/invoices?status=failed|View failed invoices>
+
+Internal `alert` where each listed thing has its own page to fix:
+
+    *3 bookings for Nov 21 have no advisor assigned*
+    • <https://shop.example.com/admin/bookings/1041|Booking 1041>, Ridgeway Dental
+    • <https://shop.example.com/admin/bookings/1042|Booking 1042>, Corner Bakery
+    • <https://shop.example.com/admin/bookings/1047|Booking 1047>, Elm Street Books
 
 `reminder`:
 
@@ -109,6 +122,37 @@ the bot that posts, which already tells the reader which app is speaking. Exit 0
 `FAIL` line names the rule and what it measured, so fix that and run it again. The checker cannot
 tell whether the first line is true, whether the link opens the failed thing, or whether the
 problem is urgent: read the rendered message once for those.
+
+## A project's record
+
+Three forms the standard refuses are allowed on one alert only when the project has recorded it,
+with the date Dan decided it. The record is one text file the project keeps beside its copy of
+the checker, one entry per line: the date, the alert's key, and what that alert may do.
+
+    # date      alert key       what it allows
+    2026-11-18  time-off-note   own-zone
+    2026-11-18  queue-backlog   labelled-id
+    2026-11-18  page-watch      exempt bare-url
+
+- `own-zone`: a clock time may name the person's own zone in place of ET, one of CT, MT, PT, AZ,
+  AKT, HST (`9:00 AM to 1:00 PM MT`), for text about that person's own time. Any other zone fails.
+- `labelled-id`: a bare id in the dashed 8, 4, 4, 4 and 12 character form the checker refuses,
+  such as `8d41c7e2-5b9a-4f03-b6de-2c7a91e4f5b3`, may stand alone on a list line after a label saying
+  what it is (`Queue row: ` and the id). An id with no label, in a sentence, or with more words
+  after it fails. A short number such as `Queue row: 4817` passes with no record at all.
+- `exempt` and one rule: that alert is not judged on that one rule, such as `bare-url` for an
+  alert that keeps the address of the page it is about. Every other rule still applies.
+
+The project's test passes the record with every message it renders:
+
+    python3 check_alert.py --kind alert --record slack-alerts-record.txt --alert page-watch --alert-keys time-off-note,queue-backlog,page-watch message.txt
+
+`--alert` is the key of the message being judged and `--alert-keys` is every alert the project
+posts, so an entry naming any other key is refused rather than left to do nothing. A line the
+checker cannot read (no date, a date that is not a day, an allowance or rule it does not know, a
+second copy of an entry) exits 2 naming the line, and the whole record is refused with it. With no
+record nothing beyond the standard is allowed. Each entry is Dan's to add, with his date: never
+add one to make a failing message pass.
 
 ## Around the message
 

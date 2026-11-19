@@ -95,6 +95,26 @@ GOOD = {
         "*The nightly export last ran at 3:05 PM ET, Nov 14*",
         LINK,
     ])),
+    # Several links, each to a different page the reader must visit (Dan, 18 Nov 2026, #3226).
+    "an alert naming four bookings each linked to its own page": ("alert", False, "\n".join([
+        "*4 bookings for Nov 21 have no advisor assigned*",
+        DOT + "<https://example.com/bookings/1041|Booking 1041>, Ridgeway Dental",
+        DOT + "<https://example.com/bookings/1042|Booking 1042>, Corner Bakery",
+        DOT + "<https://example.com/bookings/1047|Booking 1047>, Elm Street Books",
+        DOT + "<https://example.com/bookings/1050|Booking 1050>, Harbor Florist",
+    ])),
+    "an alert naming three people each linked to their own page": ("alert", False, "\n".join([
+        "*3 advisors have no shifts set for next week*",
+        DOT + "<https://example.com/people/12|Maya Ortiz>",
+        DOT + "<https://example.com/people/31|Sam Whitfield>",
+        DOT + "<https://example.com/people/47|Priya Nolan>",
+    ])),
+    "linked list lines and a closing link to a different page": ("alert", False, "\n".join([
+        "*2 advisors have no shifts set for next week*",
+        DOT + "<https://example.com/people/12|Maya Ortiz>",
+        DOT + "<https://example.com/people/31|Sam Whitfield>",
+        "<https://example.com/rota|Open rota>",
+    ])),
 }
 
 
@@ -121,7 +141,14 @@ BAD = [
     ("two error blocks", "alert", False, (), alert(LEAD, FENCE + "HTTP 503" + FENCE, FENCE + "HTTP 500" + FENCE), "error-block"),
     ("an alert with no link", "alert", False, (), alert(LEAD, link=None), "link-missing"),
     ("a link that is not the last line", "alert", False, (), "\n".join([LEAD, LINK, "A CI re-run finished without reporting its result."]), "link-last"),
-    ("two links", "alert", False, (), alert(LEAD, "<https://example.com/a|Open runbook>"), "link-count"),
+    # Two links once failed whatever they opened. Dan reversed that on 18 Nov 2026 (#3226): several
+    # links are fine when each opens a different page, so two to the same page is what fails now.
+    ("two links to the same page", "alert", False, (), alert(LEAD, "<https://example.com/runs/88/|Open run log>"), "link-repeat"),
+    ("two links on one list line", "alert", False, (), alert(LEAD, DOT + "<https://example.com/p/1|Maya Ortiz> and <https://example.com/p/2|Sam Whitfield>"), "link-count"),
+    ("a link in the first line beside a closing link", "alert", False, (), alert("*Pull request <https://example.com/pulls/641|641> has a check stuck on pending*"), "link-count"),
+    ("a single link on a list line", "alert", False, (), alert(LEAD, DOT + "<https://example.com/p/1|Maya Ortiz>", link=None), "link-count"),
+    ("a sentence after two closing links", "alert", False, (), "\n".join([LEAD, "<https://example.com/rota|Open rota>", LINK, "A CI re-run finished without reporting its result."]), "link-last"),
+    ("a one word label on the first of two closing links", "alert", False, (), alert(LEAD, "<https://example.com/rota|rota>"), "link-label"),
     ("a link inside a sentence", "alert", False, (), alert(LEAD, "Start with the <https://example.com/a|runbook section>."), "link-count"),
     ("an arrow in the link label", "alert", False, (), alert(LEAD, link=f"<https://example.com/x|View execution {ARROW}>"), "link-label"),
     ("a one word link label", "alert", False, (), alert(LEAD, link="<https://example.com/x|open>"), "link-label"),
@@ -280,6 +307,51 @@ class CommandLine(unittest.TestCase):
         self.assertIn("no-such-message.txt", done.stderr)
         self.assertNotIn("Traceback", done.stderr)
 
+    def with_record(self, record_text, extra, message):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "slack-alerts-record.txt")
+            with open(path, "w", encoding="utf-8", errors="strict") as handle:
+                handle.write(record_text)
+            return run(["--kind", "alert", "--record", path] + extra, message)
+
+    def test_takes_a_record_and_the_alert_a_message_is(self):
+        keys = ["--alert-keys", ",".join(KEYS)]
+        done = self.with_record(ALL_THREE, ["--alert", "time-off-note"] + keys, time_off("MT"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.with_record(ALL_THREE, ["--alert", "nightly-export"] + keys, time_off("MT"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("time-format", done.stdout)
+
+    def test_a_malformed_record_exits_2_naming_the_file_and_line(self):
+        record = ALL_THREE + "\n2026-11-18 page-watch exempt bare-urls"
+        done = self.with_record(record, ["--alert", "page-watch", "--alert-keys", ",".join(KEYS)], time_off("ET"))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("slack-alerts-record.txt", done.stderr)
+        self.assertIn("line 6", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_record_that_cannot_be_read_exits_2(self):
+        done = run(["--kind", "alert", "--record", os.path.join(HERE, "no-such-record.txt"),
+                    "--alert", "page-watch", "--alert-keys", "page-watch"], time_off("ET"))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("no-such-record.txt", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+
+    def test_a_record_and_an_alert_go_together(self):
+        keys = ["--alert-keys", ",".join(KEYS)]
+        given = [
+            self.with_record(ALL_THREE, keys, time_off("ET")),
+            self.with_record(ALL_THREE, ["--alert", "page-watch"], time_off("ET")),
+            run(["--kind", "alert", "--alert", "page-watch"] + keys, time_off("ET")),
+            self.with_record(ALL_THREE, ["--alert", "not-posted"] + keys, time_off("ET")),
+        ]
+        for done in given:
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+            # Refused for the pairing, by name, never as an option the checker does not know.
+            self.assertNotIn("unrecognized arguments", done.stderr)
+            self.assertNotIn("Traceback", done.stderr)
+        self.assertIn("not-posted", given[3].stderr)
+
     def test_a_byte_that_is_not_utf8_is_judged_and_quoted_back_not_raised(self):
         # A message can carry any byte. It is still judged on its rules, and the failure line that
         # quotes it back must print, from standard input and from a file alike.
@@ -296,6 +368,223 @@ class CommandLine(unittest.TestCase):
             self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
             self.assertIn(b"first-line-title", done.stdout)
             self.assertNotIn(b"Traceback", done.stderr)
+
+
+# A project's record (claude-config#3226). Every key, date and message below is invented; no real
+# project's record is held here, since each entry is the owner's to add with his own date.
+KEYS = ("time-off-note", "queue-backlog", "page-watch", "nightly-export")
+ALL_THREE = "\n".join([
+    "# date      alert key       what it allows",
+    "2026-11-18  time-off-note   own-zone",
+    "",
+    "2026-11-18  queue-backlog   labelled-id",
+    "2026-11-18  page-watch      exempt bare-url",
+])
+UUID = "8d41c7e2-5b9a-4f03-b6de-2c7a91e4f5b3"
+QUEUE_LEAD = "*2 queue rows were not picked up in an hour*"
+PAGE_LEAD = "*The status page stopped answering at 3:05 PM ET*"
+
+
+def time_off(zone_text):
+    return alert("*Maya Ortiz is off on Nov 20*", f"She is away from 9:00 AM to 1:00 PM {zone_text}.")
+
+
+def recorded(text=ALL_THREE, keys=KEYS):
+    return check_alert.parse_record(text, keys)
+
+
+def judged(text, alert_key, record_text=ALL_THREE, kind="alert"):
+    return rules_failed_with(text, kind, recorded(record_text), alert_key)
+
+
+def rules_failed_with(text, kind, record, alert_key):
+    return [rule for rule, _ in check_alert.check(text, kind, record=record, alert=alert_key)]
+
+
+# (what is wrong with the record, its text, words the error must carry)
+BAD_RECORDS = [
+    ("an allowance the checker does not know", "2026-11-18 time-off-note any-zone", "line 1"),
+    ("an exemption naming a rule that does not exist", "2026-11-18 page-watch exempt bare-urls", "bare-urls"),
+    ("an exemption naming no rule", "2026-11-18 page-watch exempt", "line 1"),
+    ("an exemption from saying anything at all", "2026-11-18 page-watch exempt empty", "line 1"),
+    ("a file that is not text", "2026-11-18 page-watch exempt bare-url\n" + chr(0) + "x", "line 2"),
+    ("an exemption naming two rules", "2026-11-18 page-watch exempt bare-url link-count", "line 1"),
+    ("a key the project does not post", "# a comment first\n2026-11-18 page-wacth exempt bare-url", "line 2"),
+    ("an entry with no date", "page-watch exempt bare-url", "line 1"),
+    ("a date that is not a day on the calendar", "2026-11-31 page-watch exempt bare-url", "2026-11-31"),
+    ("a date written another way", "Nov 18 page-watch exempt bare-url", "line 1"),
+    ("an own zone carrying a zone of its own", "2026-11-18 time-off-note own-zone MT", "line 1"),
+    ("a labelled id carrying a word after it", "2026-11-18 queue-backlog labelled-id always", "line 1"),
+    ("a date with nothing after it", "2026-11-18", "line 1"),
+    ("a wildcard in place of a key", "2026-11-18 * exempt bare-url", "line 1"),
+    ("the same entry twice", "2026-11-18 page-watch exempt bare-url\n2026-11-19 page-watch exempt bare-url", "line 2"),
+]
+
+
+class ProjectRecord(unittest.TestCase):
+    """A project records, each with the owner's date, the alerts that take an own zone, a labelled
+    id or an exemption from one rule (claude-config#3226). Each is accepted only in its narrow form,
+    and only on the alert keys the record names."""
+
+    def test_a_project_that_records_nothing_is_refused_exactly_as_before(self):
+        # Every refusing case, judged with an empty record and a key, fails exactly as it does
+        # with no record at all: nothing is allowed until the owner records it.
+        empty = recorded("", ("any-alert",))
+        for what, kind, urgent, apps, text, rule in BAD:
+            with self.subTest(case=what):
+                self.assertEqual(
+                    check_alert.check(text, kind, urgent=urgent, apps=apps, record=empty, alert="any-alert"),
+                    check_alert.check(text, kind, urgent=urgent, apps=apps),
+                )
+
+    def test_the_three_forms_are_refused_without_a_record(self):
+        self.assertIn("time-format", rules_failed(time_off("MT"), "alert"))
+        self.assertIn("raw-id", rules_failed(alert(QUEUE_LEAD, DOT + "Queue row: " + UUID), "alert"))
+        self.assertIn("bare-url", rules_failed(alert(PAGE_LEAD, "https://status.example.com/health"), "alert"))
+
+    def test_an_own_zone_passes_on_a_recorded_alert(self):
+        for zone in check_alert.OWN_ZONES:
+            with self.subTest(zone=zone):
+                self.assertEqual(judged(time_off(zone), "time-off-note"), [])
+
+    def test_the_own_zones_are_the_ones_the_owner_chose(self):
+        # Issue #3226 and its comment, 18 Nov 2026: CT, MT, PT, AKT and HST, and AZ for Arizona.
+        self.assertEqual(sorted(check_alert.OWN_ZONES), ["AKT", "AZ", "CT", "HST", "MT", "PT"])
+
+    def test_et_still_passes_on_an_own_zone_alert(self):
+        self.assertEqual(judged(time_off("ET"), "time-off-note"), [])
+
+    def test_a_zone_the_list_does_not_hold_fails_on_an_own_zone_alert(self):
+        for zone in ("CET", "AEST", "MST", "PDT", "UTC", "Mountain"):
+            with self.subTest(zone=zone):
+                self.assertIn("time-format", judged(time_off(zone), "time-off-note"))
+
+    def test_an_own_zone_fails_on_an_alert_the_record_does_not_name_for_it(self):
+        self.assertIn("time-format", judged(time_off("MT"), "nightly-export"))
+        self.assertIn("time-format", judged(time_off("MT"), "queue-backlog"))
+
+    def test_a_labelled_id_on_its_own_list_line_passes_on_a_recorded_alert(self):
+        for label in ("Queue row", "Job", "Batch id"):
+            with self.subTest(label=label):
+                text = alert(QUEUE_LEAD, f"{DOT}{label}: {UUID}", "- Queue row: 0b7e4d11-2c3a-4e5f-8a9b-1c2d3e4f5a6b")
+                self.assertEqual(judged(text, "queue-backlog"), [])
+
+    def test_an_id_outside_that_narrow_form_fails_on_a_recorded_alert(self):
+        shapes = {
+            "an id with no label": alert(QUEUE_LEAD, DOT + UUID),
+            "an id in a sentence": alert(QUEUE_LEAD, f"Row {UUID} was retried."),
+            "an id in the first line": alert(f"*Row {UUID} was not picked up in an hour*"),
+            "a labelled id with more words after it": alert(QUEUE_LEAD, f"{DOT}Queue row: {UUID}, retried twice"),
+            "a label that is not a word": alert(QUEUE_LEAD, f"{DOT}#: {UUID}"),
+            "a labelled id that is not a list line": alert(QUEUE_LEAD, f"Queue row: {UUID}"),
+        }
+        for what, text in shapes.items():
+            with self.subTest(shape=what):
+                self.assertIn("raw-id", judged(text, "queue-backlog"))
+
+    def test_a_short_number_needs_no_record(self):
+        # The skill says so: only a long id is refused, so "Queue row: 4817" passes as it is.
+        self.assertEqual(check_alert.check(alert(QUEUE_LEAD, DOT + "Queue row: 4817"), "alert"), [])
+
+    def test_a_labelled_id_fails_on_an_alert_the_record_does_not_name_for_it(self):
+        text = alert(QUEUE_LEAD, DOT + "Queue row: " + UUID)
+        self.assertIn("raw-id", judged(text, "page-watch"))
+
+    def test_a_bare_address_passes_on_an_alert_exempted_from_that_rule(self):
+        text = alert(PAGE_LEAD, "https://status.example.com/health")
+        self.assertEqual(judged(text, "page-watch"), [])
+
+    def test_a_bare_address_fails_on_an_alert_that_is_not_exempted(self):
+        text = alert(PAGE_LEAD, "https://status.example.com/health")
+        for key in ("nightly-export", "time-off-note", "queue-backlog"):
+            with self.subTest(key=key):
+                self.assertIn("bare-url", judged(text, key))
+
+    def test_an_exemption_lifts_that_one_rule_and_no_other(self):
+        # An unlabelled link inside a sentence breaks link-count as well as bare-url, and the
+        # exemption from bare-url leaves link-count in force.
+        text = alert(PAGE_LEAD, "It answers at <https://status.example.com/health>.")
+        failed = judged(text, "page-watch")
+        self.assertNotIn("bare-url", failed)
+        self.assertIn("link-count", failed)
+
+    def test_a_malformed_record_is_an_error_naming_the_line(self):
+        for what, text, words in BAD_RECORDS:
+            with self.subTest(record=what):
+                with self.assertRaises(check_alert.RecordError) as raised:
+                    recorded(text)
+                self.assertIn(words, str(raised.exception))
+
+    def test_a_malformed_record_never_allows_anything(self):
+        # One bad line refuses the whole record, so a record half read never passes a message.
+        text = ALL_THREE + "\n2026-11-18 page-watch exempt everything"
+        with self.assertRaises(check_alert.RecordError):
+            recorded(text)
+
+    def test_a_record_file_that_is_not_utf8_is_refused_not_read_with_replaced_bytes(self):
+        # The bad byte sits in a comment, so a record read with replaced bytes would load cleanly
+        # and allow the entry below it. Read strictly, the whole file is refused.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "slack-alerts-record.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"# note: caf\xe9\n2026-11-18 page-watch exempt bare-url\n")
+            with self.assertRaises(check_alert.RecordError) as raised:
+                check_alert.load_record(path, KEYS)
+        self.assertIn("not UTF-8", str(raised.exception))
+        self.assertIn(path, str(raised.exception))
+
+    def test_a_record_with_only_comments_allows_nothing(self):
+        record = recorded("# nothing recorded yet\n\n", KEYS)
+        self.assertIn("time-format", rules_failed_with(time_off("MT"), "alert", record, "time-off-note"))
+
+    def test_judging_with_a_record_needs_the_alert_it_is(self):
+        with self.assertRaises(ValueError):
+            check_alert.check(time_off("MT"), "alert", record=recorded())
+        with self.assertRaises(ValueError):
+            check_alert.check(time_off("MT"), "alert", alert="time-off-note")
+        with self.assertRaises(ValueError):
+            check_alert.check(time_off("MT"), "alert", record=recorded(), alert="not-a-posted-alert")
+
+    def test_the_calls_an_older_project_makes_still_work(self):
+        # A project's copy is refreshed byte for byte, so its existing calls must keep working.
+        text = GOOD["a plain alert"][2]
+        self.assertEqual(check_alert.check(text, "alert"), [])
+        self.assertEqual(check_alert.check(text, "alert", False, ("Shop Admin",)), [])
+        self.assertEqual(check_alert.check(text, "alert", urgent=False, apps=()), [])
+
+
+OWNER_ON_LINKS = ("Multiple links are fine if they genuinely link to different pages and I have to go "
+                  "to each of them to fix the problem.")
+
+
+class SeveralLinks(unittest.TestCase):
+    """Several links pass when each opens a different page (Dan, 18 Nov 2026, #3226). Whether each is
+    a page the reader must act on is the writer's to judge: the checker sees only the targets."""
+
+    def test_the_repeat_failure_names_the_target_after_trimming_a_slash_and_a_fragment(self):
+        for second in ("https://example.com/runs/88/", "https://example.com/runs/88#logs", "https://example.com/runs/88/#logs"):
+            with self.subTest(second=second):
+                said = dict(check_alert.check(alert(LEAD, f"<{second}|Open run log>"), "alert")).get("link-repeat", "")
+                self.assertIn("https://example.com/runs/88", said)
+
+    def test_a_different_query_or_path_is_a_different_page(self):
+        text = alert(LEAD, "<https://example.com/runs/88?attempt=2|Open second attempt>",
+                     "<https://example.com/runs/89|View next run>")
+        self.assertEqual(check_alert.check(text, "alert"), [])
+
+    def test_a_bare_address_still_fails_beside_several_links(self):
+        text = "\n".join([GOOD["an alert naming three people each linked to their own page"][2],
+                          DOT + "https://example.com/people/52"])
+        self.assertIn("bare-url", rules_failed(text, "alert"))
+
+    def test_the_owners_words_sit_beside_the_rule_in_the_checker(self):
+        with open(os.path.join(SKILL_DIR, "check_alert.py"), encoding="utf-8", errors="strict") as handle:
+            source = " ".join(line.strip().lstrip("#").strip() for line in handle)
+        self.assertTrue(OWNER_ON_LINKS in source, "the checker does not quote the owner's words")
+        self.assertTrue("18 Nov 2026" in source)
+
+    def test_the_checker_says_it_checks_only_that_the_targets_differ(self):
+        self.assertIn("only that their targets differ", " ".join(check_alert.__doc__.split()))
 
 
 def skill_text():
@@ -367,6 +656,19 @@ class TheSkill(unittest.TestCase):
         # assertTrue, not assertIn, so a failure does not print the whole skill (L445).
         flat = " ".join(self.skill.split())
         for words in ("merges when its checks and the lessons review pass", "without me"):
+            self.assertTrue(words in flat, f'the skill does not say "{words}"')
+
+    def test_it_quotes_the_owner_on_several_links_and_leaves_the_judgement_to_the_writer(self):
+        flat = " ".join(self.skill.split())
+        for words in (OWNER_ON_LINKS, "18 Nov 2026", "only that their targets differ"):
+            self.assertTrue(words in flat, f'the skill does not say "{words}"')
+        self.assertFalse("one link straight to" in flat, "the skill still says one link")
+
+    def test_it_says_how_a_project_records_each_allowance(self):
+        # The record is the one place a project names them, so the skill must teach its form.
+        flat = " ".join(self.skill.split())
+        for words in ("--record", "--alert", "--alert-keys", "own-zone", "labelled-id", "exempt",
+                      ", ".join(check_alert.OWN_ZONES)):
             self.assertTrue(words in flat, f'the skill does not say "{words}"')
 
     def test_every_example_it_shows_passes_the_checker(self):
