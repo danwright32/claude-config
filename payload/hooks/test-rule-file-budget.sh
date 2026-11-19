@@ -393,7 +393,7 @@ growth_reading() {  # $1 = payload directory
   local repo now_set head_set end start shape shape_at base days grown paths=() rel
   repo="$(growth_repo "$1")"
   if [ -z "$repo" ]; then
-    printf 'UNREAD %s has no git history and no checkout was handed in (RUN_ALL_TESTS_CHECKOUT), so how fast the set grows cannot be read' "$1"; return 0
+    printf 'UNREAD %s is not the payload of a claude-config checkout with history and no checkout was handed in (RUN_ALL_TESTS_CHECKOUT), so how fast the set grows cannot be read' "$1"; return 0
   fi
   now_set="$(PAYLOAD="$1" loaded_files | LC_ALL=C sort | tr '\n' ' ')"
   head_set="$(LF_REPO="$repo" LF_REV=HEAD loaded_files | LC_ALL=C sort | tr '\n' ' ')"

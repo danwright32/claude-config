@@ -175,7 +175,8 @@ fi
 [ -d "$logs" ] || { say "no log folder at $logs"; exit 2; }
 
 # ---- Read each run's log ----
-# One line per run: ROW and the six fields read from the log, SKIP and why, or REFUSE and why.
+# One line per run: ROW and the seven fields read from the log (cores, processor, region, checks,
+# section time, reference reading, judged figure), SKIP and why, or REFUSE and why.
 read_log() {  # read_log <log file>
   awk -F'\t' '
     {
