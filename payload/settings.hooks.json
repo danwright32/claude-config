@@ -529,18 +529,6 @@
         ]
       }
     ],
-    "PermissionDenied": [
-      {
-        "matcher": "Bash|Monitor",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/payload-write-gate.sh",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [

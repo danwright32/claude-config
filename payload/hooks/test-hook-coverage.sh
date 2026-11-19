@@ -347,28 +347,25 @@ case "$both" in
   *"under PostToolUse"*|*UNWIRED*|*"run for Edit"*|*"run for Bash"*) check "#647 and what it does declare under either event is not reported" "it answered: [$both]" ;;
   *) check "#647 and what it does declare under either event is not reported" ok ;;
 esac
-# The two events that end a call another way, a failure and a refusal, are held to the header the
-# same way (claude-config#3253: the payload write gate is registered under both). A header naming
-# them and settings missing one is UNWIRED; one run for a tool it does not name is EXTRA; and a hook
-# whose header never names the event is EXTRA when it is run under it.
-printf '#!/usr/bin/env bash\n#\n# ends.sh\n# Claude Code PostToolUseFailure(Bash|Monitor) hook: a fixture.\n# Claude Code PermissionDenied(Bash|Monitor) hook: and refused.\n' > "$REG/hooks/ends.sh"
+# The event that ends a call by failing is held to the header the same way (claude-config#3253:
+# the payload write gate is registered under it). A header naming it and settings not running it
+# for a tool it names is UNWIRED; one run for a tool it does not name is EXTRA; and a hook whose
+# header never names the event is EXTRA when it is run under it.
+printf '#!/usr/bin/env bash\n#\n# ends.sh\n# Claude Code PostToolUseFailure(Bash|Monitor) hook: a fixture.\n' > "$REG/hooks/ends.sh"
 printf '#!/usr/bin/env bash\n#\n# preonly.sh\n# Claude Code PreToolUse(Bash) hook: a fixture.\n' > "$REG/hooks/preonly.sh"
 cat > "$REG/ends.json" <<'JSON'
 {"hooks": {"PreToolUse": [
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/preonly.sh"}]}
  ],
  "PostToolUseFailure": [
-  {"matcher": "Bash|Monitor|Edit", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/ends.sh"}]},
+  {"matcher": "Bash|Edit", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/ends.sh"}]},
   {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/preonly.sh"}]}
- ],
- "PermissionDenied": [
-  {"matcher": "Bash", "hooks": [{"type": "command", "command": "__CLAUDE_HOME__/hooks/ends.sh"}]}
 ]}}
 JSON
 ends="$(registration_faults "$REG/ends.json" "$REG/hooks" 2>&1 | grep 'ends\.sh\|preonly\.sh' || true)"
 case "$ends" in
-  *"UNWIRED ends.sh declares PermissionDenied(Bash|Monitor) and is not run for Monitor"*) check "#3253 a hook declaring PermissionDenied and not run for a tool it names is reported" ok ;;
-  *) check "#3253 a hook declaring PermissionDenied and not run for a tool it names is reported" "it answered: [$ends]" ;;
+  *"UNWIRED ends.sh declares PostToolUseFailure(Bash|Monitor) and is not run for Monitor"*) check "#3253 a hook declaring PostToolUseFailure and not run for a tool it names is reported" ok ;;
+  *) check "#3253 a hook declaring PostToolUseFailure and not run for a tool it names is reported" "it answered: [$ends]" ;;
 esac
 case "$ends" in
   *"EXTRA ends.sh declares PostToolUseFailure(Bash|Monitor) and is also run for Edit"*) check "#3253 a hook run under PostToolUseFailure for a tool it does not name is reported" ok ;;

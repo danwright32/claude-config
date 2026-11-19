@@ -4,14 +4,14 @@
 # Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse a payload/ write
 # Claude Code PostToolUse(Bash|Monitor) hook: name what a Bash call changed there, by destination
 # Claude Code PostToolUseFailure(Bash|Monitor) hook: the same for a call that failed partway
-# Claude Code PermissionDenied(Bash|Monitor) hook: drop the note of a call that never ran
 #
 # The first refuses a write under a development checkout's payload/ while the watch daemon could
 # revert it, rather than warning about it on the next prompt (claude-config#367). Before a Bash call
 # it also notes what an at risk payload/ holds, and after the call the second and third name anything
 # written, added or removed there, so a write the command's words could not show (a script file, a
-# path built at run time) is still caught, by its destination (claude-config#647). Every way a call
-# can end removes its note (claude-config#3253).
+# path built at run time) is still caught, by its destination (claude-config#647). A call that ends
+# by succeeding or failing removes its note; a refused call's note is left to the sweep of notes a
+# day old (claude-config#3253).
 #
 # payload-revert-warning.sh already says the right thing: edits to payload/ in a development
 # checkout are mirrored over by the watch daemon running from another clone. But it is a
@@ -71,14 +71,12 @@ payload="$(cat 2>/dev/null || true)"
 # its raw payload names payload/ at all, since nothing here can read more than that, and the
 # refusal names the file. A library that sources but lacks the function asked for (an empty or cut
 # short file) is the same failure. After a call there is nothing left to refuse.
-# Is this payload one sent after a call has ended, or once it was refused, read from its raw text
-# because the readers below may be what failed? Every such event, never only PostToolUse: a failed
-# call (PostToolUseFailure) has already run and a refused one (PermissionDenied) never will, so
-# neither has anything left to refuse (claude-config#3253).
+# Is this payload one sent after a call has ended, read from its raw text because the readers below
+# may be what failed? Every such event, never only PostToolUse: a failed call (PostToolUseFailure)
+# has already run, so it has nothing left to refuse either (claude-config#3253).
 after_call(){
   case "$payload" in
     *'"hook_event_name":"PostToolUse'*|*'"hook_event_name": "PostToolUse'*) return 0 ;;
-    *'"hook_event_name":"PermissionDenied"'*|*'"hook_event_name": "PermissionDenied"'*) return 0 ;;
   esac
   return 1
 }
@@ -214,15 +212,16 @@ state_key="$(printf '%s' "$use_id" | tr -c 'A-Za-z0-9_.-' '_')"
 # below took it (claude-config#3253): on 2026-11-18 the folder held 261 calls' notes, about 145 KB
 # each, every one a call whose end never reached the read. A Bash call that exits non zero is reported
 # as PostToolUseFailure, never PostToolUse, so it is read back the same way, since it can write before
-# it fails (L480). A call refused before it ran is reported, when it is reported at all, as
-# PermissionDenied, and has nothing to read back. A Monitor call runs the Bash hooks, so its note is
-# taken, but returns as Monitor while its command runs on, so a read when it returns would judge a
-# command that has barely started: its note is dropped. A refusal by another gate before this one, or
-# an interrupt nothing reports, still reaches no event, and the sweep is what removes those.
+# it fails (L480). A Monitor call runs the Bash hooks, so its note is taken, but returns as Monitor
+# while its command runs on, so a read when it returns would judge a command that has barely started:
+# its note is dropped. A call refused before it ran (by auto mode, a mod or another gate) and an
+# interrupt nothing reports reach neither event, and the day old sweep below is what removes those.
+# Claude Code reports some refusals as PermissionDenied, but a hook on that event must consult the
+# sleep predicate or carry an exemption Dan signs off (tests/test-sleep-silence.sh), so that is left
+# for a change he has answered.
 case "$event" in
   PostToolUse|PostToolUseFailure)
     [ "$tool" = "Bash" ] || { [ "$use_id" = "-" ] || rm -f "$STATE_DIR/$state_key".*; exit 0; } ;;
-  PermissionDenied) [ "$use_id" = "-" ] || rm -f "$STATE_DIR/$state_key".*; exit 0 ;;
 esac
 
 # AFTER a Bash call: what changed under a payload/ that was at risk while it ran (claude-config#647).
