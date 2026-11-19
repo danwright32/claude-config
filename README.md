@@ -5935,7 +5935,9 @@ never an id per entry: the personal MacBook's 5,979 entries in its dry run on 20
 `dcrv_whole_token`) covers the scan id and every entry's id, path and device and inode, so the
 checker plans the summary only when working it out again from the record gives the same one, then as
 exactly those entries. An entry put in the Trash after the scan is not in the record, so the summary
-never reaches it; a count or digest that differs, or a summary of any other kind, is refused.
+never reaches it; a count or digest that differs, or a summary of a kind not drawn as one row, is
+refused. The GitHub command line cache (`gh-cache`, 2,095 entries on the personal MacBook on
+2026-11-18) is drawn and summed up the same way (#3235); `DCRV_WHOLE` in `review-lib.sh` lists both.
 The confirm step says the Trash in one line, its count and total, and
 `review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 
@@ -5952,9 +5954,30 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
-files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
-again just before removing anything.
+worktrees whose repository is gone, transcripts, the kinds below for what Claude Code sessions leave
+behind, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+What a session leaves on disk, measured on the personal MacBook on 2026-11-18 (claude-config#3235),
+has a kind each. Offered, past each kind's own rule and the 30 day floor below: tool output beside
+transcripts (`transcript-extras.sh`: a session's `tool-results` folder once its transcript is gone
+and no live session owns it, to the Trash), old Claude Code versions (`claude-versions.sh`: never the
+one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
+cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
+Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
+copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
+download cache, its logs and the pnpm store are shown there and never offered), and in build
+folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
+project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
+stays refused). Shown and never offered, each row saying why: `claude-records.sh` (session notes,
+Claude Code's file history, the finding spool and its backups, and the folders this config's hooks
+keep in the home folder, with the rest of `~/.claude/state` counted in its note) and
+`claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
+rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
+this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
+nowhere instead of keeping the floor, and pins the marker to exactly these two kinds.
+Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate daily
+job; this skill only shows session notes.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so

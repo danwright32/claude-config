@@ -113,6 +113,28 @@ CLAUDE_HOME="$H" python3 -B "$JOB" would-remove --now "$NOW" --report "$WORK/rep
 ok "would-remove --report: writes the report there" 'has "WOULD REMOVE:" "$(cat "$WORK/report.txt")"'
 rm -f "$WORK/report.txt"
 
+# ---- readable-folders: what /disk-clean shows, the folders kept as mostly images or documents ----
+# Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup". Only ended sessions; nothing is written.
+big "$NOTES/-p/$LIVE/t1/shots/a.png"; big "$NOTES/-p/$RECENT/t1/shots/a.png"
+age "$NOTES/-p/$LIVE" 4; age "$NOTES/-p/$RECENT" 1
+before="$(tree "$WORK")"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" readable-folders --now "$NOW" 2>&1)"; rc=$?
+ok "readable-folders: exits 0" "[ $rc -eq 0 ]"
+ok "readable-folders: changes nothing on disk" '[ "$before" = "$(tree "$WORK")" ]'
+ok "readable-folders: lists an ended session's folder of images, with its size" 'printf "%s\n" "$out" | grep -qE "^folder	[1-9][0-9]*	$E/t1/photos\$"'
+ok "readable-folders: and its folder mostly of documents" 'printf "%s\n" "$out" | grep -qE "^folder	[1-9][0-9]*	$E/t1/sources\$"'
+ok "readable-folders: not a live session's folder of images" '! has "$NOTES/-p/$LIVE/" "$out"'
+ok "readable-folders: not one written within 3 days" '! has "$NOTES/-p/$RECENT/" "$out"'
+ok "readable-folders: not a bulky folder the rule removes" '! has "$E/t1/fixtures" "$out"'
+ok "readable-folders: not a folder under 1 MB" '! has "$E/t1/small" "$out"'
+ok "readable-folders: every line is a folder line" '[ -z "$(printf "%s\n" "$out" | grep -v "^folder	")" ]'
+mv "$REG" "$WORK/reg-aside"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" readable-folders --now "$NOW" 2>&1)"; rc=$?
+mv "$WORK/reg-aside" "$REG"
+ok "readable-folders, no registry: exits 3, so a reader cannot take it for no folders" "[ $rc -eq 3 ]"
+ok "readable-folders, no registry: says why in an unmeasured line" 'has "unmeasured	" "$out" && has "session registry" "$out"'
+ok "readable-folders, no registry: lists no folder as ended" '! has "folder	" "$out"'
+
 # ---- remove: the first run ----
 out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
 ok "remove: exits 0 when nothing failed" "[ $rc -eq 0 ]"
