@@ -125,6 +125,9 @@ check "#3028 agent rules say to stop and report the refusal" "$(has "$RULES" 'st
 # refusal that names that route may be run again that way, and only then.
 check "#3173 agent rules let a refused command be run again under the no network wrapper when the refusal says so" "$(has "$RULES" 'when the refusal itself says the command may be run again under the no network wrapper')"
 check "#3173 agent rules keep a refusal that names no such route final" "$(has "$RULES" 'A refusal that names no such route stays final')"
+# The gate passes the wrapper only as the first command of a call, after nothing but a cd, and
+# refuses any file a later command of that call runs, so the rules say how the second run is made.
+check "#3173 agent rules say the run under the wrapper is a call of its own, after only a cd" "$(has "$RULES" 'in a call of its own, with the path it names as the first word of that command and nothing before it but a cd')"
 # On 2026-11-16 two builders decided area check holds on commands their briefs did not cover, and
 # the auto mode safety check refused what followed, so the exception for a resent hold is bounded.
 check "#3028 only a hold the brief lets the agent decide is resent" "$(has "$RULES" 'a hold your brief lets you decide')"

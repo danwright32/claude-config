@@ -7,6 +7,9 @@
 #     own network address, so the block is seen to fail open before it is seen to hold (L1);
 #   * the same for a child process, a child running the system's curl, a detached child that posts
 #     only once the command has exited, and a child that starts a permissive sandbox of its own;
+#   * a unix domain socket whose listener is outside the sandbox is refused as an address is, and a
+#     connection opened BEFORE the wrapper starts and handed down to the command is NOT closed to
+#     it, which is asserted as measured so the wrapper's "what it does not cover" stays true;
 #   * the command's exit code, its words and its input come through unchanged;
 #   * nothing is run when no command is given, when the first word starts with a dash, when the
 #     sandbox tool is missing, when the profile cannot be applied, when the sandbox does not block
@@ -46,8 +49,10 @@ fi
 T="$(mktemp -d "${TMPDIR:-/tmp}/no-network-run.XXXXXXXX")" || exit 1
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$T'" >&2; exit 2 ;; esac
 LISTENER=""
+UNIX_LISTENER=""
 cleanup() {
   if [ -n "$LISTENER" ]; then kill "$LISTENER" 2>/dev/null; wait "$LISTENER" 2>/dev/null; fi
+  if [ -n "$UNIX_LISTENER" ]; then kill "$UNIX_LISTENER" 2>/dev/null; wait "$UNIX_LISTENER" 2>/dev/null; fi
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -185,6 +190,8 @@ cat > "$T/post.py" <<'PY'
 the way <how> says, and its outcome written to the result file: "sent", or "failed: " and why."""
 import http.client
 import os
+import select
+import socket
 import subprocess
 import sys
 
@@ -237,6 +244,30 @@ elif HOW == "own-sandbox":
                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if not os.path.exists(RESULT):
         write("failed: the child's own sandbox ended " + str(done.returncode) + " and ran nothing")
+elif HOW == "unix":
+    # HOST is the path of a unix domain socket here, whose listener is outside the sandbox.
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(10)
+        s.connect(HOST)
+        s.sendall(LABEL.encode("utf-8"))
+        s.shutdown(socket.SHUT_WR)
+        s.recv(16)
+        write("sent")
+    except Exception as e:
+        write("failed: " + type(e).__name__ + ": " + str(e))
+elif HOW == "held":
+    # A connection made before this process started and handed down to it on descriptor 7
+    # (hold.py): nothing is connected here, the request is only written to what is already open.
+    body = LABEL.encode("utf-8")
+    try:
+        os.write(7, b"POST /hook HTTP/1.1\r\nHost: held\r\nContent-Length: " + str(len(body)).encode("ascii")
+                 + b"\r\nConnection: close\r\n\r\n" + body)
+        ready = select.select([7], [], [], 10)[0]
+        answer = os.read(7, 64) if ready else b""
+        write("sent" if answer.startswith(b"HTTP/") else "failed: no answer on the held connection")
+    except OSError as e:
+        write("failed: " + type(e).__name__ + ": " + str(e))
 else:
     sys.exit("post.py: unknown way " + HOW)
 PY
@@ -325,6 +356,87 @@ if [ -n "$PORT" ]; then
   else
     echo "SUITE-PART-UNMEASURED a post to this Mac's own network address: ${NO_LAN:-the listener gave no port on it}, so only loopback was measured"
   fi
+fi
+
+echo "no network run: a hand off that is not a new connection to an address"
+
+# A unix domain socket whose listener is outside the sandbox (the design on #3173 listed this hand
+# off as not measured). macOS takes a socket path of at most 103 bytes.
+cat > "$T/unix-listen.py" <<'PY'
+"""unix-listen.py <socket path> <log>: takes each connection to a unix domain socket, reads what it
+is sent to the end, and writes one line for it: the text, then "via unix"."""
+import os
+import socket
+import sys
+
+PATH = sys.argv[1]
+LOG = sys.argv[2]
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(PATH + ".tmp")
+server.listen(8)
+os.rename(PATH + ".tmp", PATH)
+while True:
+    conn, _ = server.accept()
+    conn.settimeout(10)
+    data = b""
+    try:
+        while True:
+            more = conn.recv(4096)
+            if not more:
+                break
+            data += more
+    except OSError:
+        pass
+    # The line is written before the answer, so the sender never hears "ok" ahead of the record.
+    with open(LOG, "a", encoding="utf-8", errors="replace") as log:
+        log.write(data.decode("utf-8", "replace") + " via unix\n")
+    try:
+        conn.sendall(b"ok")
+    except OSError:
+        pass
+    conn.close()
+PY
+UNIX="$T/u.s"
+if [ "${#UNIX}" -gt 98 ]; then
+  echo "SUITE-PART-UNMEASURED a unix domain socket whose listener is outside the sandbox: the throwaway folder's path is ${#T} bytes long, and a socket path under it would pass the 103 macOS takes"
+else
+  python3 "$T/unix-listen.py" "$UNIX" "$T/arrivals.log" >/dev/null 2>&1 &
+  UNIX_LISTENER=$!
+  if hang_wait '[ -S "$UNIX" ]'; then
+    check "the suite's own unix socket listener is up" ok
+    both unix "$UNIX" unix-socket
+  else
+    check "the suite's own unix socket listener is up" "no socket was there within $HANG_S seconds"
+  fi
+fi
+
+# A connection made BEFORE the wrapper starts, by a program outside the sandbox, and handed down to
+# the command on a descriptor: the command connects nothing, it writes to what is already open.
+cat > "$T/hold.py" <<'PY'
+"""hold.py <host> <port> <command> [its words]: makes one connection to the listener, puts it on
+descriptor 7, and becomes the command, which inherits it."""
+import os
+import socket
+import sys
+
+s = socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=10)
+s.settimeout(None)
+os.dup2(s.fileno(), 7)
+os.execvp(sys.argv[3], sys.argv[3:])
+PY
+if [ -n "$PORT" ]; then
+  one held 127.0.0.1 open-held python3 "$T/hold.py" 127.0.0.1 "$PORT"
+  if [ "$OUTCOME" = "sent" ] && [ "$(arrived open-held)" = "1" ]; then check "held: without the wrapper the post on a connection already open arrives" ok
+  else check "held: without the wrapper the post on a connection already open arrives" "outcome '$OUTCOME', arrived $(arrived open-held)"; fi
+  # MEASURED NOT COVERED (2026-11-19, macOS 26.6.2: outcome sent, arrived 1). The sandbox refuses
+  # a new connection and does not stop a write to one already open, so this holds the wrapper's
+  # "what it does not cover" to what the sandbox does: the case fails on the day that changes,
+  # either way. The gate's rule is what keeps a call from opening one first: nothing but a cd may
+  # stand before the wrapper, and none of its words may name /dev/tcp or /dev/udp
+  # (test-slack-drafts-no-network-route.sh).
+  one held 127.0.0.1 shut-held python3 "$T/hold.py" 127.0.0.1 "$PORT" "$WRAP"
+  if [ "$OUTCOME" = "sent" ] && [ "$(arrived shut-held)" = "1" ]; then check "held: NOT COVERED, with the wrapper a post on a connection opened before it still arrives" ok
+  else check "held: NOT COVERED, with the wrapper a post on a connection opened before it still arrives" "outcome '$OUTCOME', arrived $(arrived shut-held): the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
 fi
 
 echo "no network run: the sandbox is proved on every run, and a run that cannot prove it runs nothing"

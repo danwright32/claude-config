@@ -5698,9 +5698,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         file as written, so a script run through a variable was never read, where the same file run
         by a literal path was. The second reading comes after the first and only where the first
         found nothing, so it can refuse a command the first let through and never the reverse.
-        A command run under the installed no network wrapper is none of this gate's to read
-        (no_network_run in lib/no-network-route.py, claude-config#3173)."""
-        if self.no_network_run(text):
+        A command run under the installed no network wrapper is none of this gate's to read, and
+        what it may have written is unread from there on (under_no_network in
+        lib/no-network-route.py, claude-config#3173)."""
+        if self.under_no_network(text, depth):
             return None
         reason = self.judge_written(d, text, wrapper, why, depth, whole) or self.judge_unglued(d, text, depth, whole)
         # And a shell, its code or its script named another way: $SHELL, /dev/stdin, a line read and

@@ -32,11 +32,22 @@
 # There is no retry, backoff or poll here. The one time limit is PROBE_SECONDS, a ceiling only a
 # hang reaches, and a constant so that the suite can shorten it on a copy (L524).
 #
-# WHAT IT DOES NOT COVER. A command that hands its message to something already running outside
-# the sandbox without using the network (a file in a folder another program watches, a request to
-# a macOS service or another app). Anything that is not macOS: there is no sandbox tool, so
-# nothing is run. And it is not specific to Slack: a test that needs any network, a port on this
-# Mac included, fails under it with "Operation not permitted".
+# WHAT IT DOES NOT COVER. The profile denies the network and allows everything else, so:
+#   * A command that asks something outside the sandbox to act for it, without the network. A
+#     request to launchd or to another app is not a network operation (the profile's operations
+#     for them, mach-lookup and appleevent-send, are their own): launchctl, osascript and open
+#     each have a program started that this sandbox is not on. So is a file written into a folder
+#     another program watches.
+#   * A connection that was already open when this file started and is handed down to the
+#     command: the sandbox refuses a new connection and does not stop a write to an open one
+#     (measured 2026-11-19, test-no-network-run.sh "held"). The gate's rule lets nothing but a cd
+#     stand before this file in a call, and no /dev/tcp among its words, so a call cannot open
+#     one first (lib/no-network-route.py).
+#   * A file. The command can write any file it could without this, this one included.
+# A unix domain socket whose listener is outside the sandbox IS refused (measured the same day).
+# Anything that is not macOS: there is no sandbox tool, so nothing is run. And it is not specific
+# to Slack: a test that needs any network, a port on this Mac included, fails under it with
+# "Operation not permitted".
 #
 # EXIT: the command's own exit code, unchanged. 64 for no command or an option, 69 for a missing
 # tool, 70 when the sandbox could not be proved; each says on stderr that nothing was run.
