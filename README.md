@@ -4869,6 +4869,10 @@ bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
 It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
 main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
 suite ran in: its section time and check count, and that runner's core count, processor and region.
+Since #3256 it also records the runner's reference reading (`reference_ms`) and the judged figure
+(`judged_seconds`), the number the budget now decides on, both read from the same note: a run whose
+speed was not read records `unmeasured` and its raw time, a run from before #3239 records `unknown`
+for both, and a record written before those columns existed is read with its rows marked `unknown`.
 A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
 lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
 middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
