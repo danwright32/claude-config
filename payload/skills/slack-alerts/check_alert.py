@@ -76,8 +76,9 @@ OWN_ZONES = ("CT", "MT", "PT", "AZ", "AKT", "HST")
 OWN_ZONE_OR_RANGE = re.compile(
     r"(?: (?:ET|" + "|".join(OWN_ZONES) + r")\b| (?:to|and) \d{1,2}:\d{2} (?:AM|PM)\b)"
 )
-# A bare id an alert recorded as labelled-id may show: alone on a list line, after a label of one
-# to four plain words saying what it is, such as "Queue row: 4817" (#3226).
+# A bare id (one RAW_ID matches) an alert recorded as labelled-id may show: alone on a list line,
+# after a label of one to four plain words saying what it is, such as "Queue row: " and the id
+# (#3226). A short number like "Queue row: 4817" is no RAW_ID, so it passes with no record.
 LABELLED_ID_LINE = re.compile(r"^(?:" + BULLET + r"|-) [A-Z][A-Za-z]*(?: [A-Za-z]+){0,3}: (\S+)$")
 RECORD_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ALLOWANCES = ("own-zone", "labelled-id", "exempt")

@@ -455,6 +455,10 @@ class ProjectRecord(unittest.TestCase):
             with self.subTest(shape=what):
                 self.assertIn("raw-id", judged(text, "queue-backlog"))
 
+    def test_a_short_number_needs_no_record(self):
+        # The skill says so: only a long id is refused, so "Queue row: 4817" passes as it is.
+        self.assertEqual(check_alert.check(alert(QUEUE_LEAD, DOT + "Queue row: 4817"), "alert"), [])
+
     def test_a_labelled_id_fails_on_an_alert_the_record_does_not_name_for_it(self):
         text = alert(QUEUE_LEAD, DOT + "Queue row: " + UUID)
         self.assertIn("raw-id", judged(text, "page-watch"))
