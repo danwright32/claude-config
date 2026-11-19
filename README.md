@@ -8095,7 +8095,8 @@ can reach Dan (settings hooks on turn end and waiting events, every mod's notifi
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
 that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
 route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
-prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835), `~/Downloads/Sleep report <night>.md`, is written
+prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
+`~/Downloads/Sleep report <night>.md`, is written
 from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
