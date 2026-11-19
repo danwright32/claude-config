@@ -9,6 +9,8 @@
 #   lib/disk-clean-guard.sh    (through the harness) every guarded write is judged by dc_inside
 #   lib/disk-remove.sh         in test mode it refuses unless dc_home_isolated says HOME is inside
 #                              DISK_CLEAN_TEST_ROOT, and it reads paths physically with dc_resolve
+# and, for the session notes folder shape, by a fourth: skills/disk-clean/scan-lib.sh, through which
+# categories/claude-records.sh reads dc_notes_shape and dc_notes_folder as disk-remove.sh does.
 # They lived in the harness until disk-remove.sh needed them. The harness also holds dc_run and the
 # command check, which run commands no disk-clean script may (an `exec "$@"`, python3 through a
 # variable), so a script sourcing the whole harness would fail the command check it is held to.

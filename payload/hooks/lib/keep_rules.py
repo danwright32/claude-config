@@ -168,9 +168,17 @@ class Plan:
         self.remove = []   # (kind, path, bytes, is_dir)
         self.keep = []     # (reason, path, bytes)
         self.failures = []
-        self.notes_failures = []        # the failures that are the notes rule's own
+        self.notes_failures = []        # the failures that are the notes rule's own (notes_failed)
         self.kept_notes = [0, 0]        # files, bytes of written notes in ended sessions
         self.kept_transcripts = [0, 0]  # files, bytes of transcripts this rule left
+
+
+def notes_failed(plan, why):
+    """A failure of the notes rule itself: one of the run's failures, and also what makes the list of
+    folders for /disk-clean say unmeasured. Recorded here, where the notes rule fails, so no caller
+    of plan_notes can forget to carry it over and have an undecided rule read as no folders."""
+    plan.failures.append(why)
+    plan.notes_failures.append(why)
 
 
 def plan_notes(home, now, plan):
@@ -179,11 +187,11 @@ def plan_notes(home, now, plan):
     if rst is None:
         return
     if not is_dir(rst):
-        plan.failures.append("the notes folder %s is not a folder (a link is never followed), so the notes rule did not run" % root)
+        notes_failed(plan, "the notes folder %s is not a folder (a link is never followed), so the notes rule did not run" % root)
         return
     registry = session_registry.Registry(os.path.join(home, "state", "sessions"), int(now * 1000))
     if registry.missing:
-        plan.failures.append("%s, so no session could be told to have ended and the notes rule removed nothing" % registry.missing)
+        notes_failed(plan, "%s, so no session could be told to have ended and the notes rule removed nothing" % registry.missing)
         return
     for project in entries(root):
         pp = os.path.join(root, project)
@@ -323,7 +331,6 @@ def old_file(p, st, cutoff, kind, plan):
 def make_plan(home, now):
     plan = Plan()
     plan_notes(home, now, plan)
-    plan.notes_failures = list(plan.failures)
     plan_transcripts(home, now, plan)
     return plan
 
@@ -398,7 +405,6 @@ def readable_folders(home, now):
     decide. Writes nothing."""
     plan = Plan()
     plan_notes(home, now, plan)
-    plan.notes_failures = list(plan.failures)
     lines, decided = readable_lines(plan)
     for line in lines:
         print(line)

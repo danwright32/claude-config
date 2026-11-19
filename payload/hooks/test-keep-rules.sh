@@ -218,13 +218,13 @@ ok "list cannot be written: the log says so" "grep -q '	failed	.*readable-folder
 ok "list cannot be written: the removals still ran" "[ ! -e '$E/t1/fixtures' ] && [ ! -e '$E/t1/base.tar' ]"
 ok "list cannot be written: no half written file is left beside it" '[ -z "$(extras)" ]'
 
-# ---- a folder whose name a line cannot carry is left out of the list, and the count says so ----
+# ---- a folder whose name a line cannot carry is left out of the list, whose count is of the folders it holds ----
 plant
 big "$E/t1/$(printf 'tab\there')/a.jpg"; age "$E" 4
 out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
 ok "tab in a name: the run is clean" "[ $rc -eq 0 ]"
 ok "tab in a name: the folder is kept on disk" "[ -f '$E/t1/$(printf 'tab\there')/a.jpg' ]"
-ok "tab in a name: the list leaves it out and still counts what it holds" '[ "$(grep -c "^folder	" "$LIST")" = 2 ] && [ "$(tail -1 "$LIST")" = "end	2" ] && [ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
+ok "tab in a name: the list leaves it out, and its count is of the two folders it holds" '[ "$(grep -c "^folder	" "$LIST")" = 2 ] && [ "$(tail -1 "$LIST")" = "end	2" ] && [ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
 
 # ---- no notes folder at all: the list is written, and says there are none ----
 plant
