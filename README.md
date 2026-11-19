@@ -8133,9 +8133,12 @@ parts, in order: the login, the events since sleep began, the issues created ove
 file's changes, the milestones in each repository, then the deploy runs in each repository. Every
 read it makes is kept with its part and how long it took, as `steps` on the one line it always
 writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
-stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data: the part it
-stopped in, the last read made and how long it took, the first read not made, how far it got (pages
-of events, or repositories finished in a part read one repository at a time), and its slowest reads.
+stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same
+values its sentence is built from: the part it stopped in (`part`, `parts`, `partName`), how long
+after it began (`elapsedMs`) against the limit (`limitMs`), the last read made and how long it took
+(`last`), the first read not made (`next`), how far it got (`pages` of events read, for a stop among
+the events, or `done` of `total` repositories, in a part read one repository at a time), and its
+three slowest reads (`slowest`, each with its part and time).
 The line also says that the parts after it were not read and that nothing read them later, since no
 later pass runs that night, so it stays under Needs a look. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)

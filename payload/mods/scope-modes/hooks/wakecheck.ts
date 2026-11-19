@@ -45,8 +45,9 @@ export const PARTS = [
 export type Step = { part: number; step: string; ms: number }
 /**
  * Where a check that reached its limit stopped (#3240): the part, the last read it made and the
- * first it did not, how long after it began, and how far it got in that part (repositories finished
- * of the ones to read, in the parts read one repository at a time). `text` is the one line saying it.
+ * first it did not, how long after it began, how far it got in that part (pages of events read, or
+ * repositories finished of the ones to read, in the parts read one repository at a time), and its
+ * slowest reads. `text` is the one line saying it, built from these same values.
  */
 export type Stopped = {
   limitMs: number
@@ -58,6 +59,10 @@ export type Stopped = {
   elapsedMs: number
   done?: number
   total?: number
+  /** The pages of events read, for a stop among the events (part 2). */
+  pages?: number
+  /** The three slowest reads, the ones `text` names. */
+  slowest: Step[]
   text: string
 }
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`
@@ -127,7 +132,7 @@ export const wakeCheck = async (
   // the one line saying so is written where that happened, once the rest of the check is known.
   let part = 1
   const steps: Step[] = []
-  let stop: Omit<Stopped, 'text'> | null = null
+  let stop: Omit<Stopped, 'text' | 'pages' | 'slowest'> | null = null
   let stopAt = 0
   // What the parts read one repository at a time had finished, and the events window not reached.
   let repoDone = 0
@@ -565,12 +570,15 @@ export const wakeCheck = async (
   // reads. The check runs once a night, when sleep mode ends, so nothing reads the rest later.
   let stopped: Stopped | null = null
   // Set inside `run`, which the compiler's narrowing of `stop` to its first value cannot see.
-  const s = stop as Omit<Stopped, 'text'> | null
+  const s = stop as Omit<Stopped, 'text' | 'pages' | 'slowest'> | null
   if (s) {
     const reads = s.last
       ? `the last read it made, ${s.last.step}, took ${secs(s.last.ms)}, and the next, ${s.next}, was not made`
       : `it made no read before the limit, and the next, ${s.next}, was not made`
+    // Kept as data and said in the sentence from the same values (#3240).
     const pages = steps.filter(x => x.part === 2).length
+    // Sorted copies keep equal times in the order they were read.
+    const slowestReads = [...steps].sort((a, b) => b.ms - a.ms).slice(0, 3)
     const far =
       s.part === 2
         ? ` It had read ${plural(pages, 'page', 'pages')} of events${eventsWindow ? `, so the GitHub events ${eventsWindow} were not read for the repositories to check` : ''}.`
@@ -581,12 +589,11 @@ export const wakeCheck = async (
     const rest = after.length
       ? ` The parts after it (${after.join('; ')}) were not read either, and nothing read them later`
       : ' Nothing read the rest of it later'
-    // Sorted copies keep equal times in the order they were read.
-    const slowest = [...steps].sort((a, b) => b.ms - a.ms).slice(0, 3).map(x => `${x.step} ${secs(x.ms)}`)
+    const slowest = slowestReads.map(x => `${x.step} ${secs(x.ms)}`)
     const text =
       `the overnight check stopped at its ${Math.round(s.limitMs / 1000)} s limit, ${secs(s.elapsedMs)} after it began, in part ${s.part} of ${s.parts} (${s.partName}): ${reads}.${far}${rest}: ` +
       `the check runs once a night, when sleep mode ends.${slowest.length ? ` Its slowest reads: ${slowest.join('; ')}` : ''}`
-    stopped = { ...s, text }
+    stopped = { ...s, ...(s.part === 2 ? { pages } : {}), slowest: slowestReads.map(x => ({ ...x })), text }
     unmeasured.splice(stopAt, 0, text)
   }
   return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked, steps, stopped }

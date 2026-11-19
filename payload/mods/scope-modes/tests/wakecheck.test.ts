@@ -294,6 +294,15 @@ describe('the events, page by page back to sleep (#1160)', () => {
     ])
     expect(r.stopped).toMatchObject({ limitMs: 30_000, part: 2, parts: 6, partName: 'the GitHub events since sleep began', last: { step: 'page 2 of the GitHub events', ms: 12_000 }, next: 'page 3 of the GitHub events', elapsedMs: 36_000 })
     expect(r.stopped?.text).toBe(r.unmeasured[0])
+    // The data holds what the sentence says: the pages of events read, and the same three slowest reads.
+    expect(r.stopped?.pages).toBe(2)
+    expect(r.stopped?.slowest).toEqual([
+      { part: 1, step: 'the GitHub login', ms: 12_000 },
+      { part: 2, step: 'page 1 of the GitHub events', ms: 12_000 },
+      { part: 2, step: 'page 2 of the GitHub events', ms: 12_000 },
+    ])
+    expect(r.unmeasured[0]).toContain(`It had read ${r.stopped?.pages} pages of events`)
+    expect(r.unmeasured[0]).toContain(`Its slowest reads: ${r.stopped?.slowest.map(x => `${x.step} ${(x.ms / 1000).toFixed(1)} s`).join('; ')}`)
   })
 })
 
@@ -336,6 +345,9 @@ describe('a stop at the limit says where, how far, and what came after it (#3240
         'Its slowest reads: page 1 of the issue events in o/r 20.0 s; the GitHub login 2.0 s; page 1 of the GitHub events 2.0 s',
     )
     expect(r.stopped).toMatchObject({ part: 5, done: 0, total: 2 })
+    // Pages of events are kept only for a stop among the events; the slowest reads always.
+    expect(r.stopped).not.toHaveProperty('pages')
+    expect(r.stopped?.slowest[0]).toEqual({ part: 5, step: 'page 1 of the issue events in o/r', ms: 20_000 })
   })
   test('the limit is said once: what it left undecided names no limit of its own', async () => {
     const r = await slow(world)

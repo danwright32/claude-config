@@ -6415,7 +6415,7 @@ test('the wake check times its 30 s GitHub budget on the engine clock, so a slow
   const stops = notes.filter(n => n.kind === 'unmeasured' && /limit/.test(n.text))
   expect(stops).toHaveLength(1)
   expect(stops[0]?.text).toMatch(/^the overnight check stopped at its 30 s limit, [\d.]+ s after it began, in part 3 of 6 \(the issues created overnight\): the last read it made, page 1 of the GitHub events, took 25\.0 s/)
-  expect(stops[0]?.limit).toMatchObject({ limitMs: 30_000, part: 3, parts: 6, last: { step: 'page 1 of the GitHub events', ms: 25_000 }, next: 'the issues created overnight' })
+  expect(stops[0]?.limit).toMatchObject({ limitMs: 30_000, part: 3, parts: 6, last: { step: 'page 1 of the GitHub events', ms: 25_000 }, next: 'the issues created overnight', slowest: [{ part: 1, step: 'the GitHub login', ms: 25_000 }, { part: 2, step: 'page 1 of the GitHub events', ms: 25_000 }] })
   expect(stops[0]?.limit).not.toHaveProperty('text')
   // Each read's time is kept on the check's one line, every night, so the limit can be set from real nights.
   expect(notes.find(n => n.kind === 'checked')?.steps).toEqual([

@@ -86,8 +86,11 @@ report knows, and the fields each reads (every other field is kept, and shown no
                                             at its time limit is one such note, said once, whose
                                             limit keeps where it stopped as data: part, parts,
                                             partName, last {part, step, ms}, next, elapsedMs,
-                                            limitMs, and done and total repositories in a part
-                                            read one repository at a time (#3240)
+                                            limitMs, slowest (its three slowest reads, each
+                                            {part, step, ms}), pages of events read for a stop
+                                            in part 2, and done and total repositories in a part
+                                            read one repository at a time (#3240); its text says
+                                            the same values
   checked    text, steps?                   the overnight check: one line of what it read and left
                                             out as healthy, written every time it runs (#2766), so
                                             a final report with no note of the check at all says
