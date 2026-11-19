@@ -97,6 +97,10 @@ ln -s "$REPO/payload" "$CLONE/payload"
 agent_for() { # agent_for <clone dir>  -> a launch agent plist naming that clone's tool, as the installer writes it
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>Label</key><string>com.claudesync.watch</string>\n<key>ProgramArguments</key><array>\n<string>/bin/bash</string>\n<string>%s/claude-sync</string>\n<string>watch</string>\n</array>\n</dict></plist>\n' "$1" \
     > "$WORK/agents/com.claudesync.watch.plist"
+  # The daily removal of leftovers is installed beside it, as install-autosync leaves a healthy Mac
+  # (claude-config#3235); without it `stuck` rightly says it is missing.
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>Label</key><string>com.claudesync.leftovers</string>\n<key>ProgramArguments</key><array>\n<string>/bin/bash</string>\n<string>%s/claude-sync</string>\n<string>remove-leftovers</string>\n</array>\n</dict></plist>\n' "$1" \
+    > "$WORK/agents/com.claudesync.leftovers.plist"
 }
 agent_for "$CLONE"
 

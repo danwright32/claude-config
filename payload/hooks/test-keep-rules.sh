@@ -92,7 +92,11 @@ plant(){
   age "$PROJ/-private-tmp-new" 2
   age "$OUTSIDE" 30
 }
-tree(){ (cd "$1" && find . -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(stat -f '%m %z' "$f")"; done); }
+# Every path under a folder with its time and size, read the same way on macOS and Linux.
+tree(){ python3 -c 'import os,sys
+for r,ds,fs in sorted(os.walk(sys.argv[1])):
+  for n in sorted(ds+fs):
+    p=os.path.join(r,n); s=os.lstat(p); print(p,s.st_mtime,s.st_size)' "$1"; }
 
 # ---- would-remove lists, and writes nothing but its report ----
 plant

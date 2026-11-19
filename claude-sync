@@ -34,7 +34,9 @@
 #   claude-sync record-lesson-tags first|second F # commit the tags of this Mac's new lessons for the re-rank
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
-#   claude-sync retire --yes      # a Mac being cleared: remove both agents, refuse every later sync
+#   claude-sync retire --yes      # a Mac being cleared: remove its agents, refuse every later sync
+#   claude-sync leftovers         # read-only: what the daily removal of leftovers would remove (#3235)
+#   claude-sync remove-leftovers  # remove it now; the launch agent runs this once a day
 #   claude-sync help
 #
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
@@ -13660,6 +13662,7 @@ sync_stuck_records(){
     esac
   fi
   send_refused_record "$now"
+  leftovers_stuck_records "$now"
   return 0
 }
 
@@ -14336,6 +14339,7 @@ report_automatic_jobs(){
   if this_mac_is_retired; then
     [ -f "$tp" ] && left="com.claudesync.timer"
     [ -f "$wp" ] && left="${left:+$left, }com.claudesync.watch"
+    [ -f "$agentdir/$LEFTOVERS_LABEL.plist" ] && left="${left:+$left, }$LEFTOVERS_LABEL"
     if [ -z "$left" ]; then
       echo "automatic sync: off, because this Mac is retired (said at the top): neither launch agent is installed, which is how retire leaves it."
     else
@@ -14346,6 +14350,7 @@ report_automatic_jobs(){
 
   if [ ! -f "$tp" ] && [ ! -f "$wp" ]; then
     echo "automatic sync: neither launch agent is installed on this Mac, so nothing here sends or receives on its own and every sync is one somebody typed. Install both with: claude-sync install-autosync"
+    report_leftovers_job "$agentdir"
     return 0
   fi
 
@@ -14385,6 +14390,7 @@ report_automatic_jobs(){
   # Installed, but not what this copy of the script would write now (claude-config#328). Said here
   # rather than in a report of its own, because this is the section about these same agents and one
   # subject split across two places reads as two subjects (L118).
+  report_leftovers_job "$agentdir"
   local stale_agents
   stale_agents="$(agents_out_of_date | tr '\n' ' ' | sed 's/ $//')"
   if [ -n "$stale_agents" ]; then
@@ -15285,6 +15291,142 @@ reap_scratch_if_due(){
   return 0
 }
 
+# ---------- the daily removal of leftovers (claude-config#3235) ----------
+# Dan, 2026-11-18, each from a picker recorded on #3235: once a session has ended its bulky
+# leftovers go and its written notes stay; agent and test run transcripts are kept 7 days and his
+# own sessions Claude Code's 30; and it runs "By itself, with a log", so he hears about it only when
+# a run fails or is missed. The rules themselves, and what each one removes, are
+# hooks/lib/keep_rules.py, which this runs from the payload beside this script.
+#
+# The launch agent com.claudesync.leftovers runs `remove-leftovers` once a day. This script, not the
+# job, writes the record of each run (state/keep-rules/last-run), so a job that dies without a word
+# still leaves a failed run on record (L561), and `stuck` reads that record and the agent's own
+# install time to say a failed or missed run in every session (sync-stuck-notice.sh). A clean run
+# says nothing anywhere (Dan, 2026-11-05: only alert when there is something to look into).
+#
+# Switched off on one Mac by the file state/keep-rules/off, which this Mac's own state holds and the
+# sync never carries; status says it is off for as long as it is there (L523).
+leftovers_dir(){ printf '%s' "$CLAUDE_HOME/state/keep-rules"; }
+leftovers_job(){ printf '%s' "$SYNC_SELF_PAYLOAD/hooks/lib/keep_rules.py"; }
+leftovers_log(){ printf '%s' "$(leftovers_dir)/removed.log"; }
+# A day for the interval, and a whole second day of grace for a Mac that was asleep or off when the
+# run was due: launchd runs a missed StartInterval job on wake, so only a run missing past that is
+# one nobody will make up (L51, L614).
+LEFTOVERS_OVERDUE=172800
+LEFTOVERS_LABEL="com.claudesync.leftovers"
+
+# The dry run. Its name says it lists, and it writes nothing but what it prints (L206).
+do_leftovers(){
+  local job; job="$(leftovers_job)"
+  [ -f "$job" ] || die "nothing was listed: $job is not here, so this copy of claude-sync has no keep rules to read."
+  CLAUDE_HOME="$CLAUDE_HOME" python3 -B "$job" would-remove
+}
+
+# The real run, from the launch agent once a day, or typed.
+do_remove_leftovers(){
+  local dir job out rc line outcome items bytes reason
+  dir="$(leftovers_dir)"; job="$(leftovers_job)"
+  if [ -e "$dir/off" ]; then
+    echo "claude-sync: the daily removal of leftovers is switched off on this Mac (by $dir/off), so nothing was removed. Delete that file to switch it back on."
+    return 0
+  fi
+  mkdir -p "$dir" 2>/dev/null || true
+  rc=0
+  if [ -f "$job" ]; then
+    out="$(CLAUDE_HOME="$CLAUDE_HOME" python3 -B "$job" remove 2>&1)" || rc=$?
+  else
+    out=""; rc=127
+  fi
+  printf '%s\n' "$out" | grep -v '^KEEP-RULES-SUMMARY' || true
+  line="$(printf '%s\n' "$out" | awk -F'\t' '$1 == "KEEP-RULES-SUMMARY" { l = $0 } END { print l }')"
+  outcome="$(printf '%s' "$line" | awk -F'\t' '{print $2}')"
+  items="$(printf '%s' "$line" | awk -F'\t' '{print $3}')"
+  bytes="$(printf '%s' "$line" | awk -F'\t' '{print $4}')"
+  reason="$(printf '%s' "$line" | awk -F'\t' '{print $5}')"
+  # Another run holds the job's lock and will write its own record.
+  [ "$outcome" = busy ] && return 0
+  case "$outcome" in ok|failed) ;; *)
+    outcome=failed; items=0; bytes=0
+    if [ "$rc" -eq 127 ] && [ ! -f "$job" ]; then reason="the keep rules job is not at $job"
+    else reason="the keep rules job ended (exit $rc) without saying what it did: $(printf '%s\n' "$out" | tail -n 1)"; fi ;;
+  esac
+  [ "$rc" -eq 0 ] || outcome=failed
+  [ "$outcome" = failed ] && [ "${reason:--}" = "-" ] && reason="the keep rules job exited $rc"
+  case "$items" in ''|*[!0-9]*) items=0 ;; esac
+  case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+  reason="$(printf '%s' "${reason:--}" | tr '\t\n' '  ')"
+  if ! { printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$outcome" "$items" "$bytes" "$reason" > "$dir/last-run.$$" && mv -f "$dir/last-run.$$" "$dir/last-run"; } 2>/dev/null; then
+    rm -f "$dir/last-run.$$" 2>/dev/null || true
+    notify "removing old leftovers could not record its run in $dir, so a missed run will be reported tomorrow"
+    return 1
+  fi
+  if [ "$outcome" = failed ]; then
+    notify "removing old leftovers failed on this Mac: $reason. Each item is in $(leftovers_log)"
+    return 1
+  fi
+  return 0
+}
+
+# The records `stuck` prints about this job (see sync_stuck_records for the format). Nothing for a
+# fixture home, a retired Mac, or a Mac where it is switched off.
+leftovers_stuck_records(){   # $1 = now
+  local now="$1" agentdir plist rec when outcome items bytes reason installed
+  agentdir="$(launchagents_for_this_home)"
+  [ -n "$agentdir" ] || return 0
+  this_mac_is_retired && return 0
+  [ -e "$(leftovers_dir)/off" ] && return 0
+  plist="$agentdir/$LEFTOVERS_LABEL.plist"
+  if [ ! -f "$plist" ]; then
+    if [ -f "$agentdir/com.claudesync.timer.plist" ] || [ -f "$agentdir/com.claudesync.watch.plist" ]; then
+      printf 'leftovers-not-installed\t-\t-\t%s\n' "the daily removal of old leftovers (#3235) is not installed on this Mac, so the bulky leftovers of its ended sessions and its agent and test run transcripts older than 7 days are not being removed. Install it with: claude-sync install-autosync"
+    fi
+    return 0
+  fi
+  rec="$(leftovers_dir)/last-run"
+  if [ ! -f "$rec" ]; then
+    installed="$(file_mtime "$plist")"
+    case "$installed" in ''|*[!0-9]*) return 0 ;; esac
+    if [ $(( now - installed )) -ge "$LEFTOVERS_OVERDUE" ]; then
+      printf 'leftovers-overdue\t-\t%s\t%s\n' "$installed" "the daily removal of old leftovers has never finished a run on this Mac, and its launch agent was installed $(age_in_words "$(( now - installed ))"). Its own output is in ~/.claude-sync.log. Run it now with: claude-sync remove-leftovers"
+    fi
+    return 0
+  fi
+  IFS=$'\t' read -r when outcome items bytes reason < "$rec" 2>/dev/null || true
+  case "$when" in
+    ''|*[!0-9]*)
+      printf 'leftovers-unreadable\t-\t-\t%s\n' "the record of the daily removal of old leftovers, at $rec, could not be read, so whether it is running cannot be told from it. The next run rewrites it; to run it now: claude-sync remove-leftovers"
+      return 0 ;;
+  esac
+  if [ "$outcome" = failed ]; then
+    printf 'leftovers-failed\t1\t%s\t%s\n' "$when" "the daily removal of old leftovers failed on its last run, $(age_in_words "$(( now - when ))"): ${reason:-it gave no reason}. Each item it removed or could not is in $(leftovers_log). It runs again by itself within a day; to run it now: claude-sync remove-leftovers"
+  elif [ $(( now - when )) -ge "$LEFTOVERS_OVERDUE" ]; then
+    printf 'leftovers-overdue\t-\t%s\t%s\n' "$when" "the daily removal of old leftovers last finished a run $(age_in_words "$(( now - when ))"), and it runs once a day, so at least one run was missed. Its launch agent is $plist and its own output is in ~/.claude-sync.log. Run it now with: claude-sync remove-leftovers"
+  fi
+  return 0
+}
+
+# Status's one line about this job.
+report_leftovers_job(){   # $1 = the agents folder
+  local plist="$1/$LEFTOVERS_LABEL.plist" rec when outcome items bytes reason dir
+  dir="$(leftovers_dir)"; rec="$dir/last-run"
+  if [ -e "$dir/off" ]; then
+    echo "removal of leftovers: switched off on this Mac since $(date_from_epoch "$(file_mtime "$dir/off")" '+%Y-%m-%d %H:%M' | grep . || echo 'an unknown time'), by $dir/off. Nothing is removed and no missed run is reported while it is there; delete it to switch the job back on."
+    return 0
+  fi
+  if [ ! -f "$plist" ]; then
+    echo "removal of leftovers: not installed, so nothing removes the bulky leftovers of ended sessions or agent and test run transcripts older than 7 days on this Mac. Install it with: claude-sync install-autosync"
+    return 0
+  fi
+  if [ ! -f "$rec" ]; then
+    echo "removal of leftovers: installed (once a day), and has not finished a run yet. What it would remove: claude-sync leftovers"
+    return 0
+  fi
+  IFS=$'\t' read -r when outcome items bytes reason < "$rec" 2>/dev/null || true
+  case "$when" in ''|*[!0-9]*) echo "removal of leftovers: installed, but its record at $rec cannot be read."; return 0 ;; esac
+  case "$bytes" in ''|*[!0-9]*) bytes=0 ;; esac
+  echo "removal of leftovers: installed, last ran $(age_in_words "$(( $(date +%s) - when ))") and $( [ "$outcome" = ok ] && echo "removed ${items:-0} items, $(awk -v b="$bytes" 'BEGIN { printf "%.1f MB", b / 1048576 }')" || echo "FAILED: ${reason:-no reason recorded}"). Each item is in $(leftovers_log). What it would remove now: claude-sync leftovers"
+}
+
 report_stray_processes(){
   # One watcher is one ROOT. At rest that root has one child, the subshell it forks around fswatch
   # (pid 13658 with 13702, measured on this Mac 2026-08-17), and the first version of this rule,
@@ -15953,7 +16095,7 @@ watch_park(){
 # One definition, read by the installer that WRITES them and by the check that asks whether what is
 # installed still matches. Two copies would drift and the check would then be about a definition
 # nobody installs (L41, L70).
-agent_labels(){ printf '%s\n' com.claudesync.timer com.claudesync.watch; }
+agent_labels(){ printf '%s\n' com.claudesync.timer com.claudesync.watch com.claudesync.leftovers; }
 # The agents these two replaced: install-autosync removes them wherever it finds them, and so does
 # retire, so one list serves both.
 legacy_agent_labels(){ printf '%s\n' com.claudesync.pull com.claudesync.auto; }
@@ -15976,12 +16118,16 @@ agent_arg(){
   case "$1" in
     *.timer) printf 'sync' ;;
     *.watch) printf 'watch' ;;
+    *.leftovers) printf 'remove-leftovers' ;;
   esac
 }
 agent_extra(){
   case "$1" in
     *.timer) printf '  <key>StartInterval</key><integer>%s</integer>' "${SYNC_INTERVAL:-86400}" ;;
     *.watch) printf '  <key>KeepAlive</key><true/>\n  <key>RunAtLoad</key><true/>' ;;
+    # Fixed at a day, never SYNC_INTERVAL: the keep rules are a day's work, whatever cadence the
+    # receive timer is given (claude-config#3235).
+    *.leftovers) printf '  <key>StartInterval</key><integer>86400</integer>' ;;
   esac
 }
 
@@ -16153,6 +16299,9 @@ do_install_autosync(){
     rm -f "$agentdir/com.claudesync.watch.plist"
     echo "fswatch not found — instant push disabled. For instant sync: brew install fswatch, then re-run: claude-sync install-autosync"
   fi
+  # The daily removal of leftovers (claude-config#3235), on every Mac this installs on.
+  writeplist "$LEFTOVERS_LABEL" "$(agent_arg "$LEFTOVERS_LABEL")" "$(agent_extra "$LEFTOVERS_LABEL")"
+  echo "Installed the daily removal of leftovers: once a day it removes ended sessions' bulky leftovers and agent and test run transcripts older than 7 days, logging each item to $(leftovers_log)."
   say_not_loaded
   ensure_zsh_alias
   echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
@@ -16264,7 +16413,7 @@ RETIRE_LABELS
     echo "NOT confirmed: launchctl list still shows $still loaded after it was unloaded and removed. The record above makes its runs refuse, but it is still running. Remove it with: launchctl bootout gui/$(id -u)/<label>, for each label named."
     rc=1
   else
-    echo "Confirmed: launchctl list shows neither com.claudesync.timer nor com.claudesync.watch loaded, and no older claude-sync agent either."
+    echo "Confirmed: launchctl list shows none of $(agent_labels | paste -sd ',' - | sed 's/,/, /g') loaded, and no older claude-sync agent either."
   fi
   if pid="$(watch_already_running)"; then
     echo "Still running: a claude-sync watcher as process $pid, which launchd did not start. Its next send refuses, since this Mac is retired. End it with: kill $pid"
@@ -16300,6 +16449,8 @@ case "$cmd" in
   # Not wrapped in with_lock: it touches only the tool's own scratch under the temp directory,
   # never the repo or the home, so it has nothing to serialize against.
   reap-scratch) do_reap_scratch ;;
+  leftovers) do_leftovers ;;                  # read-only: lists, writes nothing (#3235)
+  remove-leftovers) do_remove_leftovers ;;    # what com.claudesync.leftovers runs once a day
   # Not locked: it removes copies beside the config that nothing else reads or writes, and the one
   # thing it must never do is queue behind a long send while somebody waits to reclaim disk.
   clean-backups) do_clean_backups ;;
@@ -16393,5 +16544,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, retire, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, leftovers, remove-leftovers, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, retire, help)" ;;
 esac
