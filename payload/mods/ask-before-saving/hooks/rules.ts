@@ -459,9 +459,10 @@ export const savesThis = (x: AskBeforeSavingApproval, key: string): boolean => x
 /**
  * Whether an approval is the one Dan gave in the durable lesson picker for the lesson this text adds
  * (#867): `added` is what lessonAddition read the call as adding to the lessons file, undefined when
- * the call is not one that only adds an entry, which no lesson approval matches.
+ * the call is not one that only adds an entry, which no lesson approval matches. The entry may carry
+ * the check line this approval holds (#3245), read back from storage as addsLesson reads it.
  */
-export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson)
+export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check)
 
 /**
  * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
@@ -501,7 +502,9 @@ export const saveIdOf = (source: unknown): string | undefined => {
 // to the lessons file, so he is not asked For good about it a second time (Dan, 2026-10-06: "The
 // confirmation that I want to add the durable lesson should be enough to indicate that I want to add
 // it forever."). Nothing Claude writes approves it: the mod sets the answers, refuses a call carrying
-// its own, and reads only the answer the dialog hands back.
+// its own, and reads only the answer the dialog hands back. Since #3245 the picker may also carry the
+// lesson's check line in `metadata.check`, shown to Dan on a line of its own, and the same answer
+// then covers that one line on that one lesson (Dan, 2026-11-19: "Yes, cover the check line").
 export const LESSON_SOURCE = 'durable-lesson'
 export const LESSON_ADD = 'Add to LESSONS.md'
 export const LESSON_PROJECT = 'Project memory instead'
@@ -544,6 +547,75 @@ export const MIN_RULE = 40
  * holds this to, so the short form is a short form and nothing more.
  */
 export const MAX_SHORT = 160
+
+/**
+ * The key the durable lesson picker's metadata carries the lesson's check line under (#3245).
+ * hooks/test-durable-lesson-check.sh holds the hook's instruction to this name.
+ */
+export const LESSON_CHECK_KEY = 'check'
+
+/**
+ * The longest check line an approval holds, in characters, so the line Dan reads in the picker is one
+ * he can read whole (security review of #3245: the line had no limit). Measured 2026-11-19: the one
+ * check line the lessons file held (L865) was 185 characters, and a CHECK naming three files at the
+ * longest path the config held (89 characters) is 288. hooks/test-durable-lesson-check.sh holds the
+ * hook's instruction to this number.
+ */
+export const MAX_CHECK = 300
+
+/**
+ * A line of the lessons file without its indentation: the spaces and tabs at its two ends, and
+ * nothing else. The language's own trim also takes a byte order mark, a no break space and the line
+ * and paragraph separators, so a check line carrying one of those at an end compared equal to the
+ * line Dan read (security review of #3245).
+ */
+export const unindented = (s: string): string => s.replace(/^[ \t]+/, '').replace(/[ \t]+$/, '')
+
+/**
+ * Why text is no check line, in words for the session that sent it, or the line itself. The one
+ * reading checkLine and the picker's refusal both take, so the refusal names what the rule refused.
+ */
+export const readCheckLine = (s: unknown): { line: string } | { fault: string } => {
+  if (typeof s !== 'string') return { fault: 'it is not text' }
+  const line = unindented(s)
+  if (/[\n\r]/.test(line)) return { fault: 'it is more than one line' }
+  if (line.length > MAX_CHECK) return { fault: `it is ${line.length} characters, and a check line is at most ${MAX_CHECK}` }
+  // The class is closed, not a list of what is refused: space to tilde, written as those two
+  // characters so the source holds no escape to mistype.
+  const odd = /[^ -~]/u.exec(line)
+  if (odd) {
+    const code = (odd[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')
+    return { fault: `character ${odd.index + 1} of it is U+${code}, and a check line is plain ASCII letters, digits, punctuation and spaces, with no tab, since Dan approves only text he can see` }
+  }
+  if (/^CHECK: *[^ ].*\((?:full|partial)\)$/.test(line) || /^NO CHECK: *[^ ]+(?: +[^ ]+){2,}$/.test(line)) return { line }
+  return { fault: 'it is in neither shape' }
+}
+
+/**
+ * A lesson's check line as an approval holds it (#3245): the one line saying which check holds the
+ * rule, `CHECK: <path> (full)` or `(partial)`, or that none can, `NO CHECK: <why>` in three words or
+ * more. Text reading as one comes back without the file's indentation. Anything else is undefined:
+ * other text, text of more than one line, a line over MAX_CHECK characters, a line holding any
+ * character outside printable ASCII (space to tilde, so no tab, no control, nothing zero width,
+ * bidirectional or from the tag block, and no letter that only looks like a Latin one), and a
+ * value that is not text, which a record read back from storage can be (L50). Dan's answer covers
+ * the line because he read it, so it holds only characters he can see and is short enough to read
+ * (security review of #3245: only some controls were refused, and a run of tag characters behind
+ * the visible words was approved and written with them).
+ *
+ * It asks whether the text is a check line at all, so that nothing else can be approved as one. The
+ * lessons file's own reading (claude-sync lesson_check_records) differs both ways. It is narrower
+ * over a CHECK line, since it also holds each path's characters. It is wider in three places, where
+ * the picker refuses a line the file takes, and the session is told why and can reword it: a NO
+ * CHECK reason holding a character outside ASCII, a line over MAX_CHECK characters (the file has no
+ * limit), and white space other than a space inside the line (the file takes a tab, a form feed, a
+ * vertical tab or a carriage return between words, and at a tab its own record of the line splits,
+ * so it judges only the part before it). Every other line the file takes reads as one here.
+ */
+export const checkLine = (s: unknown): string | undefined => {
+  const read = readCheckLine(s)
+  return 'line' in read ? read.line : undefined
+}
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -622,12 +694,34 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * he approved it (bold and wrapping aside), then at most its provenance (repo#N, then a date), then at most
  * one SHORT line whose index line, `- L<n>. <short>`, is within the index's cap. Blank lines around it
  * are the file's spacing.
+ *
+ * `check` is the check line Dan read in the picker beside the rule, when it showed him one (#3245;
+ * Dan, 2026-11-19: "Yes, cover the check line"). The entry may then carry that one line, equal to it
+ * but for the file's indentation (unindented), in one place: straight after the rule and its
+ * provenance, which is just before the SHORT line, or last when the entry has none. That is the
+ * place hooks/durable-lesson-check.sh tells the session to write it, and one the lessons file's own
+ * reader reads (claude-sync lesson_entries_render scans every line of the entry after its first, so
+ * it also reads a line after the SHORT line, which no approval covers). Every other line is still
+ * read as the rule's, so another check line, a second one, one in another place, or the same line
+ * under another rule fails the comparison below and is asked about. With no `check`, or one that is
+ * no check line (checkLine), the entry takes no check line at all.
+ *
+ * The entry's line is compared as the entry holds it (security review of #3245). The lines above are
+ * split from the entry with its end trimmed of all white space, which also takes a byte order mark
+ * or a no break space behind the last line, so the line is read from a copy trimmed of spaces, tabs
+ * and newlines only. And the rule's bold must close above the check line: where it never closes,
+ * the index joins every following line of the entry into the rule it renders, the check line too.
  */
-export const addsLesson = (added: string, rule: string): boolean => {
+export const addsLesson = (added: string, rule: string, check?: unknown): boolean => {
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
-  const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
+  const approved = checkLine(check)
+  const end = shortAt === -1 ? lines.length : shortAt
+  const raw = added.replace(/^\s*\n/, '').replace(/[ \t\n]+$/, '').split('\n')
+  const checked = approved !== undefined && end > 1 && raw.length === lines.length && unindented(raw[end - 1] ?? '') === approved
+  if (checked && !/^- \*\*L\d+\.[\s\S]*\*\*/.test(lines.slice(0, end - 1).join('\n'))) return false
+  const body = ruleText(lines.slice(0, checked ? end - 1 : end).join('\n'))
   // Provenance is its shape and nothing more, one or more `repo#N` (owner qualified or not) and an
   // optional date (lessons reviews of #869: any text in parentheses let a sentence Dan never read
   // ride along, and `owner/repo#N` is a provenance too).
