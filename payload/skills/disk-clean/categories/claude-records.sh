@@ -39,6 +39,13 @@
 #                                copy of the earlier rules (hooks/lib/local-allow-rules.py)
 #   ~/.claude-handback-check     the hand back claims gate's refusal counts (hooks/handback-claims-gate.sh)
 #   ~/.claude-engine-checks      written by a check nothing in this config names now, so kept
+#   any other ~/.claude-* or ~/.claude.* entry: the sync's own folders and logs, other hooks' records
+#                                (~/.claude-verification, ~/.claude-review-cases and the like),
+#                                Claude Code's ~/.claude.json and its backups. Never offered, and
+#                                counted with their size in the kind's note rather than as rows, so the
+#                                kind accounts for every home entry named for Claude (#3235: the work
+#                                MacBook held twelve such folders on 2026-11-19, 48 MB, and only some
+#                                were rows)
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
@@ -147,6 +154,11 @@ rec_rules() { # <target>
       V="not offerable: the hand back claims gate's refusal counts, read as agents hand back" ;;
     "$HOME/.claude-engine-checks")
       V="not offerable: written by a check nothing in this config names now, so what reads it is not known" ;;
+    "$HOME/.claude-"?*|"$HOME/.claude."?*)
+      case "${t#"$HOME/"}" in
+        */*) V="not offerable: it is not one of the records this kind shows" ;;
+        *) V="not offerable: a file or folder that Claude Code, the sync or this config's hooks read, counted in this kind's note" ;;
+      esac ;;
     *) V="not offerable: it is not one of the records this kind shows" ;;
   esac
 }
@@ -188,21 +200,35 @@ do_scan() {
     "$HOME/.claude-allow-rule-backups" "$HOME/.claude-handback-check" "$HOME/.claude-engine-checks"; do
     [ -e "$e" ] && printf '%s\n' "$e" >> "$DCS_WORK/rec.paths"
   done
+  # Every other home entry named for Claude, which the note counts (the header says what they are).
+  : > "$DCS_WORK/rec.home"
+  for e in "$HOME"/.claude-* "$HOME"/.claude.*; do
+    { [ -e "$e" ] || [ -L "$e" ]; } || continue
+    grep -qxF -- "$e" "$DCS_WORK/rec.paths" || printf '%s\n' "$e" >> "$DCS_WORK/rec.home"
+  done
   dcs_measure "$DCS_WORK/rec.paths" | sort -t "$S" -k2,2nr > "$DCS_WORK/rec.sized"
   local p kib size ident
   while IFS="$S" read -r p kib size ident; do
     rec_rules "$p"
     dcs_item "$p" "$REC_METHOD" "$kib" "$size" "$V" "" "" "$ident"
   done < "$DCS_WORK/rec.sized"
-  [ -s "$DCS_WORK/rec.rest" ] || return 0
-  local n=0 total=0 short=""
-  dcs_measure "$DCS_WORK/rec.rest" > "$DCS_WORK/rec.rest.sized"
+  local notes=""
+  [ ! -s "$DCS_WORK/rec.rest" ] || notes="$(rec_count "$DCS_WORK/rec.rest" "other entries in ~/.claude/state") state that Claude Code and this config's hooks read as they run, never removed here."
+  [ ! -s "$DCS_WORK/rec.home" ] || notes="${notes:+$notes }$(rec_count "$DCS_WORK/rec.home" "other files and folders in the home folder named for Claude Code or this config") the sync's folders and logs, other hooks' records and Claude Code's settings, never removed here."
+  [ -z "$notes" ] || dcs_note "$notes"
+}
+
+# Prints "<count> <what> hold <size>:" for the paths listed in <file>, "at least" before the size when
+# any of them could not be read in full (dcs_measure's size column).
+rec_count() { # <file of paths> <what>
+  local n=0 total=0 short="" p kib size ident
+  dcs_measure "$1" > "$1.sized"
   while IFS="$S" read -r p kib size ident; do
     n=$((n + 1))
     case "$kib" in ''|*[!0-9]*) short=1 ;; *) total=$((total + kib)) ;; esac
     [ "$size" = measured ] || short=1
-  done < "$DCS_WORK/rec.rest.sized"
-  dcs_note "$n other entries in ~/.claude/state hold $([ -n "$short" ] && printf 'at least ')$(dcu_human "$total"): state that Claude Code and this config's hooks read as they run, never removed here."
+  done < "$1.sized"
+  printf '%s %s hold %s%s:' "$n" "$2" "$([ -n "$short" ] && printf 'at least ')" "$(dcu_human "$total")"
 }
 
 case "${1:-}" in
