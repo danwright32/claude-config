@@ -326,6 +326,21 @@ if [ -n "$live_dir" ] && [ "$live_ww" = 1 ]; then ok
 else bad "the folder of a suite still running is kept (got '$live_dir', window_wait ended $live_ww where 1, ran out, was wanted)"; fi
 touch "$W/live-go"; wait "$live_pid"
 gone "$W/tmp-live" && ok || bad "and removed once that suite ends ($(isos "$W/tmp-live"))"
+# A suite stopped at its deadline: the watchdog stops it, waits for it to go, and takes its folder.
+iso_suite "$W/tmp-expired" 1 "set -- \"\$1\" \"\$2\" expired; $rec; while :; do sleep 0.2; done" >/dev/null 2>&1
+ended "a suite stopped at its deadline leaves no folder behind" expired
+# A watchdog signalled while its suite still runs leaves that suite's folder alone: the folder is
+# the suite's records, in use, and the watchdog's own end is not the suite's.
+SUITE_WALL_PIDFILE="$W/sig.wd" iso_suite "$W/tmp-sig" 60 'ls -d "$TMPDIR"/claude-sync-suite-work.isolated.* > "$2/sig-iso"; until [ -e "$2/sig-go" ]; do sleep 0.2; done' &
+sig_pid=$!
+hang_wait '[ -s "$W/sig-iso" ] && [ -s "$W/sig.wd" ]' 0.2 || bad "the signalled watchdog case never started (no folder or watchdog pid)"
+sig_dir="$(cat "$W/sig-iso" 2>/dev/null)"; sig_wd="$(head -1 "$W/sig.wd" 2>/dev/null)"
+case "$sig_wd" in ''|*[!0-9]*) bad "the watchdog wrote no pid ('$sig_wd')" ;; *) kill -TERM "$sig_wd" 2>/dev/null ;; esac
+hang_wait "! kill -0 '$sig_wd' 2>/dev/null" 0.2 || bad "the signalled watchdog did not end"
+window_wait 1 "[ ! -d '$sig_dir' ]" 0.2; sig_ww=$?
+if [ -n "$sig_dir" ] && [ "$sig_ww" = 1 ]; then ok
+else bad "a watchdog signalled while its suite runs leaves the suite's folder (got '$sig_dir', window_wait ended $sig_ww where 1, ran out, was wanted)"; fi
+touch "$W/sig-go"; wait "$sig_pid"
 
 echo
 echo "passed: $pass, failed: $fail"
