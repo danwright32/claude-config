@@ -170,13 +170,6 @@ $hits
 HITS
 }
 
-# One file still states the absolute form bare and is listed here rather than failed: the sleep rule
-# an overnight worker is told on every prompt, and the comment over the handler that notes a
-# refusal. The mods folder belonged to another change while this rule was written, so its two lines
-# get the pointer in a follow on under claude-config#3224, which stays open until they have it. An
-# entry here that no longer needs to be here fails, so the list cannot outlive its reason (L129).
-AWAITING="mods/scope-modes/hooks/register.ts"
-
 if [ -n "$PAYLOAD" ]; then
   roots=("$PAYLOAD")
   for extra in README.md DESIGN.md docs; do
@@ -184,25 +177,28 @@ if [ -n "$PAYLOAD" ]; then
   done
   bare="$(bare_files "$PAYLOAD/CLAUDE.md" "${roots[@]}")"
   unpointed=""
-  awaited=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    rel="${f#"$PAYLOAD"/}"
-    case " $AWAITING " in
-      *" $rel "*) awaited="$awaited $rel" ;;
-      *) unpointed="$unpointed ${f#"$REPO"/}" ;;
-    esac
+    unpointed="$unpointed ${f#"$REPO"/}"
   done <<BARE
 $bare
 BARE
   check "every other document that calls a refusal by the check final names the rule or carries its exception" \
     "$([ -z "$unpointed" ] && echo ok || echo "the absolute form with no pointer to '$RULE_NAME' in:$unpointed")"
-  for a in $AWAITING; do
-    case " $awaited " in
-      *" $a "*) echo "NOTE: payload/$a still states the absolute form with no pointer to the rule; it is awaited under claude-config#3224." ;;
-      *) check "the awaited list holds only files that still need it" "payload/$a no longer states the absolute form bare, so take it out of AWAITING" ;;
-    esac
-  done
+  # The scan passes a whole file on one pointer anywhere in it, which is too loose for the one
+  # sentence an overnight worker is told on every prompt: the sleep rule of the scope modes mod.
+  # That sentence is the old rule's second copy, and overnight is where the refusals fell, so it is
+  # held by itself: the line that says a refusal is final must name the rule and its home.
+  WORKER_FILE="$PAYLOAD/mods/scope-modes/hooks/register.ts"
+  worker_line="$(grep -m 1 -F -- 'by that list or by the auto mode classifier' "$WORKER_FILE" 2>/dev/null)"
+  check "the sleep rule an overnight worker is told is where this suite looks for it" \
+    "$([ -n "$worker_line" ] && echo ok || echo "no sentence about a refusal 'by that list or by the auto mode classifier' in $WORKER_FILE, so the worker's rule was not read")"
+  check "the sleep rule names the rule on the line that calls a refusal final" \
+    "$(grep -q -F -- "$RULE_NAME" <<< "$worker_line" && echo ok || echo "the worker is told a refusal is final with no '$RULE_NAME' beside it")"
+  check "the sleep rule says where the rule's home is" \
+    "$(grep -q -F -- '~/.claude/CLAUDE.md' <<< "$worker_line" && echo ok || echo "the worker's line does not name ~/.claude/CLAUDE.md")"
+  check "the sleep rule tells the two refusals apart by the words no verdict" \
+    "$(grep -q -i -F -- 'no verdict' <<< "$worker_line" && echo ok || echo "the worker's line does not say no verdict")"
   # The scan must have read the tree: the agent rules state the absolute form and name the home, so
   # a scan that cannot find their line would pass everything above by seeing nothing (L98).
   check "the scan reads the agent rules' own line" \
