@@ -19,9 +19,10 @@
 # the guard's manifest without its hooks module, since picker-manners adds $.designRound itself
 # when the guard's member is absent (#2261) and must load then too, naming itself as its source.
 #
-# It says SUITE-PART-UNMEASURED, never a pass, when it cannot measure: CI (no Claude Code there),
-# no claude or python3, or a session that does not finish within its deadline.
-# MODS_LOAD_CLAUDE names the claude to run (default the one on PATH); MODS_LOAD_REAL_ENGINE=0 skips.
+# It says SUITE-PART-UNMEASURED, never a pass, when it cannot measure: no claude or python3, or a
+# session that does not finish within its deadline. It runs on CI wherever Claude Code is installed
+# there for the mods (#3297). MODS_LOAD_CLAUDE, else MODS_CLAUDE, names the claude to run, and one
+# named that is not there fails; with neither it is the one on PATH. MODS_LOAD_REAL_ENGINE=0 skips.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,9 +46,20 @@ finish() { printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"; [ "$fail
 unmeasured() { echo "SUITE-PART-UNMEASURED whether every mod loads on the real Claude Code: $1"; finish; }
 
 [ "${MODS_LOAD_REAL_ENGINE:-}" = 0 ] && unmeasured "switched off by MODS_LOAD_REAL_ENGINE=0"
-case "${CI:-}" in ''|false|0) ;; *) unmeasured "running under CI (CI=$CI), where there is no Claude Code to run" ;; esac
-CLAUDE_BIN="${MODS_LOAD_CLAUDE:-$(command -v claude || true)}"
-[ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ] || unmeasured "there is no claude command to run the engine with"
+# CI is not a reason to stand down (#3297): the pull request checks install Claude Code for the mods
+# and name it in MODS_CLAUDE, kept off PATH so no other suite starts it. Given that way, a claude
+# that is not there is a failure, since the install promised one; found on PATH or not at all, it is
+# UNMEASURED as before.
+if [ -n "${MODS_LOAD_CLAUDE:-}${MODS_CLAUDE:-}" ]; then
+  CLAUDE_BIN="${MODS_LOAD_CLAUDE:-$MODS_CLAUDE}"
+  if [ ! -x "$CLAUDE_BIN" ]; then
+    check "the claude this run was given to load the mods with is there" "$CLAUDE_BIN is not an executable file"
+    finish
+  fi
+else
+  CLAUDE_BIN="$(command -v claude || true)"
+  [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ] || unmeasured "there is no claude command to run the engine with"
+fi
 command -v python3 >/dev/null 2>&1 || unmeasured "there is no python3 to run the stand in model with"
 VERSION="$("$CLAUDE_BIN" --version 2>/dev/null)"
 VERSION="${VERSION%% *}"

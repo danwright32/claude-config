@@ -27,6 +27,26 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # real tree (case 8) keeps its failures where the caller said, or in the default place.
 REAL_KEPT_SET="${CHECK_MODS_FAILURE_OUTPUT+set}"; REAL_KEPT="${CHECK_MODS_FAILURE_OUTPUT-}"
 export CHECK_MODS_FAILURE_OUTPUT="$TMPROOT/kept-output"
+# The same for the record of the Claude Code build the mods last passed on (#3297): a fixture passing
+# on the stub's build must never move this Mac's record, so it is off for every case but the real
+# tree (case 8), and case 6d points it at a scratch file of its own.
+REAL_LAST_SET="${CHECK_MODS_LAST_PASSED+set}"; REAL_LAST="${CHECK_MODS_LAST_PASSED-}"
+export CHECK_MODS_LAST_PASSED=""
+# The claude the real tree is checked with (case 8): MODS_CLAUDE where the caller installed one for
+# the mods alone, as the pull request checks do without putting it on every suite's PATH (#3297),
+# else the one on PATH, else ~/.local/bin/claude.
+REAL_BIN="${MODS_CLAUDE:-$(command -v claude 2>/dev/null || true)}"
+[ -n "$REAL_BIN" ] || { [ -x "$HOME/.local/bin/claude" ] && REAL_BIN="$HOME/.local/bin/claude"; }
+# Said first, where the runner prints it under this suite's line, when Claude Code changed since the
+# mods last passed on this Mac, so a red below reads as that change before anyone hunts for a commit.
+real_note=""
+if [ -n "$REAL_BIN" ] && [ -x "$REAL_BIN" ]; then
+  real_note="$(CHECK_MODS_LAST_PASSED="$REAL_LAST"; [ "$REAL_LAST_SET" = set ] || unset CHECK_MODS_LAST_PASSED
+    . "$ROOT/tools/lib/mods-last-passed.sh" \
+      || { echo "tools/lib/mods-last-passed.sh is missing, so whether Claude Code changed since the mods last passed was not read"; exit 0; }
+    mods_last_passed_note "$("$REAL_BIN" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')")"
+  [ -z "$real_note" ] || echo "SUITE-NOTE $real_note"
+fi
 # The sections below that run the real pinned compiler look for it in this checkout, which in a new
 # worktree has none until it is linked or installed (#1496), so that is done first, here, and why it
 # could not be is carried on every line that says those sections were not measured. From the npm
@@ -705,14 +725,14 @@ chmod 700 "$RO"
 M4F="$TMPROOT/m4f"; mkmod "$M4F" verclean; mkmod "$M4F" illtyped-ver
 TS4F="$TMPROOT/ts-4f"; mkdir -p "$TS4F/node_modules/.bin"; cp "$TSC" "$TS4F/node_modules/.bin/tsc"; pin "$TS4F" 2.1.291
 run4f(){ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TS_DIR="$TS4F" PATH=/usr/bin:/bin "$@" bash "$CHECK" "$M4F" 2>&1)"; code=$?; }
-run4f env FAKE_CC_VERSION=2.1.291; same_out="$(printf '%s\n' "$out" | grep -v 'this Mac runs')"; same_code=$code
-printf '%s\n' "$out" | grep -q 'type checked against the Claude Code 2.1.291 types pinned in' && ! printf '%s\n' "$out" | grep -q 'this Mac runs' \
+run4f env FAKE_CC_VERSION=2.1.291; same_out="$(printf '%s\n' "$out" | grep -v 'pinned type files are from')"; same_code=$code
+printf '%s\n' "$out" | grep -q 'type checked against the Claude Code 2.1.291 types pinned in' && ! printf '%s\n' "$out" | grep -q 'pinned type files are from' \
   && check "a run on the pinned build names it, and says nothing more" ok || check "a run on the pinned build names it, and says nothing more" "$out"
 run4f env FAKE_CC_VERSION=2.1.300
-printf '%s\n' "$out" | grep 'this Mac runs Claude Code 2.1.300' | grep '2.1.291' | grep -q 'refresh-claude-code-types.sh' \
+printf '%s\n' "$out" | grep 'pinned type files are from Claude Code 2.1.291' | grep 'not the 2.1.300 installed here' | grep -q 'refresh-claude-code-types.sh' \
   && check "a run on another build names both, with the command that pins the newer types" ok \
   || check "a run on another build names both, with the command that pins the newer types" "$out"
-[ "$code" -eq "$same_code" ] && [ "$(printf '%s\n' "$out" | grep -v 'this Mac runs')" = "$same_out" ] \
+[ "$code" -eq "$same_code" ] && [ "$(printf '%s\n' "$out" | grep -v 'pinned type files are from')" = "$same_out" ] \
   && check "and every verdict is the same on either build" ok \
   || check "and every verdict is the same on either build" "exit $same_code then $code: $out"
 # The pinned types this repository ships are held whole and clean by tools/test-refresh-claude-code-types.sh.
@@ -734,7 +754,7 @@ laid "$TMPROOT/home-other/.claude/mods/mcpwatcher" mcp__other__y; laid "$TMPROOT
 verdicts=""
 for h in home-absent home-own home-other; do
   run4i "$TMPROOT/$h"
-  verdicts="$verdicts$h exit $code: $(printf '%s\n' "$out" | grep -v 'this Mac runs' | paste -sd'|' -)
+  verdicts="$verdicts$h exit $code: $(printf '%s\n' "$out" | grep -v 'pinned type files are from' | paste -sd'|' -)
 "
   [ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'mcpwatcher ok' | grep -q 'types checked' \
     && check "with the installed copy $h, a mod matching its own MCP tool passes the type check" ok \
@@ -762,7 +782,7 @@ TS
   real=""
   for h in home-absent home-own home-other; do
     out="$(HOME="$TMPROOT/$h" CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" TSC_BIN="$REAL_TSC" bash "$CHECK" "$M4J" 2>&1)"; code=$?
-    real="$real$code $(printf '%s\n' "$out" | grep -v 'this Mac runs' | paste -sd'|' -)
+    real="$real$code $(printf '%s\n' "$out" | grep -v 'pinned type files are from' | paste -sd'|' -)
 "
   done
   [ "$(printf '%s' "$real" | sort -u | wc -l | tr -d ' ')" = 1 ] && printf '%s' "$real" | head -n 1 | grep -q '^0 .*realmcp ok (types checked)' \
@@ -820,6 +840,91 @@ runit "$M6C"
 [ "$code" -eq 1 ] && check "a test failure with no verdict line fails the run" ok || check "a test failure with no verdict line fails the run" "exit=$code out=$out"
 line="$(printf '%s\n' "$out" | grep 'noverdict-mod failed')"
 case "$line" in *"exit 7"*"something odd happened"*) check "naming the exit code and the last output" ok ;; *) check "naming the exit code and the last output" "$out" ;; esac
+
+# 6d. Each Mac records the Claude Code build every mod last passed on, and a run on another build says
+#     so in its first line, so a red with no commit to blame reads as Claude Code changing first
+#     (#3297: 2.1.328 turned two secret guard tests red on 2026-11-18, and three builders each had
+#     to prove it was not theirs). Written on a whole folder's pass alone: never on a failure, never
+#     on an unmeasured run, never for one mod checked on its own.
+REC="$TMPROOT/last-passed/mods-last-passed.tsv"
+runrec(){   # $1 = mods dir, then env words -> sets out and code, with the record in REC
+  local d="$1"; shift
+  : > "$LOG"
+  out="$(env CHECK_MODS_LAST_PASSED="$REC" STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" "$@" bash "$CHECK" "$d" 2>&1)"; code=$?
+}
+rec_build(){ cut -f1 "$REC" 2>/dev/null; }
+runrec "$M1" FAKE_CC_VERSION=2.1.300
+[ "$code" -eq 0 ] && [ "$(rec_build)" = 2.1.300 ] && grep -qE '^2\.1\.300	[0-9]{4}-[0-9]{2}-[0-9]{2}$' "$REC" \
+  && check "#3297 a whole folder's pass records the build and the date" ok \
+  || check "#3297 a whole folder's pass records the build and the date" "exit=$code record: $(cat "$REC" 2>&1)"
+case "$out" in *"Claude Code changed since"*) check "#3297 and with no record before it says nothing about a change" "$out" ;;
+  *) check "#3297 and with no record before it says nothing about a change" ok ;; esac
+runrec "$M1" FAKE_CC_VERSION=2.1.300
+case "$out" in *"Claude Code changed since"*) check "#3297 a run on the build the mods last passed on says nothing about a change" "$out" ;;
+  *) check "#3297 a run on the build the mods last passed on says nothing about a change" ok ;; esac
+runrec "$M2" FAKE_CC_VERSION=2.1.301
+first="$(printf '%s\n' "$out" | head -n 1)"
+case "$first" in *"Claude Code changed since the mods last passed on this Mac"*"2.1.300"*"2.1.301 is installed now"*)
+  check "#3297 a run on another build says so in its first line, naming both builds" ok ;;
+  *) check "#3297 a run on another build says so in its first line, naming both builds" "first line: $first" ;; esac
+[ "$code" -eq 1 ] && [ "$(rec_build)" = 2.1.300 ] \
+  && check "#3297 a failing run leaves the record on the build that last passed" ok \
+  || check "#3297 a failing run leaves the record on the build that last passed" "exit=$code record: $(cat "$REC" 2>&1)"
+runrec "$M6B" FAKE_CC_VERSION=2.1.302
+[ "$(rec_build)" = 2.1.300 ] && check "#3297 and so does a failure beside mods Claude Code switched off" ok \
+  || check "#3297 and so does a failure beside mods Claude Code switched off" "exit=$code record: $(cat "$REC" 2>&1)"
+M6D="$TMPROOT/m6d"; mkmod "$M6D" switchedoff-only; printf 'x\n' > "$M6D/switchedoff-only/hooks/a.test.ts"
+runrec "$M6D" FAKE_CC_VERSION=2.1.302
+[ "$code" -eq 4 ] && [ "$(rec_build)" = 2.1.300 ] && check "#3297 an unmeasured run records nothing" ok \
+  || check "#3297 an unmeasured run records nothing" "exit=$code record: $(cat "$REC" 2>&1)"
+runrec "$M1/one" FAKE_CC_VERSION=2.1.303
+[ "$code" -eq 0 ] && [ "$(rec_build)" = 2.1.300 ] && check "#3297 one mod passing on its own records nothing" ok \
+  || check "#3297 one mod passing on its own records nothing" "exit=$code record: $(cat "$REC" 2>&1)"
+runrec "$M1" FAKE_CC_VERSION=2.1.304 CHECK_MODS_LAST_PASSED=
+[ "$code" -eq 0 ] && [ "$(rec_build)" = 2.1.300 ] && ! printf '%s\n' "$out" | grep -q 'Claude Code changed since' \
+  && check "#3297 the record set empty is off: no note and nothing written" ok \
+  || check "#3297 the record set empty is off: no note and nothing written" "exit=$code record: $(cat "$REC" 2>&1) out=$out"
+runrec "$M1" FAKE_CC_VERSION=2.1.305
+[ "$code" -eq 0 ] && [ "$(rec_build)" = 2.1.305 ] && check "#3297 the next whole pass moves the record to its build" ok \
+  || check "#3297 the next whole pass moves the record to its build" "exit=$code record: $(cat "$REC" 2>&1)"
+# The line about the pinned TYPES must not read as this one (#3297): it compares against the build
+# the type files were made from, and so it is printed on nearly every run.
+case "$out" in *"this Mac runs Claude Code"*) check "#3297 no line about the pinned types starts like a note about the installed build" "$out" ;;
+  *) check "#3297 no line about the pinned types starts like a note about the installed build" ok ;; esac
+
+# 6e. A caller that promises a claude (CHECK_MODS_REQUIRE_CLAUDE=1, set where the pull request checks
+#     install one for the mods, #3297) gets a failure, exit 6, wherever the mods could not be checked
+#     with it: a missing claude, or one that answers hooks modules are switched off. Unpromised, the
+#     same runs stay UNMEASURED (cases 6 and 6b), since a Mac without it is not a broken check.
+out="$(CHECK_MODS_REQUIRE_CLAUDE=1 TSC_BIN="$TSC_PASS" CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M1" 2>&1)"; code=$?
+[ "$code" -eq 6 ] && printf '%s\n' "$out" | grep -q 'CHECK_MODS_REQUIRE_CLAUDE' \
+  && check "#3297 a promised claude that is not there fails, exit 6, naming the promise" ok \
+  || check "#3297 a promised claude that is not there fails, exit 6, naming the promise" "exit=$code out=$out"
+runit_req(){ : > "$LOG"; out="$(CHECK_MODS_REQUIRE_CLAUDE=1 STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" bash "$CHECK" "$1" 2>&1)"; code=$?; }
+runit_req "$M6D"
+[ "$code" -eq 6 ] && printf '%s\n' "$out" | grep -q 'hooks modules are turned off' \
+  && check "#3297 so does one that answers hooks modules are switched off, with its words" ok \
+  || check "#3297 so does one that answers hooks modules are switched off, with its words" "exit=$code out=$out"
+runit_req "$M1"
+[ "$code" -eq 0 ] && check "#3297 and a promised claude that checks every mod passes as before" ok \
+  || check "#3297 and a promised claude that checks every mod passes as before" "exit=$code out=$out"
+runit_req "$M2"
+[ "$code" -eq 1 ] && check "#3297 and a mod it refuses still fails as a mod, exit 1" ok \
+  || check "#3297 and a mod it refuses still fails as a mod, exit 1" "exit=$code out=$out"
+
+# 6f. The load test runs wherever a claude is given it, CI included (#3297): it used to stand down
+#     whenever CI=true, before even looking. Given a claude through MODS_CLAUDE that is not there, it
+#     fails; with none given and none on PATH it is UNMEASURED for that reason, never for CI.
+LOADT="$ROOT/tests/test-mods-load-engine.sh"
+out="$(env -u MODS_LOAD_CLAUDE -u MODS_LOAD_REAL_ENGINE MODS_CLAUDE="$TMPROOT/no-such-claude" CI=true bash "$LOADT" 2>&1)"; code=$?
+[ "$code" -ne 0 ] && printf '%s\n' "$out" | grep -q "^FAIL: .*$TMPROOT/no-such-claude" \
+  && check "#3297 the load test given a claude that is not there fails, naming it" ok \
+  || check "#3297 the load test given a claude that is not there fails, naming it" "exit=$code out=$out"
+out="$(env -u MODS_LOAD_CLAUDE -u MODS_LOAD_REAL_ENGINE -u MODS_CLAUDE CI=true PATH=/usr/bin:/bin HOME="$TMPROOT/no-home" bash "$LOADT" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q '^SUITE-PART-UNMEASURED .*no claude command' \
+  && ! printf '%s\n' "$out" | grep -q 'running under CI' \
+  && check "#3297 under CI with no claude it is unmeasured for want of claude, not for being CI" ok \
+  || check "#3297 under CI with no claude it is unmeasured for want of claude, not for being CI" "exit=$code out=$out"
 
 # 7. A mods folder that does not exist is refused, not passed as empty.
 out="$(CLAUDE_BIN="$FAKE" STUB_LOG="$LOG" TSC_BIN="$TSC_PASS" bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code=$?
@@ -937,20 +1042,21 @@ out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.296 CLAUDE_BIN="$TMPROOT/claude-same"
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'compacts hooks session.compact, which' \
   && check "and on a Mac still running a build before 2.1.299" ok || check "and on a Mac still running a build before 2.1.299" "exit=$code out=$out"
 
-# 8. The real tree, with the real binary where this machine has one.
-REAL_BIN="$(command -v claude 2>/dev/null || true)"
-[ -n "$REAL_BIN" ] || { [ -x "$HOME/.local/bin/claude" ] && REAL_BIN="$HOME/.local/bin/claude"; }
+# 8. The real tree, with the real binary where this machine has one (REAL_BIN, found at the top).
+#    Its failures are kept, and its pass recorded as the build the mods last passed on, where the
+#    caller said or in the default places, never in this run's scratch. Given MODS_CLAUDE, the caller
+#    promised a claude, so a run that could not check the mods with it fails (#3297).
+real_env=(env)
+if [ "$REAL_KEPT_SET" = set ]; then real_env+=(CHECK_MODS_FAILURE_OUTPUT="$REAL_KEPT"); else real_env+=(-u CHECK_MODS_FAILURE_OUTPUT); fi
+if [ "$REAL_LAST_SET" = set ]; then real_env+=(CHECK_MODS_LAST_PASSED="$REAL_LAST"); else real_env+=(-u CHECK_MODS_LAST_PASSED); fi
+[ -z "${MODS_CLAUDE:-}" ] || real_env+=(CHECK_MODS_REQUIRE_CLAUDE=1)
 if [ ! -d "$ROOT/payload/mods" ]; then
   # The folder is created by the sync the first time a Mac sends a mod, and never by hand: payload/
   # in a development checkout is overwritten by the live daemon (payload-write-gate.sh).
   # Not a pass over mods, so not counted as one (claude-config#1452, L98): said by the agreed line.
   echo "SUITE-PART-UNMEASURED the real mods, because payload/mods does not exist yet (no Mac has sent a mod), so there is nothing to check"
 else
-  if [ "$REAL_KEPT_SET" = set ]; then
-    out="$(CHECK_MODS_FAILURE_OUTPUT="$REAL_KEPT" CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
-  else
-    out="$(env -u CHECK_MODS_FAILURE_OUTPUT CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
-  fi
+  out="$("${real_env[@]}" CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
   if [ "$code" -eq 3 ]; then
     # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because there is no claude command on this machine"
@@ -967,8 +1073,9 @@ else
     # dropped like any other chatter (#1444).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine. check-mods said: $(printf '%s\n' "$out" | grep UNMEASURED | sed 's/^check-mods: //' | tr '\n' ' ')"
   else
+    # A change of build since the last pass leads the failure, as it leads the run (#3297).
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
-      || check "every mod in payload/mods passes Claude Code's own checks" "exit=$code out=$out"
+      || check "every mod in payload/mods passes Claude Code's own checks" "${real_note:+$real_note }exit=$code out=$out"
   fi
 fi
 

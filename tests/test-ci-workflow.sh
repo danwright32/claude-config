@@ -229,6 +229,26 @@ grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-o
   && check "#597 run-on-linux.sh has an image for '$runner'" ok \
   || check "#597 run-on-linux.sh has an image for '$runner'" "no case arm names it"
 
+# Every other workflow too (#3297 added the daily mods-on-newest-claude-code.yml): the reasons above
+# hold for any file GitHub runs, and a second workflow is where an unpinned tag would go unread. Its
+# image is the one tests.yml runs on, which the container above reproduces.
+others=0
+for wf in "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml; do
+  [ -f "$wf" ] && [ "$wf" != "$REAL" ] || continue
+  others=$((others + 1))
+  r="$(actions_pinned "$wf")"
+  [ "$r" = ok ] \
+    && check "#597 every action in ${wf##*/} is pinned to a commit on a supported runtime" ok \
+    || check "#597 every action in ${wf##*/} is pinned to a commit on a supported runtime" "$r"
+  r="$(image_named "$wf")"
+  img="$(code_of "$wf" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p' | sort -u)"
+  [ "$r" = ok ] && [ "$img" = "$runner" ] \
+    && check "#597 ${wf##*/} names its runner image, the one tests.yml runs on" ok \
+    || check "#597 ${wf##*/} names its runner image, the one tests.yml runs on" "${r#ok}${r:+ }runs on '$img', tests.yml on '$runner'"
+done
+[ "$others" -ge 1 ] && check "#3297 the workflows beside tests.yml were found and read" ok \
+  || check "#3297 the workflows beside tests.yml were found and read" "none found in $WORKFLOWS"
+
 # ---------------------------------------------------------------------------
 # #1901: the job's start is recorded first, and its limit is one the runner can read.
 # ---------------------------------------------------------------------------
