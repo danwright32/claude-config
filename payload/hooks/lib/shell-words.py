@@ -1012,7 +1012,7 @@ def alone(text):
         return False
 
 
-def command_rest(text, passed=None, glue_read=True):
+def command_rest(text, passed=None):
     """(the command from its own name on, its leading assignments) for one command's text.
 
     Past the reserved words that only open or continue a compound command (RESERVED: then, do, {,
@@ -1021,9 +1021,16 @@ def command_rest(text, passed=None, glue_read=True):
     merge 7` saw `then` where gh should be, so a merge inside an if, a loop or a brace group was no
     merge to any of them (claude-config#1040). The text is kept as written, quotes and all, so a
     caller reads its arguments the way it always has, but for the space written before a
-    redirection glued to a word (spaced, claude-config#3252); glue_read=False leaves that out, for
-    glued_script alone, which asks how the command read before.
+    redirection glued to a word (spaced, claude-config#3252).
     """
+    return _command_rest(text, passed, True)
+
+
+def _command_rest(text, passed, glue_read):
+    """command_rest, or with glue_read False the same reading without the space spaced() writes,
+    for glued_script alone, which asks how a command read before claude-config#3252. Kept apart
+    from command_rest, whose two arguments are what a caller wrapping it passes on: the Slack
+    drafts gate puts a wrapper of exactly that shape in its place to read each text once."""
     s = text.lstrip()
     # A subshell or group opening a command the crude cut left whole, `( cd x && git push )` or
     # `(git push)`, is not part of it (claude-config#439): an opener glued to the name is peeled off,
@@ -2068,7 +2075,7 @@ def glued_script(text):
     reading. Delete this function and its one call to stop reporting it."""
     if "<" not in text and ">" not in text:
         return ""
-    rest = command_rest(text, None, False)[0]
+    rest = _command_rest(text, None, False)[0]
     word, _ = first_word(rest)
     if not word or not glued_cut(word)[1]:
         return ""
