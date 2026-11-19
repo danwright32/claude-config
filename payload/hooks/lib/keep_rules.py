@@ -370,7 +370,7 @@ class Log:
         except OSError:
             pass
         try:
-            self.fh = open(path, "a", encoding="utf-8")
+            self.fh = open(path, "a", encoding="utf-8", errors="backslashreplace")
         except OSError as e:
             self.error = "the log %s could not be opened (%s)" % (path, e.strerror or e)
 
@@ -434,7 +434,7 @@ def prune_empty(home, removed):
 def do_remove(home, now):
     state = os.path.join(home, "state", "keep-rules")
     os.makedirs(state, exist_ok=True)
-    lock = open(os.path.join(state, ".lock"), "w")
+    lock = open(os.path.join(state, ".lock"), "w", errors="strict")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -500,7 +500,7 @@ def main(argv):
     if mode == "would-remove":
         text = report(make_plan(home, now), home, now)
         if report_to:
-            with open(report_to, "w", encoding="utf-8") as fh:
+            with open(report_to, "w", encoding="utf-8", errors="backslashreplace") as fh:
                 fh.write(text)
         else:
             sys.stdout.write(text)
