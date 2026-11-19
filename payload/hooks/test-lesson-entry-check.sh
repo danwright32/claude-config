@@ -194,6 +194,69 @@ else
   check "and nothing was pushed to the desktop" ok
 fi
 
+echo "lesson entry check: the line naming the check that holds a lesson (claude-config#3245)"
+
+# L1 and L2 predate check lines; L77 is written after. The baseline is the tool's test seam.
+BASEFIX="$WORK/before-check-lines.txt"
+printf '1\n2\n' > "$BASEFIX"
+run_hook_base() { # run_hook_base <tool name> <file path>
+  payload_for "$1" "$2" | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" SYNC_LESSON_CHECK_BASELINE="$BASEFIX" bash "$HOOK" 2>&1
+}
+with_new() { printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- **L77. a newer rule that fits.** body\n%s' "$1" > "$HOME_FIX/LESSONS.md"; }
+
+# A malformed check line is a fault like any other: refused, so the session that wrote it fixes it.
+with_new "  CHECK: hooks/test-rule-file-budget.sh
+"
+out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
+says "a check line ending in neither (full) nor (partial) is refused" "$out" '"decision":"block"'
+says "and the refusal names the entry" "$out" "L77"
+says "and says what the line should read" "$out" "(partial)"
+
+# Both well formed lines are accepted and nothing is said.
+with_new "  CHECK: hooks/test-rule-file-budget.sh (full)
+"
+out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
+silent "a new entry naming a check that is on disk is not spoken about" "$out"
+with_new "  NO CHECK: it is a judgement about what a reader needs, which no tool can see.
+"
+out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
+silent "a new entry saying why no check can hold it is not spoken about" "$out"
+
+# Neither line on a NEW entry is warned about, never refused (Dan's open question, the cautious
+# answer: warn only). The warning reaches the session as context, so the file still publishes.
+with_new ""
+out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
+says "a new entry carrying neither line is warned about" "$out" "L77"
+says "with the line to add" "$out" "NO CHECK:"
+says "as context for the session" "$out" '"additionalContext"'
+never_says "and never refused" "$out" '"decision":"block"'
+never_says "and the older entry is not named" "$out" "L1 carries"
+
+# A named check that is not on disk is said: a line naming a hook that is not there is worse than
+# no line, because it reads as a rule a machine holds.
+with_new "  CHECK: hooks/no-such-guard.sh (full)
+"
+out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
+says "a named check missing on disk is said" "$out" "hooks/no-such-guard.sh"
+never_says "and is not refused" "$out" '"decision":"block"'
+
+# The same warning through the shell, which is how lessons get appended in auto mode.
+with_new ""
+rm -f "$HOME_FIX/state/lesson-entry-check.stamp"
+out="$(printf '{}' | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" SYNC_LESSON_CHECK_BASELINE="$BASEFIX" bash "$HOOK" --after-bash 2>&1)"
+says "a new entry carrying neither line, appended by a shell command, is warned about" "$out" "L77"
+
+# A clone that does not know lesson-checks yet judged nothing about check lines, and says so rather
+# than going quiet, since quiet reads as nothing to warn about (L11, L98).
+OLDCLONE="$WORK/oldclone"; mkdir -p "$OLDCLONE"
+printf '#!/usr/bin/env bash\ncase "$1" in lesson-faults) exit 0 ;; *) echo "claude-sync: unknown command '"'"'$1'"'"'" >&2; exit 1 ;; esac\n' > "$OLDCLONE/claude-sync"
+chmod +x "$OLDCLONE/claude-sync"
+printf '%s\n' "$OLDCLONE" > "$WORK/oldclones"
+with_new ""
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$WORK/oldclones" bash "$HOOK" 2>&1)"
+says "a clone without lesson-checks is said to have judged nothing about check lines" "$out" "lesson-checks"
+never_says "and that is not a refusal" "$out" '"decision":"block"'
+
 echo "lesson entry check: it fires on the writes that happen, and nothing else"
 
 sound
