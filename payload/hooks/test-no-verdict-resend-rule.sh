@@ -20,10 +20,16 @@
 #      is recorded; and that every other refusal stays final. It carries Dan's decision and date.
 #   2. the words the home quotes are words Claude Code really writes, held against the refusal a
 #      session received on 2026-11-19 (L48), and the rule asks nothing that message forbids.
-#   3. the rules every dispatched agent reads point at the home and keep their own rule.
+#   3. the rules every dispatched agent reads point at the home and keep their own rule: the
+#      exception they add names the home and the issue, and its own sentence on a second refusal
+#      sends it under item 6 of the report.
 #   4. no other document states the absolute form bare. A scan by spelling (L564): it finds a line
 #      that puts the check beside "is final" or "never retried". Such a line passes when it carries
 #      the exception itself (it says "no verdict") or its file names the home.
+#   5. the sleep rule an overnight worker is told on every prompt (WORKER_NOTE in the scope modes
+#      mod's register.ts) is held by itself, on its own line: the sentence that calls a refusal
+#      final names the rule, its home and the words no verdict. The scan alone would pass that file
+#      on one pointer anywhere in it.
 #
 # NO_VERDICT_CLAUDE_MD and NO_VERDICT_AGENT_RULES point the suite at other copies, which is how a
 # broken copy is shown to fail.
@@ -128,17 +134,45 @@ check "the rule allows no second resend" \
 # ---- 3. the agent rules point at the home and keep their own rule ----
 pointer="$(grep -m 1 -F -- "$RULE_NAME" "$RULES" 2>/dev/null)"
 check "the agent rules name the rule" "$([ -n "$pointer" ] && echo ok || echo "no '$RULE_NAME' in $RULES")"
+# The whole paragraph on refusals is ONE line of the agent rules, and its first sentence already
+# says "under item 6 of your report" and names other issues. So everything asked of the exception
+# is looked for in the exception's own words, the text after the rule's name on that line, never
+# anywhere on the line.
+exception="${pointer#*"$RULE_NAME"}"
+[ "$exception" = "$pointer" ] && exception=""
 check "the agent rules say where its home is" \
-  "$(grep -q -F -- '~/.claude/CLAUDE.md' <<< "$pointer" && echo ok || echo "the line naming the rule does not name ~/.claude/CLAUDE.md")"
+  "$(grep -q -F -- '~/.claude/CLAUDE.md' <<< "$exception" && echo ok || echo "the exception naming the rule does not name ~/.claude/CLAUDE.md")"
 check "the agent rules carry the issue" \
-  "$(grep -q -F -- 'claude-config#3224' <<< "$pointer" && echo ok || echo "the line naming the rule does not carry claude-config#3224")"
+  "$(grep -q -F -- 'claude-config#3224' <<< "$exception" && echo ok || echo "the exception naming the rule does not carry claude-config#3224")"
 check "the agent rules still say a refused command is final" \
   "$(grep -q -F -- 'A refused command is final.' "$RULES" 2>/dev/null && echo ok || echo "the rule of #3028 is gone from $RULES")"
-check "the agent rules send a second refusal to the report" \
-  "$(grep -q -F -- 'Refused a second time' <<< "$pointer" && grep -q -F -- 'item 6' <<< "$pointer" && echo ok || echo "the line naming the rule does not say a second refusal goes under item 6")"
+# The sentence that opens "Refused a second time", up to its full stop, is what must name item 6.
+second_refusal() { # second_refusal <the exception's words>   prints ok, or what is missing
+  local words="$1" sentence
+  case "$words" in
+    *'Refused a second time'*) ;;
+    *) echo "the exception does not say what a second refusal means"; return 0 ;;
+  esac
+  sentence="${words#*Refused a second time}"
+  sentence="${sentence%%.*}"
+  case "$sentence" in
+    *'item 6'*) echo ok ;;
+    *) echo "the sentence on a second refusal does not send it under item 6: Refused a second time$sentence." ;;
+  esac
+}
+check "the agent rules send a second refusal to the report" "$(second_refusal "$exception")"
+# Seen to fail (L1): a line whose only "item 6" is in its first sentence, as the real line's first
+# sentence has one, and a line whose exception stops before the second refusal.
+dropped=" in \`~/.claude/CLAUDE.md\` (claude-config#3224). Refused a second time, it is final like any other. A later sentence names item 6."
+check "the check of the second refusal fails when its own sentence drops item 6" \
+  "$([ "$(second_refusal "$dropped")" != "ok" ] && echo ok || echo "a sentence with no item 6 passed because another sentence on the line has one")"
+check "the check of the second refusal fails when the exception never mentions one" \
+  "$([ "$(second_refusal " in \`~/.claude/CLAUDE.md\` (claude-config#3224).")" != "ok" ] && echo ok || echo "an exception with no second refusal passed")"
+check "the check of the second refusal passes a sentence that names item 6" \
+  "$([ "$(second_refusal " (claude-config#3224). Refused a second time, it is final: report it under item 6.")" = "ok" ] && echo ok || echo "a sentence naming item 6 was failed")"
 # The agent rules restate none of the home: the marks and the count live in one place.
 check "the agent rules do not restate what a second refusal is recorded with" \
-  "$(grep -q -F -- 'issue-spool.sh note . "<what was refused' <<< "$pointer" && echo "the pointer line restates the home's recording step" || echo ok)"
+  "$(grep -q -F -- 'issue-spool.sh note . "<what was refused' <<< "$exception" && echo "the exception restates the home's recording step" || echo ok)"
 
 # ---- 4. no other document states the absolute form bare ----
 # A line that puts the check beside "is final" or "never retried", either way round, in one
@@ -154,7 +188,9 @@ bare_files() { # bare_files <home file> <root>...   prints each file with a bare
     --exclude='test-*' --exclude='*.test.ts' --exclude='*.test.tsx' --exclude='LESSONS*' \
     --exclude-dir=tests --exclude-dir=audits --exclude-dir=node_modules --exclude-dir=.git \
     "$@" 2>/dev/null)"
-  local seen="" file rest text
+  # Every name this sets is declared, hit included: it is read through a subshell, where a name left
+  # global is discarded on return (test-scan-subshell-globals.sh).
+  local seen="" file rest text hit
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     file="${hit%%:*}"; rest="${hit#*:}"; text="${rest#*:}"
