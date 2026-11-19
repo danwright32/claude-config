@@ -37,16 +37,6 @@ export CHECK_MODS_LAST_PASSED=""
 # else the one on PATH, else ~/.local/bin/claude.
 REAL_BIN="${MODS_CLAUDE:-$(command -v claude 2>/dev/null || true)}"
 [ -n "$REAL_BIN" ] || { [ -x "$HOME/.local/bin/claude" ] && REAL_BIN="$HOME/.local/bin/claude"; }
-# Said first, where the runner prints it under this suite's line, when Claude Code changed since the
-# mods last passed on this Mac, so a red below reads as that change before anyone hunts for a commit.
-real_note=""
-if [ -n "$REAL_BIN" ] && [ -x "$REAL_BIN" ]; then
-  real_note="$(CHECK_MODS_LAST_PASSED="$REAL_LAST"; [ "$REAL_LAST_SET" = set ] || unset CHECK_MODS_LAST_PASSED
-    . "$ROOT/tools/lib/mods-last-passed.sh" \
-      || { echo "tools/lib/mods-last-passed.sh is missing, so whether Claude Code changed since the mods last passed was not read"; exit 0; }
-    mods_last_passed_note "$("$REAL_BIN" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')")"
-  [ -z "$real_note" ] || echo "SUITE-NOTE $real_note"
-fi
 # The sections below that run the real pinned compiler look for it in this checkout, which in a new
 # worktree has none until it is linked or installed (#1496), so that is done first, here, and why it
 # could not be is carried on every line that says those sections were not measured. From the npm
@@ -1043,6 +1033,8 @@ out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.296 CLAUDE_BIN="$TMPROOT/claude-same"
   && check "and on a Mac still running a build before 2.1.299" ok || check "and on a Mac still running a build before 2.1.299" "exit=$code out=$out"
 
 # 8. The real tree, with the real binary where this machine has one (REAL_BIN, found at the top).
+#    Nothing before this case starts the real claude, so the record of the build the mods last
+#    passed on is read and written here alone.
 #    Its failures are kept, and its pass recorded as the build the mods last passed on, where the
 #    caller said or in the default places, never in this run's scratch. Given MODS_CLAUDE, the caller
 #    promised a claude, so a run that could not check the mods with it fails (#3297).
@@ -1057,6 +1049,11 @@ if [ ! -d "$ROOT/payload/mods" ]; then
   echo "SUITE-PART-UNMEASURED the real mods, because payload/mods does not exist yet (no Mac has sent a mod), so there is nothing to check"
 else
   out="$("${real_env[@]}" CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
+  # check-mods says first when Claude Code changed since the mods last passed on this Mac (#3297).
+  # Marked, so the runner prints it under this suite's line whether the suite passed or failed, and
+  # put in front of a failure below, so a red reads as that change before anyone hunts for a commit.
+  real_note="$(printf '%s\n' "$out" | sed -n 's/^check-mods: \(Claude Code changed since the mods last passed .*\)$/\1/p' | head -n 1)"
+  [ -z "$real_note" ] || echo "SUITE-NOTE $real_note"
   if [ "$code" -eq 3 ]; then
     # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because there is no claude command on this machine"
@@ -1073,7 +1070,6 @@ else
     # dropped like any other chatter (#1444).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine. check-mods said: $(printf '%s\n' "$out" | grep UNMEASURED | sed 's/^check-mods: //' | tr '\n' ' ')"
   else
-    # A change of build since the last pass leads the failure, as it leads the run (#3297).
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
       || check "every mod in payload/mods passes Claude Code's own checks" "${real_note:+$real_note }exit=$code out=$out"
   fi

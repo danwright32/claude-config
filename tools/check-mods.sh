@@ -22,7 +22,7 @@
 #
 # A whole folder passing on a claude records that build as the one the mods last passed on, in this
 # Mac's ~/.claude/state (CHECK_MODS_LAST_PASSED moves it, set empty turns it off), and a whole folder
-# run on another build says so in its first line (#3297, tools/lib/mods-last-passed.sh).
+# run on another build says so in its first line (#3297, LAST_PASSED below).
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
@@ -116,17 +116,35 @@ if [ -z "$bin" ]; then
 fi
 cc_now=""
 [ -n "$bin" ] && [ -x "$bin" ] && cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
-# Which build every mod last passed on, on this Mac, and the first line of a whole folder's run when
-# that is another build than this one, so a red with no commit to blame reads as Claude Code's change
-# first (#3297, tools/lib/mods-last-passed.sh). Missing, it is said, and the run goes on.
-_cm_last_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mods-last-passed.sh"
-if [ -f "$_cm_last_lib" ]; then
-  . "$_cm_last_lib"
-  [ "$whole_folder" -eq 0 ] || { _cm_note="$(mods_last_passed_note "$cc_now")"; [ -z "$_cm_note" ] || echo "check-mods: $_cm_note"; }
-else
-  echo "check-mods: $_cm_last_lib is missing, so whether Claude Code changed since the mods last passed was not read, and this run's result will not be recorded." >&2
-  mods_last_passed_write(){ return 1; }
-fi
+# WHICH BUILD EVERY MOD LAST PASSED ON, ON THIS MAC (#3297). On 2026-11-18 Claude Code 2.1.328
+# arrived on the personal MacBook and two of the secret guard's tests failed from then on with no
+# commit to blame; three builders each spent time showing the failure was not theirs, because nothing
+# said Claude Code had changed since the suite last passed. So a whole folder passing on a claude
+# records that build, and the next whole folder run on another build says so in its first line.
+# One line, the build, a tab and the date, in this Mac's ~/.claude/state, which the sync never
+# carries: each Mac's record is about the build it runs. Written only by a run, never by hand, and
+# kept here rather than in a library this script would source, since the area check lets this script
+# run by its texts (payload/mods/area-check/hooks/named.ts). CHECK_MODS_LAST_PASSED names another
+# file (tests/test-mods.sh points every fixture at none), and set empty turns both the note and the
+# record off.
+LAST_PASSED="${CHECK_MODS_LAST_PASSED-$HOME/.claude/state/mods-last-passed.tsv}"
+last_passed_note(){   # $1 = build installed now: one line when the mods last passed on another
+  local was="" when=""
+  [ -n "$LAST_PASSED" ] && [ -n "${1:-}" ] && [ -f "$LAST_PASSED" ] || return 0
+  IFS=$'\t' read -r was when < "$LAST_PASSED" 2>/dev/null || true
+  [ -n "$was" ] && [ "$was" != "$1" ] || return 0
+  echo "check-mods: Claude Code changed since the mods last passed on this Mac: they passed on Claude Code $was${when:+ on $when}, and $1 is installed now. Read a failure below as that change first, before looking for a commit to blame."
+}
+last_passed_write(){   # $1 = build: written beside the record and moved over it, so a run killed halfway leaves the old one
+  local tmp=""
+  [ -n "$LAST_PASSED" ] && [ -n "${1:-}" ] || return 0
+  mkdir -p "$(dirname "$LAST_PASSED")" 2>/dev/null && tmp="$(mktemp "$LAST_PASSED.XXXXXX" 2>/dev/null)" \
+    && printf '%s\t%s\n' "$1" "$(date +%Y-%m-%d)" > "$tmp" && mv -f "$tmp" "$LAST_PASSED" && return 0
+  [ -z "$tmp" ] || rm -f "$tmp"
+  echo "check-mods: the pass above could not be recorded in $LAST_PASSED as the build the mods last passed on." >&2
+  return 1
+}
+[ "$whole_folder" -eq 0 ] || last_passed_note "$cc_now"
 # CHECK_MODS_REQUIRE_CLAUDE=1 is a caller's promise that a working claude is here, made where the pull
 # request checks install one for the mods (#3297). With it, a run that could not check the mods with
 # claude is a failure, exit 6, rather than UNMEASURED: on that runner it means the install broke, and
@@ -680,7 +698,5 @@ fi
 # Every mod passed on this build. Recorded as the build the mods last passed on, for the note at the
 # top of the next run (#3297), only when the whole folder was checked: one mod passing says nothing
 # about the rest. A record that cannot be written is said, and the pass stands.
-if [ "$whole_folder" -eq 1 ] && [ -n "$cc_now" ]; then
-  mods_last_passed_write "$cc_now" || echo "check-mods: the pass above was not recorded as the build the mods last passed on." >&2
-fi
+[ "$whole_folder" -eq 0 ] || last_passed_write "$cc_now" || true
 exit 0
