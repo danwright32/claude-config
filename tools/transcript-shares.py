@@ -17,8 +17,8 @@ November 2026) both used, so figures from this tool are comparable with them:
   requests. A request is placed in the window by its own timestamp, never its file's date.
 - What a request carried is estimated from the size of each transcript item before it, at 2.78
   characters a token, so an item costs its size times the number of later requests in the same
-  context. A compaction starts a new context. ESTIMATED_OVER_MEASURED says how close the estimate
-  comes to the measured total (0.95 and 1.02 on the re-measure).
+  context. A compaction starts a new context. `estimated_over_measured` on each KIND line says how
+  close the estimate comes to the measured total (0.95 and 1.02 on the re-measure).
 - Code reading is the output of Read, Grep, and Bash commands that start (after any `cd ... &&`,
   `NAME=value` or `rtk` prefix) with sed, cat, grep, rg or git show.
 - Agent reports are `<task-notification>` blocks (each read once however often it arrives), the
@@ -27,9 +27,16 @@ November 2026) both used, so figures from this tool are comparable with them:
   it is interactive (`entrypoint` cli), headless (sdk-cli) or other.
 
 Reads item sizes and kinds only and prints no transcript text (L222). A window holding no
-transcripts or no requests exits 1 rather than report an empty measurement (L98). A file it cannot
-read and a line that is not JSON are counted and named (UNREADABLE, MALFORMED), and END says
-`complete=no`. Output is tab separated: WINDOW, INPUT, UNREADABLE, MALFORMED, TOTAL, then KIND,
+transcripts or no requests exits 1 rather than report an empty measurement (L98). Faults are
+counted and named, and END then says `complete=no`:
+
+- MALFORMED, per file: lines that are not JSON, are nested too deep to parse, or carry an id that is
+  not a string. The line is skipped and the rest of the file is read.
+- UNREADABLE: a file that cannot be opened, a folder that cannot be listed, and a file whose read
+  fails part way. For the last, NOTHING from that file is counted (a partial transcript would carry
+  a wrong context into every share), and the line says after which line it failed.
+
+Output is tab separated: WINDOW, INPUT, UNREADABLE, MALFORMED, TOTAL, then KIND,
 SHARE, READS and WORDS per kind, SESSION for the largest main sessions, COMPACTIONS, END.
 """
 import argparse
@@ -44,7 +51,7 @@ import sys
 
 try:
     import zoneinfo
-except ImportError:  # pragma: no cover, Python before 3.9
+except ImportError:  # Python before 3.9, or a build without it: refused in main, by name
     zoneinfo = None
 
 # The one sum of a request's context, shared with the context size hook and tools/cache-usage.py.
@@ -119,12 +126,53 @@ def new_agg():
             "code_reads": [], "reports_bg": [], "reports_fg": [], "reports_am": []}
 
 
+def has_bad_id(o):
+    """True when a message id, tool use id or tool result's tool_use_id is present but not a string."""
+    msg = o.get("message")
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("id") is not None and not isinstance(msg["id"], str):
+        return True
+    cont = msg.get("content")
+    for b in cont if isinstance(cont, list) else ():
+        if isinstance(b, dict):
+            for key in ("id", "tool_use_id"):
+                if b.get(key) is not None and not isinstance(b[key], str):
+                    return True
+    return False
+
+
+def counted(fh, out):
+    """The file's lines, recording each one as done only once the loop comes back for the next."""
+    for n, line in enumerate(fh, 1):
+        yield line
+        out["lines_done"] = n
+
+
+def new_result(path):
+    return {"path": path, "kind": None, "agg": None, "session": None, "err": None, "malformed": 0,
+            "untimed": 0, "lines_done": 0}
+
+
 def process(job):
+    """One transcript, with a failure boundary: a read that fails part way, or anything else raised
+    while reading it, names the file UNREADABLE and counts NOTHING from it, so one bad file never
+    stops the run (in a worker it would otherwise end it with a traceback)."""
+    path = job[0]
+    out = new_result(path)
+    try:
+        return read_transcript(job, out)
+    except Exception as e:
+        failed = new_result(path)
+        detail = str(e) if isinstance(e, OSError) else "%s: %s" % (type(e).__name__, e)
+        failed["err"] = "read failed after line %d, nothing from this file counted: %s" % (out["lines_done"], detail)
+        return failed
+
+
+def read_transcript(job, out):
     """One transcript: its kind, its totals for requests in the window, and what went wrong reading it."""
     path, since, until = job
-    out = {"path": path, "kind": None, "agg": None, "session": None, "err": None, "malformed": 0,
-           "untimed": 0}
-    kind = "subagent" if "%ssubagents%s" % (os.sep, os.sep) in path else None
+    kind ="subagent" if "%ssubagents%s" % (os.sep, os.sep) in path else None
     entry = None
     ctx = collections.Counter()
     tools = {}
@@ -156,15 +204,15 @@ def process(job):
         out["err"] = e.strerror or str(e)
         return out
     with fh:
-        for line in fh:
+        for line in counted(fh, out):
             if not line.strip() or SKIP_HEAD.search(line[:120]):
                 continue
             try:
                 o = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):
                 out["malformed"] += 1
                 continue
-            if not isinstance(o, dict):
+            if not isinstance(o, dict) or has_bad_id(o):
                 out["malformed"] += 1
                 continue
             t = o.get("type")
@@ -278,13 +326,18 @@ def process(job):
 
 
 def find_files(root, projects, since):
-    """(matched project count, [(path, problem or None)], files older than the window)."""
+    """(matched project count, [(path, problem or None)], files older than the window,
+    [(folder, problem)] for folders that could not be listed, whose transcripts are unknown)."""
     names = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n))
                    and (not projects or any(p in n for p in projects)))
-    found, old = [], 0
+    found, old, unlisted = [], 0, []
     floor = since.timestamp()
+
+    def cannot_list(e):
+        unlisted.append((e.filename, "folder cannot be listed: %s" % (e.strerror or str(e))))
+
     for n in names:
-        for dp, _dn, fn in os.walk(os.path.join(root, n)):
+        for dp, _dn, fn in os.walk(os.path.join(root, n), onerror=cannot_list):
             for f in sorted(fn):
                 if not f.endswith(".jsonl"):
                     continue
@@ -299,7 +352,7 @@ def find_files(root, projects, since):
                     old += 1
                     continue
                 found.append((p, None))
-    return len(names), found, old
+    return len(names), found, old, unlisted
 
 
 def pct(a, b):
@@ -341,9 +394,13 @@ def main(argv):
     ap.add_argument("--jobs", type=int, default=1, help="worker processes")
     a = ap.parse_args(argv)
 
+    if zoneinfo is None:
+        print("NO ZONEINFO: this Python has no zoneinfo module (it needs 3.9 or later), so --tz %s "
+              "cannot be read" % a.tz)
+        return 2
     try:
         zone = zoneinfo.ZoneInfo(a.tz)
-    except Exception:
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
         print("BAD --tz: %s" % a.tz)
         return 2
     since, until = parse_bound(a.since, zone), parse_bound(a.until, zone)
@@ -360,7 +417,11 @@ def main(argv):
     if not os.path.isdir(a.root):
         print("\n".join(out + ["NO TRANSCRIPTS ROOT: %s" % a.root]))
         return 1
-    nproj, found, old = find_files(a.root, a.project, since)
+    try:
+        nproj, found, old, unlisted = find_files(a.root, a.project, since)
+    except OSError as e:
+        print("\n".join(out + ["NO TRANSCRIPTS ROOT: %s cannot be listed: %s" % (a.root, e.strerror or e)]))
+        return 1
     jobs = [(p, since, until) for p, err in found if err is None]
     if a.jobs > 1 and len(jobs) > 1:
         from multiprocessing import Pool
@@ -370,7 +431,7 @@ def main(argv):
         results = [process(j) for j in jobs]
     results.sort(key=lambda r: r["path"])
 
-    unreadable = [(p, err) for p, err in found if err is not None]
+    unreadable = [(p, err) for p, err in found if err is not None] + unlisted
     unreadable += [(r["path"], r["err"]) for r in results if r["err"]]
     read = [r for r in results if not r["err"]]
     active = [r for r in read if r["agg"] and r["agg"]["requests"]]

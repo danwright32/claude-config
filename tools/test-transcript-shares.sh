@@ -14,7 +14,8 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="${TRANSCRIPT_SHARES_TOOL:-$DIR/transcript-shares.py}"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# A folder below is made unlistable on purpose; its permission is put back before removal.
+trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 pass=0; fail=0
 check(){ if [[ "$3" == *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected to contain: $2"; echo "  actual: ${3:0:3000}"; fi; }
 absent(){ if [[ "$3" != *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected NOT to contain: $2"; fi; }
@@ -213,6 +214,108 @@ out="$(run --project fx-alpha --jobs 2)"
 check "several worker processes give the same answer" \
   $'SHARE\tinteractive\tcode_reading=0.0%\tagent_reports=1.2%' "$out"
 check "and the same input counts" $'files_read=3\tfiles_with_requests_in_window=3\trequests_in_window=8' "$out"
+
+# ---- Faults inside a file and inside the folder tree, in a root of their own so the counts above
+# stay as worked out. Every number here is set by this fixture, not measured.
+Q="$WORK/projects-faults"
+mkdir -p "$Q/-fx-ids" "$Q/-fx-io" "$Q/-fx-locked/s9/subagents"
+python3 - "$Q" <<'PY'
+import json, os, sys
+Q = sys.argv[1]
+
+
+def asst(mid, tokens, content=None):
+    return json.dumps({"type": "assistant", "entrypoint": "cli", "timestamp": "2026-03-04T09:00:00Z",
+                       "message": {"id": mid, "model": "m", "content": content or [],
+                                   "usage": {"input_tokens": tokens, "cache_read_input_tokens": 0,
+                                             "cache_creation_input_tokens": 0}}})
+
+
+def write(path, lines):
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+# A message id that is a list, a tool result whose tool_use_id is an object, and a line nested too
+# deep to parse: three bad lines, each counted, and the 1,000 token request after them still read.
+write(os.path.join(Q, "-fx-ids", "ids.jsonl"), [
+    asst(["not", "an", "id"], 500),
+    json.dumps({"type": "user", "timestamp": "2026-03-04T09:00:01Z", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": {"x": 1}, "content": "invented"}]}}),
+    "[" * 100000,
+    asst("good1", 1000),
+])
+# Two requests of 300 and 400 tokens; the run below makes the read fail after the first line.
+write(os.path.join(Q, "-fx-io", "flaky.jsonl"), [asst("io1", 300), asst("io2", 400)])
+write(os.path.join(Q, "-fx-io", "fine.jsonl"), [asst("ok1", 2000)])
+write(os.path.join(Q, "-fx-locked", "s9", "subagents", "agent-l1.jsonl"), [asst("hidden", 9000)])
+PY
+
+out="$(python3 "$TOOL" --root "$Q" --project fx-ids --since 2026-03-02 --until 2026-03-09 2>&1)"; rc=$?
+exit_is "a line with a bad id or too deep to parse does not stop the run" "$rc" 0
+check "each bad line is counted against its file" $'MALFORMED\t'"$Q/-fx-ids/ids.jsonl"$'\tlines=3' "$out"
+check "the good request after them is still read" $'TOTAL\ttokens=1000' "$out"
+absent "no traceback" "Traceback" "$out"
+
+# A read that fails part way through a file. The failure is injected into the tool's own open() so
+# it is a real OSError raised from inside the read loop, after the first line.
+out="$(python3 - "$TOOL" "$Q" <<'PY' 2>&1
+import errno, importlib.util, sys
+spec = importlib.util.spec_from_file_location("transcript_shares", sys.argv[1])
+tm = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tm)
+
+
+class Flaky:
+    def __init__(self, fh):
+        self.fh = fh
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.fh.close()
+
+    def __iter__(self):
+        yield next(iter(self.fh))
+        raise OSError(errno.EIO, "Input/output error")
+
+
+def fake_open(path, *a, **k):
+    fh = open(path, *a, **k)
+    return Flaky(fh) if path.endswith("flaky.jsonl") else fh
+
+
+tm.open = fake_open
+rc = tm.main(["--root", sys.argv[2], "--project", "fx-io", "--since", "2026-03-02", "--until", "2026-03-09"])
+print("rc=%d" % rc)
+PY
+)"
+check "a read failing part way names the file and says what was dropped" \
+  $'UNREADABLE\t'"$Q/-fx-io/flaky.jsonl"$'\tread failed after line 1, nothing from this file counted: [Errno 5] Input/output error' "$out"
+check "the other file is still measured, without the failed file's first request" $'TOTAL\ttokens=2000' "$out"
+check "and the run says it is incomplete" $'END\tcomplete=no' "$out"
+check "and still exits 0" "rc=0" "$out"
+absent "no traceback" "Traceback" "$out"
+
+# A folder that cannot be listed. Root can list it anyway, so that case is reported as unmeasured.
+chmod 000 "$Q/-fx-locked/s9"
+if ls "$Q/-fx-locked/s9" >/dev/null 2>&1; then
+  echo "UNMEASURED: an unlistable folder cannot be made here (running as root?)"
+else
+  out="$(python3 "$TOOL" --root "$Q" --project fx-locked --project fx-io --since 2026-03-02 --until 2026-03-09 2>&1)"
+  check "a folder that cannot be listed is named" $'UNREADABLE\t'"$Q/-fx-locked/s9"$'\t' "$out"
+  check "and counted" $'unreadable=1' "$out"
+  check "and the run says it is incomplete" $'END\tcomplete=no' "$out"
+fi
+chmod 755 "$Q/-fx-locked/s9"
+
+# Without the zoneinfo module a valid zone must not be called bad.
+out="$(python3 -c 'import runpy, sys; sys.modules["zoneinfo"] = None; sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name="__main__")' \
+  "$TOOL" --root "$Q" --since 2026-03-02 --until 2026-03-09 --tz America/New_York 2>&1)"; rc=$?
+check "a missing zoneinfo module is said as that" "NO ZONEINFO" "$out"
+absent "not as a bad zone name" "BAD --tz" "$out"
+exit_is "and exits 2" "$rc" 2
 
 echo
 echo "passed: $pass, failed: $fail"
