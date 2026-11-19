@@ -22,9 +22,8 @@ import {
   addsThis,
   readCheckLine,
   unindented,
-  questionFault,
+  askFault,
   shownFault,
-  unseenIn,
   lessonAddition,
   lessonOptions,
   lessonsFile,
@@ -882,12 +881,15 @@ export const register: Register = on => {
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
       // The whole question is what he reads (#3295): one holding what he cannot see, or longer than
       // the dialog shows, where the rule or the check line could stand past the cut, is not asked.
-      const unread = questionFault(question)
-      if (unread !== undefined) return { deny: `The question would not reach Dan as written: ${unread}. He approves only text he can read whole, so reword it and ask again.` }
+      // Every text of the call is judged as the dialog will get it, the mod's own header and answers
+      // in place (security review of #3295: the fields beside the question went to it unjudged).
+      const shown = { ...e, questions: [{ ...questions[0], header: LESSON_HEADER, options: lessonOptions(file), multiSelect: false }] } as typeof e
+      const unread = askFault(shown as unknown as Record<string, unknown>, [file])
+      if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He approves only text he can read whole, so reword it and ask again.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this lesson.' }
 
-      const r = await next({ ...e, questions: [{ ...questions[0], header: LESSON_HEADER, options: lessonOptions(file), multiSelect: false }] } as typeof e)
+      const r = await next(shown)
       if (r.deny !== undefined || r.isError) return r
       const out = (r.result ?? {}) as AskResult
       const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
@@ -935,13 +937,14 @@ export const register: Register = on => {
       // prompt, so a question holding what he cannot see, or longer than the dialog shows, is not
       // asked. A file's own name is the mod's to show, in the answers too, so one that holds such a
       // character is set aside first, or its save could never be asked about at all (L665).
-      const unread = questionFault(q.files.reduce((text, f) => (unseenIn(f) ? text.split(f).join('x'.repeat(f.length)) : text), question))
-      if (unread !== undefined) return { deny: `The question would not reach Dan as written: ${unread}. He decides on the words he can read whole, so reword it and ask again, with the same metadata.` }
+      const shown = { ...e, questions: [{ ...questions[0], header: HEADER, options: dialogOptions(q.files), multiSelect: false }] } as typeof e
+      const unread = askFault(shown as unknown as Record<string, unknown>, q.files)
+      if (unread !== undefined) return { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so reword it and ask again, with the same metadata.` }
       // An answer only Dan's dialog may give: one the call already carries is refused, never read.
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this save.' }
 
-      const r = await next({ ...e, questions: [{ ...questions[0], header: HEADER, options: dialogOptions(q.files), multiSelect: false }] } as typeof e)
+      const r = await next(shown)
       if (r.deny !== undefined || r.isError) return r
       const out = (r.result ?? {}) as AskResult
       const asked = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question

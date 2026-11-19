@@ -7671,11 +7671,19 @@ width, bidirectional, the tag block, a soft hyphen, a byte order mark), private 
 no character is assigned to, a space that is not the plain one, or anything else drawn as nothing
 (rules.ts `unseenIn`; the spaces and tabs at a line's two ends are indentation). A rule is prose,
 so it is not held to ASCII as a check line is: an accented letter, a curly quote or a
-multiplication sign stands. The opening of an HTML comment and a markdown link are refused too,
-since a surface can draw less than their text, and so is a question over 1,500 characters, since
-the dialog cuts one at 2,000 (read in Claude Code 2.1.328 on 2026-11-19). The entry written under
-his answer is held to the same class, its `SHORT:` line included, which the picker never shows,
-and the question asked before a For good is held as the lesson's is.
+multiplication sign stands. Markup that a surface other than the terminal hides or redraws is
+refused too, as a class (Claude Code's typings say the desktop, VS Code and mobile surfaces draw
+the dialog with Markdown): `<` before a letter, `!`, `?` or `/`, `]` before `(`, `[` or `:`, and a
+character reference, in the text as sent and with its bold marks dropped. Code in backticks on one
+line stands, since it is drawn as written. Refused as well: text over 1,500 UTF-16 code units,
+since the dialog cuts a question at 2,000; two blank lines running; and text taking over 20 rows
+at 76 columns, since the dialog neither cuts nor scrolls a tall question (read in Claude Code
+2.1.328 on 2026-11-19). The row cap bounds how far above the answers a word can stand; it does
+not fit a question into a 24 row window, which shows about the last 8 rows of one at the cap.
+Every text of the call is judged by the one function, a title, a description and a placeholder
+included (rules.ts `shownFault`, `askFault`). The entry written under his answer is held to the
+unseen class, its `SHORT:` line included, which the picker never shows, and the question asked
+before a For good is held as the lesson's is.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
