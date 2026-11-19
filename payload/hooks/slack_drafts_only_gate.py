@@ -1611,6 +1611,8 @@ py_follow = _py_aliases.make(PY_INERT)
 # The one route for a command this gate would refuse: run under the installed no network wrapper,
 # and the real path test that route and /nudge are both let through by (claude-config#3173).
 NoNetworkRoute = load_lib("no_network_route", "no-network-route.py").make(HERE)
+# The words written after a program the gate does not know, judged as a command (claude-config#3277).
+UnknownProgram = load_lib("unknown_program", "unknown-program.py").make(judged_by_name, SH_REDIRECT)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -1691,7 +1693,8 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute):
+class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute,
+            UnknownProgram):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -5692,7 +5695,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             got = self.words_memo[rest] = tuple(self.sw.command_words(rest))
         return list(got)
 
-    def judge(self, d, text, wrapper, why, depth, whole):
+    def judge(self, d, text, wrapper, why, depth, whole, fed_by=None):
         """The reason one command posts, or None: the command as it is written, and then, where a word
         of it holds a variable or a substitution whose value is certain, the same command with those
         words written out (sh_placed, claude-config#2678). `python3 "$ROOT/tools/post.py"` named no
@@ -5701,13 +5704,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         found nothing, so it can refuse a command the first let through and never the reverse.
         A command run under the installed no network wrapper is none of this gate's to read, and
         what it may have written is unread from there on (under_no_network in
-        lib/no-network-route.py, claude-config#3173)."""
+        lib/no-network-route.py, claude-config#3173). fed_by is the command as the text wrote it
+        where text is only the words after a program that may run them (judge_behind_unknown,
+        claude-config#3277): what feeds those words is what feeds that command."""
         if self.under_no_network(text, depth):
             return None
-        reason = self.judge_written(d, text, wrapper, why, depth, whole) or self.judge_unglued(d, text, depth, whole)
+        reason = (self.judge_written(d, text, wrapper, why, depth, whole, fed_by)
+                  or self.judge_unglued(d, text, depth, whole))
         # And a shell, its code or its script named another way: $SHELL, /dev/stdin, a line read and
         # then run, xargs, \$( ) in a double quoted string (lib/sh-walk-shapes.py, claude-config#3251).
         reason = reason or self.judge_unread_shapes(d, text, wrapper, depth, whole)
+        # And the words after a program the gate does not know, which may run them, read as the
+        # command they spell (`op run -- node --test x.test.js`; lib/unknown-program.py, #3277).
+        reason = reason or self.judge_behind_unknown(d, text, wrapper, depth, whole, fed_by or text)
         if reason:
             return reason
         placed = self.sh_placed(text, d)
@@ -5715,7 +5724,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return None
         was, self.placing = self.placing, True
         try:
-            return self.judge_written(d, placed, wrapper, why, depth, whole, text)
+            return self.judge_written(d, placed, wrapper, why, depth, whole, fed_by or text)
         finally:
             self.placing = was
 
