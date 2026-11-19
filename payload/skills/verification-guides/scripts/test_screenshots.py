@@ -310,6 +310,25 @@ class Publishing(Base):
         m = self.publish(gh, link=LINK)
         self.assertEqual(m["mode"], "link")
         self.assertEqual(gh.posts("git/blobs"), [])
+        block = s.render_block(m)
+        self.assertIn("The pictures are on a private page: %s" % LINK, block)
+        self.assertNotIn("may not be shown", block, "a private repository given --link could show them inline")
+
+    def test_turning_private_repo_images_off_sends_a_private_repo_back_to_the_link(self):
+        # The switch stays a supported setting, so its refusal is kept and run here.
+        self.shoot_all()
+        gh = FakeGitHub(private=True)
+        saved = s.PRIVATE_REPO_IMAGES
+        s.PRIVATE_REPO_IMAGES = False
+        try:
+            with self.assertRaises(v.VerificationError) as e:
+                self.publish(gh)
+        finally:
+            s.PRIVATE_REPO_IMAGES = saved
+        kind, message = e.exception.problems[0]
+        self.assertEqual(kind, "screenshots-need-private-link")
+        self.assertIn("is private, and PRIVATE_REPO_IMAGES is off", message)
+        self.assertEqual(gh.posts("git/blobs"), [])
 
     def test_a_link_that_is_not_a_claude_artifact_is_refused(self):
         self.areas = areas_doc(synthetic=False)

@@ -66,7 +66,8 @@ ARTIFACT_RE = re.compile(r"^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]{8,}
 # Whether a picture committed to a branch shows inline in a PRIVATE repository's PR body. Measured in
 # claude-config#2699 on 2026-11-19: on danwright32/pr-image-test#1 all eight pictures rendered for the
 # owner signed in, and the same link signed out answers 404. So a viewer with access sees them, and
-# nobody without access sees them, which is what a private repository should do.
+# nobody without access sees them, which is what a private repository should do. Setting it False
+# stays supported (private repositories then need --link), and a test runs that refusal.
 PRIVATE_REPO_IMAGES = True
 
 
@@ -308,7 +309,7 @@ def render_block(m):
     if m["no_visible_change"]:
         lines += ["", "No visible change measured: every before and after pair is byte for byte identical."]
     if m["mode"] == "link":
-        lines += ["", "The pictures are on a private page, since they may not be shown in this repository: %s" % m["link"]]
+        lines += ["", "The pictures are on a private page: %s" % m["link"]]
     by = {(s["area"], s["screen"], s["side"], s["width"], s["theme"]): s for s in m["shots"]}
     for sc in m["screens"]:
         where = ("test `%s`, frame `%s`" % (sc["test"], sc["frame"]) if "test" in sc else "`%s`" % sc["path"])
