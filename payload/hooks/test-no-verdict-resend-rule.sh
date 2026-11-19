@@ -98,16 +98,30 @@ says "declares itself the one home" 'one home'
 # call sent beside another call in one response. Copied whole and unshaped (L48). The measurement
 # on #3224 quotes the same sentences from an overnight transcript of 2026-11-18.
 REAL_REFUSAL="The server-side auto mode classifier gave no verdict for Bash: another call in this response was changed after auto mode reviewed it, or could not be confirmed unchanged, so this call's review no longer applies. This is not a judgment that the action is unsafe. Issue the Bash call again in a response of its own, exactly as this conversation records it, after you have seen the results of the other calls. If it is denied again, do not retry; continue with other tasks and tell the user that auto mode could not evaluate it. Note: reading files, searching code, and other read-only operations do not require the classifier and can still be used."
-in_real() { # in_real <description> <quoted text>   the text between the quotes is in the refusal
+# A second shape of it, received the same day for a Bash call whose input a hook had rewritten (the
+# rtk rewrite puts rtk in front of a command) after the check reviewed it. Here Claude Code asks for
+# the call with the input it quotes, not as it was first sent. Copied whole but for the quoted
+# input, which held a path on the Mac it was received on and is left out where the mark stands.
+REAL_REFUSAL_REWRITTEN="The server-side auto mode classifier gave no verdict for Bash: a hook changed this call's input after auto mode reviewed it, so the review does not cover what would run. This is not a judgment that the action is unsafe. The hook produced this input: [the input, left out]. In your next response, issue the Bash call once more with exactly that input so auto mode reviews it. Put nothing else in that response but other calls whose denial quoted an input like this one. If it is denied again, do not retry; continue with other tasks and tell the user that auto mode could not check this Bash call because a hook or plugin changes it, and that they can turn that hook or plugin off (or ask their administrator to) or switch out of auto mode to approve it themselves. Note: reading files, searching code, and other read-only operations do not require the classifier and can still be used."
+in_text() { # in_text <description> <quoted text> <refusal>   the text between the quotes is in it
   local bare="${2#\"}"; bare="${bare%\"}"
-  check "$1" "$(grep -q -F -- "$bare" <<< "$REAL_REFUSAL" && echo ok || echo "the real refusal does not say: $bare")"
+  check "$1" "$(grep -q -F -- "$bare" <<< "$3" && echo ok || echo "the real refusal does not say: $bare")"
 }
+in_real() { in_text "$1" "$2" "$REAL_REFUSAL"; }
+in_rewritten() { in_text "$1" "$2" "$REAL_REFUSAL_REWRITTEN"; }
 in_real "the first quoted mark is in the refusal Claude Code writes" "$MARK_ONE"
 in_real "the second quoted mark is in the refusal Claude Code writes" "$MARK_TWO"
+in_rewritten "the first quoted mark is in the refusal of a call a hook rewrote" "$MARK_ONE"
+in_rewritten "the second quoted mark is in the refusal of a call a hook rewrote" "$MARK_TWO"
 # The rule and the message agree: the message asks for the call again in a response of its own and
 # forbids a retry after a second denial, so a rule allowing two resends would contradict it.
 in_real "Claude Code's message asks for the call again in a response of its own" '"again in a response of its own"'
 in_real "Claude Code's message forbids a retry after a second denial" '"If it is denied again, do not retry"'
+in_rewritten "Claude Code's message for a rewritten call forbids a retry after a second denial" '"If it is denied again, do not retry"'
+# For a call a hook rewrote the message asks for the input it quotes, so a rule that allowed only
+# the call as first sent would forbid what the message asks for.
+in_rewritten "Claude Code's message for a rewritten call asks for the input it quotes" '"once more with exactly that input"'
+says "allows the input the refusal quotes, where a hook rewrote the call" 'the input the refusal quotes'
 check "the rule allows no second resend" \
   "$(grep -q -i -E 'twice more|two more|a second resend|up to (two|three|2|3)' <<< "$home_line" && echo "the rule allows more than one resend" || echo ok)"
 
