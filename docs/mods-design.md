@@ -1782,6 +1782,12 @@ morning offers what the night proposed, filing nothing he has not picked.
   then the proposed issues in the end of turn issue review's multi select picker (each option ending
   with its proposed priority, labels and milestone) and each proposed lesson in the durable lesson
   picker. Notes that could not be read are said, and the proposals offered from the report instead.
+  Since #3245 each lesson is asked the rungs first, as steps 3 to 5 of
+  `hooks/durable-lesson-check.sh` describe, and its picker carries the check line the morning
+  session arrives at. That line is never read from the night's notes: the block of overnight text
+  still gives each lesson's source and rule only, so the one line Dan's answer covers is one the
+  session worked out and he read. `hooks/test-durable-lesson-check.sh` holds the step numbers
+  named here to the hook's own.
 - A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
   line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
   days), counted as asked only once that prompt went in.
@@ -2610,6 +2616,45 @@ and the band question is removed rather than kept beside it (L29). Three defects
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
   is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  Since #3245 (built 2026-11-19; Dan on the issue that day: "Yes, cover the check line") the picker
+  may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
+  rule or that none can, which the durable lesson check now asks for before a lesson is written.
+  The same Add to LESSONS.md then covers that one line in that one entry, just before the SHORT
+  line, or last in an entry that has none, and the approval records it beside the rule. That is
+  the one place `hooks/durable-lesson-check.sh` tells the session to write it, and one the lessons
+  file's reader reads (`claude-sync lesson_entries_render` scans every line of an entry after its
+  first, so it also reads a line after the SHORT line, where L865 has one; no approval covers that
+  place, and such a line is asked about). It is taken on the same footing as the rule,
+  as text Dan read: the picker is refused unless the line is one line in a check line's shape
+  (`readCheckLine`: `CHECK:` with something named and `(full)` or `(partial)`, or `NO CHECK:` with
+  three words of reason) and stands whole on a line of its own in the question, since a short line
+  held to the question only by containment would pass as a fragment of a longer one.
+  A security review of the first build (731ba496be) found the line could carry text he cannot see:
+  only some control characters were refused, so zero width characters, bidirectional controls, the
+  tag block (U+E0000 to U+E007F, invisible and readable by a model as ASCII), C1 controls and a tab
+  passed, at any length, and a run of tag characters behind the visible words was approved and
+  written with them. The class is now closed rather than listed: a check line is printable ASCII,
+  space to tilde, at most `MAX_CHECK` (300) characters, a cap measured against the one real line the
+  file held (185) and a `CHECK:` naming three files at the longest path in the config (288). The
+  picker refuses anything else before Dan is asked and says which character or length refused it.
+  Indentation is the spaces and tabs at a line's two ends (`unindented`) and never the language's
+  own trim, which also takes a byte order mark, a no break space and the line separators, so one
+  of those at the end of the entry's line no longer compares equal to the line he read. And an
+  approved line is not taken under a rule whose bold never closes, where the index would join the
+  line into the rule it renders. Visible words are not judged: any reason after `NO CHECK:`
+  passes, since Dan reads it, and deciding what a reason may say is not the mod's question.
+  The mod and the lessons file's own reading (`claude-sync lesson_check_records`) now differ both
+  ways. The file is narrower over a `CHECK:` line, since it also holds each path's characters; the
+  mod asks whether the text is a check line and nothing else, not whether it is a valid one. The
+  file is wider in three places, where the picker refuses a line the file takes and the session
+  rewords it: a `NO CHECK:` reason holding a character outside ASCII, a line over 300 characters,
+  and white space other than a space between words (at a tab the file's own record of the line
+  splits, so it judges only the part before it). In the entry every other line is still read as the
+  rule's, so a different check line, a second one, one in another place, the same line under
+  another rule or on another lesson, and any check line on an approval that showed him none fail
+  the comparison and are asked about. An entry without the line still goes through, as it did
+  before the line existed. The value is read back from storage through `checkLine` again (L50), so
+  a damaged record covers the rule alone.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same

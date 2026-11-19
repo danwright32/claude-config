@@ -400,8 +400,13 @@ export const morningPrompt = (o: {
     data.push(...o.issues.map((i, k) => `1.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}${i.text ? `. ${i.text}` : ''} ${pickerTags(i)}`))
   }
   if (fromReport || o.lessons.length) {
+    // The check line (claude-config#3245) is never taken from the night's notes: the session that
+    // offers the lesson asks the rungs itself, and Dan reads the line it arrives at in the question,
+    // which is what lets his one answer cover it (the ask before saving mod). So the block below
+    // still gives each lesson's source and rule only, and the check line is added here in words.
+    // hooks/test-durable-lesson-check.sh holds the steps named to the hook's own numbering.
     out.push(
-      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, the rule stated word for word, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>"}${fromReport ? '' : ' as given beside it in the block below'}, as step 4 of ~/.claude/hooks/durable-lesson-check.sh describes (its dedupe against LESSONS.md and its Likely applies to line included). Add one only on Dan's Add to LESSONS.md.`,
+      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe (its dedupe against LESSONS.md, its rungs and its Likely applies to line included). Ask the rungs of each lesson first. Then state the rule word for word in the question, say which rung it reached, and give its check line on a line of its own, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>"}${fromReport ? '' : ', the source and rule as given beside the lesson in the block below'}. Add one only on Dan's Add to LESSONS.md.`,
     )
     data.push(...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`))
   }
