@@ -36,6 +36,13 @@ export type AskBeforeSavingApproval = {
    * save's, so a call is never matched to it by key.
    */
   lesson?: string
+  /**
+   * Set beside `lesson` when the picker showed Dan that lesson's check line (#3245; Dan, 2026-11-19:
+   * "Yes, cover the check line"), as he read it (rules.ts checkLine): the entry that adds this rule
+   * may carry this one line, equal to it, just before its SHORT line. It covers no other line and no
+   * other lesson, and an approval without it covers no check line at all.
+   */
+  check?: string
 }
 
 /**

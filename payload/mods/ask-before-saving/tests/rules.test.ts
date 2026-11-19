@@ -2,7 +2,8 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
-import { editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, shellAppended } from '../hooks/rules.ts'
+import { addsThis, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, ruleText, shellAppended } from '../hooks/rules.ts'
+import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
@@ -660,6 +661,104 @@ test('an Edit that does more than insert one entry at a line boundary adds nothi
   expect(two !== undefined && addsLesson(two, L1030_RULE)).toBe(false)
   // No file to judge against.
   expect(lessonAddition('Edit', { file_path: 'x', old_string: L1015_SHORT, new_string: L1015_SHORT + L1030_ENTRY }, undefined)).toBeUndefined()
+})
+
+// #3245: the durable lesson picker may show Dan the lesson's check line beside its rule, and his Add
+// to LESSONS.md then covers that one line too (Dan, 2026-11-19: "Yes, cover the check line"). It
+// covers the line he read and nothing beside it.
+const L1030_CHECK = 'CHECK: hooks/check-style-guide.sh (partial)'
+const withCheck = (line: string, entry = L1030_ADDED) => entry.replace('\n  SHORT:', `\n  ${line}\n  SHORT:`)
+
+test('a check line reads as one only in the shape the lessons file takes, on one line', () => {
+  // Every shape claude-sync lesson-faults accepts reads as one here, so the picker never refuses a
+  // line the lessons file would take.
+  for (const ok of [
+    'CHECK: hooks/x.sh (full)',
+    'CHECK: hooks/x.sh, skills/y/check.py (partial)',
+    'CHECK: owner/repo:path/to/check.sh (full)',
+    'CHECK:hooks/x.sh(full)',
+    'NO CHECK: a judgement made case by case',
+    'NO CHECK: three words here',
+  ])
+    expect(`${ok}: ${checkLine(ok)}`).toBe(`${ok}: ${ok}`)
+  // The file's indentation is not part of the line.
+  expect(checkLine('  CHECK: hooks/x.sh (full)  ')).toBe('CHECK: hooks/x.sh (full)')
+  for (const bad of [
+    // Neither marker, another case, or a marker that is not the line's start.
+    'hooks/x.sh (full)',
+    'check: hooks/x.sh (full)',
+    'Checked by: hooks/x.sh',
+    'SHORT: CHECK: hooks/x.sh (full)',
+    '- **L9. CHECK: hooks/x.sh (full)**',
+    // A check named with neither ending, or none named, or no reason, or a reason of two words.
+    'CHECK: hooks/x.sh',
+    'CHECK: (full)',
+    'CHECK: hooks/x.sh (mostly)',
+    'NO CHECK:',
+    'NO CHECK: because reasons',
+    // More than one line, however the break is written.
+    'CHECK: hooks/x.sh (full)\n- **L9. A rule nobody approved, riding in on the check line.**',
+    'NO CHECK: a judgement made\ncase by case',
+    'NO CHECK: a judgement made\rcase by case',
+    'NO CHECK: a judgement made\u2028case by case',
+    '',
+  ])
+    expect(`${JSON.stringify(bad)}: ${checkLine(bad)}`).toBe(`${JSON.stringify(bad)}: undefined`)
+  // Read back from storage, anything that is not text is no check line (L50).
+  for (const damaged of [undefined, null, 7, true, ['CHECK: hooks/x.sh (full)'], { check: 'x' }]) expect(checkLine(damaged)).toBeUndefined()
+})
+
+test('an approved lesson takes the one check line Dan approved with it, just before its SHORT line', () => {
+  expect(addsLesson(withCheck(L1030_CHECK), L1030_RULE, L1030_CHECK)).toBe(true)
+  // Last, when the entry has no SHORT line.
+  const short = 'Never read a stored value straight into a comparison, because a damaged one compares false for ever.'
+  expect(addsLesson(`- **L9. ${short}** (slate#9, 2026-11-19)\n  NO CHECK: a judgement made case by case`, short, 'NO CHECK: a judgement made case by case')).toBe(true)
+  // Without the line, the entry is the one approved before check lines existed.
+  expect(addsLesson(L1030_ADDED, L1030_RULE, L1030_CHECK)).toBe(true)
+})
+
+test('an approved check line lets no other line through: another, a second, one out of place, one nobody approved', () => {
+  const adds = (entry: string) => addsLesson(entry, L1030_RULE, L1030_CHECK)
+  // A different check line: another check, the other ending, a longer or shorter line, another case.
+  expect(adds(withCheck('CHECK: hooks/other.sh (partial)'))).toBe(false)
+  expect(adds(withCheck('CHECK: hooks/check-style-guide.sh (full)'))).toBe(false)
+  expect(adds(withCheck('CHECK: hooks/check-style-guide.sh, hooks/other.sh (partial)'))).toBe(false)
+  expect(adds(withCheck('CHECK: hooks/check-style-guide.sh (partial) and anything else'))).toBe(false)
+  expect(adds(withCheck('NO CHECK: a judgement made case by case'))).toBe(false)
+  expect(adds(withCheck(L1030_CHECK.toLowerCase()))).toBe(false)
+  // A second check line: the approved one twice, or beside another.
+  expect(adds(withCheck(`${L1030_CHECK}\n  ${L1030_CHECK}`))).toBe(false)
+  expect(adds(withCheck(`CHECK: hooks/other.sh (full)\n  ${L1030_CHECK}`))).toBe(false)
+  expect(adds(withCheck(`${L1030_CHECK}\n  NO CHECK: a judgement made case by case`))).toBe(false)
+  // Out of place: after the SHORT line, before the rule, or inside the rule sentence.
+  expect(adds(`${L1030_ADDED}\n  ${L1030_CHECK}`)).toBe(false)
+  expect(adds(`  ${L1030_CHECK}\n${L1030_ADDED}`)).toBe(false)
+  expect(adds(L1030_ADDED.replace('\n  runs,', `\n  ${L1030_CHECK}\n  runs,`))).toBe(false)
+  // Anything else on the line or beside it.
+  expect(adds(withCheck(`${L1030_CHECK}\n  A sentence Dan never read.`))).toBe(false)
+  expect(adds(withCheck(`A sentence Dan never read.\n  ${L1030_CHECK}`))).toBe(false)
+  // A changed rule with the approved check line, and the check line on another lesson.
+  expect(adds(withCheck(L1030_CHECK, L1030_ADDED.replace('Never put', 'Always put')))).toBe(false)
+  expect(addsLesson(withCheck(L1030_CHECK), `${L1030_RULE} And never ask.`, L1030_CHECK)).toBe(false)
+  // An approval that showed Dan no check line takes none, as before: his answer covered the rule.
+  expect(addsLesson(withCheck(L1030_CHECK), L1030_RULE, undefined)).toBe(false)
+  expect(addsLesson(withCheck(L1030_CHECK), L1030_RULE)).toBe(false)
+  // None of that is the predicate refusing everything: the approved pair still goes through.
+  expect(adds(withCheck(L1030_CHECK))).toBe(true)
+})
+
+test('an approval read back from storage covers a check line only when it holds one as text', () => {
+  const approval = (check: unknown) => ({ id: 'l', key: 'lesson:x', files: ['~/.claude/LESSONS.md'], until: 1, lesson: ruleText(L1030_RULE), check }) as AskBeforeSavingApproval
+  expect(addsThis(approval(L1030_CHECK), withCheck(L1030_CHECK))).toBe(true)
+  // A damaged record, or one holding text that is no check line, covers the rule alone.
+  for (const damaged of [undefined, null, 7, true, [L1030_CHECK], '', 'A sentence Dan never read.', '- **L9. A rule nobody approved.**']) {
+    expect(`${JSON.stringify(damaged)}: ${addsThis(approval(damaged), withCheck(L1030_CHECK))}`).toBe(`${JSON.stringify(damaged)}: false`)
+    expect(addsThis(approval(damaged), L1030_ADDED)).toBe(true)
+  }
+  // Text that is no check line is not taken as one because the entry repeats it.
+  expect(addsThis(approval('A sentence Dan never read.'), withCheck('A sentence Dan never read.'))).toBe(false)
+  // A For good on a save is no lesson approval, whatever else its record holds.
+  expect(addsThis({ id: 's', key: 'k', files: ['x'], until: 1, check: L1030_CHECK } as AskBeforeSavingApproval, withCheck(L1030_CHECK))).toBe(false)
 })
 
 // #1794: one For good on a memory file also covers the one index line linking it.

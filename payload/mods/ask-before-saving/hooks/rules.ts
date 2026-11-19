@@ -459,9 +459,10 @@ export const savesThis = (x: AskBeforeSavingApproval, key: string): boolean => x
 /**
  * Whether an approval is the one Dan gave in the durable lesson picker for the lesson this text adds
  * (#867): `added` is what lessonAddition read the call as adding to the lessons file, undefined when
- * the call is not one that only adds an entry, which no lesson approval matches.
+ * the call is not one that only adds an entry, which no lesson approval matches. The entry may carry
+ * the check line this approval holds (#3245), read back from storage as addsLesson reads it.
  */
-export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson)
+export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check)
 
 /**
  * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
@@ -501,7 +502,9 @@ export const saveIdOf = (source: unknown): string | undefined => {
 // to the lessons file, so he is not asked For good about it a second time (Dan, 2026-10-06: "The
 // confirmation that I want to add the durable lesson should be enough to indicate that I want to add
 // it forever."). Nothing Claude writes approves it: the mod sets the answers, refuses a call carrying
-// its own, and reads only the answer the dialog hands back.
+// its own, and reads only the answer the dialog hands back. Since #3245 the picker may also carry the
+// lesson's check line in `metadata.check`, shown to Dan on a line of its own, and the same answer
+// then covers that one line on that one lesson (Dan, 2026-11-19: "Yes, cover the check line").
 export const LESSON_SOURCE = 'durable-lesson'
 export const LESSON_ADD = 'Add to LESSONS.md'
 export const LESSON_PROJECT = 'Project memory instead'
@@ -544,6 +547,31 @@ export const MIN_RULE = 40
  * holds this to, so the short form is a short form and nothing more.
  */
 export const MAX_SHORT = 160
+
+/**
+ * The key the durable lesson picker's metadata carries the lesson's check line under (#3245).
+ * hooks/test-durable-lesson-check.sh holds the hook's instruction to this name.
+ */
+export const LESSON_CHECK_KEY = 'check'
+
+/**
+ * A lesson's check line as an approval holds it (#3245): the one line saying which check holds the
+ * rule, `CHECK: <path> (full)` or `(partial)`, or that none can, `NO CHECK: <why>` in three words or
+ * more. Text reading as one, on one line, comes back without the file's indentation. Anything else
+ * is undefined: other text, text holding a line break of any kind, and a value that is not text,
+ * which a record read back from storage can be (L50).
+ *
+ * It asks whether the text is a check line at all, so that nothing else can be approved as one. The
+ * lessons file's own reading (claude-sync lesson_check_records) is narrower, since it also holds
+ * each path's characters, and every line that one takes reads as one here, so the picker never
+ * refuses a line the file accepts.
+ */
+export const checkLine = (s: unknown): string | undefined => {
+  if (typeof s !== 'string') return undefined
+  const line = s.trim()
+  if (/[\u0000-\u0008\u000a-\u001f\u007f\u0085\u2028\u2029]/.test(line)) return undefined
+  return /^CHECK:\s*\S.*\((?:full|partial)\)$/.test(line) || /^NO CHECK:\s*\S+(?:\s+\S+){2,}$/.test(line) ? line : undefined
+}
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -622,12 +650,22 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * he approved it (bold and wrapping aside), then at most its provenance (repo#N, then a date), then at most
  * one SHORT line whose index line, `- L<n>. <short>`, is within the index's cap. Blank lines around it
  * are the file's spacing.
+ *
+ * `check` is the check line Dan read in the picker beside the rule, when it showed him one (#3245;
+ * Dan, 2026-11-19: "Yes, cover the check line"). The entry may then carry that one line, equal to it
+ * but for the file's indentation, in one place: just before the SHORT line, or last when there is
+ * none. Every other line is still read as the rule's, so another check line, a second one, one in
+ * another place, or the same line under another rule fails the comparison below and is asked about.
+ * With no `check`, or one that is no check line (checkLine), the entry takes no check line at all.
  */
-export const addsLesson = (added: string, rule: string): boolean => {
+export const addsLesson = (added: string, rule: string, check?: unknown): boolean => {
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
-  const body = ruleText((shortAt === -1 ? lines : lines.slice(0, shortAt)).join('\n'))
+  const approved = checkLine(check)
+  const end = shortAt === -1 ? lines.length : shortAt
+  const checked = approved !== undefined && end > 1 && (lines[end - 1] ?? '').trim() === approved
+  const body = ruleText(lines.slice(0, checked ? end - 1 : end).join('\n'))
   // Provenance is its shape and nothing more, one or more `repo#N` (owner qualified or not) and an
   // optional date (lessons reviews of #869: any text in parentheses let a sentence Dan never read
   // ride along, and `owner/repo#N` is a provenance too).

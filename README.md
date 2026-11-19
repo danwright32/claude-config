@@ -3638,6 +3638,16 @@ which are candidates for Dan to take out of the core one at a time. The lesson e
 written after 2026-11-19 carrying neither line, or a named check that is not on disk. The lessons
 that existed before then are listed in `hooks/lib/lessons-before-check-lines.txt` and are not asked.
 
+The line is asked for before the lesson is written. When an issue is filed,
+`hooks/durable-lesson-check.sh` has the session ask three questions of any lesson it is about to
+propose, cheapest first: can the code be shaped so the mistake cannot be written, can a static check
+catch it (a hook, a guard, a lint rule, a type, a test), can running the thing show it. A written
+lesson is the last of those places, since it holds only while a session reads it and obeys. The
+proposal then tells Dan which rung it reached and why the ones above do not fit, and shows him the
+entry's check line on a line of its own. His Add to LESSONS.md covers the rule and that one line
+together (the `ask-before-saving` row of the mods table says exactly what it covers), so he is asked
+once for each lesson.
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
@@ -7534,7 +7544,15 @@ save the payload write gate refuses is never asked about. Dan's Add to LESSONS.m
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. For good on one file directly in a project's memory folder, once that save lands, also
+still asks. Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
+lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
+entry, just before its `SHORT:` line. The picker is refused unless the line reads as a check line
+(`CHECK: <path> (full)` or `(partial)`, or `NO CHECK:` and a reason of three words) and stands on a
+line of its own in the question, so the line approved is the line Dan read. A different check line,
+a second one, one in another place, the same line under another rule or on another lesson, and any
+check line when the picker showed him none are asked about as before (rules.ts `checkLine`,
+`addsLesson`).
+For good on one file directly in a project's memory folder, once that save lands, also
 lets through the single line in that folder's `MEMORY.md` linking to it, once, until the same
 approval would lapse (#1794, Dan, 2026-10-26: "didn't I already give permission to save this?"): by
 Write, Edit, or a shell append of one quoted `echo`, `printf` or `cat` heredoc with `>>`, the index
@@ -7560,7 +7578,8 @@ writes is said whole, with why its new lines could not be told.
 
 </td><td>
 
-#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216
+#618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216,
+#3245
 
 </td></tr>
 <tr><td>
@@ -8322,7 +8341,9 @@ proposed issues (`repo`, `title`, `priority`, `labels`, `milestone`, as the over
 workers to note them) in the end of turn issue review's multi select picker, each option ending with
 its proposed priority, labels and milestone so Dan can correct them, and each proposed lesson in the
 durable lesson picker with its `durable-lesson` metadata, filing or adding only what he selects
-(`hooks/wake.ts`). Text overnight sessions wrote reaches what Claude is told only through
+(`hooks/wake.ts`). Each lesson is first asked what check holds it, as one proposed when an issue is
+filed is, and its picker carries the check line the session arrives at, never one taken from the
+night's notes (#3245). Text overnight sessions wrote reaches what Claude is told only through
 `hooks/overnightdata.ts` (#922): the proposals, what waking found (it quotes titles made overnight)
 and the claim queue's answers in a Stop block each go in one `<untrusted-overnight-text>` block,
 where only that name is neutralised (in any case or spacing, so nothing written can close or forge

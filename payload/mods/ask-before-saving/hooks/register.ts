@@ -11,6 +11,7 @@ import {
   HEADER,
   type InCheckout,
   LESSON_ADD,
+  LESSON_CHECK_KEY,
   LESSON_HEADER,
   LESSON_PROJECT,
   LESSON_SKIP,
@@ -18,6 +19,7 @@ import {
   MAX_SHORT,
   MIN_RULE,
   addsThis,
+  checkLine,
   lessonAddition,
   lessonOptions,
   lessonsFile,
@@ -541,7 +543,7 @@ const agentRefusal = ({ files, guessed, handed }: Targets) =>
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
-type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown } }
+type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -853,6 +855,18 @@ export const register: Register = on => {
         return { deny: `Ask one question about this lesson, stating the rule word for word as metadata "rule" carries it.` }
       const question = questions[0].question as string
       if (!ruleText(question).includes(rule)) return { deny: `The question must state the rule word for word as metadata "rule" carries it, so Dan approves the text that is added to ${file}.` }
+      // The lesson's check line (#3245), when the picker carries one: his answer covers it only as a
+      // line he read whole, so it must read as a check line and stand on a line of its own in the
+      // question. One that does neither stops the picker rather than being dropped, or the entry's
+      // check line would be asked about a second time with nothing saying why.
+      const given = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_CHECK_KEY]
+      const check = checkLine(given)
+      if (given !== undefined && check === undefined)
+        return {
+          deny: `Metadata "${LESSON_CHECK_KEY}" reads as no check line. Put the lesson's one check line there, on one line, word for word as it will be added to ${file}: "CHECK: <path> (full)", "CHECK: <path> (partial)" or "NO CHECK: <why no check can hold it>". Leave "${LESSON_CHECK_KEY}" out to ask about the rule alone.`,
+        }
+      if (check !== undefined && !question.split('\n').some(l => l.trim() === check))
+        return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this lesson.' }
 
@@ -868,13 +882,14 @@ export const register: Register = on => {
       if (typeof chosen === 'string' && chosen.trim() && chosen !== LESSON_ADD)
         return say(await typedSaid($, chosen, { still: 'the lesson is not approved', again: 'ask him the same question again, with the same metadata and the rule as it then stands' }))
       if (chosen !== LESSON_ADD) return say(`Dan did not choose ${LESSON_ADD}, and gave no answer, so the lesson is not approved. Ask him again, or leave it.`)
-      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule }
+      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}) }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
+      const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line,` : ''
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
           `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD), and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked} and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {

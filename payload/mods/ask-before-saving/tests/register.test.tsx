@@ -1951,6 +1951,161 @@ test('an approved lesson Write into a lessons file of real size goes through, in
   expect(w.ran.length).toBe(1)
 })
 
+// #3245: before a lesson is written the durable lesson check asks what check holds it, and the entry
+// carries one line saying so. Dan, 2026-11-19: "Yes, cover the check line". The picker shows him that
+// line on a line of its own, and his one Add to LESSONS.md covers it with the rule: that line, on that
+// lesson, and nothing beside it.
+const CHECK = 'CHECK: hooks/merge-null-guard.sh (partial)'
+const questionWith = (line: string, rule = RULE) =>
+  `Add this lesson to ${LESSONS_SHOWN}: ${rule}\nIt reached the second rung, a static check: the merge clause cannot be typed so the mistake is unwritable.\n${line}\nLikely applies to: slate (merges); unlikely in: the rest.`
+const proposeChecked = ($: Caller, w: W, answer: string | undefined, check: unknown = CHECK, question = questionWith(String(check)), rule = RULE, extra: Record<string, unknown> = {}) =>
+  proposeLesson($, w, answer, { metadata: { source: 'durable-lesson', rule, check }, ...extra }, rule, question)
+const entryWith = (line: string, entry = ENTRY) => entry.replace('  SHORT:', `  ${line}\n  SHORT:`)
+const addEntry = (entry: string) => ({ tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${entry}## Data safety` })
+const addChecked = addEntry(entryWith(CHECK))
+const endSession = ($: Caller) => ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+
+test('a lesson Dan approved with its check line is added carrying that line, with no second question, once (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const answered = await proposeChecked($, w, 'Add to LESSONS.md')
+  // Dan read the rule and the check line, word for word, over the picker's own three answers.
+  const q = w.asked[0]?.questions[0]
+  if (!q) throw new Error('Dan was asked no question')
+  expect(q.question).toContain(RULE)
+  expect(q.question.split('\n')).toContain(CHECK)
+  expect(q.options.map(o => o.label)).toEqual(['Add to LESSONS.md', 'Project memory instead', 'Skip'])
+  // Claude is told the one line his answer also covers, and where it goes.
+  expect(contextOf(answered)).toContain('Dan answered Add to LESSONS.md')
+  expect(contextOf(answered)).toContain(`its check line exactly as he read it, "${CHECK}", on a line of its own just before the SHORT line`)
+  const added = await call($, addChecked)
+  expect(added.deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
+  quietOnMain(w)
+  // Used once: the same write again is asked about.
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
+test('an approved check line covers that line on that lesson only: another line, a second, another lesson, a changed rule are asked about (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  const others = [
+    // A different check line: another check, the other ending, the line saying none can hold it.
+    addEntry(entryWith('CHECK: hooks/some-other-guard.sh (partial)')),
+    addEntry(entryWith('CHECK: hooks/merge-null-guard.sh (full)')),
+    addEntry(entryWith('NO CHECK: a judgement made case by case')),
+    // A second check line beside the approved one, and the approved one twice.
+    addEntry(entryWith(`${CHECK}\n  CHECK: hooks/some-other-guard.sh (full)`)),
+    addEntry(entryWith(`${CHECK}\n  ${CHECK}`)),
+    // The approved line after the SHORT line, and with a sentence beside it.
+    addEntry(ENTRY.replace('conflict.\n', `conflict.\n  ${CHECK}\n`)),
+    addEntry(entryWith(`${CHECK}\n  A sentence Dan never read.`)),
+    // The approved line on another lesson: a rule he never saw, alone and riding beside the approved entry.
+    addEntry(entryWith(CHECK, '- **L753. A rule nobody approved, long enough to read as a lesson of its own.** (slate#9, 2026-10-06)\n  SHORT: Nobody approved this.\n\n')),
+    addEntry(`${entryWith(CHECK)}- **L753. A rule nobody approved.**\n  ${CHECK}\n\n`),
+    // The approved line under a changed rule.
+    addEntry(entryWith(CHECK, ENTRY.replace('must fill a stored null', 'may skip a stored null'))),
+    addEntry(entryWith(CHECK, ENTRY.replace('never repairs.', 'never repairs. Always force push after one.'))),
+    // The approved line by itself, added to a lesson already in the file.
+    { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n  ${CHECK}` },
+  ]
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // None of them used it up: the approved entry with its approved line still goes through.
+  expect((await call($, addChecked)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('a check line Dan was not shown rides on no approval: none asked, none given, a lesson approved without one (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, agents: ['agent-a1'], files: { [LESSONS]: LESSONS_TEXT } })
+  // No lesson approval at all.
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // Project memory instead and Skip, the check line shown: nothing is approved.
+  await proposeChecked($, w, 'Project memory instead')
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  await proposeChecked($, w, 'Skip')
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // His own typed words.
+  await proposeChecked($, w, 'yes with that check')
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // A dialog that closed while he was away, whatever answer it carries.
+  w.dialog.afk = true
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  w.dialog.afk = false
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // A subagent's picker.
+  await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(CHECK), RULE, { agentId: 'agent-a1' })
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // The lesson approved with no check line shown: his answer covers the rule, as it did before.
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect((await call($, addLesson)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+  // And once that approval is spent, the check line added to the entry it wrote is asked about.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '  SHORT: Fill a stored null on conflict.', new_string: `  ${CHECK}\n  SHORT: Fill a stored null on conflict.` }))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
+test('a check line approved for one lesson is not carried to another lesson approved without one (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const OTHER = 'A retry that sleeps must take its clock from the caller, never from the wall, because a test that waits for real is a test nobody runs twice.'
+  const OTHER_ENTRY = `- **L754. ${OTHER}** (slate#11, 2026-11-19)\n  SHORT: Inject the clock into every retry.\n\n`
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  await proposeLesson($, w, 'Add to LESSONS.md', {}, OTHER)
+  // The second lesson with the first one's line: neither approval is for that pair.
+  expect(refusalOf(await call($, addEntry(entryWith(CHECK, OTHER_ENTRY))))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // Each goes through as Dan approved it.
+  expect((await call($, addEntry(OTHER_ENTRY))).deny).toBeUndefined()
+  expect((await call($, addChecked)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(2)
+})
+
+test("the picker shows Dan the check line it approves, or approves nothing: a line he does not read, one in no shape, one that is not one line (#3245)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  // The question does not state it at all.
+  const hidden = await proposeChecked($, w, 'Add to LESSONS.md', CHECK, `Add this lesson to ${LESSONS_SHOWN}: ${RULE}`)
+  expect(hidden.deny).toContain('on a line of its own')
+  // The question states another line, or the line inside a longer one he reads differently.
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith('CHECK: hooks/merge-null-guard.sh (full)'))).deny).toContain('on a line of its own')
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(`Not this: ${CHECK}`))).deny).toContain('on a line of its own')
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(`${CHECK} unless it is a Tuesday`))).deny).toContain('on a line of its own')
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', 'NO CHECK: a judgement made', questionWith('NO CHECK: a judgement made case by case'))).deny).toContain('on a line of its own')
+  // A line in neither shape, a second lesson dressed as one, more than one line, something that is not text.
+  for (const bad of ['hooks/merge-null-guard.sh', 'CHECK: hooks/merge-null-guard.sh', 'NO CHECK: none', '- **L753. A rule nobody approved, long enough to read as a lesson.**', `${CHECK}\n- **L753. A rule nobody approved.**`, '', 7, null, [CHECK], { line: CHECK }]) {
+    const r = await proposeChecked($, w, 'Add to LESSONS.md', bad, questionWith(typeof bad === 'string' ? bad : CHECK))
+    expect(`${JSON.stringify(bad)}: ${r.deny}`).toContain('reads as no check line')
+  }
+  // Dan was asked nothing, and nothing was approved: not the line, and not the rule beside it.
+  expect(w.asked).toEqual([])
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('an approved check line lapses with its lesson after 10 minutes, and ends with the session (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  // A millisecond short of its time it still stands, so the lapse below is the clock's doing.
+  await w.clock.advance(APPROVAL_MS - 1)
+  expect(w.toasts.join('\n')).not.toContain('lapsed')
+  await w.clock.advance(1)
+  expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  // Approved again, then the session ends: the next session's write is asked about.
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  await endSession($)
+  expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} was never used before the session ended`)
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // Neither refusal is the write being unapprovable: approved once more, it goes through.
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  expect((await call($, addChecked)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
 
 // ---- Sleep mode phase 2 (#841): a save waits for the morning report while Dan is asleep ----
 
@@ -2005,6 +2160,22 @@ test('under no build, an approved lesson lets no other Edit through, and does no
   await w.clock.advance(APPROVAL_MS)
   expect((await call($, addLesson)).deny).toBe('NO BUILD: refused')
   expect(w.ran).toEqual([])
+})
+
+// #3245: no build asks the same noun, so it answers for the approved check line as the mod itself does.
+test('under no build, a lesson approved with its check line is added with that line and no other (#3245)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT, '/nobuild/on': '' } })
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  expect((await call($, addEntry(entryWith('CHECK: hooks/some-other-guard.sh (partial)')))).deny).toBe('NO BUILD: refused')
+  expect((await call($, addEntry(entryWith(`${CHECK}\n  ${CHECK}`)))).deny).toBe('NO BUILD: refused')
+  expect(w.ran).toEqual([])
+  expect((await call($, addChecked)).deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  // Spent on that write, and a lesson approved without a check line takes none here either.
+  expect((await call($, addChecked)).deny).toBe('NO BUILD: refused')
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  expect((await call($, addChecked)).deny).toBe('NO BUILD: refused')
+  expect(w.ran.length).toBe(1)
 })
 
 test('a For good approval is answered by the noun the same way: the exact save once, nothing after (#1483)', withNoBuild, async ($, on) => {

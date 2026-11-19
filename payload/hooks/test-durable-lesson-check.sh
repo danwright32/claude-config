@@ -225,6 +225,75 @@ else
   FAIL=$((FAIL+1)); echo "FAIL: ask before saving's MAX_SHORT (${maxshort:-unread}) is not the budget suite's ENTRY_CAP (${realcap:-unread}), so an approved lesson can pass the mod and be refused by the send"
 fi
 
+# THE RUNGS BEFORE A WRITTEN LESSON (claude-config#3245). A correction is cheapest where a miss
+# cannot happen at all, so before proposing prose the check asks, in order, whether the code can be
+# shaped so the mistake cannot be written, whether a static check can catch it, and whether running
+# the thing shows it. The proposal states the rung it reached and why the ones above do not fit, and
+# the entry carries the line the lessons file accepts for it: CHECK: or NO CHECK:.
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh issue create -t x -b y')" "$T")
+reason="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reason"])' 2>/dev/null)"
+rung_missing=""
+case "$reason" in *'shape the code'*) ;; *) rung_missing="$rung_missing code" ;; esac
+case "$reason" in *'static check'*) ;; *) rung_missing="$rung_missing static" ;; esac
+case "$reason" in *'verification'*) ;; *) rung_missing="$rung_missing verification" ;; esac
+case "$reason" in *'which rung'*'why the rungs above it do not fit'*) ;; *) rung_missing="$rung_missing statement" ;; esac
+case "$reason" in *'CHECK: <path> (full)'*'NO CHECK: <why'*) ;; *) rung_missing="$rung_missing lines" ;; esac
+if [ -z "$rung_missing" ]; then
+  PASS=$((PASS+1)); echo "PASS: the proposal asks the three rungs, states its rung, and names the check line's two shapes"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the proposal instruction lacks:$rung_missing (claude-config#3245)"
+fi
+# The code rung comes before the static rung, and that before verification, because the order IS
+# the rule: the cheapest place a miss cannot happen is asked first.
+_c="${reason%%shape the code*}"; _s="${reason%%static check*}"; _v="${reason%%verification*}"
+if [ "${#_c}" -lt "${#_s}" ] && [ "${#_s}" -lt "${#_v}" ]; then
+  PASS=$((PASS+1)); echo "PASS: the rungs are asked cheapest first"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the rungs are not asked in the order code, static check, verification"
+fi
+
+# AND THE PICKER CARRIES THE CHECK LINE AS ASK BEFORE SAVING READS IT (claude-config#3245; Dan,
+# 2026-11-19: "Yes, cover the check line"). His one answer to add the lesson covers the check line
+# only when the picker's metadata carries it under the mod's own key and the question shows it to him
+# on a line of its own, so the instruction must say both, the key read from the mod (L41). Without
+# them the entry's check line is asked about a second time.
+checkkey="$(sed -n "s/^export const LESSON_CHECK_KEY = '\(.*\)'$/\1/p" "$rules" 2>/dev/null)"
+if [ -z "$checkkey" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read LESSON_CHECK_KEY from $rules, so the picker's check line metadata was compared against nothing"
+else
+  ck_missing=""
+  case "$reason" in *"\"$checkkey\": \"<the check line, word for word>\""*) ;; *) ck_missing="$ck_missing metadata:$checkkey" ;; esac
+  case "$reason" in *'on a line of its own'*) ;; *) ck_missing="$ck_missing own-line" ;; esac
+  case "$reason" in *'its check line as approved and its SHORT line'*) ;; *) ck_missing="$ck_missing entry-order" ;; esac
+  if [ -z "$ck_missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the picker instruction carries the check line as ask before saving reads it"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the picker instruction lacks what ask before saving reads for the check line (${ck_missing# }), so Dan is asked For good about it a second time"
+  fi
+fi
+
+# AND THE MORNING PICKERS ASK THE SAME WAY (claude-config#3245). Scope modes offers the lessons
+# proposed overnight through this same picker and points at this hook's steps by NUMBER, so adding
+# the rungs step moved the step it named. Held here from both sides: the steps it names are the ones
+# this hook has, and its picker carries the check line under the mod's key.
+wake="$(dirname "${BASH_SOURCE[0]}")/../mods/scope-modes/hooks/wake.ts"
+wake_text="$(cat "$wake" 2>/dev/null)"
+if [ -z "$wake_text" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read $wake, so the morning lesson picker's wording was compared against nothing"
+else
+  wk_missing=""
+  case "$wake_text" in *'as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe'*) ;; *) wk_missing="$wk_missing steps-named" ;; esac
+  case "$reason" in *'Step 3, dedupe'*'Step 4, ask the rungs'*'Step 5, propose'*) ;; *) wk_missing="$wk_missing steps-here" ;; esac
+  case "$reason" in *'Step 6'*) wk_missing="$wk_missing a-sixth-step" ;; esac
+  case "$wake_text" in *"\"${checkkey:-unread}\":\"<the check line, word for word>\""*) ;; *) wk_missing="$wk_missing metadata:${checkkey:-unread}" ;; esac
+  if [ -z "$wk_missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the morning lesson picker names this hook's dedupe, rungs and propose steps and carries the check line"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the morning lesson picker in scope-modes/hooks/wake.ts and this hook disagree (${wk_missing# }), so a lesson proposed overnight is offered with no check line or by a step that moved"
+  fi
+fi
+
 echo "----"
 echo "passed $PASS, failed $FAIL"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$PASS" "$FAIL"

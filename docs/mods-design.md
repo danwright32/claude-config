@@ -1782,6 +1782,12 @@ morning offers what the night proposed, filing nothing he has not picked.
   then the proposed issues in the end of turn issue review's multi select picker (each option ending
   with its proposed priority, labels and milestone) and each proposed lesson in the durable lesson
   picker. Notes that could not be read are said, and the proposals offered from the report instead.
+  Since #3245 each lesson is asked the rungs first, as steps 3 to 5 of
+  `hooks/durable-lesson-check.sh` describe, and its picker carries the check line the morning
+  session arrives at. That line is never read from the night's notes: the block of overnight text
+  still gives each lesson's source and rule only, so the one line Dan's answer covers is one the
+  session worked out and he read. `hooks/test-durable-lesson-check.sh` holds the step numbers
+  named here to the hook's own.
 - A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
   line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
   days), counted as asked only once that prompt went in.
@@ -2610,6 +2616,24 @@ and the band question is removed rather than kept beside it (L29). Three defects
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
   is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  Since #3245 (built 2026-11-19; Dan on the issue that day: "Yes, cover the check line") the picker
+  may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
+  rule or that none can, which the durable lesson check now asks for before a lesson is written.
+  The same Add to LESSONS.md then covers that one line in that one entry, just before the SHORT
+  line, and the approval records it beside the rule. It is taken on the same footing as the rule,
+  as text Dan read: the picker is refused unless the line is one line in a check line's shape
+  (`checkLine`: no line break of any kind, `CHECK:` with something named and `(full)` or
+  `(partial)`, or `NO CHECK:` with three words of reason) and stands whole on a line of its own in
+  the question, since a short line held to the question only by containment would pass as a
+  fragment of a longer one. The shape is deliberately no narrower than the lessons file's own
+  reading (`claude-sync lesson-faults`, which also holds each path's characters), so the picker
+  never refuses a line that file takes; the mod's question is whether the text is a check line and
+  nothing else, not whether it is a valid one. In the entry every other line is still read as the
+  rule's, so a different check line, a second one, one in another place, the same line under
+  another rule or on another lesson, and any check line on an approval that showed him none fail
+  the comparison and are asked about. An entry without the line still goes through, as it did
+  before the line existed. The value is read back from storage through `checkLine` again (L50), so
+  a damaged record covers the rule alone.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
