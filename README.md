@@ -2033,7 +2033,18 @@ and log, and waited on like any other run. A run whose jobs ran and failed is ne
 already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
 left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
 gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
-has to pass `block-red-merge.sh`. A job that waited for a runner is said (claude-config#2714): GitHub
+has to pass `block-red-merge.sh`. A head GitHub has not yet given a run, or whose finished run's
+checks it has not yet listed, is waited on rather than stopped on (claude-config#3254): on
+2026-11-18 the helper updated #3242 at 14:36 ET and stopped at 14:40:28 on "PR has NO checks at all",
+one second before GitHub created the head's tests run, which went green. Over 455 updates from
+2026-11-08 to 11-18 GitHub created the run within 8 seconds 95 times in 100, and in up to 388 seconds
+for the rest. So with no checks listed and no run for the head, the helper says "no workflow run
+created for this head yet" and waits up to `MWR_NO_CHECKS_GRACE_SECONDS` (600, sized from that spread, counted
+from its first look at the head) before asking the gates, which decide on the empty list as before:
+in a repository that runs pull request workflows they refuse it and name why. With no checks listed and a run for the head finished other than as a failure, it says GitHub
+has not listed its checks yet and waits up to `MWR_CHECKS_LIST_SECONDS` (300, a setting, not a
+measurement), then says so, naming the run, and the gates decide on the empty list exactly as before.
+Only how long it waits changed, never what the gates allow. A job that waited for a runner is said (claude-config#2714): GitHub
 runs at most 20 jobs at once on the Free plan's hosted runners (docs.github.com/en/actions/reference/limits),
 and on 2026-11-10 that pool was full twice and 15 jobs waited over a minute, up to 6.6 minutes, which
 read in the merge logs as slow tests. Once every run of the head has finished, each run the helper
