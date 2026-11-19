@@ -7063,7 +7063,11 @@ the blank columns drawn before it. A side pane a mod opened with `$.ui.open({ id
 card is drawn by mod-kit too, with the band's own row drawing, so a card reads the same in both: the
 mod publishes it with `$.modkit.pane({ mod, id, lines, frame })` (a band row's lines and frame, no
 slot) and stops it with `$.modkit.clearPane({ mod, id })`; a pane id another mod already draws is
-refused. mod-kit also tries every mod's refused `$.session.send` once more, in its `session.send`
+refused. Claude Code names the mod that opened a pane as its owner, and a pane hook naming no
+owner hears only its own mod's panes, so mod-kit's names every owner (`plugin: '*'`) and draws
+only a pane it holds; `tools/check-mods.sh` fails a mod whose pane hook names no owner while it
+opens no pane itself (#3285).
+mod-kit also tries every mod's refused `$.session.send` once more, in its `session.send`
 hook so the message still arrives as the sending mod's, never after a throw (it may have landed),
 and answers the second refusal's reason trimmed of its full stop; a mod sends once and reports
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
