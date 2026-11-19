@@ -43,6 +43,9 @@ const card = (over: Partial<ModKitPane> = {}): ModKitPane => ({
   lines: [[{ text: 'Cloudflare WAF', color: 'warning' }], [{ text: '1. Turn on the WAF rule', bold: true }, { text: '  ' }, { button: 'done', label: 'Done' }], [{ text: 'https://dash.cloudflare.com/waf', indent: 3 }]],
   ...over,
 })
+// `plugin` here is whose elements the handle presses (mod-kit draws the card's buttons), not the
+// pane's owner: the kit (2.1.328) mounts every drawing with no owner at all, so which panes the
+// hook hears is tested from its matcher in pane-owner.test.ts (#3285).
 const pane = (surface: 'terminal' | 'desktop' = 'terminal', requestId = 'steps') =>
   ({ plugin: 'mod-kit', surface, component: 'Pane', requestId, props: { title: 'Manual steps', isFocused: false, bodyColumns: 50 }, viewport: { columns: 120, rows: 40, isFullscreen: true } }) as never
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
@@ -114,6 +117,21 @@ test('a pane nothing was published for, or one cleared, is left to whoever draws
   ui = await $.ui.mount(pane())
   expect(await ui.find({ text: 'engine' })).toBeDefined()
   expect(await ui.find({ text: 'Cloudflare WAF' })).toBeUndefined()
+  await ui.unmount()
+})
+
+// #3285: mod-kit hears every mod's panes now, so a pane another mod opened and draws itself (the
+// goal tracker's, the nickname pane) must still reach that mod's own hook untouched.
+test("a pane another mod opened and draws itself is passed on, while the publisher's is drawn", withPublisher, async ($, on) => {
+  engine(on)
+  await run($, `pane ${JSON.stringify(card())}`)
+  let ui = await $.ui.mount(pane('terminal', 'goals'))
+  expect(await ui.find({ text: 'engine' })).toBeDefined()
+  expect(await ui.find({ text: 'Cloudflare WAF' })).toBeUndefined()
+  await ui.unmount()
+  ui = await $.ui.mount(pane())
+  expect(await ui.find({ text: 'Cloudflare WAF' })).toBeDefined()
+  expect(await ui.find({ text: 'engine' })).toBeUndefined()
   await ui.unmount()
 })
 

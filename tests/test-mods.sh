@@ -61,7 +61,13 @@ cat > "$FAKE" <<'STUB'
 echo "$*" >> "$STUB_LOG"
 [ "$1" = --version ] && { echo "${FAKE_CC_VERSION:-2.1.291} (Claude Code)"; exit 0; }
 case "$1 $2" in
-  "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;; esac; echo 'Validation passed' ;;
+  "plugin validate") case "$3" in *broken*) printf '  hooks: bad event\n\nValidation failed\n'; exit 1 ;;
+      # Claude Code 2.1.328's own lines for a Pane hook (#3285): naming no owner and opening no pane
+      # (mod-kit before the fix), naming no owner and opening its own, and naming every owner.
+      *deafpane*) printf '  \342\235\257 ./register.tsx hooks: session.start, ui.render{component=AbovePrompt} (default matcher key: plugin), ui.render{component=Pane} (default matcher key: plugin), ui.render{component=ToolResult}\n  \342\235\257 ./register.tsx calls: $.state.get, $.ui.log, $.ui.resolve, $.ui.toast\n'; exit 0 ;;
+      *ownpane*) printf '  \342\235\257 ./register.tsx hooks: ui.render{component=Pane, requestId=goals} (default matcher key: plugin)\n  \342\235\257 ./register.tsx calls: $.ui.close (via hide), $.ui.open (via openPane), $.ui.resolve\n'; exit 0 ;;
+      *starpane*) printf '  \342\235\257 ./register.tsx hooks: ui.render{component=AbovePrompt} (default matcher key: plugin), ui.render{component=Pane, plugin=*}\n  \342\235\257 ./register.tsx calls: $.state.get, $.ui.resolve\n'; exit 0 ;;
+    esac; echo 'Validation passed' ;;
   "plugin test") case "$3" in
       *redtest*) printf ' 0 pass\n 1 fail\n'; exit 1 ;;
       # Claude Code's own answer while its cached rollout switch is saved off (2.1.289, #740).
@@ -97,6 +103,25 @@ printf '%s\n' "$out" | grep 'broken-mod' | grep -q 'bad event' \
   && check "naming the mod and the reason on one line" ok || check "naming the mod and the reason on one line" "$out"
 grep -q "plugin validate $M2/fine" "$LOG" && check "and the other mod was still checked" ok \
   || check "and the other mod was still checked" "$(cat "$LOG")"
+
+# 2a. #3285: a side pane hook the validator says hears only its own mod's panes, in a mod that opens
+#     none, is never asked to draw: the manual steps pane drew empty that way (Dan, 2026-11-19).
+M2P="$TMPROOT/m2p"; mkmod "$M2P" deafpane-mod; mkmod "$M2P" ownpane-mod; mkmod "$M2P" starpane-mod
+runit "$M2P"
+[ "$code" -eq 1 ] && check "#3285 a pane hook that can hear no pane fails the run" ok \
+  || check "#3285 a pane hook that can hear no pane fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'deafpane-mod' | grep -F 'ui.render{component=Pane} (default matcher key: plugin)' | grep -q "plugin: '\*'" \
+  && check "#3285 naming the mod, the hook and the matcher that fixes it" ok \
+  || check "#3285 naming the mod, the hook and the matcher that fixes it" "$out"
+printf '%s\n' "$out" | grep -q 'ownpane-mod ok' \
+  && check "#3285 a pane hook naming no owner in a mod that opens its own pane passes" ok \
+  || check "#3285 a pane hook naming no owner in a mod that opens its own pane passes" "$out"
+printf '%s\n' "$out" | grep -q 'starpane-mod ok' \
+  && check "#3285 a pane hook naming every owner passes though the mod opens no pane" ok \
+  || check "#3285 a pane hook naming every owner passes though the mod opens no pane" "$out"
+! printf '%s\n' "$out" | grep 'deafpane-mod' | grep -q 'AbovePrompt' \
+  && check "#3285 a band hook keyed to its own mod is not taken for a pane hook" ok \
+  || check "#3285 a band hook keyed to its own mod is not taken for a pane hook" "$out"
 
 # 3. A mod with tests has them run; one with none is not asked to run any.
 M3="$TMPROOT/m3"; mkmod "$M3" redtest-mod; printf 'x\n' > "$M3/redtest-mod/hooks/a.test.ts"; mkmod "$M3" untested
