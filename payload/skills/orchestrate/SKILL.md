@@ -35,8 +35,8 @@ Show the board, then one picker: start as planned, or change something. Nothing 
 
 A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961), in three tiers since Fable became his default model (Dan, 2026-11-09, claude-config#2547), keeping ordinary builders off Fable to limit usage. This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
 
-- Sonnet, with `model: "sonnet"` on the Agent call, for three kinds: a rename or move that changes no behaviour, filling in tests for code that already exists, and a fix for a review comment.
-- Fable, with `model: "fable"`, for design, security and compliance work, even when it is also one of the three kinds above.
+- Sonnet, with `model: "sonnet"` on the Agent call, only for work that needs no judgement: a rename or move that changes no behaviour, a comment or wording fix, filling in tests for code that already exists. A fix for a review finding that changes logic or behaviour runs on Opus, or on Fable where it is design, security or compliance work (Dan, 2026-11-19, claude-config#3290: "why are we using sonnet? we basically should only ever be using fable or opus", then "if it's just comment fixes, renames, etc. Things that any idiot could do, sonnet is fine").
+- Fable, with `model: "fable"`, for design, security and compliance work, even when it is also one of the kinds above.
 - Opus, with `model: "opus"`, for everything else.
 - A fork ignores `model` and runs on the session's own model, so a builder whose tier is not the session's model is never a fork.
 - To run one brief on another model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.

@@ -746,6 +746,31 @@ The staleness hold back counts as well as the gate. This Mac can be holding an u
 the repo has changed `LESSONS.md` since the last apply, and then the source is left alone as stale
 while the index rendered from it, unsent lesson and all, would be copied over the repo's.
 
+### Recording the check that holds a lesson, and what was not done (#3245)
+
+A lesson entry may carry one indented line after its rule sentence: `CHECK: <path> (full)` or
+`(partial)`, naming the hook, guard, lint rule or test that holds it, or `NO CHECK: <why>`. On
+2026-11-19 none of the 894 entries carried either, so nobody could say how many lessons a machine
+enforces. Choices made, each reversible:
+
+- A malformed line is a publish fault (`checkline`), walked from the same list as the others. A
+  new entry carrying neither line is only warned about, as context for the session that wrote it.
+  Refusing it was the other answer to the issue's open question, and the cautious one was taken.
+- Only entries written from now on are asked for a line. Which ones those are comes from a frozen
+  list of the numbers that existed on 2026-11-19 (`hooks/lib/lessons-before-check-lines.txt`),
+  not from a date or a number threshold: the two Macs mint from separate bands, so a higher number
+  is not a newer lesson, and an entry's dates are its evidence, not when it was written.
+- A named check missing on disk is a warning, not a publish fault. A hook deleted in one pull
+  request would otherwise hold the whole lessons file back from both Macs over a line nobody in
+  that change touched.
+- A check in another repository (`owner/repo:path`) is counted but not looked for: nothing here
+  can read that repository, and calling it present or missing would be a claim never measured.
+- An entry a check fully holds is listed as a candidate to leave the always loaded core. Nothing
+  is removed: each one is Dan's call.
+
+The line is never rendered into the generated index, so the core and index files and the rule file
+budgets are unchanged by it.
+
 ### Handing the freed budget to the last suite still running
 
 Rejected for #147, which is what the issue proposed. A full run measured 84 seconds on an idle Mac

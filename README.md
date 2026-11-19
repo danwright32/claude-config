@@ -374,6 +374,13 @@ run posts a desktop notification, and a failed or missed run (none finished for 
 once per session by the per prompt sync notice, from `claude-sync stuck`. `claude-sync status` has a
 "removal of leftovers" line.
 
+Each run also writes `~/.claude/state/keep-rules/readable-folders.tsv`: the folders it kept because
+they are mostly images or documents, in ended sessions, which `/disk-clean` reads and offers (Dan,
+2026-11-19: "Daily file, no list change"; the `/disk-clean` section says how, where it lists what
+each kind offers). It is written whole on every run, never added to, and a run that cannot write
+it fails and says so, while its removals still happen. With the job switched off on a Mac the list
+is not written there, and `/disk-clean` says those folders are unmeasured.
+
 - See what it would remove, changing nothing: `claude-sync leftovers`
 - Run it now: `claude-sync remove-leftovers`
 - Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
@@ -567,6 +574,22 @@ one with each such library taken away. A library a gate loads with a stand in fu
 `this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
 each examined one gone as well, and must decide its judged call as it does with the library in
 place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
+
+Before a Bash call the write gate also notes what an at risk `payload/` holds, in
+`~/.claude-payload-write-gate`, so that after the call it can name anything written there that the
+command's words could not show (#647). The note goes when the call ends, however it ends (#3253):
+read back and removed when the call succeeds or fails (`PostToolUse`, `PostToolUseFailure`), and
+removed unread for a Monitor call, whose command runs on after it returns, and for a call auto mode
+refuses before it runs (`PermissionDenied`). A refusal by another gate and an interrupt reach no
+event, and Claude Code promises none for a refusal by a mod, so the gate still sweeps notes a day
+old whenever it takes a new one. On `PermissionDenied` the hook only removes that one call's note:
+it prints nothing and decides nothing. `tests/test-sleep-silence.sh` holds every hook on that event
+to the sleep predicate or to an exempt entry with a reason, and this hook has the entry, which Dan
+signed off on 2026-11-19 (asked "This hook only deletes its own note and prints nothing. Sign off
+an exempt entry for it?", he answered "Sign off the entry"). The entry covers that and nothing
+wider. That suite and `hooks/test-payload-write-gate.sh` both run the hook on a refused call, the
+first against an asleep record and an awake one, and fail if it writes one byte to stdout or
+stderr or removes any note but the refused call's.
 
 Every hook takes its payload through `ps_read_payload` in `hooks/lib/push-scope.sh`, or cleans a raw
 capture with `ps_clean_payload` before anything parses it, because jq rejects a whole payload holding
@@ -3604,6 +3627,17 @@ one the index shows to chance (#392). Each refusal names the lesson numbers. All
 faults above, come from one list that `check-lessons`, the send, and the hook that runs the moment a
 lesson is written all walk, so none of them can disagree about what a fault is.
 
+A lesson can say what holds it (#3245). One indented line after the rule sentence names the check:
+`CHECK: hooks/x.sh (full)` when a check holds the whole rule, `(partial)` when a reader holds the
+rest, `owner/repo:path` for a check in another repository, or `NO CHECK: <why no check can hold it>`.
+A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above.
+`claude-sync lesson-checks` counts the whole library: lessons naming a check, lessons no check can
+hold, lessons with neither, named checks missing on disk, and core lessons a check holds fully,
+which are candidates for Dan to take out of the core one at a time. The lesson entry hook runs its
+`--warnings` form after every write and tells the session, without refusing anything, about a lesson
+written after 2026-11-19 carrying neither line, or a named check that is not on disk. The lessons
+that existed before then are listed in `hooks/lib/lessons-before-check-lines.txt` and are not asked.
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
@@ -3812,8 +3846,116 @@ What it refuses:
   refused.
 
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
-(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
-2026-11-05), matched by its real path, so a copy anywhere else is refused.
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
+through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+### Running a refused command with no network (#3173)
+
+The gate refuses a command whose files reach code able to post, and that stopped one test file being
+run on its own although its test drives that code through fakes and posts nothing. Unsetting the
+webhook variable does not make such a run safe: on a fixture posting eight ways, seven still arrived
+with the variable unset or the whole environment emptied, and none arrived with the network taken
+away (measured 2026-11-18, the design on #3173). So there is one route, decided by Dan on 2026-11-18
+("Yes, any command"), which reverses the 2026-11-16 decision on #3028 that reviewers get no
+sanctioned route past the gate:
+
+    cd <the project> && <this Mac's home>/.claude/hooks/no-network-run.sh node --test test/notify.test.js
+
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
+network operation. Every process the command starts inherits that, a detached one included, and none
+can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+command's own exit code comes through unchanged. The gate passes a call that is that installed file
+and its command and nothing else, without reading what runs under it. The refusal of a file whose
+imports reach code
+that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
+lets an agent run a refused command again that way when the refusal says so.
+
+The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
+the call starts the installed wrapper, by its real path, and everything the call runs is under it.
+What the gate checks (`lib/no-network-route.py`), each of which must hold or the call is judged
+exactly as it was before:
+
+- The wrapper's command is the whole call. One thing may stand in front of it, `cd <a folder written
+  out> &&`, and nothing may follow it: no `;`, `&&`, `||`, `|` or `&`, no second line, no comment.
+  So it is not in a script file or a `bash -c` string, not in a loop, a function, a group, a subshell
+  or a substitution, and it is the only wrapper run of the call. What ran under the wrapper is unread
+  and can write any file, and the gate does not read everything a later command starts as a file (a
+  package script, a program found by its bare name on the `PATH`, a git hook, a Makefile), so a
+  filter or a second step goes inside the wrapped command, where it has no network either:
+  `no-network-run.sh sh -c 'node --test x.test.js | tail -20'`.
+- Nothing else stands in front of it: no other command, no variable assignment, no redirection, no
+  program that runs its words (`env`, `timeout`, `sudo`, `xargs`) and no word of the shell's own
+  (`time`, `!`, `{`, `if`, `coproc`, `noglob`, `command`, `builtin`, `exec`, `nocorrect`). An earlier
+  command could change what the wrapper's path starts (zsh runs a function named by a path) or open
+  a connection the command inherits; zsh runs `time -p <words>` as a program named `-p`; and bash
+  opens a redirection on a group or an `if` before it runs what is inside. Each goes after the
+  wrapper: `no-network-run.sh env NODE_ENV=test node --test x.test.js`.
+- Every character of the call is printable ASCII, a tab or a newline, and only a space or a tab
+  parts its words. Python reads a no break space, a line separator, a form feed and their like as
+  white space and a shell keeps each inside the word, so with one in front of the wrapper's path the
+  shell would start a file of another name.
+- The wrapper is the command's first word, written out as an absolute path with no variable, tilde,
+  pattern or substitution in it, and its real path is the installed file's, by the test `/nudge` is
+  let through by. A link that resolves to the installed file passes, as one to `nudge.py` does. A
+  copy anywhere else does not.
+- A command follows it, and every word after the wrapper is one the shell hands on as it stands:
+  plain characters with `*` and `?`, text in single quotes, text in double quotes, and a variable by
+  its name alone (`$NAME`, `${NAME}`). No command substitution, backticks, process substitution,
+  here document, brace, tilde or backslash, which the shell works out or runs before the wrapper
+  starts, outside the sandbox. Whatever does not fit goes inside single quotes behind a program
+  that reads it under the wrapper (`... sh -c '...'`).
+- A redirection after those words is one of these and no other: the output or the errors written or
+  added to a file written out (`> f`, `>> f`, `1> f`, `2> f`, `2>> f`), the input read from one
+  (`< f`), and one output joined to the other (`2>&1`, `1>&2`, `>&2`). Refused: `&>` and `&>>` (the
+  bash macOS ships reads `cmd &>> f` as `cmd &` and a second command), `>|`, `<>`, a descriptor past
+  2, a closed one, a here string, a target with a variable or a pattern in it, one glued to a word,
+  and any name holding `/dev/tcp` or `/dev/udp`.
+
+What the route is, so nobody reads more into it. It stops code from using the network while it runs
+under the wrapper, which is what makes an accidental post from a test impossible. It does not
+contain code written to get out. The sandbox allows every file write, so such code can leave
+something behind for a later call, or ask another program to act for it:
+
+- A file a later call reads without the gate reading it. Every Bash call starts a login shell, which
+  reads `~/.zshenv`, `~/.zprofile` and `~/.zlogin`, and the gate reads none of them. The same holds
+  for a tool's own config file (`~/.curlrc`, `.git/config`, a `package.json` script) and for a
+  program in a folder on the `PATH` that the user can write, several of which stand ahead of
+  `/usr/bin` on these Macs. A command under the wrapper can write any of them unread. The gate on
+  main already passes some such writes when they only mention an address; under the wrapper the
+  writer is not read at all.
+- A command that asks something outside the sandbox to act for it without using the network. A
+  request to launchd or to another app is not a network operation, so what `launchctl`, `osascript`
+  or `open` has started runs outside the sandbox. `open` takes one line and no setup: a command
+  under the wrapper can write an HTML page whose form submits itself to an address and open it, and
+  the browser, which is not in the sandbox, posts. Read from the profile, which denies the network
+  and allows everything else; not run. The profile was left as it is: denying those requests too
+  would be a change of design, for Dan to decide.
+- A connection that was already open when the wrapper started. The sandbox refuses a new connection
+  and does not stop a write to one handed down to the command (measured 2026-11-19). The rule above
+  is what keeps a call from opening one first. A unix domain socket whose listener is outside the
+  sandbox is refused, as an address is (measured the same day).
+- A change to the wrapper's own file. The rule goes by the file's path, as the `/nudge` rule does,
+  and a command the gate allows can replace the file at that path in an earlier call, as it can the
+  gate's own files.
+- Anything that is not macOS. There is no sandbox tool, so the wrapper refuses and runs nothing.
+- A Mac without Apple's command line developer tools. The check below is made by the python3 at
+  `/Library/Developer/CommandLineTools/usr/bin/python3` and no other, a path only an administrator
+  can write: one found on the `PATH` would run outside the sandbox at the start of every run, and
+  several `PATH` folders are the user's to write. Where that file is not there the wrapper refuses
+  (exit 69) and runs nothing. It only reads whether the file is there, so it never raises the
+  dialog that offers to install the tools.
+- It is not specific to Slack. A test that needs any network, a port on this Mac included, fails
+  under it with "Operation not permitted", and still needs the project's whole suite.
+- `/usr/bin/sandbox-exec` is a tool Apple marks as deprecated, and the whole route rests on it. So
+  the wrapper proves it on every run before the command: it opens a listener of its own on loopback
+  and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
+  which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
+  is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
+  tool).
+
+Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
+their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
 with nothing changed takes about 0.13 s instead of about 4 for `bash tests/test-claude-sync.sh`. The
@@ -3861,9 +4003,37 @@ second reading the program they land on, where the script names it bare, is hand
 would hand them to it, since the package manager puts `node_modules/.bin` in front of the PATH. So
 `npm run test:node -- tests/x.spec.js`, whose script is `playwright test`, gets the answer `npx
 playwright test tests/x.spec.js` gets: refused where the spec's imports reach code that posts. The
-words the script itself writes after a bare program are judged as before, so handed only an option,
-or nothing, a script gets the answer it always got. Whether a single test file that loads posting
-code may run at all is #3173.
+words the script itself writes after a bare program are read the same way since #3251: a bare
+program in a script's own command that is no shell builtin and no program in `/bin`, `/usr/bin`,
+`/sbin` or `/usr/sbin` is read as the package `npx` would run, handed every word the script gives
+it, so `npm run test:one` with `"test:one": "playwright test tests/job.spec.js"` is refused where
+that spec's imports reach code that posts. Whether a single test file that loads posting code may
+run at all is #3173.
+
+Since #3251 two more things a package manager or a launcher is handed are read. A file pattern
+(`npx playwright test 'tests/*.spec.js'`, `node run-tests.js tests/*.spec.js`, a package script
+handed one) is expanded against the working tree as the shell expands it (`*`, `?`, `[ ]`, `{a,b}`
+and `**`, with `node_modules` and dot folders not entered unless the pattern names them) and each
+file it matches is read as if it were written there. The words are read as written first and then
+again with the matches in place, so a pattern can only add a refusal. A quoted pattern is expanded
+only for a package a launcher or a package script runs, which expands it itself, and for the words
+after a package script's name; handed quoted to any other program it is that program's own text (a
+pathspec, a filter), and a word holding white space or a parenthesis is never a pattern. The first
+build expanded every one, and over this Mac's past commands (2026-11-19) that newly refused seven
+harmless ones, this repository's `tests/test-undated-measurements.sh` among them. It is a glob only: a runner's
+regular expression or substring filter (`npx jest 'alert.*'`, `npx playwright test job`) and a
+folder handed to a runner are not read, and are recorded for an issue of their own. A script run
+through a workspace selector (`pnpm --filter web test`, `pnpm -F`, `pnpm -r`, `npm -w web run
+test`, `npm --workspaces`, `yarn workspace web test`, `yarn workspaces foreach` or `run`) is judged
+in each folder the selector chooses, with the selector taken out of the words: the workspace root
+is the nearest folder above holding a `pnpm-workspace.yaml` or a `package.json` with `workspaces`,
+and a selector that is one plain name or path chooses the packages of that name or under that
+folder, while any other selector (a pattern, `...name`) chooses them all, which reads more than
+runs and never less. A plain selector matching nothing runs nothing and passes. Where these cannot
+be read with certainty the typed command is refused as unread: a pattern matching more than 200
+files or sitting in a folder of more than 4,000 entries, and a workspace root holding more than
+6,000 entries outside `node_modules` (limits the code sets, not measured). In a script on disk each
+is left alone, as an unread feed is there.
 
 A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
 `export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
@@ -4270,9 +4440,42 @@ refused there. A redirection glued to a command's name or to its file is read as
 command with spaces (`bash<post`, `bash <post`, `bash 0<post`, `'bash'<post`): the shared reader
 splits a command's words on white space alone, so before this only `bash < post` had its file read.
 The wrapper sends a call to the rule for a shell's name followed by anything that ends the name, not
-only a space. Left open, each recorded for an issue of its own: `/dev/stdin` named as the script, a
-shell named by a variable, `xargs` building the command from its input, and a line read and then
-run.
+only a space. The four shapes this left open (`/dev/stdin` named as the script, a shell named by a
+variable, `xargs` building the command from its input, and a line read and then run) are read
+since #3251, below.
+
+Since claude-config#3251 five more ways of naming a shell, its code or its script are read, each
+as one more reading of the command after the ones there were, so each can refuse a command those
+let through and never the reverse (`lib/sh-walk-shapes.py`, `judge_unread_shapes`). A shell, an
+interpreter, `source` or `.` handed a path that names its own input (`cat post.sh | bash
+/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0`) is judged as the program reading its input (`bash
+-s`, `python3 -`), and another descriptor (`bash /dev/fd/3 3< post.sh`) is read where the same
+command opens it from a file. A command whose program is `$SHELL`, `${SHELL}`, `$BASH`,
+`$ZSH_NAME`, a typed `$0`, or a lookup of a shell's path (`$(which bash)`, `$(command -v zsh)`) is
+judged as that shell given the same words, as bash and as zsh where the variable can name either.
+A command that is a variable a `read`, `mapfile` or `readarray` filled earlier in the text (`read
+-r l < post.sh; $l`, `cat post.sh | { read -r l; $l; }`), or a whole command substitution
+(`$(cat post.sh)`), runs the text that was read, so the file the read is given, or what feeds the
+command, is judged as commands. Where what feeds `xargs` can be read, each command it puts
+together (its input added to the end, or put where `-I`, `-J` or `-i` writes the mark) is judged
+as a line, so `cat post.sh | xargs -0 bash -c` and `echo post.sh | xargs bash` are refused. And a
+double quoted `-c` or `eval` string holding a `$` or a backquote behind a backslash is judged
+again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
+shell fills in replaced by the value the gate works out for it; where it works none out, the typed
+string is read with that part as a word of unknown value and a script on disk is left as before
+(this repository's `test-pr-review.sh` sources two files by `'$DIR/lib/...'` in such a string).
+Where one of these
+cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
+not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
+command substitution run as a command, where what was read cannot be read; and `xargs` whose input
+cannot be read, only where that input becomes the code or names what runs (a shell's `-c` with no
+string or with the mark in it, a shell or an interpreter with no script word, `npm run` or `npx`
+with nothing after it). A script written in the command and handed words from an unread input is
+judged as before, and in a script on disk, or in text one evaluates, each unread case is left
+alone. The wrapper sends a call to the rule when a command's first word holds a `$`, a backquote,
+a quote or a backslash, which named no shell or script as written. Left open, each recorded for an
+issue of its own: `turbo`, `nx` and `lerna`, and a loop over the words of a file (`for w in $(cat
+f); do $w; done`). Suite: `test-slack-drafts-unread-shapes.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
@@ -4901,6 +5104,10 @@ bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
 It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
 main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
 suite ran in: its section time and check count, and that runner's core count, processor and region.
+Since #3256 it also records the runner's reference reading (`reference_ms`) and the judged figure
+(`judged_seconds`), the number the budget now decides on, both read from the same note: a run whose
+speed was not read records `unmeasured` and its raw time, a run from before #3239 records `unknown`
+for both, and a record written before those columns existed is read with its rows marked `unknown`.
 A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
 lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
 middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
@@ -5180,8 +5387,10 @@ its own throwaway folder, whatever was inherited. A suite typed straight into a 
 none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
 from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
 `suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
-in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
-claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`. The suite's
+watchdog, or a small waiter when it has no deadline, removes that folder once the suite's process
+has gone, however it ended (claude-config#3253); claude-sync's scratch sweep, which reclaims one
+after four hours, is only the backstop now. Under the runner every one is already set,
 so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
@@ -5935,7 +6144,9 @@ never an id per entry: the personal MacBook's 5,979 entries in its dry run on 20
 `dcrv_whole_token`) covers the scan id and every entry's id, path and device and inode, so the
 checker plans the summary only when working it out again from the record gives the same one, then as
 exactly those entries. An entry put in the Trash after the scan is not in the record, so the summary
-never reaches it; a count or digest that differs, or a summary of any other kind, is refused.
+never reaches it; a count or digest that differs, or a summary of a kind not drawn as one row, is
+refused. The GitHub command line cache (`gh-cache`, 2,095 entries on the personal MacBook on
+2026-11-18) is drawn and summed up the same way (#3235); `DCRV_WHOLE` in `review-lib.sh` lists both.
 The confirm step says the Trash in one line, its count and total, and
 `review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 
@@ -5952,9 +6163,59 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
-files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
-again just before removing anything.
+worktrees whose repository is gone, transcripts, the kinds below for what Claude Code sessions leave
+behind, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
+`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+
+What a session leaves on disk, measured on the personal MacBook on 2026-11-18 (claude-config#3235),
+has a kind each. Offered, past each kind's own rule and the 30 day floor below: tool output beside
+transcripts (`transcript-extras.sh`: a session's `tool-results` folder once its transcript is gone
+and no live session owns it, to the Trash), old Claude Code versions (`claude-versions.sh`: never the
+one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
+cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
+Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
+copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
+download cache, its logs and the pnpm store are shown there and never offered), and in build
+folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
+project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
+stays refused). Shown and never offered, each row saying why: in `claude-records.sh`, session notes
+as a whole, Claude Code's file history, the finding spool and its backups, and the folders this
+config's hooks keep in the home folder, with the rest of `~/.claude/state` counted in its note; and
+`claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
+rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
+this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
+nowhere instead of keeping the floor, and pins the marker to exactly that one kind.
+
+Folders of images and documents in session notes are the one thing `claude-records.sh` offers.
+Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
+daily job, and they keep an ended session's folder when more than half of it is images or
+documents (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup"). Each such folder is a row here,
+offered once nothing in it was changed or opened in 30 days, and ticking it moves it to the Trash.
+Two decisions of 2026-11-19, both recorded on #3235, are behind that:
+
+- **Showing them: "Daily file, no list change".** A disk-clean script may call only the commands
+  on the harness's reviewed list, and python is not one, so the page cannot ask the keep rules
+  directly. The daily run writes the folders it keeps for this reason to
+  `~/.claude/state/keep-rules/readable-folders.tsv` (a header, one `folder` line each, and an `end`
+  line with their count, renamed into place whole), and the page reads that file. So a row can be
+  up to a day old: a folder kept an hour ago appears tomorrow, and one that has gone since the list
+  was written is simply no row. The page says these folders are unmeasured, and offers none, when
+  the list is missing, is not whole, is dated in the future or is over two days old by the file's
+  own time, or when the keep rules wrote that they could not decide (the session registry could
+  not be read). `claude-sync remove-leftovers` writes a new list. Because the list can be a day
+  old, a folder whose session is open now is never offered, whatever the list says.
+- **Removing them: "Allow it".** `disk-remove.sh` refuses everything under `~/.claude/state`
+  whatever a category says, with this one exception: a folder exactly four levels under
+  `session-notes` (`session-notes/<project>/<session>/<task>/<folder>`) is let past that refusal to
+  its judge. It is let past only as an item of the `claude-records` kind going to the Trash, only
+  by its own path (no link at any level, no `..`, no empty level), and only when it is a real
+  folder. The judge then still requires that the keep rules' list names it and that the 30 day
+  floor holds. Everything else under the state folder stays refused: `session-notes` itself, a
+  project, a session, a task folder, a file, and anything five or more levels down. So does the
+  same four level folder under any other kind, by any method but the Trash, or named to
+  `--propose`, whose only check is that the item is the one proposed. The shape is one predicate,
+  `dc_notes_shape` and `dc_notes_folder` in `hooks/lib/disk-clean-predicates.sh`, read by both the
+  page and the remover, so a row is offered only where the remover takes it.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
@@ -6013,8 +6274,9 @@ an hour old (exit 3) and when its scan is not the last scan (exit 4), with a mes
 
 Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive, app packages,
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
-under `/Applications` or `/System`, and the home folder's standard folders and listed dotfolders
-themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the one
+session notes folder shape described above, and the home folder's standard folders and listed
+dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
@@ -6801,7 +7063,11 @@ the blank columns drawn before it. A side pane a mod opened with `$.ui.open({ id
 card is drawn by mod-kit too, with the band's own row drawing, so a card reads the same in both: the
 mod publishes it with `$.modkit.pane({ mod, id, lines, frame })` (a band row's lines and frame, no
 slot) and stops it with `$.modkit.clearPane({ mod, id })`; a pane id another mod already draws is
-refused. mod-kit also tries every mod's refused `$.session.send` once more, in its `session.send`
+refused. Claude Code names the mod that opened a pane as its owner, and a pane hook naming no
+owner hears only its own mod's panes, so mod-kit's names every owner (`plugin: '*'`) and draws
+only a pane it holds; `tools/check-mods.sh` fails a mod whose pane hook names no owner while it
+opens no pane itself (#3285).
+mod-kit also tries every mod's refused `$.session.send` once more, in its `session.send`
 hook so the message still arrives as the sending mod's, never after a throw (it may have landed),
 and answers the second refusal's reason trimmed of its full stop; a mod sends once and reports
 `reason`. A mod that answers a tool call itself, and so passes it to no guard beneath it, asks
@@ -7988,7 +8254,9 @@ reflection and issue review, the PR quiz, the lesson fan out notice and claude-s
 can reach Dan (settings hooks on turn end and waiting events, every mod's notifier, sound, question
 and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`) and fails on one
 that neither reads the sleep record nor sits on its exempt list with a reason, then runs each shell
-route asleep and awake. The night's report (#835), `~/Downloads/Sleep report <night>.md`, is written
+route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
+prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
+`~/Downloads/Sleep report <night>.md`, is written
 from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
@@ -8097,7 +8365,21 @@ needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot s
 passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
-not run. A failed, cancelled or timed out run is listed. What may merge and
+not run. A failed, cancelled or timed out run is listed. The check runs once a night, when sleep
+mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
+limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
+parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
+file's changes, the milestones in each repository, then the deploy runs in each repository. Every
+read it makes is kept with its part and how long it took, as `steps` on the one line it always
+writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
+stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same
+values its sentence is built from: the part it stopped in (`part`, `parts`, `partName`), how long
+after it began (`elapsedMs`) against the limit (`limitMs`), the last read made and how long it took
+(`last`), the first read not made (`next`), how far it got (`pages` of events read, for a stop among
+the events, or `done` of `total` repositories, in a part read one repository at a time), and its
+three slowest reads (`slowest`, each with its part and time).
+The line also says that the parts after it were not read and that nothing read them later, since no
+later pass runs that night, so it stays under Needs a look. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
@@ -9095,8 +9377,14 @@ toward goals, Findings, and Limits and usage (each wait on a limit, the usage re
 usage). Its header says which sessions had no goal, and so did no work, and each worker's row at the
 end gives its goal. Three or more calls auto mode's check refused with no verdict for one reason
 (the check unavailable, a call not reviewed) are one line in Parked and failed, with the count, the
-time window and the kinds of call, followed by each of them that did more than read and was never
-sent again unchanged and run (#3158); a real refusal by the check is always its own row.
+time window in ET, the issues being worked while they fell and the kinds of call (#3158, #3223).
+Listed after it on its own is each of them that stopped work: one that did more than read, was
+never sent again unchanged and run, and after which its session did not finish the work it held
+(#3223). That work counts as finished when every issue the session had claimed by then, and not yet
+ended, was noted done afterwards; a session holding no claim finished its work when it later noted
+something done or a step of progress. A real refusal by the check is always
+its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
+are (#3223).
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,

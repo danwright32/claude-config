@@ -572,6 +572,19 @@ reason(){   # $1 = output  $2 = exit code
 # this process: ..." or "hooks modules are turned off here (disableAllHooks, ...)"). It says nothing
 # about the mod, so the mod is unmeasured, never failed (L411).
 switched_off(){ printf '%s\n' "$1" | grep -m1 'hooks modules are turned off' | sed 's/^ *//'; }
+# #3285: since a Claude Code build between 2.1.310 and 2.1.323, a hook drawing a side pane is asked
+# only about the panes its own mod opened, unless its matcher names the owner, and the validator
+# marks such a hook "(default matcher key: plugin)". A mod hooking Pane that way while opening no
+# pane itself ($.ui.open on none of its "calls:" lines) is never asked to draw anything: mod-kit's
+# hook was one, and the manual steps pane drew empty (Dan, 2026-11-19). Prints that hook, else
+# nothing. A hook matching a list of components is not read here.
+deaf_pane(){   # $1 = validate output
+  local hook
+  hook="$(printf '%s\n' "$1" | grep -o 'ui\.render{component=Pane[^}]*} (default matcher key: plugin)' | head -n 1)"
+  [ -n "$hook" ] || return 0
+  printf '%s\n' "$1" | grep ' calls: ' | grep -qE '\$\.ui\.open([^A-Za-z]|$)' && return 0
+  printf '%s' "$hook"
+}
 unmeasured=0; off_reason=""
 
 for i in "${!mods[@]}"; do
@@ -586,6 +599,12 @@ for i in "${!mods[@]}"; do
   fi
   if [ "$rc" -ne 0 ]; then
     echo "check-mods: $name refused by claude plugin validate: $(reason "$out" "$rc") ($(load_average_note)); $(kept_note "$name" plugin-validate "$out")"
+    failed=1
+    continue
+  fi
+  deaf="$(deaf_pane "$out")"
+  if [ -n "$deaf" ]; then
+    echo "check-mods: $name draws side panes it never opens, and Claude Code asks it about none: its hook $deaf hears only panes $name opened itself. Name the owners in the matcher, { component: 'Pane', plugin: '*' } for every mod's (#3285)"
     failed=1
     continue
   fi

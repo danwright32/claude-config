@@ -6,6 +6,10 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L865. When a query API can answer from a sample, read the field that says so on every answer and treat a sampled answer as unmeasured. A positive control does not catch it, because a common control line reads above zero as an estimate while a rare needle in the same answer reads zero.**
+  (slate#5204, 2026-11-19)
+  SHORT: A query API that may answer from a sample must be checked on every answer: a control passes on an estimate while a rare needle reads zero.
+  NO CHECK: the field that reports sampling differs for every API, so no shared guard can see it; each project's own reader needs a test with a sampled answer (slate#5204 builds Slate's).
 - **L827. A duration recorded for an operation that retries covers every attempt and the waits between them, so a per attempt timeout sized from it grows by whole timeouts on a bad day; size a per attempt limit only from per attempt timings, and record those if nothing does.**
   (bidspoke#3098, 2026-10-30)
   SHORT: A retried operation's recorded duration spans every attempt, so size a per attempt timeout only from per attempt timings.

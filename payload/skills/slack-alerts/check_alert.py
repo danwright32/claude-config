@@ -7,15 +7,26 @@ other system's response, <https://address|Label> for the link, <@U123> for a men
 lines that start with a bullet character or a hyphen.
 
     python3 check_alert.py --kind alert [--urgent] [--app NAME] [FILE]    (FILE or standard input)
+    python3 check_alert.py --kind alert --record RECORD --alert KEY --alert-keys KEY,KEY,... [FILE]
 
-Exit 0 when the message passes, 1 with one FAIL line per broken rule, 2 on a bad command line or a
-message that could not be read.
+Exit 0 when the message passes, 1 with one FAIL line per broken rule, 2 on a bad command line, a
+message that could not be read, or a project record that could not be read as written.
+
+A project's record (claude-config#3226) names, each with the owner's date, the alerts that may show
+a clock time in the person's own zone, a bare id on a labelled list line, or break one named rule.
+With no record nothing beyond the standard is allowed, and a record with one bad line is refused
+whole, never read as allowing anything.
 The words inside the code fence are not judged, since that text belongs to the other system; only
 its length, and that there is one closed block, are. What no script can
 judge (whether the first line is true, whether the link opens the failed thing) stays with the
 skill and with whoever reviews the wording.
+
+A message may carry several links, each on a closing line of its own or on the list line of the
+thing it opens. Of several links the checker checks only that their targets differ: whether each
+is a page the reader must visit to act, and not a reference, is the writer's to judge.
 """
 import argparse
+import datetime
 import re
 import sys
 
@@ -30,7 +41,7 @@ LINK_REQUIRED = ("alert", "reminder", "digest", "request")
 RULES = (
     "empty", "first-line-bold", "first-line-title", "recovery-opening", "reminder-opening",
     "app-name", "mention", "wording-length", "sentences", "labelled-lines", "list-length",
-    "error-block", "link-missing", "link-count", "link-last", "link-label", "bare-url",
+    "error-block", "link-missing", "link-count", "link-last", "link-label", "link-repeat", "bare-url",
     "time-format", "emoji", "dash", "capitals", "machine-plural", "issue-ref", "raw-id", "filler",
 )
 
@@ -62,6 +73,19 @@ OTHER_ZONE = re.compile(r"\b(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|Eastern)\
 CLOCK = re.compile(r"(?<![\d:])\d{1,2}:\d{2}(?![\d:])")
 MERIDIEM = re.compile(r" (?:AM|PM)\b")
 ZONE_OR_RANGE = re.compile(r"(?: ET\b| (?:to|and) \d{1,2}:\d{2} (?:AM|PM)\b)")
+# The zones an alert the project records as own-zone may also name, for a person's own time
+# (Dan, 18 Nov 2026, #3226: CT, MT, PT, AKT and HST, and AZ for Arizona, which never changes its
+# clocks, so MT there reads an hour off for most of the year).
+OWN_ZONES = ("CT", "MT", "PT", "AZ", "AKT", "HST")
+OWN_ZONE_OR_RANGE = re.compile(
+    r"(?: (?:ET|" + "|".join(OWN_ZONES) + r")\b| (?:to|and) \d{1,2}:\d{2} (?:AM|PM)\b)"
+)
+# A bare id (one RAW_ID matches) an alert recorded as labelled-id may show: alone on a list line,
+# after a label of one to four plain words saying what it is, such as "Queue row: " and the id
+# (#3226). A short number like "Queue row: 4817" is no RAW_ID, so it passes with no record.
+LABELLED_ID_LINE = re.compile(r"^(?:" + BULLET + r"|-) [A-Z][A-Za-z]*(?: [A-Za-z]+){0,3}: (\S+)$")
+RECORD_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ALLOWANCES = ("own-zone", "labelled-id", "exempt")
 YEAR = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?,? (?:\d{1,2},? )?20\d{2}\b")
 SHOUTED = re.compile(
     r"\b(?:NOT|NEVER|WRONG|FAILED|WARNING|DOWN|UNKNOWN|SKIPPED|MUST|ONLY|PRODUCTION|ERROR|"
@@ -94,10 +118,102 @@ def plain(text):
     return re.sub(r"\s+", " ", text.replace("*", "").replace("`", "")).strip()
 
 
-def check(text, kind, urgent=False, apps=()):
-    """Every rule the message breaks, as (rule, what was measured), in the order of RULES."""
+class RecordError(ValueError):
+    """A project record that cannot be read as written. It is refused whole, never read as allowing
+    anything, and the message names the line."""
+
+
+class Record:
+    """What a project's record allows each of its alerts, read by parse_record or load_record."""
+
+    def __init__(self, keys, allowed):
+        self.keys = frozenset(keys)
+        self._allowed = {key: frozenset(entries) for key, entries in allowed.items()}
+
+    def allows(self, alert):
+        return self._allowed.get(alert, frozenset())
+
+
+def parse_record(text, alert_keys, source="the record"):
+    """Read a project's record. Each line is the owner's date, an alert key and what it allows:
+
+        2026-11-18  time-off-note  own-zone
+        2026-11-18  queue-backlog  labelled-id
+        2026-11-18  page-watch     exempt bare-url
+
+    alert_keys is every alert the project posts, so an entry naming any other is refused rather
+    than left to allow nothing. Blank lines and lines starting with # are skipped."""
+    keys = frozenset(key.strip() for key in alert_keys if key.strip())
+    if not keys:
+        raise RecordError(f"{source}: no alert keys were given, so its entries cannot be checked against the alerts the project posts")
+    allowed, seen = {}, {}
+    for number, raw in enumerate(text.split("\n"), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        where = f"{source}, line {number}"
+        words = line.split()
+        if not RECORD_DATE.match(words[0]):
+            raise RecordError(f'{where}: "{line}" does not start with the date the owner decided it, written YYYY-MM-DD')
+        try:
+            datetime.date.fromisoformat(words[0])
+        except ValueError:
+            raise RecordError(f"{where}: {words[0]} is not a day on the calendar") from None
+        if len(words) < 3:
+            raise RecordError(f"{where}: each entry is a date, an alert key and what it allows ({', '.join(ALLOWANCES)})")
+        key, what, rest = words[1], words[2], words[3:]
+        if key not in keys:
+            raise RecordError(f'{where}: "{key}" is not one of the alerts the project posts ({", ".join(sorted(keys))})')
+        if what == "exempt":
+            if len(rest) != 1:
+                raise RecordError(f"{where}: an exemption names exactly one rule")
+            if rest[0] not in RULES or rest[0] == "empty":
+                raise RecordError(f'{where}: "{rest[0]}" is not a rule an alert can be exempted from ({", ".join(r for r in RULES if r != "empty")})')
+            entry = "exempt " + rest[0]
+        elif what in ALLOWANCES:
+            if rest:
+                raise RecordError(f'{where}: {what} takes nothing after it, and "{" ".join(rest)}" follows')
+            entry = what
+        else:
+            raise RecordError(f'{where}: "{what}" is not something a record can allow: own-zone, labelled-id, or exempt and one rule')
+        if (key, entry) in seen:
+            raise RecordError(f"{where}: {key} {entry} is already recorded on line {seen[(key, entry)]}")
+        seen[(key, entry)] = number
+        allowed.setdefault(key, set()).add(entry)
+    return Record(keys, allowed)
+
+
+def load_record(path, alert_keys):
+    """parse_record on a file. A file that cannot be read raises OSError; one that is not UTF-8 is a
+    RecordError, since a record read with replaced bytes could name a key nobody wrote."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        # Strict on purpose: a record that is not UTF-8 is refused, never read with replaced bytes.
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise RecordError(f"{path}: not UTF-8 at byte {error.start}") from None
+    return parse_record(text, alert_keys, source=path)
+
+
+def is_labelled_id(line):
+    """A list line holding one bare id after a label saying what it is, and nothing else."""
+    match = LABELLED_ID_LINE.match(line)
+    return bool(match and RAW_ID.fullmatch(match.group(1)))
+
+
+def check(text, kind, urgent=False, apps=(), *, record=None, alert=None):
+    """Every rule the message breaks, as (rule, what was measured), in the order of RULES. With a
+    project's record and the alert this message is, what the record allows that alert is applied."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}: one of {', '.join(KINDS)}")
+    if (record is None) != (alert is None):
+        raise ValueError("a project's record and the alert a message is go together")
+    allowances = frozenset()
+    if record is not None:
+        if alert not in record.keys:
+            raise ValueError(f"{alert!r} is not one of the alerts the record was read against")
+        allowances = record.allows(alert)
     found = {}
 
     def fail(rule, said):
@@ -165,17 +281,45 @@ def check(text, kind, urgent=False, apps=()):
         fail("list-length", f"{len(items)} list lines; show {LIST_LIMIT} and end with \"and {len(items) - LIST_LIMIT} more\"")
 
     every_link = ANY_LINK.findall(outside)
-    if kind in LINK_REQUIRED and not links:
-        fail("link-missing", f"a {kind} ends with one labelled link to the thing itself")
-    if len(every_link) > 1 or (every_link and not links):
-        fail("link-count", f"{len(every_link)} links, or a link inside a sentence; one link stands alone on the last line")
-    if links:
-        last = [line.strip() for line in text.split("\n") if line.strip()][-1]
-        if last != links[-1]:
-            fail("link-last", "the link is not the last line")
-        label = LINK_LINE.match(links[-1]).group(2)
-        if not LINK_LABEL.match(label):
-            fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+    every_line = [line.strip() for line in text.split("\n") if line.strip()]
+    if len(every_link) <= 1:
+        # One link is judged exactly as it was before several were allowed.
+        if kind in LINK_REQUIRED and not links:
+            fail("link-missing", f"a {kind} ends with one labelled link to the thing itself")
+        if every_link and not links:
+            fail("link-count", "a link inside a sentence; one link stands alone on the last line")
+        if links:
+            if every_line[-1] != links[-1]:
+                fail("link-last", "the link is not the last line")
+            label = LINK_LINE.match(links[-1]).group(2)
+            if not LINK_LABEL.match(label):
+                fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+    else:
+        # Dan, 18 Nov 2026 (#3226): "Multiple links are fine if they genuinely link to different
+        # pages and I have to go to each of them to fix the problem." Only the first half can be
+        # measured: each target differs. The second half is the writer's.
+        listed = [line for line in items if ANY_LINK.search(line)]
+        placed = len(links) + len(listed)
+        if kind in LINK_REQUIRED and not placed:
+            fail("link-missing", f"a {kind} ends with a labelled link to the thing itself, or links each listed thing to its own page")
+        if any(len(ANY_LINK.findall(line)) > 1 for line in listed) or placed != len(every_link):
+            fail("link-count", "a link inside a sentence or the first line, or two on one list line; each link "
+                               "stands alone on a closing line or on the list line of the thing it opens")
+        if links:
+            if every_line[-len(links):] != links:
+                fail("link-last", "the links on lines of their own are not the closing lines")
+            for line in links:
+                label = LINK_LINE.match(line).group(2)
+                if not LINK_LABEL.match(label):
+                    fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+                    break
+        opened = {}
+        for link in every_link:
+            target = link[1:-1].split("|")[0].split("#")[0].rstrip("/")
+            if target in opened:
+                fail("link-repeat", f"two links open {target}; several links are for different pages the reader must visit")
+                break
+            opened[target] = link
     if any("|" not in link for link in every_link) or "://" in ANY_LINK.sub("", outside):
         fail("bare-url", "a bare address; give the link a label")
 
@@ -187,12 +331,15 @@ def check(text, kind, urgent=False, apps=()):
         times.append("seconds")
     if OTHER_ZONE.search(read):
         times.append("a zone that is not written ET")
+    own_zone = "own-zone" in allowances
+    zone_or_range = OWN_ZONE_OR_RANGE if own_zone else ZONE_OR_RANGE
+    zones = "ET or the person's own zone (" + ", ".join(OWN_ZONES) + ")" if own_zone else "ET"
     for clock in CLOCK.finditer(read):
         after = read[clock.end():]
         if not MERIDIEM.match(after):
             times.append(f'"{clock.group(0)}" without AM or PM in capitals after a space')
-        elif not ZONE_OR_RANGE.match(after[3:]):
-            times.append(f'"{clock.group(0)}" without ET after it')
+        elif not zone_or_range.match(after[3:]):
+            times.append(f'"{clock.group(0)}" without {zones} after it')
     if YEAR.search(read):
         times.append("a year")
     if times:
@@ -210,7 +357,10 @@ def check(text, kind, urgent=False, apps=()):
     issue = ISSUE_REF.search(read)
     if issue:
         fail("issue-ref", f'an issue number, "{issue.group(0)}"; the reader cannot act on it')
-    if RAW_ID.search(read):
+    ids_read = read
+    if "labelled-id" in allowances:
+        ids_read = "\n".join(plain(line) for line in lines if not is_labelled_id(line))
+    if RAW_ID.search(ids_read):
         fail("raw-id", "a bare id; link to the thing or leave the id out")
     for pattern, what in FILLER:
         said = pattern.search(read)
@@ -218,7 +368,8 @@ def check(text, kind, urgent=False, apps=()):
             fail("filler", f'"{said.group(0)}" {what}; say only what happened')
             break
 
-    return [(rule, found[rule]) for rule in RULES if rule in found]
+    # An exemption the record holds for this alert lifts that one rule and no other.
+    return [(rule, found[rule]) for rule in RULES if rule in found and "exempt " + rule not in allowances]
 
 
 def main(argv=None):
@@ -226,8 +377,29 @@ def main(argv=None):
     parser.add_argument("--kind", required=True, choices=KINDS, help="which kind of post this is")
     parser.add_argument("--urgent", action="store_true", help="the problem costs money or stops customers, so it carries a mention")
     parser.add_argument("--app", action="append", default=[], help="the app's name, which the message must not open with (repeatable)")
+    parser.add_argument("--record", help="the project's record of what its alerts may do beyond the standard, each with the owner's date")
+    parser.add_argument("--alert", help="which of the project's alerts this message is, as the record names it")
+    parser.add_argument("--alert-keys", help="every alert the project posts, comma separated, so the record can name no other")
     parser.add_argument("file", nargs="?", help="the message file; standard input when left out")
     args = parser.parse_args(argv)
+    record = None
+    if args.record or args.alert or args.alert_keys:
+        if not (args.record and args.alert and args.alert_keys):
+            print("check_alert.py: --record, --alert and --alert-keys go together: the project's record, "
+                  "which alert this message is, and every alert the project posts", file=sys.stderr)
+            return 2
+        keys = [key.strip() for key in args.alert_keys.split(",") if key.strip()]
+        if args.alert not in keys:
+            print(f'check_alert.py: --alert "{args.alert}" is not one of --alert-keys ({", ".join(keys)})', file=sys.stderr)
+            return 2
+        try:
+            record = load_record(args.record, keys)
+        except OSError as error:
+            print(f"check_alert.py: cannot read the record {args.record}: {error}", file=sys.stderr)
+            return 2
+        except RecordError as error:
+            print(f"check_alert.py: {error}", file=sys.stderr)
+            return 2
     # A byte that is not UTF-8 is read as the replacement character, so the message is still
     # judged on its rules and a failure line that quotes it back can always be printed.
     try:
@@ -240,7 +412,8 @@ def main(argv=None):
         # Exit 1 means the message broke a rule, so a message that could not be read is exit 2.
         print(f"check_alert.py: cannot read {args.file or 'standard input'}: {error}", file=sys.stderr)
         return 2
-    failures = check(text, args.kind, urgent=args.urgent, apps=args.app)
+    failures = check(text, args.kind, urgent=args.urgent, apps=args.app,
+                     record=record, alert=args.alert if record else None)
     for rule, said in failures:
         print(f"FAIL {rule}: {said}")
     if failures:

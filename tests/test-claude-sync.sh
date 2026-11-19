@@ -5838,6 +5838,7 @@ _clk_write(){   # _clk_write <kind>
     # One rule under two numbers, and one entry holding two SHORT lines (claude-config#392).
     repeated)  printf '# Lessons\n\n## Proof over green\n\n- **L1. sound.** body\n- **L2. sound.** body\n' > "$CLKH/LESSONS.md" ;;
     twoshort)  printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n  SHORT: a sound rule about proving.\n  SHORT: a sound rule.\n' > "$CLKH/LESSONS.md" ;;
+    checkline) printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n  CHECK: hooks/some-guard.sh\n' > "$CLKH/LESSONS.md" ;;
     *) return 1 ;;
   esac
 }
@@ -6137,6 +6138,8 @@ _hb_write(){   # _hb_write <kind>: that fault and only that fault, plus an unpub
     twoshort)  fault='- **L2. another sound rule about testing.** body
   SHORT: another sound rule about testing.
   SHORT: another sound rule.' ;;
+    checkline) fault='- **L2. another sound rule about testing.** body
+  NO CHECK:' ;;
     *) return 1 ;;
   esac
   printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule about proving.** body\n%s\n\n## Data safety\n\n- **L9. a rule that rides on the second section.** body\n' "$fault" > "$HBH/LESSONS.md"

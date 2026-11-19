@@ -159,6 +159,18 @@ allowed_root() { # <physical path>
 # substitution, since it runs twice for every item of a plan thousands long. The rest of a home
 # dotfolder's contents are left to the category's judge (transcripts live in ~/.claude/projects, the
 # Trash's entries in ~/.Trash), but the folder itself is never removed.
+#
+# ONE EXCEPTION, in ~/.claude/state (Dan, 2026-11-19, recorded on #3235: "Allow it"). A folder
+# exactly four levels under session-notes (session-notes/<project>/<session>/<task>/<folder>, the
+# shape lib/disk-clean-predicates.sh's dc_notes_shape reads) is let past this list to its judge when
+# path_checks set NOTES_OK for the item, and NOTES_USED then says the exception was taken. Nothing
+# else under the state folder is: session-notes itself, a project, a session, a task folder, and
+# anything five or more levels down stay refused here.
+STATE_DENY="it is Claude Code's own state, this tool's records among it"
+# The category whose judge answers for a session notes folder: it takes one only when the daily
+# keep rules list it and nothing in it was changed or opened in 30 days (categories/claude-records.sh).
+NOTES_CATEGORY=claude-records
+NOTES_OK="" NOTES_USED=""
 deny_reason() { # <path>
   local p="${1%/}" H="$HOME_PHYS" L="$HOME_PHYS/Library"
   case "$p" in
@@ -183,7 +195,12 @@ deny_reason() { # <path>
     "$L/Application Support/CrashPlan"|"$L/Application Support/CrashPlan/"*) DENY='it is the store of CrashPlan, a backup client'; return 0 ;;
     "$H/.pcloud"|"$H/.pcloud/"*|"$H/pCloud Drive"|"$H/pCloud Drive/"*) DENY='it is the store of pCloud, a sync client'; return 0 ;;
     "$H/.ssh"|"$H/.ssh/"*|"$H/.gnupg"|"$H/.gnupg/"*) DENY='it holds keys and credentials'; return 0 ;;
-    "$H/.claude/state"|"$H/.claude/state/"*) DENY="it is Claude Code's own state, this tool's records among it"; return 0 ;;
+    "$H/.claude/state"|"$H/.claude/state/"*)
+      # The one exception (Dan, 2026-11-19, recorded on #3235: "Allow it"): a folder exactly four
+      # levels under session-notes, and only for an item path_checks opened it to (NOTES_OK). It is
+      # not removed by this: it reaches its judge, and path_checks then holds it to dc_notes_folder.
+      if [ -n "$NOTES_OK" ] && dc_notes_shape "$p" "$H"; then NOTES_USED=1
+      else DENY="$STATE_DENY"; return 0; fi ;;
     "$H/.local"|"$H/.cache"|"$H/.config"|"$H/.claude"|"$H/.docker"|"$H/.Trash"|"$H/.vscode"|"$H/.nvm"|"$H/.cargo"|"$H/.rustup")
       DENY="it is the dotfolder ${p##*/} itself, which this tool never removes whole"; return 0 ;;
     "$L"|"$L/Caches"|"$L/Containers"|"$L/Group Containers"|"$L/Application Support"|"$L/Developer"|"$H/Documents"|"$H/Desktop"|"$H/Downloads"|"$H/Movies"|"$H/Music"|"$H/Pictures"|"$H/Public"|"$H/Applications")
@@ -341,9 +358,17 @@ run_judge() { # <category> <target> <identity> [method]
 
 # Checks a path target as far as acting on it: sets PHYS and succeeds, or sets WHY and fails. Run in
 # the current shell, never a substitution, so PHYS reaches the caller.
-path_checks() { # <target>
+#
+# With a category and a method, the state folder's one exception is open to this item, and only
+# when the category is the one whose judge asks the keep rules (NOTES_CATEGORY) and the method is
+# trash, so nothing let through here is ever deleted in place. --propose passes neither: a path
+# removed by name is judged by its identity alone, with no keep rules and no 30 day floor, so the
+# exception is never open to it. An item the exception let past the deny list is then held to
+# dc_notes_folder, the page's own predicate: a real folder, reached by its own path through no link.
+path_checks() { # <target> [<category> <method>]
   local t="$1" r
-  PHYS="" WHY=""
+  PHYS="" WHY="" NOTES_OK="" NOTES_USED=""
+  if [ "${2:-}" = "$NOTES_CATEGORY" ] && [ "${3:-}" = trash ]; then NOTES_OK=1; fi
   case "$t" in /*) ;; *) WHY='its path is not absolute'; return 1 ;; esac
   case "$t" in *[[:cntrl:]]*) WHY='its path holds a control character'; return 1 ;; esac
   case "$t/" in */../*|*/./*) WHY='its path holds a . or .. component'; return 1 ;; esac
@@ -354,6 +379,9 @@ path_checks() { # <target>
   fi
   PHYS="$(dc_resolve "$t")" || { WHY='where it lies could not be read'; return 1; }
   if deny_reason "$PHYS"; then WHY="never removed: $DENY"; return 1; fi
+  if [ -n "$NOTES_USED" ] && { [ -e "$t" ] || [ -L "$t" ]; }; then
+    dc_notes_folder "$t" "$HOME" "$HOME_PHYS" || { WHY="never removed: $STATE_DENY, and $DC_NOTES_WHY"; return 1; }
+  fi
   allowed_root "$PHYS" || { WHY="it is outside the folders this tool removes from ($PHYS)"; return 1; }
   return 0
 }
@@ -576,7 +604,7 @@ do_docker() { # <id> <category> <target> <identity>
 # ---------- a path item ----------
 do_path() { # <id> <category> <method> <target> <identity>
   local id="$1" cat="$2" method="$3" t="$4" ident="$5" why out rc before_bytes after_bytes after_kib
-  path_checks "$t" || { finish_item "$id" skipped "" "$t" "$WHY"; return; }
+  path_checks "$t" "$cat" "$method" || { finish_item "$id" skipped "" "$t" "$WHY"; return; }
   gone_now "$PHYS" && { finish_item "$id" gone "" "$t" "it was already gone"; return; }
   case "$method" in
     truncate) { [ -f "$PHYS" ] && [ ! -d "$PHYS" ]; } || { finish_item "$id" skipped "" "$t" "truncate empties a single file, and this is not one"; return; } ;;
