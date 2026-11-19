@@ -967,8 +967,9 @@ check "gh cache: and the note counts them as not judged" "$(has "$(note_of gh-ca
 dc_stub lsof 'exit 1'
 
 # ================================================================================================
-# Claude Code's own records: measured and shown, never offered (state, file history, the finding
-# spool and its backups, and the folders this config's hooks keep in the home folder)
+# Claude Code's own records: measured and shown (state, file history, the finding spool and its
+# backups, and the folders this config's hooks keep in the home folder), none of them offered; the
+# one thing the kind offers, a folder of images or documents in session notes, is the section below
 # ================================================================================================
 fresh
 mkdir -p "$H/.claude/state/session-notes/p/s" "$H/.claude/state/ai-review" "$H/.claude/file-history/$U5" "$H/.claude-issue-spool" \
@@ -1001,6 +1002,157 @@ judge claude-records "$H/.claude/state/session-notes"
 check "claude records judge: session notes are not offerable" "$(has "$JUDGED" "not offerable: ")"
 judge claude-records "$H/Downloads"
 check "claude records judge: a folder it does not list is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
+
+# ------------------------------------------------------------------------------------------------
+# Folders of images and documents in ended sessions' notes (#3235). The daily keep rules keep them
+# (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup") and write which they are to
+# ~/.claude/state/keep-rules/readable-folders.tsv, which this kind reads, since a disk-clean script
+# may not run python (Dan, 2026-11-19: "Daily file, no list change"). Each is offered, to the Trash,
+# once nothing in it was changed or opened in 30 days (Dan, 2026-11-19: "Allow it").
+# ------------------------------------------------------------------------------------------------
+NSID=22222222-2222-4222-8222-222222222222
+NSES="$H/.claude/state/session-notes/-Users-x-proj/$NSID"
+NT="$NSES/task-1"
+KRS="$H/.claude/state/keep-rules"; NLIST="$KRS/readable-folders.tsv"
+DR="$DIR/../../hooks/lib/disk-remove.sh"
+# Days ago, as touch -t takes it (L290: the list's age is set, never waited for).
+ago() { date -v-"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days ago" '+%Y%m%d%H%M'; }
+ahead() { date -v+"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days" '+%Y%m%d%H%M'; }
+# Writes a whole list naming each <path>, as keep_rules.py's remove run writes it, dated now.
+notes_listed() { # <path>...
+  local p
+  mkdir -p "$KRS"
+  { printf 'readable-folders\t1\n'; for p in "$@"; do printf 'folder\t2000000\t%s\n' "$p"; done; printf 'end\t%s\n' "$#"; } > "$NLIST"
+}
+notes_home() {
+  fresh
+  mkdir -p "$NT/photos" "$NT/my sources" "$NT/fixtures" "$NT/photos-deep/inner" "$H/Documents/album" "$H/w/real"
+  printf 'img\n' > "$NT/photos/a.jpg"; printf 'doc\n' > "$NT/my sources/paper.pdf"; printf 'x\n' > "$NT/fixtures/a.bin"
+  printf 'x\n' > "$NT/photos-deep/inner/b.jpg"; printf 'n\n' > "$NT/evidence.md"; printf 'x\n' > "$H/Documents/album/c.jpg"
+  ln -s "$H/w/real" "$NT/linked"
+  old "$H"
+}
+notes_rows() { dcr_review_items "$REC" | awk -F "$S" -v p="$H/.claude/state/session-notes/" '$2 == "claude-records" && index($4, p) == 1 { print $4 "|" $3 "|" $5 }' | sort; }
+
+notes_home
+notes_listed "$NT/photos" "$NT/my sources" "$NT/trashed-yesterday" "$NT/linked" "$H/Documents/album" "$NT" "$NT/photos-deep/inner"
+run_scan --only claude-records
+check "notes folders: the scan exits 0" "$(eq "$RC" 0)"
+check "notes folders: with a list a day run wrote today, the kind is measured" "$(eq "$(status_of claude-records)" measured)"
+check "notes folders: exactly the two listed folders of the shape are rows, each offered to the Trash" \
+  "$(eq "$(notes_rows | tr '\n' ';')" "$NT/my sources|trash|offerable;$NT/photos|trash|offerable;")"
+check "notes folders: a bulky folder the list does not name is no row" "$(eq "$(item_of "$NT/fixtures")" "")"
+check "notes folders: a listed folder that has gone since the list was written is no row" "$(eq "$(item_of "$NT/trashed-yesterday")" "")"
+check "notes folders: a listed link is no row" "$(eq "$(item_of "$NT/linked")" "")"
+check "notes folders: a listed path outside session notes is no row" "$(eq "$(item_of "$H/Documents/album")" "")"
+check "notes folders: a listed task folder is no row" "$(eq "$(item_of "$NT")" "")"
+check "notes folders: a listed folder five levels down is no row" "$(eq "$(item_of "$NT/photos-deep/inner")" "")"
+check "notes folders: session notes as a whole are still shown and never offered" "$(has "$(state_of "$H/.claude/state/session-notes")" "not offerable: ")"
+judge claude-records "$NT/photos"
+check "notes judge: a listed folder is offerable" "$(eq "$JUDGED" offerable)"
+judge claude-records "$NT/my sources"
+check "notes judge: and one whose name holds a space" "$(eq "$JUDGED" offerable)"
+judge claude-records "$NT/fixtures"
+check "notes judge: a folder of the shape the keep rules do not list is not offerable" "$(has "$JUDGED" "not offerable: the daily keep rules run does not list it")"
+judge claude-records "$NT/linked"
+check "notes judge: a listed link is not offerable" "$(has "$JUDGED" "not offerable: it is a symbolic link")"
+judge claude-records "$H/Documents/album"
+check "notes judge: a listed path outside session notes is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$NT"
+check "notes judge: a listed task folder is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$NSES"
+check "notes judge: a session folder is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$NT/photos-deep/inner"
+check "notes judge: a listed folder five levels down is not offerable" "$(has "$JUDGED" "not offerable: ")"
+ln -s "$NSES" "$H/.claude/state/session-notes/-Users-x-proj/via-link"
+notes_listed "$H/.claude/state/session-notes/-Users-x-proj/via-link/task-1/photos"
+judge claude-records "$H/.claude/state/session-notes/-Users-x-proj/via-link/task-1/photos"
+check "notes judge: a listed folder reached through a link above it is not offerable" "$(has "$JUDGED" "not offerable: its path passes through a symbolic link")"
+rm -f "$H/.claude/state/session-notes/-Users-x-proj/via-link"
+notes_listed "$NT/photos"
+floor_checks claude-records "$NT/photos" "$NT/photos/a.jpg" folder
+
+# A session open now is never offered, whatever the list said when it was written: the list can be
+# a day old, and the session may have been resumed since.
+mkdir -p "$H/.claude/sessions"
+printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$NSID" > "$H/.claude/sessions/1.json"
+judge claude-records "$NT/photos"
+check "notes judge: a listed folder whose session is open now is not offerable" "$(has "$JUDGED" "not offerable: its session is open now")"
+chmod 000 "$H/.claude/sessions/1.json"
+judge claude-records "$NT/photos"
+check "notes judge: when the open sessions cannot be read it is unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
+chmod 644 "$H/.claude/sessions/1.json"; rm -rf "$H/.claude/sessions"
+
+# The list's age is the file's own time: one written yesterday is used, one over two days old is not.
+notes_listed "$NT/photos"; touch -t "$(ago 1)" "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list written a day ago is used" "$(eq "$JUDGED" offerable)"
+run_scan --only claude-records
+check "notes list: and its rows are offered" "$(eq "$(state_of "$NT/photos")" offerable)"
+touch -t "$(ago 3)" "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list three days old makes the folder unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run last listed them 3 days ago")"
+run_scan --only claude-records
+check "notes list: and the kind says unmeasured, with the list's age" "$(has "$(status_of claude-records)" "unmeasured: folders of images and documents in ended sessions' notes: the daily keep rules run last listed them 3 days ago")"
+check "notes list: and offers no row from the old list" "$(eq "$(notes_rows | grep -c '|offerable$')" 0)"
+check "notes list: while the rest of the kind is still shown" "$(has "$(state_of "$H/.claude/state/session-notes")" "not offerable: ")"
+touch -t "$(ahead 2)" "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list dated in the future is unmeasured, its age not being one to trust" "$(has "$JUDGED" "unmeasured: the daily keep rules run's list is dated in the future")"
+rm -f "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: with no list the folder is unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run has not written its list")"
+run_scan --only claude-records
+check "notes list: and the kind says unmeasured" "$(has "$(status_of claude-records)" "unmeasured: folders of images and documents in ended sessions' notes: the daily keep rules run has not written its list")"
+check "notes list: and offers nothing" "$(eq "$(notes_rows | grep -c '|offerable$')" 0)"
+: > "$KRS/off"
+judge claude-records "$NT/photos"
+check "notes list: with no list and the daily job switched off, it says the job is off" "$(has "$JUDGED" "unmeasured: the daily keep rules job is switched off on this Mac")"
+rm -f "$KRS/off"
+# A list that is not whole, or not one the keep rules write, is never read as a short list.
+printf 'readable-folders\t1\nfolder\t2000000\t%s\n' "$NT/photos" > "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list with no end line is unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run's list is not whole")"
+printf 'readable-folders\t1\nfolder\t2000000\t%s\nend\t2\n' "$NT/photos" > "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list whose count is not its folders is unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run's list is not whole")"
+printf 'readable-folders\t2\nfolder\t2000000\t%s\nend\t1\n' "$NT/photos" > "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list in a version this does not read is unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run's list is not whole")"
+: > "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: an empty file is unmeasured" "$(has "$JUDGED" "unmeasured: the daily keep rules run's list is not whole")"
+printf 'readable-folders\t1\nunmeasured\tthe session registry could not be read, so no session could be told to have ended\nend\t0\n' > "$NLIST"
+judge claude-records "$NT/photos"
+check "notes list: a list saying the keep rules could not decide is unmeasured, with their reason" "$(has "$JUDGED" "unmeasured: the session registry could not be read")"
+run_scan --only claude-records
+check "notes list: and the kind says so" "$(has "$(status_of claude-records)" "the session registry could not be read")"
+printf 'readable-folders\t1\nend\t0\n' > "$NLIST"
+run_scan --only claude-records
+check "notes list: a whole list of none is measured, with no rows" "$(eq "$(status_of claude-records)|$(notes_rows | grep -c .)" "measured|0")"
+# No notes folder at all: there is nothing the list could be about, so its absence is said nowhere.
+notes_home; rm -rf "$H/.claude/state/session-notes"; mkdir -p "$H/.claude/state/ai-review"
+run_scan --only claude-records
+check "notes list: with no session notes folder, a missing list is not an unmeasured kind" "$(eq "$(status_of claude-records)" measured)"
+
+# The page and the remover agree: every row offered here is one disk-remove.sh takes, by the real
+# judge, and it goes to the Trash (L261, L643).
+notes_home
+notes_listed "$NT/photos" "$NT/my sources"
+dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; $(printf %q "$DC_ROOT")/*) /bin/rm -rf \"\$a\" ;; *) echo \"trash stub: refused \$a\" >&2; exit 1 ;; esac; done"
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only claude-records
+NIDS="$(dcr_review_items "$REC" | awk -F "$S" -v p="$H/.claude/state/session-notes/" '$2 == "claude-records" && index($4, p) == 1 && $5 == "offerable" { print $1 }')"
+check "agreement: the scan offered both folders (a control on the plan below)" "$(eq "$(printf '%s\n' "$NIDS" | grep -c .)" 2)"
+{ printf 'scan_id %s\ncount 2\n' "$(dcr_header "$REC" scan_id)"; printf '%s\n' "$NIDS" | sed 's/^/item /'; } > "$H/notes-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/notes-plan" 2>&1)"; RRC=$?
+check "agreement: disk-remove.sh takes every row the page offered" "$(eq "$RRC|$(grep -c '^trashed ' <<< "$REMOVED")" "0|2")"
+check "agreement: and refuses none of them as state" "$(hasnt "$REMOVED" "never removed")"
+check "agreement: both folders are gone from the notes" "$([ ! -e "$NT/photos" ] && [ ! -e "$NT/my sources" ] && echo ok || echo "one is still there")"
+check "agreement: they went through trash, twice" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')" 2)"
+check "agreement: and the notes beside them are untouched" "$([ -f "$NT/evidence.md" ] && [ -f "$NT/fixtures/a.bin" ] && echo ok || echo "a note is gone")"
+default_stubs
 
 # ================================================================================================
 # npm and pnpm caches: each npx copy not run or changed in 30 days is offered (Dan, 2026-11-18:
@@ -1084,7 +1236,7 @@ for c in transcript-extras claude-records claude-versions claude-user-temp gh-ca
   check "titles: $c has a title in words, so the page never shows its code name" "$(t="$(dcr_title "$c")"; [ -n "$t" ] && [ "$t" != "$c" ] && echo ok || echo "titled '$t'")"
 done
 check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 19)"
-check "floor: exactly the two kinds that only show space say they offer nothing (a control on the marker)" \
-  "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-records.sh claude-user-temp.sh ")"
+check "floor: exactly the one kind that only shows space says it offers nothing (a control on the marker)" \
+  "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-user-temp.sh ")"
 
 finish
