@@ -9218,7 +9218,9 @@ installed), and the run says UNMEASURED, counting them and naming the install co
 failure. `claude-sync status` names a sync clone where the pinned compiler is not installed yet,
 with its `npm ci` command (the apply does not install it, which would put npm and the network on
 every pull; the mods' checks install it on their first run there). The pinned types are Claude Code 2.1.307's
-(2026-10-22, #1484, all 20 mods clean; 2.1.294's before, from 2026-10-08). A run on a Mac with another build ends with a line saying the pinned type files are from another build, which changes no verdict and is not the note above about the build the mods last passed on;
+(2026-10-22, #1484, all 20 mods clean; 2.1.294's before, from 2026-10-08). A run on a Mac with
+another build ends with a line saying the pinned type files are from another build, which changes
+no verdict and is not the note above about the build the mods last passed on;
 to move the pin, run `bash tools/refresh-claude-code-types.sh` once a mod has loaded on the new build
 (it copies the engine and built-in tool types from `~/.claude/mods/mod-kit/.claude-plugin/types`, or
 a laid folder named as its argument, cuts the tsconfig's types back to the three, never takes the
