@@ -110,6 +110,35 @@ the bot that posts, which already tells the reader which app is speaking. Exit 0
 tell whether the first line is true, whether the link opens the failed thing, or whether the
 problem is urgent: read the rendered message once for those.
 
+## A project's record
+
+Three forms the standard refuses are allowed on one alert only when the project has recorded it,
+with the date Dan decided it. The record is one text file the project keeps beside its copy of
+the checker, one entry per line: the date, the alert's key, and what that alert may do.
+
+    # date      alert key       what it allows
+    2026-11-18  time-off-note   own-zone
+    2026-11-18  queue-backlog   labelled-id
+    2026-11-18  page-watch      exempt bare-url
+
+- `own-zone`: a clock time may name the person's own zone in place of ET, one of CT, MT, PT, AZ,
+  AKT, HST (`9:00 AM to 1:00 PM MT`), for text about that person's own time. Any other zone fails.
+- `labelled-id`: a bare id may stand alone on a list line after a label saying what it is
+  (`Queue row: 4817`). An id with no label, in a sentence, or with more words after it fails.
+- `exempt` and one rule: that alert is not judged on that one rule, such as `bare-url` for an
+  alert that keeps the address of the page it is about. Every other rule still applies.
+
+The project's test passes the record with every message it renders:
+
+    python3 check_alert.py --kind alert --record slack-alerts-record.txt --alert page-watch --alert-keys time-off-note,queue-backlog,page-watch message.txt
+
+`--alert` is the key of the message being judged and `--alert-keys` is every alert the project
+posts, so an entry naming any other key is refused rather than left to do nothing. A line the
+checker cannot read (no date, a date that is not a day, an allowance or rule it does not know, a
+second copy of an entry) exits 2 naming the line, and the whole record is refused with it. With no
+record nothing beyond the standard is allowed. Each entry is Dan's to add, with his date: never
+add one to make a failing message pass.
+
 ## Around the message
 
 - **The project's CLAUDE.md** records the bot and channel, which alerts are urgent, the one person
