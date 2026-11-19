@@ -16,10 +16,12 @@ import {
   LESSON_PROJECT,
   LESSON_SKIP,
   LESSON_SOURCE,
+  MAX_CHECK,
   MAX_SHORT,
   MIN_RULE,
   addsThis,
-  checkLine,
+  readCheckLine,
+  unindented,
   lessonAddition,
   lessonOptions,
   lessonsFile,
@@ -859,13 +861,16 @@ export const register: Register = on => {
       // line he read whole, so it must read as a check line and stand on a line of its own in the
       // question. One that does neither stops the picker rather than being dropped, or the entry's
       // check line would be asked about a second time with nothing saying why.
+      // It is refused here, before Dan is asked anything, when it holds what he could not see or
+      // read whole (security review of #3245), and the refusal says which, so the line can be reworded.
       const given = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_CHECK_KEY]
-      const check = checkLine(given)
-      if (given !== undefined && check === undefined)
+      const read = given === undefined ? undefined : readCheckLine(given)
+      const check = read !== undefined && 'line' in read ? read.line : undefined
+      if (read !== undefined && 'fault' in read)
         return {
-          deny: `Metadata "${LESSON_CHECK_KEY}" reads as no check line. Put the lesson's one check line there, on one line, word for word as it will be added to ${file}: "CHECK: <path> (full)", "CHECK: <path> (partial)" or "NO CHECK: <why no check can hold it>". Leave "${LESSON_CHECK_KEY}" out to ask about the rule alone.`,
+          deny: `Metadata "${LESSON_CHECK_KEY}" reads as no check line: ${read.fault}. Put the lesson's one check line there, word for word as it will be added to ${file}, on one line of plain ASCII, at most ${MAX_CHECK} characters: "CHECK: <path> (full)", "CHECK: <path> (partial)" or "NO CHECK: <why no check can hold it>". Leave "${LESSON_CHECK_KEY}" out to ask about the rule alone.`,
         }
-      if (check !== undefined && !question.split('\n').some(l => l.trim() === check))
+      if (check !== undefined && !question.split('\n').some(l => unindented(l) === check))
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this lesson.' }
@@ -885,7 +890,7 @@ export const register: Register = on => {
       const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}) }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
-      const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line,` : ''
+      const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line (last, when the entry has none),` : ''
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
           `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +

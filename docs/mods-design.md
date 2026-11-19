@@ -2620,15 +2620,36 @@ and the band question is removed rather than kept beside it (L29). Three defects
   may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
   rule or that none can, which the durable lesson check now asks for before a lesson is written.
   The same Add to LESSONS.md then covers that one line in that one entry, just before the SHORT
-  line, and the approval records it beside the rule. It is taken on the same footing as the rule,
+  line, or last in an entry that has none, and the approval records it beside the rule. That is
+  the one place `hooks/durable-lesson-check.sh` tells the session to write it, and one the lessons
+  file's reader reads (`claude-sync lesson_entries_render` scans every line of an entry after its
+  first, so it also reads a line after the SHORT line, where L865 has one; no approval covers that
+  place, and such a line is asked about). It is taken on the same footing as the rule,
   as text Dan read: the picker is refused unless the line is one line in a check line's shape
-  (`checkLine`: no line break of any kind, `CHECK:` with something named and `(full)` or
-  `(partial)`, or `NO CHECK:` with three words of reason) and stands whole on a line of its own in
-  the question, since a short line held to the question only by containment would pass as a
-  fragment of a longer one. The shape is deliberately no narrower than the lessons file's own
-  reading (`claude-sync lesson-faults`, which also holds each path's characters), so the picker
-  never refuses a line that file takes; the mod's question is whether the text is a check line and
-  nothing else, not whether it is a valid one. In the entry every other line is still read as the
+  (`readCheckLine`: `CHECK:` with something named and `(full)` or `(partial)`, or `NO CHECK:` with
+  three words of reason) and stands whole on a line of its own in the question, since a short line
+  held to the question only by containment would pass as a fragment of a longer one.
+  A security review of the first build (731ba496be) found the line could carry text he cannot see:
+  only some control characters were refused, so zero width characters, bidirectional controls, the
+  tag block (U+E0000 to U+E007F, invisible and readable by a model as ASCII), C1 controls and a tab
+  passed, at any length, and a run of tag characters behind the visible words was approved and
+  written with them. The class is now closed rather than listed: a check line is printable ASCII,
+  space to tilde, at most `MAX_CHECK` (300) characters, a cap measured against the one real line the
+  file held (185) and a `CHECK:` naming three files at the longest path in the config (288). The
+  picker refuses anything else before Dan is asked and says which character or length refused it.
+  Indentation is the spaces and tabs at a line's two ends (`unindented`) and never the language's
+  own trim, which also takes a byte order mark, a no break space and the line separators, so one
+  of those at the end of the entry's line no longer compares equal to the line he read. And an
+  approved line is not taken under a rule whose bold never closes, where the index would join the
+  line into the rule it renders. Visible words are not judged: any reason after `NO CHECK:`
+  passes, since Dan reads it, and deciding what a reason may say is not the mod's question.
+  The mod and the lessons file's own reading (`claude-sync lesson_check_records`) now differ both
+  ways. The file is narrower over a `CHECK:` line, since it also holds each path's characters; the
+  mod asks whether the text is a check line and nothing else, not whether it is a valid one. The
+  file is wider in three places, where the picker refuses a line the file takes and the session
+  rewords it: a `NO CHECK:` reason holding a character outside ASCII, a line over 300 characters,
+  and white space other than a space between words (at a tab the file's own record of the line
+  splits, so it judges only the part before it). In the entry every other line is still read as the
   rule's, so a different check line, a second one, one in another place, the same line under
   another rule or on another lesson, and any check line on an approval that showed him none fail
   the comparison and are asked about. An entry without the line still goes through, as it did

@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS } from '../hooks/rules.ts'
+import { APPROVAL_MS, MAX_CHECK } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
@@ -2083,6 +2083,104 @@ test("the picker shows Dan the check line it approves, or approves nothing: a li
   expect(refusalOf(await call($, addChecked))).toContain(ASKS)
   expect(refusalOf(await call($, addLesson))).toContain(ASKS)
   expect(w.ran).toEqual([])
+})
+
+// Security review of #3245: the picker took a check line holding characters Dan cannot see (a run of
+// tag characters behind the visible words was approved and written with them), and a line of any
+// length. Each character below is built from its number, so this file holds none of them.
+const pt = (...points: number[]) => String.fromCodePoint(...points)
+const REASON = 'NO CHECK: a judgement made case by case'
+
+test('the picker refuses a check line Dan could not see whole, before he is asked, and says why (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  // The metadata and the question's own line carry the same text, so only the character refuses it.
+  const unseen: [string, string, string][] = [
+    ['a run of tag characters behind the words', `${REASON}${pt(0xe0041, 0xe006c, 0xe0077, 0xe0061, 0xe0079, 0xe0073)}`, `character ${REASON.length + 1} of it is U+E0041`],
+    ['a zero width space inside a word', REASON.replace('judgement', `judge${pt(0x200b)}ment`), 'is U+200B'],
+    ['a zero width joiner at the end', `${REASON}${pt(0x200d)}`, 'is U+200D'],
+    ['a right to left override', REASON.replace('made', `${pt(0x202e)}made`), 'is U+202E'],
+    ['a bidirectional isolate', `${REASON}${pt(0x2066)}`, 'is U+2066'],
+    ['a C1 control, the 8 bit CSI', `${REASON}${pt(0x9b)}`, 'is U+009B'],
+    ['a byte order mark at the end', `${CHECK}${pt(0xfeff)}`, 'is U+FEFF'],
+    ['a no break space at the end', `${CHECK}${pt(0xa0)}`, 'is U+00A0'],
+    ['a tab between words', `${CHECK}${pt(0x09)}anything (full)`, 'is U+0009'],
+    ['a letter that only looks Latin', CHECK.replace('guard', `gu${pt(0x430)}rd`), 'is U+0430'],
+  ]
+  for (const [name, line, why] of unseen) {
+    const r = await proposeChecked($, w, 'Add to LESSONS.md', line, questionWith(line))
+    expect(`${name}: ${r.deny}`).toContain('reads as no check line')
+    expect(`${name}: ${r.deny}`).toContain(why)
+    expect(`${name}: ${r.deny}`).toContain('plain ASCII')
+  }
+  // A line too long to read whole, however plain: one character over the cap, and ten thousand.
+  const over = `CHECK: ${'hooks/'.padEnd(MAX_CHECK - 13, 'x')} (full)`
+  expect(over.length).toBe(MAX_CHECK + 1)
+  for (const line of [over, `CHECK: ${'x'.repeat(10_000)} (full)`]) {
+    const r = await proposeChecked($, w, 'Add to LESSONS.md', line, questionWith(line))
+    expect(`${line.length}: ${r.deny}`).toContain(`reads as no check line: it is ${line.length} characters, and a check line is at most ${MAX_CHECK}`)
+  }
+  // A clean line whose line in the question carries something unseen beside it is not the line he read.
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(`${CHECK}${pt(0xa0)}`))).deny).toContain('on a line of its own')
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(`${pt(0xfeff)}${CHECK}`))).deny).toContain('on a line of its own')
+  // Dan was asked nothing, and nothing was approved: not a line, and not the rule beside it.
+  expect(w.asked).toEqual([])
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // None of that is the picker refusing every check line: a line at the cap is asked and approved,
+  // and so is one indented with spaces and a tab, which is the file's indentation and no part of it.
+  const atCap = `CHECK: ${'hooks/'.padEnd(MAX_CHECK - 14, 'x')} (full)`
+  expect(atCap.length).toBe(MAX_CHECK)
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', atCap, questionWith(atCap))).deny).toBeUndefined()
+  expect((await proposeChecked($, w, 'Add to LESSONS.md', ` ${pt(0x09)}${CHECK} `, questionWith(` ${pt(0x09)}${CHECK}`))).deny).toBeUndefined()
+  expect(w.asked.length).toBe(2)
+  expect((await call($, addChecked)).deny).toBeUndefined()
+})
+
+test('an approved check line is added only as Dan read it: one carrying an unseen character, or under an unclosed rule, is asked about (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  const others = [
+    // The approved line with something behind it, before it or in it that the picker never showed.
+    ...[0xfeff, 0xa0, 0x200b, 0x2029, 0x0b, 0x0c, 0x85, 0x9b, 0x202e].flatMap(p => [addEntry(entryWith(`${CHECK}${pt(p)}`)), addEntry(entryWith(`${pt(p)}${CHECK}`))]),
+    addEntry(entryWith(`${CHECK}${pt(0xe0041, 0xe006c, 0xe0077, 0xe0061, 0xe0079, 0xe0073)}`)),
+    addEntry(entryWith(CHECK.replace('guard', `gu${pt(0x200d)}ard`))),
+    addEntry(entryWith(CHECK.replace(' (partial)', `${pt(0x09)}(partial)`))),
+    // The approved line under a rule whose bold never closes, which the index would join it into.
+    addEntry(entryWith(CHECK, ENTRY.replace('overwrite it.**', 'overwrite it.'))),
+  ]
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // None of them used it up, and the line as he read it still goes through, tab indented or not.
+  expect((await call($, addEntry(entryWith(`${pt(0x09)}${CHECK}`)))).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test('a check line in the metadata of any other picker changes nothing: its answers are its own and no lesson is approved (#3245)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  for (const source of ['next-issue', 'durable-lessons', 'Durable-Lesson', '', undefined, 7, null]) {
+    const before = w.asked.length
+    const r = await proposeLesson($, w, 'Add', { metadata: { ...(source === undefined ? {} : { source }), rule: RULE, check: CHECK } }, RULE, questionWith(CHECK))
+    expect(`${JSON.stringify(source)}: ${r.deny}`).toBe(`${JSON.stringify(source)}: undefined`)
+    // Dan saw the picker as Claude sent it, not the lesson picker's header and three answers.
+    const q = w.asked[before]?.questions[0]
+    if (!q) throw new Error(`Dan was asked no question under source ${JSON.stringify(source)}`)
+    expect(q.header).toBe('Durable')
+    expect(q.options.map(o => o.label)).toEqual(['Add', 'Skip'])
+    expect(contextOf(r)).not.toContain('Dan answered')
+    // And his answer to it approved neither the lesson nor its check line.
+    expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+    expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  }
+  // The same answer under the mod's own words, from a picker that is not the lesson's.
+  const r = await proposeLesson($, w, 'Add to LESSONS.md', { metadata: { source: 'next-issue', rule: RULE, check: CHECK } }, RULE, questionWith(CHECK))
+  expect(r.deny).toBeUndefined()
+  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // None of that is the write being refused whatever was asked: the lesson's own picker approves it.
+  await proposeChecked($, w, 'Add to LESSONS.md')
+  expect((await call($, addChecked)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
 })
 
 test('an approved check line lapses with its lesson after 10 minutes, and ends with the session (#3245)', withKit, async ($, on) => {

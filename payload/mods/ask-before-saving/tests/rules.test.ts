@@ -2,7 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
-import { addsThis, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, ruleText, shellAppended } from '../hooks/rules.ts'
+import { MAX_CHECK, addsThis, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, ruleText, shellAppended } from '../hooks/rules.ts'
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
@@ -670,8 +670,8 @@ const L1030_CHECK = 'CHECK: hooks/check-style-guide.sh (partial)'
 const withCheck = (line: string, entry = L1030_ADDED) => entry.replace('\n  SHORT:', `\n  ${line}\n  SHORT:`)
 
 test('a check line reads as one only in the shape the lessons file takes, on one line', () => {
-  // Every shape claude-sync lesson-faults accepts reads as one here, so the picker never refuses a
-  // line the lessons file would take.
+  // Every shape claude-sync lesson-faults accepts reads as one here, written in plain ASCII with
+  // spaces between its words and within the cap (the tests below hold those three limits).
   for (const ok of [
     'CHECK: hooks/x.sh (full)',
     'CHECK: hooks/x.sh, skills/y/check.py (partial)',
@@ -706,6 +706,124 @@ test('a check line reads as one only in the shape the lessons file takes, on one
     expect(`${JSON.stringify(bad)}: ${checkLine(bad)}`).toBe(`${JSON.stringify(bad)}: undefined`)
   // Read back from storage, anything that is not text is no check line (L50).
   for (const damaged of [undefined, null, 7, true, ['CHECK: hooks/x.sh (full)'], { check: 'x' }]) expect(checkLine(damaged)).toBeUndefined()
+})
+
+// Security review of 731ba496be (#3245): a check line could carry characters Dan cannot see, since
+// only some controls were refused. A run of tag characters after the visible words was approved with
+// them and written to the file. The class is closed, not listed: a check line is printable ASCII,
+// space to tilde, and nothing else. Every character here is built from its number, so this file
+// holds none of them.
+const at = (...points: number[]) => String.fromCodePoint(...points)
+const TAB = at(0x09)
+const UNSEEN: [string, string][] = [
+  ['a tab', TAB],
+  ['a vertical tab', at(0x0b)],
+  ['a form feed', at(0x0c)],
+  ['an escape', at(0x1b)],
+  ['a delete', at(0x7f)],
+  ['a C1 control', at(0x80)],
+  ['a next line', at(0x85)],
+  ['an 8 bit CSI', at(0x9b)],
+  ['a no break space', at(0xa0)],
+  ['a soft hyphen', at(0xad)],
+  ['a zero width space', at(0x200b)],
+  ['a zero width non joiner', at(0x200c)],
+  ['a zero width joiner', at(0x200d)],
+  ['a left to right mark', at(0x200e)],
+  ['a right to left mark', at(0x200f)],
+  ['a paragraph separator', at(0x2029)],
+  ['a bidirectional embedding', at(0x202a)],
+  ['a right to left override', at(0x202e)],
+  ['a word joiner', at(0x2060)],
+  ['a bidirectional isolate', at(0x2066)],
+  ['a pop isolate', at(0x2069)],
+  ['a variation selector', at(0xfe0f)],
+  ['a byte order mark', at(0xfeff)],
+  ['a run of tag characters spelling a word', at(0xe0041, 0xe006c, 0xe0077, 0xe0061, 0xe0079, 0xe0073)],
+  ['a cancel tag', at(0xe007f)],
+  // Visible, and still not a character a check line needs: the class is ASCII, not a list of the unseen.
+  ['an accented letter', at(0xe9)],
+  ['a curly apostrophe', at(0x2019)],
+  ['a long dash', at(0x2014)],
+  ['a letter from another alphabet that looks like a Latin one', at(0x430)],
+]
+
+test('a check line is printable ASCII only: no character Dan cannot see, at its end, inside it or between its words', () => {
+  for (const [name, c] of UNSEEN) {
+    for (const line of [`NO CHECK: a judgement made case by case${c}`, `NO CHECK: a judgement${c} made case by case`, `NO CHECK: a judgement made${c}case by case`, `CHECK: hooks/x.sh${c} (full)`, `CHECK: hooks/x${c}.sh (full)`, `${c}CHECK: hooks/x.sh (full)`]) {
+      if (c === TAB && (line.startsWith(c) || line.endsWith(c))) continue // a tab around the line is indentation, held below
+      expect(`${name} in ${JSON.stringify(line)}: ${checkLine(line)}`).toBe(`${name} in ${JSON.stringify(line)}: undefined`)
+    }
+  }
+  // A space is the one white space a check line holds: any other between its words is refused, the
+  // tab among them, where claude-sync's own record of the line splits.
+  for (const gap of [TAB, at(0x0b), at(0x0c), at(0x0d), at(0xa0), at(0x2003), at(0x3000)])
+    for (const line of [`CHECK:${gap}hooks/x.sh (full)`, `CHECK: hooks/x.sh${gap}(full)`, `CHECK: hooks/x.sh,${gap}hooks/y.sh (full)`, `NO CHECK:${gap}a judgement made case by case`, `NO CHECK: a${gap}judgement${gap}made`])
+      expect(`${JSON.stringify(line)}: ${checkLine(line)}`).toBe(`${JSON.stringify(line)}: undefined`)
+  // Every printable ASCII character may stand in a reason, so nothing a reason needs is refused.
+  const all = Array.from({ length: 0x7e - 0x21 + 1 }, (_, k) => at(0x21 + k)).join('')
+  expect(checkLine(`NO CHECK: every one of ${all}`)).toBe(`NO CHECK: every one of ${all}`)
+  // Indentation is spaces or tabs around the line, and is not part of it.
+  expect(checkLine(`${at(0x09)}  CHECK: hooks/x.sh (full) ${at(0x09)}`)).toBe('CHECK: hooks/x.sh (full)')
+})
+
+test('a check line is at most MAX_CHECK characters, a length the real lines fit in with room', () => {
+  const reason = (n: number) => `NO CHECK: ${'a judgement '.repeat(40)}`.slice(0, n - 1) + 'x'
+  expect(reason(MAX_CHECK).length).toBe(MAX_CHECK)
+  expect(checkLine(reason(MAX_CHECK))).toBe(reason(MAX_CHECK))
+  expect(checkLine(reason(MAX_CHECK + 1))).toBeUndefined()
+  const paths = (n: number) => `CHECK: ${'hooks/'.padEnd(n - 14, 'x')} (full)`
+  expect(paths(MAX_CHECK).length).toBe(MAX_CHECK)
+  expect(checkLine(paths(MAX_CHECK))).toBe(paths(MAX_CHECK))
+  expect(checkLine(paths(MAX_CHECK + 1))).toBeUndefined()
+  expect(checkLine(`CHECK: ${'x'.repeat(10_000)} (full)`)).toBeUndefined()
+  // The one check line in the lessons file when the cap was chosen (L865, 185 characters), and a
+  // CHECK naming three files at the longest path the config held (89 characters), both fit.
+  const L865 = "NO CHECK: the field that reports sampling differs for every API, so no shared guard can see it; each project's own reader needs a test with a sampled answer (slate#5204 builds Slate's)."
+  expect(L865.length).toBe(185)
+  expect(checkLine(L865)).toBe(L865)
+  const longest = 'skills/design-rounds/score/tests/fixtures/swift-test/command-line-tools-library-fault.txt'
+  expect(longest.length).toBe(89)
+  expect(checkLine(`CHECK: ${longest}, ${longest}, ${longest} (partial)`)).toBe(`CHECK: ${longest}, ${longest}, ${longest} (partial)`)
+})
+
+test('the approved check line is taken only as itself: nothing unseen rides on the entry line, and the bold above it is closed', () => {
+  const adds = (entry: string) => addsLesson(entry, L1030_RULE, L1030_CHECK)
+  // The same with a rule short enough to need no SHORT line, so the check line is the entry's last.
+  const brief = 'Never read a stored value straight into a comparison, because a damaged one compares false for ever.'
+  const last = (line: string, head = `- **L9. ${brief}** (slate#9, 2026-11-19)`) => addsLesson(`${head}\n  ${line}`, brief, L1030_CHECK)
+  // None of what follows is the predicate refusing everything.
+  expect(adds(withCheck(L1030_CHECK))).toBe(true)
+  expect(last(L1030_CHECK)).toBe(true)
+  const inside = (c: string) => L1030_CHECK.replace('hooks/', `hooks/${c}`)
+  for (const [name, c] of UNSEEN) {
+    // On the entry's line, where the picker never saw it: behind the line, in it, before it.
+    for (const line of [`${L1030_CHECK}${c}`, inside(c), `${c}${L1030_CHECK}`]) {
+      if (c === TAB && line !== inside(c)) continue // a tab around the line is indentation
+      expect(`${name}: ${adds(withCheck(line))}`).toBe(`${name}: false`)
+      expect(`${name}, last: ${last(line)}`).toBe(`${name}, last: false`)
+    }
+    if (c === TAB) continue
+    // An approval holding such a line, however it came to, covers no check line.
+    expect(`${name}, stored: ${addsLesson(withCheck(`${L1030_CHECK}${c}`), L1030_RULE, `${L1030_CHECK}${c}`)}`).toBe(`${name}, stored: false`)
+    // Nor does one ride behind the entry's last line, as white space the entry's end is trimmed of.
+    expect(`${name}, behind: ${last(`${L1030_CHECK}\n${c}`)}`).toBe(`${name}, behind: false`)
+  }
+  // Spaces and tabs around the entry's line are the file's indentation, and blank lines its spacing.
+  expect(adds(withCheck(`${TAB}${L1030_CHECK} ${TAB}`))).toBe(true)
+  expect(last(`${L1030_CHECK}  \n\n`)).toBe(true)
+  // A line over the cap is no check line, so an approval holding one covers none.
+  const long = `CHECK: ${'hooks/'.padEnd(MAX_CHECK, 'x')} (full)`
+  expect(addsLesson(withCheck(long), L1030_RULE, long)).toBe(false)
+  // The rule's bold must close above the check line, or the index joins the line into the rule.
+  const open = L1030_ADDED.replace('file instead.**', 'file instead.')
+  expect(addsLesson(open, L1030_RULE)).toBe(true) // as before this change, with no check line
+  expect(adds(withCheck(L1030_CHECK, open))).toBe(false)
+  expect(last(L1030_CHECK, `- **L9. ${brief} (slate#9, 2026-11-19)`)).toBe(false)
+  // Nor may the check line be what closes it.
+  const closing = 'NO CHECK: a judgement ** made case by case'
+  expect(addsLesson(withCheck(closing, open), L1030_RULE, closing)).toBe(false)
+  expect(addsLesson(withCheck(closing), L1030_RULE, closing)).toBe(true)
 })
 
 test('an approved lesson takes the one check line Dan approved with it, just before its SHORT line', () => {

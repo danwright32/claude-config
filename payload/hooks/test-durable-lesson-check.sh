@@ -273,6 +273,29 @@ else
   fi
 fi
 
+# AND THE SESSION IS TOLD THE LINE'S LIMITS AND ITS ONE PLACE, AS ASK BEFORE SAVING HOLDS THEM
+# (security review of claude-config#3245). His answer covers a check line only when it is plain
+# ASCII within the mod's cap, and only in one place in the entry, so a session told neither writes a
+# line the picker refuses or puts an approved one where it is asked about again. The cap is read from
+# the mod (L41), and the place is held in the mod's own words to Claude as well as in this hook's,
+# so the instruction, the approval's telling and the approval name one position.
+maxcheck="$(sed -n 's/^export const MAX_CHECK = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+register="$(dirname "${BASH_SOURCE[0]}")/../mods/ask-before-saving/hooks/register.ts"
+if [ -z "$maxcheck" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read MAX_CHECK from $rules, so the check line's limits in the instruction were compared against nothing"
+else
+  lim_missing=""
+  case "$reason" in *'on one line of plain ASCII'*) ;; *) lim_missing="$lim_missing ascii" ;; esac
+  case "$reason" in *"at most $maxcheck characters"*) ;; *) lim_missing="$lim_missing cap:$maxcheck" ;; esac
+  case "$reason" in *'the check line just before the SHORT line, or last when the entry needs no SHORT line'*) ;; *) lim_missing="$lim_missing place" ;; esac
+  grep -Fq 'just before the SHORT line (last, when the entry has none)' "$register" 2>/dev/null || lim_missing="$lim_missing place-as-the-mod-tells-it"
+  if [ -z "$lim_missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the instruction gives the check line's limits (plain ASCII, $maxcheck characters) and its one place, as ask before saving holds them"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the instruction and ask before saving disagree about the check line (${lim_missing# }), so a session writes a line the picker refuses or puts it where it is asked about again"
+  fi
+fi
+
 # AND THE MORNING PICKERS ASK THE SAME WAY (claude-config#3245). Scope modes offers the lessons
 # proposed overnight through this same picker and points at this hook's steps by NUMBER, so adding
 # the rungs step moved the step it named. Held here from both sides: the steps it names are the ones

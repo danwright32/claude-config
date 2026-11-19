@@ -3646,7 +3646,9 @@ lesson is the last of those places, since it holds only while a session reads it
 proposal then tells Dan which rung it reached and why the ones above do not fit, and shows him the
 entry's check line on a line of its own. His Add to LESSONS.md covers the rule and that one line
 together (the `ask-before-saving` row of the mods table says exactly what it covers), so he is asked
-once for each lesson.
+once for each lesson. For that the line is written in plain ASCII, at most 300 characters, and goes
+just before the entry's `SHORT:` line, or last in an entry that has none: the place the approval
+covers, and one `claude-sync lesson-checks` reads.
 
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
@@ -7654,12 +7656,21 @@ for word in the question) approves the one Edit or Write that only adds that rul
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
 still asks. Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
-entry, just before its `SHORT:` line. The picker is refused unless the line reads as a check line
-(`CHECK: <path> (full)` or `(partial)`, or `NO CHECK:` and a reason of three words) and stands on a
-line of its own in the question, so the line approved is the line Dan read. A different check line,
-a second one, one in another place, the same line under another rule or on another lesson, and any
-check line when the picker showed him none are asked about as before (rules.ts `checkLine`,
-`addsLesson`).
+entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
+unless the line reads as a check line (`CHECK: <path> (full)` or `(partial)`, or `NO CHECK:` and a
+reason of three words) and stands on a line of its own in the question, so the line approved is the
+line Dan read. It is also refused, before he is asked and with the reason, unless the line is plain
+printable ASCII (space to tilde: no tab, no control, nothing zero width, bidirectional or from the
+tag block, no letter that only looks Latin) and at most 300 characters, since his answer covers only
+text he can see and read whole (a security review of #3245 found a run of tag characters behind the
+visible words was approved and written with them). A different check line, a second one, one in
+another place, one carrying anything he was not shown, one under a rule whose bold never closes, the
+same line under another rule or on another lesson, and any check line when the picker showed him
+none are asked about as before (rules.ts `readCheckLine`, `addsLesson`). Visible words are not
+judged: any reason after `NO CHECK:` passes, because he reads it. The lessons file's own reader is
+wider in three places, where a line it takes is refused here and has to be reworded: a `NO CHECK:`
+reason holding a character outside ASCII, a line over 300 characters, and a tab or other white space
+that is not a space between words.
 For good on one file directly in a project's memory folder, once that save lands, also
 lets through the single line in that folder's `MEMORY.md` linking to it, once, until the same
 approval would lapse (#1794, Dan, 2026-10-26: "didn't I already give permission to save this?"): by
