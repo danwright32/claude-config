@@ -166,9 +166,18 @@ allowed_root() { # <physical path>
 # path_checks set NOTES_OK for the item, and NOTES_USED then says the exception was taken. Nothing
 # else under the state folder is: session-notes itself, a project, a session, a task folder, and
 # anything five or more levels down stay refused here.
+#
+# THE SAME SHAPE, FOR A SESSION STILL OPEN (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle
+# days"). That decision signs off a task folder's bulky folders, in a session still open, reaching
+# their judge. They are folders of this same four level shape, so no path is let past this list
+# that was not before: what changed is which of them the judge takes. This list never asked whether
+# a session had ended; the judge did, and still does for a folder of images or documents.
 STATE_DENY="it is Claude Code's own state, this tool's records among it"
-# The category whose judge answers for a session notes folder: it takes one only when the daily
-# keep rules list it and nothing in it was changed or opened in 30 days (categories/claude-records.sh).
+# The category whose judge answers for a session notes folder (categories/claude-records.sh). It
+# takes one only when the daily keep rules list it, by their own rules: as an ended session's folder
+# of images or documents, with nothing in it changed or opened in 30 days, or as a bulky leftover
+# in a session still open, with nothing in its task folder changed or opened in 7 days and no live
+# session working there.
 NOTES_CATEGORY=claude-records
 NOTES_OK="" NOTES_USED=""
 deny_reason() { # <path>

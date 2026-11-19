@@ -1032,11 +1032,19 @@ DR="$DIR/../../hooks/lib/disk-remove.sh"
 # Days ago, as touch -t takes it (L290: the list's age is set, never waited for).
 ago() { date -v-"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days ago" '+%Y%m%d%H%M'; }
 ahead() { date -v+"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days" '+%Y%m%d%H%M'; }
-# Writes a whole list naming each <path>, as keep_rules.py's remove run writes it, dated now.
-notes_listed() { # <path>...
-  local p
+# Writes one whole list naming each <path>, as keep_rules.py's remove run writes it, dated now.
+list_written() { # <list name> <path>...
+  local name="$1" p
+  shift
   mkdir -p "$KRS"
-  { printf 'readable-folders\t1\n'; for p in "$@"; do printf 'folder\t2000000\t%s\n' "$p"; done; printf 'end\t%s\n' "$#"; } > "$NLIST"
+  { printf '%s\t1\n' "$name"; for p in "$@"; do printf 'folder\t2000000\t%s\n' "$p"; done; printf 'end\t%s\n' "$#"; } > "$KRS/$name.tsv"
+}
+# The list of folders of images and documents naming each <path>. A real run writes every list each
+# day, so the list of open sessions' bulky leftovers is written beside it, naming none, unless a
+# case has put one there.
+notes_listed() { # <path>...
+  list_written readable-folders "$@"
+  [ -f "$KRS/open-leftovers.tsv" ] || list_written open-leftovers
 }
 notes_home() {
   fresh
@@ -1167,6 +1175,141 @@ check "agreement: and refuses none of them as state" "$(hasnt "$REMOVED" "never 
 check "agreement: both folders are gone from the notes" "$([ ! -e "$NT/photos" ] && [ ! -e "$NT/my sources" ] && echo ok || echo "one is still there")"
 check "agreement: they went through trash, twice" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')" 2)"
 check "agreement: and the notes beside them are untouched" "$([ -f "$NT/evidence.md" ] && [ -f "$NT/fixtures/a.bin" ] && echo ok || echo "a note is gone")"
+default_stubs
+
+# ------------------------------------------------------------------------------------------------
+# Bulky leftovers in a session that is still open (Dan, 2026-11-19, recorded on #3235: "Offer after
+# 7 idle days"). The daily keep rules list them in open-leftovers.tsv, by their own definition of
+# bulky, and remove none. Each is offered, to the Trash, once nothing in its TASK folder was changed
+# or opened for 7 days and no live session is working there.
+# ------------------------------------------------------------------------------------------------
+OSID=33333333-3333-4333-8333-333333333333
+OSES="$H/.claude/state/session-notes/-Users-x-proj/$OSID"
+OT="$OSES/task-9"; OBUSY="$OSES/task-busy"
+OLIST="$KRS/open-leftovers.tsv"
+open_listed() { list_written readable-folders; list_written open-leftovers "$@"; }
+open_home() {
+  fresh
+  mkdir -p "$OT/fixtures" "$OT/node_modules" "$OT/small" "$OT/repo/.git" "$OBUSY/fixtures" "$H/.claude/sessions"
+  printf 'x\n' > "$OT/fixtures/a.bin"; printf 'x\n' > "$OT/node_modules/m.js"; printf 'n\n' > "$OT/handoff.md"
+  printf 'n\n' > "$OT/small/n.md"; printf 'x\n' > "$OT/repo/a.bin"; printf 'x\n' > "$OBUSY/fixtures/a.bin"
+  # The session is open, working somewhere else; a second one is working inside task-busy.
+  printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$OSID" > "$H/.claude/sessions/1.json"
+  printf '{"pid":2,"sessionId":"s2","cwd":"%s/fixtures/run"}\n' "$OBUSY" > "$H/.claude/sessions/2.json"
+  old "$H"
+  open_listed "$OT/fixtures" "$OT/node_modules" "$OT/repo" "$OBUSY/fixtures" "$OT/handoff.md" "$OT" "$OT/gone-since"
+}
+open_rows() { dcr_review_items "$REC" | awk -F "$S" -v p="$OSES/" '$2 == "claude-records" && index($4, p) == 1 { print $4 "|" $3 "|" $5 }' | sort; }
+
+open_home
+run_scan --only claude-records
+check "open leftovers: the scan exits 0, the kind measured" "$(eq "$RC|$(status_of claude-records)" "0|measured")"
+check "open leftovers: a listed folder whose task folder sat idle is offered, to the Trash" "$(eq "$(state_of "$OT/fixtures")|$(method_of "$OT/fixtures")" "offerable|trash")"
+check "open leftovers: and so is its sibling" "$(eq "$(state_of "$OT/node_modules")" offerable)"
+check "open leftovers: the row says its own rule, which is not the page's 30 days" "$(has "$(detail_of "$OT/fixtures")" "in a session still open, with nothing in its task folder changed or run in 7 days")"
+check "open leftovers: a listed folder that is a git checkout now is not offerable" "$(has "$(state_of "$OT/repo")" "not offerable: it is a git checkout now")"
+check "open leftovers: one in a task folder a live session is working inside is not offerable" "$(has "$(state_of "$OBUSY/fixtures")" "not offerable: a session is working in its task folder ($OBUSY/fixtures/run)")"
+check "open leftovers: a listed file, a listed task folder and a listed folder gone since are no rows" "$(eq "$(item_of "$OT/handoff.md")$(item_of "$OT")$(item_of "$OT/gone-since")" "")"
+check "open leftovers: a folder in the task folder the list does not name is no row" "$(eq "$(item_of "$OT/small")" "")"
+check "open leftovers: exactly the four listed folders are rows" "$(eq "$(open_rows | wc -l | tr -d ' ')" 4)"
+judge claude-records "$OT/fixtures"
+check "open leftovers judge: a listed folder in an idle task folder is offerable" "$(eq "$JUDGED" offerable)"
+judge claude-records "$OT/small"
+check "open leftovers judge: a child the keep rules do not call bulky is not offerable" "$(has "$JUDGED" "not offerable: the daily keep rules run does not list it")"
+judge claude-records "$OT/handoff.md"
+check "open leftovers judge: a notes file in the task folder is not offerable, listed or not" "$(has "$JUDGED" "not offerable: it is not a folder")"
+judge claude-records "$OT"
+check "open leftovers judge: the task folder itself is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$OSES"
+check "open leftovers judge: nor the session folder" "$(has "$JUDGED" "not offerable: ")"
+# Seven days, read over the whole task folder: one day short of it is not idle, whichever time moved.
+touch -m -t "$(ago 6)" "$OT/handoff.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a note beside it written 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days (handoff.md)")"
+touch -m -t "$(ago 8)" "$OT/handoff.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: the same note written 8 days ago leaves it offerable, well inside the 30 days other rows wait" "$(eq "$JUDGED" offerable)"
+touch -a -t "$(ago 6)" "$OT/small/n.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a file in a sibling folder opened 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was opened within 7 days (small/n.md)")"
+touch -a -t "$(ago 8)" "$OT/small/n.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: opened 8 days ago leaves it offerable" "$(eq "$JUDGED" offerable)"
+touch -m -t "$(ago 6)" "$OT/fixtures/a.bin"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a file inside the leftover itself changed 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days (fixtures/a.bin)")"
+touch -t "$OLD" "$OT/fixtures/a.bin"
+touch -m "$OT/small"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a folder inside the task folder changed just now makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days")"
+touch -t "$OLD" "$OT/small"
+# The task folder's own time moves when a leftover in it goes to the Trash, so it is never read.
+touch -m "$OT"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: the task folder's own time, which a removal from it moves, does not count" "$(eq "$JUDGED" offerable)"
+mkdir -p "$OT/idle-locked"; printf 'x\n' > "$OT/idle-locked/f"; old "$OT/idle-locked"; chmod 000 "$OT/idle-locked"
+judge claude-records "$OT/fixtures"
+check "open leftovers idle: a part of the task folder whose times cannot be read makes it unmeasured" "$(has "$JUDGED" "unmeasured: ")"
+chmod 755 "$OT/idle-locked"; rm -rf "$OT/idle-locked"; old "$OT"
+# A live session working in the task folder is never idle, however old every file in it is.
+printf '{"pid":3,"sessionId":"s3","cwd":"%s"}\n' "$OT" > "$H/.claude/sessions/3.json"
+judge claude-records "$OT/fixtures"
+check "open leftovers judge: a live session whose working folder is the task folder makes it not offerable" "$(has "$JUDGED" "not offerable: a session is working in its task folder")"
+rm -f "$H/.claude/sessions/3.json"
+chmod 000 "$H/.claude/sessions/1.json"; judge claude-records "$OT/fixtures"
+check "open leftovers judge: when the live sessions cannot be read it is unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
+chmod 644 "$H/.claude/sessions/1.json"
+# The list is read as the other one is: missing, old or cut, it offers nothing and says why.
+touch -t "$(ago 3)" "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: a list three days old makes the folder unmeasured" "$(has "$JUDGED" "unmeasured: whether it is one of the bulky leftovers in the notes of sessions still open is not known: the daily keep rules run last listed them 3 days ago")"
+rm -f "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: with no list the folder is unmeasured" "$(has "$JUDGED" "the daily keep rules run has not written its list")"
+run_scan --only claude-records
+check "open leftovers list: and the kind says which of its lists is missing" "$(has "$(status_of claude-records)" "unmeasured: bulky leftovers in the notes of sessions still open: the daily keep rules run has not written its list")"
+check "open leftovers list: and offers no row" "$(eq "$(open_rows | grep -c '|offerable$')" 0)"
+printf 'open-leftovers\t1\nfolder\t2000000\t%s\n' "$OT/fixtures" > "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: a list with no end line is unmeasured" "$(has "$JUDGED" "the daily keep rules run's list is not whole")"
+printf 'readable-folders\t1\nfolder\t2000000\t%s\nend\t1\n' "$OT/fixtures" > "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: the other list's header in its place is not read as this one" "$(has "$JUDGED" "the daily keep rules run's list is not whole")"
+
+# The page and the remover agree, by the real judge: both ticked leftovers of one task folder go to
+# the Trash in one plan (the first one's going moves the task folder's own time just before the
+# second is judged again), each logged before it went and checked gone after.
+open_home
+dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; $(printf %q "$DC_ROOT")/*) /bin/rm -rf \"\$a\" ;; *) echo \"trash stub: refused \$a\" >&2; exit 1 ;; esac; done"
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only claude-records
+OIDS="$(dcr_review_items "$REC" | awk -F "$S" -v p="$OSES/" '$2 == "claude-records" && index($4, p) == 1 && $5 == "offerable" { print $1 }')"
+check "open agreement: the scan offered the two idle leftovers (a control on the plan below)" "$(eq "$(printf '%s\n' "$OIDS" | grep -c .)" 2)"
+OSCAN="$(dcr_header "$REC" scan_id)"
+{ printf 'scan_id %s\ncount 2\n' "$OSCAN"; printf '%s\n' "$OIDS" | sed 's/^/item /'; } > "$H/open-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/open-plan" 2>&1)"; RRC=$?
+check "open agreement: disk-remove.sh takes both rows the page offered" "$(eq "$RRC|$(grep -c '^trashed ' <<< "$REMOVED")" "0|2")"
+check "open agreement: both leftovers are gone" "$([ ! -e "$OT/fixtures" ] && [ ! -e "$OT/node_modules" ] && echo ok || echo "one is still there")"
+check "open agreement: they went through trash, twice" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')" 2)"
+OLOG="$STATE/removals/$OSCAN.log"
+check "open agreement: each has an INTENT line naming the Trash, written before it went" "$(eq "$(awk -F '\t' '$1 == "INTENT" && $5 == "trash"' "$OLOG" | wc -l | tr -d ' ')" 2)"
+check "open agreement: and an OUTCOME line saying it was checked gone" "$(eq "$(awk -F '\t' '$1 == "OUTCOME" && $5 == "trashed"' "$OLOG" | wc -l | tr -d ' ')" 2)"
+check "open agreement: the notes, the small folder, the checkout and the busy task folder are untouched" \
+  "$([ -f "$OT/handoff.md" ] && [ -f "$OT/small/n.md" ] && [ -f "$OT/repo/a.bin" ] && [ -f "$OBUSY/fixtures/a.bin" ] && echo ok || echo "something else went")"
+# Asked for outside its exception, by a record that claims each is offerable: the remover itself
+# refuses what is not a folder of the shape, and the real judge refuses the rest.
+open_home
+: > "$DC_ROOT/open-items"
+oitem() { printf '%s\n' "$1$S$2$S$3$S$4$S${S}offerable$S" >> "$DC_ROOT/open-items"; }
+oitem x1 claude-records trash "$OT/handoff.md"
+oitem x2 claude-records trash "$OT/small"
+oitem x3 claude-records trash "$OT"
+oitem x4 claude-records trash "$OBUSY/fixtures"
+oitem x5 claude-records delete "$OT/fixtures"
+oitem x6 caches trash "$OT/fixtures"
+oitem x7 claude-records trash "$OT/repo"
+mkdir -p "$STATE"; dcr_write "$REC" open-x "$(date +%s)" "$DC_ROOT/open-items"
+printf 'scan_id open-x\ncount 7\nitem x1\nitem x2\nitem x3\nitem x4\nitem x5\nitem x6\nitem x7\n' > "$H/open-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/open-plan" 2>&1)"; RRC=$?
+oline() { grep -F -- "$1" <<< "$REMOVED" | awk 'NR == 1'; }
+check "open refusals: the plan exits 5 and trashes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")|$(dc_calls trash | wc -l | tr -d ' ')" "5|0|0")"
+check "open refusals: a task folder's notes file is refused by the remover as state" "$(has "$(oline "$OT/handoff.md:")" "never removed: it is Claude Code's own state")"
+check "open refusals: a child the keep rules do not call bulky is refused by its judge" "$(has "$(oline "$OT/small:")" "judged again just now: not offerable: the daily keep rules run does not list it")"
+check "open refusals: the task folder itself is refused by the remover as state" "$(has "$(oline "$OT:")" "never removed: it is Claude Code's own state")"
+check "open refusals: a leftover where a session is working is refused by its judge" "$(has "$(oline "$OBUSY/fixtures:")" "judged again just now: not offerable: a session is working in its task folder")"
+check "open refusals: a leftover asked for by deleting, or under another kind, is refused by the remover" "$(eq "$(grep -c "skipped.*$OT/fixtures: never removed: it is Claude Code's own state" <<< "$REMOVED")" 2)"
+check "open refusals: a listed folder that is a checkout now is refused by its judge" "$(has "$(oline "$OT/repo:")" "judged again just now: not offerable: it is a git checkout now")"
+check "open refusals: everything asked for is still there" "$([ -f "$OT/handoff.md" ] && [ -f "$OT/small/n.md" ] && [ -f "$OT/fixtures/a.bin" ] && [ -f "$OBUSY/fixtures/a.bin" ] && [ -f "$OT/repo/a.bin" ] && echo ok || echo "something went")"
 default_stubs
 
 # ================================================================================================

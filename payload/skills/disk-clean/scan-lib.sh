@@ -298,14 +298,31 @@ dcs_recent_file() { # <dir> <days> <stderr file> [<prune name>...]
 # never lists a folder iCloud keeps only in the cloud, since that makes iCloud fetch it: such a part
 # makes the item unmeasured, as does anything find could not read, or find failing.
 dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
+  dcs_idle "$DCS_UNUSED_DAYS" 0 "$@"
+}
+# The reading the floor is, for any number of days: keeps V at offerable only when nothing at or
+# beneath <path> was changed or opened in the last <days> days, by the times and with the gaps the
+# floor's own comment gives. The one reading of "changed or opened", so a rule with a window of its
+# own (Dan, 2026-11-19, recorded on #3235: a task folder idle for 7 days) asks the floor's question
+# rather than a second one (L261).
+#
+# <depth> is 0 to read <path> itself with everything beneath it, as the floor does, or 1 to leave
+# out <path>'s own times and read only what it holds. A folder's own modification time moves when
+# an entry directly in it is made, removed or renamed, so depth 1 is for a folder whose direct
+# entries disk-clean itself removes: without it, moving one ticked item to the Trash would make
+# every sibling read as changed just now. A <name> holding a slash is a path pattern, for the files
+# of a whole folder the scan itself reads (a checkout's .git).
+dcs_idle() { # <days> <depth: 0 or 1> <path> [<name or path pattern whose access time the scan itself moves>...]
   [ "${V:-}" = offerable ] || return 0
-  local p="${1%/}" n hit rc rel why err="$DCS_WORK/floor.err.$$"
-  shift
+  local DCS_UNUSED_DAYS="$1" depth="$2" p="${3%/}" n hit rc rel why err="$DCS_WORK/floor.err.$$"
+  shift 3
   local ex=( -name .disk-clean-excludes-nothing )
-  for n in "$@"; do ex=( "${ex[@]}" -o -name "$n" ); done
+  for n in "$@"; do
+    case "$n" in */*) ex=( "${ex[@]}" -o -path "$n" ) ;; *) ex=( "${ex[@]}" -o -name "$n" ) ;; esac
+  done
   why="so whether it was changed or opened in $DCS_UNUSED_DAYS days is not known"
   dcs_floor_ref || { V="unmeasured: the reference time for the $DCS_UNUSED_DAYS day rule could not be made ($DCS_WHY), $why"; return 0; }
-  hit="$(find "$p" -type d \( "${DCS_DL[@]}" \) -print -quit \
+  hit="$(find "$p" -mindepth "$depth" -type d \( "${DCS_DL[@]}" \) -print -quit \
     -o \( -newermm "$DCS_FLOOR_REF" -o -type f ! \( "${ex[@]}" \) -neweram "$DCS_FLOOR_REF" \) -print -quit 2> "$err")"; rc=$?
   hit="${hit%%$'\n'*}"
   if [ -n "$hit" ]; then
@@ -332,12 +349,13 @@ dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
   rm -f "$err"
   return 0
 }
-# Makes, once per process, the file whose modification time is DCS_UNUSED_DAYS days ago, which every
-# floor find compares against. Sets DCS_WHY and fails when it cannot.
+# Makes, once per process and per number of days, the file whose modification time is
+# DCS_UNUSED_DAYS days ago (dcs_idle's <days> while it runs), which every floor find compares
+# against, and sets DCS_FLOOR_REF to it. Sets DCS_WHY and fails when it cannot.
 DCS_FLOOR_REF=""
 dcs_floor_ref() {
-  [ -n "$DCS_FLOOR_REF" ] && [ -f "$DCS_FLOOR_REF" ] && return 0
-  local now then stamp f="$DCS_WORK/floor.ref.$$"
+  local now then stamp f="$DCS_WORK/floor.ref.$DCS_UNUSED_DAYS.$$"
+  if [ -f "$f" ]; then DCS_FLOOR_REF="$f"; return 0; fi
   now="$(date '+%s')" || { DCS_WHY="date failed"; return 1; }
   then=$(( now - DCS_UNUSED_DAYS * 86400 ))
   stamp="$(date -r "$then" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "@$then" '+%Y%m%d%H%M.%S' 2>/dev/null)"
