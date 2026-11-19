@@ -7661,7 +7661,19 @@ save the payload write gate refuses is never asked about. Dan's Add to LESSONS.m
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
+still asks. Since #3295 the picker is refused, before he is asked and saying which character and
+where, when its rule or its question holds a character he cannot see: a control other than the
+newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
+width, bidirectional, the tag block, a soft hyphen, a byte order mark), private use, a code point
+no character is assigned to, a space that is not the plain one, or anything else drawn as nothing
+(rules.ts `unseenIn`; the spaces and tabs at a line's two ends are indentation). A rule is prose,
+so it is not held to ASCII as a check line is: an accented letter, a curly quote or a
+multiplication sign stands. The opening of an HTML comment and a markdown link are refused too,
+since a surface can draw less than their text, and so is a question over 1,500 characters, since
+the dialog cuts one at 2,000 (read in Claude Code 2.1.328 on 2026-11-19). The entry written under
+his answer is held to the same class, its `SHORT:` line included, which the picker never shows,
+and the question asked before a For good is held as the lesson's is.
+Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
 unless the line reads as a check line (`CHECK: <path> (full)` or `(partial)`, or `NO CHECK:` and a
@@ -7705,7 +7717,7 @@ writes is said whole, with why its new lines could not be told.
 </td><td>
 
 #618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216,
-#3245
+#3245, #3295
 
 </td></tr>
 <tr><td>

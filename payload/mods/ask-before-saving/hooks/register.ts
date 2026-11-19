@@ -22,6 +22,9 @@ import {
   addsThis,
   readCheckLine,
   unindented,
+  questionFault,
+  shownFault,
+  unseenIn,
   lessonAddition,
   lessonOptions,
   lessonsFile,
@@ -853,6 +856,11 @@ export const register: Register = on => {
       const rule = typeof ask.metadata?.rule === 'string' ? ruleText(ask.metadata.rule) : ''
       if (rule.length < MIN_RULE)
         return { deny: `Put the whole rule, word for word as it will be added to ${file}, in metadata "rule" (at least ${MIN_RULE} characters), and state it in the question.` }
+      // His answer covers the rule because he read it (#3295), so one holding what he cannot see, or
+      // what a surface may draw as less than its text, is refused before he is asked, as it was sent:
+      // the comparisons below fold white space, which would read a tab or a no break space as a space.
+      const hidden = shownFault(String(ask.metadata?.rule))
+      if (hidden !== undefined) return { deny: `Metadata "rule" would not reach Dan as written: ${hidden}. He approves only text he can read, so reword the rule without it, in the metadata and in the question alike, and ask again.` }
       if (questions.length !== 1 || typeof questions[0]?.question !== 'string')
         return { deny: `Ask one question about this lesson, stating the rule word for word as metadata "rule" carries it.` }
       const question = questions[0].question as string
@@ -872,6 +880,10 @@ export const register: Register = on => {
         }
       if (check !== undefined && !question.split('\n').some(l => unindented(l) === check))
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
+      // The whole question is what he reads (#3295): one holding what he cannot see, or longer than
+      // the dialog shows, where the rule or the check line could stand past the cut, is not asked.
+      const unread = questionFault(question)
+      if (unread !== undefined) return { deny: `The question would not reach Dan as written: ${unread}. He approves only text he can read whole, so reword it and ask again.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this lesson.' }
 
@@ -919,6 +931,12 @@ export const register: Register = on => {
       const question = questions[0].question as string
       const missing = q.files.filter(f => !question.includes(f))
       if (missing.length) return { deny: `The question must name the file the rule would go to (${missing.join(', ')}) and state the rule in one plain sentence, such as "Save to ${q.files[0]} for good: <the rule>?".` }
+      // He decides on the words he reads (#3295), and Just this session puts them in the system
+      // prompt, so a question holding what he cannot see, or longer than the dialog shows, is not
+      // asked. A file's own name is the mod's to show, in the answers too, so one that holds such a
+      // character is set aside first, or its save could never be asked about at all (L665).
+      const unread = questionFault(q.files.reduce((text, f) => (unseenIn(f) ? text.split(f).join('x'.repeat(f.length)) : text), question))
+      if (unread !== undefined) return { deny: `The question would not reach Dan as written: ${unread}. He decides on the words he can read whole, so reword it and ask again, with the same metadata.` }
       // An answer only Dan's dialog may give: one the call already carries is refused, never read.
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this save.' }

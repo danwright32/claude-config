@@ -605,17 +605,138 @@ export const readCheckLine = (s: unknown): { line: string } | { fault: string } 
  *
  * It asks whether the text is a check line at all, so that nothing else can be approved as one. The
  * lessons file's own reading (claude-sync lesson_check_records) differs both ways. It is narrower
- * over a CHECK line, since it also holds each path's characters. It is wider in three places, where
+ * over a CHECK line, since it also holds each path's characters. It is wider in two places, where
  * the picker refuses a line the file takes, and the session is told why and can reword it: a NO
- * CHECK reason holding a character outside ASCII, a line over MAX_CHECK characters (the file has no
- * limit), and white space other than a space inside the line (the file takes a tab, a form feed, a
- * vertical tab or a carriage return between words, and at a tab its own record of the line splits,
- * so it judges only the part before it). Every other line the file takes reads as one here.
+ * CHECK reason holding a character outside ASCII, and a line over MAX_CHECK characters (the file
+ * has no limit). Since #3294 the file's reader, like the picker, refuses a tab, a carriage return
+ * or another control character inside the line, and a line running on to the next one: its record
+ * of a line once split at a tab, so it judged only the part before it. Every other line the file
+ * takes reads as one here.
  */
 export const checkLine = (s: unknown): string | undefined => {
   const read = readCheckLine(s)
   return 'line' in read ? read.line : undefined
 }
+
+// What Dan cannot see (#3295). His answer in a picker covers text because he read it, so the text a
+// picker shows him, and the entry written under his answer, hold no character that is drawn as
+// nothing, that moves or hides the text around it, or that reads as a plain space and is not one.
+// A rule is prose and quotes real text, so unlike a check line it is not held to ASCII: every
+// letter, mark and symbol of any alphabet stands. What is refused is a class, by Unicode's own
+// properties, so a character nobody listed is still in it:
+// - every control but the newline (Cc: the tab, the carriage return, the escape that starts a
+//   terminal sequence, the C1 controls),
+// - every format character (Cf: the zero width ones, the bidirectional controls, the tag block, the
+//   soft hyphen, the byte order mark),
+// - private use, surrogate halves and code points no character is assigned to (Co, Cs, Cn; a
+//   character newer than the engine's Unicode tables reads as unassigned, and is refused),
+// - every space but the plain one, and the line and paragraph separators (Zs, Zl, Zp),
+// - whatever else is drawn as nothing by default (Default_Ignorable_Code_Point: the variation
+//   selectors, the Hangul fillers, the combining grapheme joiner), and the blank braille pattern,
+//   which no property covers.
+// Claude Code's own dialog puts a replacement mark over most of the same class (read in 2.1.328 on
+// 2026-11-19), which shows Dan that something is there and not what, while the text written is the
+// character itself. The class is written as property escapes and one code point by number, so the
+// source holds none of the characters it refuses.
+const UNSEEN = new RegExp(String.raw`[^\P{C}\n]|[^\P{Z} ]|\p{Default_Ignorable_Code_Point}|` + String.fromCodePoint(0x2800), 'u')
+
+const within = (p: number, ...ranges: [number, number][]) => ranges.some(([from, to]) => p >= from && p <= to)
+
+/** A refused character in words, for the session that must find it and reword: the commonest by name, the rest by kind. */
+const unseenName = (c: string): string => {
+  const p = c.codePointAt(0) ?? 0
+  const named: Record<number, string> = {
+    0x09: 'a tab',
+    0x0d: 'a carriage return',
+    0x1b: 'the escape character, which starts a terminal escape sequence',
+    0xa0: 'a no break space',
+    0xad: 'a soft hyphen',
+    0x200b: 'a zero width space',
+    0x200c: 'a zero width non joiner',
+    0x200d: 'a zero width joiner',
+    0x2028: 'a line separator',
+    0x2029: 'a paragraph separator',
+    0xfeff: 'a byte order mark',
+  }
+  const name = named[p]
+  if (name !== undefined) return name
+  if (p === 0x61c || within(p, [0x200e, 0x200f], [0x202a, 0x202e], [0x2066, 0x2069])) return 'a bidirectional control'
+  if (within(p, [0xe0000, 0xe007f])) return 'a tag character'
+  if (within(p, [0xfe00, 0xfe0f], [0xe0100, 0xe01ef])) return 'a variation selector'
+  if (/\p{Cc}/u.test(c)) return 'a control character'
+  if (/\p{Cf}/u.test(c)) return 'a format character, which is drawn as nothing'
+  if (/\p{Co}/u.test(c)) return 'a private use character'
+  if (/\p{Cs}/u.test(c)) return 'half of a surrogate pair'
+  if (/\p{Cn}/u.test(c)) return 'a code point no character is assigned to'
+  if (/\p{Zs}/u.test(c)) return 'a space that is not the plain one'
+  return 'a character drawn as nothing'
+}
+
+/**
+ * The first character of `s` Dan cannot see (the class above), or undefined when he can read all of
+ * it: `at` is its place counted in characters from 1, `code` its code point, `what` its name or
+ * kind, and `after` the visible text of its own line just before it, at most 24 characters, empty
+ * at the start of a line.
+ *
+ * The spaces and tabs at the two ends of a line are the text's indentation and are not judged, as
+ * around a check line (unindented): a wrapped rule is indented in the lessons file, by either. A tab
+ * anywhere else is refused, since the dialog draws it as a space and the file would hold the tab.
+ */
+export const unseenIn = (s: string): { at: number; code: string; what: string; after: string } | undefined => {
+  let start = 0
+  for (const line of s.split('\n')) {
+    const lead = /^[ \t]*/.exec(line)?.[0].length ?? 0
+    const m = UNSEEN.exec(unindented(line))
+    if (m) {
+      const index = start + lead + m.index
+      const code = (m[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')
+      return { at: Array.from(s.slice(0, index)).length + 1, code: `U+${code}`, what: unseenName(m[0]), after: Array.from(line.slice(0, lead + m.index).replace(/^[ \t]+/, '')).slice(-24).join('') }
+    }
+    start += line.length + 1
+  }
+  return undefined
+}
+
+/**
+ * Why Dan would not read text as it is written, in words for the session that sent it, or undefined
+ * when he would (#3295). Three things, the first found:
+ * - a character he cannot see (unseenIn), named by its code point and its place;
+ * - the opening of an HTML comment, which a surface that draws markdown hides with all that follows
+ *   it. The terminal dialog draws a question as plain text (read in 2.1.328), and the desktop and
+ *   mobile surfaces were not read, so it is refused wherever the picker is drawn (L648);
+ * - a markdown link, a bracket pair straight before a parenthesis pair on one line. The terminal
+ *   dialog draws one that points at a file as its label alone, in the part of a question after its
+ *   first blank line, and a surface drawing markdown does so for every link.
+ * Measured 2026-11-19: none of the 895 entries of the lessons file, and none of the 186 picker
+ * calls in the transcripts this Mac kept, held any of the three.
+ */
+export const shownFault = (s: string): string | undefined => {
+  const unseen = unseenIn(s)
+  if (unseen) return `character ${unseen.at} of it is ${unseen.code}, ${unseen.what}, ${unseen.after ? `right after ${JSON.stringify(unseen.after)}` : 'at the start of its line'}`
+  const place = (index: number) => Array.from(s.slice(0, index)).length + 1
+  const comment = s.indexOf('<!--')
+  if (comment !== -1) return `it holds "<!--" at character ${place(comment)}, which opens an HTML comment, and a surface that draws markdown hides a comment`
+  const link = /\[[^[\]\n]*\]\([^()\n]*\)/.exec(s)
+  if (link) return `it holds a markdown link at character ${place(link.index)}, ${JSON.stringify(link[0])}, and a link can be drawn as its label alone`
+  return undefined
+}
+
+/**
+ * The longest question a picker of this mod's asks, in characters as the language counts them. Dan
+ * answers for text he read, and Claude Code's dialog cuts a question at 2,000 of these and ends it
+ * with an ellipsis (read in 2.1.328 on 2026-11-19: the question is sliced to 2,000 before it is
+ * drawn), so a rule or a check line past the cut was approved unread. The cap sits under the cut
+ * with room for a surface that shows less. Measured the same day: the longest rule in the lessons
+ * file was 565 characters and a check line is at most MAX_CHECK, and of the picker calls in the
+ * transcripts this Mac kept, the longest lesson question of 9 was 753 and the longest memory
+ * question of 177 was 462. A rule has no cap of its own: the question must state it, so this one
+ * holds it.
+ */
+export const MAX_QUESTION = 1500
+
+/** Why a picker's question would not reach Dan as written, or undefined: shownFault, and no longer than MAX_QUESTION. */
+export const questionFault = (question: string): string | undefined =>
+  shownFault(question) ?? (question.length > MAX_QUESTION ? `it is ${question.length} characters, and a question is shown whole only up to ${MAX_QUESTION}` : undefined)
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -711,8 +832,15 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * or a no break space behind the last line, so the line is read from a copy trimmed of spaces, tabs
  * and newlines only. And the rule's bold must close above the check line: where it never closes,
  * the index joins every following line of the entry into the rule it renders, the check line too.
+ *
+ * No line of the entry holds a character Dan cannot see (#3295, unseenIn), and neither does the
+ * rule the approval holds, which is read back from storage (L50). The comparison below folds every
+ * run of white space into one space, so a tab, a no break space or a line separator in the entry
+ * once read as the space he saw in the rule. And the SHORT line is never shown in the picker at
+ * all, while the index carries it into every session, so it was where anything unseen could ride.
  */
 export const addsLesson = (added: string, rule: string, check?: unknown): boolean => {
+  if (unseenIn(added) !== undefined || unseenIn(rule) !== undefined) return false
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false

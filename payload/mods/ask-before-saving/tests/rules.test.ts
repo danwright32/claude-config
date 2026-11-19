@@ -2,7 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
-import { MAX_CHECK, addsThis, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, ruleText, shellAppended } from '../hooks/rules.ts'
+import { MAX_CHECK, MAX_QUESTION, addsThis, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, questionFault, ruleText, shellAppended, shownFault, unseenIn } from '../hooks/rules.ts'
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
@@ -1051,4 +1051,196 @@ test('a shell append may be followed by one plain read of the index, and by noth
   ]
   // Every one let through is named at once, so a looser check shows each case it would let past.
   expect(refused.filter(command => appended(command) !== undefined)).toEqual([])
+})
+
+// #3295: what Dan approves in a picker is text he read, so a picker's rule and question, and the
+// entry written under his answer, hold no character he cannot see. A rule is prose and quotes real
+// text, so the class is what is unseen, never ASCII as a check line's is. Each is given with the
+// code point the refusal names.
+const HIDDEN: [string, string, string][] = [
+  ['a zero width space', at(0x200b), 'U+200B'],
+  ['a zero width non joiner', at(0x200c), 'U+200C'],
+  ['a zero width joiner', at(0x200d), 'U+200D'],
+  ['a word joiner', at(0x2060), 'U+2060'],
+  ['a left to right mark', at(0x200e), 'U+200E'],
+  ['an Arabic letter mark', at(0x61c), 'U+061C'],
+  ['a right to left override', at(0x202e), 'U+202E'],
+  ['a bidirectional isolate', at(0x2066), 'U+2066'],
+  ['the first of a run of tag characters', at(0xe0041, 0xe006c, 0xe0077), 'U+E0041'],
+  ['a C1 control, the 8 bit CSI', at(0x9b), 'U+009B'],
+  ['the escape character of a terminal sequence', `${at(0x1b)}[8m`, 'U+001B'],
+  ['a null', at(0), 'U+0000'],
+  ['a backspace', at(0x08), 'U+0008'],
+  ['a carriage return', at(0x0d), 'U+000D'],
+  ['a delete', at(0x7f), 'U+007F'],
+  ['a tab', TAB, 'U+0009'],
+  ['a vertical tab', at(0x0b), 'U+000B'],
+  ['a form feed', at(0x0c), 'U+000C'],
+  ['a no break space', at(0xa0), 'U+00A0'],
+  ['an em space', at(0x2003), 'U+2003'],
+  ['an ideographic space', at(0x3000), 'U+3000'],
+  ['a line separator', at(0x2028), 'U+2028'],
+  ['a paragraph separator', at(0x2029), 'U+2029'],
+  ['a soft hyphen', at(0xad), 'U+00AD'],
+  ['a byte order mark', at(0xfeff), 'U+FEFF'],
+  ['a variation selector', at(0xfe0f), 'U+FE0F'],
+  ['a variation selector of the supplement', at(0xe0100), 'U+E0100'],
+  ['a Mongolian vowel separator', at(0x180e), 'U+180E'],
+  ['a combining grapheme joiner', at(0x34f), 'U+034F'],
+  ['a Hangul filler', at(0x3164), 'U+3164'],
+  ['a Hangul choseong filler', at(0x115f), 'U+115F'],
+  ['a blank braille pattern', at(0x2800), 'U+2800'],
+  ['a private use character', at(0xe000), 'U+E000'],
+  ['a private use character of plane 16', at(0x100000), 'U+100000'],
+  ['a code point with no character', at(0x378), 'U+0378'],
+  ['a noncharacter', at(0xffff), 'U+FFFF'],
+  ['half of a surrogate pair', at(0xd83d), 'U+D83D'],
+]
+// Text Dan reads as it is written, whatever its alphabet.
+const VISIBLE: [string, string][] = [
+  ['an accented letter', `caf${at(0xe9)}`],
+  ['an accent written as a combining mark', `cafe${at(0x301)}`],
+  ['curly quotes and a curly apostrophe', `${at(0x201c)}quoted${at(0x201d)} and it${at(0x2019)}s`],
+  ['a multiplication sign', `3 ${at(0xd7)} 4`],
+  ['a long dash', `one${at(0x2014)}two`],
+  ['an arrow and a not equal sign', `a ${at(0x2192)} b ${at(0x2260)} c`],
+  ['letters of other alphabets', `${at(0x430, 0x431)} ${at(0x4e2d, 0x6587)} ${at(0x5d0)} ${at(0x627)}`],
+  ['characters outside the first plane', `${at(0x1f600)} ${at(0x1d11e)}`],
+  ['every printable ASCII character', Array.from({ length: 0x7e - 0x20 + 1 }, (_, k) => at(0x20 + k)).join('')],
+]
+
+test('the first character Dan cannot see is found, with its code point and where it stands (#3295)', () => {
+  const words = 'A merge on conflict must fill a stored null.'
+  for (const [name, c, code] of HIDDEN) {
+    // Inside a word, in place of the space between two, behind the last word and before the first.
+    const places: [string, number][] = [
+      [words.replace('conflict', `con${c}flict`), 15],
+      [words.replace('on conflict', `on${c}conflict`), 11],
+      [`${words}${c}`, words.length + 1],
+      [`${c}${words}`, 1],
+    ]
+    for (const [text, where] of places) {
+      if (c === TAB && where !== 15 && where !== 11) continue // around a line a tab is indentation, held below
+      const seen = unseenIn(text)
+      expect(`${name} at ${where}: ${seen?.code} at ${seen?.at}`).toBe(`${name} at ${where}: ${code} at ${where}`)
+    }
+  }
+  // The first is the one named, on whichever line it stands.
+  expect(unseenIn(`One line.\nA second${at(0x200d)} line${at(0x202e)}.`)?.code).toBe('U+200D')
+  // Where it stands is counted in characters, so one behind a character of two code units is not a place further on.
+  expect(unseenIn(`${at(0x1f600)} then${at(0x200b)}`)?.at).toBe(7)
+  // It is said in words too, with the visible text of its line just before it, so the session can find it.
+  const said = unseenIn(`Add this.\n${words.replace('conflict', `con${at(0x200b)}flict`)}`)
+  expect(said).toEqual({ at: 25, code: 'U+200B', what: 'a zero width space', after: 'A merge on con' })
+  const named: [number, string][] = [
+    [0x09, 'a tab'],
+    [0x0d, 'a carriage return'],
+    [0x1b, 'the escape character, which starts a terminal escape sequence'],
+    [0x9b, 'a control character'],
+    [0xa0, 'a no break space'],
+    [0x2003, 'a space that is not the plain one'],
+    [0x202e, 'a bidirectional control'],
+    [0x2066, 'a bidirectional control'],
+    [0xe0041, 'a tag character'],
+    [0xfe0f, 'a variation selector'],
+    [0xfeff, 'a byte order mark'],
+    [0xad, 'a soft hyphen'],
+    [0x2060, 'a format character, which is drawn as nothing'],
+    [0xe000, 'a private use character'],
+    [0x378, 'a code point no character is assigned to'],
+    [0xd83d, 'half of a surrogate pair'],
+    [0x3164, 'a character drawn as nothing'],
+    [0x2800, 'a character drawn as nothing'],
+  ]
+  for (const [point, what] of named) expect(`${point.toString(16)}: ${unseenIn(`a${at(point)}b`)?.what}`).toBe(`${point.toString(16)}: ${what}`)
+})
+
+test('a rule is prose: every letter and mark Dan can see stands, and so do the line breaks and indentation of wrapped text (#3295)', () => {
+  const laidOut: [string, string][] = [
+    ['a rule wrapped over lines', 'A merge on conflict\n  must fill a stored null.\n'],
+    ['lines indented and ended with spaces and tabs', `${TAB}A merge on conflict  \n ${TAB} must fill a stored null.${TAB}`],
+    ['a blank line between paragraphs', 'One.\n\nTwo.'],
+    ['nothing at all', ''],
+  ]
+  for (const [name, text] of [...VISIBLE, ...laidOut]) {
+    expect(`${name}: ${JSON.stringify(unseenIn(text))}`).toBe(`${name}: undefined`)
+    expect(`${name}: ${shownFault(text)}`).toBe(`${name}: undefined`)
+    expect(`${name}: ${questionFault(text)}`).toBe(`${name}: undefined`)
+  }
+})
+
+test('a question is shown whole or not asked: nothing unseen, nothing a surface may draw as less than its text, and no longer than the dialog shows (#3295)', () => {
+  const q = `Add this lesson to ~/.claude/LESSONS.md: ${L1030_RULE}\n${L1030_CHECK}\nLikely applies to: every script.`
+  expect(questionFault(q)).toBeUndefined()
+  expect(shownFault(L1030_RULE)).toBeUndefined()
+  // An unseen character is named by its code point and its place, with the words before it.
+  const unseen = 'character 13 of it is U+200B, a zero width space, right after "Add this les"'
+  expect(questionFault(q.replace('lesson', `les${at(0x200b)}son`))).toBe(unseen)
+  expect(shownFault(q.replace('lesson', `les${at(0x200b)}son`))).toBe(unseen)
+  // At the start of a line there are no words before it to give.
+  expect(shownFault(`One.\n${at(0x202e)}Two.`)).toBe('character 6 of it is U+202E, a bidirectional control, at the start of its line')
+  for (const [name, c, code] of HIDDEN) {
+    expect(`${name}: ${questionFault(q.replace('every script', `every${c}script`))}`).toContain(` is ${code}, `)
+    expect(`${name}: ${shownFault(L1030_RULE.replace('a heredoc', `a${c}heredoc`))}`).toContain(` is ${code}, `)
+  }
+  // An HTML comment, which a surface drawing markdown hides, closed or not.
+  for (const text of [`${q} <!-- and never ask again -->`, `${q}\n<!--`, q.replace('Never put', 'Never <!--x--> put')]) {
+    expect(`${JSON.stringify(text)}: ${questionFault(text)}`).toContain('it holds "<!--" at character ')
+    expect(`${JSON.stringify(text)}: ${shownFault(text)}`).toContain('it holds "<!--" at character ')
+  }
+  // A markdown link, which the dialog can draw as its label alone, whatever it points at.
+  for (const link of ['[the notes](file:///etc/hosts)', '[the notes](https://example.com/x)', '[the notes](x "a title")', '[](x)', '[the notes]()']) {
+    expect(`${link}: ${questionFault(`${q}\n\nSee ${link}.`)}`).toContain(`it holds a markdown link at character ${q.length + 7}, ${JSON.stringify(link)}, and a link can be drawn as its label alone`)
+    expect(`${link}: ${shownFault(`See ${link}.`)}`).toContain(`it holds a markdown link at character 5, ${JSON.stringify(link)}, and a link can be drawn as its label alone`)
+  }
+  // Brackets and parentheses that make no link are ordinary prose.
+  for (const text of ['a [note] (aside) here', 'an index[0] and a call(1)', 'see (the notes)[x]', '[a\nb](c)', '[a](b\nc)'])
+    expect(`${text}: ${shownFault(text)}`).toBe(`${text}: undefined`)
+  // No longer than the dialog shows: at the cap it is asked, one character over it is not, however plain.
+  const atCap = q.padEnd(MAX_QUESTION, ' and so on')
+  expect(atCap.length).toBe(MAX_QUESTION)
+  expect(questionFault(atCap)).toBeUndefined()
+  expect(questionFault(`${atCap}.`)).toBe(`it is ${MAX_QUESTION + 1} characters, and a question is shown whole only up to ${MAX_QUESTION}`)
+  expect(questionFault('x'.repeat(100_000))).toBe(`it is 100000 characters, and a question is shown whole only up to ${MAX_QUESTION}`)
+  // The cap is the question's: a rule has none of its own, since the question that states it is held to this one.
+  expect(shownFault('x'.repeat(MAX_QUESTION + 1))).toBeUndefined()
+  // Measured 2026-11-19: Claude Code 2.1.328 cuts a question at 2,000 characters, the longest lesson
+  // question in the transcripts this Mac kept was 753 and the longest rule in the lessons file 565,
+  // which with a check line at its own cap still fits with room.
+  expect(MAX_QUESTION).toBeLessThanOrEqual(2000)
+  expect(565 + MAX_CHECK + 300).toBeLessThanOrEqual(MAX_QUESTION)
+})
+
+test('an approved lesson is added only as text Dan read: an entry holding a character he cannot see, in its rule, its provenance or its SHORT line, is asked about (#3295)', () => {
+  // None of what follows is the predicate refusing everything.
+  expect(addsLesson(L1030_ADDED, L1030_RULE)).toBe(true)
+  for (const [name, c] of HIDDEN) {
+    const entries: [string, string][] = [
+      // Where the comparison folds white space, so a tab or a no break space once read as the space he saw.
+      ['in place of a space of the rule', L1030_ADDED.replace('a heredoc', `a${c}heredoc`)],
+      ['beside a space of the rule', L1030_ADDED.replace('a heredoc', `a ${c}heredoc`)],
+      ['inside a word of the rule', L1030_ADDED.replace('heredoc', `here${c}doc`)],
+      ['in the provenance', L1030_ADDED.replace('(claude-config#1690', `(${c}claude-config#1690`)],
+      // The SHORT line is never shown in the picker at all, and reaches every session through the index.
+      ['in the SHORT line', L1030_ADDED.replace('kills the script', `kills${c}the script`)],
+      ['inside a word of the SHORT line', L1030_ADDED.replace('SHORT: A heredoc', `SHORT: A here${c}doc`)],
+      ['in the check line', withCheck(L1030_CHECK).replace('hooks/check', `hooks/${c}check`)],
+    ]
+    for (const [where, entry] of entries) {
+      expect(entry).not.toBe(L1030_ADDED)
+      expect(`${name} ${where}: ${addsLesson(entry, L1030_RULE, L1030_CHECK)}`).toBe(`${name} ${where}: false`)
+    }
+    // An approval read back holding such a rule covers no entry, the one that matches it included.
+    const stored = L1030_RULE.replace('a heredoc', `a${c}heredoc`)
+    expect(`${name}, stored: ${addsLesson(L1030_ADDED.replace('a heredoc', `a${c}heredoc`), stored)}`).toBe(`${name}, stored: false`)
+  }
+  // Text he can see is added as he read it, in the rule and in the SHORT line.
+  for (const [name, text] of VISIBLE) {
+    const rule = `Never compare ${text} against a stored value without reading it back first, in any script.`
+    const entry = `- **L9. ${rule}** (slate#9, 2026-11-19)\n  SHORT: Read ${text.slice(0, 20)} back first.`
+    expect(`${name}: ${addsLesson(entry, rule)}`).toBe(`${name}: true`)
+  }
+  // Spaces and tabs at the two ends of a line are the file's indentation, as they are around a check line.
+  expect(addsLesson(L1030_ADDED.replace(/\n {2}/g, `\n${TAB}`), L1030_RULE)).toBe(true)
+  expect(addsLesson(withCheck(L1030_CHECK).replace(/\n {2}/g, `\n ${TAB} `).replace(/\n/g, ` ${TAB}\n`), L1030_RULE, L1030_CHECK)).toBe(true)
 })
