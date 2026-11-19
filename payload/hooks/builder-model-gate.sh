@@ -119,7 +119,7 @@ print("refuse" if earlier >= ORCHESTRATING else "allow")
 case "$verdict" in
   allow) exit 0 ;;
   refuse)
-    echo "REFUSED: this builder dispatch names no model, so it would run on the session default with nothing said (claude-config#2027). Set model on the Agent call by the kind of task: \"sonnet\" for a rename or move that changes no behaviour, tests for code that already exists, or a fix for a review comment; \"fable\" for design, security and compliance work; \"opus\" for everything else. The rule is in \"Which model a builder runs on\" in ~/.claude/skills/orchestrate/SKILL.md. To use another model for one brief, suggest it to Dan with the reason first." >&2
+    echo "REFUSED: this builder dispatch names no model, so it would run on the session default with nothing said (claude-config#2027). Set model on the Agent call by the kind of task: \"sonnet\" only for work that needs no judgement (a rename or move that changes no behaviour, a comment or wording fix, tests for code that already exists), and a review fix that changes logic or behaviour is \"opus\", or \"fable\" where it is design, security or compliance work; \"fable\" for design, security and compliance work; \"opus\" for everything else. The rule is in \"Which model a builder runs on\" in ~/.claude/skills/orchestrate/SKILL.md. To use another model for one brief, suggest it to Dan with the reason first." >&2
     exit 2
     ;;
   unreadable$'\t'*)
