@@ -111,6 +111,40 @@ if [ ! -x /usr/bin/sandbox-exec ]; then
   exit $?
 fi
 
+# The python3 that makes the wrapper's check is one file at a fixed path, the command line
+# developer tools' own, which only an administrator can write. One found on the PATH would run
+# outside the sandbox at the start of every run, and a command run under the wrapper can write a
+# file named python3 into a PATH folder of the user's (the review of 2026-11-19).
+PY_FIXED=/Library/Developer/CommandLineTools/usr/bin/python3
+if grep -q "^PYTHON=$PY_FIXED\$" "$WRAP"; then check "the wrapper names its python3 by one fixed path" ok
+else check "the wrapper names its python3 by one fixed path" "no line PYTHON=$PY_FIXED in $WRAP"; fi
+
+changed nopython 's|^PYTHON=.*|PYTHON=/nonexistent-3173/python3|'
+run "$T/nopython.sh" /usr/bin/touch "$T/ran.nopython"
+exits "a missing python3 at the fixed path is refused" 69
+says "a missing python3 is named by its path" "/nonexistent-3173/python3"
+says "a missing python3 says nothing was run" "Nothing was run"
+not_ran "a missing python3 runs nothing" nopython
+
+if [ ! -x "$PY_FIXED" ]; then
+  run "$WRAP" /usr/bin/touch "$T/ran.notools"
+  exits "where the command line tools' python3 is not there the wrapper itself refuses" 69
+  not_ran "where the command line tools' python3 is not there the wrapper itself runs nothing" notools
+  echo "SUITE-PART-UNMEASURED the network being taken away, the sandbox being proved on each run and the command's exit code coming through: $PY_FIXED, which makes the wrapper's check, is not on this machine"
+  echo
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+  exit $?
+fi
+if [ "$(id -u)" -eq 0 ]; then
+  echo "SUITE-PART-UNMEASURED whether this user can write the wrapper's python3: the suite is running as root, which can write any file"
+elif [ -w "$PY_FIXED" ] || [ -w "$(dirname "$PY_FIXED")" ]; then
+  check "the wrapper's python3 and its folder are not this user's to write" "$PY_FIXED or its folder is writable by $(id -un)"
+else
+  check "the wrapper's python3 and its folder are not this user's to write" ok
+fi
+
 echo "no network run: the command runs, and what it is given comes through"
 
 run "$WRAP" /usr/bin/touch "$T/ran.plain"
@@ -139,6 +173,20 @@ printf '%s\n' "/usr/bin/touch '$T/ran.bashenv'" > "$T/env.sh"
 BASH_ENV="$T/env.sh" run "$WRAP" /usr/bin/true
 exits "a run with BASH_ENV set still runs" 0
 not_ran "a BASH_ENV file is not sourced by the wrapper" bashenv
+
+# A python3 that stands first on the PATH is not the one the wrapper runs: the stand in records
+# that it was started and then hands on to the real one, so the run would pass either way and only
+# the record shows which was used.
+REAL_PYTHON="$(command -v python3)"
+mkdir -p "$T/fakebin"
+printf '%s\n' '#!/bin/sh' "/usr/bin/touch '$T/ran.fakepython'" "exec '$REAL_PYTHON' \"\$@\"" > "$T/fakebin/python3"
+chmod +x "$T/fakebin/python3"
+PATH="$T/fakebin:$PATH" run "$WRAP" /usr/bin/touch "$T/ran.pathpython"
+exits "with another python3 first on the PATH the command still runs" 0
+ran "with another python3 first on the PATH the command is run" pathpython
+not_ran "a python3 that stands first on the PATH is not started by the wrapper" fakepython
+if [ "$(PATH="$T/fakebin:$PATH" command -v python3)" = "$T/fakebin/python3" ]; then check "and that stand in is the python3 the PATH finds first" ok
+else check "and that stand in is the python3 the PATH finds first" "the PATH found $(PATH="$T/fakebin:$PATH" command -v python3)"; fi
 
 echo "no network run: a post arrives without it and not with it"
 

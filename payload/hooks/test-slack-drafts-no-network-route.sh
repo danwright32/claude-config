@@ -10,18 +10,21 @@
 #
 # The installed wrapper, to the gate, is the no-network-run.sh beside it, so here it is the one
 # beside this suite. What is held:
-#   * a command the gate refuses passes with that wrapper as the first word of the call's first
-#     command, with only a cd before it;
+#   * a command the gate refuses passes when the call is that wrapper and the command and nothing
+#     else, with one `cd <folder> &&` in front at most, and its output, errors or input sent to a
+#     file written out, each form of that by name;
 #   * the refusal of a file whose imports reach code that posts names the route, and no other
 #     refusal does;
-#   * every other way of naming the wrapper is judged as it was before the rule, which for each
-#     case here is a refusal: a copy elsewhere, a wrapper the same command wrote, moved, linked or
-#     changed, a variable, a tilde, a program, an assignment or a redirection in front of it, any
-#     command but a cd before it, a loop, a function, a script or a string around it, a second
-#     wrapper run in the same call, and a word after it that the shell itself works out or runs;
-#   * everything else on the line is still judged, and never better for the wrapper being there:
-#     a command after it, the other side of a pipe, a second line, and a file a later command runs
-#     that the wrapped command could have written, which the gate has not read.
+#   * every other call is judged as it was before the rule, which for each case here is a refusal:
+#     a copy elsewhere, a variable, a tilde, a program, an assignment, a redirection or a word of
+#     the shell's own in front of the wrapper, such as time or if, any command before it but the one
+#     cd, a loop, a function, a group, a script or a string around it, anything after its command
+#     (a second command, a pipe, a command put in the background, a second line, a comment), any
+#     other form of redirection, a word the shell itself works out or runs, and any character that
+#     is not printable ASCII, a tab or a newline, each written here as an escape;
+#   * the two checks no call can reach while nothing may stand before the wrapper but a cd and
+#     nothing after it, each on its own, by handing one Judge two lines: that the call has not
+#     written or built the wrapper's file, and that a pass leaves every file unread.
 # Where a shape cannot be told apart by the gate's verdict (the wrapper with nothing after it runs
 # nothing, so it was never refused), the rule itself is asked, through the gate's own code.
 set -uo pipefail
@@ -170,9 +173,30 @@ run_here "$POST"
 read_refused "#3173 a request to the endpoint itself is refused"
 says_not "#3173 and that refusal names no route" "no network wrapper"
 
-echo "slack drafts only: a command run under the installed no network wrapper passes (claude-config#3173)"
+# A command holding a character this file must not hold. Each \uXXXX in the text handed over is that
+# one character by the time the gate reads the payload, so none is written here.
+esc_input() {
+  python3 -c '
+import json, re, sys
+text = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), sys.argv[1])
+print(json.dumps({"command": text, "description": "d"}))
+' "$1"
+}
+run_esc() { run_raw "$(payload Bash "$(esc_input "$1")" "$RUN_IN")"; }
+each_esc() { # as each, for commands written with \uXXXX
+  local how="$1" label="$2" runs
+  while IFS= read -r runs <&3; do
+    [ -n "$runs" ] || continue
+    run_esc "$runs"
+    "$how" "$label: $runs"
+  done
+}
+# A package script that is harmless as it stands, for a later command of a call that runs one.
+printf '%s\n' '{ "scripts": { "x": "echo fine" } }' > "$P/package.json"
 
-each read_allowed "#3173 the installed wrapper as the first word of the call's first command passes" 3<<EOF
+echo "slack drafts only: the installed no network wrapper and its command, as the whole call, pass (claude-config#3173)"
+
+each read_allowed "#3173 the installed wrapper and its command, as the whole call, pass" 3<<EOF
 $W node --test test/notify.test.js
 '$W' node --test test/notify.test.js
 "$W" node --test test/notify.test.js
@@ -181,19 +205,59 @@ $W env NODE_ENV=test node --test test/notify.test.js
 $W timeout 60 node --test test/notify.test.js
 $W bash post.sh
 $W bash -c '$POST'
-$W node --test test/notify.test.js > out.txt 2>&1
-$W node --test test/notify.test.js 2>/dev/null
+$W sh -c 'node --test test/notify.test.js | tail -5; echo done'
 $W node --test "\$FILE" "\${HOME}/x.test.js" test/*.test.js --name='a b'
 cd $P && $W node --test test/notify.test.js
-cd '$P'; $W node --test test/notify.test.js
-time $W node --test test/notify.test.js
-! $W node --test test/notify.test.js
-if $W node --test test/notify.test.js; then echo passed; fi
-{ $W node --test test/notify.test.js; }
-$W node --test test/notify.test.js | tail -5
-$W node --test test/notify.test.js || echo failed
-$W node --test test/notify.test.js; echo done
+cd '$P' && "$W" node --test test/notify.test.js
 EOF
+
+# The redirections the rule takes after the wrapper's words, each form by name: the command's output
+# or its errors written or added to a file written out, its input read from one, and one output
+# joined to the other. The shell opens the file before the wrapper starts and nothing else.
+each read_allowed "#3173 the wrapper's output, errors or input sent to a file written out passes" 3<<EOF
+$W node --test test/notify.test.js > out.txt
+$W node --test test/notify.test.js >> out.txt
+$W node --test test/notify.test.js 1> out.txt
+$W node --test test/notify.test.js 2> err.txt
+$W node --test test/notify.test.js 2>> err.txt
+$W node --test test/notify.test.js 2>/dev/null
+$W node --test test/notify.test.js > out.txt 2>&1
+$W node --test test/notify.test.js 2>&1
+$W node --test test/notify.test.js 1>&2
+$W node --test test/notify.test.js >&2
+$W node --test test/notify.test.js < in.txt
+$W node --test test/notify.test.js > 'out file.txt' 2> "err file.txt"
+EOF
+
+# Every other redirection leaves the command judged as it was: both outputs at once (bash 3.2, the
+# one macOS ships, reads the adding form as a command put in the background and a second command),
+# a forced overwrite, a file opened both ways, a descriptor past 2, one closed, a here document or
+# string, a target the shell works out, a name bash opens as a connection, and one glued to a word.
+each read_refused "#3173 any other redirection after the wrapper's words is judged as it was" 3<<EOF
+$W node --test test/notify.test.js &> out.txt
+$W node --test test/notify.test.js &>> out.txt
+$W node --test test/notify.test.js >| out.txt
+$W node --test test/notify.test.js >! out.txt
+$W node --test test/notify.test.js <> in.txt
+$W node --test test/notify.test.js 3> out.txt
+$W node --test test/notify.test.js >&3
+$W node --test test/notify.test.js 2>&-
+$W node --test test/notify.test.js >& out.txt
+$W node --test test/notify.test.js > "\$OUT"
+$W node --test test/notify.test.js > \$OUT
+$W node --test test/notify.test.js > out*.txt
+$W node --test test/notify.test.js > ~/out.txt
+$W node --test test/notify.test.js 0< in.txt
+$W node --test test/notify.test.js 2< in.txt
+$W node --test test/notify.test.js > /dev/tcp/127.0.0.1/9
+$W node --test test/notify.test.js < /dev/tcp/127.0.0.1/9
+$W node --test test/notify.test.js > /dev/udp/127.0.0.1/9
+$W node --test test/notify.test.js 3<>/dev/tcp/127.0.0.1/9
+$W node --test test/notify.test.js <<< "\$(bash post.sh)"
+EOF
+# One glued to the last word (`... notify.test.js>out.txt`) is asked of the rule below and not
+# here: the gate passes that line while the rule says no (measured 2026-11-19), so the pass is a
+# reading of the gate's own, of a word with a redirection glued to it, and not this rule's.
 
 # A link that resolves to the installed wrapper passes, as a link to the installed nudge.py does:
 # both are judged by the real path. So does the wrapper reached through a linked folder.
@@ -207,19 +271,6 @@ echo "slack drafts only: any other way of naming the wrapper is judged as it was
 
 each read_refused "#3173 a copy of the wrapper anywhere else is refused" 3<<EOF
 $T/copy/no-network-run.sh node --test test/notify.test.js
-EOF
-
-each read_refused "#3173 a wrapper the same command wrote, moved, linked or changed is refused" 3<<EOF
-cp $T/runner.sh $W && $W node --test test/notify.test.js
-mv $T/runner.sh $W && $W node --test test/notify.test.js
-ln -sf $T/runner.sh $W && $W node --test test/notify.test.js
-echo 'exec "\$@"' > $W && $W node --test test/notify.test.js
-echo 'exec "\$@"' >> $W; $W node --test test/notify.test.js
-cat $T/runner.sh | tee $W; $W node --test test/notify.test.js
-sed -i '' 's/deny network/allow network/' $W && $W node --test test/notify.test.js
-cp $W $T/made.sh && $T/made.sh node --test test/notify.test.js
-ln -s $W $T/made-link.sh && $T/made-link.sh node --test test/notify.test.js
-cp -R $T/copy $T/made-dir && $T/made-dir/no-network-run.sh node --test test/notify.test.js
 EOF
 
 each read_refused "#3173 the wrapper named through a variable is refused" 3<<EOF
@@ -247,13 +298,18 @@ $W | node --test test/notify.test.js
 $W > out.txt; node --test test/notify.test.js
 EOF
 
-echo "slack drafts only: the wrapper passes only as the call's own first command (claude-config#3173)"
+echo "slack drafts only: nothing stands in front of the wrapper but one cd (claude-config#3173)"
 
 # Whatever the call runs before the wrapper could change what its path starts (a function or an
 # alias of that name, in zsh an alias for every .sh file) or open a connection the command then
-# inherits, which the sandbox does not close (test-no-network-run.sh, "held"). So only a cd to a
-# folder written out may come first, and the wrapper is not inside a subshell or a substitution.
-each read_refused "#3173 the wrapper after any command but a cd is judged as it was" 3<<EOF
+# inherits, which the sandbox does not close (test-no-network-run.sh, "held"). And a word of the
+# shell's own in front of it is not safe to read past: zsh runs `time -p <words>` as a program
+# named -p, outside the sandbox (measured 2026-11-19), and bash opens the redirection on a group or
+# an if before it runs what is inside. So the one thing that may come first is `cd <folder> &&`.
+# The lines that write, move, link or change the wrapper's file first were a group of their own,
+# named for the check that the call has not written the file: they are turned away here, by there
+# being a command in front, and that check is asked apart, below (one Judge handed two lines).
+each read_refused "#3173 the wrapper after anything but one cd is judged as it was" 3<<EOF
 echo start; $W node --test test/notify.test.js
 true && $W node --test test/notify.test.js
 ls | $W node --test test/notify.test.js
@@ -263,14 +319,29 @@ alias -s sh=bash; $W node --test test/notify.test.js
 $W() { "\$@"; }; $W node --test test/notify.test.js
 function $W { "\$@"; }; $W node --test test/notify.test.js
 cd \$(pwd) && $W node --test test/notify.test.js
+cd $P; $W node --test test/notify.test.js
+cd $P || $W node --test test/notify.test.js
+cd $P && cd $P && $W node --test test/notify.test.js
 ( $W node --test test/notify.test.js )
 echo \$($W node --test test/notify.test.js)
+time $W node --test test/notify.test.js
+time -p $W node --test test/notify.test.js
+! $W node --test test/notify.test.js
+{ $W node --test test/notify.test.js; }
+{ $W node --test test/notify.test.js; } 3<>/dev/tcp/127.0.0.1/9
+if $W node --test test/notify.test.js; then echo passed; fi
+if $W node --test test/notify.test.js; then :; fi 3<>/dev/tcp/127.0.0.1/9
+cp $T/runner.sh $W && $W node --test test/notify.test.js
+mv $T/runner.sh $W && $W node --test test/notify.test.js
+ln -sf $T/runner.sh $W && $W node --test test/notify.test.js
+echo 'exec "\$@"' > $W && $W node --test test/notify.test.js
+sed -i '' 's/deny network/allow network/' $W && $W node --test test/notify.test.js
+cp $W $T/made.sh && $T/made.sh node --test test/notify.test.js
+ln -s $W $T/made-link.sh && $T/made-link.sh node --test test/notify.test.js
 EOF
 
-# A loop or a function runs the same words again, and the second time the wrapper's path starts
-# whatever the first run left there: the sandbox does not stop a command writing a file. A script
-# or a string another program runs can be run in a loop by that program, so the wrapper passes only
-# on the call's own line.
+# A loop or a function runs the same words again, and a script or a string another program runs can
+# be run in a loop by that program, so the wrapper passes only as the call itself.
 each read_refused "#3173 the wrapper inside a loop, a function, a script or a string is judged as it was" 3<<EOF
 for f in a b; do $W node --test test/notify.test.js; done
 for f in a b; do echo "\$f"; $W node --test test/notify.test.js; done
@@ -281,19 +352,70 @@ bash -c '$W node --test test/notify.test.js'
 bash under.sh
 EOF
 
-# Only the first wrapper run of a call passes: the first could have rewritten the wrapper's file,
-# or any link to it, and the gate has not read what it ran.
-each read_refused "#3173 a second wrapper run in one call is judged as it was" 3<<EOF
-$W node --test test/plain.test.js; $W node --test test/notify.test.js
+echo "slack drafts only: nothing follows the wrapper's command in the call (claude-config#3173)"
+
+# The gate has not read what ran under the wrapper, and that command can write any file: a package
+# script, a program in a folder ahead of /usr/bin on the PATH, a git hook, a Makefile. The gate
+# does not read every one of those as a file a later command runs, so nothing may follow: a later
+# command, the other side of a pipe, a command put in the background, a second line, a comment.
+# What an agent wants done afterwards goes inside the wrapped command, behind sh -c '...'.
+each read_refused "#3173 anything after the wrapper's command leaves it judged as it was" 3<<EOF
+$W node --test test/notify.test.js; npm run x
+$W node --test test/notify.test.js; tail out.txt
+$W node --test test/notify.test.js && cat out.txt
+$W node --test test/notify.test.js || echo failed
+$W node --test test/notify.test.js; echo done
+$W node --test test/notify.test.js | tail -5
+$W node --test test/notify.test.js |& tail -5
+$W node --test test/notify.test.js | xargs -n1 tail
+$W node --test test/notify.test.js &
+$W node --test test/notify.test.js & tail out.txt
+$W node --test test/notify.test.js; git status
+$W node --test test/notify.test.js; make
+$W node --test test/notify.test.js ;
+$W node --test test/notify.test.js # and a note
 $W node --test test/notify.test.js; $W node --test test/plain.test.js
-$W sh -c 'cp $T/runner.sh $W'; $W node --test test/notify.test.js
+$W node --test test/plain.test.js; $W node --test test/notify.test.js
 $W node --test test/notify.test.js && $T/links/run.sh node --test test/notify.test.js
+$W node --test test/notify.test.js; node --test test/plain.test.js
 EOF
 
-# The words after the wrapper are ones the shell hands on as they are: plain characters, quoted
-# text, a variable by its name. Anything the shell would work out or run itself before the wrapper
-# starts (zsh runs the code in a pattern's (e:...:) and in a \${(e)NAME}) is outside the sandbox,
-# and so is a connection the shell opens for a redirection.
+run_here "$W node --test test/notify.test.js
+tail out.txt"
+read_refused "#3173 a second line after the wrapper's is judged as it was"
+run_here "# run the one test
+$W node --test test/notify.test.js"
+read_refused "#3173 the wrapper after a comment line is judged as it was"
+run_here "$W node --test \\
+test/notify.test.js"
+read_refused "#3173 a command carried onto a second line by a backslash is judged as it was"
+run_here "$W node --test test/notify.test.js <<EOF
+\$(bash post.sh)
+EOF"
+read_refused "#3173 a here document, whose substitutions the shell runs itself, is judged as it was"
+
+# The other command of such a call is judged as it always was, whatever the wrapper is doing there.
+each read_refused "#3173 a command beside the wrapper's is judged as it was" 3<<EOF
+$W node --test test/plain.test.js; node --test test/notify.test.js
+$W node --test test/plain.test.js && bash post.sh
+node --test test/notify.test.js; $W node --test test/notify.test.js
+node --test test/notify.test.js | $W cat
+$W node --test test/plain.test.js & bash post.sh
+$W node --test test/plain.test.js || $POST
+$W cat post.sh | bash
+$W printf '%s\n' '$POST' | sh
+bash <($W cat post.sh)
+eval "\$($W cat post.sh)"
+source <($W cat post.sh)
+$W cp post.sh made.sh; bash made.sh
+$W cat post.sh > made.sh; bash made.sh
+EOF
+
+echo "slack drafts only: the words after the wrapper are ones the shell hands on as they stand (claude-config#3173)"
+
+# Plain characters, quoted text, a variable by its name. Anything the shell would work out or run
+# itself before the wrapper starts (zsh runs the code in a pattern's (e:...:) and in a \${(e)NAME})
+# is outside the sandbox.
 each read_refused "#3173 a word the shell itself would work out or run is judged as it was" 3<<EOF
 $W node --test test/notify.test.js *(e:'bash post.sh':)
 $W node --test test/notify.test.js \${(e)CODE}
@@ -302,92 +424,6 @@ $W node --test test/notify.test.js "\$CODE[1]"
 $W node --test test/notify.test.js {a,b}
 $W node --test test/notify.test.js a\\;b
 $W node --test test/notify.test.js ~/x
-$W node --test test/notify.test.js <<< "\$(bash post.sh)"
-$W node --test test/notify.test.js > /dev/tcp/127.0.0.1/9
-$W node --test test/notify.test.js 3<>/dev/tcp/127.0.0.1/9
-$W node --test test/notify.test.js > "\$OUT"
-$W node --test test/notify.test.js >&3
-EOF
-
-run_here "$W node --test test/notify.test.js <<EOF
-\$(bash post.sh)
-EOF"
-read_refused "#3173 a here document, whose substitutions the shell runs itself, is judged as it was"
-run_here "$W node --test \\
-test/notify.test.js"
-read_refused "#3173 a command carried onto a second line by a backslash is judged as it was"
-run_here "# run the one test
-$W node --test test/notify.test.js"
-read_refused "#3173 the wrapper after a comment line is judged as it was"
-
-echo "slack drafts only: everything else on the wrapper's line is still judged (claude-config#3173)"
-
-each read_refused "#3173 a command beside the wrapper's is judged as it was" 3<<EOF
-$W node --test test/plain.test.js; node --test test/notify.test.js
-$W node --test test/plain.test.js && bash post.sh
-node --test test/notify.test.js; $W node --test test/notify.test.js
-node --test test/notify.test.js | $W cat
-$W node --test test/plain.test.js & bash post.sh
-$W node --test test/plain.test.js || $POST
-EOF
-
-run_here "$W node --test test/plain.test.js
-bash post.sh"
-read_refused "#3173 a second line after the wrapper's is judged as it was"
-
-# What the wrapped command prints is not read, so a shell that is fed it is refused.
-each read_refused "#3173 a shell fed what the wrapped command prints is refused" 3<<EOF
-$W cat post.sh | bash
-$W printf '%s\n' '$POST' | sh
-bash <($W cat post.sh)
-eval "\$($W cat post.sh)"
-source <($W cat post.sh)
-EOF
-
-echo "slack drafts only: a file the wrapped command could have written is not read as it stands (claude-config#3173)"
-
-# The sandbox takes the network away and nothing else, so the wrapped command can write any file,
-# and the gate has not read what it ran. A later command of the same call that runs a file gets
-# no better a verdict for the wrapper being in front of the earlier one.
-# later_refused <label> <earlier> <later>: <later> alone passes as the files stand; after <earlier>
-# it is refused today, with no wrapper; and it is refused with the wrapper in front of <earlier>.
-later_refused() {
-  local label="$1" earlier="$2" later="$3"
-  run_here "$later"
-  read_allowed "$label: alone, as the files stand, it passes: $later"
-  run_here "$earlier; $later"
-  read_refused "$label: after it with no wrapper it is refused: $earlier; $later"
-  run_here "$W $earlier; $later"
-  read_refused "$label: after it under the wrapper it is refused too: $W $earlier; $later"
-}
-later_refused "#3173 a script copied over" "cp post.sh made.sh" "bash made.sh"
-later_refused "#3173 a script copied over inside a string" "bash -c 'cp post.sh made.sh'" "bash made.sh"
-# A script file on disk that writes the posting script over another: with no wrapper the gate
-# passes `python3 gen.py; bash made.sh` today, since it does not follow what a script on disk
-# writes (measured 2026-11-19 and reported apart from #3173). Under the wrapper nothing is read at
-# all, so the later command is refused.
-run_here "$W python3 gen.py; bash made.sh"
-read_refused "#3173 a script the wrapped program writes over is refused"
-if [ -f "$NUDGE" ]; then
-  later_refused "#3173 the installed nudge script written over" "bash -c 'cp $T/e.py $NUDGE'" "python3 $NUDGE '$NUDGE_TO'"
-else
-  check "nudge.py is where the gate expects it, beside the hooks" "missing $NUDGE"
-fi
-RUN_IN="$B"
-later_refused "#3173 a build's output" "npm run build" "node out.js"
-RUN_IN="$P"
-run_here "$W cat post.sh > made.sh; bash made.sh"
-read_refused "#3173 a script the wrapped command's output is written to is refused"
-run_here "$W cp post.sh newtool; ./newtool"
-read_refused "#3173 a file that is not there yet, which the wrapped command could make, is refused"
-# The cost of that, said plainly: after a wrapper run, the same call cannot run any other file.
-run_here "$W node --test test/notify.test.js; node --test test/plain.test.js"
-read_refused "#3173 after a wrapper run, a later command of the same call that runs a file is refused"
-says "#3173 and the refusal names the wrapper run as what may have written it" "the command run under the no network wrapper"
-
-# A substitution among the wrapper's words is run by the shell before the wrapper starts, outside
-# the sandbox, so a command holding one is judged as it was before the rule.
-each read_refused "#3173 a substitution among the wrapper's words is judged as it was" 3<<EOF
 $W echo \$(bash post.sh)
 $W echo "\$(bash post.sh)"
 $W echo \`bash post.sh\`
@@ -396,6 +432,19 @@ $W node --test \$(node --test test/notify.test.js)
 $W node --test test/plain.test.js > >(bash post.sh)
 2> >(bash post.sh) $W node --test test/plain.test.js
 EOF
+
+echo "slack drafts only: only a space, a tab and a newline are white space to the rule (claude-config#3173)"
+
+# Python's strip, isspace and \s take a no break space, a line separator, a form feed and their like
+# as white space, and zsh and bash keep each inside the word (measured 2026-11-19): with one in
+# front of the wrapper's path the shell runs a file of another name, in the folder the call is in.
+# So a call holding any character but printable ASCII, a tab and a newline is judged as it was.
+for c in 00a0 2028 3000 000c 000b 000d 0000; do
+  each_esc read_refused "#3173 U+$c in front of the wrapper leaves the call judged as it was" 3<<EOF
+\\u$c$W node --test test/notify.test.js
+cd $P && \\u$c$W node --test test/notify.test.js
+EOF
+done
 
 echo "slack drafts only: a tilde path to the wrapper is not the installed path (claude-config#3173)"
 
@@ -423,25 +472,40 @@ echo "slack drafts only: the rule itself, asked through the gate's own code (cla
 
 # rule.py <the gate's .py> <folder>: for each line on its input, read as a call made in that folder
 # and walked as the gate walks one (Judge.line), "yes" where Judge.no_network_run held for a
-# command of it and "no" where it held for none, then a tab and the line. For the shapes whose
-# verdict cannot show the rule: a command that runs nothing was allowed before the rule and is
-# allowed after it, and a wrapper run the gate refuses today is refused whichever part of the rule
-# turned it away.
+# command of it and "no" where it held for none, then a tab and the line as it was handed over. A
+# \uXXXX in a line is that one character by the time it is judged. For the shapes whose verdict
+# cannot show the rule: a command that runs nothing was allowed before the rule and is allowed after
+# it, and a wrapper run the gate refuses today is refused whichever part of the rule turned it away.
+#
+# With a third word it is handed pairs, FIRST<tab>SECOND, and one Judge reads both in turn, which no
+# call can make it do: the rule lets nothing stand before the wrapper but a cd and nothing after
+# it. It is the one way to ask the two checks that hold if that is ever widened, each on its own:
+# that this call has not written the wrapper's file, and that a pass leaves every file unread. It
+# prints whether the rule held for SECOND, then "refused: <why>" or "allowed", then the pair.
 cat > "$T/rule.py" <<'PY'
 import importlib.util
 import os
+import re
 import sys
 
 GATE = sys.argv[1]
 CWD = sys.argv[2]
+PAIRS = len(sys.argv) > 3
 os.environ["GATE_DIR"] = os.path.dirname(GATE)
 spec = importlib.util.spec_from_file_location("drafts_gate", GATE)
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
+
+
+def written(text):
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+
+
 for line in sys.stdin:
-    text = line.rstrip("\n")
-    if not text:
+    shown = line.rstrip("\n")
+    if not shown:
         continue
+    texts = [written(t) for t in (shown.split("\t") if PAIRS else [shown])]
     judge = gate.Judge(gate.load_reader())
     held = []
     rule = judge.no_network_run
@@ -453,31 +517,61 @@ for line in sys.stdin:
 
     judge.no_network_run = asked
     judge.watch()
+    reason = None
     try:
-        judge.line(text, CWD, 0, text)
+        for text in texts:
+            del held[:]
+            reason = judge.line(text, CWD, 0, text)
     finally:
         judge.unwatch()
-    print(("yes" if any(held) else "no") + "\t" + text)
+    verdict = ("\t" + ("refused: " + reason if reason else "allowed")) if PAIRS else ""
+    print(("yes" if any(held) else "no") + verdict + "\t" + shown)
 PY
 
 rule_says() { # rule_says <yes|no> <label>, the commands on descriptor 3, one per line
-  local want="$1" label="$2" runs got
+  # One start of the gate's code answers the whole list (L298), a line of output for each command
+  # in turn. An answer that is missing or out of place fails the command it belongs to.
+  local want="$1" label="$2" runs got i=0
+  printf '' > "$T/rule.in"
   while IFS= read -r runs <&3; do
     [ -n "$runs" ] || continue
-    got="$(printf '%s\n' "$runs" | python3 "$T/rule.py" "$DIR/slack_drafts_only_gate.py" "$P" 2>&1)"
-    if [ "$got" = "$want"$'\t'"$runs" ]; then check "$label: $runs" ok; else check "$label: $runs" "the rule said: ${got:0:300}"; fi
+    printf '%s\n' "$runs" >> "$T/rule.in"
   done
+  python3 "$T/rule.py" "$DIR/slack_drafts_only_gate.py" "$P" < "$T/rule.in" > "$T/rule.out" 2>&1
+  exec 4< "$T/rule.out"
+  while IFS= read -r runs; do
+    i=$((i + 1))
+    got=""
+    IFS= read -r got <&4 || true
+    if [ "$got" = "$want"$'\t'"$runs" ]; then check "$label: $runs" ok; else check "$label: $runs" "the rule said: ${got:0:300}"; fi
+  done < "$T/rule.in"
+  exec 4<&-
+  if [ "$i" -eq 0 ]; then check "$label" "no command was handed over"; fi
 }
 
-rule_says yes "#3173 the rule holds for the wrapper and a command" 3<<EOF
+rule_says yes "#3173 the rule holds for the wrapper and a command as the whole call" 3<<EOF
 $W node --test test/notify.test.js
-time $W true
-time -p $W true
+$W true
 cd $P && $W node --test test/notify.test.js
-if $W true; then echo ok; fi
-{ $W true; }
+cd '$P' && '$W' true
+cd "$P"   &&   "$W"   true
+  $W true
+$W true\\u000a
+\\u000a$W true
+$W sh -c 'true | tail -5; echo done # a note'
+$W sh -c 'true\\u000atail out.txt'
 $W node -e 'fetch(u); console.log("a b")' "\$HOME/x" --flag=1 test/*.js > out.txt 2>&1
-$W true | tail -5
+$W true > out.txt
+$W true >> out.txt
+$W true 1> out.txt
+$W true 2> err.txt
+$W true 2>> err.txt
+$W true 2>/dev/null
+$W true 2>&1
+$W true 1>&2
+$W true >&2
+$W true < in.txt
+$W true > 'out file.txt' 2> "err file.txt"
 EOF
 
 rule_says no "#3173 the rule does not hold for the wrapper with nothing after it" 3<<EOF
@@ -495,27 +589,64 @@ $DIR/no-network-r*.sh node --test test/notify.test.js
 $DIR/{no-network-run.sh,x} node --test test/notify.test.js
 no-network-run.sh node --test test/notify.test.js
 ./no-network-run.sh node --test test/notify.test.js
+$W/ true
+$W/. true
 EOF
 
-rule_says no "#3173 the rule does not hold with anything in front of the wrapper or run beside it" 3<<EOF
+# A word of the shell's own in front of the wrapper: each is read past by one shell or reader and
+# run as a program, or sets up a redirection first, by another.
+rule_says no "#3173 the rule does not hold with any word in front of the wrapper" 3<<EOF
+time $W true
+time -p $W true
+time -- $W true
+! $W true
+{ $W true; }
+{ $W true; } 3<>/dev/tcp/127.0.0.1/9
+if $W true; then echo ok; fi
+if $W true; then :; fi 3<>/dev/tcp/127.0.0.1/9
+then $W true
+do $W true
+coproc $W true
+noglob $W true
+nocorrect $W true
+command $W true
+builtin $W true
+exec $W true
+- $W true
+eval $W true
+( $W true )
+($W true)
 env $W node --test test/notify.test.js
 xargs $W node --test
 sudo $W node --test test/notify.test.js
-exec $W node --test test/notify.test.js
-command $W node --test test/notify.test.js
 A=1 $W node --test test/notify.test.js
 2>/dev/null $W node --test test/notify.test.js
 2> >(date) $W node --test test/notify.test.js
 some-program $W node --test test/notify.test.js
-$W echo \$(date)
-$W cat <(date)
+>out.txt $W true
+< /dev/null $W true
+&>log.txt $W true
+2>&1 $W true
+EOF
+
+rule_says no "#3173 the rule does not hold with any command before the wrapper but one cd" 3<<EOF
 echo start; $W true
 true && $W true
 ls | $W cat
 cd \$(pwd) && $W true
 cd "\$HOME" && $W true
 cd -P $P && $W true
-( $W true )
+cd - && $W true
+cd ~ && $W true
+cd $P; $W true
+cd $P || $W true
+cd $P | $W true
+cd $P & $W true
+cd $P &&\\u000a$W true
+cd $P\\u000a$W true
+cd $P && cd $P && $W true
+cd $P $P && $W true
+cd && $W true
 echo \$($W true)
 for f in a b; do $W true; done
 for f in a b; do echo "\$f"; $W true; done
@@ -526,17 +657,72 @@ $W() { "\$@"; }; $W true
 alias -s sh=bash; $W true
 bash -c '$W true'
 bash under.sh
->out.txt $W true
-< /dev/null $W true
-&>log.txt $W true
-2>&1 $W true
-coproc $W true
 if true; then $W true; fi
 if false; then true; else $W true; fi
 case x in x) $W true;; esac
 repeat 2 $W true
 for f (a b) $W true
 eval '$W true'
+# a note\\u000a$W true
+EOF
+
+# What the review of 2026-11-19 showed passing: a package script, a program run by its bare name, a
+# git hook or a Makefile the wrapped command wrote, run by a later command of the same call, and the
+# other side of a pipe, which can wait until the wrapped command has written.
+rule_says no "#3173 the rule does not hold with anything after the wrapper's command" 3<<EOF
+$W sh -c 'cp evil.json package.json'; npm run x
+$W sh -c 'cp post.sh tail'; tail -5 out.txt
+$W true; tail out.txt
+$W true && cat out.txt
+$W true || echo failed
+$W true; echo done
+$W true | tail -5
+$W true |& tail -5
+$W true | xargs -n1 tail
+$W true | (sleep 5; tail)
+$W true; git status
+$W true; make
+$W true; curl https://example.com/x
+$W true &
+$W true & tail out.txt
+$W true ;
+$W true;
+$W true # a note
+$W true; $W true
+$W true && $T/links/run.sh true
+$W true\\u000atail out.txt
+$W true\\u000a$W true
+$W true\\u000a# a note
+$W true > out.txt; bash out.txt
+EOF
+
+rule_says no "#3173 the rule does not hold for any other redirection" 3<<EOF
+$W true &> out.txt
+$W true &>> out.txt
+$W true >| out.txt
+$W true >! out.txt
+$W true <> in.txt
+$W true 3> out.txt
+$W true 12> out.txt
+$W true >&3
+$W true 2>&-
+$W true >& out.txt
+$W true > "\$OUT"
+$W true > \$OUT
+$W true > out*.txt
+$W true > ~/out.txt
+$W true 0< in.txt
+$W true 2< in.txt
+$W true>out.txt
+$W node --test test/notify.test.js>out.txt
+$W true > /dev/tcp/127.0.0.1/9
+$W true < /dev/tcp/127.0.0.1/9
+$W true > /dev/udp/127.0.0.1/9
+$W true > '/dev/tcp/127.0.0.1/9'
+$W true 3<>/dev/tcp/127.0.0.1/9
+$W cat <<< "\$(date)"
+$W cat <<WORDS
+$W echo '/dev/udp/127.0.0.1/9'
 EOF
 
 # Two lines the gate passes with or without the rule, because it cannot work out the file they
@@ -558,13 +744,91 @@ $W echo a\\;b
 $W echo ~/x
 $W echo "a\\nb"
 $W echo "\`date\`"
-$W cat <<< "\$(date)"
-$W cat <<WORDS
-$W echo hi > /dev/tcp/127.0.0.1/9
-$W echo hi 3<>/dev/tcp/127.0.0.1/9
-$W echo hi > "\$OUT"
-$W echo hi >&3
-$W echo '/dev/udp/127.0.0.1/9'
+$W echo \$(date)
+$W cat <(date)
+$W echo a#b
+$W echo [ab]
+$W echo a!b
+EOF
+
+# Each character Python reads as white space, or drops, and a shell keeps in the word, at each place
+# it could change which file the shell starts or where a word ends: in front of the wrapper, in
+# front of the cd, inside the wrapper's path, between its words, and at the end. And inside quotes,
+# where it would change nothing: the rule reads no character it has to know the class of.
+for c in 00a0 2028 3000 000c 000b 000d 0000 0085 2003 001f 007f 200b feff; do
+  rule_says no "#3173 the rule does not hold for a call holding U+$c" 3<<EOF
+\\u$c$W true
+ \\u$c $W true
+cd $P && \\u$c$W true
+cd $P &&\\u$c$W true
+\\u${c}cd $P && $W true
+cd\\u$c$P && $W true
+$DIR/\\u${c}no-network-run.sh true
+$DIR\\u$c/no-network-run.sh true
+$W\\u${c}true
+$W true\\u${c}x
+$W true \\u$c x
+$W true\\u$c
+$W echo 'a\\u${c}b'
+EOF
+done
+
+echo "slack drafts only: the two checks no call can reach, asked of one Judge handed two lines (claude-config#3173)"
+
+# pair_says <yes|no> <refused|allowed|any> <label> [says]: the pairs on descriptor 3, FIRST then a
+# tab then SECOND, one Judge reading both: whether the rule held for SECOND and how SECOND was judged.
+pair_says() {
+  local rule="$1" verdict="$2" label="$3" want="${4:-}" runs got
+  while IFS= read -r runs <&3; do
+    [ -n "$runs" ] || continue
+    got="$(printf '%s\n' "$runs" | python3 "$T/rule.py" "$DIR/slack_drafts_only_gate.py" "$RUN_IN" pairs 2>&1)"
+    case "$got" in
+      "$rule"$'\t'*$'\t'"$runs") check "$label (the rule): $runs" ok ;;
+      *) check "$label (the rule): $runs" "the rule said: ${got:0:300}" ;;
+    esac
+    case "$verdict:$got" in
+      any:*|refused:*$'\t'"refused: "*|allowed:*$'\t'allowed$'\t'*) check "$label (the verdict): $runs" ok ;;
+      *) check "$label (the verdict): $runs" "it was judged: ${got:0:300}" ;;
+    esac
+    if [ -n "$want" ]; then
+      case "$got" in *"$want"*) check "$label (and says so): $runs" ok ;; *) check "$label (and says so): $runs" "it said: ${got:0:400}" ;; esac
+    fi
+  done
+}
+TAB=$'\t'
+
+# The control: a Judge that has read a harmless line first answers as a fresh one does.
+pair_says yes allowed "#3173 after a line that writes nothing, the rule holds as it does alone" 3<<EOF
+echo hi${TAB}$W node --test test/notify.test.js
+EOF
+pair_says no allowed "#3173 after a line that writes nothing, a test that imports nothing passes" 3<<EOF
+echo hi${TAB}node --test test/plain.test.js
+EOF
+
+# The check that this call has not written, moved, linked or changed the wrapper's file, which is
+# the test /nudge is let through by (is_installed).
+pair_says no any "#3173 the rule does not hold for a wrapper the same Judge saw written" 3<<EOF
+cp $T/runner.sh $W${TAB}$W node --test test/notify.test.js
+mv $T/runner.sh $W${TAB}$W node --test test/notify.test.js
+ln -sf $T/runner.sh $W${TAB}$W node --test test/notify.test.js
+echo 'exec "\$@"' > $W${TAB}$W node --test test/notify.test.js
+sed -i '' 's/deny network/allow network/' $W${TAB}$W node --test test/notify.test.js
+EOF
+# And that no build this call ran writes it, which that test does not ask.
+RUN_IN="$B"
+pair_says no any "#3173 the rule does not hold for a wrapper the same Judge saw a build write" 3<<EOF
+esbuild esrc/post.ts --outfile=$W${TAB}$W node out.js
+EOF
+RUN_IN="$P"
+
+# The record a pass leaves: every file is, from then on, one an unread program may have written.
+pair_says no refused "#3173 after a pass, a file the same Judge is asked to run is unread" "the command run under the no network wrapper" 3<<EOF
+$W node --test test/notify.test.js${TAB}node --test test/plain.test.js
+$W cp post.sh made.sh${TAB}bash made.sh
+EOF
+pair_says no any "#3173 after a pass, the rule does not hold a second time" 3<<EOF
+$W true${TAB}$W node --test test/notify.test.js
+$W true${TAB}$T/links/run.sh node --test test/notify.test.js
 EOF
 
 echo

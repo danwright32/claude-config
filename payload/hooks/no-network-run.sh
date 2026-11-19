@@ -17,10 +17,15 @@
 # IT TAKES NO OPTION AND READS NO SETTING, so nothing in a command line can weaken it: a first
 # word starting with a dash is refused, and there is no "this Mac only" mode. The shebang's -p
 # keeps bash from sourcing a BASH_ENV file or taking functions from the environment before the
-# first line here runs. The sandbox tool is named by its own path, never looked up. python3, which
-# only makes the check below, is found on the PATH as every hook finds it: a stand in for it could
-# fake the check, and could not take the sandbox off the command, which the last line here starts
-# with the tool and the profile written in this file.
+# first line here runs. Nothing this file starts is found through the environment. The sandbox
+# tool is named by its own path. So is python3, which makes the check below and runs OUTSIDE the
+# sandbox to make it: one found on the PATH would be whatever stands first there, and folders ahead
+# of /usr/bin on the PATH are the user's to write, so a command run under this file could leave a
+# python3 there that the next run starts with the network on (the review of 2026-11-19). The one
+# used is the command line developer tools' own, in a folder only an administrator can write.
+# /usr/bin/python3 is not used: where those tools are missing it is a stub that raises a dialog
+# offering to install them. This file only reads whether its python3 is there, and where it is
+# not, refuses (exit 69) and runs nothing.
 #
 # IT PROVES THE SANDBOX ON EVERY RUN, because /usr/bin/sandbox-exec is a tool Apple marks as
 # deprecated and the whole route rests on it. Before the command, it opens a listener of its own
@@ -32,18 +37,25 @@
 # There is no retry, backoff or poll here. The one time limit is PROBE_SECONDS, a ceiling only a
 # hang reaches, and a constant so that the suite can shorten it on a copy (L524).
 #
-# WHAT IT DOES NOT COVER. The profile denies the network and allows everything else, so:
+# WHAT IT IS, AND WHAT IT DOES NOT COVER. It stops code from using the network while that code
+# runs under it, which is what makes an accidental post from a test impossible. It does not contain
+# code written to get out. The profile denies the network and allows everything else, so:
+#   * A file. The command can write any file it could without this, this one included, and a later
+#     call can read that file without the gate reading it: a shell startup file (every Bash call
+#     starts a login shell, which reads ~/.zshenv, ~/.zprofile and ~/.zlogin), a tool's own config
+#     file, a program in a folder on the PATH that the user can write.
 #   * A command that asks something outside the sandbox to act for it, without the network. A
 #     request to launchd or to another app is not a network operation (the profile's operations
 #     for them, mach-lookup and appleevent-send, are their own): launchctl, osascript and open
-#     each have a program started that this sandbox is not on. So is a file written into a folder
-#     another program watches.
+#     each have a program started that this sandbox is not on. With open that takes one line and
+#     no setup: a page written to disk whose form submits itself, opened in a browser, is posted
+#     by the browser (read from the profile, not run). The profile is left as it is: denying
+#     those requests too would be a change of design, for Dan to decide.
 #   * A connection that was already open when this file started and is handed down to the
 #     command: the sandbox refuses a new connection and does not stop a write to an open one
 #     (measured 2026-11-19, test-no-network-run.sh "held"). The gate's rule lets nothing but a cd
 #     stand before this file in a call, and no /dev/tcp among its words, so a call cannot open
 #     one first (lib/no-network-route.py).
-#   * A file. The command can write any file it could without this, this one included.
 # A unix domain socket whose listener is outside the sandbox IS refused (measured the same day).
 # Anything that is not macOS: there is no sandbox tool, so nothing is run. And it is not specific
 # to Slack: a test that needs any network, a port on this Mac included, fails under it with
@@ -54,6 +66,7 @@
 # Tests: test-no-network-run.sh.
 set -u
 SANDBOX=/usr/bin/sandbox-exec
+PYTHON=/Library/Developer/CommandLineTools/usr/bin/python3
 PROFILE='(version 1)(allow default)(deny network*)'
 PROBE_SECONDS=20
 ME=no-network-run
@@ -68,11 +81,12 @@ case "$1" in
   -*) refuse 64 "this takes no option, and the first word after it, $1, starts with a dash. Write the command to run straight after this file's path." ;;
 esac
 [ -x "$SANDBOX" ] || refuse 69 "$SANDBOX, the macOS tool that takes the network away, is not on this machine, so no command can be run without the network here."
-PYTHON="$(command -v python3)" || refuse 69 "python3, which checks that the sandbox really blocks a connection, is not on the PATH."
+[ -x "$PYTHON" ] || refuse 69 "$PYTHON, which checks that the sandbox really blocks a connection, is not on this machine. It comes with Apple's command line developer tools, and no other python3 is used, since one found on the PATH would run outside the sandbox."
 
 # The proof. Its code comes on its input, which leaves the command's own input untouched: the
-# heredoc is this one program's alone. -I keeps PYTHONPATH and its like out of it.
-"$PYTHON" -I - "$SANDBOX" "$PROFILE" "$PROBE_SECONDS" <<'PROOF'
+# heredoc is this one program's alone. -I keeps PYTHONPATH and its like out of it, and the folder
+# the call is in off its import path. The probes are run by the same python3, by the same path.
+"$PYTHON" -I - "$SANDBOX" "$PROFILE" "$PROBE_SECONDS" "$PYTHON" <<'PROOF'
 import socket
 import subprocess
 import sys
@@ -80,6 +94,7 @@ import sys
 SANDBOX = sys.argv[1]
 PROFILE = sys.argv[2]
 SECONDS = float(sys.argv[3])
+PYTHON = sys.argv[4]
 # One connection to the listener. 0: it connected. 7: refused with a permission error, which is
 # what the sandbox gives. 9: any other failure.
 PROBE = """
@@ -105,7 +120,7 @@ def stop(why):
 def probe(front):
     """How the probe ended with front before it: its exit code, or words saying why it gave none."""
     try:
-        done = subprocess.run(front + [sys.executable, "-I", "-c", PROBE, str(PORT), str(SECONDS)],
+        done = subprocess.run(front + [PYTHON, "-I", "-c", PROBE, str(PORT), str(SECONDS)],
                               stdin=subprocess.DEVNULL, timeout=SECONDS)
     except subprocess.TimeoutExpired:
         return "no answer within %g seconds" % SECONDS
