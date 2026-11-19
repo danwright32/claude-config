@@ -175,7 +175,7 @@ check "watch after retire: says the Mac is retired" has "$out" "this Mac was ret
 : > "$LCLOG"
 out="$(run install-autosync)"; rc=$?
 check "install-autosync after retire: refused" test "$rc" -ne 0
-check "install-autosync after retire: writes no agent" test ! -e "$AGENTS/com.claudesync.timer.plist" -a ! -e "$AGENTS/com.claudesync.watch.plist"
+check "install-autosync after retire: writes no agent" test ! -e "$AGENTS/com.claudesync.timer.plist" -a ! -e "$AGENTS/com.claudesync.watch.plist" -a ! -e "$AGENTS/com.claudesync.leftovers.plist"
 check "install-autosync after retire: loads nothing" same "$(cat "$LCLOG")" ""
 check "install-autosync after retire: names the way back" has "$out" "rm $RECORD"
 out="$(run install-schedule)"; rc=$?
