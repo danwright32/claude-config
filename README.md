@@ -3630,7 +3630,10 @@ lesson is written all walk, so none of them can disagree about what a fault is.
 A lesson can say what holds it (#3245). One indented line after the rule sentence names the check:
 `CHECK: hooks/x.sh (full)` when a check holds the whole rule, `(partial)` when a reader holds the
 rest, `owner/repo:path` for a check in another repository, or `NO CHECK: <why no check can hold it>`.
-A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above.
+A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above,
+and so is a line holding a tab, a carriage return or another control character, or one running on to
+the next line, since its reader would judge only part of it (#3294). Spaces and tabs at its two ends
+are indentation and are not part of the line.
 `claude-sync lesson-checks` counts the whole library: lessons naming a check, lessons no check can
 hold, lessons with neither, named checks missing on disk, and core lessons a check holds fully,
 which are candidates for Dan to take out of the core one at a time. The lesson entry hook runs its
@@ -6697,7 +6700,26 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's file, whose band it would otherwise overwrite. One with no transcript of its own either
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
-- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
+- **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
+  costs #1940 tracks: the share of subagent reads spent on code reading, the share of interactive
+  reads spent carrying agent reports, and the main sessions past a number of compactions. It
+  reads each item's size and kind, never prints its text, and is the method both posted
+  measurements used, so a re-measure on either Mac is comparable with them:
+
+      python3 tools/transcript-shares.py --project <part of a project folder name> \
+          --since 2026-11-02 --until 2026-11-16 --tz America/New_York --jobs 8
+
+  `--project` matches part of a folder name under `~/.claude/projects`, so it also matches that
+  repository's worktree folders and any folder it was in before a move; check which folders it
+  matched before comparing two runs. A part starting with a dash is written `--project=-...`.
+  It can be repeated, or left out to read every project. Its INPUT line says how many
+  files and requests it read. A file it cannot open, a folder it cannot list, and a file whose
+  read fails part way are each named on an UNREADABLE line; from the last, nothing is counted.
+  A line that is not JSON, is nested too deep to parse, or carries an id that is not a string is
+  counted on its file's MALFORMED line, and the rest of that file is read. Any of these puts
+  `complete=no` on END.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
+  `tools/test-transcript-shares.sh`.
 
 ## Mods
 
@@ -7679,9 +7701,9 @@ another place, one carrying anything he was not shown, one under a rule whose bo
 same line under another rule or on another lesson, and any check line when the picker showed him
 none are asked about as before (rules.ts `readCheckLine`, `addsLesson`). Visible words are not
 judged: any reason after `NO CHECK:` passes, because he reads it. The lessons file's own reader is
-wider in three places, where a line it takes is refused here and has to be reworded: a `NO CHECK:`
-reason holding a character outside ASCII, a line over 300 characters, and a tab or other white space
-that is not a space between words.
+wider in two places, where a line it takes is refused here and has to be reworded: a `NO CHECK:`
+reason holding a character outside ASCII, and a line over 300 characters. Since #3294 it refuses a
+tab, a carriage return or any other control character inside the line, as this picker does.
 For good on one file directly in a project's memory folder, once that save lands, also
 lets through the single line in that folder's `MEMORY.md` linking to it, once, until the same
 approval would lapse (#1794, Dan, 2026-10-26: "didn't I already give permission to save this?"): by
@@ -8360,7 +8382,11 @@ restart never repeats it; this is the one notification sent while asleep (#1545)
 does not give changes nothing and is logged, and a notifier that fails is logged and never ends
 sleep mode. While asleep (#834, phase 3, Dan's "everything not banned"), a worker session's own
 permission prompts are approved, never a question or the plan approval and never over a decision
-beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
+beneath; a classifier refusal is noted as `failed` and never retried by the mod, which drops any
+hook's request beneath it to run the call again (whether the session itself may send the call again
+is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
+a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
+session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
