@@ -6682,7 +6682,23 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's file, whose band it would otherwise overwrite. One with no transcript of its own either
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
-- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
+- **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
+  costs #1940 tracks: the share of subagent reads spent on code reading, the share of interactive
+  reads spent carrying agent reports, and the main sessions past a number of compactions. It
+  reads each item's size and kind, never prints its text, and is the method both posted
+  measurements used, so a re-measure on either Mac is comparable with them:
+
+      python3 tools/transcript-shares.py --project <part of a project folder name> \
+          --since 2026-11-02 --until 2026-11-16 --tz America/New_York --jobs 8
+
+  `--project` matches part of a folder name under `~/.claude/projects`, so it also matches that
+  repository's worktree folders and any folder it was in before a move; check which folders it
+  matched before comparing two runs. A part starting with a dash is written `--project=-...`.
+  It can be repeated, or left out to read every project. Its INPUT line says how many
+  files and requests it read, and a file it cannot read or a line that is not JSON is named on
+  its own line, with `complete=no` on END.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
+  `tools/test-transcript-shares.sh`.
 
 ## Mods
 
