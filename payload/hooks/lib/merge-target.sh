@@ -1856,7 +1856,8 @@ mt_view_class() {  # $1 = the envelope mt_pr_view printed
 #
 # Sets MT_RUNS_PENDING to the unfinished runs' names, joined with ", " (empty when every run has
 # finished, or when there are none at all, which is what a repository without Actions answers),
-# MT_RUNS_FAILED to the runs that finished as a failure (see below), and MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
+# MT_RUNS_FAILED to the runs that finished as a failure (see below), MT_RUNS_DONE to the names of the
+# runs that finished any other way (claude-config#3254), and MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
 # the read failed transiently, MT_SIGNIN_RC when GitHub refused the sign in (mt_gh_read_class), and 1
 # for anything else, including an answer that is not that list:
 # not knowing whether CI is still to come is not the same as knowing it is not (L42). Asked as

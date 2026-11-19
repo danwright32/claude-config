@@ -697,8 +697,9 @@ read_pr(){   # sets view_env
   return "$rc"
 }
 # The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
-# runs_pending, and runs_failed (the head's runs that finished as a failure), which
-# rerun_failed_start reads (claude-config#2537). Asked as the account this run merges as, once
+# runs_pending, runs_failed (the head's runs that finished as a failure), which
+# rerun_failed_start reads (claude-config#2537), and runs_done (the names of those that finished any
+# other way), which no_checks_wait reads (claude-config#3254). Asked as the account this run merges as, once
 # resolve_merger has chosen it, and before that as the one that could see the pull request (#2629).
 read_runs(){
   local rc
