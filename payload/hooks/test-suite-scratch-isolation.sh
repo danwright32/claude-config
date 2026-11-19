@@ -44,7 +44,7 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${SCRATCH_ISOLATION_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+ROOT="${SCRATCH_ISOLATION_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"
 
 pass=0
 fail=0
@@ -53,8 +53,8 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 # No repository here is not a failure of this suite's subject, it is a place it cannot be asked. Its
 # own wording, so it stays distinguishable from the siblings that refuse for their own reasons (L11).
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-  echo "test-suite-scratch-isolation: no repo above $DIR, so there were no suites to read." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read every suite in it, and there is none above $DIR"
+  echo "test-suite-scratch-isolation: $DIR is not in a claude-config checkout, so there were no suites to read." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read every suite in it, and $DIR is not in a claude-config checkout"
   exit 2
 fi
 

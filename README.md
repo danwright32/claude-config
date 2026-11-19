@@ -4841,6 +4841,24 @@ sync suite recomputes both bounds from the record, read by column name, and fail
 at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
 make rather than a pull request gone red at random.
 
+Since #3239 the budget is held against the work, not the runner's seconds. CI's runners are several
+processors, and on 2026-11-18 one tree cost 832s of section time on an Intel Xeon 6975P-C and 1448s
+on an AMD EPYC 7763, every section slower by about the same factor, so the raw figure could not tell
+a suite that grew from a slower runner. After its shards the suite times a fixed piece of reference
+work (1,200 short processes, in `suite_reference_work`), twice, and keeps the faster reading of its
+processor time. The section time is judged as section time times the reference's nominal
+(`SUITE_REFERENCE_NOMINAL_MS`) over this run's reading, so every processor is held to the same
+amount of work. Across 22 CI runs of one tree on five processors, read on 2026-11-18, the raw section
+time ran from 823s to 1396s (highest over lowest 1.70, standard deviation 17% of the mean) and
+the judged figure from 1155s to 1327s (1.15, and 4.2%). The nominal, 2.424s, is set by #2614's rule
+applied to the judged figure: the 1440s budget sits at its mean plus four standard deviations. The
+note on CI's log says both the raw figure and what
+it was judged as, and a red names the processor and the reading. A reading outside the sane range, or none at all, is reported as `UNMEASURED` on a
+`SUITE-PART-UNMEASURED` line and the raw section time is judged as before, so a slow reading can
+never be what turns a red green. The reference's text is held to a checksum beside its nominal, so
+changing the work fails the suite until the nominal is measured again. The record and the bounds
+above still set the raw budget, which is what applies when the speed was not read.
+
 The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
 
 ```bash
@@ -5878,6 +5896,15 @@ the verified per item total beside `df -m` before and after. Anything needing Da
 to him as one command; the skill never runs `sudo`. `test-disk-clean-skill.sh` derives every exit
 code each of those four scripts can return from its source and fails when the skill does not say what
 to tell Dan for one, and runs the review page and checker commands as written through the harness.
+The Trash is drawn as one row, and ticking it copies one summary, `all:trash:<count>:<digest>`,
+never an id per entry: the personal MacBook's 5,979 entries in its dry run on 2026-11-17 were about
+70 KB of ids in the chat and 5,979 lines of the confirm step (#3232). The digest (`review-lib.sh`,
+`dcrv_whole_token`) covers the scan id and every entry's id, path and device and inode, so the
+checker plans the summary only when working it out again from the record gives the same one, then as
+exactly those entries. An entry put in the Trash after the scan is not in the record, so the summary
+never reaches it; a count or digest that differs, or a summary of any other kind, is refused.
+The confirm step says the Trash in one line, its count and total, and
+`review-check.sh --entries trash --plan <plan>` lists its entries, writing nothing, when Dan asks.
 
 `skills/disk-clean/scan.sh` is the half of that flow that removes nothing (claude-config#1806). It
 is not write free: it writes the scan record, and the review page writes itself and its nonce into

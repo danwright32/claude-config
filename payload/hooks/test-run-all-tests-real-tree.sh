@@ -72,7 +72,7 @@ STRAY_WORD="UNMEAS""URED"
 # fixtures before anyone relies on this answer. It is asked only WHICH directories it would read,
 # never run, because running it from here would run this suite from inside itself.
 # ---------------------------------------------------------------------------
-REAL="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -n "$REAL" ]; then
   out_list="$(HOOK_TESTS_LIST_ONLY=1 bash "$RUNNER" 2>/dev/null)"
   for d in payload/hooks tests tools payload/skills/milestone; do
@@ -90,8 +90,8 @@ if [ -n "$REAL" ]; then
     && check "the listing answered rather than refusing" ok \
     || check "the listing answered rather than refusing" "it printed $(printf '%s\n' "$out_list" | grep -c .) line(s)"
 else
-  # No repository above this file, which is what a deployed copy under the config directory looks
-  # like. The four checks above cannot be asked here, and this branch used to REFUSE, which is one
+  # This file is not in a claude-config checkout (lib/checkout-root.sh refused), which is what a
+  # deployed copy under the config directory looks like. The four checks above cannot be asked here, and this branch used to REFUSE, which is one
   # of the three failures that made the documented command report red on a tree where nothing was
   # wrong (claude-config#155). What is true here is asserted instead, so the branch still checks
   # something rather than only explaining why it cannot (L98).
@@ -123,7 +123,7 @@ case "$pu_found" in
   *test-a.sh:1:*b_tests.py:1:*test-c.sh:1:*test-e.sh:1:*) case "$pu_found" in *test-d.sh*) check "#1444 the source scan finds each stray print and nothing else" "it flagged the agreed line: $pu_found" ;; *) check "#1444 the source scan finds each stray print and nothing else" ok ;; esac ;;
   *) check "#1444 the source scan finds each stray print and nothing else" "found: $pu_found" ;;
 esac
-pu_root="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+pu_root="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ] || pu_root="${RUN_ALL_TESTS_CHECKOUT:-}"
 if [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ]; then
   pu_files=()
