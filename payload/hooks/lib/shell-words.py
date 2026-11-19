@@ -425,9 +425,10 @@ def cd_target(text):
     """The directory a simple command moves to when it is a cd, as the shell reads the word, or None.
 
     A bare cd goes home. Only a leading tilde is expanded later; a variable stays as written, so
-    the caller refuses it rather than guessing what it holds.
+    the caller refuses it rather than guessing what it holds. `cd>/dev/null <dir>` is a cd too
+    (spaced, claude-config#3252).
     """
-    text = join_continuations(text)
+    text = spaced(join_continuations(text))
     try:
         words = shell_split(text)
     except ValueError:
@@ -832,7 +833,12 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             header = FUNC_HEADER.match(before)
             if header:
                 before = before[header.end():]
-            if all(w in RESERVED for w in before.split()) and (not header or before.split()):
+            # A function whose body is a subshell, `f() ( git push )`: the ( after the header opens
+            # the body, whose commands the shell runs on each call (claude-config#3252). The ( of
+            # `function f ()` is the header's own.
+            body = (not header and FUNC_BODY_OPENS.fullmatch(before)
+                    and not (before.rstrip()[-1:] != ")" and EMPTY_PARENS.match(s, i)))
+            if body or (all(w in RESERVED for w in before.split()) and (not header or before.split())):
                 if nx == "(":
                     frames.append({"k": "arith", "depth": 0})
                     i += 2
@@ -860,9 +866,10 @@ def command_words(text):
     and a walker that took `then` or `do` for the command name saw no push in `if x; then git push;
     fi` (#1017). Looked past from RESERVED, the same list cd_target uses, so the two readings cannot
     disagree about which word is the command. A command shlex cannot read (an unbalanced quote) is
-    split on whitespace instead, the reading that still lets a push be seen.
+    split on whitespace instead, the reading that still lets a push be seen. A redirection glued to
+    a word is a word of its own, as the shell reads it (spaced, claude-config#3252).
     """
-    text = join_continuations(text)
+    text = spaced(join_continuations(text))
     try:
         words = shell_split(text)
     except ValueError:
@@ -1005,7 +1012,7 @@ def alone(text):
         return False
 
 
-def command_rest(text, passed=None):
+def command_rest(text, passed=None, glue_read=True):
     """(the command from its own name on, its leading assignments) for one command's text.
 
     Past the reserved words that only open or continue a compound command (RESERVED: then, do, {,
@@ -1013,7 +1020,9 @@ def command_rest(text, passed=None):
     holding quotes, a substitution or spaces. A merge gate reading the first words of `then gh pr
     merge 7` saw `then` where gh should be, so a merge inside an if, a loop or a brace group was no
     merge to any of them (claude-config#1040). The text is kept as written, quotes and all, so a
-    caller reads its arguments the way it always has.
+    caller reads its arguments the way it always has, but for the space written before a
+    redirection glued to a word (spaced, claude-config#3252); glue_read=False leaves that out, for
+    glued_script alone, which asks how the command read before.
     """
     s = text.lstrip()
     # A subshell or group opening a command the crude cut left whole, `( cd x && git push )` or
@@ -1024,6 +1033,12 @@ def command_rest(text, passed=None):
     while True:
         m = re.match(r"(\S+)(\s+|$)", s)
         if not m or m.group(1) not in RESERVED:
+            # A function's header stands before its body's first command as a reserved word stands
+            # before a command, and the { after it is one (claude-config#3252).
+            header = FUNC_HEAD.match(s)
+            if header:
+                s = s[header.end():]
+                continue
             break
         s = s[m.end():]
         # The shell's own time takes -p, and -- to end it, before the command it times
@@ -1033,7 +1048,9 @@ def command_rest(text, passed=None):
             if not m2:
                 break
             s = s[m2.end():]
-    assigns, rest = past_head(s)
+    # A redirection glued to the name, to a runner or to a word after either is a word of its own
+    # from here on (claude-config#3252).
+    assigns, rest = past_head(spaced(s) if glue_read else s)
     rest, more = past_runners(rest, passed)
     return rest, "\n".join(assigns + more)
 
@@ -1071,6 +1088,171 @@ def past_head(s):
         if not more:
             return assigns, s
         assigns.extend(more)
+
+
+# ---- a redirection glued to the word before it (claude-config#3252) ------------------------------
+# The shell ends a word at a redirection's operator, so `git>/dev/null push` runs git push with its
+# output redirected, `git push>/dev/null` the same, and `env>/dev/null git push` runs env. Read by
+# its whitespace, the first was a program named git>/dev/null, the second a subcommand named
+# push>/dev/null and the third no runner, so no gate asking for a git push saw one in any of them.
+# spaced() writes the space the shell reads there and changes nothing else: the words, the
+# redirections and their order stay as written, so every reading after it (the name, a runner's
+# options, the subcommand, a shell's -c string, a cd's directory) meets a spelling it always read.
+# Quotes, an escaped operator, substitutions, ${ }, arithmetic and anything in parentheses are text.
+# A descriptor number is the redirection's only as a word of its own (`2>x`; in `v2>x` the word is
+# v2), and bash's {name}> stays whole. <( ) and >( ) are words, and so is zsh's numeric range
+# <1-10>. A test's [[ a<b ]] and an arithmetic (( a<b )) compare and redirect nothing, so a command
+# that opens on either is left as written.
+GLUED_STOP = re.compile(r"""[\\'"$`<>(&]""")
+# What may stand right before a redirection that is glued to nothing: a blank, or what ends a command.
+OPERATOR_START = " \t\n;|&("
+NUMERIC_RANGE = re.compile(r"<\d*-\d*>")
+NAMED_DESCRIPTOR = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+DESCRIPTOR_TARGET = re.compile(r"[ \t]*(?:\d+|-)")
+TEST_OPENS = re.compile(_PREFIX + r"(?:\[\[|\(\()")
+
+
+def _past(s, i):
+    """The index just past the quoted or bracketed piece that opens at s[i] (a quote, $' ', ${ }, a
+    backquote or a parenthesis, a substitution's or any other), or len(s) when it never closes."""
+    n, stack = len(s), []
+    while i < n:
+        c = s[i]
+        top = stack[-1] if stack else ""
+        if top == "'":
+            j = s.find("'", i)
+            if j < 0:
+                return n
+            stack.pop()
+            i = j + 1
+        elif top == "$'":
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'":
+                stack.pop()
+            i += 1
+        elif c == "\\":
+            i += 2
+            continue
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+            elif c == "`":
+                stack.append("`")
+            elif c == "$" and s[i + 1:i + 2] in ("(", "{"):
+                stack.append(s[i + 1])
+                i += 1
+            i += 1
+        else:
+            if c == "'":
+                stack.append("'")
+            elif c == '"':
+                stack.append('"')
+            elif c == "`":
+                if top == "`":
+                    stack.pop()
+                else:
+                    stack.append("`")
+            elif c == "$" and s[i + 1:i + 2] == "'":
+                stack.append("$'")
+                i += 1
+            elif c == "$" and s[i + 1:i + 2] == "{":
+                stack.append("{")
+                i += 1
+            elif c == "(":
+                stack.append("(")
+            elif c == ")" and top == "(":
+                stack.pop()
+            elif c == "}" and top == "{":
+                stack.pop()
+            i += 1
+        if not stack:
+            return i
+    return n
+
+
+def spaced(text):
+    """text with a space written before each redirection glued to the word before it, and text itself
+    when it holds none (claude-config#3252). Most commands hold no < and no >, and are answered by
+    looking for those two characters alone."""
+    if "<" not in text and ">" not in text:
+        return text
+    return _spaced(text)
+
+
+@functools.lru_cache(maxsize=4096)
+def _spaced(s):
+    if TEST_OPENS.match(s):
+        return s
+    n, i, floor, cuts = len(s), 0, 0, []
+    while i < n:
+        m = GLUED_STOP.search(s, i)
+        if not m:
+            break
+        i = m.start()
+        c = s[i]
+        nx = s[i + 1:i + 2]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"`(" or (c == "$" and nx in ("'", "{")):
+            i = _past(s, i)
+            continue
+        if c == "$" or (c == "&" and nx != ">"):
+            i += 1
+            continue
+        if c != "&" and nx == "(":
+            i = _past(s, i + 1)  # <( ) or >( ): a word, whose text is its own
+            continue
+        if c == "<":
+            r = NUMERIC_RANGE.match(s, i)
+            if r:
+                i = r.end()
+                continue
+        # The redirection starts at its descriptor when one is written as a word of its own.
+        p = i
+        if c != "&":
+            j = i
+            while j > floor and s[j - 1].isdigit():
+                j -= 1
+            if j < i and (j == 0 or s[j - 1] in OPERATOR_START):
+                p = j
+            elif s[i - 1:i] == "}":
+                k = s.rfind("{", floor, i)
+                if k >= 0 and NAMED_DESCRIPTOR.fullmatch(s, k, i) and (k == 0 or s[k - 1] in OPERATOR_START):
+                    p = k
+        if p > 0 and s[p - 1] not in OPERATOR_START:
+            cuts.append(p)
+        op = LEADING_REDIRECT.match(s, i)
+        i = op.end()
+        if s[i - 1] == "&":
+            # A descriptor it is copied from or to, `2>&1`, is its target and no word before the next.
+            t = DESCRIPTOR_TARGET.match(s, i)
+            if t:
+                i = t.end()
+        floor = i
+    if not cuts:
+        return s
+    out, at = [], 0
+    for p in cuts:
+        out.append(s[at:p])
+        at = p
+    out.append(s[at:])
+    return " ".join(out)
+
+
+# ---- a function's header in front of its body's first command (claude-config#3252) ---------------
+# `f() { git push; }` is cut at the ; so its first command's text is `f() { git push`, and read from
+# its first word that was a program named f(), so the first command of every function body was no
+# git and no gh to any gate, while the second was read. zsh also takes any one command as a body,
+# `f() git push`. command_rest passes the header over as it passes a reserved word over.
+FUNC_HEAD = re.compile(r"(?:function\s+[^\s(){}]+(?:\s*\(\s*\))?|[A-Za-z_][\w:.-]*\s*\(\s*\))\s*")
+# A function's header and nothing after it, which is what stands before the ( of a body written as
+# a subshell, `f() ( git push )`: the shell runs that body's commands on each call, and read as a
+# plain ( ) they were one command named f() that no gate read (claude-config#3252).
+FUNC_BODY_OPENS = re.compile(_PREFIX + FUNC_HEAD.pattern)
+EMPTY_PARENS = re.compile(r"\(\s*\)")
 
 
 # The words that only run the command after them, each with the short options that take a value and
@@ -1146,6 +1328,10 @@ def past_runners(rest, passed=None):
         values, longs = RUNNERS[w.split("/")[-1]]
         s = after
         while True:
+            # A redirection among the runner's own options is the shell's, as one before its
+            # command is: `env 2>/dev/null -u X gh pr merge 7` was a command named -u, and `timeout
+            # 2>/dev/null 30 git push` took the redirection for the duration (claude-config#3252).
+            s = past_redirects(s)
             opt, after_opt = first_word(s)
             if opt is None:
                 return rest, assigns
@@ -1175,14 +1361,15 @@ def past_runners(rest, passed=None):
             break
         name = w.split("/")[-1]
         for _ in range(POSITIONALS.get(name, 0)):
-            _, s = first_word(s)
+            _, s = first_word(past_redirects(s))
         if name == "rtk":
-            sub_word, after_sub = first_word(s)
+            sub_word, after_sub = first_word(past_redirects(s))
             if sub_word == "proxy":
                 # rtk proxy runs the words after its own options as they stand. rtk is then not the
                 # command's last runner, so `rtk proxy init` is a program named init, not rtk's.
                 s = after_sub
                 while True:
+                    s = past_redirects(s)
                     opt, after_opt = first_word(s)
                     if opt is None or not opt.startswith("-") or opt == "-":
                         break
@@ -1192,7 +1379,7 @@ def past_runners(rest, passed=None):
                 rest = s
                 continue
         if passed is not None:
-            passed.append((name, s))
+            passed.append((name, past_redirects(s)))
         more, s = past_head(s)
         assigns.extend(more)
         rest = s
@@ -1267,7 +1454,7 @@ def gh_path(words):
     absent (`api` takes no action), front
     is the words written in front of the action, in order, for the subcommand to read as its own,
     and after is every word after the action (after `api` for gh api)."""
-    path, front = [], []
+    path, front, redirections = [], [], []
     j, n = 0, len(words)
     while j < n:
         w = words[j]
@@ -1281,24 +1468,77 @@ def gh_path(words):
                 j += 1
             j += 1
             continue
+        k = redirection_words(words, j)
+        if k:
+            redirections.extend(words[j:j + k])
+            j += k
+            continue
+        w, glued = glued_cut(w)
         path.append(w)
         j += 1
+        if glued:
+            k = 0 if REDIRECT_WORD.match(glued).group(1) or j >= n else 1
+            redirections.extend([glued] + words[j:j + k])
+            j += k
         if len(path) == 2 or path[0] == "api":
             break
     sub, act = gh_long_form(path[0] if path else "", path[1] if len(path) > 1 else "")
-    return sub, act, front, words[j:]
+    return sub, act, front, words[j:] + redirections
+
+
+# Where a redirection glued to a word starts in it: its < or >, or the & of an &>.
+GLUED_AT = re.compile(r"&(?=>)|[<>]")
+
+
+def redirection_words(words, j):
+    """How many of words from j on are one redirection, as shlex.split or shell_tokens leaves one:
+    1 for an operator with its target (`2>/dev/null`), 2 for an operator whose target is the next
+    word (`>` then `/dev/null`), 0 when words[j] is none (claude-config#3252)."""
+    m = REDIRECT_WORD.match(words[j])
+    if not m:
+        return 0
+    return 1 if m.group(1) or j + 1 >= len(words) else 2
+
+
+def glued_cut(word):
+    """(word, "") for a word holding no redirection, else (the word before the redirection glued to
+    it, that redirection): `push>/dev/null` is push and >/dev/null (claude-config#3252). For the
+    words a caller split itself, where the quotes are gone: no program, subcommand or action is
+    named with a < or a > in it, so one read there is the shell's."""
+    m = GLUED_AT.search(word, 1)
+    return (word[:m.start()], word[m.start():]) if m else (word, "")
 
 
 def git_path(words):
     """The words after `git` as git reads them: (sub, front, after). sub is the subcommand (empty
-    when there is none), front git's own options before it, after every word after it."""
+    when there is none), front git's own options before it, after every word after it.
+
+    A redirection written before the subcommand is the shell's and no subcommand (claude-config
+    #3252): `git 2>/dev/null push` and `git > /dev/null push` were subcommands named 2>/dev/null and
+    >, so no push to any gate. Passed over, it is given with the words after the subcommand, where a
+    redirection written last has always stood, and so is one glued to the subcommand."""
     j, n = 0, len(words)
-    while j < n and words[j].startswith("-") and words[j] != "-":
-        j += 2 if words[j] in GIT_VALUED else 1
-    j = min(j, n)
+    front, redirections = [], []
+    while j < n:
+        k = redirection_words(words, j)
+        if k:
+            redirections.extend(words[j:j + k])
+            j += k
+        elif words[j].startswith("-") and words[j] != "-":
+            k = 2 if words[j] in GIT_VALUED else 1
+            front.extend(words[j:j + k])
+            j += k
+        else:
+            break
     if j >= n:
         return "", words[:n], []
-    return words[j], words[:j], words[j + 1:]
+    sub, glued = glued_cut(words[j])
+    j += 1
+    if glued:
+        k = 0 if REDIRECT_WORD.match(glued).group(1) or j >= n else 1
+        redirections = [glued] + words[j:j + k] + redirections
+        j += k
+    return sub, front, words[j:] + redirections
 
 
 def tool_read(words):
@@ -1366,6 +1606,13 @@ def rejoin(words):
         rest = command_rest(text)[0]
         k = starts.index(len(text) - len(rest)) if rest and len(text) - len(rest) in starts else None
         bare = _redirect_bare(words[k]) if k is not None else None
+        if bare is None and k is not None:
+            # A redirection glued to the name, `git>/dev/null` as shlex.split leaves it, is written
+            # as the name and then the redirection, so command_rest reads the name (claude-config
+            # #3252): quoted whole, it was a program of that name and no gate saw what it ran.
+            name, glued = glued_cut(words[k])
+            if name and glued:
+                bare = shlex.quote(name) + " " + _redirect_bare(glued)
         if bare is None or bare == pieces[k]:
             return text
         grew = len(bare) - len(pieces[k])
@@ -1809,6 +2056,26 @@ def script_text(path, d, wrapper):
     return path, text
 
 
+def glued_script(text):
+    """The reason one command was reported as a script file run by its path before claude-config
+    #3252, when that came only of a redirection holding a slash glued to its name (`git>/dev/null
+    status`, read as a file named git>/dev/null); "" for any other command.
+
+    The shell runs the program, and every other reading here now says so. But check-wrapped-commands.sh
+    refuses a script file beside git, gh or rtk, so it refused these, and a refusal is not dropped as
+    a side effect of a fix to the reader: that is a decision of its own, left to Dan in #3252's pull
+    request. Until it is made the command keeps the report it had, word for word, beside its true
+    reading. Delete this function and its one call to stop reporting it."""
+    if "<" not in text and ">" not in text:
+        return ""
+    rest = command_rest(text, None, False)[0]
+    word, _ = first_word(rest)
+    if not word or not glued_cut(word)[1]:
+        return ""
+    old = _script_run(word, rest)
+    return old[2] if old and old[0] == "direct" else ""
+
+
 def _records(s, cwd, depth, scripts=None, fields=True):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
@@ -1830,6 +2097,17 @@ def _records(s, cwd, depth, scripts=None, fields=True):
         else:
             (rest, assigns), field = command_rest(t), ""
         found = wrapped(rest)
+        if found is None or (found[1] is not None and not found[2]):
+            kept = glued_script(t)
+            if kept:
+                # Refused before claude-config#3252 as a script file, and so still reported as one
+                # (glued_script), with the commands of a string it hands a shell read after it.
+                inner = []
+                if found is not None and depth < MAX_DEPTH:
+                    inner = _records(found[1], d, depth + 1, scripts, fields)[0]
+                out.append((d, t, "direct\x1d" + kept, rest, assigns, field, depth))
+                out.extend(inner)
+                continue
         if found is None:
             out.append((d, t, "", rest, assigns, field, depth))
             continue
