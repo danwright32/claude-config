@@ -232,7 +232,7 @@ done
 # And the file is read by one place: every other code line naming it is a cache key, or the report's
 # text to a reader.
 named="$(cd "$ROOT" && git grep -l -F 'claude-code-version' -- '*.sh' '*.py' '*.yml' '*.yaml' '*.mjs' '*.ts' 2>/dev/null \
-  | grep -v -e '/test-[^/]*$' -e '^tools/install-claude-code\.sh$' -e '^tools/report-mods-on-newest-claude-code\.sh$')"
+  | grep -v -e '^tools/test-install-claude-code\.sh$' -e '^tools/install-claude-code\.sh$' -e '^tools/report-mods-on-newest-claude-code\.sh$')"
 bad=""
 for f in $named; do
   case "$f" in
@@ -246,7 +246,9 @@ done
 # The daily run: on a schedule and by hand only, the newest release, and only the job running no
 # Claude Code may write.
 on="$(printf '%s\n' "$dw" | awk '/^on:/ { on = 1; next } on && /^[A-Za-z]/ { on = 0 } on')"
-grep -q '^  schedule:' <<< "$on" && ! grep -qE '^  (push|pull_request|pull_request_target|workflow_run):' <<< "$on" \
+# Its triggers are exactly these two, so any other (a push, a pull request, another workflow) fails.
+triggers="$(sed -n 's/^  \([a-z_]*\):.*$/\1/p' <<< "$on" | LC_ALL=C sort | paste -sd' ' -)"
+[ "$triggers" = "schedule workflow_dispatch" ] \
   && check "#3297 the daily run is on a schedule and never on a push or a pull request, so it cannot turn one red" ok \
   || check "#3297 the daily run is on a schedule and never on a push or a pull request, so it cannot turn one red" "on: $(printf '%s' "$on" | tr '\n' ' ')"
 dtests="$(job_of "$DAILY_WF" tests)"; dreport="$(job_of "$DAILY_WF" report)"
