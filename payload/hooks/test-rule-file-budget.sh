@@ -351,8 +351,9 @@ TOTAL_WARN_SMALL_WINDOW=120000
 #
 # The end point is the newest commit and the start is a commit's tree, so the reading is decided by
 # history alone and never by the clock (L713). A reading that cannot be made says UNREAD and why,
-# never a number (L460), and the suite prints that as a SUITE-PART-UNMEASURED line (#1444): no git
-# history here and no checkout handed in, a set that took its current shape fewer than
+# never a number (L460), and the suite prints that as a SUITE-PART-UNMEASURED line (#1444): not the
+# payload of a claude-config checkout (no git history here, or a repository without claude-sync at
+# its top) and no checkout handed in, a set that took its current shape fewer than
 # GROWTH_MIN_DAYS ago, history that does not reach back, or an installed copy that loads a different
 # set from the checkout's history (a Mac with no core set loads the library).
 #
