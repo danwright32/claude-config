@@ -5867,7 +5867,8 @@ and no live session owns it, to the Trash), old Claude Code versions (`claude-ve
 one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
 cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open), and in build folders a Swift
 `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose project is a git
-worktree (a `.git` file). Shown and never offered, each row saying why: `claude-records.sh` (every
+worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule stays refused). Shown
+and never offered, each row saying why: `claude-records.sh` (every
 entry of `~/.claude/state`, session notes among them, Claude Code's file history, the finding spool
 and its backups, and the folders this config's hooks keep in the home folder), `package-caches.sh`
 (npm's cache and npx copies and the pnpm store: only partly Claude's, so Dan's call) and

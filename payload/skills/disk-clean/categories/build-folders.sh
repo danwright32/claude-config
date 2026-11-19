@@ -25,10 +25,13 @@ project_of() { # <target>
   local t="${1%/}" p
   PROJ=""
   # A home dotfolder's build folders belong to tools (npx's copies, global packages), unless the
-  # project folder is a git worktree, whose .git is a FILE: a verify checkout kept there (#3235).
+  # project folder is a git worktree, whose .git is a FILE naming a gitdir under .git/worktrees/: a
+  # verify checkout kept there (#3235). A submodule's .git file names .git/modules/ and stays refused.
   case "$t" in "$HOME"/.*/*|"$DCS_HOME"/.*/*)
     p="${t%/*}"; case "$t" in */.wrangler/tmp) p="${t%/.wrangler/tmp}" ;; esac
-    [ -f "$p/.git" ] && [ ! -L "$p/.git" ] || { V="not offerable: it is inside a home dotfolder, where build folders belong to tools, not projects"; return 1; } ;;
+    if [ ! -f "$p/.git" ] || [ -L "$p/.git" ] || ! grep -q '^gitdir: .*/worktrees/[^/]*$' "$p/.git" 2>/dev/null; then
+      V="not offerable: it is inside a home dotfolder, where build folders belong to tools, not projects"; return 1
+    fi ;;
   esac
   case "$t" in
     */.build)
