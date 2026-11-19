@@ -434,7 +434,7 @@ dcs_claude_running() {
 # or a folder iCloud keeps only in the cloud: on 2026-10-27 the same walk without that last prune ran
 # past ten minutes inside the iCloud synced Documents of this Mac, and with it took 34 seconds. It
 # prints, one per line:
-#   every node_modules and .next folder, and every .wrangler/tmp, without going inside them
+#   every node_modules, .next and .build folder (Swift), and every .wrangler/tmp, without going inside them
 #   every .git (a folder is a repository, a file is a worktree or a submodule)
 #   every *.log over the large size, anywhere it goes, dotfolders included
 #   every file a project for a forgotten tool would hold, .nvmrc, .python-version and pyvenv.cfg
@@ -459,7 +459,7 @@ EOF
       -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
     -o -name .git -print -prune \
     -o \( "${DCS_DL[@]}" \) -prune \
-    -o -type d \( -name node_modules -o -name .next \) -print -prune \
+    -o -type d \( -name node_modules -o -name .next -o -name .build \) -print -prune \
     -o -type d -path '*/.wrangler/tmp' -print -prune \
     -o -type f \( -name '*.log' -size +"$DCS_LARGE_MB"M -o -name .nvmrc -o -name .python-version -o -name pyvenv.cfg $markers \
       -o \( \( -path "$H/Downloads/*" -o -path "$H/Desktop/*" -o -path "$H/Documents/*" -o -path "$H/Movies/*" \) -size +"$DCS_LARGE_MB"M \) \) -print

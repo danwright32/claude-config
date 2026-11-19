@@ -236,6 +236,46 @@ rc_not "a new run whose log gh fails to fetch fails the refresh" 0 "$rc"
 says "and names the run" "COULD NOT READ run 42566634695" "$(cat "$WORK/err7d")"
 same "and leaves the record alone" "$WORK/record-new-before.tsv" "$WORK/record-new.tsv"
 
+# ---- 8. The reference reading and the judged figure are recorded (#3256) ----
+# Since #3239 the budget decides on the section time judged at a reference speed, and the note says
+# both. The saved logs predate that, so their rows carry neither, and say so rather than a number.
+says "the committed record names the reference reading and the judged figure" "$(printf 'runner_group\treference_ms\tjudged_seconds')" "$hdr"
+says "a run from before #3239 records neither as a number" \
+  "$(printf '42525286498\t2026-11-08T21:27:23Z\t37166a2b\tpush\tsuccess\t4\tunknown\teastus2\t3398\t1092\tfaster\tunknown\tunknown')" "$(cat "$WORK/out1")"
+# The note line below is copied from run 44464124724's log (2026-11-19, part 1, AMD EPYC 9V74),
+# the first measured on CI after #3239 shipped, put in place of a saved run's own note.
+REAL_NOTE="note: 1088s of section time against a 1440s budget, judged as 1196s of work at the reference speed the budget is calibrated at (this runner's reference work took 2.205s of processor time, against the 2.424s the budget is calibrated at)"
+with_note() {  # with_note <name> <the text in place of the run's note, or empty for none>: prints the folder
+  local d; d="$(logs_copy "$1")"
+  awk -v note="$2" '/ note: 1303s of section time against a / { if (note == "") next; sub(/note: .*/, note) } { print }' \
+    "$SAMPLE/logs/42897282086.log" > "$d/42897282086.log"
+  printf '%s' "$d"
+}
+jd="$(with_note judged "$REAL_NOTE")"
+out="$("$TOOL" --print --record "$RECORD" --runs "$SAMPLE/runs.tsv" --logs "$jd" 2>"$WORK/err8")"; rc=$?
+rc_is "a log carrying the judged figure is read" 0 "$rc"
+says "its reference reading is recorded in milliseconds and its judged figure in seconds" "$(printf '\t1088\tfaster\t2205\t1196')" "$out"
+# A run whose speed was not measured was judged raw, which its note says; the record says the same.
+rw="$(with_note raw "note: 1303s of section time against a 1440s budget, judged raw because the runner's speed was not measured (the runner's reference work could not be timed)")"
+out="$("$TOOL" --print --record "$RECORD" --runs "$SAMPLE/runs.tsv" --logs "$rw" 2>/dev/null)"
+says "a run judged raw records its reference as unmeasured and its raw time as what was judged" "$(printf '\t1303\tslower\tunmeasured\t1303')" "$out"
+# A run the budget turned red says the judged figure on its failure line, the line read first.
+fl="$(with_note failline "")"
+printf "suites part 1\tEvery suite of this part\t2026-11-10T20:50:05.5258295Z           FAIL: test suite: this run's sections cost 1500s of section time between them, which is 1460s of work at the reference speed the budget is calibrated at (this runner's reference work took 2.488s of processor time, against the 2.424s the budget is calibrated at), against a budget of 1440s\n" > "$WORK/failline.txt"
+awk -v add="$(cat "$WORK/failline.txt")" '{ print } / ok +test-claude-sync\.sh / { print add }' "$fl/42897282086.log" > "$fl/x" && mv "$fl/x" "$fl/42897282086.log"
+out="$("$TOOL" --print --record "$RECORD" --runs "$SAMPLE/runs.tsv" --logs "$fl" 2>/dev/null)"
+says "a red run's failure line gives its reference reading and judged figure" "$(printf '\t1500\tslower\t2488\t1460')" "$out"
+# A judged figure with no reading beside it means the format moved: refused, never half read.
+hf="$(with_note half "note: 1088s of section time against a 1440s budget, judged as 1196s of work at the reference speed the budget is calibrated at")"
+"$TOOL" --print --record "$RECORD" --runs "$SAMPLE/runs.tsv" --logs "$hf" >/dev/null 2>"$WORK/err8h"; rc=$?
+rc_not "a judged figure with no reference reading fails the read" 0 "$rc"
+says "and says what is missing" "no reference reading" "$(cat "$WORK/err8h")"
+# A record written before these columns existed is still read: its rows are kept, marked unknown.
+cut -f1-11 "$RECORD" > "$WORK/record-old.tsv"
+"$TOOL" --record "$WORK/record-old.tsv" --runs "$SAMPLE/runs.tsv" --logs "$SAMPLE/logs" >/dev/null 2>"$WORK/err8o"; rc=$?
+rc_is "a record in the old shape is refreshed rather than refused" 0 "$rc"
+same "and comes out as the committed record, every old row kept" "$RECORD" "$WORK/record-old.tsv"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
