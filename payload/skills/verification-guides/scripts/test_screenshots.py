@@ -293,13 +293,22 @@ class Publishing(Base):
         self.assertEqual(gh.posts("git/blobs"), [])
         self.assertTrue(all(sh["url"] is None for sh in m["shots"]))
 
-    def test_a_private_repo_uses_the_private_link_until_inline_rendering_is_measured(self):
-        self.assertFalse(s.PRIVATE_REPO_IMAGES, "flip this test with the constant, once the render is measured")
+    def test_a_private_repo_gets_inline_images_as_measured_in_2699(self):
+        # Measured 2026-11-19 on danwright32/pr-image-test#1: branch pictures render inline for a
+        # signed in viewer with access. Real seed data stays inside the private repository.
+        self.assertTrue(s.PRIVATE_REPO_IMAGES, "set from the measurement in claude-config#2699")
+        self.areas = areas_doc(synthetic=False)
         self.shoot_all()
         gh = FakeGitHub(private=True)
-        with self.assertRaises(v.VerificationError) as e:
-            self.publish(gh)
-        self.assertEqual(e.exception.problems[0][0], "screenshots-need-private-link")
+        m = self.publish(gh)
+        self.assertEqual(m["mode"], "images")
+        self.assertEqual(len(gh.files_at(m["commit"])), 8)
+
+    def test_a_private_repo_still_takes_a_private_link_when_one_is_given(self):
+        self.shoot_all()
+        gh = FakeGitHub(private=True)
+        m = self.publish(gh, link=LINK)
+        self.assertEqual(m["mode"], "link")
         self.assertEqual(gh.posts("git/blobs"), [])
 
     def test_a_link_that_is_not_a_claude_artifact_is_refused(self):

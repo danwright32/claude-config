@@ -18,9 +18,8 @@ Where the pictures live:
           pr-<number>/<head sha>/, and linked by the commit that added it, so a later write to the
           branch cannot change what a body shows. Nothing is ever pruned (Dan, 2026-11-10).
   link    no picture is uploaded; the block links a private Artifact page instead.
-Images only in a public repository whose screens all use a seed declared synthetic (made up data),
-and in a private repository only once PRIVATE_REPO_IMAGES says inline images were measured to
-render there. Everything else is a link.
+Images in a private repository (PRIVATE_REPO_IMAGES, measured in #2699), and in a public repository
+only when its screens all use a seed declared synthetic (made up data). Everything else is a link.
 
 Formats, read only here (the merge check imports this file, L370):
   verification-screenshots/1   the ```verification-screenshots manifest inside the `## Screenshots`
@@ -64,11 +63,11 @@ UPLOAD_TRIES = 3
 FOLDER_RE = re.compile(r"^pr-[1-9][0-9]{0,9}/[0-9a-f]{40}\Z")
 ARTIFACT_RE = re.compile(r"^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]{8,}\Z")
 
-# Whether a picture committed to a branch shows inline in a PRIVATE repository's PR body, measured in
-# claude-config#2699: on 2026-11-10 creating the private test repository was refused by Claude Code's
-# auto mode safety check, so private repositories get the private link, right either way. Flip it
-# only with the measurement in the same pull request.
-PRIVATE_REPO_IMAGES = False
+# Whether a picture committed to a branch shows inline in a PRIVATE repository's PR body. Measured in
+# claude-config#2699 on 2026-11-19: on danwright32/pr-image-test#1 all eight pictures rendered for the
+# owner signed in, and the same link signed out answers 404. So a viewer with access sees them, and
+# nobody without access sees them, which is what a private repository should do.
+PRIVATE_REPO_IMAGES = True
 
 
 # ---------------------------------------------------------------------------------------------
@@ -260,8 +259,7 @@ def publish(areas, slug, pr, base_rid, head_rid, gh=_gh, home=None, link=None):
     synthetic = all(areas["seeds"][_screen(areas, s["area"], s["screen"])["seed"]]["synthetic"] for s in required)
     images_ok = PRIVATE_REPO_IMAGES if private else synthetic
     if link is None and not images_ok:
-        why = ("%s is private, and whether a picture on a branch shows in a private repository's PR body has not"
-               " been measured" % slug) if private else (
+        why = ("%s is private, and PRIVATE_REPO_IMAGES is off in screenshots.py" % slug) if private else (
             "%s is public, and a screen is shot with a seed not declared synthetic in areas.json" % slug)
         v.fail("screenshots-need-private-link", "%s, so no picture may go there. Publish the pictures to a private"
                " Artifact page and pass its link with --link" % why)
