@@ -411,8 +411,13 @@ EOF
 # by this rule. On 2026-11-19 they were seven of the repository's 588 shell scripts, this suite and
 # the gate's other four among them; before a function the text defines was left as it was, the
 # gate's own suite was refused at `run_slow python` and then at `f2854 curl "<a write>"`.
+# The repository's tests and tools are in the checkout, found by the one shared test
+# (lib/checkout-root.sh, #1663); the installed copy of this suite has none and walks what is beside it.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 : > "$T/named.in"
-for f in "$DIR"/*.sh "$DIR"/lib/*.sh "$DIR"/../../tests/*.sh "$DIR"/../../tools/*.sh; do
+named_from=("$DIR"/*.sh "$DIR"/lib/*.sh)
+[ -z "$REPO" ] || named_from+=("$REPO"/tests/*.sh "$REPO"/tools/*.sh)
+for f in "${named_from[@]}"; do
   [ -f "$f" ] || continue
   if grep -qiE 'chat[._](postmessage|schedulemessage|postephemeral|memessage)|hooks\.slack\.com|slack_webhook' "$f"; then
     printf 'bash %s\n' "$f" >> "$T/named.in"
