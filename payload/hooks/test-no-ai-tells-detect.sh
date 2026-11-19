@@ -104,6 +104,7 @@ for p in \
   "tell me about users who never signed in" \
   "read copy of the settings file and compare" \
   "why does the particle simulation stall" \
+  "where are my pens" \
   ; do
   [ "$(fires "$p")" = "no" ] \
     && check "it stays quiet on: $p" ok \

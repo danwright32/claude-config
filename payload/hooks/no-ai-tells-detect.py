@@ -17,6 +17,11 @@ import sys
 sys.stdout.reconfigure(errors="replace")
 
 
+# Words matched exactly, with no ending. "pen" plus an ending is another word ("pens", "pend"), and the
+# old "pen " with its trailing space never matched those either.
+EXACT_WORDS = {"pen"}
+
+
 def word_pattern(terms):
     """One regex matching any of the terms as WHOLE WORDS (claude-config#3238).
 
@@ -31,7 +36,9 @@ def word_pattern(terms):
     alternatives = []
     for term in terms:
         word = re.escape(term.strip())
-        if " " in term.strip():
+        if term.strip() in EXACT_WORDS:
+            alternatives.append(word)
+        elif " " in term.strip():
             alternatives.append(word + "s?")
         else:
             alternatives.append(word + "(?:s|es|d|ed|ing|er|ers)?")

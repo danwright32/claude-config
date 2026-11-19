@@ -10,6 +10,8 @@
 # word, so every such run went against the skill's own text.
 #
 # What this holds the skill to, each a fixed phrase it must carry:
+#   0. a message to another Claude session is not checked, said before the first step so no page is
+#      fetched for one (claude-config#3238);
 #   1. it reads on with the offset each result gives, until no part is left unread;
 #   2. it confirms the end of the list was reached, rather than trusting a missing note;
 #   3. a partial read is never reported as clean;
@@ -75,8 +77,8 @@ if [ -r "$SKILL" ]; then text="$(cat "$SKILL")"; else text=""; check "the no-ai-
 # step, or the session reads the 250,000 character page before learning it need not have.
 check "the skill exempts a message to another Claude session" "$(holds "$text" "A message to another Claude session is not checked")"
 check "the exemption quotes Dan's choice with its date" "$(holds "$text" '2026-11-18: "1.1 File: exempt them"')"
-exempt_line="$(grep -n "A message to another Claude session is not checked" "$SKILL" 2>/dev/null | head -1 | cut -d: -f1)"
-first_step_line="$(grep -n "## MANDATORY FIRST STEP" "$SKILL" 2>/dev/null | head -1 | cut -d: -f1)"
+exempt_line="$(awk 'index($0, "A message to another Claude session is not checked") { print NR; exit }' "$SKILL" 2>/dev/null)"
+first_step_line="$(awk 'index($0, "## MANDATORY FIRST STEP") { print NR; exit }' "$SKILL" 2>/dev/null)"
 [ -n "$exempt_line" ] && [ -n "$first_step_line" ] && [ "$exempt_line" -lt "$first_step_line" ] \
   && check "the exemption comes before the first step, so no page is fetched for it" ok \
   || check "the exemption comes before the first step, so no page is fetched for it" "exemption at line ${exempt_line:-none}, first step at line ${first_step_line:-none}"
