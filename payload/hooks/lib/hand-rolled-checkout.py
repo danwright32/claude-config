@@ -8,7 +8,7 @@ unrelated repository. lib/checkout-root.sh is the one test of whether a folder i
 claude-config checkout (#1567), and every suite that needs the checkout asks it. This finds the next
 suite that hand rolls the lookup instead (L613), so the fix is not converted one site at a time.
 
-WHAT IT LOOKS FOR, in a suite file (a test-*.sh), two shapes:
+WHAT IT LOOKS FOR, in a suite file (a test-*.sh), three shapes:
 
 - An upward derivation, a command substitution that changes into a variable's folder (or a
   `dirname`) followed only by two or more `..` and prints where it landed (`$(cd "$DIR/../.." &&
@@ -22,6 +22,14 @@ WHAT IT LOOKS FOR, in a suite file (a test-*.sh), two shapes:
   (`$DIR/../../hooks` from a skill) is there in the installed copy too and is not reported. That is
   how #2620 shipped: two suites read the README two folders up, which is the checkout's from
   payload/hooks and ~/README.md from the installed copy.
+- A git question for the top level asked from the suite's own folder (`git -C "$DIR" rev-parse
+  --show-toplevel`, `cd "$DIR/.." && git rev-parse --show-cdup`, `--show-prefix` the same),
+  claude-config#3221. It is the same lookup by another route: it takes ANY repository above a copy
+  for this one (a home folder under version control), which is the case the helper refuses; twelve suites
+  carried it while the pre push scanners gate recognised a suite that walks the checkout only by its
+  naming the helper. The suite's own folder is a variable the file sets from a `dirname` of
+  BASH_SOURCE or $0, or such a `dirname` written in place; a git question about a fixture's
+  repository is not judged.
 
 Comments, and a line inside a quoted string spanning lines (a fixture of some other check's input),
 are not code and are not judged (lib/shell_code_lines.py).
@@ -59,9 +67,29 @@ def climbs_out(rel, line):
     return False
 
 
+# The suite's own folder: a `dirname` of BASH_SOURCE or $0, written in place or set into a variable.
+OWN_DIRNAME = r'\bdirname\s+"?\$(?:\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE\b|\{0\}|0\b)'
+SELF_SET = re.compile(r'^\s*(?:(?:local|readonly|export|declare(?:\s+-\w+)?)\s+)?(\w+)=.*' + OWN_DIRNAME)
+TOP_QUESTION = re.compile(r'\brev-parse\b.*--show-(?:toplevel|cdup|prefix)\b')
+
+
+def self_lookup(line, own):
+    """True when the line asks git for the top level from the suite's own folder: with -C, or after
+    a cd, aimed at one of the variables in own or at such a dirname written in place. A dirname of
+    anything else (a fixture's file) is not the suite's folder."""
+    if not TOP_QUESTION.search(line):
+        return False
+    names = '|'.join(re.escape(v) for v in own)
+    here = r'\$\(\s*' + OWN_DIRNAME + (r'|\$\{?(?:%s)\b\}?' % names if names else '')
+    return bool(re.search(r'-C\s+"?(?:%s)' % here, line)
+                or re.search(r'\bcd\s+"?(?:%s)[^;&|]*(?:&&|;)\s*git\b' % here, line))
+
+
 def judge(text, rel=''):
-    return [(n, line.strip()) for n, line in code_lines(text)
-            if UPWARD.search(line) or climbs_out(rel, line)]
+    lines = list(code_lines(text))
+    own = {m.group(1) for _, line in lines for m in [SELF_SET.match(line)] if m}
+    return [(n, line.strip()) for n, line in lines
+            if UPWARD.search(line) or climbs_out(rel, line) or self_lookup(line, own)]
 
 
 def main():
