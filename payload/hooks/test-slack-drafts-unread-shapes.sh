@@ -618,6 +618,10 @@ run_here 'bash named-ok.sh'
 allowed "#3251 a script whose shell, named by a variable, sources a file by the words its string is handed passes"
 run_here 'bash named-posts.sh'
 read_refused "#3251 and one whose string runs what posts is refused"
+# A first word made of two substitutions is a path built from what they print, never text run as
+# commands, so it is judged as it was before (lessons review of the first push).
+run_here '$(pwd)/$(basename ok.sh)'
+allowed "#3251 a program whose path is built from two substitutions is not read as a substitution run as a command"
 
 echo
 

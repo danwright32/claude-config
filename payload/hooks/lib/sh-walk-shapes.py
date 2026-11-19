@@ -829,6 +829,11 @@ def make(sh_special, sh_param, unknown_dir=None):
                 if pieces is None:
                     return None
             elif LONE_SUBST.fullmatch(first):
+                core = first.strip('"')
+                if core.startswith("$(") and self.sh_close(core, 2) != len(core) - 1:
+                    # Two substitutions in one word (`$(pwd)/$(basename x)`) are a path built from
+                    # what they print, not text run as commands: judged as before.
+                    return None
                 # No pieces at all is a file that is not there, which runs nothing; only a
                 # substitution that prints no one file's text is unread.
                 pieces = self.text_of_file(first, d)
