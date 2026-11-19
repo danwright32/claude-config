@@ -14341,7 +14341,7 @@ report_automatic_jobs(){
     [ -f "$wp" ] && left="${left:+$left, }com.claudesync.watch"
     [ -f "$agentdir/$LEFTOVERS_LABEL.plist" ] && left="${left:+$left, }$LEFTOVERS_LABEL"
     if [ -z "$left" ]; then
-      echo "automatic sync: off, because this Mac is retired (said at the top): neither launch agent is installed, which is how retire leaves it."
+      echo "automatic sync: off, because this Mac is retired (said at the top): no claude-sync launch agent is installed, which is how retire leaves it."
     else
       echo "automatic sync: off, because this Mac is retired (said at the top), but $left is still installed in $agentdir, and every run it starts refuses. Remove it with: claude-sync retire --yes"
     fi

@@ -53,7 +53,9 @@ removed so a run killed mid removal is finished by the next one whatever is left
 decision is read again from disk on each run.
 
 The last line printed is the summary claude-sync records:
-  KEEP-RULES-SUMMARY <TAB> ok|failed <TAB> items <TAB> bytes <TAB> first failure or -
+  KEEP-RULES-SUMMARY <TAB> ok|failed|busy <TAB> items <TAB> bytes <TAB> first failure or -
+busy means another run held the lock, so this one removed nothing and records nothing. A log that
+cannot be written stops the run before its next removal and fails it.
 """
 
 import sys
@@ -116,12 +118,19 @@ def entries(path):
         return []
 
 
-def walk(top):
-    """(path, lstat) for everything under top, never following a link."""
+def walk(top, unread=None):
+    """(path, lstat) for everything under top, never following a link. A folder that cannot be read
+    is added to `unread`, so a caller judging age or size can refuse rather than read it as empty."""
     stack = [top]
     while stack:
         d = stack.pop()
-        for n in entries(d):
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            if unread is not None:
+                unread.append(d)
+            continue
+        for n in names:
             p = os.path.join(d, n)
             st = lst(p)
             if st is None:
@@ -179,14 +188,18 @@ def plan_session(sp, sess, registry, now, plan):
     state, why = registry.session(sess)
     # Newest WRITE, read from files and links only: a folder's own time moves whenever something in
     # it is removed, so this job's own removals would otherwise make an ended session look written to.
-    total, newest = 0, None
-    for _, st in walk(sp):
+    total, newest, unread = 0, None, []
+    for _, st in walk(sp, unread):
         if is_file(st):
             total += size_of(st)
         if not is_dir(st):
             newest = st.st_mtime if newest is None else max(newest, st.st_mtime)
     if newest is None:
         newest = lst(sp).st_mtime
+    if unread:
+        # A folder nobody can list may hold the newest write, so quiet cannot be measured.
+        plan.keep.append(("a folder in it cannot be read (%s), so whether it was written to lately cannot be told" % unread[0], sp, total))
+        return
     if state == "open":
         plan.keep.append(("live session: the session registry shows it open", sp, total))
         return
@@ -346,23 +359,38 @@ def stamp(now):
 
 
 class Log:
+    """The removal log. A write that fails sets `error`, and the run stops removing, since an item
+    removed with no line saying so is exactly what Dan asked the log to prevent."""
+
     def __init__(self, path):
-        self.path = path
+        self.path, self.fh, self.error = path, None, None
         try:
             if os.path.getsize(path) > LOG_ROTATE_BYTES:
                 os.replace(path, path + ".1")
         except OSError:
             pass
-        self.fh = open(path, "a", encoding="utf-8")
+        try:
+            self.fh = open(path, "a", encoding="utf-8")
+        except OSError as e:
+            self.error = "the log %s could not be opened (%s)" % (path, e.strerror or e)
 
     def line(self, *fields):
-        self.fh.write("\t".join(str(f) for f in fields) + "\n")
-        self.fh.flush()
+        if self.fh is None:
+            return False
+        try:
+            self.fh.write("\t".join(str(f) for f in fields) + "\n")
+            self.fh.flush()
+            return True
+        except OSError as e:
+            self.error = self.error or "the log %s could not be written (%s)" % (self.path, e.strerror or e)
+            return False
 
 
 def remove_dir(p):
     """Rename first, so a run killed half way leaves a name the next run finishes whatever its size."""
     st = lst(p)
+    if st is None:
+        raise FileNotFoundError(errno.ENOENT, "already gone")
     if not is_dir(st):
         raise OSError(errno.ENOTDIR, "no longer a folder (a link is never followed)")
     base = os.path.basename(p)
@@ -377,33 +405,30 @@ def remove_dir(p):
 
 def remove_file(p):
     st = lst(p)
+    if st is None:
+        raise FileNotFoundError(errno.ENOENT, "already gone")
     if not is_file(st):
         raise OSError(errno.EINVAL, "no longer a plain file (a link is never followed)")
     os.unlink(p)
 
 
-def prune_empty(home):
-    """Folders the transcripts rule emptied, inside session folders and run project folders only."""
+def prune_empty(home, removed):
+    """Only the folders THIS run emptied of transcripts: from each removed file's folder upward, while
+    empty, stopping at the session folder in Dan's own projects and at the projects folder in a run
+    project. An empty folder this run did not empty (a live session's fresh one) is never touched."""
     root = os.path.join(home, "projects")
-    for project in entries(root):
-        pp = os.path.join(root, project)
-        if not is_dir(lst(pp)):
+    for p in removed:
+        rel = os.path.relpath(p, root).split(os.sep)
+        if len(rel) < 2 or rel[0] in (os.curdir, os.pardir):
             continue
-        for name in entries(pp):
-            p = os.path.join(pp, name)
-            if not (SESSION_DIR.match(name) and is_dir(lst(p))):
-                continue
-            dirs = [q for q, st in walk(p) if is_dir(st)]
-            for q in sorted(dirs, key=len, reverse=True) + ([p] if run_folder(project) else []):
-                try:
-                    os.rmdir(q)
-                except OSError:
-                    pass
-        if run_folder(project):
+        stop = os.path.join(root) if run_folder(rel[0]) else os.path.join(root, rel[0], rel[1])
+        d = os.path.dirname(p)
+        while d != stop and d.startswith(stop + os.sep):
             try:
-                os.rmdir(pp)
+                os.rmdir(d)
             except OSError:
-                pass
+                break
+            d = os.path.dirname(d)
 
 
 def do_remove(home, now):
@@ -420,9 +445,12 @@ def do_remove(home, now):
     log = Log(os.path.join(state, "removed.log"))
     items = done_bytes = 0
     failures = list(plan.failures)
+    removed = []
     for f in plan.failures:
         log.line(stamp(now), "failed", "-", 0, "-", f)
     for kind, p, b, isdir in plan.remove:
+        if log.error:
+            break
         try:
             if isdir:
                 remove_dir(p)
@@ -437,8 +465,14 @@ def do_remove(home, now):
             continue
         items += 1
         done_bytes += b
-        log.line(stamp(now), "removed", kind, b, p)
-    prune_empty(home)
+        if not isdir:
+            removed.append(p)
+        if not log.line(stamp(now), "removed", kind, b, p):
+            # Said in the summary, which claude-sync records whatever the log can take.
+            failures.append("%s was removed, %d bytes, and %s" % (p, b, log.error))
+    prune_empty(home, [p for p in removed if p.startswith(os.path.join(home, "projects") + os.sep)])
+    if log.error and not any(log.error in f for f in failures):
+        failures.append("%s, so nothing was removed" % log.error if items == 0 else log.error)
     outcome = "failed" if failures else "ok"
     log.line(stamp(now), "run", outcome, done_bytes, "%d items" % items, failures[0] if failures else "-")
     print("keep rules: removed %d items, %s; %s" % (items, mb(done_bytes), ("%d could not be removed or decided, the first: %s" % (len(failures), failures[0])) if failures else "nothing failed"))

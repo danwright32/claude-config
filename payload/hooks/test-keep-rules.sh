@@ -179,6 +179,29 @@ ok "unremovable: names the item" 'has "could not be removed" "$out"'
 out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
 ok "after a failed run: its own removals do not make the session look written to, so the next run finishes" "[ $rc -eq 0 ] && [ ! -e '$E/t1/fixtures' ]"
 
+# ---- a folder that cannot be read: its session cannot be judged quiet, so it is kept ----
+plant
+mkdir -p "$E/t3/locked"; note "$E/t3/locked/new.md"; chmod 000 "$E/t3/locked"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"
+chmod 755 "$E/t3/locked"
+ok "unreadable folder: the session's bulky folder is kept" "[ -e '$E/t1/fixtures' ]"
+
+# ---- an empty folder the run did not empty is left alone ----
+plant
+mkdir -p "$PROJ/-Users-x-proj/$SUB/tool-results/empty-now"
+CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" >/dev/null 2>&1
+ok "prune: an empty folder in Dan's own session that this run did not empty stays" "[ -d '$PROJ/-Users-x-proj/$SUB/tool-results/empty-now' ]"
+ok "prune: the subagents folder this run emptied of old transcripts keeps the newer one" "[ -f '$PROJ/-Users-x-proj/$SUB/subagents/agent-new.jsonl' ]"
+ok "prune: the workflow folder it emptied is gone" "[ ! -e '$PROJ/-Users-x-proj/$SUB/subagents/workflows' ]"
+
+# ---- a log that cannot be written: nothing is removed without its line ----
+plant
+mkdir -p "$H/state/keep-rules/removed.log"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "no log: exits 1" "[ $rc -eq 1 ]"
+ok "no log: says the log could not be opened" 'has "could not be opened" "$out"'
+ok "no log: removed nothing" "[ -e '$E/t1/fixtures' ] && [ -e '$PROJ/-private-tmp-abc' ]"
+
 # ---- a mode that is not one does nothing ----
 plant
 before="$(tree "$WORK")"
