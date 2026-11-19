@@ -189,7 +189,8 @@ def load_record(path, alert_keys):
     with open(path, "rb") as handle:
         data = handle.read()
     try:
-        text = data.decode("utf-8")
+        # Strict on purpose: a record that is not UTF-8 is refused, never read with replaced bytes.
+        text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise RecordError(f"{path}: not UTF-8 at byte {error.start}") from None
     return parse_record(text, alert_keys, source=path)

@@ -310,7 +310,7 @@ class CommandLine(unittest.TestCase):
     def with_record(self, record_text, extra, message):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "slack-alerts-record.txt")
-            with open(path, "w", encoding="utf-8") as handle:
+            with open(path, "w", encoding="utf-8", errors="strict") as handle:
                 handle.write(record_text)
             return run(["--kind", "alert", "--record", path] + extra, message)
 
@@ -566,7 +566,7 @@ class SeveralLinks(unittest.TestCase):
         self.assertIn("bare-url", rules_failed(text, "alert"))
 
     def test_the_owners_words_sit_beside_the_rule_in_the_checker(self):
-        with open(os.path.join(SKILL_DIR, "check_alert.py"), encoding="utf-8") as handle:
+        with open(os.path.join(SKILL_DIR, "check_alert.py"), encoding="utf-8", errors="strict") as handle:
             source = " ".join(line.strip().lstrip("#").strip() for line in handle)
         self.assertTrue(OWNER_ON_LINKS in source, "the checker does not quote the owner's words")
         self.assertTrue("18 Nov 2026" in source)
