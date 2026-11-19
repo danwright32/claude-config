@@ -1000,7 +1000,7 @@ for d in .claude-area-check .claude-quiz-verdicts .claude-allow-rule-backups .cl
 done
 check "claude records: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
 check "claude records: each is sized" "$(eq "$(field "$(item_of "$H/.claude-issue-spool")" 8)" measured)"
-# The count is exact, so a shown record (nine rows above) counted again in the note would fail it.
+# The count is exact, so one of the eight home folder rows above counted again in the note would fail it.
 check "claude records: the other home entries named for Claude are counted and sized in the note" \
   "$(has "$(note_of claude-records)" "3 other files and folders in the home folder named for Claude Code or this config hold 37 KB")"
 check "claude records: and they are not listed row by row" "$(eq "$(item_of "$H/.claude-verification")$(item_of "$H/.claude.json")$(item_of "$H/.claude-sync.log")" "")"
