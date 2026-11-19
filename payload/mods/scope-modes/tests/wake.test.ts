@@ -69,6 +69,22 @@ describe('morningPrompt: the summary and the morning pickers, on the session tha
     expect(both).toContain('~/.claude/hooks/durable-lesson-check.sh')
     expect(both).toContain('2.1 Parse dates with their zone. Metadata: {"source":"durable-lesson","rule":"Parse dates with their zone."}')
   })
+  // claude-config#3245: a lesson proposed overnight is asked what check holds it, as one proposed when
+  // an issue is filed is, and its picker carries the check line so Dan's one answer covers it.
+  test('each lesson is asked the rungs and offered with its check line, as the durable lesson check asks (#3245)', () => {
+    expect(both).toContain('as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe')
+    expect(both).toMatch(/Ask the rungs of each lesson first/)
+    expect(both).toMatch(/its check line on a line of its own/)
+    expect(both).toContain('{"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>"}')
+    // The block still gives only what the night wrote: the check line is the morning session's to
+    // work out and Dan's to read, never a worker's note.
+    expect(both).toContain('2.1 Parse dates with their zone. Metadata: {"source":"durable-lesson","rule":"Parse dates with their zone."}')
+    expect(both).not.toMatch(/Metadata: \{[^\n]*"check"/)
+    // Lessons read from the report are asked the same way.
+    const fromReport = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })
+    expect(fromReport).toMatch(/Ask the rungs of each lesson first/)
+    expect(fromReport).toContain('"check":"<the check line, word for word>"')
+  })
   test('nothing was filed or added overnight, and the prompt says so', () => {
     expect(both).toMatch(/Nothing was filed and no lesson was added overnight/)
   })
