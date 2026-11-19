@@ -3846,8 +3846,116 @@ What it refuses:
   refused.
 
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
-(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
-2026-11-05), matched by its real path, so a copy anywhere else is refused.
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
+through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+### Running a refused command with no network (#3173)
+
+The gate refuses a command whose files reach code able to post, and that stopped one test file being
+run on its own although its test drives that code through fakes and posts nothing. Unsetting the
+webhook variable does not make such a run safe: on a fixture posting eight ways, seven still arrived
+with the variable unset or the whole environment emptied, and none arrived with the network taken
+away (measured 2026-11-18, the design on #3173). So there is one route, decided by Dan on 2026-11-18
+("Yes, any command"), which reverses the 2026-11-16 decision on #3028 that reviewers get no
+sanctioned route past the gate:
+
+    cd <the project> && <this Mac's home>/.claude/hooks/no-network-run.sh node --test test/notify.test.js
+
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
+network operation. Every process the command starts inherits that, a detached one included, and none
+can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+command's own exit code comes through unchanged. The gate passes a call that is that installed file
+and its command and nothing else, without reading what runs under it. The refusal of a file whose
+imports reach code
+that posts names the route and the path to write, in full, and `skills/orchestrate/agent-rules.md`
+lets an agent run a refused command again that way when the refusal says so.
+
+The gate does not read what runs under the wrapper, so the rule is no wider than this: the shell of
+the call starts the installed wrapper, by its real path, and everything the call runs is under it.
+What the gate checks (`lib/no-network-route.py`), each of which must hold or the call is judged
+exactly as it was before:
+
+- The wrapper's command is the whole call. One thing may stand in front of it, `cd <a folder written
+  out> &&`, and nothing may follow it: no `;`, `&&`, `||`, `|` or `&`, no second line, no comment.
+  So it is not in a script file or a `bash -c` string, not in a loop, a function, a group, a subshell
+  or a substitution, and it is the only wrapper run of the call. What ran under the wrapper is unread
+  and can write any file, and the gate does not read everything a later command starts as a file (a
+  package script, a program found by its bare name on the `PATH`, a git hook, a Makefile), so a
+  filter or a second step goes inside the wrapped command, where it has no network either:
+  `no-network-run.sh sh -c 'node --test x.test.js | tail -20'`.
+- Nothing else stands in front of it: no other command, no variable assignment, no redirection, no
+  program that runs its words (`env`, `timeout`, `sudo`, `xargs`) and no word of the shell's own
+  (`time`, `!`, `{`, `if`, `coproc`, `noglob`, `command`, `builtin`, `exec`, `nocorrect`). An earlier
+  command could change what the wrapper's path starts (zsh runs a function named by a path) or open
+  a connection the command inherits; zsh runs `time -p <words>` as a program named `-p`; and bash
+  opens a redirection on a group or an `if` before it runs what is inside. Each goes after the
+  wrapper: `no-network-run.sh env NODE_ENV=test node --test x.test.js`.
+- Every character of the call is printable ASCII, a tab or a newline, and only a space or a tab
+  parts its words. Python reads a no break space, a line separator, a form feed and their like as
+  white space and a shell keeps each inside the word, so with one in front of the wrapper's path the
+  shell would start a file of another name.
+- The wrapper is the command's first word, written out as an absolute path with no variable, tilde,
+  pattern or substitution in it, and its real path is the installed file's, by the test `/nudge` is
+  let through by. A link that resolves to the installed file passes, as one to `nudge.py` does. A
+  copy anywhere else does not.
+- A command follows it, and every word after the wrapper is one the shell hands on as it stands:
+  plain characters with `*` and `?`, text in single quotes, text in double quotes, and a variable by
+  its name alone (`$NAME`, `${NAME}`). No command substitution, backticks, process substitution,
+  here document, brace, tilde or backslash, which the shell works out or runs before the wrapper
+  starts, outside the sandbox. Whatever does not fit goes inside single quotes behind a program
+  that reads it under the wrapper (`... sh -c '...'`).
+- A redirection after those words is one of these and no other: the output or the errors written or
+  added to a file written out (`> f`, `>> f`, `1> f`, `2> f`, `2>> f`), the input read from one
+  (`< f`), and one output joined to the other (`2>&1`, `1>&2`, `>&2`). Refused: `&>` and `&>>` (the
+  bash macOS ships reads `cmd &>> f` as `cmd &` and a second command), `>|`, `<>`, a descriptor past
+  2, a closed one, a here string, a target with a variable or a pattern in it, one glued to a word,
+  and any name holding `/dev/tcp` or `/dev/udp`.
+
+What the route is, so nobody reads more into it. It stops code from using the network while it runs
+under the wrapper, which is what makes an accidental post from a test impossible. It does not
+contain code written to get out. The sandbox allows every file write, so such code can leave
+something behind for a later call, or ask another program to act for it:
+
+- A file a later call reads without the gate reading it. Every Bash call starts a login shell, which
+  reads `~/.zshenv`, `~/.zprofile` and `~/.zlogin`, and the gate reads none of them. The same holds
+  for a tool's own config file (`~/.curlrc`, `.git/config`, a `package.json` script) and for a
+  program in a folder on the `PATH` that the user can write, several of which stand ahead of
+  `/usr/bin` on these Macs. A command under the wrapper can write any of them unread. The gate on
+  main already passes some such writes when they only mention an address; under the wrapper the
+  writer is not read at all.
+- A command that asks something outside the sandbox to act for it without using the network. A
+  request to launchd or to another app is not a network operation, so what `launchctl`, `osascript`
+  or `open` has started runs outside the sandbox. `open` takes one line and no setup: a command
+  under the wrapper can write an HTML page whose form submits itself to an address and open it, and
+  the browser, which is not in the sandbox, posts. Read from the profile, which denies the network
+  and allows everything else; not run. The profile was left as it is: denying those requests too
+  would be a change of design, for Dan to decide.
+- A connection that was already open when the wrapper started. The sandbox refuses a new connection
+  and does not stop a write to one handed down to the command (measured 2026-11-19). The rule above
+  is what keeps a call from opening one first. A unix domain socket whose listener is outside the
+  sandbox is refused, as an address is (measured the same day).
+- A change to the wrapper's own file. The rule goes by the file's path, as the `/nudge` rule does,
+  and a command the gate allows can replace the file at that path in an earlier call, as it can the
+  gate's own files.
+- Anything that is not macOS. There is no sandbox tool, so the wrapper refuses and runs nothing.
+- A Mac without Apple's command line developer tools. The check below is made by the python3 at
+  `/Library/Developer/CommandLineTools/usr/bin/python3` and no other, a path only an administrator
+  can write: one found on the `PATH` would run outside the sandbox at the start of every run, and
+  several `PATH` folders are the user's to write. Where that file is not there the wrapper refuses
+  (exit 69) and runs nothing. It only reads whether the file is there, so it never raises the
+  dialog that offers to install the tools.
+- It is not specific to Slack. A test that needs any network, a port on this Mac included, fails
+  under it with "Operation not permitted", and still needs the project's whole suite.
+- `/usr/bin/sandbox-exec` is a tool Apple marks as deprecated, and the whole route rests on it. So
+  the wrapper proves it on every run before the command: it opens a listener of its own on loopback
+  and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
+  which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
+  is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
+  tool).
+
+Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
+their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
 with nothing changed takes about 0.13 s instead of about 4 for `bash tests/test-claude-sync.sh`. The
