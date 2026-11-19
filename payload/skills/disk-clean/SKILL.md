@@ -110,10 +110,12 @@ bash ~/.claude/skills/disk-clean/review-check.sh --out <folder> --payload <folde
 ```
 
 - **Exit 0**: the plan is written, and it printed each kind's count and total, then every item by
-  path with its size and marks. Build the confirm picker below from that output.
+  path with its size and marks, except for a kind chosen whole. Build the confirm picker below from
+  that output.
 - **Exit 2**: the selection could not be checked (not what the page copies, or no scan or page to
   check it against). Tell Dan the reason in plain words and ask him to press Copy selection on the
-  page again and paste it; when it says there is no scan record, go back to step 1.
+  page again and paste it; when it says there is no scan record, go back to step 1. When it says
+  the summary could not be worked out, copying again cannot help: tell Dan that and stop.
 - **Exit 3**: a newer scan has replaced the one he reviewed. Nothing was planned. Go back to step 2,
   which renders the page for the newer scan.
 - **Exit 4**: the selection came from an older copy of the page, or was left on the clipboard from
@@ -124,13 +126,26 @@ bash ~/.claude/skills/disk-clean/review-check.sh --out <folder> --payload <folde
   the scan). Nothing was planned. Name each one with the reason it printed, and ask him to untick
   those and copy again, or to start again from step 1.
 - **Exit 7**: nothing was ticked, so nothing will be removed. Say so and stop.
+- **Exit 8**: the Trash was ticked as one row, but what the selection says of it is not what the
+  scan offers now: an entry went after the page was drawn, the page was drawn for another scan, or
+  the selection was edited. Nothing was planned. Go back to step 2, which draws the page for what
+  the scan offers now, and ask him to tick again and copy from it.
 
 Then put up one AskUserQuestion confirm picker, the only picker in this flow. Its question names
 what will go, taken from the checker's output and never retyped from memory: each kind with its
-count and total, and under the Trash, Worktrees whose repository is gone, Large personal files and
-Tools not used in 180 days every item by path, with its size, any mark it carries (Holds a
-credential, Removes it from iCloud on every device) and, for a worktree, the date it last changed.
-Say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
+count and total, and under Worktrees whose repository is gone, Large personal files and Tools not
+used in 180 days every item by path, with its size, any mark it carries (Holds a credential, Removes
+it from iCloud on every device) and, for a worktree, the date it last changed. The Trash, ticked as
+its one row, is a kind chosen whole: the checker says it in one line, its count and total and any
+mark some of its entries carry, and the picker says it the same way, never an entry a line (the Trash held 5,979 entries on the personal
+MacBook). When Dan asks to see those entries, list them, which writes nothing, and then put the
+same picker up again:
+
+```bash
+bash ~/.claude/skills/disk-clean/review-check.sh --entries trash --plan <folder>/plan.txt
+```
+
+In the picker's question, say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
 personal files and Tools not used in 180 days are moved to the Trash, which frees nothing until it
 is emptied (a worktree git has forgotten can still hold work nothing else has); everything else is
 deleted because it regenerates, or, for a log a program holds open, emptied in place. Two options:
