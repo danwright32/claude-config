@@ -939,10 +939,14 @@ printf 'n\n' > "$H/.claude/state/session-notes/p/s/handoff.md"; printf 'a\n' > "
 printf 'v\n' > "$H/.claude/file-history/$U5/abc@v1"; printf '{}\n' > "$H/.claude-issue-spool/aaa.jsonl"
 printf '{}\n' > "$H/.claude-issue-spool.backup-20260829-161937/aaa.jsonl"; printf 'x\n' > "$H/.claude-payload-write-gate/toolu_1.list"
 old "$H"
+dc_stub du 'for a in "$@"; do case "$a" in -*) ;; */session-notes) printf "500\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 run_scan --only claude-records
 check "claude records: the scan exits 0" "$(eq "$RC" 0)"
 check "claude records: session notes are shown" "$(has "$(state_of "$H/.claude/state/session-notes")" "not offerable: ")"
-check "claude records: each other entry of state is shown" "$(has "$(state_of "$H/.claude/state/ai-review")" "not offerable: ")"
+check "claude records: the rest of state is not listed row by row, all with one reason" "$(eq "$(item_of "$H/.claude/state/ai-review")" "")"
+check "claude records: the note gives the rest of state's count and size instead" "$(has "$(note_of claude-records)" "other entries in ~/.claude/state")"
+check "claude records: rows come largest first, so the biggest record leads the kind" \
+  "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" { print $4; exit }')" "$H/.claude/state/session-notes")"
 check "claude records: file history is shown, as /rewind's copies" "$(has "$(state_of "$H/.claude/file-history")" "/rewind")"
 check "claude records: the finding spool is never offered" "$(has "$(state_of "$H/.claude-issue-spool")" "not offerable: findings not yet reviewed")"
 check "claude records: a spool backup is never offered" "$(has "$(state_of "$H/.claude-issue-spool.backup-20260829-161937")" "not offerable: ")"
@@ -966,11 +970,14 @@ fresh
 mkdir -p "$H/.npm/_cacache/content-v2" "$H/.npm/_npx/abc123/node_modules" "$H/.npm/_logs" "$H/Library/pnpm/store/v11/files"
 printf 'c\n' > "$H/.npm/_cacache/content-v2/x"; printf 'p\n' > "$H/.npm/_npx/abc123/package.json"; printf 's\n' > "$H/Library/pnpm/store/v11/files/y"
 old "$H"
+dc_stub du 'for a in "$@"; do case "$a" in -*) ;; */v11) printf "500\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 run_scan --only package-caches
+check "package caches: rows come largest first" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" { print $4; exit }')" "$H/Library/pnpm/store/v11")"
 check "package caches: npm's download cache is shown, not offered" "$(has "$(state_of "$H/.npm/_cacache")" "not offerable: ")"
 check "package caches: each npx copy is shown, not offered" "$(has "$(state_of "$H/.npm/_npx/abc123")" "not offerable: ")"
 check "package caches: npm's logs are shown, not offered" "$(has "$(state_of "$H/.npm/_logs")" "not offerable: ")"
 check "package caches: the pnpm store is shown, not offered" "$(has "$(state_of "$H/Library/pnpm/store/v11")" "not offerable: ")"
+check "package caches: the note says once what an npx copy is, rather than on every row" "$(has "$(note_of package-caches)" "Each npx copy is one package npx has run")"
 check "package caches: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
 judge package-caches "$H/.npm/_npx/abc123"
 check "package caches judge: an npx copy is not offerable" "$(has "$JUDGED" "not offerable: ")"

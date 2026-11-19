@@ -35,18 +35,18 @@ rec_rules() { # <target>
   n="${t##*/}"
   case "$t" in
     "$HOME/.claude/state/session-notes")
-      V="not offerable: sessions' notes and working files, which Dan's daily keep rule for session notes looks after (#3235)" ;;
+      V="not offerable: sessions' notes and working files, which the daily keep rule for session notes looks after" ;;
     "$HOME/.claude/state/"*)
       case "${t#"$HOME/.claude/state/"}" in
         */*) V="not offerable: it is not one of the records this kind shows" ;;
         *) V="not offerable: state that Claude Code and this config's hooks read as they run, so it is never removed here" ;;
       esac ;;
     "$HOME/.claude/file-history")
-      V="not offerable: Claude Code's copy of each file before an edit, which /rewind restores; one can be the only copy of an earlier version, so whether any goes is Dan's call (#3235)" ;;
+      V="not offerable: Claude Code's copy of each file before an edit, which /rewind restores; one can be the only copy of an earlier version, so whether any goes is your call" ;;
     "$HOME/.claude-issue-spool")
       V="not offerable: findings not yet reviewed, which the end of turn issue review reads" ;;
     "$HOME/.claude-issue-spool.backup-"*)
-      V="not offerable: a copy of the finding spool made ${n#.claude-issue-spool.backup-}; it may hold findings found nowhere else, so whether it goes is Dan's call (#3235)" ;;
+      V="not offerable: a copy of the finding spool made $(printf '%s' "${n#.claude-issue-spool.backup-}" | sed 's|^\([0-9][0-9][0-9][0-9]\)\([0-9][0-9]\)\([0-9][0-9]\).*|\1-\2-\3|'); it may hold findings found nowhere else, so whether it goes is your call" ;;
     "$HOME/.claude-payload-write-gate")
       V="not offerable: the payload write gate's note of each Bash call, read back when the call ends" ;;
     "$HOME/.claude-area-check")
@@ -63,13 +63,18 @@ rec_rules() { # <target>
   esac
 }
 
+# The rest of ~/.claude/state (about forty entries on the personal MacBook, all with the one reason) is
+# said once, in the kind's note, with its count and size, rather than as forty greyed rows carrying
+# the same sentence (L605); session notes keep a row of their own. Rows come largest first (L609).
 do_scan() {
   local e
-  : > "$DCS_WORK/rec.paths"
+  : > "$DCS_WORK/rec.paths"; : > "$DCS_WORK/rec.rest"
   if [ -d "$HOME/.claude/state" ]; then
     if ls -A "$HOME/.claude/state" > "$DCS_WORK/rec.state" 2> "$DCS_WORK/rec.err"; then
       while IFS= read -r e; do
-        [ -n "$e" ] && printf '%s\n' "$HOME/.claude/state/$e" >> "$DCS_WORK/rec.paths"
+        [ -n "$e" ] || continue
+        if [ "$e" = session-notes ]; then printf '%s\n' "$HOME/.claude/state/$e" >> "$DCS_WORK/rec.paths"
+        else printf '%s\n' "$HOME/.claude/state/$e" >> "$DCS_WORK/rec.rest"; fi
       done < "$DCS_WORK/rec.state"
     else
       dcs_status "unmeasured: ~/.claude/state could not be listed ($(awk 'NR == 1' "$DCS_WORK/rec.err"))"
@@ -80,12 +85,21 @@ do_scan() {
     "$HOME/.claude-allow-rule-backups" "$HOME/.claude-handback-check" "$HOME/.claude-engine-checks"; do
     [ -e "$e" ] && printf '%s\n' "$e" >> "$DCS_WORK/rec.paths"
   done
-  dcs_measure "$DCS_WORK/rec.paths" > "$DCS_WORK/rec.sized"
+  dcs_measure "$DCS_WORK/rec.paths" | sort -t "$S" -k2,2nr > "$DCS_WORK/rec.sized"
   local p kib size ident
   while IFS="$S" read -r p kib size ident; do
     rec_rules "$p"
     dcs_item "$p" delete "$kib" "$size" "$V" "" "" "$ident"
   done < "$DCS_WORK/rec.sized"
+  [ -s "$DCS_WORK/rec.rest" ] || return 0
+  local n=0 total=0 short=""
+  dcs_measure "$DCS_WORK/rec.rest" > "$DCS_WORK/rec.rest.sized"
+  while IFS="$S" read -r p kib size ident; do
+    n=$((n + 1))
+    case "$kib" in ''|*[!0-9]*) short=1 ;; *) total=$((total + kib)) ;; esac
+    [ "$size" = measured ] || short=1
+  done < "$DCS_WORK/rec.rest.sized"
+  dcs_note "$n other entries in ~/.claude/state hold $([ -n "$short" ] && printf 'at least ')$(dcu_human "$total"): state that Claude Code and this config's hooks read as they run, never removed here."
 }
 
 case "${1:-}" in
