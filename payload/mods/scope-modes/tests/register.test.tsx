@@ -4432,7 +4432,7 @@ test("what the report says needs Dan that cannot be read is said in the morning,
   await start($ as never, clock)
   await command($ as never, 'wake')
   await clock.settle()
-  expect(morningOf(w)[0]).toMatch(/What the night's report says needs Dan could not be read here \(.+\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed\./)
+  expect(morningOf(w)[0]).toMatch(/What the night's report says needs Dan could not be read here \(.+\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed, rows in the same words together in one picker/)
 })
 
 test('a report whose wake render did not finish has its earlier rows handed over, and says Needs a look may lack the end of the night (#1665)', withDeps, async ($, on) => {

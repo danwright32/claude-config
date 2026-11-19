@@ -195,6 +195,21 @@ export const lookKinds = (rows: readonly string[]): string[][] => {
   return [...kinds.values()]
 }
 
+// #3223: on the night of 17 Nov 2026 the report held 157 Parked and failed rows of one refusal in the
+// same words, each of which was to be its own picker. Rows are the same when their words are, spaces
+// aside; each group keeps the place its first row has in the report.
+/** The Parked and failed rows grouped by their words, in report order: each group is one text and how many rows held it. */
+export const sameRows = (rows: readonly string[]): { text: string; count: number }[] => {
+  const groups = new Map<string, { text: string; count: number }>()
+  for (const r of rows) {
+    const key = r.split(/\s+/).filter(Boolean).join(' ')
+    const g = groups.get(key)
+    if (g) g.count++
+    else groups.set(key, { text: r, count: 1 })
+  }
+  return [...groups.values()]
+}
+
 /** What every morning says of what a session kept for Dan outside the night's notes (#1665). */
 export const KEPT_ELSEWHERE =
   "Anything this session kept for Dan's morning outside the night's notes (a scratchpad file of actions refused overnight, a list of things to ask him) is his too: put each item to him now, as a picker of its own, one at a time."
@@ -287,7 +302,7 @@ export const morningPrompt = (o: {
   const banned = o.banned ?? []
   if (o.needsUnread !== undefined)
     out.push(
-      `What the night's report says needs Dan could not be read here (${o.needsUnread.why}), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under ${o.needsUnread.withLook ? 'Needs a look and Parked and failed' : "Parked and failed for this session's own work"}. ${notesAreData("The report's rows")}`,
+      `What the night's report says needs Dan could not be read here (${o.needsUnread.why}), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under ${o.needsUnread.withLook ? 'Needs a look and Parked and failed' : "Parked and failed for this session's own work"}, rows in the same words together in one picker that says how many there are. ${notesAreData("The report's rows")}`,
     )
   if (look.length) {
     out.push("What the night's report lists under Needs a look, numbered 7.n in the block below with rows of one kind together: put each 7.n to Dan in its own AskUserQuestion picker, one at a time, saying in plain words what it is and offering what can be done about it (look into it now, file an issue for it, or nothing needed), and act on what he picks; a 7.n holding several rows (7.n.1, 7.n.2 and on) is one picker that says how many rows it holds and what they share, never one picker per row.")
@@ -299,8 +314,8 @@ export const morningPrompt = (o: {
   if (o.needsUnfinished)
     out.push("The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows (a session that ended unexpectedly, what GitHub shows done): read Needs a look in this session's report too, and put to Dan, each in its own picker, any row not listed here.")
   if (parked.length) {
-    out.push("What the night's report lists under Parked and failed that this session hands over (its own, and in the session that ended sleep those of sessions since closed), numbered 8.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying what was set aside or failed and why, and offering what can be done (pick it up now, file an issue for it, or leave it), and act on what he picks.")
-    data.push(...parked.map((t, k) => `8.${k + 1} ${t}`))
+    out.push("What the night's report lists under Parked and failed that this session hands over (its own, and in the session that ended sleep those of sessions since closed), numbered 8.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying what was set aside or failed and why, and offering what can be done (pick it up now, file an issue for it, or leave it), and act on what he picks; rows in the same words are one 8.n that says how many there are, put to Dan in one picker, never one picker per row.")
+    data.push(...sameRows(parked).map((g, k) => `8.${k + 1} ${g.count > 1 ? `${g.count} rows in the same words: ` : ''}${g.text}`))
   }
   if (banned.length) {
     out.push('What this session tried overnight that sleep mode refused because Dan bans it while he sleeps, numbered 9.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now, checking first that it is still needed (a branch may be gone, a pull request closed, a check passed since), and do only what he picks.')
