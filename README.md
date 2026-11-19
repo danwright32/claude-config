@@ -3812,8 +3812,64 @@ What it refuses:
   refused.
 
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
-(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
-2026-11-05), matched by its real path, so a copy anywhere else is refused.
+(a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one script let
+through (Dan, 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+### Running a refused command with no network (#3173)
+
+The gate refuses a command whose files reach code able to post, and that stopped one test file being
+run on its own although its test drives that code through fakes and posts nothing. Unsetting the
+webhook variable does not make such a run safe: on a fixture posting eight ways, seven still arrived
+with the variable unset or the whole environment emptied, and none arrived with the network taken
+away (measured 2026-11-18, the design on #3173). So there is one route, decided by Dan on 2026-11-18
+("Yes, any command"), which reverses the 2026-11-16 decision on #3028 that reviewers get no
+sanctioned route past the gate:
+
+    ~/.claude/hooks/no-network-run.sh node --test test/notify.test.js
+
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
+network operation. Every process the command starts inherits that, a detached one included, and none
+can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+command's own exit code comes through unchanged. The gate passes a command whose first word is that
+installed file, without reading what runs under it. The refusal of a file whose imports reach code
+that posts names the route and the path to write, and `skills/orchestrate/agent-rules.md` lets an
+agent run a refused command again that way when the refusal says so.
+
+What the gate checks (`lib/no-network-route.py`), each of which must hold or the command is judged
+exactly as it was before:
+
+- The wrapper is the command's first word, written out as an absolute path with no variable, tilde,
+  pattern or substitution in it, and its real path is the installed file's, by the test `/nudge` is
+  let through by. A link that resolves to the installed file passes, as one to `nudge.py` does. A
+  copy anywhere else does not, nor does a wrapper the same call wrote, moved, linked or changed.
+- Nothing stands in front of it but the shell's own reserved words. A variable assignment or a
+  program that runs its words (`env`, `timeout`, `sudo`, `xargs`) goes after the wrapper, never
+  before: `no-network-run.sh env NODE_ENV=test node --test x.test.js`.
+- The command holds no command substitution, backticks or process substitution. The shell runs
+  those before the wrapper starts, outside the sandbox.
+- A command follows it.
+
+Everything else on the line is judged as always: the commands before and after it, the other side of
+a pipe.
+
+What it does not cover, so nobody reads more into it:
+
+- A command that hands its message to something already running outside the sandbox without using
+  the network: a file in a folder another program watches, a request to a macOS service or another
+  app. Not measured, and it needs a second program set up to post on the command's behalf.
+- Anything that is not macOS. There is no sandbox tool, so the wrapper refuses and runs nothing.
+- It is not specific to Slack. A test that needs any network, a port on this Mac included, fails
+  under it with "Operation not permitted", and still needs the project's whole suite.
+- `/usr/bin/sandbox-exec` is a tool Apple marks as deprecated, and the whole route rests on it. So
+  the wrapper proves it on every run before the command: it opens a listener of its own on loopback
+  and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
+  which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
+  is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
+  tool).
+
+Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
+their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
 with nothing changed takes about 0.13 s instead of about 4 for `bash tests/test-claude-sync.sh`. The

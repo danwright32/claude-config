@@ -34,6 +34,11 @@
 #   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
 #   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy
 #   of it anywhere else is refused. There is no override variable, on purpose.
+#   One command is let through without being read: a command whose first word is the installed no
+#   network wrapper, no-network-run.sh in this folder, by that same real path test. What runs under
+#   it has no network access at all, so it cannot post whatever it is (Dan, 2026-11-18: "Yes, any
+#   command", claude-config#3173; the rule is lib/no-network-route.py). A copy of the wrapper, or the
+#   wrapper behind a variable or another program, is judged as any other script is.
 #
 # Why a hook and not a permissions deny list: claude-sync carries the hooks block to both Macs and
 # leaves each Mac's permissions alone, so a deny entry would need a new sync feature, while this is

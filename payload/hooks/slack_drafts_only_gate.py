@@ -44,6 +44,9 @@ Two routes are judged:
     be unable to send or run code (SH_INERT), to its own functions, or to scripts seen unable to act
     (claude-config#2434). The one script let through is /nudge, at skills/nudge/nudge.py beside this
     hooks folder, by its real path; a copy anywhere else is refused like any other script that posts.
+    And one command is let through unread: a command whose first word is the installed no network
+    wrapper, no-network-run.sh beside this file, by the same real path test, since what runs under it
+    cannot reach the network (lib/no-network-route.py; Dan, 2026-11-18, claude-config#3173).
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
 through a path alias (`@/lib/x`), a Python module in the standard library or installed (whether
@@ -1604,6 +1607,9 @@ _js_mocks = load_lib("js_mocks", "js-mocks.py")
 # the gate does not follow it (claude-config#3102).
 _py_aliases = load_lib("py_aliases", "py-aliases.py")
 py_follow = _py_aliases.make(PY_INERT)
+# The one route for a command this gate would refuse: run under the installed no network wrapper,
+# and the real path test that route and /nudge are both let through by (claude-config#3173).
+NoNetworkRoute = load_lib("no_network_route", "no-network-route.py").make(HERE)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -1684,7 +1690,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes):
+class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -1696,6 +1702,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.overran = None  # the OutOfTime the budget's timer raised, if it fired (interrupt)
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
+        self.no_network = self.installed_wrapper()  # no-network-run.sh beside this file (#3173)
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
         # (the script, how many of its modules are read) while walk() is reading past
@@ -2767,8 +2774,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if edited:
             return f"{label} is edited earlier in this command by {edited[0]}, whose code names {edited[1]}"
         real = os.path.realpath(path)
-        if self.nudge and real == self.nudge and not self.made_from(real):
-            return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
+        if self.is_installed(real, self.nudge):
+            return None  # /nudge, the one script let through (Dan, 2026-11-05), unless this call overwrote it
         key = None
         if self.placing and not (self.made or self.made_dirs or self.made_unknown or self.made_maybe
                                  or self.made_code or self.made_git or self.made_built):
@@ -5690,7 +5697,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         words written out (sh_placed, claude-config#2678). `python3 "$ROOT/tools/post.py"` named no
         file as written, so a script run through a variable was never read, where the same file run
         by a literal path was. The second reading comes after the first and only where the first
-        found nothing, so it can refuse a command the first let through and never the reverse."""
+        found nothing, so it can refuse a command the first let through and never the reverse.
+        A command run under the installed no network wrapper is none of this gate's to read
+        (no_network_run in lib/no-network-route.py, claude-config#3173)."""
+        if self.no_network_run(text):
+            return None
         reason = self.judge_written(d, text, wrapper, why, depth, whole) or self.judge_unglued(d, text, depth, whole)
         # And a shell, its code or its script named another way: $SHELL, /dev/stdin, a line read and
         # then run, xargs, \$( ) in a double quoted string (lib/sh-walk-shapes.py, claude-config#3251).
@@ -7737,6 +7748,8 @@ def main():
                       "written, say so to Dan (claude-config#2631).")
         else:
             advice = draft_advice("with the same channel and thread")
+        if not unfollowed:
+            advice += judge.route_note(reason)  # the no network wrapper, for a file's imports (#3173)
         print("refuse\n" + lead + reason + ". " + advice)
         if kept:
             _cache.trace("not stored: refused")

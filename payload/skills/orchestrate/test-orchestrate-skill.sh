@@ -120,6 +120,11 @@ check "#2490 agents never put a worktree in the temp folder" "$(has "$RULES" 'Ne
 check "#3028 agent rules say a refused command is final" "$(has "$RULES" 'A refused command is final.')"
 check "#3028 agent rules name every other way a refusal is never retried" "$(has "$RULES" 'never retried in pieces, as a test file, through another tool or by another agent')"
 check "#3028 agent rules say to stop and report the refusal" "$(has "$RULES" 'stop and report the refusal')"
+# claude-config#3173: the Slack drafts gate names one route in some of its refusals, the no network
+# wrapper, and Dan decided on 2026-11-18 that a command run under it passes. The rules say a
+# refusal that names that route may be run again that way, and only then.
+check "#3173 agent rules let a refused command be run again under the no network wrapper when the refusal says so" "$(has "$RULES" 'when the refusal itself says the command may be run again under the no network wrapper')"
+check "#3173 agent rules keep a refusal that names no such route final" "$(has "$RULES" 'A refusal that names no such route stays final')"
 # On 2026-11-16 two builders decided area check holds on commands their briefs did not cover, and
 # the auto mode safety check refused what followed, so the exception for a resent hold is bounded.
 check "#3028 only a hold the brief lets the agent decide is resent" "$(has "$RULES" 'a hold your brief lets you decide')"
