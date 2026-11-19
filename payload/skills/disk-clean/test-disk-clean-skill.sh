@@ -210,7 +210,7 @@ done
 # A sanity anchor on the derivation against what each script's own header documents today, so a
 # derivation gone blind (every set empty or 0 alone) cannot pass by agreeing with an empty skill.
 check "scan.sh's derived codes include its lock refusal" "$(grep -qw 75 <<< "$(codes_of "$DIR/scan.sh")" && echo ok || echo "got: $(codes_of "$DIR/scan.sh")")"
-check "review-check.sh's derived codes include each refusal" "$(eq "$(codes_of "$DIR/review-check.sh")" "0 2 3 4 5 6 7")"
+check "review-check.sh's derived codes include each refusal" "$(eq "$(codes_of "$DIR/review-check.sh")" "0 2 3 4 5 6 7 8")"
 
 # ================================================================================================
 # 3. The order: scan, review page, check, remove, and the Full Disk Access result first
@@ -260,10 +260,18 @@ check "the pasted selection is written with the Write tool, never through a shel
 check "there is exactly one AskUserQuestion confirm picker" \
   "$(eq "$(grep -c 'AskUserQuestion' "$SKILL")" 1)"
 check "and it sits in the step after the check" "$(grep -q 'AskUserQuestion' <<< "$check_sec" && echo ok || echo "not in the check step")"
-check "the Trash and Dan's own files are named one by one in it" \
+check "the Trash and Dan's own files are named in it, Dan's own files by path" \
   "$(grep -qF 'Trash' <<< "$check_sec" && grep -qF 'Large personal files' <<< "$check_sec" && grep -qF 'Tools not used in 180 days' <<< "$check_sec" && grep -qi 'by path' <<< "$check_sec" && echo ok || echo "the step does not name them")"
 check "and so are worktrees whose repository is gone, by the name the record gives them (#2346)" \
   "$(grep -qF 'Worktrees whose repository is gone' <<< "$check_sec" && echo ok || echo "the step does not name them")"
+# The Trash chosen whole is one line, its count and total, and its entries are listed only when Dan
+# asks, by the checker's read only listing (#3232: the 5,979 entries of the dry run on 2026-11-17
+# were 5,979 lines of the picker).
+entries_line="$(grep -m 1 -E '^bash ~/\.claude/skills/disk-clean/review-check\.sh --entries ' <<< "$check_code")"
+check "the step says a kind chosen whole is one line, its count and total" \
+  "$(grep -qi 'chosen whole' <<< "$check_sec" && grep -qi 'one line' <<< "$check_sec" && echo ok || echo "the step does not say so")"
+check "and lists its entries only on request, from the plan" \
+  "$(grep -qF -- '--entries trash --plan <folder>/plan.txt' <<< "$entries_line" && grep -qi 'asks' <<< "$check_sec" && echo ok || echo "the line is: $entries_line")"
 
 # ================================================================================================
 # 6. The removal, its verified result by df, and nothing removed by hand
@@ -310,7 +318,9 @@ out="$(dc_run bash -c "$(as_written "$page_line")" 2>&1)"; rc=$?
 check "the review page command, run as written, writes the page" "$([ "$rc" -eq 0 ] && [ -f "$FOLDER/$PAGE_NAME" ] && echo ok || echo "exit $rc, said: $out")"
 check "and clears the clipboard first" "$([ -f "$H/clipboard.txt" ] && [ ! -s "$H/clipboard.txt" ] && echo ok || echo "the clipboard stub was not called empty")"
 NONCE="$(awk '$1 == "nonce" { print $2 }' "$FOLDER/disk-clean-review.nonce" 2>/dev/null)"
-printf '{"scan_id":"%s","nonce":"%s","count":2,"ids":["trash-1","caches-1"]}\n' "$SID" "$NONCE" > "$FOLDER/selection.json"
+# What Copy selection writes with the Trash row and the cache ticked: the Trash as one summary (#3232).
+TOKEN="$(grep -oE 'data-all="[^"]*"' "$FOLDER/$PAGE_NAME" 2>/dev/null | sed 's/^data-all="//; s/"$//')"
+printf '{"scan_id":"%s","nonce":"%s","count":2,"ids":["%s","caches-1"]}\n' "$SID" "$NONCE" "$TOKEN" > "$FOLDER/selection.json"
 out="$(dc_run bash -c "$(as_written "$check_line")" 2>&1)"; rc=$?
 check "the checker command, run as written on a selection from that page, writes the plan" \
   "$([ "$rc" -eq 0 ] && [ -f "$FOLDER/plan.txt" ] && echo ok || echo "exit $rc, said: $out")"
@@ -318,6 +328,9 @@ check "and the plan names the scan and both items" \
   "$(eq "$(tr '\n' ' ' 2>/dev/null < "$FOLDER/plan.txt")" "scan_id $SID count 2 item trash-1 item caches-1 ")"
 check "and prints each kind with its size, for the picker to name" \
   "$(grep -qF 'Trash: 1 item' <<< "$out" && grep -qF 'App caches: 1 item' <<< "$out" && echo ok || echo "said: $out")"
+out="$(dc_run bash -c "$(as_written "$entries_line")" 2>&1)"; rc=$?
+check "the listing command, run as written, names the Trash entries the plan takes" \
+  "$([ "$rc" -eq 0 ] && grep -qF "$H/.Trash/old.zip" <<< "$out" && echo ok || echo "exit $rc, said: $out")"
 check "nothing outside the throwaway directory was written" "$(eq "$(dc_refusals)" "")"
 
 finish

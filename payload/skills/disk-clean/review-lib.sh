@@ -32,6 +32,23 @@
 #                                      no randomness. In test mode the folder must be inside the
 #                                      throwaway directory.
 #   dcrv_read_nonce <folder>           prints the nonce the last render wrote there; fails when none
+#   DCRV_WHOLE                         the kinds the page draws as ONE row and copies as one summary
+#                                      when that row is ticked, rather than an id per entry (the
+#                                      Trash: 5,979 entries on the personal MacBook were about 70 KB
+#                                      of ids, #3216, #3232). The checker refuses a summary of any
+#                                      other kind.
+#   dcrv_whole_entries <items> <kind>  every entry of <kind> the scan offers, from <items> (what
+#                                      dcr_review_items prints): id, target and identity separated
+#                                      by \037, one line each, in byte order
+#   dcrv_whole_token <items> <scan_id> <kind>
+#                                      the summary of those entries: all:<kind>:<count>:<digest>,
+#                                      the digest being the first 32 hex characters of the SHA-256 of
+#                                      "scan_id <scan_id>" and then dcrv_whole_entries' lines. So it
+#                                      names one scan and exactly the entries it offered, by id, path
+#                                      and device and inode: the page draws it, and the checker works
+#                                      it out again from the record and plans only when the two are
+#                                      the same. Fails, printing nothing, when the scan offers none,
+#                                      or when the kind or scan id is not one a summary can carry.
 #   dcrv_clear_clipboard               empties the clipboard, so a selection copied from an earlier
 #                                      page is not what gets pasted (the skill runs it before the
 #                                      page opens, #1808). pbcopy is reached by NAME, never by path:
@@ -39,8 +56,8 @@
 #                                      and no test can reach the real clipboard. Fails, saying so
 #                                      with pbcopy's own words, when pbcopy does.
 #
-# Commands: awk cat cut head mkdir mv pbcopy rm shasum, and the builtins. bash 3.2 safe. Sourcing
-# defines constants and functions and does nothing else.
+# Commands: awk cat cut head mkdir mv pbcopy rm shasum sort, and the builtins. bash 3.2 safe.
+# Sourcing defines constants and functions and does nothing else.
 
 DCRV_DIR="${BASH_SOURCE[0]%/*}"; [ "$DCRV_DIR" != "${BASH_SOURCE[0]}" ] || DCRV_DIR=.
 . "$DCRV_DIR/../../hooks/lib/disk-clean-predicates.sh" || { echo "disk-clean review: hooks/lib/disk-clean-predicates.sh is missing"; return 2; }
@@ -70,6 +87,25 @@ function dcrv_flags(flags,    n, f, i, out, w) {
 
 DCRV_PAGE=disk-clean-review.html
 DCRV_NONCE=disk-clean-review.nonce
+DCRV_WHOLE="trash"
+
+dcrv_whole_entries() { # <items> <kind>
+  [ -f "${1:-}" ] || return 1
+  awk -F $'\037' -v k="${2:-}" -v s=$'\037' '$2 == k && $5 == "offerable" { print $1 s $4 s $7 }' "$1" | LC_ALL=C sort
+}
+
+dcrv_whole_token() { # <items> <scan_id> <kind>
+  local items="${1:-}" sid="${2:-}" kind="${3:-}" list n d
+  case "$kind" in ''|*[!a-z0-9-]*) return 1 ;; esac
+  case "$sid" in ''|*[[:space:][:cntrl:]]*) return 1 ;; esac
+  list="$(dcrv_whole_entries "$items" "$kind")" || return 1
+  [ -n "$list" ] || return 1
+  n="$(printf '%s\n' "$list" | awk 'END { print NR }')"
+  d="$(printf 'scan_id %s\n%s\n' "$sid" "$list" | shasum -a 256 | cut -c 1-32)"
+  case "$d" in *[!0-9a-f]*|'') return 1 ;; esac
+  [ "${#d}" -eq 32 ] || return 1
+  printf 'all:%s:%s:%s\n' "$kind" "$n" "$d"
+}
 
 # True outside test mode; in it, true only when <path> lies inside the throwaway directory, by the
 # predicate disk-remove.sh and the harness use (L261).

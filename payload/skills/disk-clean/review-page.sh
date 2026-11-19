@@ -33,7 +33,10 @@
 #   - within a kind, what can be ticked largest first and unknown sizes last (D4), then what will not
 #     be removed, greyed, each with its reason (D2), in the order the scan found them; except the
 #     Trash, drawn as ONE row whose box ticks every entry that can go, with their count and total,
-#     and one greyed row per reason for what cannot (#3216: 5,979 entries were 5,979 rows);
+#     and one greyed row per reason for what cannot (#3216: 5,979 entries were 5,979 rows). Its box
+#     copies one summary of those entries, never an id each (review-lib.sh, dcrv_whole_token, #3232:
+#     5,979 ids were about 70 KB pasted into the chat), and a greyed row says its reason without the
+#     scan's "it", so it reads right for one entry and for many;
 #   - each row on one line: path (the home folder as ~), then its reason or detail, then its marks
 #     (D5, D7, D8), and its size;
 #   - every tick box unticked, the foot bar reading Nothing selected (D9).
@@ -184,9 +187,17 @@ awk -F "$S" -v cats="$CATS" -v table="$DCR_TITLES" -v catfile="$WORK/cats" -v ta
 [ -f "$WORK/cats" ] || : > "$WORK/cats"
 sort -t "$TAB" -k1,1n -k2,2n -k3,3n -k4,4n "$WORK/keyed" > "$WORK/sorted" || refuse "could not order the scan's items, so no page was written."
 
+# The summary each kind drawn as one row copies when ticked (review-lib.sh, dcrv_whole_token, #3232):
+# kind, then summary, for each such kind the scan offers anything of.
+: > "$WORK/whole"
+for c in $DCRV_WHOLE; do
+  tok="$(dcrv_whole_token "$WORK/items" "$SID" "$c")" || continue
+  printf '%s\t%s\n' "$c" "$tok" >> "$WORK/whole"
+done
+
 # Pass 2: the markup. Every string from the record is escaped; nothing from it is ever markup.
 awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v scanned="$SCANNED" \
-  -v catfile="$WORK/cats" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCRV_AWK_WORDS"'
+  -v catfile="$WORK/cats" -v wholefile="$WORK/whole" -v whole="$DCRV_WHOLE" "$DCU_AWK_LIB$DCU_AWK_TALLY$DCRV_AWK_WORDS"'
   function h(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); gsub(/\047/, "\\&#39;", s); return s }
   function short(t) {
     if (home != "" && t == home) return "~"
@@ -219,41 +230,49 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
       if (gnote[drawn] != "") printf "<p class=\"group-note\">%s</p>\n", h(gnote[drawn])
     }
   }
-  function commas(x,    s) {
-    s = x ""
-    while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]($|,)/, ",&", s)
-    return s
+  function entries(x) { return dcu_commas(x) (x == 1 ? " entry" : " entries") }
+  # The scan words each reason about one entry ("it is no longer in the Trash"). On a row of the
+  # Trash folder that "it" reads as the folder, and beside a count of many it reads as one, so the
+  # row says the reason without its subject, which reads right for one entry and for many (#3232).
+  function bare(t) {
+    if (t == "this entry of the scan could not be read") return "could not be read in the scan record"
+    if (sub(/^it (is|was) /, "", t)) return t
+    sub(/^its /, "", t)
+    return t
   }
-  function entries(x) { return commas(x) (x == 1 ? " entry" : " entries") }
   # A size from the shared tally over one key, in the words the total of a kind uses.
   function tsize(key,    k) {
     k = dcu_tally_kind(key)
     return (k == "unknown") ? "Size unknown" : ((k == "lower") ? "At least " : "") dcu_h(dcu_tally_kib(key) + 0)
   }
   # A kind drawn as ONE row (#3216): every entry that can be ticked is one row, whose box carries
-  # their ids, their count and the tally of their sizes; what cannot be ticked is one greyed row
-  # per reason, saying how many. The Trash held 5,979 entries on the personal MacBook.
+  # the summary of them that ticking it copies (review-lib.sh, dcrv_whole_token, #3232), their count
+  # and the tally of their sizes; what cannot be ticked is one greyed row per reason, saying how
+  # many. The Trash held 5,979 entries on the personal MacBook.
   function fold(r, f, st, b, ok,    t, k, nf, fl) {
-    if (gr != r) { gr = r; gn = 0; gids = ""; gp = 0; gflags = ""; nko = 0; split("", kc); split("", ko); split("", seenf) }
+    if (gr != r) { gr = r; gn = 0; gp = 0; gflags = ""; nko = 0; split("", kc); split("", ko); split("", seenf) }
     if (gdir == "") { t = f[4]; sub(/\/[^\/]*$/, "", t); gdir = t }
     if (ok) {
-      gn++; gids = gids (gids == "" ? "" : " ") f[1]
+      gn++
       dcu_tally("fold" r, b, f[8])
       if (dcu_part(b, f[8])) gp = 1
       nf = split(f[9], fl, ",")
       for (k = 1; k <= nf; k++) if (fl[k] != "" && !(fl[k] in seenf)) { seenf[fl[k]] = 1; gflags = gflags (gflags == "" ? "" : ",") fl[k] }
     } else {
-      t = reason(st)
+      t = bare(reason(st))
       if (!(t in kc)) ko[++nko] = t
       kc[t]++
       dcu_tally("kept" r SUBSEP t, b, f[8])
     }
   }
-  function unfold(    p, sub_, marks, nf, fl, k, key, bytes) {
+  function unfold(    p, sub_, marks, nf, fl, k, key, bytes, tok, tf) {
     if (gr == "") return
     p = h(short(gdir))
     if (gn) {
       key = "fold" gr
+      # The summary must stand for exactly the entries this row counts, or the page is not written.
+      tok = wtok[name[gr]]; split(tok, tf, ":")
+      if (tok == "" || tf[3] != gn "") { print "the summary of " name[gr] " (" (tok == "" ? "none" : tok) ") does not count the " gn " entries its row draws" > "/dev/stderr"; failed = 1; exit 3 }
       sub_ = "<span class=\"note\">" h(entries(gn)) "</span>"
       if (gflags != "") {
         nf = split(gflags, fl, ","); marks = ""
@@ -261,8 +280,8 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
         sub_ = sub_ "<span class=\"flags\">" marks "</span>"
       }
       bytes = sprintf("%.0f", dcu_tb[key] + 0)
-      printf "<div class=\"item\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s, %s\" data-id=\"%s\" data-ids=\"%s\" data-category=\"%s\" data-bytes=\"%s\" data-unsized=\"%d\" data-partial=\"%d\"><div class=\"what\"><span class=\"path\">%s</span><span class=\"sub\">%s</span></div><span class=\"size%s\">%s</span></div>\n", \
-        h(name[gr]), p, h(entries(gn)), h(name[gr]), h(gids), h(name[gr]), bytes, dcu_tally_unsized(key), gp, p, sub_, (dcu_tally_kind(key) == "unknown" ? " unknown" : ""), h(tsize(key))
+      printf "<div class=\"item\" data-id=\"%s\"><input class=\"tick\" type=\"checkbox\" autocomplete=\"off\" aria-label=\"%s, %s\" data-id=\"%s\" data-all=\"%s\" data-count=\"%d\" data-category=\"%s\" data-bytes=\"%s\" data-unsized=\"%d\" data-partial=\"%d\"><div class=\"what\"><span class=\"path\">%s</span><span class=\"sub\">%s</span></div><span class=\"size%s\">%s</span></div>\n", \
+        h(name[gr]), p, h(entries(gn)), h(name[gr]), h(tok), gn, h(name[gr]), bytes, dcu_tally_unsized(key), gp, p, sub_, (dcu_tally_kind(key) == "unknown" ? " unknown" : ""), h(tsize(key))
       rows++
     }
     for (k = 1; k <= nko; k++) {
@@ -274,8 +293,10 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     gr = ""; gdir = ""
   }
   BEGIN {
-    # The kinds drawn as one row rather than a row per entry (#3216).
-    folded["trash"] = 1
+    # The kinds drawn as one row rather than a row per entry (#3216), from review-lib.sh, which the
+    # checker reads too, and the summary of each (#3232).
+    nw = split(whole, wl, " "); for (k = 1; k <= nw; k++) folded[wl[k]] = 1
+    while ((getline line < wholefile) > 0) { split(line, c, tab); wtok[c[1]] = c[2] }
     while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; gnote[c[1]] = c[7]; nkinds++ }
     printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back. Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
@@ -305,6 +326,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     rows++
   }
   END {
+    if (failed) exit 3
     unfold()
     heads(nkinds + 0)
     if (!rows && unmeasured) print "<p class=\"empty\">Nothing was found to remove in what the scan could measure.</p>"
