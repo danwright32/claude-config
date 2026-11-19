@@ -481,6 +481,10 @@ def do_remove(home, now):
 
 
 def main(argv):
+    # A name that is not valid UTF-8 is listed escaped, so one such name never stops a listing or a
+    # run half way, after items were already removed.
+    sys.stdout.reconfigure(errors="backslashreplace")
+    sys.stderr.reconfigure(errors="backslashreplace")
     mode = argv[1] if len(argv) > 1 else ""
     now, report_to, i = time.time(), None, 2
     while i < len(argv):

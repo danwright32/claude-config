@@ -362,9 +362,10 @@ header is the checkable statement of both. In short:
   tests.txt, pr-body.md, logs) stays, every folder under 1 MB stays, and a link is never followed or
   removed. A folder not named like a session id is never touched.
 - **Transcripts** (`~/.claude/projects/`). Removed once last written more than 7 days ago: subagent
-  transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and every file
-  of a project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
-  `/private/tmp` (`-private-tmp`). A `memory` folder is never touched.
+  transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and, in a
+  project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
+  `/private/tmp` (`-private-tmp`), the session transcript `<session>.jsonl` and every file in the
+  session's own folder. A `memory` folder is never touched.
 
 Where it is said: each removed item, with its size in bytes, is a line in
 `~/.claude/state/keep-rules/removed.log` (kept to about 5 MB, one older file beside it), and the last
