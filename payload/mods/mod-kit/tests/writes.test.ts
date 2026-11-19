@@ -1883,6 +1883,21 @@ describe('writes: an editor run on files, and the other programs that write a fi
     expect(scripts(`vim -es -c 'w app/globals.css' -c q notes.md`)).toEqual([{ what: 'a script vim runs', program: 'w app/globals.css\nq', folder: CWD, inputs: [] }])
     expect(scripts(`ex -s +'%s/a/b/' +wq a.md`)).toEqual([{ what: 'a script ex runs', program: '%s/a/b/\nwq', folder: CWD, inputs: [] }])
     expect(scripts(`cd "$D" && vim -es -c wq a.md`)).toEqual([{ what: 'a script vim runs', program: 'wq', folder: undefined, inputs: [] }])
+    // A script handed as a here-string is in the command's own words as a heredoc's is. It was read
+    // as no script at all, so the file it names ran unasked (the review of #3324).
+    for (const fed of [`<<< 'e app/globals.css'`, `<<<'e app/globals.css'`, `<<< "e app/globals.css"`, `0<<< 'e app/globals.css'`]) {
+      for (const editor of ['ed -s', 'ex -s', 'vim -es']) {
+        const got = scripts(`${editor} ${fed}`)
+        expect(got.map(g => g.what)).toEqual([`a script ${editor.split(' ')[0]} runs`])
+        expect(got[0]?.program).toContain('e app/globals.css')
+        expect(got[0]?.folder).toBe(CWD)
+      }
+    }
+    expect(scripts(`ed -s <<< $'e app/globals.css\\n1s/a/b/\\nw\\nq'`)[0]?.program).toContain('e app/globals.css\n1s/a/b/')
+    // A here-string on another descriptor is not the editor's script, and one given to a program
+    // that is no editor is read as before.
+    expect(scripts(`ed -s 3<<< 'e app/globals.css'`)).toEqual([])
+    expect(scripts(`cat <<< 'e app/globals.css'`)).toEqual([])
     // A script piped in or read from a file is not in the command's own words.
     expect(scripts(`printf 'w\\nq\\n' | ed -s a.md`)).toEqual([{ what: 'a script ed runs', program: undefined, folder: undefined, inputs: [] }])
     expect(scripts('ed -s a.md < /tmp/fix.ed')).toEqual([{ what: 'a script ed runs', program: undefined, folder: undefined, inputs: ['/tmp/fix.ed'] }])

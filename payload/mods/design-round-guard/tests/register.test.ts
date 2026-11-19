@@ -901,6 +901,10 @@ test('#3279: an editor given a script, a pipe into sponge and the other programs
     ["printf '1s/a{}/a{color:red}/\\nw\\nq\\n' | ed -s /w/slate/app/globals.css", 'app/globals.css'],
     // The file named only inside the script the editor runs.
     ["ed -s <<'EOF'\ne app/globals.css\n1s/a{}/a{color:red}/\nw\nq\nEOF", 'app/globals.css'],
+    // The same, the script handed as a here-string (the review of #3324).
+    ["ed -s <<< $'e app/globals.css\\n1s/a{}/a{color:red}/\\nw\\nq'", 'app/globals.css'],
+    ["ex -s <<< 'e app/globals.css | %s/a{}/a{color:red}/ | wq'", 'app/globals.css'],
+    ['vim -es <<< "e app/globals.css | wq"', 'app/globals.css'],
     ["ex -sc '%s/a{}/a{color:red}/|x' app/globals.css", 'app/globals.css'],
     ["cd /w/slate && ex -s app/globals.css <<'EOF'\n%s/a{}/a{color:red}/\nwq\nEOF", 'app/globals.css'],
     ["vim -es -c '%s/a{}/a{color:red}/' -c wq app/globals.css", 'app/globals.css'],

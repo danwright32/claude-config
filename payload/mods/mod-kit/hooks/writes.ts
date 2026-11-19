@@ -631,6 +631,21 @@ const VALUED: Record<string, ReadonlySet<string>> = {
   rsync: new Set(['-e', '-f', '-T', '-B', '--rsh', '--exclude', '--include', '--filter', '--files-from', '--exclude-from', '--include-from', '--chmod', '--log-file', '--rsync-path', '--port', '--temp-dir', '--backup-dir', '--suffix', '--compare-dest', '--link-dest', '--copy-dest', '--block-size', '--bwlimit', '--timeout', '--max-size', '--min-size', '--partial-dir']),
 }
 
+// The text of each here-string on standard input (`<<< text`, `<<<text`, `0<<< text`), as the words
+// give it, with a written `\n` read as a line end so a dollar quoted script reads line by line. One
+// on another descriptor is not what the program reads as its input. splitInputs below drops the
+// same words from a command's operands.
+const hereStrings = (words: string[]): string[] => {
+  const out: string[] = []
+  for (let i = 0; i < words.length; i++) {
+    const m = /^(\d*)<<<([\s\S]*)$/.exec(words[i] as string)
+    if (!m) continue
+    const text = m[2] !== '' ? m[2] : words[++i]
+    if (text !== undefined && (m[1] === '' || m[1] === '0')) out.push(text.replace(/\\n/g, '\n'))
+  }
+  return out
+}
+
 // A destination on another machine (host:path, user@host:path) is no file here.
 const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
 
@@ -1243,7 +1258,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       writer = true
       for (const f of e.files) named(f, true)
       for (const f of e.written) named(f)
-      const fed = (c.heredocs ?? []).filter(h => (h.fd ?? 0) === 0).map(h => h.body)
+      // A here-string is the script as much as a heredoc is, and is in the command's own words. It
+      // was read as no script, so `ed -s <<< 'e app/globals.css'` named nothing (the review of #3324).
+      const fed = [...(c.heredocs ?? []).filter(h => (h.fd ?? 0) === 0).map(h => h.body), ...hereStrings(words)]
       const piped = c.pipedFrom !== undefined
       if (e.text.length || e.scripts.length || fed.length || piped || inputs.length) {
         const whole = !e.scripts.length && !piped && !inputs.length
