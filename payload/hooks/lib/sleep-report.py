@@ -82,11 +82,18 @@ report knows, and the fields each reads (every other field is kept, and shown no
   woke, limit  reason?                      how the night ended (written by the scope modes mod)
   outward    text                           the overnight check (#834): something done overnight
                                             that the ban list exists to stop, read from GitHub
-  unmeasured text                           the overnight check: a read it could not make
-  checked    text                           the overnight check: one line of what it read and left
+  unmeasured text, limit?                   the overnight check: a read it could not make; a stop
+                                            at its time limit is one such note, said once, whose
+                                            limit keeps where it stopped as data: part, parts,
+                                            partName, last {part, step, ms}, next, elapsedMs,
+                                            limitMs, and done and total repositories in a part
+                                            read one repository at a time (#3240)
+  checked    text, steps?                   the overnight check: one line of what it read and left
                                             out as healthy, written every time it runs (#2766), so
                                             a final report with no note of the check at all says
-                                            the check did not run
+                                            the check did not run; steps is each GitHub read it
+                                            made, {part, step, ms}, so its limit can be set from
+                                            real nights (#3240)
 
 `by` is the session id that wrote it, stamped by the writer when the caller gave none from the
 local session id (CLAUDE_CODE_SESSION_ID), the id the record names its workers by (#1167). `link`, stamped by the writer when the caller gave none, is
