@@ -6701,7 +6701,7 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
 - **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
-  costs #1940 tracks: the share of subagent reads spent on code reading, the share of interactive
+  costs #1940 measured: the share of subagent reads spent on code reading, the share of interactive
   reads spent carrying agent reports, and the main sessions past a number of compactions. It
   reads each item's size and kind, never prints its text, and is the method both posted
   measurements used, so a re-measure on either Mac is comparable with them:
