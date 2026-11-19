@@ -65,11 +65,17 @@ Report what it printed, in plain words, in this order:
 4. Every note the scan printed under a kind, in plain words. Under Project build folders it says
    how many build folders were left out because iCloud syncs them: none of those is ever offered,
    since removing one would remove it from iCloud on every device (#3215).
-5. Two kinds show where space is and never offer anything (#3235): Records Claude Code and this
-   config keep (its state, session notes among them, file history, the finding spool and its
-   backups, the home folders its hooks write), and Claude items in the user temp folder, which
-   lists no rows and gives its count and size in its note. Say the first one's largest rows by
-   size and the second one's note, as space shown, not as space that can be freed. npm and pnpm
+5. Two kinds mostly show where space is (#3235): Records Claude Code and this config keep (its
+   state, session notes among them, file history, the finding spool and its backups, the home
+   folders its hooks write), and Claude items in the user temp folder, which lists no rows and
+   gives its count and size in its note. Say the first one's largest rows by size and the second
+   one's note, as space shown, not as space that can be freed. The one thing Records offers is a
+   folder of images or documents the daily keep rules kept in an ended session's notes, once
+   nothing in it was changed or opened in 30 days; it goes to the Trash (Dan, 2026-11-19). Those
+   rows are read from the list the keep rules job writes once a day, so one can be up to a day
+   old. When the kind says those folders are unmeasured, say why in its words (the list is
+   missing, over two days old, or the job is switched off on this Mac), and that
+   `claude-sync remove-leftovers` writes a new one. npm and pnpm
    caches offers only npx copies (Dan, 2026-11-18); its other rows are shown, never offered. What
    Claude Code sessions leave that can go is under Tool output beside transcripts, Old Claude Code
    versions, GitHub command line cache (one row, its kept entries counted in its note) and Project
@@ -155,7 +161,7 @@ bash ~/.claude/skills/disk-clean/review-check.sh --entries trash --plan <folder>
 ```
 
 In the picker's question, say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
-personal files, Tools not used in 180 days and Tool output beside transcripts are moved to the Trash, which frees nothing until it
+personal files, Tools not used in 180 days, Tool output beside transcripts and a session notes folder of images or documents are moved to the Trash, which frees nothing until it
 is emptied (a worktree git has forgotten can still hold work nothing else has); everything else is
 deleted because it regenerates, or, for a log a program holds open, emptied in place. Two options:
 remove them, or keep everything. On keep everything, say nothing was removed and stop.

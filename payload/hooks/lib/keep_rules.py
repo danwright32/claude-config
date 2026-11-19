@@ -45,7 +45,11 @@ Modes, so the one that removes cannot be mistaken for the one that looks (L206):
   readable-folders [--now EPOCH]               lists the folders kept as mostly images or documents
                                                in ended sessions, for /disk-clean to show. Writes
                                                nothing.
-  remove [--now EPOCH]                         removes it, one log line per item with its size.
+  remove [--now EPOCH]                         removes it, one log line per item with its size, and
+                                               writes the same list of folders readable-folders
+                                               prints to state/keep-rules/readable-folders.tsv,
+                                               which /disk-clean reads in place of running this
+                                               (Dan, 2026-11-19: "Daily file, no list change").
 
 Time is handed in with --now (seconds since the epoch), so a test sets the clock rather than
 waiting for it. CLAUDE_HOME names the config folder (default ~/.claude).
@@ -83,6 +87,11 @@ BULKY_BYTES = 1024 * 1024
 # Why a folder of mostly images or documents is kept. `readable-folders` lists exactly the folders kept
 # for this reason, for /disk-clean to show (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup").
 READABLE_KEEP = "mostly images or documents, which somebody may have looked at or read"
+# The list of those folders `remove` writes each day in state/keep-rules, which /disk-clean reads
+# (skills/disk-clean/categories/claude-records.sh). A change to its shape is a new version number.
+READABLE_LIST = "readable-folders.tsv"
+READABLE_HEADER = "readable-folders"
+READABLE_VERSION = 1
 LOG_ROTATE_BYTES = 5 * 1024 * 1024
 MARK = ".keep-rules-removing."
 SESSION_DIR = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -159,8 +168,17 @@ class Plan:
         self.remove = []   # (kind, path, bytes, is_dir)
         self.keep = []     # (reason, path, bytes)
         self.failures = []
+        self.notes_failures = []        # the failures that are the notes rule's own (notes_failed)
         self.kept_notes = [0, 0]        # files, bytes of written notes in ended sessions
         self.kept_transcripts = [0, 0]  # files, bytes of transcripts this rule left
+
+
+def notes_failed(plan, why):
+    """A failure of the notes rule itself: one of the run's failures, and also what makes the list of
+    folders for /disk-clean say unmeasured. Recorded here, where the notes rule fails, so no caller
+    of plan_notes can forget to carry it over and have an undecided rule read as no folders."""
+    plan.failures.append(why)
+    plan.notes_failures.append(why)
 
 
 def plan_notes(home, now, plan):
@@ -169,11 +187,11 @@ def plan_notes(home, now, plan):
     if rst is None:
         return
     if not is_dir(rst):
-        plan.failures.append("the notes folder %s is not a folder (a link is never followed), so the notes rule did not run" % root)
+        notes_failed(plan, "the notes folder %s is not a folder (a link is never followed), so the notes rule did not run" % root)
         return
     registry = session_registry.Registry(os.path.join(home, "state", "sessions"), int(now * 1000))
     if registry.missing:
-        plan.failures.append("%s, so no session could be told to have ended and the notes rule removed nothing" % registry.missing)
+        notes_failed(plan, "%s, so no session could be told to have ended and the notes rule removed nothing" % registry.missing)
         return
     for project in entries(root):
         pp = os.path.join(root, project)
@@ -360,17 +378,17 @@ def report(plan, home, now):
     return "\n".join(out) + "\n"
 
 
-def readable_folders(home, now):
-    """Prints `folder<TAB>bytes<TAB>path` for each folder the notes rule keeps only because it is
-    mostly images or documents, in a session that has ENDED by this file's own rule, which /disk-clean
-    shows. When the notes rule could not decide (the registry cannot be read), prints one
-    `unmeasured<TAB>why` line and returns 3, so a reader never takes an unread registry for no such
-    folders. A path a line cannot carry (a tab, a newline, or bytes that are not UTF-8) is left out."""
-    plan = Plan()
-    plan_notes(home, now, plan)
-    if plan.failures:
-        print("unmeasured\t%s" % " ".join(plan.failures).replace("\t", " ").replace("\n", " "))
-        return 3
+def readable_lines(plan):
+    """The lines saying which folders the notes rule keeps only because they are mostly images or
+    documents, in a session that has ENDED by this file's own rule: `folder<TAB>bytes<TAB>path` each.
+    When the notes rule could not decide (the registry cannot be read), the one line
+    `unmeasured<TAB>why` instead, so a reader never takes an unread registry for no such folders.
+    Returns (lines, decided). A path a line cannot carry (a tab, a newline, or bytes that are not
+    UTF-8) is left out. The one reading of this, for the `readable-folders` mode and for the list
+    `remove` writes (L261)."""
+    if plan.notes_failures:
+        return ["unmeasured\t%s" % " ".join(plan.notes_failures).replace("\t", " ").replace("\n", " ")], False
+    lines = []
     for r, p, b in plan.keep:
         if r != READABLE_KEEP or "\t" in p or "\n" in p:
             continue
@@ -378,8 +396,44 @@ def readable_folders(home, now):
             p.encode("utf-8")
         except UnicodeEncodeError:
             continue
-        print("folder\t%d\t%s" % (b, p))
-    return 0
+        lines.append("folder\t%d\t%s" % (b, p))
+    return lines, True
+
+
+def readable_folders(home, now):
+    """Prints readable_lines, which /disk-clean shows, and returns 3 when the notes rule could not
+    decide. Writes nothing."""
+    plan = Plan()
+    plan_notes(home, now, plan)
+    lines, decided = readable_lines(plan)
+    for line in lines:
+        print(line)
+    return 0 if decided else 3
+
+
+def write_readable_list(state, plan):
+    """Writes readable_lines to state/keep-rules/readable-folders.tsv for /disk-clean to read, since
+    a disk-clean script may not run python (Dan, 2026-11-19, recorded on #3235: "Daily file, no list
+    change"). The file is its header `readable-folders<TAB>1`, the lines, and `end<TAB>count of folder
+    lines`, so a reader can tell a whole list from a cut one. It is written beside its name and renamed
+    into place, so a reader sees the old list or the new one, never half of either. How old the list
+    is, is the file's own time, which the reader holds to two days. Returns why it could not be
+    written, or None."""
+    path = os.path.join(state, READABLE_LIST)
+    tmp = "%s.writing.%d" % (path, os.getpid())
+    lines, _ = readable_lines(plan)
+    count = sum(1 for line in lines if line.startswith("folder\t"))
+    try:
+        with open(tmp, "w", encoding="utf-8", errors="backslashreplace") as fh:
+            fh.write("\n".join(["%s\t%d" % (READABLE_HEADER, READABLE_VERSION)] + lines + ["end\t%d" % count]) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return "the list of folders for /disk-clean, %s could not be written (%s)" % (path, e.strerror or e)
+    return None
 
 
 def stamp(now):
@@ -476,6 +530,12 @@ def do_remove(home, now):
     removed = []
     for f in plan.failures:
         log.line(stamp(now), "failed", "-", 0, "-", f)
+    # The list /disk-clean reads, from this same plan: the folders it names are ones this run keeps,
+    # so nothing below changes it. A list that cannot be written fails the run, and the removals go on.
+    unlisted = write_readable_list(state, plan)
+    if unlisted:
+        failures.append(unlisted)
+        log.line(stamp(now), "failed", "-", 0, "-", unlisted)
     for kind, p, b, isdir in plan.remove:
         if log.error:
             break

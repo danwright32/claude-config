@@ -1038,15 +1038,17 @@ refused "a linked worktree mid rebase of a detached HEAD is still refused"
 GG "$G/wt" rebase --abort 2>/dev/null
 GG "$G/wt" checkout -q feat 2>/dev/null
 
-echo "payload write gate: its notes go when a call fails or is a Monitor call, and stay while a call is in flight (claude-config#3253)"
+echo "payload write gate: its notes go however a call ends, and stay while a call is in flight (claude-config#3253)"
 
 # On 2026-11-18 its notes folder held the notes of 261 calls whose end the gate never heard: 135
 # refused by auto mode, 25 denied by a mod, 49 that exited non zero (Claude Code reports those as
 # PostToolUseFailure, never PostToolUse) and 48 Monitor calls, which run the Bash hooks before they
 # start and are reported afterwards as Monitor. Each note holds the whole payload/ listing, about
-# 145 KB, and only the sweep of notes a day old ever removed them. The refused calls are still left
-# to that sweep: hearing them means a hook on PermissionDenied, which tests/test-sleep-silence.sh
-# holds to the sleep predicate or an exemption Dan signs off.
+# 145 KB, and only the sweep of notes a day old ever removed them. A call auto mode refuses is
+# reported as PermissionDenied, and tests/test-sleep-silence.sh holds every hook on that event to
+# the sleep predicate or an exempt entry. This one has the entry, which Dan signed off on
+# 2026-11-19 for a hook that only deletes its own note and prints nothing, so the cases below hold
+# it to exactly that: each stream is kept apart and must be empty to the byte.
 rm -f "$HOLD"; SID=""
 notes(){ find "$STATE" -type f -name "$1.*" 2>/dev/null | wc -l | tr -d ' '; }
 aged(){ # aged <hours> <tool use id>: back date that call's notes, as if it were taken that long ago
@@ -1067,6 +1069,61 @@ else check "a call that exited non zero is still checked afterwards, since it ma
 says "and the report names what it changed" "$FIX/dev/payload/LESSONS.md"
 if [ "$(notes f1)" = 0 ]; then check "and that failed call's note is removed" ok
 else check "and that failed call's note is removed" "$(notes f1) files left"; fi
+# A call refused before it ran, in the shape Claude Code documents for PermissionDenied.
+denied(){ # denied <tool use id> [tool name] [command] -> DRC, and each stream in a file of its own
+  python3 -c '
+import json, sys
+d = {"session_id": sys.argv[4], "cwd": sys.argv[3], "permission_mode": "auto",
+     "hook_event_name": "PermissionDenied", "tool_name": sys.argv[2],
+     "tool_input": {"command": sys.argv[5]}, "reason": "refused by auto mode"}
+if sys.argv[1]:
+    d["tool_use_id"] = sys.argv[1]
+print(json.dumps(d))
+' "$1" "${2:-Bash}" "$FIX/dev" "$SID" "${3:-python3 $FIX/w.py}" \
+    | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" > "$FIX/denied.out" 2> "$FIX/denied.err"
+  DRC=$?
+}
+quiet(){ # quiet <description>: exit 0, and not one byte on stdout or on stderr
+  if [ "$DRC" -eq 0 ] && [ ! -s "$FIX/denied.out" ] && [ ! -s "$FIX/denied.err" ]; then check "$1" ok
+  else check "$1" "exit $DRC, stdout: [$(head -c 80 "$FIX/denied.out")], stderr: [$(head -c 80 "$FIX/denied.err")]"; fi
+}
+held(){ find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' '; }
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f2
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f2other
+other_before="$(notes f2other)"
+if [ "$(notes f2)" -gt 0 ] && [ "$other_before" -gt 0 ]; then check "two calls let through each have a note, so a removal below is a removal" ok
+else check "two calls let through each have a note, so a removal below is a removal" "f2 has $(notes f2), f2other has $other_before"; fi
+denied f2
+quiet "a call refused before it ran writes nothing to stdout or stderr, and exits 0"
+if [ "$(notes f2)" = 0 ]; then check "and the refused call's note is removed" ok
+else check "and the refused call's note is removed" "$(notes f2) files left"; fi
+if [ "$(notes f2other)" = "$other_before" ]; then check "and the note of another call, still in flight, is left alone" ok
+else check "and the note of another call, still in flight, is left alone" "$(notes f2other) of $other_before files left"; fi
+denied f2other Edit
+quiet "a refusal of another tool says nothing"
+if [ "$(notes f2other)" = "$other_before" ]; then check "and removes nothing, even when it names a call that has a note" ok
+else check "and removes nothing, even when it names a call that has a note" "$(notes f2other) of $other_before files left"; fi
+held_before="$(held)"
+denied f2never
+quiet "a refusal of a call that has no note says nothing"
+if [ "$(held)" = "$held_before" ]; then check "and removes nothing" ok
+else check "and removes nothing" "$(held) of $held_before files left"; fi
+denied ""
+quiet "a refusal that names no call says nothing"
+if [ "$(held)" = "$held_before" ]; then check "and removes nothing either" ok
+else check "and removes nothing either" "$(held) of $held_before files left"; fi
+# The hardest thing to stay quiet about: a command this gate refuses before a call, with the watcher
+# live and no hold. Refused already, it is not refused a second time and takes no note (L246).
+denied f2write Bash "cp /tmp/x $FIX/dev/payload/LESSONS.md"
+quiet "a refused call whose command writes under payload/ is not refused again"
+if [ "$(held)" = "$held_before" ]; then check "and no note is taken for it" ok
+else check "and no note is taken for it" "$(held) files held, $held_before before"; fi
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f2mon
+denied f2mon Monitor
+quiet "a refused Monitor call says nothing"
+if [ "$(notes f2mon)" = 0 ]; then check "and its note is removed" ok
+else check "and its note is removed" "$(notes f2mon) files left"; fi
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f2other
 prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" f3
 printf 'while a monitor starts\n' > "$FIX/dev/payload/LESSONS.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" f3 "$PIDF" Monitor
@@ -1146,10 +1203,10 @@ says "and the refusal names the reader that is missing" "python3"
 OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
   | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
 allowed "with no python3 the check after a call stays quiet rather than refusing what already ran"
-for after_ev in PostToolUseFailure; do
+for after_ev in PostToolUseFailure PermissionDenied; do
   OUT="$(printf '{"hook_event_name":"%s","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$after_ev" "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
     | ( cd "$FIX/dev" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
-  allowed "with no python3, $after_ev stays quiet too, since that call is over (#3253)"
+  allowed "with no python3, $after_ev stays quiet too, since that call is over or never ran (#3253)"
 done
 
 # Only the state that loses work, exactly as with a reader present. A write that names nothing
@@ -1230,11 +1287,11 @@ for gone in sync-clone.sh push-scope.sh; do
   OUT="$(printf '{"hook_event_name":"PostToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
     | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
   allowed "with lib/$gone missing, the check after a call refuses nothing, since the call already ran"
-  # Nor after a call that failed, which already ran (#3253).
-  for after_ev in PostToolUseFailure; do
+  # Nor after a call that failed, which already ran, or one refused, which never will (#3253).
+  for after_ev in PostToolUseFailure PermissionDenied; do
     OUT="$(printf '{"hook_event_name":"%s","tool_name":"Bash","cwd":"%s","tool_input":{"command":"cat %s"}}' "$after_ev" "$FIX/dev" "$FIX/dev/payload/LESSONS.md" \
       | env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
-    allowed "with lib/$gone missing, $after_ev refuses nothing, since that call is over"
+    allowed "with lib/$gone missing, $after_ev refuses nothing, since that call is over or never ran"
   done
 done
 HOOK="$SAVED_HOOK"
