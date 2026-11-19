@@ -89,6 +89,46 @@ done
   || check "and on a prompt that asks for nothing to be written" "it fired"
 
 # ---------------------------------------------------------------------------
+# Words are matched as WORDS, never as letters inside another word (claude-config#3238). Matched as
+# substrings, "pen " fired inside "open " and "author" inside "authorization", and each of those
+# prompts was then told to load a skill whose first step reads a 250,000 character page. The first
+# three were reproduced against the installed hook on 2026-11-18; the rest are the same fault
+# found in the prose terms ("about us" inside "about users", "ad copy" inside "read copy",
+# "article" inside "particle").
+# ---------------------------------------------------------------------------
+for p in \
+  "message the other open session to look into it" \
+  "open the folder" \
+  "check why authorization fails on login" \
+  "message the other session to look into it" \
+  "tell me about users who never signed in" \
+  "read copy of the settings file and compare" \
+  "why does the particle simulation stall" \
+  "where are my pens" \
+  ; do
+  [ "$(fires "$p")" = "no" ] \
+    && check "it stays quiet on: $p" ok \
+    || check "it stays quiet on: $p" "it fired"
+done
+
+# The other half of word matching: the forms of a word a substring caught by accident must still
+# be caught, or the fix trades a false alarm for a missed draft. A plural, a past tense, a word at
+# the very end of the prompt ("bio " needed a space after it, so a prompt ending in "bio" was
+# missed), and a word followed by punctuation.
+for p in \
+  "draft three tweets for the launch" \
+  "can you look over the headlines and the captions" \
+  "the drafted reply needs another pass" \
+  "write my bio" \
+  "update the bio, it is out of date" \
+  "rewrite: the intro paragraph" \
+  ; do
+  [ "$(fires "$p")" = "yes" ] \
+    && check "it still fires on: $p" ok \
+    || check "it still fires on: $p" "it stayed quiet"
+done
+
+# ---------------------------------------------------------------------------
 # What it injects has to be a pointer at the writing skill, not merely something.
 # ---------------------------------------------------------------------------
 out="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
