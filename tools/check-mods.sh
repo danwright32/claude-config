@@ -576,6 +576,8 @@ if [ -z "$bin" ] || [ ! -x "$bin" ]; then
   # A Mac without Claude Code is here. The type check above needs no Claude Code, so it has run (#953).
   if [ "$require_claude" = 1 ]; then
     echo "check-mods: FAILED: $n mod(s) in $dir, and no claude command to validate or test them with (looked for ${bin:-claude on PATH}), though CHECK_MODS_REQUIRE_CLAUDE=1 promised one. Find why the install did not leave it there." >&2
+    # A definite failure above outranks it, as it outranks 3 and 4.
+    [ "$failed" -eq 1 ] && exit 1
     exit 6
   fi
   echo "check-mods: UNMEASURED: $n mod(s) in $dir, and no claude command to validate or test them with (looked for ${bin:-claude on PATH}). That is not a pass. Their strict type check needs no Claude Code and is reported above." >&2

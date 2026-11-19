@@ -57,7 +57,7 @@ else
 fi
 
 bin="$folder/node_modules/.bin/claude"
-installed(){ [ -x "$bin" ] && [ "$("$bin" --version 2>/dev/null | head -n 1 | awk '{ print $1 }')" = "$version" ]; }
+installed(){ [ -x "$bin" ] && [ "$("$bin" --version 2>/dev/null | awk 'NR == 1 { print $1 }')" = "$version" ]; }
 
 if installed; then
   say "Claude Code $version is already in $folder, so it was not downloaded again."
@@ -70,7 +70,7 @@ else
     exit 1
   fi
   if ! installed; then
-    say "npm installed $PACKAGE@$version, but $bin does not answer --version with $version (it said: $("$bin" --version 2>&1 | head -n 2 | tr '\n' ' ')), so it is not the build asked for."
+    say "npm installed $PACKAGE@$version, but $bin does not answer --version with $version (it said: $("$bin" --version 2>&1 | awk 'NR <= 2' | tr '\n' ' ')), so it is not the build asked for."
     exit 1
   fi
   say "installed Claude Code $version into $folder."

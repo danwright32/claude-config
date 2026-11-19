@@ -53,7 +53,7 @@ lines="$( { for f in test-mods load-engine; do
   done; } | cut -c1-500)"
 n="$(printf '%s\n' "$lines" | grep -c .)"
 if [ "$n" -gt 40 ]; then
-  lines="$(printf '%s\n' "$lines" | head -n 40)
+  lines="$(printf '%s\n' "$lines" | awk 'NR <= 40')
 ...and $((n - 40)) more lines, in the run's own log"
 fi
 

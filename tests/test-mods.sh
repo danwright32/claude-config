@@ -890,6 +890,10 @@ out="$(CHECK_MODS_REQUIRE_CLAUDE=1 TSC_BIN="$TSC_PASS" CLAUDE_BIN="$TMPROOT/no-s
 [ "$code" -eq 6 ] && printf '%s\n' "$out" | grep -q 'CHECK_MODS_REQUIRE_CLAUDE' \
   && check "#3297 a promised claude that is not there fails, exit 6, naming the promise" ok \
   || check "#3297 a promised claude that is not there fails, exit 6, naming the promise" "exit=$code out=$out"
+out="$(CHECK_MODS_REQUIRE_CLAUDE=1 TSC_LOG="$TSC_LOG" TSC_BIN="$TSC" CLAUDE_BIN="$TMPROOT/no-such-claude" bash "$CHECK" "$M6" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'illtyped-ci fails a strict type check' \
+  && check "#3297 and a definite failure beside it still fails as itself, exit 1" ok \
+  || check "#3297 and a definite failure beside it still fails as itself, exit 1" "exit=$code out=$out"
 runit_req(){ : > "$LOG"; out="$(CHECK_MODS_REQUIRE_CLAUDE=1 STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" bash "$CHECK" "$1" 2>&1)"; code=$?; }
 runit_req "$M6D"
 [ "$code" -eq 6 ] && printf '%s\n' "$out" | grep -q 'hooks modules are turned off' \

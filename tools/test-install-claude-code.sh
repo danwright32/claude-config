@@ -68,7 +68,7 @@ run_install bash "$INSTALL" "$TMPROOT/cc1"
   && check "#3297 with no version given it installs the one in the file, exactly, and prints only the command's path" ok \
   || check "#3297 with no version given it installs the one in the file, exactly, and prints only the command's path" "exit=$code out=$out err=$err npm: $(cat "$NPM_LOG")"
 run_install bash "$INSTALL" "$TMPROOT/cc1"
-[ "$code" -eq 0 ] && [ ! -s "$NPM_LOG" ] && printf '%s' "$err" | grep -q 'already in' \
+[ "$code" -eq 0 ] && [ ! -s "$NPM_LOG" ] && grep -q 'already in' <<< "$err" \
   && check "#3297 a folder already holding that version is used without asking npm" ok \
   || check "#3297 a folder already holding that version is used without asking npm" "exit=$code err=$err npm: $(cat "$NPM_LOG")"
 printf '2.1.301\n' > "$VF"
@@ -92,20 +92,20 @@ done
 check "#3297 a version file not holding exactly one exact version is refused before npm is asked" "$refused_all"
 rm -f "$VF"
 run_install bash "$INSTALL" "$TMPROOT/cc3"
-[ "$code" -eq 2 ] && printf '%s' "$err" | grep -q 'is missing' \
+[ "$code" -eq 2 ] && grep -q 'is missing' <<< "$err" \
   && check "#3297 a missing version file is refused, saying so" ok || check "#3297 a missing version file is refused, saying so" "exit=$code err=$err"
 printf '2.1.302\n' > "$VF"
 run_install STUB_INSTALL_FAIL=1 bash "$INSTALL" "$TMPROOT/cc4"
-[ "$code" -eq 1 ] && [ -z "$out" ] && printf '%s' "$err" | grep -q '404 Not Found' \
+[ "$code" -eq 1 ] && [ -z "$out" ] && grep -q '404 Not Found' <<< "$err" \
   && check "#3297 an npm failure fails with npm's words and prints no path" ok \
   || check "#3297 an npm failure fails with npm's words and prints no path" "exit=$code out=$out err=$err"
 run_install STUB_BUILT_VERSION=2.1.250 bash "$INSTALL" "$TMPROOT/cc5"
-[ "$code" -eq 1 ] && [ -z "$out" ] && printf '%s' "$err" | grep -q 'not the build asked for' \
+[ "$code" -eq 1 ] && [ -z "$out" ] && grep -q 'not the build asked for' <<< "$err" \
   && check "#3297 a command answering another version than asked fails" ok \
   || check "#3297 a command answering another version than asked fails" "exit=$code out=$out err=$err"
 run_install STUB_NEWEST=2.1.333 bash "$INSTALL" "$TMPROOT/cc6" --newest
 [ "$code" -eq 0 ] && grep -q '^view @anthropic-ai/claude-code dist-tags.latest' "$NPM_LOG" && grep -q '@anthropic-ai/claude-code@2.1.333$' "$NPM_LOG" \
-  && printf '%s' "$err" | grep -q 'newest release of @anthropic-ai/claude-code is 2.1.333' \
+  && grep -q 'newest release of @anthropic-ai/claude-code is 2.1.333' <<< "$err" \
   && check "#3297 --newest installs the exact version npm names newest, and says which" ok \
   || check "#3297 --newest installs the exact version npm names newest, and says which" "exit=$code err=$err npm: $(cat "$NPM_LOG")"
 run_install STUB_VIEW_FAIL=1 bash "$INSTALL" "$TMPROOT/cc7" --newest
@@ -211,20 +211,21 @@ job_of(){   # $1 = workflow  $2 = job id -> that job's code lines
   code_of "$1" | awk -v j="  $2:" '$0 == j { on = 1; next } on && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { on = 0 } on'
 }
 tw="$(code_of "$TESTS_WF")"; dw="$(code_of "$DAILY_WF")"; parts="$(job_of "$TESTS_WF" parts)"
-printf '%s\n' "$parts" | grep -qE 'bash tools/install-claude-code\.sh "\$HOME/claude-code-for-mods"\)"$' \
-  && printf '%s\n' "$parts" | grep -q 'MODS_CLAUDE=' \
+grep -qE 'bash tools/install-claude-code\.sh "\$HOME/claude-code-for-mods"\)"$' <<< "$parts" \
+  && grep -q 'MODS_CLAUDE=' <<< "$parts" \
   && check "#3297 every part installs the version in the file, with no version or --newest given, and names it in MODS_CLAUDE" ok \
   || check "#3297 every part installs the version in the file, with no version or --newest given, and names it in MODS_CLAUDE" "not found in the parts job"
-printf '%s\n' "$parts" | grep -qF "hashFiles('.github/claude-code-version')" \
+grep -qF "hashFiles('.github/claude-code-version')" <<< "$parts" \
   && check "#3297 the parts' Claude Code is cached on the version file" ok || check "#3297 the parts' Claude Code is cached on the version file" "no cache key on it"
-printf '%s\n' "$tw" | grep -q 'GITHUB_PATH' \
+grep -q 'GITHUB_PATH' <<< "$tw" \
   && check "#3297 the checks' Claude Code is kept off every suite's PATH" "tests.yml writes GITHUB_PATH" \
   || check "#3297 the checks' Claude Code is kept off every suite's PATH" ok
 # The version is written once: no workflow installs the package itself, or names the pinned version.
 bad=""
 for wf in "$TESTS_WF" "$DAILY_WF"; do
-  code_of "$wf" | grep -qE '@anthropic-ai/claude-code|claude-code@|npm (install|i) .*claude' && bad="$bad ${wf##*/} installs the package itself;"
-  [ -n "$real_version" ] && code_of "$wf" | grep -qF "$real_version" && bad="$bad ${wf##*/} names $real_version;"
+  wcode="$(code_of "$wf")"
+  grep -qE '@anthropic-ai/claude-code|claude-code@|npm (install|i) .*claude' <<< "$wcode" && bad="$bad ${wf##*/} installs the package itself;"
+  [ -n "$real_version" ] && grep -qF "$real_version" <<< "$wcode" && bad="$bad ${wf##*/} names $real_version;"
 done
 [ -z "$bad" ] && check "#3297 neither workflow installs Claude Code but through the installer, or writes its version" ok \
   || check "#3297 neither workflow installs Claude Code but through the installer, or writes its version" "$bad"
@@ -235,37 +236,38 @@ named="$(cd "$ROOT" && git grep -l -F 'claude-code-version' -- '*.sh' '*.py' '*.
 bad=""
 for f in $named; do
   case "$f" in
-    .github/workflows/*) code_of "$ROOT/$f" | grep -F 'claude-code-version' | grep -vF "hashFiles('.github/claude-code-version')" | grep -q . && bad="$bad $f" ;;
+    .github/workflows/*) [ -n "$(code_of "$ROOT/$f" | grep -F 'claude-code-version' | grep -vF "hashFiles('.github/claude-code-version')")" ] && bad="$bad $f" ;;
     *) bad="$bad $f" ;;
   esac
 done
-grep -v '^[[:space:]]*#' "$REPORT" | grep -F 'claude-code-version' | grep -vq '`' && bad="$bad tools/report-mods-on-newest-claude-code.sh (outside its text)"
+[ -n "$(grep -v '^[[:space:]]*#' "$REPORT" | grep -F 'claude-code-version' | grep -v '`')" ] && bad="$bad tools/report-mods-on-newest-claude-code.sh (outside its text)"
 [ -z "$bad" ] && check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" ok \
   || check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" "also named, outside a cache key, in:$bad"
 # The daily run: on a schedule and by hand only, the newest release, and only the job running no
 # Claude Code may write.
 on="$(printf '%s\n' "$dw" | awk '/^on:/ { on = 1; next } on && /^[A-Za-z]/ { on = 0 } on')"
-printf '%s\n' "$on" | grep -q '^  schedule:' && ! printf '%s\n' "$on" | grep -qE '^  (push|pull_request|pull_request_target|workflow_run):' \
+grep -q '^  schedule:' <<< "$on" && ! grep -qE '^  (push|pull_request|pull_request_target|workflow_run):' <<< "$on" \
   && check "#3297 the daily run is on a schedule and never on a push or a pull request, so it cannot turn one red" ok \
   || check "#3297 the daily run is on a schedule and never on a push or a pull request, so it cannot turn one red" "on: $(printf '%s' "$on" | tr '\n' ' ')"
 dtests="$(job_of "$DAILY_WF" tests)"; dreport="$(job_of "$DAILY_WF" report)"
-printf '%s\n' "$dtests" | grep -q 'bash tools/install-claude-code\.sh .* --newest)"$' && printf '%s\n' "$dtests" | grep -q 'bash tests/test-mods\.sh' \
-  && printf '%s\n' "$dtests" | grep -q 'bash tests/test-mods-load-engine\.sh' \
+grep -q 'bash tools/install-claude-code\.sh .* --newest)"$' <<< "$dtests" && grep -q 'bash tests/test-mods\.sh' <<< "$dtests" \
+  && grep -q 'bash tests/test-mods-load-engine\.sh' <<< "$dtests" \
   && check "#3297 the daily run installs the newest release and runs both mods suites on it" ok \
   || check "#3297 the daily run installs the newest release and runs both mods suites on it" "not found in its tests job"
 top_perm="$(printf '%s\n' "$dw" | awk '/^permissions:/ { on = 1; next } on && /^[A-Za-z]/ { on = 0 } on')"
-! printf '%s\n%s\n' "$top_perm" "$dtests" | grep -qE ':[[:space:]]*write' && printf '%s\n' "$dreport" | grep -qE '^      issues:[[:space:]]*write' \
-  && ! printf '%s\n' "$dreport" | grep -qE 'install-claude-code|tests/test-' \
+! grep -qE ':[[:space:]]*write' <<< "$top_perm
+$dtests" &&grep -qE '^      issues:[[:space:]]*write' <<< "$dreport" \
+  && ! grep -qE 'install-claude-code|tests/test-' <<< "$dreport" \
   && check "#3297 only the report job may write, and it runs no Claude Code and no suite" ok \
   || check "#3297 only the report job may write, and it runs no Claude Code and no suite" "permissions or steps are not split that way"
-printf '%s\n' "$dreport" | grep -q 'needs: tests' && printf '%s\n' "$dreport" | grep -q 'if: always()' \
-  && printf '%s\n' "$dreport" | grep -qF 'RESULT: ${{ needs.tests.result }}' \
+grep -q 'needs: tests' <<< "$dreport" && grep -q 'if: always()' <<< "$dreport" \
+  && grep -qF 'RESULT: ${{ needs.tests.result }}' <<< "$dreport" \
   && check "#3297 the report runs whatever the tests did, and is handed their result" ok \
   || check "#3297 the report runs whatever the tests did, and is handed their result" "needs, always() or RESULT missing"
 missing=""
-for j in tests report; do job_of "$DAILY_WF" "$j" | grep -qE '^    timeout-minutes: [0-9]+$' || missing="$missing $j"; done
+for j in tests report; do grep -qE '^    timeout-minutes: [0-9]+$' <<< "$(job_of "$DAILY_WF" "$j")" || missing="$missing $j"; done
 [ -z "$missing" ] && check "#3297 every job of the daily run has a timeout" ok || check "#3297 every job of the daily run has a timeout" "none on:$missing"
-printf '%s\n' "$dw" | grep -q '^  cancel-in-progress: false' \
+grep -q '^  cancel-in-progress: false' <<< "$dw" \
   && check "#3297 two daily runs never overlap or cancel each other, so one failure is one issue" ok \
   || check "#3297 two daily runs never overlap or cancel each other, so one failure is one issue" "no uncancelled concurrency group"
 
