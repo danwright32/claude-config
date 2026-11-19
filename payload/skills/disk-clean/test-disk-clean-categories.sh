@@ -864,6 +864,16 @@ chmod 000 "$H/.claude/sessions/1.json"
 judge transcript-extras "$PJ/$U6/tool-results"
 check "beside transcripts judge: an unreadable session map makes it unmeasured" "$(has "$JUDGED" "unmeasured: the session map")"
 chmod 600 "$H/.claude/sessions/1.json"
+# An empty session map while Claude Code runs means the map is wrong, not that every session ended,
+# as claude-temp.sh judges it: otherwise a live session's orphaned tool output would read as abandoned.
+rm -f "$H/.claude/sessions/1.json"
+dc_stub ps 'echo "/usr/bin/login"; echo "/usr/local/bin/claude"'
+run_scan --only transcript-extras
+check "beside transcripts: an empty session map while Claude Code runs makes the kind unmeasured" "$(has "$(status_of transcript-extras)" "unmeasured: the session map")"
+check "beside transcripts: and offers nothing" "$(hasnt "$(state_of "$PJ/$U6/tool-results")" offerable)"
+judge transcript-extras "$PJ/$U6/tool-results"
+check "beside transcripts judge: an empty session map while Claude Code runs makes it unmeasured" "$(has "$JUDGED" "unmeasured: the session map")"
+dc_stub ps 'echo "/usr/bin/login"'
 
 # ================================================================================================
 # Old Claude Code versions: never the one the claude command starts, never one a process runs
@@ -946,7 +956,7 @@ check "claude records: session notes are shown" "$(has "$(state_of "$H/.claude/s
 check "claude records: the rest of state is not listed row by row, all with one reason" "$(eq "$(item_of "$H/.claude/state/ai-review")" "")"
 check "claude records: the note gives the rest of state's count and size instead" "$(has "$(note_of claude-records)" "other entries in ~/.claude/state")"
 check "claude records: rows come largest first, so the biggest record leads the kind" \
-  "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" { print $4; exit }')" "$H/.claude/state/session-notes")"
+  "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" && !f { print $4; f = 1 }')" "$H/.claude/state/session-notes")"
 check "claude records: file history is shown, as /rewind's copies" "$(has "$(state_of "$H/.claude/file-history")" "/rewind")"
 check "claude records: the finding spool is never offered" "$(has "$(state_of "$H/.claude-issue-spool")" "not offerable: findings not yet reviewed")"
 check "claude records: a spool backup is never offered" "$(has "$(state_of "$H/.claude-issue-spool.backup-20260829-161937")" "not offerable: ")"
@@ -972,7 +982,7 @@ printf 'c\n' > "$H/.npm/_cacache/content-v2/x"; printf 'p\n' > "$H/.npm/_npx/abc
 old "$H"
 dc_stub du 'for a in "$@"; do case "$a" in -*) ;; */v11) printf "500\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 run_scan --only package-caches
-check "package caches: rows come largest first" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" { print $4; exit }')" "$H/Library/pnpm/store/v11")"
+check "package caches: rows come largest first" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && !f { print $4; f = 1 }')" "$H/Library/pnpm/store/v11")"
 check "package caches: npm's download cache is shown, not offered" "$(has "$(state_of "$H/.npm/_cacache")" "not offerable: ")"
 check "package caches: each npx copy is shown, not offered" "$(has "$(state_of "$H/.npm/_npx/abc123")" "not offerable: ")"
 check "package caches: npm's logs are shown, not offered" "$(has "$(state_of "$H/.npm/_logs")" "not offerable: ")"

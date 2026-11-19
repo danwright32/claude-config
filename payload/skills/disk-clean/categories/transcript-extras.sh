@@ -10,7 +10,8 @@
 # back by itself): a <project>/<session id>/tool-results folder whose <session id>.jsonl is gone,
 # whose session is in no ~/.claude/sessions/*.json (the live session map), and in which nothing was
 # changed or opened in the last 30 days (the floor every kind keeps). The whole category is
-# unmeasured when the session map cannot be read, as claude-temp.sh judges it.
+# unmeasured when the session map cannot be read, or is empty while Claude Code runs, as
+# claude-temp.sh judges it.
 #
 # Never listed, and said in the kind's note: <session id>/subagents (subagent transcripts, which
 # belong to the transcript keep rules, and their small .meta.json records, which Claude Code reads
@@ -26,10 +27,18 @@ P="$HOME/.claude/projects"
 IDS="$DCS_WORK/te.ids"; CWDS="$DCS_WORK/te.cwds"
 TE_ID='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
-# Sets MAP_WHY to why the session map cannot be read, or leaves it empty.
+# Sets MAP_WHY to why the session map cannot be trusted, or leaves it empty: unreadable, or empty
+# while Claude Code runs, which means the map is wrong, not that every session ended (claude-temp.sh's
+# rule, the same reading).
 read_map() {
   MAP_WHY=""
-  dcs_sessions "$IDS" "$CWDS" || MAP_WHY="the session map could not be read ($DCS_WHY)"
+  if ! dcs_sessions "$IDS" "$CWDS"; then MAP_WHY="the session map could not be read ($DCS_WHY)"; return; fi
+  [ -s "$IDS" ] && return
+  dcs_claude_running
+  case $? in
+    0) MAP_WHY="the session map (~/.claude/sessions) is empty while Claude Code is running, so no session can be told ended" ;;
+    2) MAP_WHY="the session map (~/.claude/sessions) is empty, and whether Claude Code is running could not be read" ;;
+  esac
 }
 
 # Sets V for <target>; read_map has run.

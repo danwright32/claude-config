@@ -68,8 +68,8 @@ Report what it printed, in plain words, in this order:
 5. Three kinds show where space is and never offer anything (#3235): Records Claude Code and this
    config keep (its state, session notes among them, file history, the finding spool and its
    backups, the home folders its hooks write), npm and pnpm caches, and Claude items in the user
-   temp folder, whose note gives their count and size. Say each one's largest rows by size, as
-   shown, not as space that can be freed. What Claude Code sessions leave that can go is under Tool
+   temp folder, which lists no rows and gives its count and size in its note. Say the first two's
+   largest rows by size and the third's note, as space shown, not as space that can be freed. What Claude Code sessions leave that can go is under Tool
    output beside transcripts, Old Claude Code versions, GitHub command line cache and Project build
    folders (which now include Swift .build folders).
 
