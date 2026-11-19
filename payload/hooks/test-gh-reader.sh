@@ -450,6 +450,9 @@ check_eq "#3252 a redirection before rtk's own subcommand" "rtk|init||-g" "$(rea
 check_eq "#3252 a shell's string read past a redirection glued to the shell" "bash -c ; -" "$(redir_read "$SW" wrap "bash>log -c '$G push'")"
 check_eq "#3252 and the push in that string is read" "- ; $G|push||" "$(each_tool "bash>/dev/null -c '$G push'")"
 check_eq "#3252 a program with a redirection glued on is no wrapper" "-" "$(redir_read "$SW" wrap "$G>>log push")"
+# A real script file with a redirection glued on is reported by its true name, never by the kept
+# report below, which would name a file called ./build.sh>log (the lessons review at 6909f22).
+check_eq "#3252 a script file with a redirection glued on keeps its true name" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" "$(redir_read "$SW" wrap "./build.sh>log")"
 # Kept as it was: a glued redirection holding a slash made the name read as a script file, which
 # check-wrapped-commands.sh refuses beside git, gh or rtk. The report stays, word for word, beside
 # the true reading, until Dan decides whether that refusal goes (glued_script).

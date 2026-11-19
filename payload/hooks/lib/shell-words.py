@@ -2072,7 +2072,13 @@ def glued_script(text):
     refuses a script file beside git, gh or rtk, so it refused these, and a refusal is not dropped as
     a side effect of a fix to the reader: that is a decision of its own, left to Dan in #3252's pull
     request. Until it is made the command keeps the report it had, word for word, beside its true
-    reading. Delete this function and its one call to stop reporting it."""
+    reading. Delete this function and its one call to stop reporting it.
+
+    This answers for the first word alone: whether a redirection is glued to it and the old reading
+    took the whole word for a script file. It does not ask whether the command is a script file by
+    its true reading, and for one that is (`./build.sh>log`) it returns the old words, which name
+    ./build.sh>log. Its one caller, _records, asks only when the true reading is no script file, so
+    those words reach no guard; a second caller must ask the same way."""
     if "<" not in text and ">" not in text:
         return ""
     rest = _command_rest(text, None, False)[0]
