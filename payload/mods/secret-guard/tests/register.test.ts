@@ -1,112 +1,11 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
+// The stand-in for mod-kit, the world beneath the mod and the made up secrets, shared with
+// screen.test.ts (#3291).
+import { ENV_SECRET, GH_TOKEN, KNOWN, kit, start, steps, world } from './world.ts'
 
-// A stand-in for mod-kit, which draws the grey card. An inline plugin runs in an environment of
-// its own and cannot reach this file's variables, so it reports each card as a transcript line
-// the world below collects (measured 2026-10-03). Its command reader is a small stand-in for the
-// real one (a mod cannot import another mod's files), enough for the commands below; the real
-// reader is tested in mod-kit.
-const kit: { name: string; register: Register } = {
-  name: 'mod-kit',
-  register: on => {
-    const read = (cmd: string): string[][] =>
-      cmd
-        .split(/&&|;|\n/)
-        .map(part => {
-          const words: string[] = []
-          // A word may mix bare and quoted parts (X="a b" is one word), as the shell's are.
-          for (const m of part.matchAll(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)) words.push(m[0].replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
-          while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? '')) words.shift()
-          return words
-        })
-        .filter(w => w.length > 0)
-    on('engine.create', async ($, e, next) => {
-      const built = await next(e)
-      return {
-        ...built,
-        modkit: {
-          blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
-          commands: async ({ command }: { command: string }) => read(command),
-          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
-          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
-          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
-          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
-          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
-          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
-          gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
-          mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
-          goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
-          ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
-          linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
-          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
-          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
-          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
-          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
-          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
-          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
-          // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
-          press: async () => ({ isAnswered: false }),
-          clickable: async () => true,
-          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
-          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
-          pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
-          login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
-          account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
-        },
-      }
-    })
-  },
-}
 const withKit = { plugins: [kit] }
-
-const KNOWN = 'kN0wn-S3cr3t-v4lue-zz'
-const ENV_SECRET = 'fr0m-the-env-f1le-yy'
-const GH_TOKEN = 'gho_' + 'Q'.repeat(36)
-
-// The world beneath the mod: the environment, the gh token and one project .env file. Every tool
-// call that gets past the mod is answered here, and recorded, so a test can tell a refusal (the
-// call never arrived) from a pass.
-// files: more files on disk, by path, beside the project .env.
-const world = (on: On, files: Record<string, string> = {}, failing?: string) => {
-  const logs: string[] = []
-  const reached: string[] = []
-  const toasts: string[] = []
-  const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
-  on('process.run', ($, e) => {
-    const cmd = e.argv.join(' ')
-    if (cmd === 'env') return { value: { exitCode: 0, stdout: `HOME=${'/Users'}/x\nAPI_TOKEN=${KNOWN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    if (cmd === 'gh auth token') return { value: { exitCode: 0, stdout: `${GH_TOKEN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    if (cmd.startsWith('git rev-parse')) return { value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
-  on('fs.list', ($, e) => ({ value: e.path === '/repo' ? [{ name: '.env', kind: 'file' as const }, { name: 'src', kind: 'dir' as const }] : [] }) as never)
-  on('fs.read', ($, e) => {
-    if (e.path === '/repo/.env') return { value: `SUPABASE_SERVICE_ROLE_KEY=${ENV_SECRET}\nPORT=3000\n` }
-    const more = files[e.path]
-    if (more !== undefined) return { value: more }
-    throw new Error(`no file ${e.path}`)
-  })
-  on('ui.toast', ($, e) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.log', ($, e) => {
-    if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
-    else logs.push(e.text)
-    return { value: undefined }
-  })
-  on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('tool.call', ($, e) => {
-    reached.push(e.tool)
-    if (failing !== undefined && (e as { command?: string }).command === failing) throw new Error('the tool beneath failed')
-    return { result: 'ran', text: 'ran' } as never
-  })
-  return { reached, toasts, cards, logs }
-}
 
 const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> } }, row: unknown) => {
   try {
@@ -115,10 +14,6 @@ const appendRow = async ($: { session: { append: (e: never) => Promise<unknown> 
     if (!/no implementation for session.append/.test(String(err))) throw err
   }
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const start = async ($: { session: { start: (e: { cwd: string; surface: 'terminal'; isInteractive: boolean }) => Promise<unknown> } }) =>
-  $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
 test('a command that prints a secret is refused and a toast says so', withKit, async ($, on) => {
   const w = world(on)
@@ -264,15 +159,20 @@ test('a secret in a tool result is scrubbed before it is kept, with a toast', wi
   expect(w.toasts).toContain("Hid 2 secrets from a command's output.")
 })
 
-// #707: a mod that answers a tool call itself never calls next, so a hook beneath it never sees the
-// call: manual steps, is it live, handoff and the job watcher all sort above this mod. The answering
-// mod here stands in for them (a mod's tests cannot load another mod's files), loaded above this
-// one: it asks $.secretGuard.screen before it acts, and says it acted by a toast.
-const answerer: { name: string; tier: 'prepend'; register: Register } = {
-  name: 'manual-steps',
+// #707: the cases for a mod that answers a tool call itself and asks $.secretGuard.screen first are
+// in screen.test.ts, where this mod is seated beneath the stand-in answering mod. Their stand-in
+// sat here in the prepend tier until #3291. Since Claude Code 2.1.328 a mod seated there is the
+// organization's, and a person's hooks do not hear a call it makes on $ (Tier, in Claude Code's
+// types), so this mod's hook on secretGuard.screen never ran and the noun's own refusal answered:
+// 2 of 77 failed on 2.1.328 and none on 2.1.327, on the same files.
+// What stays here is that seat, with this mod in the user tier as it is on the Macs. Whether this
+// mod's hook hears the organization's mod is Claude Code's to decide, so the refusal is one of two,
+// and both hold the call: the guard's own, or the noun's when the hook was not heard. What may
+// never happen is the third outcome, the mod acting on the secret (L42).
+const organizationAnswerer: { name: string; tier: 'prepend'; register: Register } = {
+  name: 'organization-steps',
   tier: 'prepend',
   register: on => {
-    // Its tool is matched in the hook, since a stand-in's tool is in no list of tools Claude Code's types name.
     on('tool.call', async ($, e, next) => {
       if (String(e.tool) !== 'mcp__manual-steps__steps') return next(e)
       const refused = await $.secretGuard.screen(e as never)
@@ -282,84 +182,45 @@ const answerer: { name: string; tier: 'prepend'; register: Register } = {
     })
   },
 }
-const steps = (value: string, id = 's1') => ({ tool: 'mcp__manual-steps__steps', tool_use_id: id, heading: 'Stripe', steps: [{ title: 'Paste the key', value, checked: 'not-done' }] }) as never
-
-test('a call another mod answers itself is refused before it acts when it carries a secret, with the card and toast (#707)', { plugins: [kit, answerer] }, async ($, on) => {
+test("a mod in the organization's tier that asks the screen is refused however its call is routed, and never acts on a secret (#3291, L42)", { plugins: [kit, organizationAnswerer] }, async ($, on) => {
   const w = world(on)
   await start($)
-  const r = await $.tool.call(steps(`sk_live_${KNOWN}`, 'm1'))
-  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
-  expect(w.toasts).toEqual(['Blocked a message containing a secret.'])
-  expect(w.cards).toEqual([{ toolUseId: 'm1', guard: 'Secret guard', reason: 'This message contains a secret.', safeWay: 'Refer to it by its name, not its value.' }])
-  // The same mod's clean call goes ahead: the refusal above was the screen, not the stand-in.
-  const ok = await $.tool.call(steps('pk_test_public', 'm2'))
-  expect((ok as { result?: unknown }).result).toBe('Pinned.')
-  expect(w.toasts).toEqual(['Blocked a message containing a secret.', 'ACTED on the steps'])
-})
-
-test('a token shaped value is refused through the screen too, before the guard has read any source (#707)', { plugins: [kit, answerer] }, async ($, on) => {
-  const w = world(on)
-  const r = await $.tool.call(steps(GH_TOKEN, 'm3'))
-  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toContain('contains a secret')
+  const r = await $.tool.call(steps(`sk_live_${KNOWN}`, 'm6'))
+  const said = String((r as { text?: string }).text ?? (r as { deny?: string }).deny)
+  const refusals = [
+    'Blocked: this message contains a secret. Refer to it by its name, not its value.',
+    'Blocked: the secret guard could not check this for secrets, so it did not run. Try it again; if it fails the same way, tell Dan.',
+  ]
+  expect(refusals.filter(refusal => refusal === said)).toEqual([said])
   expect(w.toasts).not.toContain('ACTED on the steps')
-  // The answering mod's hook ran rather than failing through to this mod's own tool.call hook: its
-  // clean call is answered by it.
-  expect((await $.tool.call(steps('pk_test_public', 'm4')) as { result?: unknown }).result).toBe('Pinned.')
+  expect(w.reached).toEqual([])
 })
 
-// The screen's check failing part way (here mod-kit cannot draw the card) refuses the call, since a
-// screen that fails open would let the secret through to the answering mod (L42).
-const brokenKit: { name: string; register: Register } = {
-  name: 'mod-kit',
+// #3291: the pairing the Macs have, the asking mod and this one both in the user tier, which
+// screen.test.ts cannot seat. The test kit puts this mod above an inline plugin of its tier, so the
+// stand-in gets a call only once this mod's tool.call hook has passed it: the call that arrives is
+// clean, and the stand-in asks the screen about a made up token of its own (an inline plugin cannot
+// reach this file's variables). The refusal that comes back, with its card and toast, is one only
+// this mod's hook on secretGuard.screen gives: the noun's own answer says "could not check".
+const userTierAsker: { name: string; register: Register } = {
+  name: 'user-tier-asker',
   register: on => {
-    on('engine.create', async ($, e, next) => {
-      const built = await next(e)
-      return {
-        ...built,
-        modkit: {
-          blocked: async () => { throw new Error('the card could not be kept') },
-          commands: async () => [],
-          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
-          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
-          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
-          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
-          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
-          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
-          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
-          gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
-          mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
-          goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
-          ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
-          linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
-          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
-          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
-          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
-          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
-          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
-          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
-          // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
-          press: async () => ({ isAnswered: false }),
-          clickable: async () => true,
-          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
-          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
-          hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
-          release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
-          pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
-          login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
-          account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
-        },
-      }
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'mcp__manual-steps__steps') return next(e)
+      const refused = await $.secretGuard.screen({ ...e, steps: [{ title: 'Paste the key', value: 'gho_' + 'Q'.repeat(36), checked: 'not-done' }] } as never)
+      return (refused ?? { result: 'Pinned.' }) as never
     })
   },
 }
-test('a screen whose check fails refuses the call rather than let it through (#707, L42)', { plugins: [brokenKit, answerer] }, async ($, on) => {
+test("a mod of the user tier, where real mods load, is heard by this mod's hook when it asks the screen (#3291)", { plugins: [kit, userTierAsker] }, async ($, on) => {
   const w = world(on)
   await start($)
-  const r = await $.tool.call(steps(KNOWN, 'm5'))
-  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe(
-    'Blocked: the secret guard could not check this for secrets, so it did not run. Try it again; if it fails the same way, tell Dan.',
-  )
-  expect(w.toasts).not.toContain('ACTED on the steps')
+  const r = await $.tool.call(steps('pk_test_public', 'm7'))
+  expect(String((r as { text?: string }).text ?? (r as { deny?: string }).deny)).toBe('Blocked: this message contains a secret. Refer to it by its name, not its value.')
+  expect(w.toasts).toEqual(['Blocked a message containing a secret.'])
+  expect(w.cards).toEqual([{ toolUseId: 'm7', guard: 'Secret guard', reason: 'This message contains a secret.', safeWay: 'Refer to it by its name, not its value.' }])
+  // The clean call was passed by this mod's own hook and answered by the stand-in beneath it.
+  expect(w.reached).toEqual([])
 })
 
 test('a tool result with no secret is kept as it was', withKit, async ($, on) => {

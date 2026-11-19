@@ -133,6 +133,8 @@ echo "builder model gate: a builder with no model is refused in an orchestrating
 run Agent general-purpose worktree "" "build the thing"
 refused "a worktree builder with no model"
 says "and it names the tiers" "sonnet"
+says "and keeps sonnet to work that needs no judgement (#3290)" "\"sonnet\" only for work that needs no judgement"
+says "and sends a review fix that changes logic or behaviour to opus" "\"opus\" for everything else, a review fix that changes logic or behaviour included"
 says "and names opus" "opus"
 says "and names fable" "fable"
 says "and points at the rule's home" "Which model a builder runs on"

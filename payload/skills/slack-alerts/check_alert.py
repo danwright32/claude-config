@@ -282,18 +282,26 @@ def check(text, kind, urgent=False, apps=(), *, record=None, alert=None):
 
     every_link = ANY_LINK.findall(outside)
     every_line = [line.strip() for line in text.split("\n") if line.strip()]
+
+    def closing_links(closing, not_last):
+        """The links on lines of their own end the message, and each is labelled with a verb and the
+        thing it opens. Written once for one link and for several, since a project keeps a copy of
+        this file whose duplication check refuses a line repeated word for word (#3222)."""
+        if closing and every_line[-len(closing):] != closing:
+            fail("link-last", not_last)
+        for line in closing:
+            label = LINK_LINE.match(line).group(2)
+            if not LINK_LABEL.match(label):
+                fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+                return
+
     if len(every_link) <= 1:
         # One link is judged exactly as it was before several were allowed.
         if kind in LINK_REQUIRED and not links:
             fail("link-missing", f"a {kind} ends with one labelled link to the thing itself")
         if every_link and not links:
             fail("link-count", "a link inside a sentence; one link stands alone on the last line")
-        if links:
-            if every_line[-1] != links[-1]:
-                fail("link-last", "the link is not the last line")
-            label = LINK_LINE.match(links[-1]).group(2)
-            if not LINK_LABEL.match(label):
-                fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
+        closing_links(links[-1:], "the link is not the last line")
     else:
         # Dan, 18 Nov 2026 (#3226): "Multiple links are fine if they genuinely link to different
         # pages and I have to go to each of them to fix the problem." Only the first half can be
@@ -305,14 +313,7 @@ def check(text, kind, urgent=False, apps=(), *, record=None, alert=None):
         if any(len(ANY_LINK.findall(line)) > 1 for line in listed) or placed != len(every_link):
             fail("link-count", "a link inside a sentence or the first line, or two on one list line; each link "
                                "stands alone on a closing line or on the list line of the thing it opens")
-        if links:
-            if every_line[-len(links):] != links:
-                fail("link-last", "the links on lines of their own are not the closing lines")
-            for line in links:
-                label = LINK_LINE.match(line).group(2)
-                if not LINK_LABEL.match(label):
-                    fail("link-label", f'"{label}" is not a verb and the thing it opens in two to four plain words, such as "View run"')
-                    break
+        closing_links(links, "the links on lines of their own are not the closing lines")
         opened = {}
         for link in every_link:
             target = link[1:-1].split("|")[0].split("#")[0].rstrip("/")
@@ -394,8 +395,8 @@ def main(argv=None):
             return 2
         try:
             record = load_record(args.record, keys)
-        except OSError as error:
-            print(f"check_alert.py: cannot read the record {args.record}: {error}", file=sys.stderr)
+        except OSError as unreadable:
+            print(f"check_alert.py: cannot read the record {args.record}: {unreadable}", file=sys.stderr)
             return 2
         except RecordError as error:
             print(f"check_alert.py: {error}", file=sys.stderr)
