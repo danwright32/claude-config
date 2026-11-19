@@ -4901,6 +4901,10 @@ bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
 It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
 main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
 suite ran in: its section time and check count, and that runner's core count, processor and region.
+Since #3256 it also records the runner's reference reading (`reference_ms`) and the judged figure
+(`judged_seconds`), the number the budget now decides on, both read from the same note: a run whose
+speed was not read records `unmeasured` and its raw time, a run from before #3239 records `unknown`
+for both, and a record written before those columns existed is read with its rows marked `unknown`.
 A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
 lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
 middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
@@ -9118,8 +9122,14 @@ toward goals, Findings, and Limits and usage (each wait on a limit, the usage re
 usage). Its header says which sessions had no goal, and so did no work, and each worker's row at the
 end gives its goal. Three or more calls auto mode's check refused with no verdict for one reason
 (the check unavailable, a call not reviewed) are one line in Parked and failed, with the count, the
-time window and the kinds of call, followed by each of them that did more than read and was never
-sent again unchanged and run (#3158); a real refusal by the check is always its own row.
+time window in ET, the issues being worked while they fell and the kinds of call (#3158, #3223).
+Listed after it on its own is each of them that stopped work: one that did more than read, was
+never sent again unchanged and run, and after which its session did not finish the work it held
+(#3223). That work counts as finished when every issue the session had claimed by then, and not yet
+ended, was noted done afterwards; a session holding no claim finished its work when it later noted
+something done or a step of progress. A real refusal by the check is always
+its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
+are (#3223).
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,

@@ -13,7 +13,11 @@
 # For every completed run of the tests workflow (pushes to main and pull requests) since the
 # earliest run the record holds, it fetches the log with `gh run view --log`, finds the part the
 # sync suite ran in, and reads from THAT part: the section time, the check count, and the runner's
-# core count, processor and Azure region. #2614 built the record this way by hand with a scratch
+# core count, processor and Azure region. Since #3239 the budget decides on the section time judged
+# at a reference speed, so the runner's reference reading (reference_ms) and that judged figure
+# (judged_seconds) are read from the same line (#3256): "unmeasured" and the raw time for a run
+# whose speed was not read, "unknown" for both in a log from before #3239, and a record written
+# before these two columns existed is read with its rows marked unknown. #2614 built the record this way by hand with a scratch
 # extractor; a budget fitted to data nobody can regenerate drifts as the suite changes (L316).
 #
 # Refreshing merges: a run it reads replaces that run's row, and a row it did not re-read (a log
@@ -46,7 +50,8 @@ WORKFLOW="tests.yml"
 # gh run list's own ceiling for one call. Reaching it means the listing may be cut short, which is
 # said; the rows it could not list are kept from the record rather than lost.
 LIST_LIMIT=1000
-HEADER="$(printf 'run_id\tcreated_at\tsha\tevent\tconclusion\tcores\tprocessor\tregion\tchecks\tsection_seconds\trunner_group')"
+OLD_HEADER="$(printf 'run_id\tcreated_at\tsha\tevent\tconclusion\tcores\tprocessor\tregion\tchecks\tsection_seconds\trunner_group')"
+HEADER="$(printf '%s\treference_ms\tjudged_seconds' "$OLD_HEADER")"
 ME="ci-section-time-readings"
 
 say() { printf '%s: %s\n' "$ME" "$*" >&2; }
@@ -85,7 +90,12 @@ rec_rows="$TMP/record-rows.tsv"
 : > "$rec_rows"
 rec_ok=0
 if [ -s "$RECORD" ]; then
-  if [ "$(head -1 "$RECORD")" = "$HEADER" ]; then rec_ok=1; tail -n +2 "$RECORD" | grep . > "$rec_rows"; fi
+  if [ "$(head -1 "$RECORD")" = "$HEADER" ]; then rec_ok=1; tail -n +2 "$RECORD" | grep . > "$rec_rows"
+  # A record written before the reference reading was recorded (#3256) is read too: its rows keep
+  # every reading they hold and say they carry neither new figure, which their logs did not print.
+  elif [ "$(head -1 "$RECORD")" = "$OLD_HEADER" ]; then
+    rec_ok=1; tail -n +2 "$RECORD" | grep . | awk -F'\t' -v OFS='\t' '{ print $0, "unknown", "unknown" }' > "$rec_rows"
+  fi
 fi
 if [ -z "$since" ]; then
   since="$(awk -F'\t' 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "created_at") c = i; if (!c) exit; next }
@@ -165,7 +175,8 @@ fi
 [ -d "$logs" ] || { say "no log folder at $logs"; exit 2; }
 
 # ---- Read each run's log ----
-# One line per run: ROW and the six fields read from the log, SKIP and why, or REFUSE and why.
+# One line per run: ROW and the seven fields read from the log (cores, processor, region, checks,
+# section time, reference reading, judged figure), SKIP and why, or REFUSE and why.
 read_log() {  # read_log <log file>
   awk -F'\t' '
     {
@@ -185,9 +196,9 @@ read_log() {  # read_log <log file>
       }
       if ((job in result) && !(job in section)) {
         if (match(text, /^ +note: [0-9]+s of section time against a /)) {
-          t = substr(text, RSTART, RLENGTH); sub(/^ +note: /, "", t); sub(/s .*/, "", t); section[job] = t
+          t = substr(text, RSTART, RLENGTH); sub(/^ +note: /, "", t); sub(/s .*/, "", t); section[job] = t; sline[job] = text
         } else if (match(text, /sections cost [0-9]+s of section time/)) {
-          t = substr(text, RSTART + 14, RLENGTH - 14); sub(/s .*/, "", t); section[job] = t
+          t = substr(text, RSTART + 14, RLENGTH - 14); sub(/s .*/, "", t); section[job] = t; sline[job] = text
         }
       }
     }
@@ -202,7 +213,21 @@ read_log() {  # read_log <log file>
       if (cores[j] !~ /^[0-9]+$/) { print "REFUSE\tthe core count in " j " reads \"" cores[j] "\", which is not a count"; exit }
       p = proc[j]; if (p == "" || p == "UNKNOWN") p = "unknown"
       g = region[j]; if (g == "") g = "unknown"
-      printf "ROW\t%s\t%s\t%s\t%s\t%s\n", cores[j], p, g, checks[j], section[j]
+      # What the budget decided on (#3239), read from the same line as the section time (#3256): the
+      # note says "judged as Ns of work", a red says "which is Ns of work", each beside the runner
+      # reading "reference work took 2.205s"; a run whose speed was not measured was judged raw, and
+      # a log from before #3239 says neither.
+      l = sline[j]; ref = "unknown"; jud = "unknown"
+      if (l ~ /judged raw because/ || l ~ /The runner.s speed was not measured/) { ref = "unmeasured"; jud = section[j] }
+      else if (match(l, /(judged as|which is) [0-9]+s of work/)) {
+        jud = substr(l, RSTART, RLENGTH); gsub(/[^0-9]/, "", jud)
+        if (!match(l, /reference work took [0-9]+\.[0-9][0-9][0-9]s of processor time/)) {
+          print "REFUSE\tthe judged figure in " j " has no reference reading beside it, so the log format may have moved"; exit
+        }
+        t = substr(l, RSTART + 20, RLENGTH - 20); sub(/s of processor time$/, "", t); split(t, a, ".")
+        ref = sprintf("%d", a[1] * 1000 + a[2])
+      }
+      printf "ROW\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cores[j], p, g, checks[j], section[j], ref, jud
     }' "$1"
 }
 
@@ -219,9 +244,9 @@ while IFS=$'\t' read -r id created sha event conclusion; do
   verdict="$(read_log "$logs/$id.log")"
   case "$verdict" in
     ROW$'\t'*)
-      IFS=$'\t' read -r _ c p g k s <<< "$verdict"
+      IFS=$'\t' read -r _ c p g k s ref jud <<< "$verdict"
       grp=faster; [ "$s" -gt "$split" ] && grp=slower
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$created" "${sha:0:8}" "$event" "$conclusion" "$c" "$p" "$g" "$k" "$s" "$grp" >> "$new_rows" ;;
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$created" "${sha:0:8}" "$event" "$conclusion" "$c" "$p" "$g" "$k" "$s" "$grp" "$ref" "$jud" >> "$new_rows" ;;
     SKIP$'\t'*) skipped=$((skipped + 1)); say "skipped run $id: ${verdict#*$'\t'}" ;;
     REFUSE$'\t'*) printf '%s\t%s\n' "$id" "${verdict#*$'\t'}" >> "$refusals" ;;
     *) printf '%s\tthe log could not be read\n' "$id" >> "$refusals" ;;
