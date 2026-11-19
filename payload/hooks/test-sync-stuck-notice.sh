@@ -119,6 +119,17 @@ clear_state
 out="$(prompt healthy)"
 silent "no stuck record means nothing is said" "$out"
 
+echo "sync stuck notice: a missed run of the daily removal of leftovers reaches the session (#3235)"
+
+# Installed three days ago and never finished a run: `stuck` says leftovers-overdue, and this hook
+# says it, through the branch every kind it does not name goes through.
+python3 -c 'import os,sys; t=float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$WORK/agents/com.claudesync.leftovers.plist" "$(( NOW - 3 * 86400 ))"
+out="$(prompt leftovers-missed)"
+says "a missed run of the daily removal of leftovers is said in the session" "$out" "the daily removal of old leftovers has never finished a run"
+out="$(prompt leftovers-missed)"
+never_says "and only once in that session" "$out" "daily removal of old leftovers"
+touch "$WORK/agents/com.claudesync.leftovers.plist"
+
 echo "sync stuck notice: sending stuck past the threshold is said once, then clears once"
 
 # Fields as the tool writes them: count, first skip, last skip, last reconcile attempt.

@@ -226,7 +226,7 @@ out="$(run retire -- --yes)"; rc=$?
 check "stuck agent: exits non zero" test "$rc" -ne 0
 check "stuck agent: says it is still loaded" has "$out" "NOT confirmed"
 check "stuck agent: names the label" has "$out" "com.claudesync.watch"
-check "stuck agent: makes no claim that neither is loaded" lacks "$out" "launchctl list shows neither"
+check "stuck agent: makes no claim that none is loaded" lacks "$out" "launchctl list shows none of"
 check "stuck agent: the record is still written, so its runs refuse" test -f "$RECORD"
 # Status on a retired Mac with an agent's plist back on disk (a hand restore, a migration): it is
 # named, and the remedy is retire again, which runs on a retired Mac, never install-autosync.
@@ -244,7 +244,7 @@ touch "$LISTFAIL"
 out="$(run retire -- --yes)"; rc=$?
 check "unreadable launchd: exits non zero" test "$rc" -ne 0
 check "unreadable launchd: says it could not read" has "$out" "could not be read"
-check "unreadable launchd: makes no claim that neither is loaded" lacks "$out" "launchctl list shows neither"
+check "unreadable launchd: makes no claim that none is loaded" lacks "$out" "launchctl list shows none of"
 
 # ==== 8. a fixture home is refused whole: it is not this Mac's to retire ====
 plant mac-fixture
