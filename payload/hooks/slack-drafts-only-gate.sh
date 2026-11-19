@@ -99,6 +99,12 @@ RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([[:space:]]|\\[nrt])*\)'
 # which nothing in the command feeds.
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_."-]|$)'
 RUNS+='|(^|[^A-Za-z0-9_"]|\\[nrt])(bash|sh|zsh|dash|ksh)"'
+# A command whose first word holds a $, a backquote, a quote or a backslash (claude-config#3251):
+# `$SHELL posts`, `$(cat posts)`, `read -r l < posts; $l`, `b\ash posts` and `b''ash posts` name no
+# shell, script or interpreter as written, so with a file of no extension the call never reached
+# python3. In the payload's JSON a double quote is \" and a backslash \\; the \n, \r and \t of a
+# line break or a tab are no part of a word, so the word is read up to its first backslash.
+RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()'\\\\\$\`]*('|\\\\\\\\|\\\\\"|\\\$|\`)"
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
 # call goes to python3 while one of the places curl reads one from holds a file, and so does a call

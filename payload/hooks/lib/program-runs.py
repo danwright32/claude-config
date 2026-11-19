@@ -131,6 +131,30 @@ GO_EMBED = re.compile(r"^//go:embed\s+(.+)$", re.M)
 NATIVE_WALK = 5000
 NATIVE_FILES = 2000
 
+# A word that may be a file pattern (claude-config#3251), how many files one pattern is expanded to,
+# and how many directory entries its walk looks at. Past either the pattern is unread: refused where
+# typed, left alone in a script on disk.
+PATTERN_CHARS = re.compile(r"[*?\[{]")
+PATTERN_FILES = 200
+PATTERN_VISITS = 4000
+# Folders neither ** nor the walk for workspaces enters unless the pattern names them.
+PATTERN_SKIP = frozenset({"node_modules", ".git"})
+# How many directory entries the walk for a workspace root's package.json files looks at, how much of
+# each is read, and a selector that is one plain name or path.
+WORKSPACE_VISITS = 6000
+MAX_PACKAGE_JSON = 2 * 1024 * 1024
+WORKSPACE_PLAIN = re.compile(r"[@\w./~-]+")
+# Words that start a command in a package script and are no program of a package: the shell's
+# builtins and reserved words. A name missing here is read as a package handed its words, which can
+# only refuse more. And the system's own folders, whose programs are no package's either.
+SH_WORDS = frozenset(
+    ". : [ [[ alias bg bind break builtin caller case cd command compgen complete continue declare dirs "
+    "disown do done echo elif else enable esac eval exec exit export false fc fg fi for function getopts "
+    "hash help history if in jobs kill let local logout mapfile popd printf pushd pwd read readarray "
+    "readonly return select set shift shopt source suspend test then time times trap true type typeset "
+    "ulimit umask unalias unset until wait while { } ! ((".split())
+SYSTEM_DIRS = ("/bin", "/usr/bin", "/sbin", "/usr/sbin")
+
 
 def jsonc(text):
     """A tsconfig's JSON: comments and trailing commas taken away, outside strings."""
@@ -175,10 +199,12 @@ def ts_glob(pattern):
     return re.compile(rx + "$")
 
 
-def make(marker, judged_by_name):
+def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
     """The base class for the gate's Judge (module docstring). marker is the gate's MARKER, the
     endpoints it refuses, and judged_by_name its judged_by_name(), whether it reads a program by its
-    own name (an interpreter, a shell, a sender), which a launcher's word is then left to."""
+    own name (an interpreter, a shell, a sender), which a launcher's word is then left to.
+    pkg_dir_opts is the gate's PKG_DIR_OPTS, a package manager's options naming the folder it runs
+    in, and max_depth its MAX_DEPTH, how deep one text running another is followed (#3251)."""
 
     class ProgramRuns:
         # ---- Packages a launcher runs -----------------------------------------------------------
@@ -1135,5 +1161,305 @@ def make(marker, judged_by_name):
                         out += [stem + x for x in BUILT_FROM[ext] if x != ext]
             return out
 
+        # ---- Files a command names without writing them out (claude-config#3251) ----------------
+        #
+        # Three shapes the gate judged without opening the files involved, each measured on
+        # 2026-11-18 through the suite's harness: a pattern (`npx playwright test
+        # 'tests/*.spec.js'`, `node run-tests.js tests/*.spec.js`) named no file, so nothing was
+        # read; a package script's own command (`"test:one": "playwright test tests/job.spec.js"`)
+        # had the files it hands a bare runner read only for the words after the script's name
+        # (#3143); and a script run through a workspace selector (`pnpm --filter web test`) was
+        # never looked up, the selector being read as the script's name or skipped as an option.
+        # Each reading here is one more, after the ones there were, so it can only refuse more.
+
+        def unread_typed(self, why):
+            """why, recorded as something the gate could not read (unfollow), for a typed command;
+            None in a script on disk, where what cannot be worked out is left alone as an unread
+            feed is (fed_reason)."""
+            return None if self.sh_in_script() else self.unfollow(why)
+
+        def patterned(self, words, d):
+            """(words with each pattern among them replaced by the files it matches, the reason a
+            pattern could not be expanded or None). The shell replaces an unquoted pattern with its
+            matches before the program starts, and a runner handed a quoted one expands it itself,
+            so either way the matches are what runs. A pattern is a word holding * ? [ or { that
+            names no file as it stands; an option, a word holding a variable and a pattern matching
+            nothing stay as written, as the shell leaves a pattern with no match."""
+            if not any(PATTERN_CHARS.search(w) for w in words[1:]):
+                return words, None
+            out = [words[0]]
+            for w in words[1:]:
+                if w[:1] in "-+" or not PATTERN_CHARS.search(w) or re.search(r"[$`<>]", w) \
+                        or self.is_file(self.resolve(w, d)):
+                    out.append(w)
+                    continue
+                got = self.pattern_matches(w, d)
+                if got is None:
+                    why = self.unread_typed(
+                        f"the pattern {w} matches more than {PATTERN_FILES} files, or sits in a folder of more "
+                        f"than {PATTERN_VISITS} entries, so the files it hands the program were not read and "
+                        "whether one of them posts cannot be checked. Name the files, or a narrower pattern")
+                    if why:
+                        return words, why
+                out.extend(got or [w])
+            return out, None
+
+        @staticmethod
+        def braces(word):
+            """word with each {a,b} written out, as a list, or None past 64 alternatives. A brace
+            holding no comma, or one that never closes, is text."""
+            out, todo = [], [word]
+            while todo:
+                w = todo.pop()
+                m = re.search(r"\{([^{}]*,[^{}]*)\}", w)
+                if not m:
+                    out.append(w)
+                    continue
+                todo += [w[:m.start()] + alt + w[m.end():] for alt in reversed(m.group(1).split(","))]
+                if len(todo) + len(out) > 64:
+                    return None
+            return out
+
+        def pattern_matches(self, word, d):
+            """The files a pattern matches, each written as the pattern writes its folders, or None
+            where there are more than PATTERN_FILES of them or the walk looks at more than
+            PATTERN_VISITS entries. Matched as the shell matches: * ? and [ ] within one name, a name
+            starting with a dot only where the pattern writes the dot, ** for any depth of folders
+            (zsh, and bash with globstar), below which node_modules and dot folders are not entered."""
+            alts = self.braces(word)
+            if alts is None:
+                return None
+            found, budget = [], [PATTERN_VISITS]
+            for alt in alts:
+                if not re.search(r"[*?\[]", alt):
+                    if self.is_file(self.resolve(alt, d)):
+                        found.append(alt)
+                    continue
+                shown = "/" if alt.startswith("/") else ""
+                if not self.pattern_walk(shown, [p for p in alt.split("/") if p], d, found, budget):
+                    return None
+            return list(dict.fromkeys(found))
+
+        def pattern_walk(self, shown, parts, d, found, budget):
+            """pattern_matches for the parts of one pattern left to match below the folder shown
+            ("" for where the command runs, else ending in a slash); False once over a limit."""
+            if not parts:
+                return True
+            head, rest = parts[0], parts[1:]
+            if not re.search(r"[*?\[]", head):
+                path = shown + head
+                if rest:
+                    return not os.path.isdir(self.resolve(path, d)) or self.pattern_walk(path + "/", rest, d, found, budget)
+                if self.is_file(self.resolve(path, d)):
+                    found.append(path)
+                return len(found) <= PATTERN_FILES
+            try:
+                names = sorted(os.listdir(self.resolve(shown or ".", d)))
+            except OSError:
+                return True
+            budget[0] -= len(names)
+            if budget[0] < 0:
+                return False
+            if head == "**":
+                if rest and not self.pattern_walk(shown, rest, d, found, budget):
+                    return False
+                for n in names:
+                    if n.startswith(".") or n in PATTERN_SKIP:
+                        continue
+                    full = self.resolve(shown + n, d)
+                    if os.path.isdir(full) and not os.path.islink(full):
+                        if not self.pattern_walk(shown + n + "/", parts, d, found, budget):
+                            return False
+                    elif not rest and self.is_file(full):
+                        found.append(shown + n)
+                return len(found) <= PATTERN_FILES
+            for n in names:
+                if (n.startswith(".") and not head.startswith(".")) or not fnmatch.fnmatchcase(n, head):
+                    continue
+                full = self.resolve(shown + n, d)
+                if rest:
+                    if os.path.isdir(full) and not self.pattern_walk(shown + n + "/", rest, d, found, budget):
+                        return False
+                elif self.is_file(full):
+                    found.append(shown + n)
+                    if len(found) > PATTERN_FILES:
+                        return False
+            return True
+
+        def script_own(self, words):
+            """(what runs it, the program and every word it is given) where this command is one a
+            package script runs (pkg_scripts, which package() keeps while it reads a script's
+            command, a shell script that command runs included) and its program is named bare and
+            may be the package's own, else None. The package manager runs a script with
+            node_modules/.bin in front of the PATH, so a bare name there is the package a launcher
+            would run, and it is read as one handed its words (package_run): the files among them
+            are opened. #3143 read it that way only for the words after the script's name, so
+            `"test:one": "playwright test tests/job.spec.js"` passed run as `npm run test:one`.
+            A shell builtin, a reserved word and a program in one of the system's own folders (cp,
+            cat, git) are no package, and are judged as before."""
+            if not self.pkg_scripts or not words or "/" in words[0]:
+                return None
+            name = words[0]
+            if not name or re.search(r"[$`=<>(){}\s]", name) or name in SH_WORDS:
+                return None
+            if any(os.path.isfile(os.path.join(p, name)) for p in SYSTEM_DIRS):
+                return None
+            return f"the package script {self.pkg_scripts[-1]}", list(words)
+
+        def workspace_words(self, name, words):
+            """(the selectors, the packager's command with them taken out as one list of words for
+            each way it can be read, whether every workspace is selected) for a package manager's
+            words that choose workspaces, else None. pnpm: --filter or -F, with = or the next word,
+            and -r or --recursive. npm: -w or --workspace, with = or the next word, and --workspaces
+            or -ws; npm reads them before or after the script's name. yarn: `workspace NAME` then any
+            yarn command, and `workspaces foreach` or `workspaces run` for all of them; foreach's own
+            options may take a value, so the command is read from each word after it that is no
+            option, one of which is where it starts."""
+            if name == "yarn":
+                k = 1
+                while k < len(words) and words[k].startswith("-"):
+                    k += 1
+                if words[k:k + 1] == ["workspace"] and len(words) > k + 2:
+                    return [words[k + 1]], [["yarn"] + words[k + 2:]], False
+                if words[k:k + 1] == ["workspaces"] and len(words) > k + 2:
+                    after = words[k + 2:] if words[k + 1] == "foreach" else words[k + 1:]
+                    return [], [["yarn"] + after[p:] for p in range(len(after)) if not after[p].startswith("-")], True
+                return None
+            one = {"pnpm": ("--filter", "-F"), "npm": ("--workspace", "-w")}.get(name, ())
+            every_opts = {"pnpm": ("-r", "--recursive"), "npm": ("--workspaces", "-ws")}.get(name, ())
+            selectors, rest, every, k = [], [words[0]], False, 1
+            while k < len(words):
+                w = words[k]
+                opt, eq, val = w.partition("=")
+                if w == "--":
+                    rest += words[k:]
+                    break
+                if opt in one:
+                    if eq:
+                        selectors.append(val)
+                    elif k + 1 < len(words):
+                        selectors.append(words[k + 1])
+                        k += 1
+                elif w in every_opts:
+                    every = True
+                else:
+                    rest.append(w)
+                k += 1
+            return (selectors, [rest], every) if selectors or every else None
+
+        def workspace_root(self, where):
+            """The nearest folder at or above where that declares workspaces (a pnpm-workspace.yaml,
+            or a package.json holding "workspaces"), else the nearest one holding a package.json,
+            else None."""
+            cur, nearest = os.path.abspath(where or os.getcwd()), None
+            while True:
+                pkg = os.path.join(cur, "package.json")
+                if os.path.isfile(os.path.join(cur, "pnpm-workspace.yaml")):
+                    return cur
+                if os.path.isfile(pkg):
+                    nearest = nearest or cur
+                    try:
+                        with open(pkg, "rb") as f:
+                            if b'"workspaces"' in f.read(MAX_PACKAGE_JSON):
+                                return cur
+                    except OSError:
+                        pass
+                parent = os.path.dirname(cur)
+                if parent == cur:
+                    return nearest
+                cur = parent
+
+        def workspace_packages(self, root):
+            """(folder, name) for each package.json at or under root, node_modules and dot folders
+            left out, or None where that is more than WORKSPACE_VISITS entries to look at. Every
+            folder a workspace list can name under the root is among them, so matching a selector
+            against these reads no fewer workspaces than the package manager runs."""
+            out, todo, seen = [], [root], 0
+            while todo:
+                cur = todo.pop()
+                try:
+                    names = sorted(os.listdir(cur))
+                except OSError:
+                    continue
+                seen += len(names)
+                if seen > WORKSPACE_VISITS:
+                    return None
+                for n in names:
+                    full = os.path.join(cur, n)
+                    if n == "package.json":
+                        try:
+                            with open(full, "rb") as f:
+                                body = json.loads(f.read(MAX_PACKAGE_JSON).decode("utf-8", "replace"))
+                            named = body.get("name") if isinstance(body, dict) else None
+                        except (OSError, ValueError):
+                            named = None
+                        out.append((cur, named if isinstance(named, str) else ""))
+                    elif not n.startswith(".") and n not in PATTERN_SKIP and os.path.isdir(full) \
+                            and not os.path.islink(full):
+                        todo.append(full)
+            return out
+
+        def package_selected(self, name, words, d, depth):
+            """The reason a package script run through a workspace selector posts, or None
+            (workspace_words). The script is judged by package() in each folder the selectors
+            choose, with the selector taken out of the words, so the words after the script's name
+            are handed to it as they are run in its own folder. A selector that is one plain name or
+            path chooses the packages of that name (pnpm also takes a bare name for a scoped one,
+            @scope/name), the one in that folder and those under it; any other selector (a pattern,
+            `...name`, a change since a commit) chooses them all, as a run of every workspace does,
+            which reads more than runs and never less. A plain selector matching nothing runs
+            nothing. Where the workspaces cannot be listed the typed command is refused as unread."""
+            got = self.workspace_words(name, words)
+            if got is None or depth >= self.pkg_max_depth:
+                return None
+            selectors, rests, every = got
+            where, kept = d, []
+            for rest in rests:
+                out, k = [rest[0]], 1
+                while k < len(rest):
+                    opt, eq, val = rest[k].partition("=")
+                    if opt in self.pkg_dir_opts and (eq or k + 1 < len(rest)):
+                        where = self.resolve(val if eq else rest[k + 1], d)
+                        k += 1 if eq else 2
+                        continue
+                    out.append(rest[k])
+                    k += 1
+                kept.append(out)
+            root = self.workspace_root(where)
+            if root is None:
+                return None
+            pkgs = self.workspace_packages(root)
+            if pkgs is None:
+                return self.unread_typed(
+                    f"{name} chooses workspaces under {root}, which holds more than {WORKSPACE_VISITS} entries "
+                    "outside node_modules, so its workspaces could not be listed and the script it runs in "
+                    "them was not read. Run the script from the workspace's own folder")
+            chosen = list(pkgs) if every else []
+            for s in selectors:
+                if not WORKSPACE_PLAIN.fullmatch(s) or "..." in s:
+                    chosen = list(pkgs)
+                    break
+                folders = {os.path.realpath(self.resolve(s, where)), os.path.realpath(os.path.join(root, s))}
+                for folder, named in pkgs:
+                    real = os.path.realpath(folder)
+                    if named == s or (name == "pnpm" and "/" not in s and named.endswith("/" + s)) \
+                            or any(real == f or real.startswith(f + os.sep) for f in folders):
+                        chosen.append((folder, named))
+            for folder, named in dict.fromkeys(chosen):
+                for rest in kept:
+                    key = (folder, tuple(rest))
+                    if key in self.pkg_selecting:
+                        continue  # the script that is being read runs this one again: nothing new
+                    self.pkg_selecting.add(key)
+                    try:
+                        reason = self.package(name, rest, folder, depth)
+                    finally:
+                        self.pkg_selecting.discard(key)
+                    if reason:
+                        return f"{name} runs it in the workspace {named or folder}: {reason}"
+            return None
+
+    ProgramRuns.pkg_dir_opts = frozenset(pkg_dir_opts)
+    ProgramRuns.pkg_max_depth = max_depth
     return ProgramRuns
 
