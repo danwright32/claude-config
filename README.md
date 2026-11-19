@@ -374,6 +374,13 @@ run posts a desktop notification, and a failed or missed run (none finished for 
 once per session by the per prompt sync notice, from `claude-sync stuck`. `claude-sync status` has a
 "removal of leftovers" line.
 
+Each run also writes `~/.claude/state/keep-rules/readable-folders.tsv`: the folders it kept because
+they are mostly images or documents, in ended sessions, which `/disk-clean` reads and offers (Dan,
+2026-11-19: "Daily file, no list change"; the `/disk-clean` section says how, where it lists what
+each kind offers). It is written whole on every run, never added to, and a run that cannot write
+it fails and says so, while its removals still happen. With the job switched off on a Mac the list
+is not written there, and `/disk-clean` says those folders are unmeasured.
+
 - See what it would remove, changing nothing: `claude-sync leftovers`
 - Run it now: `claude-sync remove-leftovers`
 - Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
@@ -6036,15 +6043,44 @@ copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies 
 download cache, its logs and the pnpm store are shown there and never offered), and in build
 folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
 project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
-stays refused). Shown and never offered, each row saying why: `claude-records.sh` (session notes,
-Claude Code's file history, the finding spool and its backups, and the folders this config's hooks
-keep in the home folder, with the rest of `~/.claude/state` counted in its note) and
+stays refused). Shown and never offered, each row saying why: in `claude-records.sh`, session notes
+as a whole, Claude Code's file history, the finding spool and its backups, and the folders this
+config's hooks keep in the home folder, with the rest of `~/.claude/state` counted in its note; and
 `claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
 rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
 this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
-nowhere instead of keeping the floor, and pins the marker to exactly these two kinds.
-Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate daily
-job; this skill only shows session notes.
+nowhere instead of keeping the floor, and pins the marker to exactly that one kind.
+
+Folders of images and documents in session notes are the one thing `claude-records.sh` offers.
+Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
+daily job, and they keep an ended session's folder when more than half of it is images or
+documents (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup"). Each such folder is a row here,
+offered once nothing in it was changed or opened in 30 days, and ticking it moves it to the Trash.
+Two decisions of 2026-11-19, both recorded on #3235, are behind that:
+
+- **Showing them: "Daily file, no list change".** A disk-clean script may call only the commands
+  on the harness's reviewed list, and python is not one, so the page cannot ask the keep rules
+  directly. The daily run writes the folders it keeps for this reason to
+  `~/.claude/state/keep-rules/readable-folders.tsv` (a header, one `folder` line each, and an `end`
+  line with their count, renamed into place whole), and the page reads that file. So a row can be
+  up to a day old: a folder kept an hour ago appears tomorrow, and one that has gone since the list
+  was written is simply no row. The page says these folders are unmeasured, and offers none, when
+  the list is missing, is not whole, is dated in the future or is over two days old by the file's
+  own time, or when the keep rules wrote that they could not decide (the session registry could
+  not be read). `claude-sync remove-leftovers` writes a new list. Because the list can be a day
+  old, a folder whose session is open now is never offered, whatever the list says.
+- **Removing them: "Allow it".** `disk-remove.sh` refuses everything under `~/.claude/state`
+  whatever a category says, with this one exception: a folder exactly four levels under
+  `session-notes` (`session-notes/<project>/<session>/<task>/<folder>`) is let past that refusal to
+  its judge. It is let past only as an item of the `claude-records` kind going to the Trash, only
+  by its own path (no link at any level, no `..`, no empty level), and only when it is a real
+  folder. The judge then still requires that the keep rules' list names it and that the 30 day
+  floor holds. Everything else under the state folder stays refused: `session-notes` itself, a
+  project, a session, a task folder, a file, and anything five or more levels down. So does the
+  same four level folder under any other kind, by any method but the Trash, or named to
+  `--propose`, whose only check is that the item is the one proposed. The shape is one predicate,
+  `dc_notes_shape` and `dc_notes_folder` in `hooks/lib/disk-clean-predicates.sh`, read by both the
+  page and the remover, so a row is offered only where the remover takes it.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
@@ -6103,8 +6139,9 @@ an hour old (exit 3) and when its scan is not the last scan (exit 4), with a mes
 
 Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive, app packages,
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
-under `/Applications` or `/System`, and the home folder's standard folders and listed dotfolders
-themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the one
+session notes folder shape described above, and the home folder's standard folders and listed
+dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
