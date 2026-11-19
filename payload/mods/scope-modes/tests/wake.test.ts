@@ -378,6 +378,21 @@ describe('morningPrompt puts what the report says needs Dan, and what sleep mode
     expect(p).toMatch(/What the night's report lists under Parked and failed that this session hands over \(its own, and in the session that ended sleep those of sessions since closed\), numbered 8\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
     expect(p).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
   })
+  // #3223: on the night of 17 Nov 2026 the report held 157 rows of one refusal in the same words, and
+  // each row would have been its own picker.
+  test('Parked and failed rows in the same words are one picker saying how many there are; a row of its own words stays alone', () => {
+    const same = 'Failed a repo not named: the auto mode classifier refused Bash: Classifier unavailable'
+    const q = morningPrompt({
+      worker: true,
+      offers: false,
+      issues: [],
+      lessons: [],
+      parked: [same, 'Parked o/r#12: the push was refused', same, same, 'Failed a repo not named: the auto mode classifier refused Bash: [Git Destructive]'],
+    })
+    expect(q).toMatch(/rows in the same words are one 8\.n that says how many there are, put to Dan in one picker, never one picker per row/)
+    expect(q).toContain(`8.1 3 rows in the same words: ${same}\n8.2 Parked o/r#12: the push was refused\n8.3 Failed a repo not named: the auto mode classifier refused Bash: [Git Destructive]`)
+    expect(q.split(same).length - 1).toBe(1)
+  })
   test('each action sleep mode refused as banned is asked about in its own picker, with the call it would make', () => {
     expect(p).toMatch(/numbered 9\.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now/)
     expect(p).toContain('9.1 delete a branch. The call refused: git push origin --delete replaced-fix')
@@ -399,10 +414,10 @@ describe('morningPrompt puts what the report says needs Dan, and what sleep mode
   test('a file that could not be read is said, sending the session to its report for both sections, never read as nothing', () => {
     const u = morningPrompt({ worker: true, issues: [], lessons: [], needsUnread: { why: 'it is not JSON', withLook: true } })
     expect(u).toMatch(
-      /What the night's report says needs Dan could not be read here \(it is not JSON\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed\./,
+      /What the night's report says needs Dan could not be read here \(it is not JSON\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed, rows in the same words together in one picker that says how many there are\./,
     )
     const own = morningPrompt({ worker: true, offers: false, issues: [], lessons: [], needsUnread: { why: 'EACCES', withLook: false } })
-    expect(own).toMatch(/every row this session's report lists under Parked and failed for this session's own work\./)
+    expect(own).toMatch(/every row this session's report lists under Parked and failed for this session's own work, rows in the same words together in one picker that says how many there are\./)
   })
   test('a report not finished at wake is said, so Needs a look may lack the end of the night', () => {
     const u = morningPrompt({ worker: true, issues: [], lessons: [], look: ['Not checked overnight: deploy runs in o/r'], needsUnfinished: true })
