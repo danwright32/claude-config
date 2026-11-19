@@ -7,7 +7,7 @@ You are one of several agents, each working one item while the orchestrator sess
 - Work only your item. Something else you notice gets recorded, not fixed:
   `bash ~/.claude/hooks/lib/issue-spool.sh note . "<the finding>" "<item number> agent"`
 - Never touch anything your brief names as another agent's.
-- Write working files only under the working folder your brief names, which is in the session's notes folder (`~/.claude/state/session-notes/...`), never in the scratchpad under `/private/tmp`: a restart of the Mac empties that (claude-config#2490).
+- Write your notes (handoff.md, evidence.md, tests.txt, pr-body.md and the like) only under the working folder your brief names, which is in the session's notes folder (`~/.claude/state/session-notes/...`), never in the scratchpad under `/private/tmp`: a restart of the Mac empties that (claude-config#2490). Anything bulky (test fixtures, copies of a repository or of its files, bisect trees, tar files, big logs) goes in the session's scratchpad under a subfolder named for your task instead: once the session ends a daily job removes such leftovers from the notes folder and keeps the notes (claude-config#3235).
 
 ## Reading code
 

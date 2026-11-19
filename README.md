@@ -332,7 +332,7 @@ lists the security default in it. Set `SYNC_MANAGED_SETTINGS` to check another p
 
 ## Automatic sync
 
-`install-autosync` sets up two launchd agents (and retires older ones), and installs
+`install-autosync` sets up three launchd agents (and retires older ones), and installs
 the `claudesync` shell alias:
 
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
@@ -344,6 +344,43 @@ the `claudesync` shell alias:
   sync, not a measurement, which is why it has no row in DESIGN.md's measured
   numbers table; what holds it honest is that it appears here on the line that names
   the setting, and the suite requires the two to agree.
+- **`com.claudesync.leftovers`**, once a day, runs `claude-sync remove-leftovers`: the two keep
+  rules Dan set on 2026-11-18 (claude-config#3235), described under "Removing old leftovers by
+  itself" below.
+
+### Removing old leftovers by itself (#3235)
+
+Dan's three decisions, each from a picker on 2026-11-18: session notes "Drop bulky leftovers, keep
+notes"; transcripts "Shorten only agent and test runs", kept "7 days" (his own sessions stay at
+Claude Code's 30); and it runs "By itself, with a log". The rules are `hooks/lib/keep_rules.py`, whose
+header is the checkable statement of both. In short:
+
+- **Session notes** (`~/.claude/state/session-notes/<project>/<session>/`). A session has ended
+  when the session registry does not show it open AND no file in its notes folder was written for 3
+  days. Then each folder inside a task folder taking 1 MB or more goes, unless it is a git checkout
+  or mostly images or documents, and so do tar files. Every other file (handoff.md, evidence.md,
+  tests.txt, pr-body.md, logs) stays, every folder under 1 MB stays, and a link is never followed or
+  removed. A folder not named like a session id is never touched.
+- **Transcripts** (`~/.claude/projects/`). Removed once last written more than 7 days ago: subagent
+  transcripts (`subagents/**/agent-*.jsonl` and their `.meta.json`) in every project, and, in a
+  project folder keyed to a worktree (`-claude-worktrees-`) or to a headless run under
+  `/private/tmp` (`-private-tmp`), the session transcript `<session>.jsonl` and every file in the
+  session's own folder. A `memory` folder is never touched.
+
+Where it is said: each removed item, with its size in bytes, is a line in
+`~/.claude/state/keep-rules/removed.log` (kept to about 5 MB, one older file beside it), and the last
+run's outcome is `~/.claude/state/keep-rules/last-run`. A clean run says nothing anywhere. A failed
+run posts a desktop notification, and a failed or missed run (none finished for two days) is said
+once per session by the per prompt sync notice, from `claude-sync stuck`. `claude-sync status` has a
+"removal of leftovers" line.
+
+- See what it would remove, changing nothing: `claude-sync leftovers`
+- Run it now: `claude-sync remove-leftovers`
+- Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
+  long as the file is there; delete the file to switch it back on). That folder is this Mac's own
+  state and is never synced, so the other Mac is unaffected.
+- Install it on a Mac: `claude-sync install-autosync`, run once on each Mac, since a launch agent
+  is a copy. Until it is installed, `claude-sync stuck` says so in every session on that Mac.
 
 It also adds this to `~/.zshrc`, so the shortcut arrives with the rest of the setup
 instead of being added by hand on each Mac (`~/.zshrc` is deliberately not synced):

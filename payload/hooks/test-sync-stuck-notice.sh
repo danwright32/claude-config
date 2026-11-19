@@ -97,6 +97,10 @@ ln -s "$REPO/payload" "$CLONE/payload"
 agent_for() { # agent_for <clone dir>  -> a launch agent plist naming that clone's tool, as the installer writes it
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>Label</key><string>com.claudesync.watch</string>\n<key>ProgramArguments</key><array>\n<string>/bin/bash</string>\n<string>%s/claude-sync</string>\n<string>watch</string>\n</array>\n</dict></plist>\n' "$1" \
     > "$WORK/agents/com.claudesync.watch.plist"
+  # The daily removal of leftovers is installed beside it, as install-autosync leaves a healthy Mac
+  # (claude-config#3235); without it `stuck` rightly says it is missing.
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>Label</key><string>com.claudesync.leftovers</string>\n<key>ProgramArguments</key><array>\n<string>/bin/bash</string>\n<string>%s/claude-sync</string>\n<string>remove-leftovers</string>\n</array>\n</dict></plist>\n' "$1" \
+    > "$WORK/agents/com.claudesync.leftovers.plist"
 }
 agent_for "$CLONE"
 
@@ -114,6 +118,17 @@ echo "sync stuck notice: a healthy sync says nothing"
 clear_state
 out="$(prompt healthy)"
 silent "no stuck record means nothing is said" "$out"
+
+echo "sync stuck notice: a missed run of the daily removal of leftovers reaches the session (#3235)"
+
+# Installed three days ago and never finished a run: `stuck` says leftovers-overdue, and this hook
+# says it, through the branch every kind it does not name goes through.
+python3 -c 'import os,sys; t=float(sys.argv[2]); os.utime(sys.argv[1],(t,t))' "$WORK/agents/com.claudesync.leftovers.plist" "$(( NOW - 3 * 86400 ))"
+out="$(prompt leftovers-missed)"
+says "a missed run of the daily removal of leftovers is said in the session" "$out" "the daily removal of old leftovers has never finished a run"
+out="$(prompt leftovers-missed)"
+never_says "and only once in that session" "$out" "daily removal of old leftovers"
+touch "$WORK/agents/com.claudesync.leftovers.plist"
 
 echo "sync stuck notice: sending stuck past the threshold is said once, then clears once"
 
