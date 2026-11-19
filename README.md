@@ -375,7 +375,7 @@ once per session by the per prompt sync notice, from `claude-sync stuck`. `claud
 
 - See what it would remove, changing nothing: `claude-sync leftovers`
 - Run it now: `claude-sync remove-leftovers`
-- Switch it off on one Mac: `touch ~/.claude/state/keep-rules/off` (status says it is off for as
+- Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
   long as the file is there; delete the file to switch it back on). That folder is this Mac's own
   state and is never synced, so the other Mac is unaffected.
 - Install it on a Mac: `claude-sync install-autosync`, run once on each Mac, since a launch agent
