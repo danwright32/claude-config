@@ -67,7 +67,7 @@ armed="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
 eq "arming on its own sets a value for every listed variable" "$NV" "$(printf '%s\n' "$armed" | grep -c '=.')"
 lacks "no seam armed on its own points under HOME" "$W/home1" "$armed"
 iso="$(printf '%s\n' "$armed" | sed -n 's/^CLAUDE_ISSUE_SPOOL_DIR=\(.*\)\/issue-spool$/\1/p')"
-says "the seams sit in one throwaway folder the scratch sweep reclaims" "$W/tmp/claude-sync-suite-work.isolated." "$iso"
+says "the seams sit in one throwaway folder, named so the scratch sweep reclaims one left behind" "$W/tmp/claude-sync-suite-work.isolated." "$iso"
 eq "every seam sits in that same folder" "$((NV - 1))" "$(printf '%s\n' "$armed" | grep -c -F "=$iso/")"
 eq "the claude binary is one that does not exist" "SYNC_CLAUDE_BIN=$SUITE_ISOLATION_NO_CLAUDE" "$(printf '%s\n' "$armed" | grep '^SYNC_CLAUDE_BIN=')"
 

@@ -215,8 +215,9 @@ fi
 # The watchdog itself, when this file is RUN rather than sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
   target="$2"; limit="$3"; started="$4"; poll="$5"; pidfile="${6:-}"; isolated="${7:-}"
-  # However the watch ends, the suite is gone by then, so its throwaway folder goes too (#3253).
-  trap '_suite_deadline_remove_isolated "$isolated"' EXIT
+  # However the watch ends, its throwaway folder goes too once the suite has (#3253), and not while
+  # the suite still runs, as it would if the watchdog itself were signalled.
+  trap 'kill -0 "$target" 2>/dev/null || _suite_deadline_remove_isolated "$isolated"' EXIT
   # Seconds a stopped suite is given at each step of the escalation below, what twenty polls were at
   # the default poll of 2. Not tied to the poll, which tests shorten (claude-config#1454).
   grace=40
@@ -270,6 +271,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
       grace_until=$(( $(date +%s) + grace ))
       while kill -0 "$target" 2>/dev/null && [ "$(date +%s)" -lt "$grace_until" ]; do sleep "$poll"; done
       kill -KILL "$target" 2>/dev/null
+      # Until it has gone, so the EXIT trap above finds it gone and takes its folder (#3253).
+      grace_until=$(( $(date +%s) + grace ))
+      while kill -0 "$target" 2>/dev/null && [ "$(date +%s)" -lt "$grace_until" ]; do sleep "$poll"; done
       exit 0
     fi
     # Kept only when the suite was still alive AFTER the table was read. A table read just after it
