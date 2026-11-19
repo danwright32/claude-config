@@ -3627,6 +3627,17 @@ one the index shows to chance (#392). Each refusal names the lesson numbers. All
 faults above, come from one list that `check-lessons`, the send, and the hook that runs the moment a
 lesson is written all walk, so none of them can disagree about what a fault is.
 
+A lesson can say what holds it (#3245). One indented line after the rule sentence names the check:
+`CHECK: hooks/x.sh (full)` when a check holds the whole rule, `(partial)` when a reader holds the
+rest, `owner/repo:path` for a check in another repository, or `NO CHECK: <why no check can hold it>`.
+A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above.
+`claude-sync lesson-checks` counts the whole library: lessons naming a check, lessons no check can
+hold, lessons with neither, named checks missing on disk, and core lessons a check holds fully,
+which are candidates for Dan to take out of the core one at a time. The lesson entry hook runs its
+`--warnings` form after every write and tells the session, without refusing anything, about a lesson
+written after 2026-11-19 carrying neither line, or a named check that is not on disk. The lessons
+that existed before then are listed in `hooks/lib/lessons-before-check-lines.txt` and are not asked.
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
