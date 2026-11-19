@@ -2702,7 +2702,8 @@ echo
 echo "slack drafts only: a shell handed its input by what is around it is read as one fed directly (claude-config#3229)"
 
 # Measured 2026-11-18 on main at 31cb0890, through this harness: `cat posts.sh | bash` is refused, and
-# each command of the refused lists below exited 0. A shell or an interpreter given no script reads
+# 107 commands of the refused lists below exited 0 (the lists also keep, as checks, the forms that
+# were refused before: a pipe straight into `bash -s`, `env bash` and the like). A shell or an interpreter given no script reads
 # what the shell around it is reading (bash 3.2.57 and zsh 5.9 ran the fed text in every form below,
 # but for `echo $(bash)` behind a pipe, which only bash runs, and `x=$(bash) < file`, which only zsh
 # does). The gate asked only whether a pipe stood right before the program's own name, or a
