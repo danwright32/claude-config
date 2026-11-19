@@ -15,6 +15,10 @@ import { isDevice } from './inputs.ts'
 // in #712, bringing what each read that it did not: a file removed (rm, rmdir, unlink, a mv's
 // source, find -delete), stamped (touch), emptied (truncate, shred), made (mkdir) or changed in
 // mode (chmod, chown, chgrp), reported apart from the files content goes into as `changes`.
+// Since #3279 it reads an editor run on files (ed, ex, vi's family, emacs), sponge, a program given
+// its output file by an option or as an operand (sort -o, uniq, xxd, base64 -o, openssl -out), a
+// converter rewriting in place (dos2unix, yq -i, sd, plutil) and gzip and its kin (EDITORS,
+// NAMED_WRITERS, PACKERS below, which also say what is still unread).
 //
 // Inline code is judged by the reader's per language judge (code.ts), which each command already
 // carries, and a shell fed its script is read as the commands it runs, so this keeps no list of
@@ -270,6 +274,208 @@ const awkInPlace = (args: string[]): InPlace => {
   }
   const files = (scripted ? ops : ops.slice(1)).filter(o => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(o))
   return { inPlace, files: inPlace ? files : [] }
+}
+
+// #3279: the programs below write a file their words name and were read as writing nothing, since
+// this reader knows a writer by its name. On 2026-11-19 ed, ex and vim given a script, and a pipe
+// into sponge, each rewrote a look changing file past the design round guard with nothing asked; the
+// same held for every program here, each run on this Mac first where it is installed and seen to
+// change the file. What is still unread, on purpose: split and csplit (they write pieces named after
+// a prefix, never the name given), mkfifo (a pipe, no content), an archive unpacked (tar -x, unzip,
+// cpio: its files are named inside the archive), a formatter or builder run by its own name or
+// through pnpm, yarn or bunx (prettier --write, eslint --fix, sass, see TOOL_MODES for npx), inline
+// code in a language code.ts does not judge (php -r, lua -e, swift -e) and a program opening a
+// window (open -a, code). A program on no list here still writes unread: the lists are the reader.
+// A command's name is looked up as a list's own entry, never one every object carries (toString).
+const listed = (list: object, name: string): boolean => Object.prototype.hasOwnProperty.call(list, name)
+
+// An editor run on files: ed, ex, vi and their kin write in place the files they are opened on when
+// a script tells them to (`ed -s f <<EOF`, `ex -sc '%s/a/b/|x' f`, `vim -es -c ... -c wq f`), and
+// read only mode stops none of it (view's `w!` writes). `text` are the options whose value is script
+// text, `reads` those naming a script file, `writes` those naming a file the editor writes, `valued`
+// its others that take a value, so no value is taken for a file; `plus` says a `+command` word is
+// script too. vi's -s names a file of keystrokes, except in ex mode (ex, or -e or -E), where it
+// only silences. A word its options do not account for is a file it is opened on.
+type Editor = { text: ReadonlySet<string>; reads: ReadonlySet<string>; writes: ReadonlySet<string>; valued: ReadonlySet<string>; plus?: true; clusters?: true }
+const ED: Editor = { text: new Set(), reads: new Set(), writes: new Set(), valued: new Set(['-p', '--prompt']), clusters: true }
+const VI: Editor = {
+  text: new Set(['-c', '--cmd']),
+  reads: new Set(['-S']),
+  writes: new Set(['-w', '-W', '--startuptime', '--log']),
+  valued: new Set(['-t', '-T', '-q', '-i', '-u', '-U', '-P', '--servername', '--remote-send', '--remote-expr', '--listen']),
+  plus: true,
+  clusters: true,
+}
+const EMACS: Editor = {
+  text: new Set(['--eval', '--execute', '-eval', '-f', '--funcall']),
+  reads: new Set(['-l', '--load', '--script']),
+  writes: new Set(),
+  valued: new Set(['-L', '--directory', '-u', '--user', '-t', '--terminal', '--chdir', '--init-directory', '--insert']),
+}
+const EDITORS: Readonly<Record<string, Editor>> = { ed: ED, red: ED, ex: VI, vi: VI, vim: VI, nvim: VI, view: VI, rvim: VI, rview: VI, gvim: VI, gview: VI, mvim: VI, vimdiff: VI, emacs: EMACS }
+const editorRun = (name: string, args: readonly string[], g: Editor): { files: string[]; written: string[]; scripts: string[]; text: string[] } => {
+  const files: string[] = []
+  const written: string[] = []
+  const scripts: string[] = []
+  const text: string[] = []
+  const exMode = name === 'ex' || args.some(a => /^-[A-Za-z]*[eE]/.test(a))
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      files.push(...args.slice(i + 1))
+      break
+    }
+    if (g.plus && a.startsWith('+')) {
+      // `+` alone and `+12` only place the cursor.
+      if (!/^\+\d*$/.test(a)) text.push(a.slice(1))
+      continue
+    }
+    if (!a.startsWith('-') || a === '-') {
+      if (a !== '-') files.push(a)
+      continue
+    }
+    const eq = a.startsWith('--') ? a.indexOf('=') : -1
+    const value = () => (eq > 0 ? a.slice(eq + 1) : (args[++i] ?? ''))
+    const take = (key: string) => {
+      if (g.text.has(key)) text.push(value())
+      else if (g.reads.has(key) || (key === '-s' && g.plus && !exMode)) scripts.push(value())
+      else if (g.writes.has(key)) written.push(value())
+      else if (g.valued.has(key)) value()
+    }
+    // ed's and vi's single letters run together (`ex -sc '%s/a/b/|x'`), each one that takes a value
+    // taking the next word in turn; emacs's options are whole words (-batch).
+    if (g.clusters && /^-[A-Za-z]{2,}$/.test(a)) for (const letter of a.slice(1)) take(`-${letter}`)
+    else take(eq > 0 ? a.slice(0, eq) : a)
+  }
+  return { files, written, scripts, text }
+}
+
+// The operands and options of a command whose single letter options run together (`sort -uo out`,
+// `gzip -dk`): each letter of a cluster is an option, and one that takes a value takes the rest of
+// the cluster, or the next word when the cluster ends with it. Long options are read as `operands`
+// reads them. `valued` names both kinds as written (`-o`, `--output`).
+const clustered = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; opts: Map<string, string | true> } => {
+  const ops: string[] = []
+  const opts = new Map<string, string | true>()
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      ops.push(...args.slice(i + 1))
+      break
+    }
+    if (!a.startsWith('-') || a === '-') {
+      ops.push(a)
+      continue
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=')
+      if (eq > 0) opts.set(a.slice(0, eq), a.slice(eq + 1))
+      else if (valued.has(a)) opts.set(a, args[++i] ?? '')
+      else opts.set(a, true)
+      continue
+    }
+    for (let j = 1; j < a.length; j++) {
+      const o = `-${a[j] as string}`
+      if (!valued.has(o)) {
+        opts.set(o, true)
+        continue
+      }
+      opts.set(o, j < a.length - 1 ? a.slice(j + 1) : (args[++i] ?? ''))
+      break
+    }
+  }
+  return { ops, opts }
+}
+
+// A program that writes the file an option or an operand names. `out`: the options whose value is
+// the file it writes (sort -o); `ops`: which operands it writes, every one, the second alone (uniq
+// and xxd take input then output, link the new name second), or those from that place on (sd's come
+// after its two patterns, yq's after its expression); `when`: only given one of these options (yq
+// -i); `unless`: never given one of these (sd -p prints); `edits`: it rewrites them in place;
+// `words`: its options are whole words, never clusters (openssl -out, xxd -ps). `valued` are its
+// other options that take a value, so none is taken for an operand.
+type Named = { out?: readonly string[]; ops?: 'all' | 'second' | number; when?: readonly string[]; unless?: readonly string[]; edits?: true; words?: true; valued?: readonly string[] }
+const TO_DOS: Named = { ops: 'all', edits: true, valued: ['-c', '--convmode', '-C', '--codepage', '-e', '--display-enc'] }
+const NAMED_WRITERS: Readonly<Record<string, Named>> = {
+  sponge: { ops: 'all' },
+  sort: { out: ['-o', '--output'], valued: ['-k', '-t', '-S', '-T', '--key', '--field-separator', '--buffer-size', '--temporary-directory', '--parallel', '--batch-size', '--compress-program', '--random-source', '--files0-from', '--sort'] },
+  shuf: { out: ['-o', '--output'], valued: ['-n', '-i', '--head-count', '--input-range', '--random-source'] },
+  iconv: { out: ['-o', '--output'], valued: ['-f', '-t', '--from-code', '--to-code'] },
+  base64: { out: ['-o', '--output'], valued: ['-b', '-i', '-w', '--break', '--input', '--wrap'] },
+  openssl: { out: ['-out'], words: true },
+  uniq: { ops: 'second', valued: ['-f', '-s', '-w', '--skip-fields', '--skip-chars', '--check-chars'] },
+  xxd: { ops: 'second', words: true, valued: ['-c', '-cols', '-g', '-groupsize', '-l', '-len', '-n', '-name', '-o', '-offset', '-s', '-seek', '-R'] },
+  link: { ops: 'second' },
+  dos2unix: TO_DOS,
+  unix2dos: TO_DOS,
+  mac2unix: TO_DOS,
+  unix2mac: TO_DOS,
+  sd: { ops: 2, edits: true, unless: ['-p', '--preview'], valued: ['-f', '--flags', '-n', '--max-replacements'] },
+  yq: { ops: 1, edits: true, when: ['-i', '--inplace', '--in-place'], valued: ['-I', '--indent', '-o', '--output-format', '-p', '--input-format', '--arg', '--argjson', '--from-file', '--front-matter', '--expression'] },
+}
+// What one of them writes, as [file, whether it is rewritten in place], and whether it writes its
+// operands at all, for one xargs hands them to.
+const namedWrites = (args: string[], n: Named): { files: [string, boolean][]; takes: boolean } => {
+  const valued = new Set([...(n.out ?? []), ...(n.valued ?? [])])
+  const { ops, opts } = n.words ? operands(args, valued) : clustered(args, valued)
+  const given = (names: readonly string[] | undefined) => (names ?? []).some(o => opts.has(o))
+  if ((n.when && !given(n.when)) || given(n.unless)) return { files: [], takes: false }
+  const files: [string, boolean][] = []
+  for (const o of n.out ?? []) {
+    const v = opts.get(o)
+    if (typeof v === 'string' && v !== '' && v !== '-') files.push([v, false])
+  }
+  const mine = n.ops === 'all' ? ops : n.ops === 'second' ? ops.slice(1, 2) : typeof n.ops === 'number' ? ops.slice(n.ops) : []
+  for (const f of mine) files.push([f, n.edits === true])
+  return { files, takes: n.ops === 'all' || typeof n.ops === 'number' }
+}
+
+// plutil changes a file only for one of these verbs, and then in place unless -o names another (`-`
+// is standard output). -convert and -create take a format and then every file; each other verb
+// takes a key path and values, and its file is the last word. -extract in the raw form prints the
+// value and changes nothing, where its other forms put the value in place of the whole file
+// (measured on macOS, 2026-11-19; the only two past commands this reading first caught were raw).
+const PLUTIL_CHANGES = ['-convert', '-create', '-replace', '-insert', '-remove', '-extract']
+const plutilWrites = (args: string[]): [string, boolean][] => {
+  const verb = args.find(a => PLUTIL_CHANGES.includes(a))
+  if (!verb || (verb === '-extract' && args[args.indexOf(verb) + 2] === 'raw')) return []
+  const { ops, opts } = operands(args, new Set(['-convert', '-create', '-o', '-e']))
+  const out = opts.get('-o')
+  if (typeof out === 'string') return out === '-' || out === '' ? [] : [[out, false]]
+  if (verb === '-convert' || verb === '-create') return ops.map((f): [string, boolean] => [f, true])
+  const last = args[args.length - 1]
+  return last === undefined || last.startsWith('-') ? [] : [[last, true]]
+}
+
+// gzip and its kin put a packed or an unpacked twin beside each file and take the file away, unless
+// told to keep it (-k; zstd keeps unless given --rm) or to print, test or list, which change no
+// file. Unpacking writes the name without its ending, which no word spells; a name with no known
+// ending is given as it is. zstd's -o names its one output.
+type Packer = { ending: string; unpacks?: true; keeps?: true }
+const PACKERS: Readonly<Record<string, Packer>> = {
+  gzip: { ending: '.gz' },
+  gunzip: { ending: '.gz', unpacks: true },
+  bzip2: { ending: '.bz2' },
+  bunzip2: { ending: '.bz2', unpacks: true },
+  xz: { ending: '.xz' },
+  unxz: { ending: '.xz', unpacks: true },
+  lzma: { ending: '.lzma' },
+  unlzma: { ending: '.lzma', unpacks: true },
+  zstd: { ending: '.zst', keeps: true },
+  unzstd: { ending: '.zst', unpacks: true, keeps: true },
+  compress: { ending: '.Z' },
+  uncompress: { ending: '.Z', unpacks: true },
+}
+const PACKED_ENDING = /\.(?:gz|bz2|xz|lzma|zst|Z|z)$/
+const packerRun = (args: string[], p: Packer): { writes: string[]; removes: string[]; changes: boolean } => {
+  const { ops, opts } = clustered(args, new Set(['-S', '--suffix', '-o', '-T', '--threads', '-M', '--memlimit', '-D', '--files-from', '--files0-from']))
+  const has = (...names: string[]) => names.some(n => opts.has(n))
+  if (has('-c', '--stdout', '--to-stdout', '-t', '--test', '-l', '--list', '-h', '--help', '-V', '--version', '-L', '--license')) return { writes: [], removes: [], changes: false }
+  const unpacks = p.unpacks === true || has('-d', '--decompress', '--uncompress')
+  const keeps = has('-k', '--keep') || (p.keeps === true && !has('--rm'))
+  const out = opts.get('-o')
+  const writes = typeof out === 'string' && out !== '' ? [out] : ops.map(f => (unpacks ? f.replace(PACKED_ENDING, '') : `${f}${p.ending}`))
+  return { writes, removes: keeps ? [] : ops, changes: true }
 }
 
 // What curl and wget save (#726): the files their options name, and a file saved under the
@@ -1028,6 +1234,32 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       for (const f of e.files) named(f, true)
     } else if (name === 'dd') {
       for (const a of rest) if (a.startsWith('of=')) named(a.slice(3))
+    } else if (listed(EDITORS, name)) {
+      // #3279: each file an editor is opened on is edited in place. A script it is given, in its own
+      // options, on standard input or from a file, may write any other file, so it is a write the
+      // words do not name: its text as `program` where the command holds all of it, for a guard to
+      // read the names in, placed in the folder it runs in; the script files it reads otherwise.
+      const e = editorRun(name, rest, EDITORS[name] as Editor)
+      writer = true
+      for (const f of e.files) named(f, true)
+      for (const f of e.written) named(f)
+      const fed = (c.heredocs ?? []).filter(h => (h.fd ?? 0) === 0).map(h => h.body)
+      const piped = c.pipedFrom !== undefined
+      if (e.text.length || e.scripts.length || fed.length || piped || inputs.length) {
+        const whole = !e.scripts.length && !piped && !inputs.length
+        unnamed.push({ what: `a script ${name} runs`, words: written, inputs: absAll([...e.scripts, ...inputs]), ...(whole ? { program: [...e.text, ...fed].join('\n'), ...(dir ? { folder: dir } : {}) } : {}) })
+      }
+    } else if (listed(NAMED_WRITERS, name)) {
+      const n = namedWrites(rest, NAMED_WRITERS[name] as Named)
+      writer = n.takes
+      for (const [f, edits] of n.files) named(f, edits || undefined)
+    } else if (name === 'plutil') {
+      for (const [f, edits] of plutilWrites(rest)) named(f, edits || undefined)
+    } else if (listed(PACKERS, name)) {
+      const p = packerRun(rest, PACKERS[name] as Packer)
+      writer = p.changes
+      for (const f of p.writes) named(f)
+      for (const f of p.removes) changed(f, 'remove')
     } else if (name === 'curl' || name === 'wget') {
       const got = name === 'curl' ? curlDownload(rest) : wgetDownload(rest)
       for (const f of got.files) named(f)
