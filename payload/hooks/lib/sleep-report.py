@@ -826,8 +826,9 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
         fold = folds.get(id(n))
         if fold is not None:
             # A refusal with no verdict in a group of FOLD_AT or more (#3158): the group is one line
-            # where its first refusal falls, then each one neither a read nor later sent again
-            # unchanged and run, on its own; every other member is counted in the line, never listed.
+            # where its first refusal falls, then each one that is neither a read, nor later sent
+            # again unchanged and run, nor followed by its work being finished (#3223), on its own;
+            # every other member is counted in the line, never listed.
             if fold["first"] is n:
                 pf.append(fold["line"])
                 if needs is not None:
