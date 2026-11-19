@@ -923,8 +923,10 @@ dc_stub lsof "printf 'p10\ncgh\nf3\nn%s\n' $(printf %q "$G/22/abc")"
 run_scan --only gh-cache
 check "gh cache: a run log untouched 30 days is offerable" "$(eq "$(state_of "$G/run-log-1-2.zip")" offerable)"
 check "gh cache: by deleting it" "$(eq "$(method_of "$G/run-log-1-2.zip")" delete)"
-check "gh cache: one changed 5 days ago is not offerable" "$(has "$(state_of "$G/run-log-3-4.zip")" "not offerable: changed within 30 days")"
-check "gh cache: an entry gh holds open is not offerable" "$(has "$(state_of "$G/22")" "not offerable: in use by gh")"
+check "gh cache: one changed 5 days ago is kept, so not a row (the kind is drawn as one row of what can go)" "$(eq "$(item_of "$G/run-log-3-4.zip")" "")"
+check "gh cache: an entry gh holds open is kept, so not a row" "$(eq "$(item_of "$G/22")" "")"
+check "gh cache: the note counts what is kept and why" "$(has "$(note_of gh-cache)" "2 entries are kept: 1 changed or opened within 30 days, 1 in use")"
+check "gh cache: only offerable entries are rows" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "gh-cache" && $5 != "offerable"' | wc -l | tr -d ' ')" 0)"
 check "gh cache: an idle cache folder is offerable" "$(eq "$(state_of "$G/56")" offerable)"
 check "gh cache: a link is not listed" "$(eq "$(item_of "$G/a-link")" "")"
 judge gh-cache "$G/56"
@@ -939,6 +941,11 @@ check "gh cache judge: a link is not offerable" "$(has "$JUDGED" "not offerable:
 dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
 judge gh-cache "$G/56"
 check "gh cache judge: lsof saying anything on stderr makes in use unknown" "$(has "$JUDGED" "unmeasured: could not tell whether it is in use")"
+run_scan --only gh-cache
+check "gh cache: lsof saying anything on stderr makes the kind unmeasured" "$(has "$(status_of gh-cache)" "unmeasured: could not tell whether")"
+check "gh cache: and offers nothing" "$(eq "$(items_in gh-cache)" 0)"
+check "gh cache: and the note counts them as not judged" "$(has "$(note_of gh-cache)" "could not be judged")"
+dc_stub lsof 'exit 1'
 
 # ================================================================================================
 # Claude Code's own records: measured and shown, never offered (state, file history, the finding
@@ -977,25 +984,51 @@ judge claude-records "$H/Downloads"
 check "claude records judge: a folder it does not list is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
 
 # ================================================================================================
-# npm and pnpm caches: measured and shown, never offered (only partly Claude's; Dan's call, #3235)
+# npm and pnpm caches: each npx copy not run or changed in 30 days is offered (Dan, 2026-11-18:
+# "Offer npx copies only (Recommended)"); the download cache, npm's logs and the pnpm store are shown
+# and never offered
 # ================================================================================================
 fresh
-mkdir -p "$H/.npm/_cacache/content-v2" "$H/.npm/_npx/abc123/node_modules" "$H/.npm/_logs" "$H/Library/pnpm/store/v11/files"
+mkdir -p "$H/.npm/_cacache/content-v2" "$H/.npm/_npx/abc123/node_modules" "$H/.npm/_npx/held456/node_modules" \
+  "$H/.npm/_npx/new789/node_modules" "$H/.npm/_logs" "$H/Library/pnpm/store/v11/files"
 printf 'c\n' > "$H/.npm/_cacache/content-v2/x"; printf 'p\n' > "$H/.npm/_npx/abc123/package.json"; printf 's\n' > "$H/Library/pnpm/store/v11/files/y"
-old "$H"
+printf 'p\n' > "$H/.npm/_npx/held456/package.json"; printf 'p\n' > "$H/.npm/_npx/new789/package.json"
+old "$H"; touch -a -t "$RECENT" "$H/.npm/_npx/new789/package.json"
+dc_stub lsof "printf 'p10\ncnode\nf3\nn%s\n' $(printf %q "$H/.npm/_npx/held456/package.json")"
 dc_stub du 'for a in "$@"; do case "$a" in -*) ;; */v11) printf "500\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 run_scan --only package-caches
 check "package caches: rows come largest first" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && !f { print $4; f = 1 }')" "$H/Library/pnpm/store/v11")"
 check "package caches: npm's download cache is shown, not offered" "$(has "$(state_of "$H/.npm/_cacache")" "not offerable: ")"
-check "package caches: each npx copy is shown, not offered" "$(has "$(state_of "$H/.npm/_npx/abc123")" "not offerable: ")"
+check "package caches: an npx copy not run or changed in 30 days is offered" "$(eq "$(state_of "$H/.npm/_npx/abc123")" offerable)"
+check "package caches: by deleting it, since npx fetches it again" "$(eq "$(method_of "$H/.npm/_npx/abc123")" delete)"
+check "package caches: an npx copy a running process holds open is not offerable" "$(has "$(state_of "$H/.npm/_npx/held456")" "not offerable: in use by node")"
+check "package caches: an npx copy run 5 days ago is not offerable" "$(has "$(state_of "$H/.npm/_npx/new789")" "not offerable: opened within 30 days")"
 check "package caches: npm's logs are shown, not offered" "$(has "$(state_of "$H/.npm/_logs")" "not offerable: ")"
 check "package caches: the pnpm store is shown, not offered" "$(has "$(state_of "$H/Library/pnpm/store/v11")" "not offerable: ")"
 check "package caches: the note says once what an npx copy is, rather than on every row" "$(has "$(note_of package-caches)" "Each npx copy is one package npx has run")"
-check "package caches: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
+check "package caches: only the npx copy is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "package-caches" && $5 == "offerable"' | wc -l | tr -d ' ')" 1)"
 judge package-caches "$H/.npm/_npx/abc123"
-check "package caches judge: an npx copy is not offerable" "$(has "$JUDGED" "not offerable: ")"
+check "package caches judge: an idle npx copy is offerable" "$(eq "$JUDGED" offerable)"
+floor_checks package-caches "$H/.npm/_npx/abc123" "$H/.npm/_npx/abc123/package.json" folder
+judge package-caches "$H/.npm/_npx/held456"
+check "package caches judge: an npx copy held open is not offerable" "$(has "$JUDGED" "not offerable: in use by node")"
+judge package-caches "$H/.npm/_cacache"
+check "package caches judge: the download cache is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge package-caches "$H/Library/pnpm/store/v11"
+check "package caches judge: the pnpm store is not offerable" "$(has "$JUDGED" "not offerable: ")"
 judge package-caches "$H/.npm"
 check "package caches judge: ~/.npm itself is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge package-caches "$H/.npm/_npx/abc123/node_modules"
+check "package caches judge: a folder inside an npx copy is not offerable" "$(has "$JUDGED" "not offerable: ")"
+ln -s "$H/.npm/_npx/abc123" "$H/.npm/_npx/a-link"
+judge package-caches "$H/.npm/_npx/a-link"
+check "package caches judge: a link among the npx copies is not offerable" "$(has "$JUDGED" "not offerable: ")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+judge package-caches "$H/.npm/_npx/abc123"
+check "package caches judge: lsof saying anything on stderr makes an npx copy unmeasured" "$(has "$JUDGED" "unmeasured: could not tell whether it is in use")"
+run_scan --only package-caches
+check "package caches: and the scan the same" "$(has "$(state_of "$H/.npm/_npx/abc123")" "unmeasured: could not tell whether it is in use")"
+dc_stub lsof 'exit 1'
 
 # ================================================================================================
 # Claude named items in the user temp folder: counted and sized in the kind's note, never listed
@@ -1032,7 +1065,7 @@ for c in transcript-extras claude-records claude-versions claude-user-temp gh-ca
   check "titles: $c has a title in words, so the page never shows its code name" "$(t="$(dcr_title "$c")"; [ -n "$t" ] && [ "$t" != "$c" ] && echo ok || echo "titled '$t'")"
 done
 check "floor: the folder holds the kinds this suite expects (a control on the loop)" "$(eq "$(ls "$CATS"/*.sh | wc -l | tr -d ' ')" 19)"
-check "floor: exactly the three kinds that only show space say they offer nothing (a control on the marker)" \
-  "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-records.sh claude-user-temp.sh package-caches.sh ")"
+check "floor: exactly the two kinds that only show space say they offer nothing (a control on the marker)" \
+  "$(eq "$(grep -lx '# offers: nothing' "$CATS"/*.sh | sed 's|.*/||' | tr '\n' ' ')" "claude-records.sh claude-user-temp.sh ")"
 
 finish

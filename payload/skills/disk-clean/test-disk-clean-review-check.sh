@@ -408,6 +408,40 @@ check "listing from a plan for another scan is refused with exit 2" "$(eq "$RC" 
 check "saying it is not the last scan" "$(has "$OUT_TEXT" "not the last scan")"
 SID="scan-1761600000-4242"
 
+# ================================================================================================
+# 7. The GitHub command line cache chosen whole (#3235): 2,095 entries on the personal MacBook on
+# 2026-11-18, 1,045 of them offered. It is drawn as one row through the Trash's mechanism, and the
+# checker refuses a summary that is not what the page drew exactly as it does the Trash's.
+# ================================================================================================
+fresh
+GH_N=1045
+awk -v n="$GH_N" -v h="$H" -v s="$S" 'BEGIN {
+  for (i = 1; i <= n; i++) printf "gh-cache-%d%sgh-cache%sdelete%s%s/.cache/gh/run-log-%d-1.zip%s%d%sofferable%s2:%d%smeasured%s%s\n", i, s, s, s, h, i, s, 290000, s, s, i, s, s, s
+}' > "$H/gh.txt"
+write_record "$H/gh.txt"
+render_page
+check "a scan offering $GH_N GitHub cache entries renders its review page" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(head -3 <<< "$OUT_TEXT")")"
+GH_TOKEN="$(grep -oE 'data-all="all:gh-cache:[^"]*"' "$OUT/disk-clean-review.html" | sed 's/^data-all="//; s/"$//')"
+check "the GitHub cache is drawn as one row carrying one summary" "$(grep -qE "^all:gh-cache:$GH_N:[0-9a-f]{32}$" <<< "$GH_TOKEN" && echo ok || echo "got '$GH_TOKEN'")"
+check "with no row per entry" "$(hasnt "$(cat "$OUT/disk-clean-review.html")" 'data-id="gh-cache-17"')"
+payload "$SID" "$N" 1 "$GH_TOKEN"
+printf 'keep me\n' > "$PLAN"
+run_check
+check "the GitHub cache summary is accepted with exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $(head -3 <<< "$OUT_TEXT")")"
+check "and the plan takes every entry it offered" "$(eq "$(grep -c '^item gh-cache-' "$PLAN")" "$GH_N")"
+gh_digest="${GH_TOKEN##*:}"
+printf 'keep me\n' > "$PLAN"
+payload "$SID" "$N" 1 "all:gh-cache:$((GH_N + 1)):$gh_digest"
+run_check
+check "a GitHub cache summary whose count is not the scan's is refused with exit 8" "$(eq "$RC" 8)"
+check "saying the scan's number" "$(has "$OUT_TEXT" "offers 1,045")"
+check "and planning nothing" "$(eq "$(cat "$PLAN")" "keep me")"
+payload "$SID" "$N" 1 "all:gh-cache:$GH_N:0123456789abcdef0123456789abcdef"
+run_check
+check "a GitHub cache summary of the right count but other entries is refused with exit 8" "$(eq "$RC" 8)"
+check "saying they are not the entries the page drew" "$(has "$OUT_TEXT" "not the ones the scan offers now")"
+check "and planning nothing" "$(eq "$(cat "$PLAN")" "keep me")"
+
 check "the category table names categories in words" "$(eq "$(dcr_title large-files)|$(dcr_title unknown-x)" "Large personal files|unknown-x")"
 
 finish

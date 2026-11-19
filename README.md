@@ -5892,16 +5892,19 @@ has a kind each. Offered, past each kind's own rule and the 30 day floor below: 
 transcripts (`transcript-extras.sh`: a session's `tool-results` folder once its transcript is gone
 and no live session owns it, to the Trash), old Claude Code versions (`claude-versions.sh`: never the
 one `~/.local/bin/claude` points at, never one a running process holds), the GitHub command line
-cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open), and in build folders a Swift
-`.build` beside its `Package.swift` and a build folder inside a home dotfolder whose project is a git
-worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule stays refused). Shown
-and never offered, each row saying why: `claude-records.sh` (every
-entry of `~/.claude/state`, session notes among them, Claude Code's file history, the finding spool
-and its backups, and the folders this config's hooks keep in the home folder), `package-caches.sh`
-(npm's cache and npx copies and the pnpm store: only partly Claude's, so Dan's call) and
+cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
+Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
+copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
+download cache, its logs and the pnpm store are shown there and never offered), and in build
+folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
+project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
+stays refused). Shown and never offered, each row saying why: `claude-records.sh` (session notes,
+Claude Code's file history, the finding spool and its backups, and the folders this config's hooks
+keep in the home folder, with the rest of `~/.claude/state` counted in its note) and
 `claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
-rather than listed). A kind that offers nothing carries the line `# offers: nothing`, and
-`test-disk-clean-categories.sh` then requires it to set offerable nowhere instead of keeping the floor.
+rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
+this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
+nowhere instead of keeping the floor, and pins the marker to exactly these two kinds.
 Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate daily
 job; this skill only shows session notes.
 

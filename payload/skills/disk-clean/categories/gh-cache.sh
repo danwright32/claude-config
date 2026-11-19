@@ -10,7 +10,9 @@
 # again when asked, unless a running process holds a file in it (one lsof listing, as caches.sh
 # reads it) or it was changed or opened in the last 30 days (the floor every kind keeps). GitHub
 # keeps a run's logs for 90 days by default, so a log older than that cannot be downloaded again;
-# it is a copy of CI output, never anyone's work. A link is never listed.
+# it is a copy of CI output, never anyone's work. A link is never listed. The page draws the kind as
+# one row (review-lib.sh, DCRV_WHOLE), so only offerable entries are items and the kept ones are a
+# count by reason in the kind's note; when lsof cannot say what is open, the kind is unmeasured.
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
@@ -48,12 +50,31 @@ do_scan() {
     printf '%s\n' "$G/$n" >> "$DCS_WORK/gh.paths"
   done < "$DCS_WORK/gh.names"
   open_listing
+  [ -n "$OPEN_WHY" ] && dcs_status "unmeasured: could not tell whether its entries are in use ($OPEN_WHY)"
   dcs_measure "$DCS_WORK/gh.paths" > "$DCS_WORK/gh.sized"
-  local p kib size ident
+  # The page draws this kind as ONE row of what can go (review-lib.sh, DCRV_WHOLE, #3232): only an
+  # offerable entry is an item, and what is kept is counted here, in the kind's note, by why.
+  local p kib size ident recent=0 used=0 unjudged=0 other=0 kept
   while IFS="$S" read -r p kib size ident; do
     gh_rules "$p" "$LISTING"
-    dcs_item "$p" delete "$kib" "$size" "$V" "" "" "$ident"
+    case "$V" in
+      offerable) dcs_item "$p" delete "$kib" "$size" "$V" "" "" "$ident" ;;
+      "not offerable: changed within"*|"not offerable: opened within"*) recent=$((recent + 1)) ;;
+      "not offerable: in use by"*) used=$((used + 1)) ;;
+      unmeasured:*) unjudged=$((unjudged + 1)) ;;
+      *) other=$((other + 1)) ;;
+    esac
   done < "$DCS_WORK/gh.sized"
+  kept=$((recent + used + other))
+  local why="" note=""
+  if [ "$kept" -gt 0 ]; then
+    [ "$recent" -gt 0 ] && why="$recent changed or opened within $DCS_UNUSED_DAYS days"
+    [ "$used" -gt 0 ] && why="${why:+$why, }$used in use"
+    [ "$other" -gt 0 ] && why="${why:+$why, }$other gone or changed since they were listed"
+    note="$kept $([ "$kept" -eq 1 ] && echo "entry is" || echo "entries are") kept: $why."
+  fi
+  [ "$unjudged" -eq 0 ] || note="${note:+$note }$unjudged $([ "$unjudged" -eq 1 ] && echo "entry" || echo "entries") could not be judged, so none of them is offered."
+  [ -z "$note" ] || dcs_note "$note"
 }
 
 case "${1:-}" in

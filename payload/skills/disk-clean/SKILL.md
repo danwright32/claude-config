@@ -65,13 +65,15 @@ Report what it printed, in plain words, in this order:
 4. Every note the scan printed under a kind, in plain words. Under Project build folders it says
    how many build folders were left out because iCloud syncs them: none of those is ever offered,
    since removing one would remove it from iCloud on every device (#3215).
-5. Three kinds show where space is and never offer anything (#3235): Records Claude Code and this
+5. Two kinds show where space is and never offer anything (#3235): Records Claude Code and this
    config keep (its state, session notes among them, file history, the finding spool and its
-   backups, the home folders its hooks write), npm and pnpm caches, and Claude items in the user
-   temp folder, which lists no rows and gives its count and size in its note. Say the first two's
-   largest rows by size and the third's note, as space shown, not as space that can be freed. What Claude Code sessions leave that can go is under Tool
-   output beside transcripts, Old Claude Code versions, GitHub command line cache and Project build
-   folders (which now include Swift .build folders).
+   backups, the home folders its hooks write), and Claude items in the user temp folder, which
+   lists no rows and gives its count and size in its note. Say the first one's largest rows by
+   size and the second one's note, as space shown, not as space that can be freed. npm and pnpm
+   caches offers only npx copies (Dan, 2026-11-18); its other rows are shown, never offered. What
+   Claude Code sessions leave that can go is under Tool output beside transcripts, Old Claude Code
+   versions, GitHub command line cache (one row, its kept entries counted in its note) and Project
+   build folders (which now include Swift .build folders).
 
 - **Exit 0**: the scan was written, unmeasured kinds included. Report it as above and go on to step 2.
 - **Exit 2**: it refused, or its record could not be written, so there is nothing to review. Tell
@@ -142,11 +144,11 @@ Then put up one AskUserQuestion confirm picker, the only picker in this flow. It
 what will go, taken from the checker's output and never retyped from memory: each kind with its
 count and total, and under Worktrees whose repository is gone, Large personal files and Tools not
 used in 180 days every item by path, with its size, any mark it carries (Holds a credential, Removes
-it from iCloud on every device) and, for a worktree, the date it last changed. The Trash, ticked as
-its one row, is a kind chosen whole: the checker says it in one line, its count and total and any
+it from iCloud on every device) and, for a worktree, the date it last changed. The Trash and the
+GitHub command line cache, each ticked as its one row, are kinds chosen whole; for each: the checker says it in one line, its count and total and any
 mark some of its entries carry, and the picker says it the same way, never an entry a line (the Trash held 5,979 entries on the personal
-MacBook). When Dan asks to see those entries, list them, which writes nothing, and then put the
-same picker up again:
+MacBook, the GitHub cache 2,095). When Dan asks to see those entries, list them, which writes
+nothing, and then put the same picker up again (`--entries gh-cache` for the GitHub cache):
 
 ```bash
 bash ~/.claude/skills/disk-clean/review-check.sh --entries trash --plan <folder>/plan.txt
