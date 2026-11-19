@@ -166,11 +166,25 @@ LOG="$H/state/keep-rules/removed.log"
 ok "log: one line per removed item, with its size" "grep -q '	removed	notes: tar file	[0-9][0-9]*	$E/t1/base.tar\$' '$LOG'"
 ok "log: the folder line carries its size" "grep -q '	removed	notes: folder in a task folder	[1-9][0-9]*	$E/t1/fixtures\$' '$LOG'"
 ok "log: a run line closes the run" "grep -q '	run	ok	' '$LOG'"
+# The list /disk-clean reads, written by the same run from the same plan (Dan, 2026-11-19, recorded
+# on #3235: "Daily file, no list change").
+LIST="$H/state/keep-rules/readable-folders.tsv"
+extras(){ ls -A "$H/state/keep-rules" | grep -v -x -e .lock -e removed.log -e removed.log.1 -e readable-folders.tsv; }
+ok "list: the remove run wrote it" "[ -f '$LIST' ]"
+ok "list: it starts with its header" '[ "$(head -1 "$LIST")" = "readable-folders	1" ]'
+ok "list: names the ended session's folder of images, with its size" "grep -qE '^folder	[1-9][0-9]*	$E/t1/photos\$' '$LIST'"
+ok "list: and its folder mostly of documents" "grep -qE '^folder	[1-9][0-9]*	$E/t1/sources\$' '$LIST'"
+ok "list: ends with the count of its folders" '[ "$(tail -1 "$LIST")" = "end	2" ]'
+ok "list: holds nothing but its header, those two and its end" '[ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
+ok "list: its folder lines are the readable-folders mode's own, line for line" '[ "$(CLAUDE_HOME="$H" python3 -B "$JOB" readable-folders --now "$NOW")" = "$(grep "^folder	" "$LIST")" ]'
+ok "list: nothing else is left beside it" '[ -z "$(extras)" ]'
 
 # ---- a second run finds nothing ----
+printf 'left by an older run\n' > "$LIST"
 out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
 ok "second run: exits 0" "[ $rc -eq 0 ]"
 ok "second run: removes nothing" 'has "KEEP-RULES-SUMMARY	ok	0	0	-" "$out"'
+ok "second run: the list is written again whole, never added to" '[ "$(head -1 "$LIST")" = "readable-folders	1" ] && [ "$(tail -1 "$LIST")" = "end	2" ] && [ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
 
 # ---- a run already in progress: the second waits for nobody and removes nothing ----
 plant
@@ -180,6 +194,7 @@ fh=open(os.path.join(sys.argv[1],"state/keep-rules/.lock"),"w"); fcntl.flock(fh,
 print(subprocess.run([sys.executable,"-B",sys.argv[2],"remove","--now",sys.argv[3]],capture_output=True,text=True).stdout)' "$H" "$JOB" "$NOW" 2>&1)"
 ok "lock held: says another run is removing" 'has "KEEP-RULES-SUMMARY	busy	0	0	-" "$out"'
 ok "lock held: removed nothing" "[ -e '$E/t1/fixtures' ]"
+ok "lock held: wrote no list, which is the other run's to write" "[ ! -e '$LIST' ]"
 
 # ---- the registry cannot be read: fail, loudly, and remove no notes ----
 plant
@@ -190,6 +205,34 @@ ok "no registry: the summary says failed and why" 'has "KEEP-RULES-SUMMARY	faile
 ok "no registry: no notes were removed" "[ -e '$E/t1/fixtures' ] && [ -e '$E/t1/base.tar' ]"
 ok "no registry: the transcripts rule still ran" "[ ! -e '$PROJ/-private-tmp-abc' ]"
 ok "no registry: the log says it failed" "grep -q '	run	failed	' '$H/state/keep-rules/removed.log'"
+ok "no registry: the list says unmeasured and why, so a reader cannot take it for no folders" "grep -q '^unmeasured	.*session registry' '$LIST'"
+ok "no registry: the list names no folder as ended" "! grep -q '^folder	' '$LIST' && [ \"\$(tail -1 '$LIST')\" = 'end	0' ]"
+
+# ---- the list cannot be written: the run fails and says so, and the removals still happen ----
+plant
+mkdir -p "$LIST/in-the-way"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "list cannot be written: exits 1" "[ $rc -eq 1 ]"
+ok "list cannot be written: the summary says failed and names the list" 'has "KEEP-RULES-SUMMARY	failed	" "$out" && has "readable-folders.tsv could not be written" "$out"'
+ok "list cannot be written: the log says so" "grep -q '	failed	.*readable-folders.tsv could not be written' '$H/state/keep-rules/removed.log'"
+ok "list cannot be written: the removals still ran" "[ ! -e '$E/t1/fixtures' ] && [ ! -e '$E/t1/base.tar' ]"
+ok "list cannot be written: no half written file is left beside it" '[ -z "$(extras)" ]'
+
+# ---- a folder whose name a line cannot carry is left out of the list, and the count says so ----
+plant
+big "$E/t1/$(printf 'tab\there')/a.jpg"; age "$E" 4
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "tab in a name: the run is clean" "[ $rc -eq 0 ]"
+ok "tab in a name: the folder is kept on disk" "[ -f '$E/t1/$(printf 'tab\there')/a.jpg' ]"
+ok "tab in a name: the list leaves it out and still counts what it holds" '[ "$(grep -c "^folder	" "$LIST")" = 2 ] && [ "$(tail -1 "$LIST")" = "end	2" ] && [ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
+
+# ---- no notes folder at all: the list is written, and says there are none ----
+plant
+rm -rf "$NOTES"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "no notes folder: the run is clean" "[ $rc -eq 0 ]"
+ok "no notes folder: the list is its header and an end of none" '[ "$(cat "$LIST")" = "readable-folders	1
+end	0" ]'
 
 # ---- an item that cannot be removed fails the run ----
 plant

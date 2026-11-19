@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # disk-clean-predicates.sh: the one copy of the rules saying what a disk-clean test root is, and
-# whether a path lies inside one (claude-config#1804, moved here by #1805).
+# whether a path lies inside one (claude-config#1804, moved here by #1805), and of the one folder
+# shape under ~/.claude/state that disk-clean may offer (#3235, at the end of this file).
 #
 # Sourced by the three things that must agree, so none keeps a copy of its own (L261):
 #   lib/disk-clean-harness.sh  dc_run refuses to run unless HOME is isolated by these rules
@@ -102,4 +103,48 @@ dc_inside() { # <path> <root>
     t="$(readlink "$r")" || return 1
     case "$t" in /*) p="$t" ;; *) p="${r%/*}/$t" ;; esac
   done
+}
+
+# ---- the one folder shape under ~/.claude/state that disk-clean may offer (claude-config#3235) ----
+# disk-remove.sh refuses everything under ~/.claude/state, with one exception Dan signed on
+# 2026-11-19, recorded on #3235: "Allow it". The exception is a folder exactly four levels under
+# session-notes (session-notes/<project>/<session>/<task>/<folder>), which is where the daily keep
+# rules leave an ended session's folder of images or documents. These two functions are the whole
+# of that shape, read by disk-remove.sh (which lets it reach its judge) and by
+# categories/claude-records.sh (which offers it), so a row is offered only where the remover takes
+# it (L261).
+
+# True when <path>, as text, is exactly four levels under <home>/.claude/state/session-notes: no
+# level empty, none of them . or .., and no control character anywhere in it. It reads no disk, so
+# a link is not its to see; dc_notes_folder is. A trailing slash is refused, never trimmed here.
+dc_notes_shape() { # <path> <home>
+  local rest
+  case "$1" in "$2/.claude/state/session-notes/"?*) ;; *) return 1 ;; esac
+  rest="${1#"$2/.claude/state/session-notes/"}"
+  case "$rest" in *[[:cntrl:]]*) return 1 ;; esac
+  case "/$rest/" in *//*|*/./*|*/../*) return 1 ;; esac
+  # In a case pattern * crosses a slash, so five or more levels are refused before four are taken.
+  case "$rest" in
+    */*/*/*/*) return 1 ;;
+    */*/*/*) return 0 ;;
+  esac
+  return 1
+}
+
+# True when <path> is, on disk, a real folder of that shape reached by its own path: not a link,
+# and no link at any level above it, so what it names is where it lies. Otherwise it fails and
+# sets DC_NOTES_WHY to why. <home> is HOME as set and <physical home> the same folder resolved, so
+# a path written either way is read alike.
+dc_notes_folder() { # <path> <home> <physical home>
+  local t="${1%/}" norm phys
+  DC_NOTES_WHY=""
+  norm="$t"
+  case "$norm" in "$2"/*) norm="$3/${norm#"$2"/}" ;; esac
+  dc_notes_shape "$norm" "$3" || {
+    DC_NOTES_WHY="it is not a folder in a session's task folder (session-notes/<project>/<session>/<task>/<folder>)"; return 1; }
+  [ ! -L "$t" ] || { DC_NOTES_WHY="it is a symbolic link"; return 1; }
+  phys="$(dc_resolve "$t")" || { DC_NOTES_WHY="where it lies could not be read"; return 1; }
+  [ "$phys" = "$norm" ] || { DC_NOTES_WHY="its path passes through a symbolic link, so it lies somewhere else ($phys)"; return 1; }
+  [ -d "$t" ] || { DC_NOTES_WHY="it is not a folder"; return 1; }
+  return 0
 }

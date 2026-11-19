@@ -280,6 +280,130 @@ check "the deny list came before the judge: no category judge ran for any of the
 check "and no INTENT was written for any of them" "$(eq "$(intents "$(LOGF s1)" '.')" 0)"
 
 # ================================================================================================
+# 4b. Claude Code's state folder, and the one folder shape in it that reaches a judge (#3235)
+# ================================================================================================
+# Dan, 2026-11-19, recorded on #3235: "Allow it". A folder exactly four levels under session-notes
+# (session-notes/<project>/<session>/<task>/<folder>) reaches the claude-records judge, by its own
+# path, as a plan item that goes to the Trash. Everything else under ~/.claude/state stays refused.
+NOTES="$H/.claude/state/session-notes"
+NP="$NOTES/-Users-x-proj"; NS="$NP/22222222-2222-4222-8222-222222222222"; NT="$NS/task-1"
+notes_tree() {
+  fresh
+  mkdir -p "$NT/photos" "$NT/my shots" "$NT/deep/inner" "$NT/other" "$NS/my task" "$H/.claude/state/ai-review" \
+    "$H/w/elsewhere/inner" "$H/w/real-folder"
+  printf 'img\n' > "$NT/photos/a.jpg"; printf 'img\n' > "$NT/my shots/b.jpg"; printf 'x\n' > "$NT/deep/inner/c"
+  printf 'x\n' > "$NT/other/d"; printf 'n\n' > "$NT/evidence.md"; printf 'n\n' > "$NS/handoff.md"
+  printf 'x\n' > "$H/.claude/state/ai-review/x"; printf 'x\n' > "$H/w/elsewhere/inner/e"; printf 'x\n' > "$NS/my task/f"
+}
+# The pure shape rule, asked directly: what it accepts is the whole exception.
+PH="$(cd -P "$H" && pwd -P)"
+shape() { if dc_notes_shape "$1" "$PH" 2>/dev/null; then echo yes; else echo no; fi; }
+B="$PH/.claude/state/session-notes"
+check "shape: a folder four levels under session-notes is the shape" "$(eq "$(shape "$B/p/s/t/f")" yes)"
+check "shape: a name holding a space is still one level" "$(eq "$(shape "$B/p/s/t/my shots")" yes)"
+check "shape: session-notes itself is not" "$(eq "$(shape "$B")" no)"
+check "shape: a project is not" "$(eq "$(shape "$B/p")" no)"
+check "shape: a session is not" "$(eq "$(shape "$B/p/s")" no)"
+check "shape: a task folder is not" "$(eq "$(shape "$B/p/s/t")" no)"
+check "shape: a task folder whose name holds a space is not" "$(eq "$(shape "$B/p/s/my task")" no)"
+check "shape: five levels is not" "$(eq "$(shape "$B/p/s/t/f/g")" no)"
+check "shape: six levels is not" "$(eq "$(shape "$B/p/s/t/f/g/h")" no)"
+check "shape: a trailing slash on a task folder does not make it four levels" "$(eq "$(shape "$B/p/s/t/")" no)"
+check "shape: a trailing slash on a four level folder is refused rather than read" "$(eq "$(shape "$B/p/s/t/f/")" no)"
+check "shape: an empty level does not count as one" "$(eq "$(shape "$B//s/t/f")" no)"
+check "shape: an empty level in the middle does not count as one" "$(eq "$(shape "$B/p/s//f")" no)"
+check "shape: a .. level is refused" "$(eq "$(shape "$B/p/s/t/..")" no)"
+check "shape: a .. level in the middle is refused" "$(eq "$(shape "$B/p/../t/f")" no)"
+check "shape: a . level is refused" "$(eq "$(shape "$B/p/s/./f")" no)"
+check "shape: a name holding a newline is refused" "$(eq "$(shape "$B/p/s/t/a"$'\n'"b")" no)"
+check "shape: a newline does not hide deeper levels" "$(eq "$(shape "$B/p/s/t"$'\n'"/f/g")" no)"
+check "shape: another folder of state is not" "$(eq "$(shape "$PH/.claude/state/disk-clean/a/b/c/d")" no)"
+check "shape: a sibling whose name starts the same is not" "$(eq "$(shape "$PH/.claude/state/session-notes-old/p/s/t/f")" no)"
+check "shape: the same shape under another home is not" "$(eq "$(shape "$OUT/.claude/state/session-notes/p/s/t/f")" no)"
+
+notes_tree
+ln -s "$H/w/real-folder" "$NT/leaf-link"
+ln -s "$H/w/elsewhere" "$NS/task-link"
+ln -s "$NP" "$NOTES/proj-link"
+ln -s "$NT" "$H/w/into-notes"
+printf 'f\n' > "$NT/loose.txt"
+# Reaches the judge: the claude-records category, going to the Trash, by its own path.
+item a1 claude-records trash "$NT/photos"
+item a2 claude-records trash "$NT/my shots"
+# Stays refused, whatever its category says.
+item r1 claude-records trash "$H/.claude/state"
+item r2 claude-records trash "$NOTES"
+item r3 claude-records trash "$NP"
+item r4 claude-records trash "$NS"
+item r5 claude-records trash "$NT"
+item r6 claude-records trash "$NT/deep/inner"
+item r7 claude-records trash "$H/.claude/state/ai-review"
+item r8 claude-records trash "$NT/"
+item r9 claude-records trash "$NS/my task"
+item r10 claude-records trash "$NT/photos/.."
+item r11 claude-records trash "$NT/deep/../other"
+item r12 claude-records trash "$NT/leaf-link"
+item r13 claude-records trash "$NS/task-link/inner"
+item r14 claude-records trash "$NOTES/proj-link/${NS##*/}/task-1/other"
+item r15 claude-records trash "$H/w/into-notes/other"
+item r16 claude-records trash "$NS//task-1"
+item r17 claude-records trash "$NT/loose.txt"
+# The same four level folder under any other category, or by any way but the Trash.
+item r18 fixture trash "$NT/other"
+item r19 claude-records delete "$NT/other"
+item r20 claude-records truncate "$NT/other"
+item r21 named trash "$NT/other"
+record s1 10; plan "$H/plan" s1 a1 a2 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 r13 r14 r15 r16 r17 r18 r19 r20 r21
+run --plan "$H/plan"
+check "notes: a four level folder reaches its judge and is moved to the Trash" "$(gone "$NT/photos")"
+check "notes: and so does one whose name holds a space" "$(gone "$NT/my shots")"
+check "notes: the judge was asked about exactly those two, and nothing else under state" \
+  "$(eq "$(calls_of judge | sort | tr '\n' '|')" "$(printf 'judge judge %q\n' "$NT/my shots" "$NT/photos" | sort | tr '\n' '|')")"
+check "notes: both went through trash, never rm" "$(eq "$(calls_of trash | wc -l | tr -d ' ')" 2)"
+check "notes: an INTENT was written for each of the two" "$(eq "$(intents "$(LOGF s1)" '^a[12]$')" 2)"
+check "notes: and for nothing that was refused" "$(eq "$(intents "$(LOGF s1)" '^r')" 0)"
+line_of() { grep -F -- "$1" <<< "$OUT_TEXT" | awk 'NR == 1'; }
+for pair in "the state folder itself|$H/.claude/state:" "session-notes itself|$NOTES:" "a project|$NP:" "a session|$NS:" "a task folder|$NT:" "a five level path|$NT/deep/inner:" \
+  "another folder of state|$H/.claude/state/ai-review:" "a task folder with a trailing slash|$NT/:" "a task folder whose name holds a space|$NS/my task:" \
+  "a file at four levels|$NT/loose.txt:"; do
+  check "notes: ${pair%%|*} stays refused as Claude Code's own state" "$(has "$(line_of "${pair#*|}")" "never removed: it is Claude Code's own state")"
+done
+check "notes: a .. at the end of a four level path is refused" "$(has "$(line_of "$NT/photos/..:")" ". or .. component")"
+check "notes: a .. inside a path that lands four levels down is refused" "$(has "$(line_of "$NT/deep/../other:")" ". or .. component")"
+check "notes: a link at the fourth level is refused as a link" "$(has "$(line_of "$NT/leaf-link:")" "symbolic link")"
+check "notes: a link at the task level, leading out of state, does not reach the judge" "$(has "$(line_of "$NS/task-link/inner:")" "never removed: it is Claude Code's own state")"
+check "notes: a link at the project level, leading to another project, does not reach the judge" "$(has "$(line_of "$NOTES/proj-link/")" "never removed: it is Claude Code's own state")"
+check "notes: a link from outside state into a task folder does not reach the judge" "$(has "$(line_of "$H/w/into-notes/other:")" "never removed: it is Claude Code's own state")"
+check "notes: an empty level that makes a task folder read as four levels does not reach the judge" "$(has "$(line_of "$NS//task-1:")" "never removed: it is Claude Code's own state")"
+check "notes: a four level folder under another category stays refused" "$(eq "$(grep -c "skipped.*$NT/other: never removed: it is Claude Code's own state" <<< "$OUT_TEXT")" 4)"
+check "notes: everything refused is still there" \
+  "$(for f in "$NT/deep/inner/c" "$NT/other/d" "$NT/evidence.md" "$NS/handoff.md" "$H/.claude/state/ai-review/x" "$H/w/elsewhere/inner/e" "$NS/my task/f" "$NT/loose.txt" "$H/w/real-folder"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; echo ok)"
+check "notes: and every link is still a link" "$([ -L "$NT/leaf-link" ] && [ -L "$NS/task-link" ] && [ -L "$NOTES/proj-link" ] && [ -L "$H/w/into-notes" ] && echo ok || echo "a link is gone")"
+check "notes: a plan with refusals in it exits 5" "$(eq "$RC" 5)"
+
+# --propose is how a path is removed by name, judged only by its identity: it has no keep rules and
+# no 30 day floor, so the exception is never open to it.
+notes_tree
+run --propose trash "$NT/photos"
+check "notes: --propose refuses a four level folder, since its judge is not the keep rules" "$(has "$OUT_TEXT" "refused  $NT/photos: never removed: it is Claude Code's own state")"
+check "notes: and wrote no named record for it" "$([ -z "$(ls "$STATE/named" 2>/dev/null)" ] && echo ok || echo "a record was written")"
+check "notes: and the folder is still there" "$(there "$NT/photos/a.jpg")"
+
+# What the judge says still decides: the exception only lets the question be asked.
+notes_tree
+printf 'not offerable: the daily keep rules run does not list it\n' > "$VERDICTS/photos"
+item k1 claude-records trash "$NT/photos"; record s1 10; plan "$H/plan" s1 k1
+run --plan "$H/plan"
+check "notes: a four level folder its judge does not offer is kept, with the judge's reason" "$(has "$OUT_TEXT" "judged again just now: not offerable: the daily keep rules run does not list it")"
+check "notes: and it is still there" "$(there "$NT/photos/a.jpg")"
+
+# A four level folder already gone is reported as gone, like any other item.
+notes_tree
+item g1 claude-records trash "$NT/already-gone"; record s1 10; plan "$H/plan" s1 g1
+run --plan "$H/plan"
+check "notes: a four level folder that is already gone is reported as gone" "$(has "$OUT_TEXT" "it was already gone")"
+
+# ================================================================================================
 # 5. Symbolic links and the allowed root
 # ================================================================================================
 fresh
