@@ -23,6 +23,13 @@
 #     alert scripts too), by any path and behind any runner (sudo, env, rtk, nohup, xargs, find
 #     -exec); a package script (npm run, pnpm, yarn) whose package.json command posts, read with the
 #     words after the script's name, so a file handed to it is judged as one handed to npx is (#3143).
+#     Since #3251 also: the files a pattern handed to a runner matches (npx playwright test
+#     'tests/*.spec.js'); a package script run through a workspace selector (pnpm --filter, npm -w,
+#     yarn workspace), in each folder it chooses; the files a package script's own command hands a
+#     bare runner; and a shell whose code or script is named another way: /dev/stdin as the script,
+#     $SHELL as the program, a line read and then run, a command xargs builds from its input, and
+#     \$( ) in a double quoted string. Where one of those cannot be read, the typed command is
+#     refused as unread.
 #     A command that only mentions an endpoint (grep, echo, a test) passes.
 #   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
 #   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy

@@ -3861,9 +3861,32 @@ second reading the program they land on, where the script names it bare, is hand
 would hand them to it, since the package manager puts `node_modules/.bin` in front of the PATH. So
 `npm run test:node -- tests/x.spec.js`, whose script is `playwright test`, gets the answer `npx
 playwright test tests/x.spec.js` gets: refused where the spec's imports reach code that posts. The
-words the script itself writes after a bare program are judged as before, so handed only an option,
-or nothing, a script gets the answer it always got. Whether a single test file that loads posting
-code may run at all is #3173.
+words the script itself writes after a bare program are read the same way since #3251: a bare
+program in a script's own command that is no shell builtin and no program in `/bin`, `/usr/bin`,
+`/sbin` or `/usr/sbin` is read as the package `npx` would run, handed every word the script gives
+it, so `npm run test:one` with `"test:one": "playwright test tests/job.spec.js"` is refused where
+that spec's imports reach code that posts. Whether a single test file that loads posting code may
+run at all is #3173.
+
+Since #3251 two more things a package manager or a launcher is handed are read. A file pattern
+(`npx playwright test 'tests/*.spec.js'`, `node run-tests.js tests/*.spec.js`, a package script
+handed one) is expanded against the working tree as the shell expands it (`*`, `?`, `[ ]`, `{a,b}`
+and `**`, with `node_modules` and dot folders not entered unless the pattern names them) and each
+file it matches is read as if it were written there. The words are read as written first and then
+again with the matches in place, so a pattern can only add a refusal. It is a glob only: a runner's
+regular expression or substring filter (`npx jest 'alert.*'`, `npx playwright test job`) and a
+folder handed to a runner are not read, and are recorded for an issue of their own. A script run
+through a workspace selector (`pnpm --filter web test`, `pnpm -F`, `pnpm -r`, `npm -w web run
+test`, `npm --workspaces`, `yarn workspace web test`, `yarn workspaces foreach` or `run`) is judged
+in each folder the selector chooses, with the selector taken out of the words: the workspace root
+is the nearest folder above holding a `pnpm-workspace.yaml` or a `package.json` with `workspaces`,
+and a selector that is one plain name or path chooses the packages of that name or under that
+folder, while any other selector (a pattern, `...name`) chooses them all, which reads more than
+runs and never less. A plain selector matching nothing runs nothing and passes. Where these cannot
+be read with certainty the typed command is refused as unread: a pattern matching more than 200
+files or sitting in a folder of more than 4,000 entries, and a workspace root holding more than
+6,000 entries outside `node_modules`. In a script on disk each is left alone, as an unread feed is
+there.
 
 A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
 `export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
@@ -4270,9 +4293,38 @@ refused there. A redirection glued to a command's name or to its file is read as
 command with spaces (`bash<post`, `bash <post`, `bash 0<post`, `'bash'<post`): the shared reader
 splits a command's words on white space alone, so before this only `bash < post` had its file read.
 The wrapper sends a call to the rule for a shell's name followed by anything that ends the name, not
-only a space. Left open, each recorded for an issue of its own: `/dev/stdin` named as the script, a
-shell named by a variable, `xargs` building the command from its input, and a line read and then
-run.
+only a space. The four shapes this left open (`/dev/stdin` named as the script, a shell named by a
+variable, `xargs` building the command from its input, and a line read and then run) are read
+since #3251, below.
+
+Since claude-config#3251 five more ways of naming a shell, its code or its script are read, each
+as one more reading of the command after the ones there were, so each can refuse a command those
+let through and never the reverse (`lib/sh-walk-shapes.py`, `judge_unread_shapes`). A shell, an
+interpreter, `source` or `.` handed a path that names its own input (`cat post.sh | bash
+/dev/stdin`, `/dev/fd/0`, `/proc/self/fd/0`) is judged as the program reading its input (`bash
+-s`, `python3 -`), and another descriptor (`bash /dev/fd/3 3< post.sh`) is read where the same
+command opens it from a file. A command whose program is `$SHELL`, `${SHELL}`, `$BASH`,
+`$ZSH_NAME`, a typed `$0`, or a lookup of a shell's path (`$(which bash)`, `$(command -v zsh)`) is
+judged as that shell given the same words, as bash and as zsh where the variable can name either.
+A command that is a variable a `read`, `mapfile` or `readarray` filled earlier in the text (`read
+-r l < post.sh; $l`, `cat post.sh | { read -r l; $l; }`), or a whole command substitution
+(`$(cat post.sh)`), runs the text that was read, so the file the read is given, or what feeds the
+command, is judged as commands. Where what feeds `xargs` can be read, each command it puts
+together (its input added to the end, or put where `-I`, `-J` or `-i` writes the mark) is judged
+as a line, so `cat post.sh | xargs -0 bash -c` and `echo post.sh | xargs bash` are refused. And a
+double quoted `-c` or `eval` string holding a `$` or a backquote behind a backslash is judged
+again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`). Where one of these
+cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
+not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
+command substitution run as a command, where what was read cannot be read; and `xargs` whose input
+cannot be read, only where that input becomes the code or names what runs (a shell's `-c` with no
+string or with the mark in it, a shell or an interpreter with no script word, `npm run` or `npx`
+with nothing after it). A script written in the command and handed words from an unread input is
+judged as before, and in a script on disk, or in text one evaluates, each unread case is left
+alone. The wrapper sends a call to the rule when a command's first word holds a `$`, a backquote,
+a quote or a backslash, which named no shell or script as written. Left open, each recorded for an
+issue of its own: `turbo`, `nx` and `lerna`, and a loop over the words of a file (`for w in $(cat
+f); do $w; done`). Suite: `test-slack-drafts-unread-shapes.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same

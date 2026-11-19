@@ -818,9 +818,19 @@ def make(sh_special, sh_param, unknown_dir=None):
                 if pieces is None:
                     return None
             elif LONE_SUBST.fullmatch(first):
-                pieces = self.text_of_file(first, d) or [("unknown", None, "a command substitution")]
+                # No pieces at all is a file that is not there, which runs nothing; only a
+                # substitution that prints no one file's text is unread.
+                pieces = self.text_of_file(first, d)
+                if pieces is None:
+                    pieces = [("unknown", None, "a command substitution")]
             else:
                 return None
+            if self.sh_in_script():
+                # A script's own, or text one evaluates: what can be read is, and the rest is left
+                # as it was (as handed_text_reason leaves it).
+                pieces = [p for p in pieces if p[0] != "unknown"]
+                if not pieces:
+                    return None
             return self.pieces_reason(f"the command {shown}", pieces, d, depth, True, None,
                                       "is text read from a file, which it runs",
                                       "is text that was read, run as commands", unread)
