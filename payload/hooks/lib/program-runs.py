@@ -1178,11 +1178,36 @@ def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
             feed is (fed_reason)."""
             return None if self.sh_in_script() else self.unfollow(why)
 
-        def patterned(self, words, d):
+        def pattern_bare(self, word):
+            """Whether the pattern word stands somewhere in the text being read as a word of its
+            own outside quotes, where the shell replaces it with its matches before the program
+            starts. Told by what stands right around it: a quote on either side, or no such word
+            in the text at all (a value a variable carried), is not bare. A word after a package
+            script's name counts as bare however it was typed: the package manager adds it to the
+            script's command for a shell to read, quoted by some and not by others."""
+            handed = self.shell.get("handed")
+            if handed and word in handed[-1]:
+                return True
+            text = self.shell.get("text") or ""
+            for m in re.finditer(re.escape(word), text):
+                before = text[m.start() - 1] if m.start() else " "
+                after = text[m.end()] if m.end() < len(text) else " "
+                if before in " \t\n;&|(" and after in " \t\n;&|)<>":
+                    return True
+            return False
+
+        def patterned(self, words, d, runner=False):
             """(words with each pattern among them replaced by the files it matches, the reason a
             pattern could not be expanded or None). The shell replaces an unquoted pattern with its
             matches before the program starts, and a runner handed a quoted one expands it itself,
-            so either way the matches are what runs. A pattern is a word holding * ? [ or { that
+            so either way the matches are what runs. runner says the program is a package a
+            launcher or a package script runs, the one kind read as expanding a quoted pattern
+            itself. Handed to any other program a quoted pattern is that program's own text, a
+            pathspec or a filter far more often than files it runs (pattern_bare): the first build
+            expanded those too, and over this Mac's past commands that refused seven harmless
+            ones, among them this repository's tests/test-undated-measurements.sh, whose `bash
+            "$root/.../repo-files.sh" "$root" '*.md'` had CLAUDE.md read as a script bash may run.
+            A pattern is a word holding * ? [ or { that
             names no file as it stands; an option, a word holding a variable and a pattern matching
             nothing stay as written, as the shell leaves a pattern with no match. So does a word
             holding white space or a parenthesis, which is code or text a program is handed
@@ -1193,7 +1218,7 @@ def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
             out = [words[0]]
             for w in words[1:]:
                 if w[:1] in "-+" or not PATTERN_CHARS.search(w) or re.search(r"[$`<>\s()]", w) \
-                        or self.is_file(self.resolve(w, d)):
+                        or self.is_file(self.resolve(w, d)) or not (runner or self.pattern_bare(w)):
                     out.append(w)
                     continue
                 got = self.pattern_matches(w, d)

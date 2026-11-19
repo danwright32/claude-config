@@ -624,6 +624,30 @@ run_here '$(pwd)/$(basename ok.sh)'
 allowed "#3251 a program whose path is built from two substitutions is not read as a substitution run as a command"
 
 echo
+echo "slack drafts only: a quoted pattern handed to a program that is no runner is that program's own text (claude-config#3251)"
+
+# Found by the sweep of this Mac's past commands, 2026-11-19: the first build expanded every pattern
+# handed to any program, and seven harmless commands were newly refused. This repository's own
+# tests/test-undated-measurements.sh runs `bash "$root/payload/hooks/lib/repo-files.sh" "$root"
+# '*.md'`, a pathspec for git: its matches were read as files bash may run, and CLAUDE.md, which
+# names an endpoint, made the whole suite a command that posts. A quoted pattern is expanded only
+# for a package a launcher or a package script runs, which expands it itself; written bare, the
+# shell expands it for any program, and the files are judged as if written out.
+printf '%s\n' 'Call chat.postMessage to send.' 'Run `bash posts.sh` to send it.' > "$S/notes.md"
+printf '%s\n' 'root="$1"' 'found="$(bash "$root/lib/list.sh" "$root" '"'"'*.md'"'"' 2>/dev/null)"' > "$S/scan-md.sh"
+each allowed "#3251 a quoted pattern handed to a script is not expanded" 3<<'EOF'
+bash scan-md.sh
+bash "$NOWHERE/list.sh" . '*.md'
+python3 "$NOWHERE/list.py" '*.md' 'x[0]'
+bash "$NOWHERE/find.sh" . -maxdepth 1 -name 'post*'
+EOF
+run_here 'bash "$NOWHERE/list.sh" notes.md'
+WRITTEN_OUT="$RC"
+run_here 'bash "$NOWHERE/list.sh" *.md'
+if [ "$RC" -eq "$WRITTEN_OUT" ]; then check "#3251 the same pattern written bare is judged as its matches written out are (exit $WRITTEN_OUT)" ok
+else check "#3251 the same pattern written bare is judged as its matches written out are" "written out exit $WRITTEN_OUT, as a pattern exit $RC"; fi
+
+echo
 
 echo "passed: $pass, failed: $fail"
 

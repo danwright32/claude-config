@@ -6220,7 +6220,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # #3251): the words are read as written, as before, and then again with each pattern
         # replaced by its matches, so the second reading can only refuse more.
         if not expanded:
-            more, unread = self.patterned(words, d)
+            more, unread = self.patterned(words, d, bool(actor))
             if unread:
                 return unread
             if more != words:

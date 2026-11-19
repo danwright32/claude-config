@@ -3873,7 +3873,12 @@ Since #3251 two more things a package manager or a launcher is handed are read. 
 handed one) is expanded against the working tree as the shell expands it (`*`, `?`, `[ ]`, `{a,b}`
 and `**`, with `node_modules` and dot folders not entered unless the pattern names them) and each
 file it matches is read as if it were written there. The words are read as written first and then
-again with the matches in place, so a pattern can only add a refusal. It is a glob only: a runner's
+again with the matches in place, so a pattern can only add a refusal. A quoted pattern is expanded
+only for a package a launcher or a package script runs, which expands it itself, and for the words
+after a package script's name; handed quoted to any other program it is that program's own text (a
+pathspec, a filter), and a word holding white space or a parenthesis is never a pattern. The first
+build expanded every one, and over this Mac's past commands (2026-11-19) that newly refused seven
+harmless ones, this repository's `tests/test-undated-measurements.sh` among them. It is a glob only: a runner's
 regular expression or substring filter (`npx jest 'alert.*'`, `npx playwright test job`) and a
 folder handed to a runner are not read, and are recorded for an issue of their own. A script run
 through a workspace selector (`pnpm --filter web test`, `pnpm -F`, `pnpm -r`, `npm -w web run
