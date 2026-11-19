@@ -361,13 +361,14 @@ TOTAL_WARN_SMALL_WINDOW=120000
 # rate at all. Re-measure the rate itself by running this suite in a checkout.
 GROWTH_WINDOW_DAYS=30
 GROWTH_MIN_DAYS=14
-# The checkout whose history describes $1: the git work tree it sits in as payload/, else the one a
-# pull hands the runner in RUN_ALL_TESTS_CHECKOUT (the installed copy in ~/.claude has no history of
-# its own). Nothing when neither.
+# The checkout whose history describes $1: the claude-config checkout it is the payload of, as
+# lib/checkout-root.sh finds one for every suite (#3221, #3256), else the one a pull hands the runner
+# in RUN_ALL_TESTS_CHECKOUT (the installed copy in ~/.claude has no history of its own). Nothing when
+# neither.
 growth_repo() {  # $1 = payload directory
   local top
-  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || top=""
-  if [ -n "$top" ] && [ "$top/payload" -ef "$1" ]; then printf '%s' "$top"; return 0; fi
+  top="$(bash "$DIR/lib/checkout-root.sh" "$1" 2>/dev/null)" || top=""
+  if [ -n "$top" ]; then printf '%s' "$top"; return 0; fi
   top="${RUN_ALL_TESTS_CHECKOUT:-}"
   if [ -n "$top" ] && [ -f "$top/payload/CLAUDE.md" ] && git -C "$top" rev-parse --verify -q HEAD >/dev/null 2>&1; then
     printf '%s' "${top%/}"; return 0
@@ -700,6 +701,10 @@ else
   }
   gh_bytes(){ head -c "$1" /dev/zero | tr '\0' 'x'; }
   GH="$probe/history"; mkdir -p "$GH/payload"; git -C "$GH" init -q >/dev/null 2>&1
+  # A claude-config checkout, as lib/checkout-root.sh knows one: claude-sync at its top beside the
+  # payload (#3256). Without it the payload's own history is not read at all, which the case at the
+  # end of this block holds; every reading between is about the history, not the checkout.
+  : > "$GH/claude-sync"
   # No core: the whole library loads, and it grows by 1,000 characters every ten days.
   printf '@LESSONS-INDEX-a.md\nrules\n' > "$GH/payload/CLAUDE.md"
   gh_bytes 1000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 0 "library"
@@ -736,6 +741,13 @@ else
   printf '@LESSONS-INDEX-a.md\nrules\n' > "$INST/CLAUDE.md"; cp "$GH/payload/LESSONS-INDEX-a.md" "$INST/"
   reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
   case "$reading" in "UNREAD "*"LESSONS-INDEX-a.md"*) ok ;; *) bad "an installed copy loading a different set from the checkout was given the checkout's rate: $reading" ;; esac
+  # The same history in a repository that is not a claude-config checkout (no claude-sync at its
+  # top, a copy kept in some other repository) is not this set's history, and is not read as it:
+  # the checkout is found through lib/checkout-root.sh, the one test every suite asks (#3221, #3256).
+  OTHER="$probe/other"; git clone -q "$GH" "$OTHER" >/dev/null 2>&1
+  git -C "$OTHER" rm -q claude-sync >/dev/null 2>&1; gh_commit "$OTHER" 70 "no longer a claude-config checkout"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$OTHER/payload")"
+  case "$reading" in "UNREAD "*) ok ;; *) bad "a payload in a repository that is not a claude-config checkout was given a rate from that repository's history: $reading" ;; esac
 fi
 # THE MEMORY INDEX BUDGET (claude-config#1939), driven against a fixture projects folder with a set
 # clock, so it is seen to report an index over the budget and to stay quiet about one at or under it.
