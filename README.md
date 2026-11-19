@@ -3630,7 +3630,10 @@ lesson is written all walk, so none of them can disagree about what a fault is.
 A lesson can say what holds it (#3245). One indented line after the rule sentence names the check:
 `CHECK: hooks/x.sh (full)` when a check holds the whole rule, `(partial)` when a reader holds the
 rest, `owner/repo:path` for a check in another repository, or `NO CHECK: <why no check can hold it>`.
-A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above.
+A line in neither shape, two such lines, or one inside the rule sentence is a fault like those above,
+and so is a line holding a tab, a carriage return or another control character, or one running on to
+the next line, since its reader would judge only part of it (#3294). Spaces and tabs at its two ends
+are indentation and are not part of the line.
 `claude-sync lesson-checks` counts the whole library: lessons naming a check, lessons no check can
 hold, lessons with neither, named checks missing on disk, and core lessons a check holds fully,
 which are candidates for Dan to take out of the core one at a time. The lesson entry hook runs its
@@ -7672,9 +7675,9 @@ another place, one carrying anything he was not shown, one under a rule whose bo
 same line under another rule or on another lesson, and any check line when the picker showed him
 none are asked about as before (rules.ts `readCheckLine`, `addsLesson`). Visible words are not
 judged: any reason after `NO CHECK:` passes, because he reads it. The lessons file's own reader is
-wider in three places, where a line it takes is refused here and has to be reworded: a `NO CHECK:`
-reason holding a character outside ASCII, a line over 300 characters, and a tab or other white space
-that is not a space between words.
+wider in two places, where a line it takes is refused here and has to be reworded: a `NO CHECK:`
+reason holding a character outside ASCII, and a line over 300 characters. Since #3294 it refuses a
+tab, a carriage return or any other control character inside the line, as this picker does.
 For good on one file directly in a project's memory folder, once that save lands, also
 lets through the single line in that folder's `MEMORY.md` linking to it, once, until the same
 approval would lapse (#1794, Dan, 2026-10-26: "didn't I already give permission to save this?"): by

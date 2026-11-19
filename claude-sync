@@ -2563,7 +2563,11 @@ multi_short_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Ln
 #
 # Every entry, classified, one per line: Lnnn<TAB>full|partial|nocheck|neither|bad<TAB>detail. The
 # detail is the paths (space separated) for full and partial, the reason for nocheck, and what is
-# wrong for bad, worded without semicolons because the fault list joins its lines with them.
+# wrong for bad, worded without semicolons because the fault list joins its lines with them. A line
+# holding a tab, a carriage return or another control character, or running on to the next line,
+# is bad, as the ask before saving picker refuses it, rather than judged on part of its text
+# (claude-config#3294). How this reading and the picker's (checkLine in
+# mods/ask-before-saving/hooks/rules.ts) still differ is written down there, in one place.
 lesson_check_records(){   # $1 = the full lessons file
   [ -f "$1" ] || return 0
   lesson_entries_render "$1" checks | LC_ALL=C awk -F'\t' '
@@ -2603,7 +2607,9 @@ lesson_check_records(){   # $1 = the full lessons file
     $1 == "CHECKLINE" {
       n++
       if ($3 == 1) { bad("has a check line inside the rule sentence, where the index joins it into the rule, and it belongs after the sentence closes"); next }
-      if (n == 1) classify($4)
+      if ($4 == "wrapped") { bad("has a check line running on to the next line, which nothing reads as part of it, and a check line is one line placed just before the SHORT: line or last in the entry"); next }
+      if ($4 != "") { bad("has a check line holding a " $4 " inside it, and a check line holds no tab or other control character, since the text past one goes unread or shows other than it was written"); next }
+      if (n == 1) classify($5)
     }
     END { flush() }'
   return 0
@@ -3089,8 +3095,9 @@ lesson_short_form_pairs(){   # $1 = the full lessons file
 #   entries   ENTRY<TAB>Lnnn<TAB>how many SHORT: lines it holds<TAB>the rule sentence, for EVERY
 #             entry, short form or not (claude-config#392)
 #   checks    ENTRY<TAB>Lnnn for every entry, each followed by CHECKLINE<TAB>Lnnn<TAB>1 when inside
-#             the rule sentence, else 0<TAB>the line, for every line in it reading as a CHECK: or
-#             NO CHECK: line (claude-config#3245)
+#             the rule sentence, else 0<TAB>tab, carriage return, control character, wrapped or
+#             nothing<TAB>the line, any control character in it blanked, for every line in it
+#             reading as a CHECK: or NO CHECK: line (claude-config#3245, #3294)
 lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks
   [ -f "$1" ] || return 0
   # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
@@ -3129,16 +3136,40 @@ lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pa
         # whatever its case or spelling, so a line in neither shape is refused rather than silently
         # counted as an entry carrying neither. A line inside the wrapped rule sentence (k <= j) is
         # flagged, because the wrap above has already joined it into the rule the index renders.
+        #
+        # The record is split at tabs and ends at a line end, so a check line holding a tab was cut
+        # there and judged on the part before it (claude-config#3294). Only spaces and tabs at the
+        # two ends are indentation, as the ask before saving picker reads them. A tab, carriage
+        # return or other control character left inside is named in the fourth field and the line
+        # printed with it blanked, so the record stays whole and the reader refuses the line rather
+        # than judging part of it. A line running on to the next one is named too: what follows a
+        # check line in its documented place is a SHORT: line, another check line, a blank line or
+        # the next entry, and anything else is the check line wrapped, its second half unread.
         if (mode == "checks") {
           if (!match(rule, /^L[0-9]+\./)) continue
           num = substr(rule, 1, RLENGTH - 1)
           printf "ENTRY\t%s\n", num
+          if (nctl == 0) {
+            for (c = 1; c < 32; c++) ctl[++nctl] = c
+            ctl[++nctl] = 127
+          }
           for (k = i + 1; k <= NR; k++) {
             if (line[k] ~ /^- \*\*L[0-9]+\./ || line[k] ~ /^## /) break
             t = line[k]
-            sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
-            if (tolower(t) ~ /^(no[ _-]*)?check(ed)?([ _-]*by)?[[:space:]]*:/)
-              printf "CHECKLINE\t%s\t%d\t%s\n", num, (k <= j ? 1 : 0), t
+            sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t)
+            if (tolower(t) !~ /^(no[ _-]*)?check(ed)?([ _-]*by)?[[:space:]]*:/) continue
+            fault = ""; at = 0
+            for (c = 1; c <= nctl; c++) {
+              ch = sprintf("%c", ctl[c]); p = index(t, ch)
+              if (p > 0 && (at == 0 || p < at)) { at = p; fault = (ctl[c] == 9 ? "tab" : ctl[c] == 13 ? "carriage return" : "control character") }
+              if (p > 0) gsub(ch, " ", t)
+            }
+            if (fault == "" && k < NR) {
+              nx = line[k + 1]; u = nx
+              sub(/^[[:space:]]+/, "", u)
+              if (nx !~ /^- \*\*L[0-9]+\./ && nx !~ /^## / && u != "" && u !~ /^SHORT: / && tolower(u) !~ /^(no[ _-]*)?check(ed)?([ _-]*by)?[[:space:]]*:/) fault = "wrapped"
+            }
+            printf "CHECKLINE\t%s\t%d\t%s\t%s\n", num, (k <= j ? 1 : 0), fault, t
           }
           continue
         }
