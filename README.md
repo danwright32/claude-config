@@ -6180,7 +6180,10 @@ folders a Swift `.build` beside its `Package.swift` and a build folder inside a 
 project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
 stays refused). Shown and never offered, each row saying why: in `claude-records.sh`, session notes
 as a whole, Claude Code's file history, the finding spool and its backups, and the folders this
-config's hooks keep in the home folder, with the rest of `~/.claude/state` counted in its note; and
+config's hooks keep in the home folder, with the rest of `~/.claude/state` counted in its note, and
+so is every other home entry named `.claude-*` or `.claude.*` (the sync's folders and logs, other
+hooks' records, Claude Code's `~/.claude.json` and its backups), so the kind accounts for all of
+them where only some were rows before (the work MacBook held twelve such folders on 2026-11-19); and
 `claude-user-temp.sh` (Claude named entries in the user temp folder, counted in the kind's note
 rather than listed). A kind that offers nothing carries the line `# offers: nothing` (Dan signed
 this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
