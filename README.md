@@ -5184,8 +5184,10 @@ its own throwaway folder, whatever was inherited. A suite typed straight into a 
 none of them, so a builder's check before a full run wrote into the real records: 123 fixture rows
 from `test-gates-fail-closed.sh` reached the real refusal record that way (#2126). Now
 `suite_deadline_arm`, which every suite calls near its top, fills in each one nothing has set yet,
-in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`, which
-claude-sync's scratch sweep reclaims after four hours. Under the runner every one is already set,
+in one folder of its own under `$TMPDIR` named `claude-sync-suite-work.isolated.*`. The suite's
+watchdog, or a small waiter when it has no deadline, removes that folder once the suite's process
+has gone, however it ended (claude-config#3253); claude-sync's scratch sweep, which reclaims one
+after four hours, is only the backstop now. Under the runner every one is already set,
 so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
