@@ -67,6 +67,34 @@ PIPE_LEAD = re.compile(r"(?:(?<![\w$.-])(?:if|while|until|time)|[!({])\Z")
 # as a text of its own: past it the input is not worked out, and refused.
 MAX_HELD = 8
 
+# The shapes judge_unread_shapes reads (claude-config#3251). A command holding none of these is
+# none of them.
+UNREAD_HINT = re.compile(r"[$`\\]|/dev/|/proc/|xargs")
+# A command's first word that names a shell: the variable a shell keeps its own path or name in
+# (group 1; $0 only in a typed command), or a lookup of a program's path (groups 2 and 3).
+SHELL_NAMED = re.compile(
+    r'"?(?:\$\{?(SHELL|BASH|ZSH_NAME|0)(?![A-Za-z0-9_])(?::?-[^}]*)?\}?'
+    r'|\$\(\s*(?:which|command\s+-v|type\s+-[pP])\s+([\w.+-]+)\s*\)'
+    r'|`\s*(?:which|command\s+-v|type\s+-[pP])\s+([\w.+-]+)\s*`)"?(?=[\s;&|<>]|\Z)')
+SHELL_NAMES = {"SHELL": ("bash", "zsh"), "0": ("bash", "zsh"), "BASH": ("bash",), "ZSH_NAME": ("zsh",)}
+# A path that names a program's own input, or another descriptor it holds (group 1 or 2).
+STDIN_PATH = re.compile(r"/dev/stdin|/dev/fd/(\d+)|/proc/self/fd/(\d+)")
+# A first word that is one variable, an array's every element included, and one that is one command
+# substitution and nothing else.
+LONE_VAR = re.compile(r'"?\$\{?([A-Za-z_]\w*)(?:\[[@*]\])?\}?"?')
+LONE_SUBST = re.compile(r'"?(?:\$\((?!\()[\s\S]*\)|`[^`]*`)"?')
+# A command that fills variables from its input: the builtin, then its words up to what ends it.
+READS = re.compile(r"(?:^|(?<=[\s;&|({]))(read|mapfile|readarray)(?=\s)([^;&|\n(){}]*)")
+# xargs' options that take a value, glued or as the next word (as the shared reader's RUNNERS has
+# them), and a backslash in front of a $ or a backquote.
+XARGS_VALUED = "EIJLnPRSsad"
+XARGS_LONGS = ("--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--process-slot-var",
+               "--max-lines", "--eof")
+ESCAPED_SUBST = re.compile(r"\\[$`]")
+# Programs a package manager or a launcher is: run by xargs with nothing after them, the input
+# names the script or the package.
+XARGS_NAMED = {"npm", "pnpm", "yarn", "npx", "pnpx", "bunx"}
+
 
 def make(sh_special, sh_param, unknown_dir=None):
     """The base class for the gate's Judge (module docstring). sh_special is its SH_SPECIAL, the
@@ -662,5 +690,437 @@ def make(sh_special, sh_param, unknown_dir=None):
             except self.sw.Unreadable:
                 return self.held_unknown()
 
+        # A shell, its code or its script named another way (claude-config#3251, the shapes #3229
+        # left open). Each passed on 2026-11-18 with a file that posts: `$SHELL posts`, `cat posts.sh
+        # | bash /dev/stdin`, `cat posts.sh | { read -r l; $l; }`, `cat posts.sh | xargs -0 bash -c`
+        # and `bash -c "echo \$(bash posts.sh)"`. judge_unread_shapes is one more reading of a
+        # command, after the Judge's own, so it can refuse a command those let through and never
+        # the reverse. What it cannot read is refused where typed and left alone in a script on
+        # disk, as an unread feed is.
+
+        def judge_unread_shapes(self, d, text, wrapper, depth, whole):
+            """The reason one command posts by one of those shapes, or None."""
+            if not UNREAD_HINT.search(text) or self.reshaping >= 4:
+                return None
+            rest = self.sw.join_continuations(self.rest_of(text)[0])
+            noted = len(self.unfollowed)
+            self.reshaping += 1
+            try:
+                reason = (self.named_shell(d, text, rest, depth, whole)
+                          or self.stdin_named(d, text, rest, depth, whole)
+                          or self.line_run(d, text, rest, depth, whole)
+                          or self.xargs_built(d, text, rest, depth, whole)
+                          or self.escaped_string(d, text, rest, depth))
+            finally:
+                self.reshaping -= 1
+            if reason and self.sh_in_script() and any(u in reason for u in self.unfollowed[noted:]):
+                # In a script on disk only a finding that something posts stands. A reading here
+                # puts a command together and reads it as a line of its own, which knows none of
+                # the script's variables or of the words a -c string is handed, so there it can
+                # fail to read what the script's own reading reads: this repository's
+                # test-merge-target.sh runs `"$BASH" -c '. "$0/lib/merge-target.sh"; ...'
+                # "$HOOK_DIR"`, and read as a line the string's $0 is nobody's.
+                del self.unfollowed[noted:]
+                return None
+            return reason
+
+        reshaping = 0  # how many of these readings are inside one another
+        reads_memo = {}  # the read commands of each text, for read_feed (one Judge runs in a process)
+
+        def inner_line(self, s, d, depth):
+            """line() for a text one of these readings puts together, read as typed or as a script
+            on disk's own as the command it comes from is; the reason it posts, or None, or that it
+            is too deep to read."""
+            if depth >= self.pkg_max_depth:
+                return self.unread_typed(f"a command is put together more than {self.pkg_max_depth} texts deep, "
+                                         "which is not read, so whether it posts cannot be checked")
+            self.next_on_disk = self.sh_in_script()
+            try:
+                return self.line(s, d, depth + 1, s)
+            except self.sw.Unreadable:
+                return self.unread_typed(f"the command {s[:80]} cannot be read as commands, so whether it "
+                                         "posts cannot be checked")
+            finally:
+                self.next_on_disk = False
+
+        def rejudge(self, d, new, text, depth, whole):
+            """The reason the command new posts, or None: text with its program written as the
+            program it is, judged as that program is. A string a shell is handed there is read as
+            a command line here, since the reader gave its commands to nobody under the name as
+            written (as judge_unglued reads one); what feeds the command is found by text."""
+            wrapper, string, why = self.sw.wrapped(self.rest_of(new)[0]) or ("", None, "")
+            if string is not None and not why:
+                inner = self.inner_line(string, d, depth)
+                if inner:
+                    return f"{wrapper} runs a string, one of whose commands posts: {inner}"
+            return self.judge_written(d, new, wrapper, why, depth, whole, text) or self.judge_unglued(d, new, depth, whole)
+
+        def named_shell(self, d, text, rest, depth, whole):
+            """The reason a command whose program is $SHELL, $BASH, $ZSH_NAME, $0 where typed, or a
+            lookup of a program's path (`$(which bash)`), posts, or None: judged as that program
+            given the same words. $SHELL and $0 name whichever shell the person uses, so they are
+            judged as bash and as zsh, which read a file with a NUL in its first line differently."""
+            m = SHELL_NAMED.match(rest)
+            if not m:
+                return None
+            if m.group(1):
+                if m.group(1) == "0" and self.sh_in_script():
+                    return None  # a script's own name, which runs the script again
+                names = SHELL_NAMES[m.group(1)]
+            else:
+                names = (m.group(2) or m.group(3),)
+            for name in names:
+                reason = self.rejudge(d, name + rest[m.end():], text, depth, whole)
+                if reason:
+                    return f"{m.group(0)} is the program {name}: {reason}"
+            return None
+
+        def stdin_named(self, d, text, rest, depth, whole):
+            """The reason a shell, an interpreter, source or . handed a path that names its own
+            input (/dev/stdin, /dev/fd/0, /proc/self/fd/0) as the file it runs posts, or None: judged
+            as the program reading its input (`bash -s`, `python3 -`), so what feeds it is read as
+            its script is. Another descriptor (/dev/fd/3) is read where the same command opens it
+            from a file (`3< file`), and is unread anywhere else."""
+            if not STDIN_PATH.search(rest):
+                return None
+            words = self.words_of(rest)
+            name = os.path.basename(words[0]) if words else ""
+            sourced = name in ("source", ".")
+            fam = None if sourced else self.family(name)
+            if not sourced and not fam:
+                return None
+            operand = (words[1] if len(words) > 1 else None) if sourced else self.operands(words)[0]
+            m = STDIN_PATH.fullmatch(operand or "")
+            if not m:
+                return None
+            fd = m.group(1) or m.group(2) or "0"
+            new = rest
+            if fd != "0":
+                opened = re.search(r"(?<![\w$/.-])" + fd + r"<(?![<&>])", rest)
+                if not opened:
+                    return self.unread_typed(
+                        f"{name} runs {operand}, a descriptor this command does not open from a file, so what "
+                        "it holds cannot be read and whether it posts cannot be checked. Hand it the file by name")
+                new = rest[:opened.start()] + rest[opened.start() + len(fd):]
+            at = new.find(operand)
+            new = ("sh -s" if sourced else new[:at] + ("-s" if fam == "shell" else "-")) + new[at + len(operand):]
+            reason = self.rejudge(d, new, text, depth, whole)
+            return f"{name} is handed its input as the file {operand}: {reason}" if reason else None
+
+        def line_run(self, d, text, rest, depth, whole):
+            """The reason a command that is text read from somewhere else posts, or None: one named
+            by a variable that read, mapfile or readarray fills earlier in the text, which runs the
+            line that was read, and one that is a whole command substitution, which runs what the
+            substitution prints (`$(cat F)` runs F's text). What was read is judged as commands: the
+            file the read is given, or what feeds the command, as a shell's input is read."""
+            ticked = re.match(r'"?`[^`]*`"?(?=[\s;&|<>]|\Z)', rest)
+            first = ticked.group(0) if ticked else rest[:self.sh_word_end(rest, 0)]
+            if not first or SHELL_NAMED.match(rest):
+                return None
+            shown = first[:60]
+
+            def unread(came):
+                return (f"the command {shown} is text read as the command runs{came}, which cannot be read "
+                        "before it runs, so whether it posts cannot be checked. Write the command out")
+
+            var = LONE_VAR.fullmatch(first)
+            if var:
+                pieces = self.read_feed(var.group(1), d, text, whole)
+                if pieces is None:
+                    return None
+            elif LONE_SUBST.fullmatch(first):
+                core = first.strip('"')
+                if core.startswith("$(") and self.sh_close(core, 2) != len(core) - 1:
+                    # Two substitutions in one word (`$(pwd)/$(basename x)`) are a path built from
+                    # what they print, not text run as commands: judged as before.
+                    return None
+                # No pieces at all is a file that is not there, which runs nothing; only a
+                # substitution that prints no one file's text is unread.
+                pieces = self.text_of_file(first, d)
+                if pieces is None:
+                    pieces = [("unknown", None, "a command substitution")]
+            else:
+                return None
+            if self.sh_in_script():
+                # A script's own, or text one evaluates: what can be read is, and the rest is left
+                # as it was (as handed_text_reason leaves it).
+                pieces = [p for p in pieces if p[0] != "unknown"]
+                if not pieces:
+                    return None
+            return self.pieces_reason(f"the command {shown}", pieces, d, depth, True, None,
+                                      "is text read from a file, which it runs",
+                                      "is text that was read, run as commands", unread)
+
+        def read_feed(self, name, d, text, whole):
+            """What the read, mapfile or readarray that fills the variable name reads, as pieces, or
+            None where the text being read has none before this command or nothing feeds it. Its
+            own file or here string where it has one; else what feeds this command, which stands
+            in the same group or loop in every form measured; else, where the text holds a pipe or
+            an input at all, one unreadable piece."""
+            s, at = self.shell.get("text") or "", self.shell.get("at")
+            # Each text's reads are found once: a large script asks this of every command it names
+            # by a variable.
+            reads = self.reads_memo.get(s)
+            if reads is None:
+                if len(self.reads_memo) > 64:
+                    self.reads_memo.clear()
+                reads = self.reads_memo[s] = [
+                    (m, frozenset(re.findall(r"[A-Za-z_]\w*", m.group(2).split("<", 1)[0])))
+                    for m in READS.finditer(s)] if "read" in s or "mapfile" in s else []
+            found = None
+            for m, names in reads:
+                if name in names and (at is None or m.start(1) < at):
+                    found = m
+            if found is None:
+                return None
+            got = self.sh_given(d, found.group(0), found.start(1), whole)
+            if got is None:
+                got = self.fed_pieces(d, text, whole)
+            if got is None or got is False:
+                got = self.held_unknown("what the read before it reads") if re.search(r"\||<", s) else None
+            return got
+
+        def xargs_built(self, d, text, rest, depth, whole):
+            """The reason a shell, an interpreter, a package manager or a launcher run by xargs
+            posts through what xargs reads, or None. xargs adds the words of its input to the end
+            of the command, or with -I, -J or -i puts each line where the command writes the mark,
+            so the input can be the shell's code (`xargs -0 bash -c`, `xargs -I{} sh -c '{}'`) or
+            name the script it runs (`xargs bash`). Where what feeds xargs can be read (fed_pieces)
+            each command it puts together is judged as a line. Where it cannot, the typed command is
+            refused only when the input is the code or names what runs; a script written in the
+            command and handed words nobody can read is judged as before, as any command handed a
+            word of unknown value is."""
+            if "xargs" not in text:
+                return None
+            passed = []
+            self.sw.command_rest(text, passed)
+            if not any(os.path.basename(n) == "xargs" for n, _ in passed):
+                return None
+            words = self.words_of(rest)
+            name = os.path.basename(words[0]) if words else ""
+            fam = self.family(name)
+            if not fam and name not in XARGS_NAMED:
+                return None
+            try:
+                toks = self.sw.shell_split(self.sw.join_continuations(text))
+            except ValueError:
+                return None
+            k = next((i for i, t in enumerate(toks) if os.path.basename(t) == "xargs"), None)
+            if k is None:
+                return None
+            marks, nul, per_item, arg_file, i = [], False, False, None, k + 1
+            while i < len(toks) and toks[i].startswith("-") and len(toks[i]) > 1:
+                t = toks[i]
+                i += 1
+                if t == "--":
+                    break
+                if t.startswith("--"):
+                    opt, eq, val = t.partition("=")
+                    if not eq and opt in XARGS_LONGS and i < len(toks):
+                        val = toks[i]
+                        i += 1
+                    if opt == "--replace":
+                        marks.append(val or "{}")
+                    nul = nul or opt == "--null"
+                    per_item = per_item or opt in ("--max-args", "--max-lines")
+                    arg_file = val if opt == "--arg-file" else arg_file
+                    continue
+                for j in range(1, len(t)):
+                    c = t[j]
+                    if c in XARGS_VALUED:
+                        val = t[j + 1:]
+                        if not val and i < len(toks):
+                            val = toks[i]
+                            i += 1
+                        if c in "IJ":
+                            marks.append(val)
+                        per_item = per_item or c in "nL"
+                        arg_file = val if c == "a" else arg_file
+                        break
+                    if c == "i":
+                        marks.append(t[j + 1:] or "{}")
+                        break
+                    nul = nul or c == "0"
+            marks = [m for m in marks if m]
+
+            def marked(w):
+                return any(m in w for m in marks)
+
+            # Whether the input is the code or names what runs.
+            if fam:
+                operand, inline, _ = self.operands(words)
+                if inline and inline[1]:
+                    need = marked(inline[1])
+                elif inline or operand is None or operand == "-":  # -c with no code after it, or no script
+                    need = not marks or any(marked(w) for w in words[1:])
+                else:
+                    need = marked(operand)
+            else:
+                plain = [w for w in words[1:] if not w.startswith("-")]
+                need = any(marked(w) for w in words[1:]) or (not marks and all(
+                    w in ("run", "run-script", "exec", "x", "dlx") for w in plain))
+            pieces = self.pieces_of(arg_file, d) if arg_file else self.fed_pieces(d, text, whole)
+            if pieces is False:
+                return None  # nothing in the command feeds it
+            data, came = [], None
+            for kind, value, label in pieces or [("unknown", None, "")]:
+                if kind == "text":
+                    data.append(value or "")
+                elif kind == "file":
+                    try:
+                        data.append(self.content(value).decode("utf-8", "replace"))
+                    except OSError:
+                        came = label or value
+                else:
+                    came = label or "a command the gate does not read"
+            if came is None:
+                data = "".join(data)
+                if nul:
+                    items = [x for x in data.split("\0") if x.strip()]
+                elif marks:
+                    items = [x.strip() for x in data.split("\n") if x.strip()]
+                else:
+                    try:
+                        items = self.sw.shell_split(data)
+                    except ValueError:
+                        items = data.split()
+                if len(items) > MAX_CHOICES:
+                    came = f"more than {MAX_CHOICES} words or lines"
+            if came is not None:
+                if not need:
+                    return None
+                return self.unread_typed(
+                    f"xargs puts what it reads on its input into what {name} runs, and that input, which comes "
+                    f"from {came}, cannot be read, so whether it posts cannot be checked. Hand {name} the "
+                    "script by name, or write the command out")
+            if marks:
+                runs = [[self.xargs_marked(w, marks, item) for w in words] for item in items]
+            else:
+                runs = [words + items] + ([words + [item] for item in items] if per_item and len(items) > 1 else [])
+            for run in runs:
+                inner = self.inner_line(" ".join(self.sh_quoted(w) for w in run), d, depth)
+                if inner:
+                    return f"xargs runs {name} with what it reads on its input: {inner}"
+            return None
+
+        @staticmethod
+        def xargs_marked(word, marks, item):
+            for m in marks:
+                word = word.replace(m, item)
+            return word
+
+        @staticmethod
+        def sh_quoted(word):
+            """word as one word of a command line, in single quotes where it needs them."""
+            if word and re.fullmatch(r"[\w@%+=:,./-]+", word):
+                return word
+            return "'" + word.replace("'", "'\"'\"'") + "'"
+
+        def sh_inner_text(self, raw, d):
+            """(one word as written, as the shell hands it on; whether it holds something that shell
+            fills in whose value the gate does not work out). Quotes are taken off, and inside
+            double quotes or bare a backslash is taken off what it escapes, so `"echo \\$(x)"` is
+            `echo $(x)`. A variable or a substitution with no backslash is the outer shell's: it is
+            replaced by its value where the gate works that out (sh_value), and stays as written
+            where it does not, a word of unknown value to whoever reads the text. Where the text
+            has it inside single quotes of its own (`". '$DIR/lib.sh'"`) those are closed around
+            it, since the inner shell is handed the folder there and never the text $DIR."""
+            out, i, n, dq, unknown = [], 0, len(raw), False, False
+            inner = {"sq": False, "dq": False, "esc": False}  # the quotes of the text being built
+
+            def put(s):
+                for ch in s:
+                    if inner["esc"]:
+                        inner["esc"] = False
+                    elif inner["sq"]:
+                        inner["sq"] = ch != "'"
+                    elif ch == "\\":
+                        inner["esc"] = True
+                    elif ch == '"':
+                        inner["dq"] = not inner["dq"]
+                    elif ch == "'" and not inner["dq"]:
+                        inner["sq"] = True
+                out.append(s)
+
+            while i < n:
+                c = raw[i]
+                if c == "'" and not dq:
+                    j = raw.find("'", i + 1)
+                    j = n if j < 0 else j
+                    put(raw[i + 1:j])
+                    i = j + 1
+                elif c == '"':
+                    dq = not dq
+                    i += 1
+                elif c == "\\" and i + 1 < n:
+                    if dq and raw[i + 1] not in '$`"\\\n':
+                        put(c)
+                        i += 1
+                    else:
+                        put("" if raw[i + 1] == "\n" else raw[i + 1])
+                        i += 2
+                elif c in "$`":
+                    end = None
+                    if c == "`":
+                        j = raw.find("`", i + 1)
+                        end = j + 1 if j > 0 else None
+                    elif raw.startswith("$(", i) and not raw.startswith("$((", i):
+                        j = self.sh_close(raw, i + 2)
+                        end = j + 1 if j is not None else None
+                    else:
+                        m = sh_param.match(raw, i)
+                        end = m.end() if m else None
+                    if end is None:
+                        put(c)
+                        i += 1
+                        continue
+                    filled = self.sh_value('"' + raw[i:end] + '"', d)
+                    if filled is not None:
+                        put(filled)
+                    else:
+                        # Its own quotes are its own, so the quotes of the text around it stay as
+                        # they were.
+                        unknown = True
+                        inner["esc"] = False
+                        out.append("'\"" + raw[i:end] + "\"'" if inner["sq"] else raw[i:end])
+                    i = end
+                else:
+                    put(c)
+                    i += 1
+            return "".join(out), unknown
+
+        def escaped_string(self, d, text, rest, depth):
+            """The reason a string handed to a shell's -c or to eval posts once the backslashes the
+            outer shell takes off are off, or None. In `bash -c "echo \\$(bash post.sh)"` the inner
+            shell is handed `echo $(bash post.sh)` and runs post.sh. The shared reader keeps the
+            backslash, so the substitution is text to every other reading. Only a string holding a
+            backslash in front of a $ or a backquote is read again. What the outer shell fills in
+            is filled in where the gate works it out (sh_inner_text). Where it does not, the text
+            the inner shell gets is not known: typed, the string is read with that part as a word of
+            unknown value, and in a script on disk it is left as before, as every reading there
+            leaves what cannot be worked out (this repository's own test-pr-review.sh sources two
+            files by `'$DIR/lib/...'` in such a string)."""
+            if not ESCAPED_SUBST.search(text):
+                return None
+            found = self.sw.wrapped(rest)
+            if not found or found[1] is None:
+                return None
+            raws = self.raw_words(text)
+            if found[0] == "eval":
+                code = [r for r in raws[1:] if r != "--"]
+            elif found[0].endswith(" -c"):
+                inline = self.operands(raws)[1] if raws else None
+                code = [inline[1]] if inline else []
+            else:
+                return None
+            if not any(ESCAPED_SUBST.search(r) for r in code):
+                return None
+            texts = [self.sh_inner_text(r, d) for r in code]
+            value = " ".join(t for t, _ in texts)
+            if value == found[1] or (any(u for _, u in texts) and self.sh_in_script()):
+                return None
+            inner = self.inner_line(value, d, depth)
+            return (f"{found[0]} runs a string whose substitution is written with a backslash, which the shell "
+                    f"it is handed to runs: {inner}") if inner else None
 
     return ShWalkShapes

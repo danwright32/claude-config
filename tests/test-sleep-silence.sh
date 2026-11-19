@@ -58,6 +58,7 @@ EXEMPT="$WORK/exempt.tsv"
 cat > "$EXEMPT" <<'EOF'
 settings:SubagentStop:subagent-issue-harvest.sh	Runs async and only writes a finishing agent's findings to the issue spool; it never prints to Dan, and the spool waits for the morning.
 settings:TeammateIdle:teammate-challenge-gate.sh	Talks to an agent team's teammate before it goes idle, never to Dan.
+settings:PermissionDenied:payload-write-gate.sh	Only removes the write gate's own note for the call auto mode refused, and prints nothing: no notification, sound or question, and not one byte to stdout or stderr, asleep or awake, which section 2b below runs it to prove. Dan signed this entry off on 2026-11-19, asked "This hook only deletes its own note and prints nothing. Sign off an exempt entry for it?" and answering "Sign off the entry" (claude-config#3253). It covers that and nothing wider: a hook on this event that comes to say or decide anything needs the predicate.
 mod:scope-modes/hooks/register.ts:notify:notifier	The sleep mode notification itself: by endIfOver once the record no longer holds (past noon ET or another boot), the one page L523 calls for when a mute ends by itself; by /sleep when it refuses to start (#1545), before any record is written; and, the one page while asleep, by powerMinute once when the Mac goes onto battery and once when it comes back, which Dan asked for in #1545 so a pulled charger does not silently lose the night.
 mod:scope-modes/hooks/register.ts:classic.Stop	Blocks only to keep Claude finishing winding down; a question that leads to is refused while asleep by this mod's AskUserQuestion refusal.
 mod:manual-steps/hooks/register.tsx:classic.Stop	Sends Claude back to pin a steps card, and a card pinned while asleep is held by scope modes' hold, which reads the sleep record.
@@ -259,6 +260,43 @@ world unreadable awake; printf 'not json' > "$H/.claude/state/sleep/current.json
 run_route turn-end-sound.sh Stop >/dev/null
 grep -q '^afplay ' "$STUB_LOG" && check "an unreadable sleep record reads as awake, so the turn end sound plays" ok \
   || check "an unreadable sleep record reads as awake, so the turn end sound plays" "afplay was not run"
+
+# ---- 2b. the exempt route whose reason is that it prints nothing is run, asleep and awake ----
+# settings:PermissionDenied:payload-write-gate.sh sits on the exempt list because it only removes the
+# write gate's own note for a refused call and prints nothing (claude-config#3253; Dan, 2026-11-19).
+# A reason is a claim about what a hook does, and the list alone would go on believing it after the
+# hook changed (L129, L400). So the route is run here against an asleep record and an awake one and
+# held to the claim in both: exit 0, not one byte on stdout or stderr, nothing run that reaches Dan,
+# the note named for the refused call gone and another call's note still there. The notes here are
+# empty files under the names the gate gives its own; hooks/test-payload-write-gate.sh holds the same
+# with notes the gate took itself.
+DENIED_ROUTE="settings:PermissionDenied:payload-write-gate.sh"
+grep -q "^$DENIED_ROUTE"$'\t' "$ROUTES" && check "the write gate on PermissionDenied is found as a route" ok \
+  || check "the write gate on PermissionDenied is found as a route" "not found, so the runs below judge a hook nothing registers"
+asleep_now() { env HOME="$H" bash -c '. "$1" && sleep_active' _ "$HOOKS/lib/sleep.sh" >/dev/null 2>&1; }
+for state in awake asleep; do
+  world denied "$state"
+  if asleep_now; then seen=asleep; else seen=awake; fi
+  [ "$seen" = "$state" ] && check "the $state world reads as $state to the sleep predicate (the control)" ok \
+    || check "the $state world reads as $state to the sleep predicate (the control)" "it reads as $seen, so the run below is not a run while $state"
+  NOTES="$H/gate-notes"; mkdir -p "$NOTES"
+  : > "$NOTES/toolu_refused.roots"; : > "$NOTES/toolu_refused.list"; : > "$NOTES/toolu_other.roots"
+  printf '{"session_id":"s1","cwd":"%s","permission_mode":"auto","hook_event_name":"PermissionDenied","tool_name":"Bash","tool_input":{"command":"true"},"tool_use_id":"toolu_refused","reason":"refused by auto mode"}' "$WORK" \
+    | env HOME="$H" CLAUDE_HOME="$H/.claude" TMPDIR="$WORK/tmp" PATH="$STUBS:$PATH" PAYLOAD_WRITE_STATE_DIR="$NOTES" \
+        bash "$HOOKS/payload-write-gate.sh" > "$H/denied.out" 2> "$H/denied.err"
+  denied_rc=$?
+  [ "$denied_rc" -eq 0 ] && check "the write gate on PermissionDenied exits 0 while $state" ok \
+    || check "the write gate on PermissionDenied exits 0 while $state" "exit $denied_rc"
+  [ ! -s "$H/denied.out" ] && check "and writes nothing to stdout while $state" ok \
+    || check "and writes nothing to stdout while $state" "it wrote '$(head -c 200 "$H/denied.out")'"
+  [ ! -s "$H/denied.err" ] && check "and nothing to stderr while $state" ok \
+    || check "and nothing to stderr while $state" "it wrote '$(head -c 200 "$H/denied.err")'"
+  [ ! -s "$STUB_LOG" ] && check "and runs no notifier or sound while $state" ok \
+    || check "and runs no notifier or sound while $state" "ran: $(cat "$STUB_LOG")"
+  left="$(find "$NOTES" -type f | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ')"
+  [ "$left" = "toolu_other.roots " ] && check "and removes the refused call's note and no other while $state" ok \
+    || check "and removes the refused call's note and no other while $state" "its notes folder holds: ${left:-nothing}"
+done
 
 # ---- 3. the hooks that ask Dan for something right after a tool call stand down while asleep ----
 # The lesson fan out: a lesson not fanned out yet is asked for, awake; asleep it waits, unstamped.

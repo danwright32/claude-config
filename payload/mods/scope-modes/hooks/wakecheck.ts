@@ -28,7 +28,44 @@ const EVENT_PAGES = 3
  * (#2766): it is written every time the check runs, so a quiet night reads differently from a check
  * that never ran or stopped looking (Dan's alert rule: silence must still mean healthy).
  */
-export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: string }
+export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: string; steps: Step[]; stopped: Stopped | null }
+/**
+ * #3240: the parts the check reads GitHub in, in the order it reads them. A stop at the limit is said
+ * by the part it was in, because the morning after 17 Nov 2026 said only that the check had stopped.
+ */
+export const PARTS = [
+  'the GitHub login',
+  'the GitHub events since sleep began',
+  'the issues created overnight',
+  'the changes to the lessons file on GitHub',
+  'the milestones in each repository',
+  'the deploy runs in each repository',
+] as const
+/** One GitHub read the check made: its part (1 based, in PARTS), what it read, and how long it took (ms). */
+export type Step = { part: number; step: string; ms: number }
+/**
+ * Where a check that reached its limit stopped (#3240): the part, the last read it made and the
+ * first it did not, how long after it began, how far it got in that part (pages of events read, or
+ * repositories finished of the ones to read, in the parts read one repository at a time), and its
+ * slowest reads. `text` is the one line saying it, built from these same values.
+ */
+export type Stopped = {
+  limitMs: number
+  part: number
+  parts: number
+  partName: string
+  last: Step | null
+  next: string
+  elapsedMs: number
+  done?: number
+  total?: number
+  /** The pages of events read, for a stop among the events (part 2). */
+  pages?: number
+  /** The three slowest reads, the ones `text` names. */
+  slowest: Step[]
+  text: string
+}
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`
 /** How a finished run ended, in the words the report uses; every conclusion but these is said as GitHub names it. */
 const ENDED: Record<string, string> = { success: 'passed', failure: 'failed', cancelled: 'cancelled', timed_out: 'timed out', skipped: 'skipped' }
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
@@ -89,17 +126,41 @@ export const wakeCheck = async (
   const { now } = o
   const budget = o.budgetMs ?? WAKE_CHECK_MS
   const started = await now()
-  let over = false
   const SKIPPED = -2
-  const run = async (argv: string[]): Promise<Ran> => {
+  // #3240: every GitHub read is timed and kept with its part, on every run, so the limit can be set
+  // from real nights (L172); the first read past the deadline records where the check stopped, and
+  // the one line saying so is written where that happened, once the rest of the check is known.
+  let part = 1
+  const steps: Step[] = []
+  let stop: Omit<Stopped, 'text' | 'pages' | 'slowest'> | null = null
+  let stopAt = 0
+  // What the parts read one repository at a time had finished, and the events window not reached.
+  let repoDone = 0
+  let eventsWindow: string | null = null
+  const run = async (argv: string[], step = ''): Promise<Ran> => {
     if (argv[0] !== 'gh') return runAny(argv)
-    const left = budget - ((await now()) - started)
+    const before = await now()
+    const left = budget - (before - started)
     if (left <= 0) {
-      if (!over) unmeasured.push(`the overnight check stopped at its ${Math.round(budget / 1000)} s limit, so the rest of GitHub was not read`)
-      over = true
+      if (!stop) {
+        stopAt = unmeasured.length
+        const repoPart = part === 5 || part === 6
+        stop = {
+          limitMs: budget,
+          part,
+          parts: PARTS.length,
+          partName: PARTS[part - 1] ?? '',
+          last: steps.at(-1) ?? null,
+          next: step,
+          elapsedMs: before - started,
+          ...(repoPart ? { done: repoDone, total: repos.length } : {}),
+        }
+      }
       return { exitCode: SKIPPED, stdout: '', stderr: '' }
     }
-    return runAny(argv, Math.min(READ_MS, left))
+    const r = await runAny(argv, Math.min(READ_MS, left))
+    steps.push({ part, step, ms: (await now()) - before })
+    return r
   }
   const since = iso(o.since)
   // A time GitHub did not give, or gave unreadable, is unknown: said as not checked, never compared
@@ -111,7 +172,7 @@ export const wakeCheck = async (
   const NO_TIME = 'is unknown (GitHub gave no time)'
   // One read, its JSON parsed; a failure is said under `what`, and the answer is null.
   const json = async <T>(argv: string[], what: string): Promise<T | null> => {
-    const r = await run(argv)
+    const r = await run(argv, `the ${what}`)
     if (r.exitCode === SKIPPED) return null
     const tool = `${argv[0]} ${argv[1]}${argv[0] === 'gh' && argv[1] === 'search' ? ` ${argv[2]}` : argv[0] === 'gh' && argv[1] === 'run' ? ` ${argv[2]}` : ''}`
     if (r.exitCode !== 0) {
@@ -139,7 +200,7 @@ export const wakeCheck = async (
     hits.push(`Issue created overnight: ${key} "${title}"`)
   }
 
-  const login = await run(['gh', 'api', 'user', '--jq', '.login'])
+  const login = await run(['gh', 'api', 'user', '--jq', '.login'], 'the GitHub login')
   const me = login.exitCode === 0 ? login.stdout.trim() : ''
   if (!me) unmeasured.push(`GitHub was not checked at all: the gh login could not be read (${firstLine(login.stderr) || 'no login printed'})`)
   else {
@@ -151,14 +212,16 @@ export const wakeCheck = async (
     // and the oldest event read, never as a count.
     const events: Ev[] = []
     let oldest: number | null = null
+    const span = () => (oldest === null ? `since ${etWhen(o.since)}` : `from ${etWhen(o.since)} to ${etWhen(oldest)}`)
     const unread = (why: string) => {
-      const span = oldest === null ? `since ${etWhen(o.since)}` : `from ${etWhen(o.since)} to ${etWhen(oldest)}`
-      unmeasured.push(`the GitHub events ${span} were not read for the repositories to check (${why})`)
+      unmeasured.push(`the GitHub events ${span()} were not read for the repositories to check (${why})`)
     }
+    part = 2
     for (let p = 1; p <= EVENT_PAGES; p++) {
-      const r = await run(['gh', 'api', `users/${me}/events?per_page=${EVENTS_PER_PAGE}&page=${p}`])
+      const r = await run(['gh', 'api', `users/${me}/events?per_page=${EVENTS_PER_PAGE}&page=${p}`], `page ${p} of the GitHub events`)
       if (r.exitCode === SKIPPED) {
-        unread(`page ${p}: the check stopped at its ${Math.round(budget / 1000)} s limit`)
+        // Said in the stop's own line (#3240), which names this part and how far it got.
+        eventsWindow = span()
         break
       }
       if (r.exitCode !== 0) {
@@ -196,6 +259,7 @@ export const wakeCheck = async (
     }
     // The search index can lag, and the events can too, so both are read (L1014).
     type Found = { repository?: { nameWithOwner?: string }; number?: number; title?: string }
+    part = 3
     const found = await json<Found[]>(['gh', 'search', 'issues', '--author', '@me', '--created', `>=${since}`, '--json', 'repository,number,title,url', '--limit', '100'], 'issues created overnight')
     for (const f of found ?? []) {
       const repo = f.repository?.nameWithOwner
@@ -206,6 +270,7 @@ export const wakeCheck = async (
   }
 
   // LESSONS.md, on GitHub through the live sync clone's repository, and the installed copy.
+  part = 4
   const remotes = await run(['git', '-C', `${o.home}/claude-config-sync`, 'remote', '-v'])
   let config: string | null = null
   let unread = firstLine(remotes.stderr)
@@ -255,7 +320,7 @@ export const wakeCheck = async (
     if (!login) return false
     if (!ownAccounts.has(login.toLowerCase()) && !accountsRead) {
       accountsRead = true
-      const r = await run(['gh', 'auth', 'status', '--json', 'hosts'])
+      const r = await run(['gh', 'auth', 'status', '--json', 'hosts'], 'the accounts gh is logged in to')
       try {
         const hosts = r.exitCode === 0 ? (JSON.parse(r.stdout) as { hosts?: Record<string, { login?: unknown }[]> }).hosts : undefined
         for (const a of hosts?.['github.com'] ?? []) if (typeof a?.login === 'string') ownAccounts.add(a.login.toLowerCase())
@@ -279,9 +344,10 @@ export const wakeCheck = async (
     let oldest: number | null = null
     let gap: string | null = null
     for (let p = 1; p <= ISSUE_EVENT_PAGES; p++) {
-      const r = await run(['gh', 'api', `repos/${repo}/issues/events?per_page=${EVENTS_PER_PAGE}&page=${p}`])
+      const r = await run(['gh', 'api', `repos/${repo}/issues/events?per_page=${EVENTS_PER_PAGE}&page=${p}`], `page ${p} of the issue events in ${repo}`)
       if (r.exitCode === SKIPPED) {
-        gap = `page ${p}: the check stopped at its ${Math.round(budget / 1000)} s limit`
+        // The limit itself is said once, in the stop's line (#3240).
+        gap = `page ${p}: the check ran out of time first`
         break
       }
       if (r.exitCode !== 0) {
@@ -314,9 +380,9 @@ export const wakeCheck = async (
     let closers: Closers | null = null
     const closersOf = async (): Promise<Closers> => {
       if (closers) return closers
-      const r = await run(['gh', 'issue', 'list', '-R', repo, '--state', 'closed', '--search', `closed:>=${since}`, '--json', 'number,closedByPullRequestsReferences', '--limit', '100'])
+      const r = await run(['gh', 'issue', 'list', '-R', repo, '--state', 'closed', '--search', `closed:>=${since}`, '--json', 'number,closedByPullRequestsReferences', '--limit', '100'], `the closed issues in ${repo}`)
       const failed = (why: string): Closers => (closers = { map: new Map(), full: false, why })
-      if (r.exitCode === SKIPPED) return failed(`the check stopped at its ${Math.round(budget / 1000)} s limit`)
+      if (r.exitCode === SKIPPED) return failed('the check ran out of time first')
       if (r.exitCode !== 0) return failed(firstLine(r.stderr) || `exit ${r.exitCode}`)
       let list: unknown
       try {
@@ -406,8 +472,11 @@ export const wakeCheck = async (
   // What the runs left out as healthy (#2766), said in the one line the check always writes.
   const left = { passed: 0, skipped: 0, running: 0, deploys: 0 }
   if (me) {
-    for (const repo of repos) {
-      type Ms = { number?: number; title?: string; updated_at?: string; created_at?: string }
+    // Each repository's index is how many were finished in the part before it began (#3240).
+    part = 5
+    for (const [i, repo] of repos.entries()) {
+      repoDone = i
+      type Ms ={ number?: number; title?: string; updated_at?: string; created_at?: string }
       const ms = await json<Ms[]>(['gh', 'api', `repos/${repo}/milestones?state=all&per_page=100`], `milestones in ${repo}`)
       // One page, sorted by due date: a full one may leave out the milestone touched (L24).
       if (ms && ms.length >= 100) unmeasured.push(`${repo} holds 100 or more milestones, so only the first 100 were read`)
@@ -420,7 +489,9 @@ export const wakeCheck = async (
       }
       if (touched.length) await milestonesExplained(repo, touched)
     }
-    for (const repo of repos) {
+    part = 6
+    for (const [i, repo] of repos.entries()) {
+      repoDone = i
       // #2766: read through the REST API, which says who started each run and how it ended, created
       // since sleep began. A run started by a schedule, or dispatched by a cron (a bot started it),
       // that passed, was skipped or is still running needs nobody, so it is counted, never listed;
@@ -465,7 +536,7 @@ export const wakeCheck = async (
         let why = ''
         if (!cron && done && conclusion === 'success' && typeof r.head_sha === 'string' && /^[0-9a-f]{7,40}$/i.test(r.head_sha)) {
           // The pull requests whose merge commit started it: one the night's notes name accounts for it.
-          const p = await run(['gh', 'api', `repos/${repo}/commits/${r.head_sha}/pulls`])
+          const p = await run(['gh', 'api', `repos/${repo}/commits/${r.head_sha}/pulls`], `the pull requests behind a run in ${repo}`)
           let prs: unknown = null
           if (p.exitCode === 0)
             try {
@@ -494,5 +565,36 @@ export const wakeCheck = async (
   ].filter(Boolean)
   const read = me ? repos.length : 0
   const checked = `The overnight check read ${read ? plural(read, 'repository', 'repositories') : 'no repositories'} on GitHub${counted.length ? `; left out as healthy: ${counted.join(', ')}.` : ' and left nothing out.'}`
-  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked }
+  // #3240: the stop, said once where it happened, with the facts the morning needs: the part, the
+  // last read made and the one not made, how far it got, what it never reached, and the slowest
+  // reads. The check runs once a night, when sleep mode ends, so nothing reads the rest later.
+  let stopped: Stopped | null = null
+  // Set inside `run`, which the compiler's narrowing of `stop` to its first value cannot see.
+  const s = stop as Omit<Stopped, 'text' | 'pages' | 'slowest'> | null
+  if (s) {
+    const reads = s.last
+      ? `the last read it made, ${s.last.step}, took ${secs(s.last.ms)}, and the next, ${s.next}, was not made`
+      : `it made no read before the limit, and the next, ${s.next}, was not made`
+    // Kept as data and said in the sentence from the same values (#3240).
+    const pages = steps.filter(x => x.part === 2).length
+    // Sorted copies keep equal times in the order they were read.
+    const slowestReads = [...steps].sort((a, b) => b.ms - a.ms).slice(0, 3)
+    const far =
+      s.part === 2
+        ? ` It had read ${plural(pages, 'page', 'pages')} of events${eventsWindow ? `, so the GitHub events ${eventsWindow} were not read for the repositories to check` : ''}.`
+        : s.done !== undefined && s.total !== undefined
+          ? ` It had finished ${s.done} of ${plural(s.total, 'repository', 'repositories')} in this part.`
+          : ''
+    const after = PARTS.slice(s.part)
+    const rest = after.length
+      ? ` The parts after it (${after.join('; ')}) were not read either, and nothing read them later`
+      : ' Nothing read the rest of it later'
+    const slowest = slowestReads.map(x => `${x.step} ${secs(x.ms)}`)
+    const text =
+      `the overnight check stopped at its ${Math.round(s.limitMs / 1000)} s limit, ${secs(s.elapsedMs)} after it began, in part ${s.part} of ${s.parts} (${s.partName}): ${reads}.${far}${rest}: ` +
+      `the check runs once a night, when sleep mode ends.${slowest.length ? ` Its slowest reads: ${slowest.join('; ')}` : ''}`
+    stopped = { ...s, ...(s.part === 2 ? { pages } : {}), slowest: slowestReads.map(x => ({ ...x })), text }
+    unmeasured.splice(stopAt, 0, text)
+  }
+  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked, steps, stopped }
 }

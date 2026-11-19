@@ -31,6 +31,7 @@ payload/hooks/test-python-c-ascii.sh
 payload/hooks/test-repo-files.sh
 payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
+payload/hooks/test-slack-drafts-unread-shapes.sh
 payload/hooks/test-suite-modes.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh

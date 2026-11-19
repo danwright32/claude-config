@@ -87,7 +87,7 @@ function dcrv_flags(flags,    n, f, i, out, w) {
 
 DCRV_PAGE=disk-clean-review.html
 DCRV_NONCE=disk-clean-review.nonce
-DCRV_WHOLE="trash"
+DCRV_WHOLE="trash gh-cache" # gh-cache: 2,095 entries on the personal MacBook, 2026-11-18 (#3235)
 
 dcrv_whole_entries() { # <items> <kind>
   [ -f "${1:-}" ] || return 1

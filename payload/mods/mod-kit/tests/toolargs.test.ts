@@ -36,6 +36,22 @@ test('a key the engine set to undefined is taken off too, and any other key is a
   expect(Object.keys(args).sort()).toEqual(['input', 'meta'])
 })
 
+// Claude Code 2.1.327 moves a call's own argument whose name clashes with one of its keys (an MCP
+// tool taking an argument named tool or consent, say) into $shadowed, and its own reading of the
+// arguments spreads that back (#3256). No call on this Mac carried one in a month (0 of 105,555), but
+// any MCP server may name an argument so, and without this the argument was lost and $shadowed itself
+// read as an argument.
+test('an argument the engine moved into $shadowed comes back, and $shadowed is not an argument', () => {
+  const args = toolArgs({ tool: 'mcp__x__y', tool_use_id: 't4', $shadowed: { tool: 'hammer', consent: 'yes' }, query: 'q' })
+  expect(args).toEqual({ query: 'q', tool: 'hammer', consent: 'yes' })
+})
+
+test('a $shadowed that is not a plain object is taken off and restores nothing', () => {
+  for (const shadowed of ['tool', ['tool'], null, 3]) {
+    expect(toolArgs({ tool: 'Bash', $shadowed: shadowed, command: 'ls' })).toEqual({ command: 'ls' })
+  }
+})
+
 test('the caller\'s event is left as it was', () => {
   const e = { tool: 'Bash', tool_use_id: 't2', command: 'pwd' }
   toolArgs(e)

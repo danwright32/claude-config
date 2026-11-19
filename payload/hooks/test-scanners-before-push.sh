@@ -1631,10 +1631,14 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
   repo="$(mkrepo "nokey$1")"; hold="$TMPROOT/hold-nokey-$1"; : > "$hold"
   add_held_scanner "$repo" "nk$1" "$hold" 0; commit_all "$repo"
   # The budget ends once the scanner is holding (#2206), so a scanner that starts late is still the
-  # running scanner this case is about, and the gate returns long before the 20 it was given.
+  # running scanner this case is about, and the gate returns long before the 40 it was given. That
+  # it ended early is read from the refusal, which names the seconds the gate really gave (L11),
+  # never from this suite's own clock: on 2026-11-18, at a load average of 62 to 70, the whole call
+  # took 15 seconds against a limit of under 15 with the early end working (#3256, L290). The 40 is
+  # room for a loaded machine to start the scanner, under the 60 every gate call is bounded by.
   [ -z "${HELD_STARTS_LATE:-}" ] || late=", its scanner starting ${HELD_STARTS_LATE} seconds late"
   t0="$(date +%s)"
-  out="$(H="$hooks/scanners-before-push.sh" SCANNERS_STATE_DIR="${4:-$TMPROOT/nokey-$1-state}" SCANNERS_BUDGET_SECONDS=20 \
+  out="$(H="$hooks/scanners-before-push.sh" SCANNERS_STATE_DIR="${4:-$TMPROOT/nokey-$1-state}" SCANNERS_BUDGET_SECONDS=40 \
          SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$repo")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 fire "$repo" "git push")"; rc=$?
   took=$(( $(date +%s) - t0 ))
   note_held "nk$1"
@@ -1646,7 +1650,8 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
   if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait '! kill -0 "$pid" 2>/dev/null' \
      && grep -q 'stopped rather than left running' <<< "$out" && grep -q -F "$3" <<< "$out" \
      && grep -q 'a retry stops them' <<< "$out" && [ -z "$others" ] \
-     && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; } && [ "$took" -lt 15 ]; then
+     && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; } \
+     && grep -q -E 'did not finish in ([2-9]|[1-3][0-9]) seconds and were stopped' <<< "$out"; then
     check "#1910 when a run cannot be left running ($2$late), it is stopped at the budget and the refusal says why, naming $3 and no other cause" ok
   else
     check "#1910 when a run cannot be left running ($2$late), it is stopped at the budget and the refusal says why, naming $3 and no other cause" "exit=$rc pid=${pid:-none} took=${took}s other causes named:${others:- none} out=$out"

@@ -56,7 +56,8 @@ report knows, and the fields each reads (every other field is kept, and shown no
                                             mode's check, as scope modes notes it, also has tool,
                                             reason (as given), noVerdict (true when the check gave
                                             none), toolUseId, what (the command or file) and read
-                                            (true when the call only reads) (#3158)
+                                            (true when the call only reads) (#3158); its session's
+                                            claims and their ends say which issues it fell on (#3223)
   redone     tool, redoes, text             a call refused with no verdict was sent again unchanged
                                             and ran: redoes lists the toolUseIds it made good (#3158)
   question   repo, issue, text, options     something only Dan can answer, asked before bed in a
@@ -81,11 +82,21 @@ report knows, and the fields each reads (every other field is kept, and shown no
   woke, limit  reason?                      how the night ended (written by the scope modes mod)
   outward    text                           the overnight check (#834): something done overnight
                                             that the ban list exists to stop, read from GitHub
-  unmeasured text                           the overnight check: a read it could not make
-  checked    text                           the overnight check: one line of what it read and left
+  unmeasured text, limit?                   the overnight check: a read it could not make; a stop
+                                            at its time limit is one such note, said once, whose
+                                            limit keeps where it stopped as data: part, parts,
+                                            partName, last {part, step, ms}, next, elapsedMs,
+                                            limitMs, slowest (its three slowest reads, each
+                                            {part, step, ms}), pages of events read for a stop
+                                            in part 2, and done and total repositories in a part
+                                            read one repository at a time (#3240); its text says
+                                            the same values
+  checked    text, steps?                   the overnight check: one line of what it read and left
                                             out as healthy, written every time it runs (#2766), so
                                             a final report with no note of the check at all says
-                                            the check did not run
+                                            the check did not run; steps is each GitHub read it
+                                            made, {part, step, ms}, so its limit can be set from
+                                            real nights (#3240)
 
 `by` is the session id that wrote it, stamped by the writer when the caller gave none from the
 local session id (CLAUDE_CODE_SESSION_ID), the id the record names its workers by (#1167). `link`, stamped by the writer when the caller gave none, is
@@ -525,8 +536,9 @@ def questions_of(notes):
 # folded: a real refusal by the check, or a note with nothing to say which it was (written before
 # #3158), is always listed on its own. Inside a fold, a refusal is listed on its own unless it only
 # read (`read`, judged by the mod and only ever when sure) or a redone note names its toolUseId,
-# written when the same tool with the same input later ran without an error. Anything the notes
-# cannot show was done stays listed.
+# written when the same tool with the same input later ran without an error, or the work it belonged
+# to carried on after it (#3223, carried_on below). The line names the issues being worked while the
+# refusals fell. Anything the notes cannot show was done, or went on, stays listed.
 FOLD_AT = 3
 KIND_NOUNS = {"Bash": ("command", "commands"), "Write": ("file write", "file writes"),
               "Edit": ("edit", "edits"), "MultiEdit": ("edit", "edits"), "NotebookEdit": ("edit", "edits"),
@@ -543,16 +555,77 @@ def and_list(parts):
     return parts[0] if len(parts) == 1 else "%s and %s" % (", ".join(parts[:-1]), parts[-1])
 
 
-def undone_row(n):
+# Whether the work a refusal belonged to carried on (#3223). On the night of 17 Nov 2026 one session's
+# report listed 157 refusals of "Classifier unavailable" and every stretch of work carried on once the
+# check answered again, so none of them needed Dan. A refusal belongs to the issues its session held
+# when it fell: claimed by that session, at or before it, and not yet ended by that session's done,
+# parked, failed or released note. Its work carried on when that session wrote a done note for EVERY
+# one of them after it: with several held at once (an orchestrator and its agents share one session
+# id) the notes cannot say which one the call was for, so one left unfinished keeps it listed. A
+# session holding none has no named work, so a done or progress note of its own after the refusal is
+# the only sign its work went on. A park, a failure or nothing at all after it leaves it listed.
+CLAIM_ENDS = ("done", "parked", "failed", "released")
+
+
+def _issue_key(n):
+    repo, issue = n.get("repo"), n.get("issue")
+    if isinstance(repo, str) and repo.strip() and isinstance(issue, int) and not isinstance(issue, bool):
+        return (repo.strip(), issue)
+    return None
+
+
+def held_at(notes, by, at):
+    """The issues session `by` held at moment `at`, in the order it claimed them."""
+    held = {}
+    for n in sorted((n for n in notes if n.get("by") == by and num(n.get("at")) and n["at"] <= at), key=lambda n: n["at"]):
+        key = _issue_key(n)
+        if key is None:
+            continue
+        if n["kind"] == "claim":
+            held.setdefault(key, True)
+        elif n["kind"] in CLAIM_ENDS:
+            held.pop(key, None)
+    return list(held)
+
+
+def carried_on(notes, n, held):
+    """Whether the work refusal `n` belonged to carried on after it (see above)."""
+    by, at = n.get("by"), n.get("at")
+    if not isinstance(by, str) or not by or not num(at):
+        return False
+    later = [m for m in notes if m.get("by") == by and num(m.get("at")) and m["at"] > at]
+    if held:
+        done = {_issue_key(m) for m in later if m["kind"] == "done"}
+        return all(k in done for k in held)
+    return any(m["kind"] in ("done", "progress") for m in later)
+
+
+def issues_named(keys):
+    """o/r#11, #13 and p/q#2: a repository named once for the issues of it that follow one another."""
+    names, last = [], None
+    for repo, issue in keys:
+        names.append("#%d" % issue if repo == last else "%s#%d" % (repo, issue))
+        last = repo
+    return and_list(names)
+
+
+def undone_row(n, held):
     what = " ".join(str(n.get("what") or "").split())
     tool = str(n.get("tool") or "a call not named")
-    return "Refused with no verdict at %s and not sent again unchanged since: %s%s" % (
-        et_time(n["at"]) if num(n.get("at")) else "an unknown time", tool, ": %s" % what if what else "")
+    if not held:
+        why = "and its session finished no work after it"
+    elif len(held) == 1:
+        why = "while %s was being worked and not finished after it" % issues_named(held)
+    else:
+        why = "while %s were being worked, not all finished after it" % issues_named(held)
+    return "Refused with no verdict at %s and not sent again unchanged, %s: %s%s" % (
+        et_time(n["at"]) if num(n.get("at")) else "an unknown time", why, tool, ": %s" % what if what else "")
 
 
 def no_verdict_folds(notes):
     """Each failed note in a fold, by id(), mapped to its group: the first note of the group, the
-    folded line, the session and folder when one for all, and the refusals listed on their own."""
+    folded line, the session and folder when one for all, and the refusals listed on their own, each
+    as (note, the issues its session held when it fell)."""
     redone = set()
     for n in notes:
         if n["kind"] == "redone" and isinstance(n.get("redoes"), list):
@@ -566,9 +639,19 @@ def no_verdict_folds(notes):
     for reason, members in groups.items():
         if len(members) < FOLD_AT:
             continue
-        undone = [n for n in members if n.get("read") is not True and not (isinstance(n.get("toolUseId"), str) and n["toolUseId"] in redone)]
-        reads = sum(1 for n in members if n.get("read") is True)
-        again = len(members) - reads - len(undone)
+        holds = [held_at(notes, n.get("by"), n["at"]) if num(n.get("at")) else [] for n in members]
+        worked = list(dict.fromkeys(k for h in holds for k in h))
+        reads = again = carried = 0
+        undone = []
+        for n, h in zip(members, holds):
+            if n.get("read") is True:
+                reads += 1
+            elif isinstance(n.get("toolUseId"), str) and n["toolUseId"] in redone:
+                again += 1
+            elif carried_on(notes, n, h):
+                carried += 1
+            else:
+                undone.append((n, h))
         counts = {}
         for n in members:
             t = str(n.get("tool") or "unnamed")
@@ -581,13 +664,20 @@ def no_verdict_folds(notes):
             done.append("%d only read" % reads)
         if again:
             done.append("%d %s sent again unchanged and ran" % (again, "was" if again == 1 else "were"))
+        if carried:
+            done.append("%d %s followed by the work %s part of being finished" % (
+                carried, "was" if carried == 1 else "were", "it was" if carried == 1 else "they were"))
         if undone:
             rest = "the other %d %s listed next" % (len(undone), "is" if len(undone) == 1 else "are")
-            tail = "%s; %s." % (and_list(done), rest) if done else "None was sent again unchanged since, so each is listed next."
+            tail = "%s; %s." % (and_list(done), rest) if done else "None was sent again unchanged or followed by its work being finished, so each is listed next."
         else:
-            tail = "Every one only read or was sent again unchanged and ran."
-        line = "%d calls were refused because auto mode's safety check gave no verdict (%s)%s: %s. %s" % (
-            len(members), reason, window, kinds, tail[0].upper() + tail[1:])
+            tail = "Every one only read, was sent again unchanged and ran, or was followed by its work being finished."
+        if not worked:
+            during = ", while no claimed issue was being worked"
+        else:
+            during = ", while %s %s being worked" % (issues_named(worked), "was" if len(worked) == 1 else "were")
+        line = "%d calls were refused because auto mode's safety check gave no verdict (%s)%s%s: %s. %s" % (
+            len(members), reason, window, during, kinds, tail[0].upper() + tail[1:])
         where_ = {}
         for k in ("by", "cwd"):
             vals = {n.get(k) for n in members}
@@ -746,14 +836,15 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
         fold = folds.get(id(n))
         if fold is not None:
             # A refusal with no verdict in a group of FOLD_AT or more (#3158): the group is one line
-            # where its first refusal falls, then each one neither a read nor later sent again
-            # unchanged and run, on its own; every other member is counted in the line, never listed.
+            # where its first refusal falls, then each one that is neither a read, nor later sent
+            # again unchanged and run, nor followed by its work being finished (#3223), on its own;
+            # every other member is counted in the line, never listed.
             if fold["first"] is n:
                 pf.append(fold["line"])
                 if needs is not None:
                     needs.append(dict({"section": "parked", "text": fold["line"]}, **fold["where"]))
-                for u in fold["undone"]:
-                    row = undone_row(u)
+                for u, held in fold["undone"]:
+                    row = undone_row(u, held)
                     pf.append(row)
                     if needs is not None:
                         needs.append(dict({"section": "parked", "text": row}, **{k: u[k] for k in ("by", "repo", "cwd") if isinstance(u.get(k), str) and u[k]}))
