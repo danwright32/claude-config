@@ -444,11 +444,11 @@ ran_free "$rc" "$T/mark11j" && check "#2034 a large folder run with the slot fre
 # every tracked test-*.sh.
 _share="$(sed -n 's/^FOLDER_RUN_SLOT_SHARE=\([0-9][0-9]*\).*/\1/p' "$RUNNER")"
 _share="${_share%%$'\n'*}"
-_real="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+_real="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 if [ -z "$_share" ]; then
   check "#2034 the runner states the share a folder run queues at" "no FOLDER_RUN_SLOT_SHARE= line in $RUNNER"
 elif [ -z "$_real" ]; then
-  echo "SUITE-PART-UNMEASURED #2034 premise: $DIR is not inside a repository, so the real tree's share for payload/hooks cannot be counted here"
+  echo "SUITE-PART-UNMEASURED #2034 premise: $DIR is not in a claude-config checkout, so the real tree's share for payload/hooks cannot be counted here"
 else
   _all="$(git -C "$_real" ls-files | grep -c -E '(^|/)test-[^/]*\.sh$')"
   _hooks="$(git -C "$_real" ls-files | grep -c -E '^payload/hooks/test-[^/]*\.sh$')"

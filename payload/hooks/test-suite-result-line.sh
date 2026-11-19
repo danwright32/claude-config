@@ -27,7 +27,7 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${SUITE_RESULT_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+ROOT="${SUITE_RESULT_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"
 
 pass=0
 fail=0
@@ -43,8 +43,8 @@ PATTERN="^${MARK} passed=[0-9]\{1,\} failed=[0-9]\{1,\}$"
 # reported as NOT RUN rather than as broken code, and never as a pass: the runner refuses the same
 # claim wherever a repository IS present, so this cannot become a way to opt out of being run.
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-  echo "test-suite-result-line: no repo above $DIR, so there were no suites to read. Refusing rather than reporting them all correct." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository to find every suite in it, and there is none above $DIR"
+  echo "test-suite-result-line: $DIR is not in a claude-config checkout, so there were no suites to read. Refusing rather than reporting them all correct." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to find every suite in it, and $DIR is not in a claude-config checkout"
   exit 2
 fi
 
