@@ -10,6 +10,8 @@
 # word, so every such run went against the skill's own text.
 #
 # What this holds the skill to, each a fixed phrase it must carry:
+#   0. a message to another Claude session is not checked, said before the first step so no page is
+#      fetched for one (claude-config#3238);
 #   1. it reads on with the offset each result gives, until no part is left unread;
 #   2. it confirms the end of the list was reached, rather than trusting a missing note;
 #   3. a partial read is never reported as clean;
@@ -67,6 +69,19 @@ lacks() { # lacks <text> <fixed words>
 }
 
 if [ -r "$SKILL" ]; then text="$(cat "$SKILL")"; else text=""; check "the no-ai-tells skill is readable" "cannot read $SKILL"; fi
+
+# ---- 0. a message between Claude sessions is not checked (claude-config#3238) ----
+# Dan's choice on 2026-11-18 was "1.1 File: exempt them". The prompt hook sees only the words Dan
+# typed, so it cannot tell a message to another session from one to a person; the session writing
+# the text knows where it goes, so the exemption is in the skill. It has to come BEFORE the first
+# step, or the session reads the 250,000 character page before learning it need not have.
+check "the skill exempts a message to another Claude session" "$(holds "$text" "A message to another Claude session is not checked")"
+check "the exemption quotes Dan's choice with its date" "$(holds "$text" '2026-11-18: "1.1 File: exempt them"')"
+exempt_line="$(awk 'index($0, "A message to another Claude session is not checked") { print NR; exit }' "$SKILL" 2>/dev/null)"
+first_step_line="$(awk 'index($0, "## MANDATORY FIRST STEP") { print NR; exit }' "$SKILL" 2>/dev/null)"
+[ -n "$exempt_line" ] && [ -n "$first_step_line" ] && [ "$exempt_line" -lt "$first_step_line" ] \
+  && check "the exemption comes before the first step, so no page is fetched for it" ok \
+  || check "the exemption comes before the first step, so no page is fetched for it" "exemption at line ${exempt_line:-none}, first step at line ${first_step_line:-none}"
 
 # ---- 1. read on with the offset until nothing is left unread ----
 check "the skill says one fetch is never the whole list" "$(holds "$text" "one call is never the whole list")"

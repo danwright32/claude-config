@@ -42,6 +42,9 @@ THE TRANSCRIPTS RULE, under ~/.claude/projects/<project>/:
 Modes, so the one that removes cannot be mistaken for the one that looks (L206):
   would-remove [--now EPOCH] [--report FILE]   lists what `remove` would remove, with sizes, and
                                                what it keeps and why. Writes nothing but FILE.
+  readable-folders [--now EPOCH]               lists the folders kept as mostly images or documents
+                                               in ended sessions, for /disk-clean to show. Writes
+                                               nothing.
   remove [--now EPOCH]                         removes it, one log line per item with its size.
 
 Time is handed in with --now (seconds since the epoch), so a test sets the clock rather than
@@ -77,6 +80,9 @@ import session_registry  # noqa: E402
 QUIET_DAYS = 3
 TRANSCRIPT_DAYS = 7
 BULKY_BYTES = 1024 * 1024
+# Why a folder of mostly images or documents is kept. `readable-folders` lists exactly the folders kept
+# for this reason, for /disk-clean to show (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup").
+READABLE_KEEP = "mostly images or documents, which somebody may have looked at or read"
 LOG_ROTATE_BYTES = 5 * 1024 * 1024
 MARK = ".keep-rules-removing."
 SESSION_DIR = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -259,7 +265,7 @@ def plan_task(tp, plan):
         elif total < BULKY_BYTES:
             plan.keep.append(("folder under 1 MB, kept as written notes", p, total))
         elif readable * 2 > total:
-            plan.keep.append(("mostly images or documents, which somebody may have looked at or read", p, total))
+            plan.keep.append((READABLE_KEEP, p, total))
         else:
             plan.remove.append(("notes: folder in a task folder", p, total, True))
 
@@ -352,6 +358,28 @@ def report(plan, home, now):
     for r, p, b in plan.keep:
         out.append("  keep\t%s\t%d\t%s" % (r, b, p))
     return "\n".join(out) + "\n"
+
+
+def readable_folders(home, now):
+    """Prints `folder<TAB>bytes<TAB>path` for each folder the notes rule keeps only because it is
+    mostly images or documents, in a session that has ENDED by this file's own rule, which /disk-clean
+    shows. When the notes rule could not decide (the registry cannot be read), prints one
+    `unmeasured<TAB>why` line and returns 3, so a reader never takes an unread registry for no such
+    folders. A path a line cannot carry (a tab, a newline, or bytes that are not UTF-8) is left out."""
+    plan = Plan()
+    plan_notes(home, now, plan)
+    if plan.failures:
+        print("unmeasured\t%s" % " ".join(plan.failures).replace("\t", " ").replace("\n", " "))
+        return 3
+    for r, p, b in plan.keep:
+        if r != READABLE_KEEP or "\t" in p or "\n" in p:
+            continue
+        try:
+            p.encode("utf-8")
+        except UnicodeEncodeError:
+            continue
+        print("folder\t%d\t%s" % (b, p))
+    return 0
 
 
 def stamp(now):
@@ -509,9 +537,12 @@ def main(argv):
         else:
             sys.stdout.write(text)
         return 0
+    if mode == "readable-folders":
+        return readable_folders(home, now)
     if mode == "remove":
         return do_remove(home, now)
     print("usage: keep_rules.py would-remove [--now EPOCH] [--report FILE]   (lists, removes nothing)\n"
+          "       keep_rules.py readable-folders [--now EPOCH]               (lists, removes nothing)\n"
           "       keep_rules.py remove [--now EPOCH]                         (removes, and logs each item)", file=sys.stderr)
     return 2
 
