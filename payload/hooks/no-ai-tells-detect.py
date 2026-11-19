@@ -12,8 +12,30 @@ skill this Mac does not have would read exactly like guidance.
 """
 import json
 import os
+import re
 import sys
 sys.stdout.reconfigure(errors="replace")
+
+
+def word_pattern(terms):
+    """One regex matching any of the terms as WHOLE WORDS (claude-config#3238).
+
+    Matched as substrings, "pen " fired inside "open ", "author" inside "authorization", "about us"
+    inside "about users" and "ad copy" inside "read copy", so prompts that asked for no prose were
+    told to load a skill that reads a 250,000 character page. Each term must start at a word
+    boundary and end at one. A single word may carry an inflection (tweets, drafted, captioning),
+    the forms the old substring test caught by accident and that still ask for prose. A phrase may
+    only take a plural "s", because a longer ending turns its last word into another word ("about
+    us" plus "ers" is "about users").
+    """
+    alternatives = []
+    for term in terms:
+        word = re.escape(term.strip())
+        if " " in term.strip():
+            alternatives.append(word + "s?")
+        else:
+            alternatives.append(word + "(?:s|es|d|ed|ing|er|ers)?")
+    return re.compile(r"\b(?:" + "|".join(alternatives) + r")\b")
 
 POINTER = (
     "[no-ai-tells] This prompt asks for prose. Before showing any draft, load the no-ai-tells "
@@ -29,7 +51,7 @@ try:
         "blog post", "blog entry", "article", "essay", "press release",
         "marketing copy", "product description", "landing page copy",
         "tooltip", "tagline", "slogan", "cover letter", "newsletter",
-        "announcement", "caption", "headline", "blurb", "bio ",
+        "announcement", "caption", "headline", "blurb", "bio",
         "about us", "about me", "social media post", "tweet",
         "email copy", "sales copy", "microcopy", "error message copy",
         "placeholder text", "onboarding copy", "ui copy", "ux copy",
@@ -39,7 +61,7 @@ try:
 
     # Verbs that indicate writing intent
     write_verbs = [
-        "write", "draft", "compose", "author", "pen ",
+        "write", "draft", "compose", "author", "pen",
         "rewrite", "rephrase", "reword", "paraphrase",
         "revise", "edit this copy", "improve this copy",
         "make this sound", "clean up this", "fix this copy",
@@ -56,13 +78,15 @@ try:
 
     is_writing = False
 
-    # Check direct prose format matches
-    if any(term in prompt for term in prose_terms):
+    # Check direct prose format matches. The prose terms and the write verbs are matched as whole
+    # words (word_pattern). The code terms are still matched as substrings, which only ever SUPPRESSES
+    # the pointer, so this change makes nothing quieter than before on their account.
+    if word_pattern(prose_terms).search(prompt):
         is_writing = True
 
     # Check write verb + no code signal
     if not is_writing:
-        has_write_verb = any(verb in prompt for verb in write_verbs)
+        has_write_verb = bool(word_pattern(write_verbs).search(prompt))
         has_code_signal = any(code in prompt for code in code_terms)
         if has_write_verb and not has_code_signal:
             is_writing = True
