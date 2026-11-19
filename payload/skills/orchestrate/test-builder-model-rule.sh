@@ -3,8 +3,9 @@
 #
 # Dan decided on 2026-11-01 that a builder agent's model is set by a written rule by kind of task,
 # and that the orchestrator may suggest an override for one brief saying why. On 2026-11-09, with
-# Fable his default model, he split it into three tiers (claude-config#2547): Sonnet for three
-# mechanical kinds, Fable for design, security and compliance work, Opus for everything else. The
+# Fable his default model, he split it into three tiers (claude-config#2547): Sonnet for a few
+# mechanical kinds, Fable for design, security and compliance work, Opus for everything else. On
+# 2026-11-19 he narrowed Sonnet to work that needs no judgement (claude-config#3290). The
 # running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which
 # model a builder runs on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
 # Everything else that dispatches builders points at that section by name rather than restating the
@@ -69,8 +70,12 @@ has "passes the model on the Agent call for Fable" 'model: "fable"'
 has "passes the model on the Agent call for Opus" 'model: "opus"'
 has "lists renames" 'rename'
 has "lists filling in tests" 'filling in tests'
-has "lists fixes for review comments" 'review comment'
 has "carries Dan's three tier decision date" '2026-11-09'
+# Sonnet only for work that needs no judgement (Dan, 2026-11-19, claude-config#3290): "a fix for a
+# review comment" sent logic changing review fixes to Sonnet, so the tier is named by what it is for.
+has "carries Dan's no judgement decision date" '2026-11-19'
+has "carries the no judgement decision's issue" '#3290'
+has "quotes Dan's words on what Sonnet is fine for" 'any idiot could do'
 # Three tiers, each on its own bullet (Dan, 2026-11-09, claude-config#2547): Fable for design,
 # security and compliance work even when it is also a mechanical kind, Opus for everything else.
 # Judged per bullet, so a word sitting on the wrong tier's line fails rather than passing because
@@ -89,7 +94,14 @@ on_line "keeps Fable for them even when they are one of the mechanical kinds" "$
 on_line "makes Opus the default for anything not listed" "$opus_line" 'everything else'
 check "the Opus bullet no longer claims design, security or compliance" \
   "$(grep -q -i -E 'design|security|compliance' <<< "$opus_line" && echo "on: $opus_line" || echo ok)"
-on_line "keeps the three mechanical kinds on Sonnet" "$sonnet_line" 'three kinds'
+on_line "describes Sonnet by what it is for" "$sonnet_line" 'needs no judgement'
+on_line "lists comment and wording fixes on Sonnet" "$sonnet_line" 'comment or wording fix'
+on_line "lists renames on Sonnet" "$sonnet_line" 'rename or move that changes no behaviour'
+on_line "lists filling in tests on Sonnet" "$sonnet_line" 'filling in tests for code that already exists'
+on_line "sends a review fix that changes logic or behaviour to Opus" "$sonnet_line" 'review finding that changes logic or behaviour runs on Opus'
+on_line "or to Fable where it is design, security or compliance work" "$sonnet_line" 'Fable where it is design, security or compliance work'
+check "the Sonnet bullet no longer offers any fix for a review comment" \
+  "$(grep -q -i -F 'fix for a review comment' <<< "$sonnet_line" && echo "on: $sonnet_line" || echo ok)"
 has "says a fork ignores the model" 'fork ignores'
 has "lets the orchestrator suggest an override, saying why" 'suggest it to Dan with the reason'
 has "carries Dan's decision date" '2026-11-01'
