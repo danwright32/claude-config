@@ -1323,8 +1323,8 @@ def make(marker, judged_by_name, pkg_dir_opts=(), max_depth=3):
             would run, and it is read as one handed its words (package_run): the files among them
             are opened. #3143 read it that way only for the words after the script's name, so
             `"test:one": "playwright test tests/job.spec.js"` passed run as `npm run test:one`.
-            A shell builtin, a reserved word and a program in one of the system's own folders (cp,
-            cat, git) are no package, and are judged as before."""
+            A shell builtin, a reserved word and a program in one of the system's own folders, such
+            as cp, cat or git, are no package, and are judged as before."""
             if not self.pkg_scripts or not words or "/" in words[0]:
                 return None
             name = words[0]
