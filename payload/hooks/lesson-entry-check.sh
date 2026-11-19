@@ -67,6 +67,11 @@ payload="$(cat 2>/dev/null || true)"
 # library the payload is read as it came, as before.
 case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+HOOK_DIR="$_ps_dir"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 MODE=edit
 [ "${1:-}" = "--after-bash" ] && MODE=bash
@@ -231,11 +236,10 @@ $warn" ;;
 
 $warn"
   fi
-  printf '%s' "$note" | python3 -c '
-import json, sys
-print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": sys.stdin.buffer.read().decode("utf-8", "replace")}}, separators=(",", ":")))
-' 2>/dev/null || printf '%s\n' "$note" >&2
-  return 0
+  # Said through the shared notice library (claude-config#1906): a systemMessage the person sees
+  # and the same text as context for the session, valid JSON whatever the lesson quotes, and
+  # encoded in bash alone when python3 is missing. Stderr on exit 0 reaches nobody. It exits 0.
+  hook_allow_notice "$note" PostToolUse
 }
 
 # SYNC_NO_NOTIFY, because a fault here is reported INTO the session that caused it and a desktop

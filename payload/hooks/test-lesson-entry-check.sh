@@ -229,6 +229,7 @@ out="$(run_hook_base Edit "$HOME_FIX/LESSONS.md")"
 says "a new entry carrying neither line is warned about" "$out" "L77"
 says "with the line to add" "$out" "NO CHECK:"
 says "as context for the session" "$out" '"additionalContext"'
+says "and shown to the person through lib/hook-notice.sh (claude-config#1906)" "$out" '"systemMessage"'
 never_says "and never refused" "$out" '"decision":"block"'
 never_says "and the older entry is not named" "$out" "L1 carries"
 
