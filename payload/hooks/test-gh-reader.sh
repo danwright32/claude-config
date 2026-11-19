@@ -100,7 +100,7 @@ asks(){ # asks <predicate words...> -- <command> : prints yes or no
   local cmd="${*: -1}"; local -a q=("${@:1:$#-2}")
   bash -c '. "$1/lib/push-scope.sh"; shift; c="$1"; shift; if "$@" "$c"; then echo yes; else echo no; fi' _ "$DIR" "$cmd" "${q[@]}"
 }
-runs(){ bash -c '. "$1/lib/push-scope.sh"; if ps_runs_gh "$2" "$3" "$4"; then printf "yes:%s" "${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$@"; }
+runs(){ bash -c ". \"$DIR/lib/push-scope.sh\"; if ps_runs_gh \"\$1\" \"\$2\" \"\$3\"; then printf 'yes:%s' \"\${PS_RUN_ARGS[*]-}\"; else echo no; fi" _ "$@"; }
 check_eq "ps_runs_gh sees pr create behind -R in front" "yes:-R o/x --fill" "$(runs 'gh -R o/x pr create --fill' pr create)"
 check_eq "ps_runs_gh sees pr edit behind env and a flag between" "yes:-R o/x 3" "$(runs 'env A=1 gh pr -R o/x edit 3' pr edit)"
 check_eq "ps_runs_gh does not take pr view for pr create" "no" "$(runs 'gh -R o/x pr view 3' pr create)"
@@ -249,7 +249,7 @@ check_eq "#1478 and through eval" "yes" "$(asks ps_is_git_push -- "eval '$G push
 check_eq "#1478 control: not one in echo" "no" "$(asks ps_is_git_push -- "echo \"bash -c '$G push'\"")"
 check_eq "#1478 ps_is_gh_pr_create sees one in sh -c" "yes" "$(asks ps_is_gh_pr_create -- "sh -c 'gh pr create --fill'")"
 check_eq "#1478 ps_is_git_commit sees one through rtk proxy" "yes" "$(asks ps_is_git_commit -- "rtk proxy $G commit -m x")"
-unread(){ bash -c '. "$1/lib/push-scope.sh"; if ps_unreadable "$2"; then printf "%s|%s" "$PS_UNREAD_WRAPPER" "$PS_UNREAD_WHY"; else echo none; fi' _ "$DIR" "$1"; }
+unread(){ bash -c ". \"$DIR/lib/push-scope.sh\"; if ps_unreadable \"\$1\"; then printf '%s|%s' \"\$PS_UNREAD_WRAPPER\" \"\$PS_UNREAD_WHY\"; else echo none; fi" _ "$1"; }
 u="$(unread 'X=1; bash -c "$CMD"')"
 check_eq "#1478 ps_unreadable names the wrapper" "bash -c" "${u%%|*}"
 case "$u" in *"variable"*) ok ;; *) bad "#1478 and says why it cannot be read: $u" ;; esac
