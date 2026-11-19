@@ -2726,6 +2726,17 @@ printf '%s\n' 'bash<posts' > "$D29/glued.sh"
 printf '%s\n' 'cat ok.sh | (true; bash)' > "$D29/okgroup.sh"
 printf '%s\n' 'sort ok.sh | bash' > "$D29/unread-direct.sh"
 printf '%s\n' 'sort ok.sh | (true; bash)' > "$D29/unread-group.sh"
+# A function whose body runs its input, in a script on disk, fed where it is called or defined.
+printf '%s\n' 'f() { bash; }' 'cat posts.sh | f' > "$D29/fn-pipe.sh"
+printf '%s\n' 'f() { bash; }' 'f < posts.sh' > "$D29/fn-file.sh"
+printf '%s\n' 'f() { bash; } < posts.sh' 'f' > "$D29/fn-def.sh"
+printf '%s\n' 'f() { bash; }' 'cat posts.sh | { true; f; }' > "$D29/fn-group.sh"
+printf '%s\n' 'f() { bash; }' '(f) < posts.sh' > "$D29/fn-sub.sh"
+printf '%s\n' 'f() { bash; }' 'g() { f; }' 'cat posts.sh | g' > "$D29/fn-nest.sh"
+printf '%s\n' 'function f {' '  bash' '}' 'if true; then f < posts.sh; fi' > "$D29/fn-if.sh"
+printf '%s\n' 'f() { bash; }' 'cat ok.sh | f' 'f < ok.sh' 'f' > "$D29/fn-ok.sh"
+printf '%s\n' 'f() { bash; }' 'sort ok.sh | f' > "$D29/fn-unread.sh"
+printf '%s\n' 'f() { cat; }' 'cat posts.sh | f' 'g() { bash ok.sh; }' 'g < posts.sh' > "$D29/fn-reads-none.sh"
 NL='
 '
 run_29 "cat posts.sh | bash"
@@ -2742,8 +2753,10 @@ for runs in "sort ok.sh | (true; bash)" "sort ok.sh | { true; bash; }" "sort ok.
   read_refused "#3229 a shell handed a feed the gate cannot read by what is around it is refused typed: $runs"
   says "#3229 and the refusal says its input cannot be read: $runs" "what that holds cannot be read"
 done
-# The last two: a function's body is fed by whatever calls it, which is not worked out, so a program
-# that runs its input there is unread even where nothing feeds the call: the cost of the function case.
+# The last two: a function's body is fed by whatever calls it, and not every way of calling one is
+# worked out, so typed, a program that runs its input there is unread even where nothing feeds the
+# call: the cost of the function case. Measured 2026-11-18 over 45 days of this Mac's Bash calls
+# (147,020 calls, 123,744 distinct commands): 376 define a function, and it changes the verdict of none.
 #
 # A script that posts, handed to a shell or an interpreter by what is around it. In turn: a pipe into
 # the subshell, group, if, loop or case it is in; a file, a here string or a heredoc given to that; a
@@ -2791,6 +2804,21 @@ for runs in "cat posts.sh | (true; bash)" "cat posts.sh | (bash)" "cat posts.sh 
   "bash group.sh" "bash string.sh" "bash glued.sh"; do
   run_29 "$runs"
   read_refused "#3229 a shell handed a script that posts by what is around it is refused: $runs"
+done
+# A function's body in a script on disk. A feed the gate cannot read is left alone there, as it is
+# for a pipe straight into a shell, and the function case was nothing but such a feed, so a script on
+# disk that hands its function a script that posts passed whole. What is written where the function
+# is called, or on its definition, is read like any other feed, through a group, a subshell, an if
+# or another function that calls it.
+for runs in "bash fn-pipe.sh" "bash fn-file.sh" "bash fn-def.sh" "bash fn-group.sh" "bash fn-sub.sh" "bash fn-nest.sh" \
+  "bash fn-if.sh"; do
+  run_29 "$runs"
+  read_refused "#3229 a function fed a script that posts, in a script on disk, is refused: $runs"
+  says "#3229 and the refusal names the file the function's program runs: $runs" "posts.sh"
+done
+for runs in "bash fn-ok.sh" "bash fn-unread.sh" "bash fn-reads-none.sh"; do
+  run_29 "$runs"
+  allowed "#3229 a function fed nothing that posts, or running none of its input, passes on disk as before: $runs"
 done
 # What it costs, each beside the shape it is the harmless twin of. A shell handed a file that posts
 # nothing through any of these still passes, the file being read as it is for `cat ok.sh | bash`.

@@ -481,6 +481,45 @@ def make(sh_special, sh_param, unknown_dir=None):
             fd, ft, fp = feeder
             return self.sh_printed(fd, ft, None if base is None else base + fp["start"], whole)
 
+        def held_calls(self, s, cwd, items, b, base, whole, hops):
+            """What the body of the function b (a block of the Judge's sh_struct) is handed as its
+            input, as pieces that always end with one unreadable piece. A function's body reads
+            what each call of it is given, and every way a function can be called is not worked
+            out (a name held in a variable, `"$@"`, a trap, a file that sources this one), so the
+            answer is never that nothing feeds it: typed, a program that runs its input in a
+            function body is refused as unread, as it was. But an unreadable piece is left alone in
+            a script on disk, so that piece alone let a script on disk hand its function a script
+            that posts (`f() { bash; }` then `cat post.sh | f`, measured 2026-11-18: exit 0). So
+            before it come the pieces that can be read: the file, here string or heredoc written
+            on the function's definition (`f() { bash; } < post.sh`), and for each command of s
+            outside the body whose first word is the function's name, what that call is given, the
+            pipe into it, or what is around it (held_feed: a group, a subshell, an if, another
+            function that calls it). items, base and whole as held_feed takes them."""
+            def placed(x):
+                return None if base is None else base + x
+
+            def readable(got):
+                return [piece for piece in got or () if piece[0] != "unknown"]
+
+            (cd, ct), cp = items[b["close"]]
+            pieces = readable(self.sh_given(cd, ct, placed(cp["start"]), whole))
+            name = b.get("name")
+            for j, ((jd, jt), jp) in enumerate(items) if name and hops < MAX_HELD else ():
+                if b["open"] <= j <= b["close"]:
+                    continue
+                words = self.written_redirs(jt)[0]
+                while words and re.fullmatch(r"[A-Za-z_]\w*\+?=.*", words[0], re.S):
+                    words = words[1:]
+                if not words or words[0] != name:
+                    continue
+                got = self.sh_given(jd, jt, placed(jp["start"]), whole)
+                if got is None:
+                    got = self.sh_pipe_into(s, items, jp["start"], base, whole)
+                if got is None:
+                    got = self.held_feed(s, cwd, j, base, whole, hops + 1)
+                pieces += readable(got)
+            return pieces + self.held_unknown()
+
         def held_feed(self, s, cwd, k, base, whole, hops=0):
             """What the text s hands its command k (by its place in parsed's order) as its input,
             from what is written around the command, as pieces, or None where nothing there feeds
@@ -489,9 +528,10 @@ def make(sh_special, sh_param, unknown_dir=None):
             substitution what feeds the command holding it; then each group, loop, if or case
             around that (the Judge's sh_struct), by the file its closing word is given or the pipe
             into its opening one; then an `exec < file` earlier in s, which gives every later
-            command that file. A function's body is fed by whatever calls it, which is not worked
-            out, and neither is a structure that cannot be read: one unreadable piece. base is
-            where s starts in the text line() is reading, None for a wrapper's string."""
+            command that file. A function's body is fed by whatever calls it: what its calls in s
+            are given where that can be read, and always one unreadable piece (held_calls). A
+            structure that cannot be read is one unreadable piece. base is where s starts in the
+            text line() is reading, None for a wrapper's string."""
             cmds, parts = self.parsed(s, cwd)
             items = list(zip(cmds, parts))
             p = parts[k]
@@ -553,7 +593,7 @@ def make(sh_special, sh_param, unknown_dir=None):
             around = [(b["open"], n, b) for n, b in enumerate(struct[1]) if b["open"] <= lo_i and hi_i < b["close"]]
             for _, _, b in sorted(around, key=lambda x: x[:2], reverse=True):
                 if b["kind"] == "func":
-                    return self.held_unknown()
+                    return self.held_calls(s, cwd, items, b, base, whole, hops)
                 got = self.sh_given(cmds[b["close"]][0], cmds[b["close"]][1], placed(parts[b["close"]]["start"]), whole)
                 if got is None:
                     got = self.sh_pipe_into(s, items, parts[b["open"]]["start"], base, whole)

@@ -4213,8 +4213,12 @@ it is in or a pipe written inside that string (`cat post.sh | bash -c bash`, `ba
 bash'`), what feeds the command holding the command substitution it is in, and an `exec < file`
 earlier in the text. The feed is read as a pipe straight into the program is: a file or written text
 is judged, and anything else is refused as unread when typed and left alone in a script on disk. A
-function's body is fed by whatever calls it, which is not worked out, so a program that runs its
-input there is unread. A redirection glued to a command's name or to its file is read as the same
+function's body is fed by whatever calls it, and not every way of calling one is worked out, so a
+program that runs its input there is always unread, and typed it is refused even where nothing
+feeds the call (of 376 past commands defining a function on this Mac, measured 2026-11-18, none
+changed verdict). In a script on disk, where an unread feed is left alone, what each direct call of
+the function and its definition are given is read too, so `f() { bash; }` then `cat post.sh | f` is
+refused there. A redirection glued to a command's name or to its file is read as the same
 command with spaces (`bash<post`, `bash <post`, `bash 0<post`, `'bash'<post`): the shared reader
 splits a command's words on white space alone, so before this only `bash < post` had its file read.
 The wrapper sends a call to the rule for a shell's name followed by anything that ends the name, not
