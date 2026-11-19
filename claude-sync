@@ -28,6 +28,7 @@
 #   claude-sync lesson-faults     # the same faults, lock free and silent when there are none
 #   claude-sync lesson-index-faults # read-only: do the generated index files match LESSONS.md
 #   claude-sync lesson-short-forms [FILE] # every short form beside the rule it stands for
+#   claude-sync lesson-checks     # read-only: how many lessons name the check that holds them (#3245)
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync record-lesson-counts F # commit this Mac's lesson citation counts for the core re-rank
@@ -2550,6 +2551,151 @@ multi_short_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Ln
   return 0
 }
 
+# ---- the line naming the check that holds a lesson (claude-config#3245) ----
+# A lesson may carry ONE indented line after its rule sentence closes:
+#   CHECK: <path>[, <path>...] (full)       a check holds the whole rule
+#   CHECK: <path>[, <path>...] (partial)    a check holds part of it, and a reader holds the rest
+#   NO CHECK: <why no check can hold it>    at least three words of reason
+# A path is relative to the config root (hooks/x.sh, skills/y/check.py), or owner/repo:path for a
+# check living in another repository, which nothing here can look for. Without the line nobody
+# could say how many lessons a machine enforces and how many depend on a session obeying a
+# sentence (L27, L57).
+#
+# Every entry, classified, one per line: Lnnn<TAB>full|partial|nocheck|neither|bad<TAB>detail. The
+# detail is the paths (space separated) for full and partial, the reason for nocheck, and what is
+# wrong for bad, worded without semicolons because the fault list joins its lines with them.
+lesson_check_records(){   # $1 = the full lessons file
+  [ -f "$1" ] || return 0
+  lesson_entries_render "$1" checks | LC_ALL=C awk -F'\t' '
+    function bad(why) { if (kind != "bad") { kind = "bad"; detail = why } }
+    function classify(t,    body, m, targets, parts, np, p, x, reason, words) {
+      if (t ~ /^NO CHECK:/) {
+        reason = t; sub(/^NO CHECK:[[:space:]]*/, "", reason)
+        words = split(reason, x, /[[:space:]]+/)
+        if (words < 3) { bad("has a NO CHECK: line giving no reason, and it should read NO CHECK: <why no check can hold it>"); return }
+        kind = "nocheck"; detail = reason; return
+      }
+      if (t ~ /^CHECK:/) {
+        body = t; sub(/^CHECK:[[:space:]]*/, "", body)
+        if (match(body, /\((full|partial)\)$/) == 0) { bad("has a CHECK: line ending in neither (full) nor (partial), and it should read CHECK: <path> (full) or CHECK: <path> (partial)"); return }
+        m = substr(body, RSTART + 1, RLENGTH - 2)
+        targets = substr(body, 1, RSTART - 1); sub(/[[:space:]]+$/, "", targets)
+        if (targets == "") { bad("has a CHECK: line naming no check, and it should read CHECK: <path> (full) or CHECK: <path> (partial)"); return }
+        np = split(targets, parts, /,[[:space:]]*/)
+        detail = ""
+        for (p = 1; p <= np; p++) {
+          x = parts[p]
+          if (x ~ /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+:[A-Za-z0-9._\/-]+$/) { detail = detail (detail == "" ? "" : " ") x; continue }
+          if (x ~ /^[A-Za-z0-9._][A-Za-z0-9._\/-]*$/ && x !~ /(^|\/)\.\.(\/|$)/) { detail = detail (detail == "" ? "" : " ") x; continue }
+          bad("names " x " as its check, which is neither a path relative to the config root (hooks/x.sh) nor owner/repo:path"); return
+        }
+        kind = m; return
+      }
+      bad("has a line reading " substr(t, 1, 24) " which is in neither shape, and it should read CHECK: <path> (full) or (partial), or NO CHECK: <why no check can hold it>")
+    }
+    function flush() {
+      if (cur == "") return
+      if (n == 0) { printf "%s\tneither\t\n", cur; return }
+      if (n > 1) { printf "%s\tbad\tcarries %d check lines, and an entry carries one, either CHECK: or NO CHECK:\n", cur, n; return }
+      printf "%s\t%s\t%s\n", cur, kind, detail
+    }
+    $1 == "ENTRY" { flush(); cur = $2; n = 0; kind = ""; detail = ""; next }
+    $1 == "CHECKLINE" {
+      n++
+      if ($3 == 1) { bad("has a check line inside the rule sentence, where the index joins it into the rule, and it belongs after the sentence closes"); next }
+      if (n == 1) classify($4)
+    }
+    END { flush() }'
+  return 0
+}
+
+check_line_lesson_faults(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Lnnn <what is wrong>" lines
+  local src="$1/$LESSONS_FILE"
+  [ -f "$src" ] || return 0
+  lesson_check_records "$src" | awk -F'\t' -v f="$LESSONS_FILE" '$2 == "bad" { printf "%s:%s %s\n", f, $1, $3 }'
+  return 0
+}
+
+# The lessons LESSONS.md held before an entry could carry a check line: a frozen list, so only an
+# entry written from then on is asked for one (claude-config#3245). Read from this tool's own
+# payload, because it records history rather than anything about the tree being inspected.
+lesson_check_baseline_file(){ printf '%s' "${SYNC_LESSON_CHECK_BASELINE:-$SYNC_SELF_PAYLOAD/hooks/lib/lessons-before-check-lines.txt}"; }
+
+# The count over the whole library (claude-config#3245), or with --warnings only what a session that
+# just wrote a lesson should hear: an entry newer than the baseline carrying neither line, and a
+# named check that is not on disk (a line naming a hook that is not there reads as a rule a machine
+# holds when nothing does). Warnings are silent when there are none. Read only and lock free, like
+# lesson-faults, since the write time hook runs it.
+do_lesson_checks(){   # $1 = --warnings or nothing
+  local warn=0 tree="$CLAUDE_HOME" src base records core_set="" base_set
+  case "${1:-}" in
+    '') ;;
+    --warnings) warn=1 ;;
+    *) die "lesson-checks takes --warnings or nothing, and was given '$1'. Nothing was counted." ;;
+  esac
+  src="$tree/$LESSONS_FILE"
+  [ -f "$src" ] || die "lesson-checks: there is no $src to count."
+  base="$(lesson_check_baseline_file)"
+  [ -r "$base" ] || die "lesson-checks: the list of lessons written before check lines existed ($base) cannot be read, so nothing here can tell an older entry from a newer one. Restore it from the repository."
+  base_set=" $(grep -E '^[0-9]+$' "$base" | tr '\n' ' ' || true) "
+  [ -f "$tree/$LESSON_CORE_LIST" ] && core_set=" $(lesson_core_list_ids "$tree/$LESSON_CORE_LIST" | tr '\n' ' ') "
+  records="$(lesson_check_records "$src")"
+  local n=0 full=0 partial=0 nocheck=0 neither=0 neither_old=0 bad=0 allhere t
+  local missing="" elsewhere="" candidates="" newneither=""
+  while IFS=$'\t' read -r num kind detail; do
+    [ -n "$num" ] || continue
+    n=$((n + 1))
+    case "$kind" in
+      full|partial)
+        if [ "$kind" = full ]; then full=$((full + 1)); else partial=$((partial + 1)); fi
+        allhere=1
+        for t in $detail; do
+          case "$t" in
+            *:*) elsewhere="$elsewhere  $num $t"$'\n'; allhere=0 ;;
+            *) [ -e "$tree/$t" ] || { missing="$missing  $num $t"$'\n'; allhere=0; } ;;
+          esac
+        done
+        if [ "$kind" = full ] && [ "$allhere" -eq 1 ]; then
+          case "$core_set" in *" $num "*) candidates="$candidates $num" ;; esac
+        fi ;;
+      nocheck) nocheck=$((nocheck + 1)) ;;
+      neither)
+        neither=$((neither + 1))
+        case "$base_set" in
+          *" ${num#L} "*) neither_old=$((neither_old + 1)) ;;
+          *) newneither="$newneither $num" ;;
+        esac ;;
+      bad) bad=$((bad + 1)) ;;
+    esac
+  done <<RECORDS
+$records
+RECORDS
+
+  if [ "$warn" -eq 1 ]; then
+    for t in $newneither; do
+      echo "$t carries neither a CHECK: line naming the check that holds it nor a NO CHECK: line saying why none can. Ask in order whether the code can be shaped so the mistake cannot be written, whether a hook, guard, lint rule or test can catch it, and whether running the thing shows it, then add the line that answers: CHECK: <path> (full) or CHECK: <path> (partial), or NO CHECK: <why no check can hold it>."
+    done
+    printf '%s' "$missing" | while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      set -- $t
+      echo "$1 names $2 as the check that holds it, and there is no such file under $tree. A line naming a check that is not there reads as a rule a machine holds when nothing does: correct the path, or replace the line with NO CHECK: <why no check can hold it>."
+    done
+    return 0
+  fi
+
+  echo "Lessons and the checks that hold them, in $src:"
+  echo "  $n lessons"
+  echo "  $((full + partial)) name the check that holds them ($full fully, $partial partly)"
+  echo "  $nocheck say no check can hold them"
+  echo "  $neither carry neither line ($neither_old written before check lines existed)"
+  [ "$bad" -gt 0 ] && echo "  $bad carry a check line in neither shape ('claude-sync lesson-faults' names them)"
+  if [ -n "$missing" ]; then printf 'Named checks not found on disk:\n%s' "$missing"; else echo "Named checks not found on disk: none"; fi
+  if [ -n "$elsewhere" ]; then printf 'Checks in another repository, not looked for here:\n%s' "$elsewhere"; else echo "Checks in another repository, not looked for here: none"; fi
+  echo "Candidates to leave the core, each one Dan's call (a check on disk holds them fully):${candidates:- none}"
+  echo "Newer lessons carrying neither line:${newneither:- none}"
+  return 0
+}
+
 # ---- the faults that hold a lessons file back, in ONE list (claude-config#373) ----
 # The send refuses to publish a lessons file carrying any of these, and `check-lessons` is the read
 # only command for asking whether it will. That command ran two of them, so on 2026-09-11 it
@@ -2561,7 +2707,7 @@ multi_short_lesson_entries(){   # $1 = tree holding LESSONS.md -> "LESSONS.md:Ln
 # lives here once and both sites walk it. A new fault is added by adding a kind here and a branch
 # to each of the four functions below, and it reaches the preview with nothing else to remember.
 # That is how drift (#389) and repeated and twoshort (#392) arrived.
-LESSON_PUBLISH_FAULT_KINDS="malformed orphaned duplicate overcap drift repeated twoshort"
+LESSON_PUBLISH_FAULT_KINDS="malformed orphaned duplicate overcap drift repeated twoshort checkline"
 
 # The detail lines for one kind, from that kind's own predicate.
 lesson_fault_lines(){   # $1 = kind, $2 = tree to inspect
@@ -2573,6 +2719,7 @@ lesson_fault_lines(){   # $1 = kind, $2 = tree to inspect
     drift)     drifted_short_forms "$2" ;;
     repeated)  repeated_lesson_entries "$2" ;;
     twoshort)  multi_short_lesson_entries "$2" ;;
+    checkline) check_line_lesson_faults "$2" ;;
     # Never a silent 0. A kind added to the list above and forgotten here would make the send and
     # the preview both report a clean file, which is the exact shape of failure this list exists to
     # end (L98, L113).
@@ -2593,6 +2740,7 @@ lesson_fault_cause(){   # $1 = kind
     drift)     printf '%s' "it holds short forms that no longer share enough vocabulary with the rule they stand for, and the generated index shows every session the short form in place of that rule" ;;
     repeated)  printf '%s' "the same lesson is stored more than once under different numbers, so the generated index shows one rule twice and a citation of either number is ambiguous" ;;
     twoshort)  printf '%s' "it holds lesson entries carrying more than one SHORT: line, so which rule the generated index shows under that number depends on which line the generator takes" ;;
+    checkline) printf '%s' "it holds lesson entries whose line naming the check that holds them is in neither shape, so the count of lessons a machine holds cannot read them" ;;
     *) return 2 ;;
   esac
 }
@@ -2605,6 +2753,7 @@ lesson_fault_remedy(){   # $1 = kind
     drift)     printf '%s' "Rewrite each short form in the words of its own rule, or check it was not moved onto the wrong entry" ;;
     repeated)  printf '%s' "Delete the later copy, and point anything citing its number at the one that stays" ;;
     twoshort)  printf '%s' "Keep the one SHORT: line that belongs to the entry, and move any other back to the lesson it was written for" ;;
+    checkline) printf '%s' "Give each entry at most one such line, after its rule sentence closes, reading 'CHECK: <path relative to the config root, or owner/repo:path> (full)' or '(partial)', or 'NO CHECK: <why no check can hold it>'" ;;
     *) return 2 ;;
   esac
 }
@@ -2618,6 +2767,7 @@ lesson_fault_notice(){   # $1 = kind
     drift)     printf '%s' "short form drifted from its rule" ;;
     repeated)  printf '%s' "lesson stored twice" ;;
     twoshort)  printf '%s' "lesson with two SHORT lines" ;;
+    checkline) printf '%s' "malformed lesson check line" ;;
     *) return 2 ;;
   esac
 }
@@ -2930,7 +3080,7 @@ lesson_short_form_pairs(){   # $1 = the full lessons file
   return 0
 }
 
-# ONE reading of a lessons file, in three shapes. The walk, the wrap joining and the SHORT: scan are
+# ONE reading of a lessons file, in five shapes. The walk, the wrap joining and the SHORT: scan are
 # the fiddly parts and they are written once: the index, the drift check and the repeated entry
 # check cannot come to different ideas of what a lesson's rule sentence is (L370, L70).
 #   index     every index line, across every section, as one stream
@@ -2938,7 +3088,10 @@ lesson_short_form_pairs(){   # $1 = the full lessons file
 #   pairs     PAIR and ORPHAN lines, as lesson_short_form_pairs describes
 #   entries   ENTRY<TAB>Lnnn<TAB>how many SHORT: lines it holds<TAB>the rule sentence, for EVERY
 #             entry, short form or not (claude-config#392)
-lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries
+#   checks    ENTRY<TAB>Lnnn for every entry, each followed by CHECKLINE<TAB>Lnnn<TAB>1 when inside
+#             the rule sentence, else 0<TAB>the line, for every line in it reading as a CHECK: or
+#             NO CHECK: line (claude-config#3245)
+lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pairs | entries | checks
   [ -f "$1" ] || return 0
   # The whole file is read into an array first, rather than walked with getline. getline CONSUMES
   # the line it reads, so a continuation loop had no way to put back a line that turned out to
@@ -2971,6 +3124,24 @@ lesson_entries_render(){   # $1 = the full lessons file  $2 = index | split | pa
         rule = (end > 0) ? substr(rest, 1, end - 1) : rest
         gsub(/[[:space:]]+/, " ", rule)
         sub(/[[:space:]]+$/, "", rule)
+        # The lines naming the check that holds a lesson, or saying none can (claude-config#3245),
+        # over the same span the SHORT: scan reads. Anything that READS as such a line is reported,
+        # whatever its case or spelling, so a line in neither shape is refused rather than silently
+        # counted as an entry carrying neither. A line inside the wrapped rule sentence (k <= j) is
+        # flagged, because the wrap above has already joined it into the rule the index renders.
+        if (mode == "checks") {
+          if (!match(rule, /^L[0-9]+\./)) continue
+          num = substr(rule, 1, RLENGTH - 1)
+          printf "ENTRY\t%s\n", num
+          for (k = i + 1; k <= NR; k++) {
+            if (line[k] ~ /^- \*\*L[0-9]+\./ || line[k] ~ /^## /) break
+            t = line[k]
+            sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t)
+            if (tolower(t) ~ /^(no[ _-]*)?check(ed)?([ _-]*by)?[[:space:]]*:/)
+              printf "CHECKLINE\t%s\t%d\t%s\n", num, (k <= j ? 1 : 0), t
+          }
+          continue
+        }
         # A long rule may carry a one line SHORT: form, and that is what the index renders. The
         # rule sentences run long because each carries the condition that makes it apply, so
         # shortening them in place would destroy the thing a reader needs; the full rule stays
@@ -16515,6 +16686,9 @@ case "$cmd" in
   # it used to cost a git repository and a sync cycle, which claude-config#492 is about). Silent and
   # 0 when they agree, because a report printed on every run is one nobody reads (L36).
   lesson-index-faults) verify_lesson_index "$CLAUDE_HOME" ;;
+  # Read only and lock free: the count of lessons naming the check that holds them, saying none can,
+  # or carrying neither; with --warnings only what the write time hook says (claude-config#3245).
+  lesson-checks) do_lesson_checks "${2:-}" ;;
   check-lessons)
     # EVERY fault that holds a lessons file back, walked from the same list the send walks
     # (claude-config#373). This command is the read only way of asking whether LESSONS.md can
@@ -16544,5 +16718,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, leftovers, remove-leftovers, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, retire, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, leftovers, remove-leftovers, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, lesson-checks, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, retire, help)" ;;
 esac

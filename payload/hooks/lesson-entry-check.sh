@@ -25,6 +25,11 @@
 # band claim, which waits on the sync lock and then REFUSES, so on this path it would say nothing
 # about the lesson precisely while the watcher was busy (L110).
 #
+# A file with no fault is then asked `claude-sync lesson-checks --warnings` (claude-config#3245): a
+# newer lesson carrying neither a CHECK: nor a NO CHECK: line, or a CHECK: line naming a file not on
+# disk, is said to the session as context, never refused. A malformed check line is one of the
+# faults above, refused like the rest.
+#
 # Speaks only about the lessons file the sync publishes, which is the one under the config root. A
 # project's own notes named LESSONS.md are not governed by any of this.
 #
@@ -62,6 +67,11 @@ payload="$(cat 2>/dev/null || true)"
 # library the payload is read as it came, as before.
 case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+HOOK_DIR="$_ps_dir"
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 
 MODE=edit
 [ "${1:-}" = "--after-bash" ] && MODE=bash
@@ -199,13 +209,46 @@ if [ -z "$sync" ]; then
   block "$WRITTEN could not be checked: no clone of claude-sync is recorded in $CLONE_REGISTRY, so nothing here could run 'claude-sync lesson-faults' against it. Until that is fixed a malformed or over length entry will be invisible until the next sync, which can be days away, and it holds the WHOLE lessons file back from publishing while it waits. Run 'claude-sync status' from a checkout of the config repo to register it, then check the entry by hand with 'claude-sync lesson-faults'."
 fi
 
+# A file that publishes may still hold an entry the session should finish (claude-config#3245): a
+# lesson written after check lines existed carrying neither a CHECK: line naming the check that
+# holds it nor a NO CHECK: line saying why none can, or a CHECK: line naming a file that is not on
+# disk. Said as context for the session and never as a refusal: Dan's open question on #3245 (refuse
+# or warn) was given the cautious answer, warn only, and nothing about the file stops it publishing.
+# Asked of `claude-sync lesson-checks --warnings`, so the hook copies no predicate (L41).
+check_line_warnings(){
+  local warn wrc note
+  warn="$(CLAUDE_HOME="$CLAUDE_HOME" SYNC_NO_NOTIFY=1 "$sync" lesson-checks --warnings 2>&1)"; wrc=$?
+  record_stamp
+  if [ "$wrc" -ne 0 ]; then
+    # Not silence: a clone that could not answer judged nothing, and quiet reads as nothing to say
+    # (L11, L98). The same staleness lesson-faults meets below, said in its own words.
+    case "$warn" in
+      *"unknown command 'lesson-checks'"*)
+        note="$WRITTEN was checked for faults and can publish, but whether it names the check that holds it was not asked: the clone of claude-sync at $(dirname "$sync") does not have the 'lesson-checks' command yet. Run 'claude-sync pull' from that clone, then ask with: $sync lesson-checks --warnings" ;;
+      *)
+        note="$WRITTEN was checked for faults and can publish, but whether it names the check that holds it could not be asked. What 'claude-sync lesson-checks --warnings' said:
+
+$warn" ;;
+    esac
+  else
+    [ -n "$(printf '%s' "$warn" | tr -d '[:space:]')" ] || return 0
+    note="$WRITTEN is saved and can publish. One thing to settle, a warning rather than a refusal:
+
+$warn"
+  fi
+  # Said through the shared notice library (claude-config#1906): a systemMessage the person sees
+  # and the same text as context for the session, valid JSON whatever the lesson quotes, and
+  # encoded in bash alone when python3 is missing. Stderr on exit 0 reaches nobody. It exits 0.
+  hook_allow_notice "$note" PostToolUse
+}
+
 # SYNC_NO_NOTIFY, because a fault here is reported INTO the session that caused it and a desktop
 # notification as well would be the same thing said twice, to somebody who is already looking at
 # it. The tool notifies on a non interactive failure by design, which is right for the background
 # sync job and wrong for a hook: run from a test suite it puts a real notification on the real
 # screen, which is how this was found (L2).
 out="$(CLAUDE_HOME="$CLAUDE_HOME" SYNC_NO_NOTIFY=1 "$sync" lesson-faults 2>&1)"; rc=$?
-[ "$rc" -eq 0 ] && { record_stamp; exit 0; }
+[ "$rc" -eq 0 ] && { check_line_warnings; exit 0; }
 
 # A clone that does not KNOW this command has not judged anything, and saying the lesson is broken
 # because the tool could not be asked is a claim this never measured (L11, L440). It happens by
