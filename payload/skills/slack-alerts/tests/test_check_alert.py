@@ -521,6 +521,18 @@ class ProjectRecord(unittest.TestCase):
         with self.assertRaises(check_alert.RecordError):
             recorded(text)
 
+    def test_a_record_file_that_is_not_utf8_is_refused_not_read_with_replaced_bytes(self):
+        # The bad byte sits in a comment, so a record read with replaced bytes would load cleanly
+        # and allow the entry below it. Read strictly, the whole file is refused.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "slack-alerts-record.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"# note: caf\xe9\n2026-11-18 page-watch exempt bare-url\n")
+            with self.assertRaises(check_alert.RecordError) as raised:
+                check_alert.load_record(path, KEYS)
+        self.assertIn("not UTF-8", str(raised.exception))
+        self.assertIn(path, str(raised.exception))
+
     def test_a_record_with_only_comments_allows_nothing(self):
         record = recorded("# nothing recorded yet\n\n", KEYS)
         self.assertIn("time-format", rules_failed_with(time_off("MT"), "alert", record, "time-off-note"))

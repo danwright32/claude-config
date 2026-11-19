@@ -136,8 +136,8 @@ the checker, one entry per line: the date, the alert's key, and what that alert 
 
 - `own-zone`: a clock time may name the person's own zone in place of ET, one of CT, MT, PT, AZ,
   AKT, HST (`9:00 AM to 1:00 PM MT`), for text about that person's own time. Any other zone fails.
-- `labelled-id`: a bare id (the long letters and digits kind, such as
-  `8d41c7e2-5b9a-4f03-b6de-2c7a91e4f5b3`) may stand alone on a list line after a label saying
+- `labelled-id`: a bare id in the dashed 8, 4, 4, 4 and 12 character form the checker refuses,
+  such as `8d41c7e2-5b9a-4f03-b6de-2c7a91e4f5b3`, may stand alone on a list line after a label saying
   what it is (`Queue row: ` and the id). An id with no label, in a sentence, or with more words
   after it fails. A short number such as `Queue row: 4817` passes with no record at all.
 - `exempt` and one rule: that alert is not judged on that one rule, such as `bare-url` for an
