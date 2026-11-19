@@ -260,13 +260,14 @@ this in the same run, before step 5 stops the head run:
    then `run_session.py stop`. One run at a time per project, so the base run follows the head run's stop.
 3. Publish: `screenshots.py publish --areas-file <scratch>/areas.json --repo <owner/repo> --pr <n> --base-receipt <id> --head-receipt <id> > <scratchpad>/verify-<n>/shots.json`.
    It refuses a missing picture by area, screen, side, width and theme before uploading anything.
-   In a public repository whose screens all use a seed declared synthetic, it adds the pictures to
-   the orphan `pr-screenshots` branch through GitHub's git data API (no push), under
-   `pr-<n>/<head sha>/`, linked by the commit that added them, keeping everything already there:
-   nothing is ever pruned (Dan, 2026-11-10). Anywhere else it refuses
+   In a private repository, and in a public one whose screens all use a seed declared synthetic, it
+   adds the pictures to the orphan `pr-screenshots` branch through GitHub's git data API (no push),
+   under `pr-<n>/<head sha>/`, linked by the commit that added them, keeping everything already
+   there: nothing is ever pruned (Dan, 2026-11-10). In a private repository they show inline for
+   anyone signed in with access and nowhere else (measured 2026-11-19, claude-config#2699,
+   `PRIVATE_REPO_IMAGES`). A public repository with a seed not declared synthetic is refused
    `screenshots-need-private-link`: publish the pictures to a private Artifact page and run it again
-   with `--link <that page>`, which uploads nothing. A private repository takes the link too until
-   inline images there are measured to render (`PRIVATE_REPO_IMAGES`, claude-config#2699).
+   with `--link <that page>`, which uploads nothing.
 4. Render: `screenshots.py render --manifest <scratchpad>/verify-<n>/shots.json --body <scratchpad>/verify-<n>/body.md > <scratchpad>/verify-<n>/new-body.md`,
    then `gh pr edit <n> --body-file <scratchpad>/verify-<n>/new-body.md`. The `## Screenshots`
    block is replaced in place, so rendering again leaves one block, and its fingerprint is kept in
@@ -315,7 +316,5 @@ These are what the merge check expects that nothing here can supply yet, said ra
   `build_stamp_source` is `none`.
 - **Drive helpers.** Each project supplies its own; only the screenshot verbs ship here
   (shoot_web.mjs for a route, shoot_native.py for a native screen).
-- **Inline pictures in a private repository.** Unmeasured, so private repositories get the private
-  link until it is measured (claude-config#2699).
 - **The native app's frame list.** The camera ships here (native/VerificationShot.swift); each
   native app's test supplies its frames.
