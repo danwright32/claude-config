@@ -23,6 +23,13 @@
 #     alert scripts too), by any path and behind any runner (sudo, env, rtk, nohup, xargs, find
 #     -exec); a package script (npm run, pnpm, yarn) whose package.json command posts, read with the
 #     words after the script's name, so a file handed to it is judged as one handed to npx is (#3143).
+#     Since #3251 also: the files a pattern handed to a runner matches (npx playwright test
+#     'tests/*.spec.js'); a package script run through a workspace selector (pnpm --filter, npm -w,
+#     yarn workspace), in each folder it chooses; the files a package script's own command hands a
+#     bare runner; and a shell whose code or script is named another way: /dev/stdin as the script,
+#     $SHELL as the program, a line read and then run, a command xargs builds from its input, and
+#     \$( ) in a double quoted string. Where one of those cannot be read, the typed command is
+#     refused as unread.
 #     A command that only mentions an endpoint (grep, echo, a test) passes.
 #   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
 #   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy
@@ -99,6 +106,12 @@ RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([[:space:]]|\\[nrt])*\)'
 # which nothing in the command feeds.
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_."-]|$)'
 RUNS+='|(^|[^A-Za-z0-9_"]|\\[nrt])(bash|sh|zsh|dash|ksh)"'
+# A command whose first word holds a $, a backquote, a quote or a backslash (claude-config#3251):
+# `$SHELL posts`, `$(cat posts)`, `read -r l < posts; $l`, `b\ash posts` and `b''ash posts` name no
+# shell, script or interpreter as written, so with a file of no extension the call never reached
+# python3. In the payload's JSON a double quote is \" and a backslash \\; the \n, \r and \t of a
+# line break or a tab are no part of a word, so the word is read up to its first backslash.
+RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()'\\\\\$\`]*('|\\\\\\\\|\\\\\"|\\\$|\`)"
 RUNS+='|(^|[^A-Za-z0-9_]|\\[nrt])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # curl also reads a default config unless -q is its first word (claude-config#2893): so any curl
 # call goes to python3 while one of the places curl reads one from holds a file, and so does a call

@@ -1584,7 +1584,7 @@ def judged_by_name(name):
             or bool(INTERPRETER.match(name)) or name in _program_runs.PYTESTS)
 
 
-ProgramRuns = _program_runs.make(MARKER, judged_by_name)
+ProgramRuns = _program_runs.make(MARKER, judged_by_name, PKG_DIR_OPTS, MAX_DEPTH)
 # Code a command loads without naming it: a PHP include, NODE_OPTIONS, a name perl's <> runs, a file
 # with a NUL in its first line run by zsh or dash (claude-config#2912, #2977, #2978).
 CodeLoaders = load_lib("code_loaders", "code-loaders.py").make(SHELL_BANG, CURL_ASSIGN, MARKER, SH_UNKNOWN_DIR, MAX_DEPTH,
@@ -1724,6 +1724,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         # its end (package, claude-config#3143): (where those words start, what hands them, the words),
         # else None.
         self.next_handed = None
+        # The package scripts whose commands are being read, innermost last (script_own), and the
+        # workspace runs being followed (package_selected), both in lib/program-runs.py (#3251).
+        self.pkg_scripts, self.pkg_selecting = [], set()
         # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
@@ -5689,6 +5692,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         by a literal path was. The second reading comes after the first and only where the first
         found nothing, so it can refuse a command the first let through and never the reverse."""
         reason = self.judge_written(d, text, wrapper, why, depth, whole) or self.judge_unglued(d, text, depth, whole)
+        # And a shell, its code or its script named another way: $SHELL, /dev/stdin, a line read and
+        # then run, xargs, \$( ) in a double quoted string (lib/sh-walk-shapes.py, claude-config#3251).
+        reason = reason or self.judge_unread_shapes(d, text, wrapper, depth, whole)
         if reason:
             return reason
         placed = self.sh_placed(text, d)
@@ -5800,7 +5806,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if reason:
             return reason
         if name in PACKAGERS:
-            return self.package(name, words, d, depth)
+            # And the script in each workspace a selector chooses (package_selected, #3251).
+            return self.package(name, words, d, depth) or self.package_selected(name, words, d, depth)
         if name == "bun" and words[1:2] == ["build"]:
             # A build runs nothing it is handed: what it builds is read where this call runs it
             # (note_build in lib/program-runs.py). Its entries were read as a script bun runs, which
@@ -5980,7 +5987,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return None
         # In a package script, the program the words after the script's name land on, where the
         # script names it bare, is handed them as a launcher's package is (script_handed, #3143).
-        lands = None if launcher else self.script_handed(words)
+        # And any bare program of a package script is handed the words the script itself writes
+        # after it (script_own in lib/program-runs.py, #3251).
+        lands = None if launcher else (self.script_handed(words) or self.script_own(words))
         if launcher or lands:
             reason = self.package_run(lands[1], d, depth, lands[0]) if lands else \
                 self.package_run(words, d, depth, launcher)
@@ -6170,7 +6179,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             words = words[k:]
         return words
 
-    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None, held_code=False, actor=None):
+    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None, held_code=False, actor=None,
+                   expanded=False):
         """The reason any word after the program that names a file posts, or None.
 
         Which word is the script depends on each program's own option table (python3 -I takes no
@@ -6206,6 +6216,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         (a module python3 -m runs, claude-config#2827; code given by -c or -e, or read from a heredoc,
         claude-config#2691), so a code shaped file after it is handed to it, as after a held script
         word, and read as code only where the code can run what it is handed."""
+        # A file pattern among the words is the files it matches (patterned in lib/program-runs.py,
+        # #3251): the words are read as written, as before, and then again with each pattern
+        # replaced by its matches, so the second reading can only refuse more.
+        if not expanded:
+            more, unread = self.patterned(words, d, bool(actor))
+            if unread:
+                return unread
+            if more != words:
+                rest = (d, depth, shell_hint, lang, inline, held_code, actor, True)
+                return self.every_file(words, *rest) or self.every_file(more, *rest)
         code, data = [], []
         names_before = len(self.held_names())
         on_disk = {}  # each script read from a file, by its label: what it writes is not otherwise noted
@@ -7287,6 +7307,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 readings.append((f"{base} {' '.join(shlex.quote(w) for w in handed)}",
                                  (len(base) + 1, f"the package script {key}", tuple(handed))))
             for text, lands in readings:
+                self.pkg_scripts.append(key)  # script_own reads its bare programs as packages (#3251)
                 try:
                     self.next_on_disk, self.next_handed = True, lands
                     inner = self.line(text, pkg_dir, depth + 1, text)
@@ -7295,6 +7316,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
                 finally:
                     self.next_handed = None
+                    self.pkg_scripts.pop()
                 if inner:
                     with_words = " with the words after its name" if lands else ""
                     return f"the package script {key}{with_words} runs a command that posts: {inner}"
