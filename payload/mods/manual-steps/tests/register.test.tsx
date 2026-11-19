@@ -93,7 +93,8 @@ const modKit: { name: string; register: Register } = {
       if (command !== 'band') return { deny: 'not the band' }
       return { deny: JSON.stringify(((await $.state.get(bandRef as never)) as { value?: Row[] }).value ?? []) }
     })
-    on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    // Every mod's panes, as the real one hears them (#3285): the pane is manual steps', not mod-kit's.
+    on('ui.render', { component: 'Pane', plugin: '*' } as { component: 'Pane' }, async ($, e, next) => {
       const pane = (((await $.state.get(paneRef as never)) as { value?: Row[] }).value ?? []).find(r => r.id === e.requestId)
       if (!pane) return next(e)
       const { Box, Button, Text } = $.ui.resolve(e)
