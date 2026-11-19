@@ -87,6 +87,33 @@ idx="$(CLAUDE_HOME="$H" bash "$SYNC" lesson-short-forms "$H/LESSONS.md" 2>&1)"
 says "a SHORT line after a CHECK line is still paired with its lesson" "$idx" "A rule a guard holds in full."
 never_says "and the CHECK line is never read as a short form" "$idx" "real-guard"
 
+echo "lesson check lines: the one place the line is written is a place it is read"
+
+# The durable lesson check tells the session to write the check line just before the SHORT line, or
+# last in an entry that needs none, and ask before saving covers it with Dan's answer only there
+# (claude-config#3245, and the security review of it). The file's reader has to READ the line in that
+# place, not merely let it by, or an approved line would count for nothing. Each entry is counted
+# with the line and again without it, because silence from lesson-faults reads the same whether the
+# line was read or skipped: only the difference between the two counts shows it was read.
+placed() { # placed <description> <the entry's lines before the check line> <the check line> <the lines after it, or none> <what the count must say>
+  local with without
+  lessons "$2
+$3${4:+
+$4}"
+  with="$(run lesson-checks)"
+  says "$1: the line is read" "$with" "$5"
+  lessons "$2${4:+
+$4}"
+  without="$(run lesson-checks)"
+  never_says "$1: and that count came from the line, since the entry without it does not get it" "$without" "$5"
+  says "$1: the entry without it carries neither" "$without" "1 carry neither line"
+}
+placed "a CHECK line just before the SHORT line" "- **L50. A newer rule a guard holds in full.**
+  (claude-config#1, 2026-01-01)" "  CHECK: hooks/real-guard.sh (full)" "  SHORT: A newer rule a guard holds." "1 name the check that holds them (1 fully, 0 partly)"
+placed "a NO CHECK line just before the SHORT line" "- **L50. A newer rule nothing can check by machine.**
+  (claude-config#1, 2026-01-01)" "  NO CHECK: a judgement made case by case" "  SHORT: A newer rule nothing can check." "1 say no check can hold them"
+placed "a CHECK line last, in an entry with no SHORT line" "- **L50. A newer rule a guard holds in part.** (claude-config#1, 2026-01-01)" "  CHECK: hooks/real-guard.sh (partial)" "" "1 name the check that holds them (0 fully, 1 partly)"
+
 echo "lesson check lines: a malformed line is refused like any other entry fault"
 
 bad_case() { # bad_case <description> <entry text> <what the refusal must name>
