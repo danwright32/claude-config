@@ -31,9 +31,18 @@
 #     \$( ) in a double quoted string. Where one of those cannot be read, the typed command is
 #     refused as unread.
 #     A command that only mentions an endpoint (grep, echo, a test) passes.
-#   The one exemption is /nudge, skills/nudge/nudge.py beside this hooks folder by its real path (it
-#   posts as Nudge Bot, never as Dan, and runs only when he types it; his choice, 2026-11-05). A copy
-#   of it anywhere else is refused. There is no override variable, on purpose.
+#   The one script let through to post is /nudge, skills/nudge/nudge.py beside this hooks folder by
+#   its real path (it posts as Nudge Bot, never as Dan, and runs only when he types it; his choice,
+#   2026-11-05). A copy of it anywhere else is refused. There is no override variable, on purpose.
+#   One call is let through without being read: one that is the installed no network wrapper,
+#   no-network-run.sh in this folder by that same real path test, and the command it runs, and
+#   nothing else, with one `cd <folder> &&` in front at most and nothing after the command's own
+#   words. What runs under it has no network access while it runs there, so it cannot post
+#   whatever it is (Dan, 2026-11-18: "Yes, any command", claude-config#3173; the rule, and what
+#   the route does not contain, are in lib/no-network-route.py). A copy of the wrapper, the
+#   wrapper behind a variable, a word of the shell's own or another program, in a loop or a
+#   script, with a second command, a pipe or a second line after it, or in a call holding any
+#   character but printable ASCII, a tab and a newline, is judged as any other script is.
 #
 # Why a hook and not a permissions deny list: claude-sync carries the hooks block to both Macs and
 # leaves each Mac's permissions alone, so a deny entry would need a new sync feature, while this is
