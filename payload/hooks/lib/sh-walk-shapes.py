@@ -1000,43 +1000,90 @@ def make(sh_special, sh_param, unknown_dir=None):
                 return word
             return "'" + word.replace("'", "'\"'\"'") + "'"
 
-        @staticmethod
-        def sh_inner_value(raw):
-            """One word as written, as the shell hands it on: quotes taken off, and inside double
-            quotes or bare a backslash taken off what it escapes, so `"echo \\$(x)"` is `echo $(x)`.
-            A variable or a substitution stays as written."""
-            out, i, n = [], 0, len(raw)
+        def sh_inner_text(self, raw, d):
+            """(one word as written, as the shell hands it on; whether it holds something that shell
+            fills in whose value the gate does not work out). Quotes are taken off, and inside
+            double quotes or bare a backslash is taken off what it escapes, so `"echo \\$(x)"` is
+            `echo $(x)`. A variable or a substitution with no backslash is the outer shell's: it is
+            replaced by its value where the gate works that out (sh_value), and stays as written
+            where it does not, a word of unknown value to whoever reads the text. Where the text
+            has it inside single quotes of its own (`". '$DIR/lib.sh'"`) those are closed around
+            it, since the inner shell is handed the folder there and never the text $DIR."""
+            out, i, n, dq, unknown = [], 0, len(raw), False, False
+            inner = {"sq": False, "dq": False, "esc": False}  # the quotes of the text being built
+
+            def put(s):
+                for ch in s:
+                    if inner["esc"]:
+                        inner["esc"] = False
+                    elif inner["sq"]:
+                        inner["sq"] = ch != "'"
+                    elif ch == "\\":
+                        inner["esc"] = True
+                    elif ch == '"':
+                        inner["dq"] = not inner["dq"]
+                    elif ch == "'" and not inner["dq"]:
+                        inner["sq"] = True
+                out.append(s)
+
             while i < n:
                 c = raw[i]
-                if c == "'":
+                if c == "'" and not dq:
                     j = raw.find("'", i + 1)
                     j = n if j < 0 else j
-                    out.append(raw[i + 1:j])
+                    put(raw[i + 1:j])
                     i = j + 1
                 elif c == '"':
-                    i += 1
-                    while i < n and raw[i] != '"':
-                        if raw[i] == "\\" and i + 1 < n and raw[i + 1] in '$`"\\\n':
-                            out.append("" if raw[i + 1] == "\n" else raw[i + 1])
-                            i += 2
-                        else:
-                            out.append(raw[i])
-                            i += 1
+                    dq = not dq
                     i += 1
                 elif c == "\\" and i + 1 < n:
-                    out.append("" if raw[i + 1] == "\n" else raw[i + 1])
-                    i += 2
+                    if dq and raw[i + 1] not in '$`"\\\n':
+                        put(c)
+                        i += 1
+                    else:
+                        put("" if raw[i + 1] == "\n" else raw[i + 1])
+                        i += 2
+                elif c in "$`":
+                    end = None
+                    if c == "`":
+                        j = raw.find("`", i + 1)
+                        end = j + 1 if j > 0 else None
+                    elif raw.startswith("$(", i) and not raw.startswith("$((", i):
+                        j = self.sh_close(raw, i + 2)
+                        end = j + 1 if j is not None else None
+                    else:
+                        m = sh_param.match(raw, i)
+                        end = m.end() if m else None
+                    if end is None:
+                        put(c)
+                        i += 1
+                        continue
+                    filled = self.sh_value('"' + raw[i:end] + '"', d)
+                    if filled is not None:
+                        put(filled)
+                    else:
+                        # Its own quotes are its own, so the quotes of the text around it stay as
+                        # they were.
+                        unknown = True
+                        inner["esc"] = False
+                        out.append("'\"" + raw[i:end] + "\"'" if inner["sq"] else raw[i:end])
+                    i = end
                 else:
-                    out.append(c)
+                    put(c)
                     i += 1
-            return "".join(out)
+            return "".join(out), unknown
 
         def escaped_string(self, d, text, rest, depth):
             """The reason a string handed to a shell's -c or to eval posts once the backslashes the
             outer shell takes off are off, or None. In `bash -c "echo \\$(bash post.sh)"` the inner
             shell is handed `echo $(bash post.sh)` and runs post.sh. The shared reader keeps the
             backslash, so the substitution is text to every other reading. Only a string holding a
-            backslash in front of a $ or a backquote is read again."""
+            backslash in front of a $ or a backquote is read again. What the outer shell fills in
+            is filled in where the gate works it out (sh_inner_text). Where it does not, the text
+            the inner shell gets is not known: typed, the string is read with that part as a word of
+            unknown value, and in a script on disk it is left as before, as every reading there
+            leaves what cannot be worked out (this repository's own test-pr-review.sh sources two
+            files by `'$DIR/lib/...'` in such a string)."""
             if not ESCAPED_SUBST.search(text):
                 return None
             found = self.sw.wrapped(rest)
@@ -1052,8 +1099,9 @@ def make(sh_special, sh_param, unknown_dir=None):
                 return None
             if not any(ESCAPED_SUBST.search(r) for r in code):
                 return None
-            value = " ".join(self.sh_inner_value(r) for r in code)
-            if value == found[1]:
+            texts = [self.sh_inner_text(r, d) for r in code]
+            value = " ".join(t for t, _ in texts)
+            if value == found[1] or (any(u for _, u in texts) and self.sh_in_script()):
                 return None
             inner = self.inner_line(value, d, depth)
             return (f"{found[0]} runs a string whose substitution is written with a backslash, which the shell "

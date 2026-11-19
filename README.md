@@ -4313,7 +4313,11 @@ command, is judged as commands. Where what feeds `xargs` can be read, each comma
 together (its input added to the end, or put where `-I`, `-J` or `-i` writes the mark) is judged
 as a line, so `cat post.sh | xargs -0 bash -c` and `echo post.sh | xargs bash` are refused. And a
 double quoted `-c` or `eval` string holding a `$` or a backquote behind a backslash is judged
-again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`). Where one of these
+again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
+shell fills in replaced by the value the gate works out for it; where it works none out, the typed
+string is read with that part as a word of unknown value and a script on disk is left as before
+(this repository's `test-pr-review.sh` sources two files by `'$DIR/lib/...'` in such a string).
+Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
 command substitution run as a command, where what was read cannot be read; and `xargs` whose input

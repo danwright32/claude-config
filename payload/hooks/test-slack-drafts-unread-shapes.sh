@@ -581,6 +581,25 @@ eval "echo \$(bash ok.sh)"
 bash -c "\$SHELL ok"
 bash -c "echo \"\$(cat posts.sh)\""
 EOF
+# A string that also holds a variable the outer shell fills in is not read again here: taking its
+# quotes off would leave `$DIR` inside the single quotes the string writes, a path no reading can
+# work out, where the inner shell is handed the folder. Seen on the first build of this reading, which
+# refused this repository's own test-pr-review.sh for `bash -c ". '$DIR/lib/merge-turn.sh' && .
+# '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"`. Such a string is judged by the
+# reading there was (#3020), with the value the gate works out for the variable.
+printf '%s\n' 'f() { echo ok; }' > "$S/lib-ok.sh"
+printf '%s\n' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+  'busy(){ bash -c ". '"'"'$DIR/lib-ok.sh'"'"' && . '"'"'$DIR/lib-ok.sh'"'"' && f \$(date +%s)"; }' \
+  'busy' > "$S/mixed-ok.sh"
+printf '%s\n' 'D=.' 'bash -c "cd $D && echo \$(bash posts.sh)"' > "$S/mixed-posts.sh"
+each allowed "#3251 a string mixing a variable of the outer shell with an escaped substitution that posts nothing passes" 3<<'EOF'
+bash mixed-ok.sh
+D=.; bash -c ". '$D/lib-ok.sh' && f \$(date +%s)"
+EOF
+each read_refused "#3251 and one whose escaped substitution runs what posts is refused" 3<<'EOF'
+bash mixed-posts.sh
+D=.; bash -c "cd $D && echo \$(bash posts.sh)"
+EOF
 
 echo
 
