@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
 # payload-write-gate.sh
-# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse a write under a
-# development checkout's payload/ while the watch daemon could revert it, rather than warning about
-# it on the next prompt (claude-config#367).
-# Claude Code PostToolUse(Bash) hook: before a Bash call the half above notes what an at risk
-# payload/ holds, and after it this names anything written, added or removed there, so a write the
-# command's words could not show (a script file, a path built at run time) is still caught, by its
-# destination (claude-config#647).
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|NotebookEdit) hook: refuse a payload/ write
+# Claude Code PostToolUse(Bash|Monitor) hook: name what a Bash call changed there, by destination
+# Claude Code PostToolUseFailure(Bash|Monitor) hook: the same for a call that failed partway
+#
+# The first refuses a write under a development checkout's payload/ while the watch daemon could
+# revert it, rather than warning about it on the next prompt (claude-config#367). Before a Bash call
+# it also notes what an at risk payload/ holds, and after the call the second and third name anything
+# written, added or removed there, so a write the command's words could not show (a script file, a
+# path built at run time) is still caught, by its destination (claude-config#647). A call that ends
+# by succeeding or failing removes its note; a refused call's note is left to the sweep of notes a
+# day old (claude-config#3253).
 #
 # payload-revert-warning.sh already says the right thing: edits to payload/ in a development
 # checkout are mirrored over by the watch daemon running from another clone. But it is a
@@ -67,9 +71,18 @@ payload="$(cat 2>/dev/null || true)"
 # its raw payload names payload/ at all, since nothing here can read more than that, and the
 # refusal names the file. A library that sources but lacks the function asked for (an empty or cut
 # short file) is the same failure. After a call there is nothing left to refuse.
+# Is this payload one sent after a call has ended, read from its raw text because the readers below
+# may be what failed? Every such event, never only PostToolUse: a failed call (PostToolUseFailure)
+# has already run, so it has nothing left to refuse either (claude-config#3253).
+after_call(){
+  case "$payload" in
+    *'"hook_event_name":"PostToolUse'*|*'"hook_event_name": "PostToolUse'*) return 0 ;;
+  esac
+  return 1
+}
 unloaded(){   # $1 = the library file that could not be loaded
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
-  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
+  after_call && exit 0
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   cat >&2 <<MSG
 claude-sync: REFUSED a write that may be under a development checkout's payload/.
@@ -139,7 +152,7 @@ refuse_unread(){
   case "$payload" in *SKIP_PAYLOAD_WRITE_CHECK=1*) exit 0 ;; esac
   # After a call there is nothing left to refuse, and the check made then needs the note this
   # branch never took.
-  case "$payload" in *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) exit 0 ;; esac
+  after_call && exit 0
   case "$payload" in *payload/*) ;; *) exit 0 ;; esac
   unreadable_root="$(sc_clone_root_of "$PWD" 2>/dev/null || true)"
   unreadable_watcher="$(sc_watcher_cmd || true)"
@@ -190,10 +203,26 @@ EOF
 [ "$cwd" = "-" ] && cwd="$PWD"
 
 # WHERE this gate keeps the note of what payload/ held before a Bash call, read back after it
-# (claude-config#647). One small set of files per call, removed by the read, so what it keeps
-# cannot grow with the number of calls (claude-config#603).
+# (claude-config#647). One set of files per call, removed by the read, so what it keeps cannot grow
+# with the number of calls (claude-config#603).
 STATE_DIR="${PAYLOAD_WRITE_STATE_DIR:-$HOME/.claude-payload-write-gate}"
 state_key="$(printf '%s' "$use_id" | tr -c 'A-Za-z0-9_.-' '_')"
+
+# A call can end three ways besides succeeding, and each left its note behind until the day old sweep
+# below took it (claude-config#3253): on 2026-11-18 the folder held 261 calls' notes, about 145 KB
+# each, every one a call whose end never reached the read. A Bash call that exits non zero is reported
+# as PostToolUseFailure, never PostToolUse, so it is read back the same way, since it can write before
+# it fails (L480). A Monitor call runs the Bash hooks, so its note is taken, but returns as Monitor
+# while its command runs on, so a read when it returns would judge a command that has barely started:
+# its note is dropped. A call refused before it ran (by auto mode, a mod or another gate) and an
+# interrupt nothing reports reach neither event, and the day old sweep below is what removes those.
+# Claude Code reports some refusals as PermissionDenied, but a hook on that event must consult the
+# sleep predicate or carry an exemption Dan signs off (tests/test-sleep-silence.sh), so that is left
+# for a change he has answered.
+case "$event" in
+  PostToolUse|PostToolUseFailure)
+    [ "$tool" = "Bash" ] || { [ "$use_id" = "-" ] || rm -f "$STATE_DIR/$state_key".*; exit 0; } ;;
+esac
 
 # AFTER a Bash call: what changed under a payload/ that was at risk while it ran (claude-config#647).
 #
@@ -203,7 +232,7 @@ state_key="$(printf '%s' "$use_id" | tr -c 'A-Za-z0-9_.-' '_')"
 # the words could not show is judged by the destination itself, after the fact. It cannot undo the
 # write, so it says so plainly and names the one step that protects it now, rather than staying
 # quiet about a write the daemon may revert (L11, L98).
-if [ "$event" = "PostToolUse" ]; then
+if [ "$event" = "PostToolUse" ] || [ "$event" = "PostToolUseFailure" ]; then
   [ "$tool" = "Bash" ] || exit 0
   [ "$use_id" != "-" ] || exit 0
   roots_f="$STATE_DIR/$state_key.roots"
@@ -900,7 +929,10 @@ DIRS
   [ -n "$roots" ] || return 0
   mkdir -p "$STATE_DIR" 2>/dev/null || return 0
   # A call another gate refused never reaches the check after it, so its note is left behind. One
-  # find clears every such note older than a day, so the directory cannot grow with refusals.
+  # find clears every such note older than a day, so the directory cannot grow with refusals. Not
+  # sooner: a note is needed until its own call ends, and the longest call in a week of this Mac's
+  # transcripts (2026-11-19) returned 258 minutes after it was issued, waiting on a prompt
+  # (claude-config#3253). A shorter window would drop that note and its check with it (L174).
   find "$STATE_DIR" -type f -mmin +1440 -delete 2>/dev/null
   # The roots file is written FIRST: its time is what "changed since" is measured from.
   printf '%s\n' "$roots" > "$STATE_DIR/$state_key.roots" || return 0
