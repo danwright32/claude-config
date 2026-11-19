@@ -647,6 +647,27 @@ run_here 'bash "$NOWHERE/list.sh" *.md'
 if [ "$RC" -eq "$WRITTEN_OUT" ]; then check "#3251 the same pattern written bare is judged as its matches written out are (exit $WRITTEN_OUT)" ok
 else check "#3251 the same pattern written bare is judged as its matches written out are" "written out exit $WRITTEN_OUT, as a pattern exit $RC"; fi
 
+# The two whole repository scans a push waits on, judged as a session runs them. The sweep's own
+# command of 2026-11-19 running both was refused by the first build over the first, and judged
+# again after that fix the gate crashed on the second. A crash shows the end of what it printed,
+# where the error is.
+REPO="$(cd "$DIR/../.." && pwd)"
+for scan in tests/test-undated-measurements.sh tests/test-hang-wait-suites-gate.sh; do
+  [ -f "$REPO/$scan" ] || { check "#3251 $scan is there to be judged" "no $REPO/$scan"; continue; }
+  RUN_IN="$REPO"; run_here "bash $REPO/$scan"; RUN_IN="$S"
+  case "$ERR" in
+    *"could not judge"*|*Traceback*) check "#3251 a session running $scan is judged, not a crash" "the gate crashed: ...${ERR: -900}" ;;
+    *) allowed "#3251 a session running $scan is not refused" ;;
+  esac
+done
+# And both in one command from another folder, with what a session adds around them, as the sweep's
+# command was.
+run_here "bash $REPO/tests/test-undated-measurements.sh > u.txt 2>&1; echo \"exit=\$?\"; tail -1 u.txt; bash $REPO/tests/test-hang-wait-suites-gate.sh > h.txt 2>&1; echo \"exit=\$?\"; grep \"^FAIL\" h.txt | cut -c1-500; tail -1 h.txt"
+case "$ERR" in
+  *"could not judge"*|*Traceback*) check "#3251 a session running both scans in one command is judged, not a crash" "the gate crashed: ...${ERR: -900}" ;;
+  *) allowed "#3251 a session running both scans in one command is not refused" ;;
+esac
+
 echo
 
 echo "passed: $pass, failed: $fail"
