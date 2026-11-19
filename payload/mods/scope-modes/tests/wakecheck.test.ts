@@ -180,7 +180,9 @@ describe('the wake check', () => {
     // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
     expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100&page=1', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
     expect(asked.filter(a => !a.startsWith('gh '))).toEqual([`git -C ${'/Users'}/x/claude-config-sync remote -v`, `mtime ${'/Users'}/x/.claude/LESSONS.md`])
-    expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
+    // #3240: the local read of the sync clone's remotes took the last 25 s, so the stop is in part 4.
+    expect(r.unmeasured).toHaveLength(1)
+    expect(r.unmeasured[0]).toMatch(/^the overnight check stopped at its 60 s limit, 100\.0 s after it began, in part 4 of 6 \(the changes to the lessons file on GitHub\): the last read it made, the issues created overnight, took 25\.0 s, and the next, the /)
   })
   test('each GitHub read is given only the time left, and the whole check 30 s by default (#834 review of 98a40f1)', async () => {
     let t = 0
@@ -195,7 +197,8 @@ describe('the wake check', () => {
     )
     // 30 s, 18 s and 6 s left as the three reads start; never more than 20 s for one read.
     expect(given).toEqual([20_000, 18_000, 6_000])
-    expect(r.unmeasured).toEqual(['the overnight check stopped at its 30 s limit, so the rest of GitHub was not read'])
+    expect(r.unmeasured).toHaveLength(1)
+    expect(r.unmeasured[0]).toMatch(/^the overnight check stopped at its 30 s limit, 48\.0 s after it began, in part 4 of 6 \(the changes to the lessons file on GitHub\): the last read it made, the issues created overnight, took 12\.0 s/)
   })
   test('without the GitHub login nothing on GitHub can be read, and that is said', async () => {
     const r = await check({ 'gh api user --jq .login': fail('not logged in') })
@@ -279,10 +282,93 @@ describe('the events, page by page back to sleep (#1160)', () => {
       { since: SINCE, home: HOME, github, now: () => t, mtimeOf: mtimeFrom(world) },
     )
     expect(asked).not.toContain(page(3))
+    // #3240: the stop is said once, with the part, the last read made, the one not made, how far it
+    // got, what came after it, and the slowest reads; the window of events it did not reach is in it.
     expect(r.unmeasured).toEqual([
-      'the overnight check stopped at its 30 s limit, so the rest of GitHub was not read',
-      'the GitHub events from 11:00 PM ET on Wed Oct 7 to 2:21 AM ET on Thu Oct 8 were not read for the repositories to check (page 3: the check stopped at its 30 s limit)',
+      'the overnight check stopped at its 30 s limit, 36.0 s after it began, in part 2 of 6 (the GitHub events since sleep began): ' +
+        'the last read it made, page 2 of the GitHub events, took 12.0 s, and the next, page 3 of the GitHub events, was not made. ' +
+        'It had read 2 pages of events, so the GitHub events from 11:00 PM ET on Wed Oct 7 to 2:21 AM ET on Thu Oct 8 were not read for the repositories to check. ' +
+        'The parts after it (the issues created overnight; the changes to the lessons file on GitHub; the milestones in each repository; the deploy runs in each repository) were not read either, ' +
+        'and nothing read them later: the check runs once a night, when sleep mode ends. ' +
+        'Its slowest reads: the GitHub login 12.0 s; page 1 of the GitHub events 12.0 s; page 2 of the GitHub events 12.0 s',
     ])
+    expect(r.stopped).toMatchObject({ limitMs: 30_000, part: 2, parts: 6, partName: 'the GitHub events since sleep began', last: { step: 'page 2 of the GitHub events', ms: 12_000 }, next: 'page 3 of the GitHub events', elapsedMs: 36_000 })
+    expect(r.stopped?.text).toBe(r.unmeasured[0])
+    // The data holds what the sentence says: the pages of events read, and the same three slowest reads.
+    expect(r.stopped?.pages).toBe(2)
+    expect(r.stopped?.slowest).toEqual([
+      { part: 1, step: 'the GitHub login', ms: 12_000 },
+      { part: 2, step: 'page 1 of the GitHub events', ms: 12_000 },
+      { part: 2, step: 'page 2 of the GitHub events', ms: 12_000 },
+    ])
+    expect(r.unmeasured[0]).toContain(`It had read ${r.stopped?.pages} pages of events`)
+    expect(r.unmeasured[0]).toContain(`Its slowest reads: ${r.stopped?.slowest.map(x => `${x.step} ${(x.ms / 1000).toFixed(1)} s`).join('; ')}`)
+  })
+})
+
+// #3240: the morning after 17 Nov 2026 said only that the overnight check stopped at its 30 s limit:
+// not in which part, at which read, how far it had got, or whether anything read the rest. The check
+// now records each GitHub read it makes, with its part and how long it took, every time it runs, and
+// a stop names the part, the read, how far it got and what it never reached, once.
+describe('a stop at the limit says where, how far, and what came after it (#3240)', () => {
+  const ev = (p: number) => `gh api repos/o/r/issues/events?per_page=100&page=${p}`
+  const full = Array.from({ length: 100 }, (_, i) => ({ event: 'labeled', created_at: new Date(SINCE + (400 - i) * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z') }))
+  const world: World = {
+    ...QUIET,
+    'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 2, title: 'Ungrouped', updated_at: '2026-10-08T03:30:00Z' }])),
+    [ev(1)]: ok(JSON.stringify(full)),
+  }
+  // Each GitHub read takes 2 s, but the first page of o/r's issue events takes 20 s; local reads take none.
+  const slow = async (w: World, ms: Record<string, number> = { [ev(1)]: 20_000 }) => {
+    let t = 0
+    const asked: string[] = []
+    const r = await wakeCheck(
+      async argv => {
+        const key = argv.join(' ')
+        asked.push(key)
+        if (argv[0] === 'gh') t += ms[key] ?? 2_000
+        return w[key] ?? fail(`unexpected: ${key}`)
+      },
+      { since: SINCE, home: HOME, github, now: () => t, mtimeOf: mtimeFrom(w) },
+    )
+    return { ...r, asked }
+  }
+
+  test('a stop among the milestones names the repository read, how many were finished, and the part after it', async () => {
+    const r = await slow(world)
+    expect(r.asked).not.toContain(ev(2))
+    expect(r.unmeasured[0]).toBe(
+      'the overnight check stopped at its 30 s limit, 30.0 s after it began, in part 5 of 6 (the milestones in each repository): ' +
+        'the last read it made, page 1 of the issue events in o/r, took 20.0 s, and the next, page 2 of the issue events in o/r, was not made. ' +
+        'It had finished 0 of 2 repositories in this part. ' +
+        'The parts after it (the deploy runs in each repository) were not read either, and nothing read them later: the check runs once a night, when sleep mode ends. ' +
+        'Its slowest reads: page 1 of the issue events in o/r 20.0 s; the GitHub login 2.0 s; page 1 of the GitHub events 2.0 s',
+    )
+    expect(r.stopped).toMatchObject({ part: 5, done: 0, total: 2 })
+    // Pages of events are kept only for a stop among the events; the slowest reads always.
+    expect(r.stopped).not.toHaveProperty('pages')
+    expect(r.stopped?.slowest[0]).toEqual({ part: 5, step: 'page 1 of the issue events in o/r', ms: 20_000 })
+  })
+  test('the limit is said once: what it left undecided names no limit of its own', async () => {
+    const r = await slow(world)
+    expect(r.unmeasured.filter(u => /limit/.test(u))).toHaveLength(1)
+    expect(r.unmeasured[1]).toBe('whether milestone "Ungrouped" in o/r was changed only by the night\'s own work was not checked (its issue events from 11:00 PM ET on Wed Oct 7 to 4:01 AM ET on Thu Oct 8 were not read: page 2: the check ran out of time first)')
+  })
+  test('a stop in the last part says nothing came after it', async () => {
+    const w: World = { ...QUIET, [RUNS('o/r')]: runs([]), [RUNS('o/claude-config')]: runs([]) }
+    const r = await slow(w, { [RUNS('o/r')]: 30_000 })
+    expect(r.unmeasured).toHaveLength(1)
+    expect(r.unmeasured[0]).toContain('in part 6 of 6 (the deploy runs in each repository): the last read it made, the deploy runs in o/r, took ')
+    expect(r.unmeasured[0]).toContain('It had finished 1 of 2 repositories in this part. Nothing read the rest of it later: the check runs once a night, when sleep mode ends.')
+  })
+  test('every GitHub read is recorded with its part and how long it took, on a night it finished too', async () => {
+    const r = await slow(QUIET, {})
+    expect(r.stopped).toBeNull()
+    expect(r.unmeasured).toEqual([])
+    expect(r.steps.map(s => s.part)).toEqual([1, 2, 3, 4, 5, 5, 6, 6])
+    expect(r.steps.every(s => s.ms === 2_000)).toBe(true)
+    expect(r.steps[0]).toEqual({ part: 1, step: 'the GitHub login', ms: 2_000 })
+    expect(r.steps[6]).toEqual({ part: 6, step: 'the deploy runs in o/r', ms: 2_000 })
   })
 })
 

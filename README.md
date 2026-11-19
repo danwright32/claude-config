@@ -8126,7 +8126,21 @@ needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot s
 passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
-not run. A failed, cancelled or timed out run is listed. What may merge and
+not run. A failed, cancelled or timed out run is listed. The check runs once a night, when sleep
+mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
+limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
+parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
+file's changes, the milestones in each repository, then the deploy runs in each repository. Every
+read it makes is kept with its part and how long it took, as `steps` on the one line it always
+writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
+stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same
+values its sentence is built from: the part it stopped in (`part`, `parts`, `partName`), how long
+after it began (`elapsedMs`) against the limit (`limitMs`), the last read made and how long it took
+(`last`), the first read not made (`next`), how far it got (`pages` of events read, for a stop among
+the events, or `done` of `total` repositories, in a part read one repository at a time), and its
+three slowest reads (`slowest`, each with its part and time).
+The line also says that the parts after it were not read and that nothing read them later, since no
+later pass runs that night, so it stays under Needs a look. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
