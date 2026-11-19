@@ -135,8 +135,8 @@ bash ~/.claude/skills/disk-clean/review-check.sh --out <folder> --payload <folde
   the scan). Nothing was planned. Name each one with the reason it printed, and ask him to untick
   those and copy again, or to start again from step 1.
 - **Exit 7**: nothing was ticked, so nothing will be removed. Say so and stop.
-- **Exit 8**: the Trash was ticked as one row, but what the selection says of it is not what the
-  scan offers now: an entry went after the page was drawn, the page was drawn for another scan, or
+- **Exit 8**: the Trash or the GitHub command line cache was ticked as its one row, but what the
+  selection says of it is not what the scan offers now: an entry went after the page was drawn, the page was drawn for another scan, or
   the selection was edited. Nothing was planned. Go back to step 2, which draws the page for what
   the scan offers now, and ask him to tick again and copy from it.
 
