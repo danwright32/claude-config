@@ -6,7 +6,7 @@
 # only when that line is what Dan read in the lesson picker: his SHORT line, or the whole rule where
 # he was shown none. The generator (lesson_entries_render in claude-sync) writes the line every
 # session loads. The review found them disagreeing: a rule approved with no SHORT line went through
-# with its bold closed after five words, and the index rendered those five words as the lesson.
+# with its bold closed after six words, and the index rendered those six words as the lesson.
 #
 # The mod now takes such an entry only in a shape the generator reads one way. This suite is the
 # half of the proof the mod's own suite cannot give, since it cannot run a shell: it runs the REAL

@@ -1554,7 +1554,7 @@ test('the tallest real lesson fits the picker with its SHORT line shown, beside 
 
 // The independent review of #3320. With no SHORT line the index renders an entry's BOLD SPAN, and
 // nothing held that span to the rule Dan read: under an approval for one sentence an entry went
-// through whose bold closed after five words, and those five words were the lesson every session
+// through whose bold closed after six words, and those six words were the lesson every session
 // loaded. An entry approved with no SHORT line is now taken only with the whole rule in bold, from
 // its number to its last word, and nothing else in bold: a shape the index reads one way. The list
 // is shared with tests/test-lesson-index-line-shown.sh at the repository root, which runs the real

@@ -7762,7 +7762,7 @@ written under a number of one or three digits. All 8 lesson pickers in the trans
 kept would be refused, each for a rule over 151 with no `SHORT:` line shown, which no picker had.
 An independent review of #3320 (2026-11-20) then tightened four things. With no `SHORT:` line the
 index renders an entry's bold span, and nothing held that span to the rule: under an approval for
-one sentence an entry went through whose bold closed after five words, and those five words were
+one sentence an entry went through whose bold closed after six words, and those six words were
 the lesson every session loaded. Such an entry is now taken only with the whole rule in bold and
 nothing else in bold, and no entry may hold a line of spaces (rules.ts `wholeRuleInBold`). The mod
 keeps no copy of the generator's reading: it requires a shape the generator reads one way, and

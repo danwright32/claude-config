@@ -2610,15 +2610,19 @@ and the band question is removed rather than kept beside it (L29). Three defects
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
   lessons reviews of #869 found a new shape each round): the file the write leaves must be the file
-  as it is now with exactly the entry block inserted at one line boundary. A Write leaves its
+  as it is now with exactly the entry block inserted at one line boundary, and since the review of
+  #3320, below, that boundary must be an entry boundary (`boundaryFault`). A Write leaves its
   content; an Edit, never replace_all, whose old text is found exactly once leaves the file with that
   text replaced. An Edit was once judged by the shape of its two texts instead, which refused old
   text cut as whole lines with their newline, the shape Claude sent for L1030, so Dan's add lapsed
   unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
-  shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
+  shape: `- **L<n>.`, the rule word for word (wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
-  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it (the
-  SHORT line was the exception until #3320, below: it was held to the cap and to nothing else).
+  is within the cap, with no blank line inside, a line of spaces included. Where the entry has a
+  SHORT line the index renders that line, and where the rule's bold closes is the file's layout.
+  Where it has none the index renders the bold span, so the whole rule and nothing else is in bold
+  (`wholeRuleInBold`, since the review of #3320, below). Nothing Dan did not read rides along with
+  it (the SHORT line was the exception until #3320: it was held to the cap and to nothing else).
   Since #3245 (built 2026-11-19; Dan on the issue that day: "Yes, cover the check line") the picker
   may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
   rule or that none can, which the durable lesson check now asks for before a lesson is written.
@@ -2627,7 +2631,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the one place `hooks/durable-lesson-check.sh` tells the session to write it, and one the lessons
   file's reader reads (`claude-sync lesson_entries_render` scans every line of an entry after its
   first, so it also reads a line after the SHORT line, where L865 has one; no approval covers that
-  place, and such a line is asked about). It is taken on the same footing as the rule,
+  place, and an entry holding such a line is refused). It is taken on the same footing as the rule,
   as text Dan read: the picker is refused unless the line is one line in a check line's shape
   (`readCheckLine`: `CHECK:` with something named and `(full)` or `(partial)`, or `NO CHECK:` with
   three words of reason) and stands whole on a line of its own in the question, since a short line
@@ -2657,7 +2661,9 @@ and the band question is removed rather than kept beside it (L29). Three defects
   In the entry every other line is still read as the rule's, so a different check line, a second
   one, one in another place, the same line under
   another rule or on another lesson, and any check line on an approval that showed him none fail
-  the comparison and are asked about. An entry without the line still goes through, as it did
+  the comparison and are refused (asked about For good until the review of #3320, below, which
+  sends every such entry back to the lesson picker). An entry without the line still goes through,
+  as it did
   before the line existed. The value is read back from storage through `checkLine` again (L50), so
   a damaged record covers the rule alone.
   The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
@@ -2733,7 +2739,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   on a line of its own. The approval records it, and the entry's SHORT line must be that line but
   for the file's indentation (`addsLesson`, read from the same copy of the entry the check line
   is). An approval that showed none covers an entry with none, so a SHORT line added afterwards is
-  asked about, and where he read one an entry without it is not the entry he read. The line is
+  refused, and where he read one an entry without it is not the entry he read. The line is
   judged by `shownFault`, the function every shown text is judged by, through `readShortLine`:
   there is no second copy of the character or markup checks, and a SHORT line is prose, so it is
   not cut to ASCII as a check line is. The picker also refuses any other line starting `SHORT:`
@@ -2761,10 +2767,44 @@ and the band question is removed rather than kept beside it (L29). Three defects
   be refused: each rule is over 151 (202 to 434) and no picker showed a SHORT line, because none
   could. That is the new requirement, not a fault in them. With a SHORT line of 151 characters
   added, those 8 questions take 11 to 14 rows.
+  The independent review of #3320 (2026-11-20, at 4cc48e4af6) found four ways the line a session
+  loads could still differ from what Dan read, and each is closed. First, and blocking: with no
+  SHORT line the index renders the entry's bold span, and nothing held that span to the rule, so
+  under an approval for one sentence an entry went through whose bold closed after six words, and
+  those six words were the lesson every session loaded. Such an entry is now taken in one shape
+  only (`wholeRuleInBold`): `- **`, the number and the whole rule, the closing marks at once, and
+  no other bold mark, with no line of spaces in any entry, since the index stops reading a wrapped
+  rule at one. The mod requires that shape and keeps no copy of the generator's reading. Sharing
+  one reading was ruled out: it means changing `claude-sync` for a mod's sake or copying its awk
+  into the mod, where the copy drifts (L370). The proof is `tests/test-lesson-index-line-shown.sh`,
+  which cuts `lesson_entries_render` out of `claude-sync`, runs it over the entries listed in the
+  mod's `tests/index-lines.ts` and holds each rendered line to the text he was shown, while the
+  mod's own suite holds the mod to the same list. Second: the approved Edit could put its entry
+  inside another entry, where the new entry took that entry's SHORT line as its own. The entry
+  must now land at an entry boundary (`boundaryFault`, `lessonPlaced`): above it an entry's last
+  line or a section heading, and below it, as the next line that is not blank, an entry's first
+  line, a section heading or the end of the file. Third: a For good could still approve an Edit
+  that adds or changes a lesson entry, under a question of the session's own wording that held
+  none of the entry. An Edit or Write to `~/.claude/LESSONS.md` that adds or changes an entry is
+  now refused, in words that send the session to the lesson picker, and no question waits on it
+  (`entriesTouched`, `pickerOnly`, `lessonEditBy` in register.ts). An entry is every line the
+  file's reader gives it, down to the next entry or section heading, and the check reads the file
+  as it stands on every send, so a For good given earlier is not taken either. Changing an entry
+  already in the file therefore takes the lesson picker for the entry as it should read, then the
+  old one taken out and the new one added. Fourth: length was counted in UTF-16 code units, where
+  the index cap counts bytes, so 151 accented letters passed the picker and made a line of 311;
+  it is counted in bytes now (`indexLength`), the cap still 151. And a line that reads as a SHORT
+  line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
+  and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
+  of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
+  route now closed. Left as they were and filed as #3343: a shell command that writes the lessons
+  file, a write that touches no entry (a section heading, an entry taken out whole, text above the
+  first section), and a checkout's `payload/LESSONS.md`, which the lesson picker does not cover.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
-  Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
+  A shell append, and a write that touches no entry, are asked about as before. The approval is
+  used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
   way, only once its write lands (#1691): an Edit or Write that errors, or that a guard beneath
