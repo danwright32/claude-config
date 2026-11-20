@@ -7,6 +7,7 @@ the shapes the standard describes, one per kind of post. The skill's own example
 the checker too, because a rule is copied through its worked example (L562). Nothing here reaches
 Slack.
 """
+import keyword
 import os
 import re
 import subprocess
@@ -680,6 +681,40 @@ class TheSkill(unittest.TestCase):
                 self.assertIsNotNone(kind, "the line above the example names no kind")
                 urgent = heading.startswith("Urgent") or kind == "reminder"
                 self.assertEqual(check_alert.check(text, kind, urgent=urgent, apps=("Shop Admin",)), [])
+
+
+def repeated_lines(source):
+    """(the line, where it first appears, where it appears again) for each line of the source that
+    appears more than once word for word, leading and trailing space ignored. A line holding no name
+    but Python's own keywords (blank, a bracket, "else:", "try:", "break", "return 2") is left out,
+    since nothing can be written once there."""
+    first, found = {}, []
+    for number, raw in enumerate(source.split("\n"), 1):
+        line = raw.strip()
+        if all(name in keyword.kwlist for name in re.findall(r"[A-Za-z_]\w*", line)):
+            continue
+        if line in first:
+            found.append((line, first[line], number))
+        else:
+            first[line] = number
+    return found
+
+
+class WrittenOnce(unittest.TestCase):
+    """A project keeps a byte for byte copy of check_alert.py, and one project's duplication check
+    refuses a line repeated word for word, so a repeat here is a file that project cannot take
+    (claude-config#3222). Caught here, before another repository's check finds it."""
+
+    def test_the_scan_finds_a_repeat_and_skips_keyword_lines(self):
+        sample = "if x:\n    say(x)\nelse:\n    return 2\n)\nif y:\n    say(x)\nelse:\n    return 2\n)\n"
+        self.assertEqual(repeated_lines(sample), [("say(x)", 2, 7)])
+
+    def test_no_line_of_the_checker_is_repeated(self):
+        with open(os.path.join(SKILL_DIR, "check_alert.py"), encoding="utf-8", errors="strict") as handle:
+            source = handle.read()
+        said = [f"line {again} repeats line {at} word for word: {line}" for line, at, again in repeated_lines(source)]
+        if said:
+            self.fail("\n".join(said))
 
 
 if __name__ == "__main__":

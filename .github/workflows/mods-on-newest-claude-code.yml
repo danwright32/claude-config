@@ -1,0 +1,104 @@
+name: mods on the newest Claude Code
+
+# Once a day, the mods' own tests on the NEWEST Claude Code release (claude-config#3297, Dan's choice
+# of 2026-11-19, "Checks plus a daily run"). The pull request checks test the mods on the one version
+# written in .github/claude-code-version, so a release that breaks a mod never turns anybody's pull
+# request red; this run is what finds it, within a day, and raising the file is then the pull request
+# that shows the fix. Claude Code shipped twelve releases from 2026-11-02 to 2026-11-19.
+#
+# It never runs on a push or a pull request, so it cannot turn either red, and tests/test-ci-workflow.sh
+# holds that. A failing day opens one issue for Dan, or comments on the one already open; a passing day
+# posts nothing (tools/report-mods-on-newest-claude-code.sh). A run that dies before reporting is red in
+# the Actions tab, and GitHub emails whoever last changed the schedule below.
+#
+# By hand: `gh workflow run mods-on-newest-claude-code.yml`.
+on:
+  schedule:
+    # 11:17 UTC, which is 6:17 AM ET in winter, off the hour when GitHub's scheduled runs bunch up.
+    - cron: '17 11 * * *'
+  workflow_dispatch:
+
+# One at a time, never cancelled: a run by hand beside the scheduled one must not open a second issue
+# for the same failure, so the second waits and then finds the first one's issue open.
+concurrency:
+  group: mods-on-newest-claude-code
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs the newest release with no write access to anything: only the report job below may post.
+  tests:
+    runs-on: ubuntu-26.04
+    # The two suites bound their own wall clock (payload/hooks/lib/suite-deadline.sh); this sits above
+    # both of them together, with the install, so a suite is always the one to say where it hung.
+    # Sixty five, not fifty: this workflow sets no deadline for the suite runner, so
+    # tests/test-claude-sync.sh (#210) holds each of its jobs above the runner's default of an hour.
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned TypeScript compiler
+        # tools/check-mods.sh type checks every mod with it, as the pull request checks do.
+        run: npm ci --prefix tools/typescript --no-audit --no-fund
+
+      - name: Install the newest Claude Code
+        run: |
+          mkdir -p "$RUNNER_TEMP/mods-logs"
+          claude_bin="$(bash tools/install-claude-code.sh "$RUNNER_TEMP/claude-code" --newest)"
+          "$claude_bin" --version | awk '{ print $1 }' > "$RUNNER_TEMP/mods-logs/version"
+          echo "MODS_CLAUDE=$claude_bin" >> "$GITHUB_ENV"
+
+      - name: The mods' tests on it
+        # Both suites run whatever the first says, and the step fails when either did. Each one's
+        # whole output is kept for the report job, which reads what failed from it.
+        run: |
+          set +e
+          bash tests/test-mods.sh > "$RUNNER_TEMP/mods-logs/test-mods.log" 2>&1; mods_rc=$?
+          bash tests/test-mods-load-engine.sh > "$RUNNER_TEMP/mods-logs/load-engine.log" 2>&1; load_rc=$?
+          grep -E '^(FAIL: |SUITE-NOTE |SUITE-PART-UNMEASURED |SUITE-RESULT )' "$RUNNER_TEMP/mods-logs/test-mods.log" "$RUNNER_TEMP/mods-logs/load-engine.log"
+          echo "test-mods.sh exited $mods_rc, test-mods-load-engine.sh exited $load_rc"
+          [ "$mods_rc" -eq 0 ] && [ "$load_rc" -eq 0 ]
+
+      - name: Keep the logs for the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mods-logs
+          path: ${{ runner.temp }}/mods-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The only job that can write, and it runs no Claude Code: it reads the logs and posts, or not.
+  report:
+    needs: tests
+    if: always()
+    runs-on: ubuntu-26.04
+    # It ends in under a minute. The number is a backstop only, and sits above an hour for the same
+    # check (#210) as the tests job's.
+    timeout-minutes: 61
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the logs
+        # Missing when the tests job died before writing any, which the report says rather than
+        # stopping here.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mods-logs
+          path: ${{ runner.temp }}/mods-logs
+
+      - name: Tell Dan when the mods failed, and nobody when they passed
+        env:
+          RESULT: ${{ needs.tests.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/mods-logs"
+          bash tools/report-mods-on-newest-claude-code.sh "$RUNNER_TEMP/mods-logs"

@@ -244,8 +244,6 @@ sandbox-exec -f $P/strict.sb node --test test/notify.test.js
 EOF
 
 gate_says refused "#3277 a redirection glued to the last word does not hide the file" "$KNOWS" 3<<EOF
-$T/runner.sh node --test test/notify.test.js>out.txt
-$T/runner.sh node --test test/notify.test.js>>out.txt
 op run -- node --test test/notify.test.js>out.txt
 op run -- node --test test/notify.test.js>out.txt 2>&1
 EOF
@@ -328,6 +326,16 @@ echo test/notify.test.js | xargs node --test
 $T/runner.sh node --test test/notify.test.js
 $T/runner.sh node --test test/notify.test.js > out.txt
 $T/runner.sh node --test test/notify.test.js 2>out.txt
+EOF
+
+# Since claude-config#3252 the shared reader takes a redirection glued to a word off it, so behind
+# a script that runs its words the glued form is the same command as the spaced one above, and is
+# refused by the rule that refuses that one (the script runs a command named by its arguments),
+# not by the unknown program reading. The reason is held, so a return to the old allowance or to
+# the other reading is seen.
+gate_says refused "#3277 behind a script that runs its words, a glued redirection is the spaced command" "runs a command named by its arguments" 3<<EOF
+$T/runner.sh node --test test/notify.test.js>out.txt
+$T/runner.sh node --test test/notify.test.js>>out.txt
 EOF
 
 echo "slack drafts only: what the gate allowed and must still allow (claude-config#3277)"

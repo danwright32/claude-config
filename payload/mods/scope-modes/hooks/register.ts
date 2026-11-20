@@ -5248,7 +5248,7 @@ const sleepPromptNote = (r: SleepRecord, self: string, now: number) =>
   `Sleep mode is on until ${endSaid(r.until, now)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
-  "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
+  "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue. The one exception is a refusal that says auto mode's safety check gave no verdict: follow \"One unchanged resend after no verdict\" in ~/.claude/CLAUDE.md."
 const HOME_NOTE = `Dan is back at the Mac: ${MODE_DEF.home.will} (${PAGE_TOOL}).`
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -6036,8 +6036,8 @@ export const register: Register = on => {
     return { ...beneath, decision: { behavior: 'allow' } }
   })
 
-  // A refusal by the auto mode classifier while asleep (#834) is final: a `failed` note naming the
-  // reason, and never a retry, whatever beneath asked for.
+  // A refusal by the auto mode classifier while asleep (#834) gets a `failed` note naming the reason,
+  // and this handler never runs it again, whatever beneath asked; the session's own resend: #3224.
   on('classic.PermissionDenied', async ($, e, next) => {
     hear(e)
     const reading = await sleepNow($)

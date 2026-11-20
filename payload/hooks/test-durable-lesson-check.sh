@@ -296,6 +296,29 @@ else
   fi
 fi
 
+# AND THE SESSION IS TOLD WHAT THE PICKER REFUSES IN THE RULE AND THE QUESTION (security review of
+# claude-config#3295: the instruction said nothing of those limits, so the first refusal was how a
+# session learned them, and no test held the question's cap to it). The three numbers are read from
+# the mod (L41), and each kind of refusal is named.
+maxquestion="$(sed -n 's/^export const MAX_QUESTION = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+maxrows="$(sed -n 's/^export const MAX_QUESTION_ROWS = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+columns="$(sed -n 's/^export const QUESTION_COLUMNS = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+if [ -z "$maxquestion" ] || [ -z "$maxrows" ] || [ -z "$columns" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read MAX_QUESTION (${maxquestion:-unread}), MAX_QUESTION_ROWS (${maxrows:-unread}) or QUESTION_COLUMNS (${columns:-unread}) from $rules, so the question's limits in the instruction were compared against nothing"
+else
+  q_missing=""
+  case "$reason" in *"at most $maxrows rows at $columns columns and $maxquestion UTF-16 code units"*) ;; *) q_missing="$q_missing size:$maxrows/$columns/$maxquestion" ;; esac
+  case "$reason" in *'never two blank lines running'*) ;; *) q_missing="$q_missing blank-lines" ;; esac
+  case "$reason" in *'no character he cannot see'*) ;; *) q_missing="$q_missing unseen" ;; esac
+  case "$reason" in *'no markup outside backticks'*) ;; *) q_missing="$q_missing markup" ;; esac
+  case "$reason" in *'write code inside backticks on one line'*) ;; *) q_missing="$q_missing backticks" ;; esac
+  if [ -z "$q_missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the instruction gives what the picker refuses in a rule and a question ($maxrows rows at $columns columns, $maxquestion code units, blank lines, unseen characters, markup), as ask before saving holds it"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the instruction and ask before saving disagree about the rule and the question (${q_missing# }), so a session learns a limit only by being refused"
+  fi
+fi
+
 # AND THE MORNING PICKERS ASK THE SAME WAY (claude-config#3245). Scope modes offers the lessons
 # proposed overnight through this same picker and points at this hook's steps by NUMBER, so adding
 # the rungs step moved the step it named. Held here from both sides: the steps it names are the ones

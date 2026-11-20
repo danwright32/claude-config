@@ -67,9 +67,10 @@ Report what it printed, in plain words, in this order:
    since removing one would remove it from iCloud on every device (#3215).
 5. Two kinds mostly show where space is (#3235): Records Claude Code and this config keep (its
    state, session notes among them, file history, the finding spool and its backups, the home
-   folders its hooks write), and Claude items in the user temp folder, which lists no rows and
-   gives its count and size in its note. Say the first one's largest rows by size and the second
-   one's note, as space shown, not as space that can be freed. The one thing Records offers is a
+   folders its hooks write, with the rest of the state and every other home entry named for Claude
+   counted in its note), and Claude items in the user temp folder, which lists no rows and gives
+   its count and size in its note. Say the first one's largest rows by size and both notes, as
+   space shown, not as space that can be freed. The one thing Records offers is a
    folder of images or documents the daily keep rules kept in an ended session's notes, once
    nothing in it was changed or opened in 30 days; it goes to the Trash (Dan, 2026-11-19). Those
    rows are read from the list the keep rules job writes once a day, so one can be up to a day

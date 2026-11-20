@@ -1830,3 +1830,168 @@ describe('writes: the settings a script is run with (#3093)', () => {
     expect(envs('T=x; bash tools/check-mods.sh payload/mods && git log --format=%s')).toEqual([['tools/check-mods.sh', undefined]])
   })
 })
+
+// claude-config#3279: with no answer from Dan recorded, a file that changes a project's look could
+// still be rewritten by a program this reader did not know writes: ed, ex or vim given a script,
+// and a pipe into sponge, each read as writing nothing (measured 2026-11-19, 23 of 72 routes tried
+// against the design round guard). The reader knows a writer by its name, so every other program
+// that writes the file its words name passed the same way: sort -o, uniq's second file, xxd,
+// base64 -o, openssl -out, plutil, gzip and its kin. Each one installed on this Mac was run first
+// and seen to change the file it names.
+describe('writes: an editor run on files, and the other programs that write a file they name (#3279)', () => {
+  const F = `${CWD}/app/globals.css`
+  const edited = (command: string) => read(command).files.filter(f => f.edits).map(f => f.path)
+  const scripts = (command: string) => read(command).unnamed.map(u => ({ what: u.what, program: u.program?.trim(), folder: u.folder, inputs: u.inputs }))
+  const removed = (command: string) => read(command).changes.filter(c => c.does === 'remove').map(c => c.path)
+  test('ed, ex, vi and their kin edit in place every file they are opened on', () => {
+    for (const command of [
+      `ed -s app/globals.css <<'EOF'\n1s/a/b/\nw\nq\nEOF`,
+      `printf '1s/a/b/\\nw\\nq\\n' | ed -s app/globals.css`,
+      'ed -s app/globals.css < /tmp/fix.ed',
+      `red -p '*' app/globals.css <<'EOF'\nw\nq\nEOF`,
+      `ex -sc '%s/a/b/|x' app/globals.css`,
+      `ex -s app/globals.css <<'EOF'\n%s/a/b/\nwq\nEOF`,
+      `ex -s +'%s/a/b/' +wq app/globals.css`,
+      `vim -es -c '%s/a/b/' -c wq app/globals.css`,
+      `vim -Es -c '%s/a/b/' -c wq app/globals.css`,
+      `vim -c '%s/a/b/' -c wq app/globals.css`,
+      `vi -es -c '%s/a/b/' -c wq app/globals.css`,
+      // neovim's switch for running with no screen, written in two halves: the scan that keeps
+      // every Chrome launch going through its helper reads that switch, whole, as a Chrome launch.
+      `nvim ${'--head' + 'less'} -c '%s/a/b/' -c wq app/globals.css`,
+      // Read only mode stops nothing: `w!` writes (measured with view on macOS, 2026-11-19).
+      `view -es -c 'w!' -c q app/globals.css`,
+      'vim -u NONE -i NONE -es -S /tmp/fix.vim app/globals.css',
+      `emacs --batch app/globals.css --eval '(replace-string "a" "b")' -f save-buffer`,
+      'env vim -es -c wq app/globals.css',
+    ])
+      expect([command, edited(command)]).toEqual([command, [F]])
+  })
+  test('the value an editor option takes is no file it is opened on, and a file an option writes is one it writes', () => {
+    expect(paths(`vim -es -c 'e notes.md' -c wq a.md b.md`)).toEqual([`${CWD}/a.md`, `${CWD}/b.md`])
+    // Outside ex mode -s names a file of keystrokes; in it, -s only silences.
+    expect(paths('vim -s keys.txt a.md')).toEqual([`${CWD}/a.md`])
+    expect(paths('vim -es a.md')).toEqual([`${CWD}/a.md`])
+    expect(paths('ex +3 a.md')).toEqual([`${CWD}/a.md`])
+    expect(paths('vim -w typed.log a.md')).toEqual([`${CWD}/a.md`, `${CWD}/typed.log`])
+    expect(paths('vim -- -odd.md')).toEqual([`${CWD}/-odd.md`])
+    expect(paths(`ed -p '> ' a.md`)).toEqual([`${CWD}/a.md`])
+  })
+  // An editor's script can name any other file (`w other.css`, `e other.css`) and run a shell, so a
+  // run given one is also a write the words do not name. Where the command holds the whole script
+  // it is given as `program`, with the folder it runs in, for a guard to read the names in.
+  test("an editor's script is a write the words do not name, given as its program where the command holds all of it", () => {
+    expect(scripts(`ed -s <<'EOF'\ne app/globals.css\nw\nq\nEOF`)).toEqual([{ what: 'a script ed runs', program: 'e app/globals.css\nw\nq', folder: CWD, inputs: [] }])
+    expect(scripts(`vim -es -c 'w app/globals.css' -c q notes.md`)).toEqual([{ what: 'a script vim runs', program: 'w app/globals.css\nq', folder: CWD, inputs: [] }])
+    expect(scripts(`ex -s +'%s/a/b/' +wq a.md`)).toEqual([{ what: 'a script ex runs', program: '%s/a/b/\nwq', folder: CWD, inputs: [] }])
+    expect(scripts(`cd "$D" && vim -es -c wq a.md`)).toEqual([{ what: 'a script vim runs', program: 'wq', folder: undefined, inputs: [] }])
+    // A script handed as a here-string is in the command's own words as a heredoc's is. It was read
+    // as no script at all, so the file it names ran unasked (the review of #3324).
+    for (const fed of [`<<< 'e app/globals.css'`, `<<<'e app/globals.css'`, `<<< "e app/globals.css"`, `0<<< 'e app/globals.css'`]) {
+      for (const editor of ['ed -s', 'ex -s', 'vim -es']) {
+        const got = scripts(`${editor} ${fed}`)
+        expect(got.map(g => g.what)).toEqual([`a script ${editor.split(' ')[0]} runs`])
+        expect(got[0]?.program).toContain('e app/globals.css')
+        expect(got[0]?.folder).toBe(CWD)
+      }
+    }
+    expect(scripts(`ed -s <<< $'e app/globals.css\\n1s/a/b/\\nw\\nq'`)[0]?.program).toContain('e app/globals.css\n1s/a/b/')
+    // A here-string on another descriptor is not the editor's script, and one given to a program
+    // that is no editor is read as before.
+    expect(scripts(`ed -s 3<<< 'e app/globals.css'`)).toEqual([])
+    expect(scripts(`cat <<< 'e app/globals.css'`)).toEqual([])
+    // A script piped in or read from a file is not in the command's own words.
+    expect(scripts(`printf 'w\\nq\\n' | ed -s a.md`)).toEqual([{ what: 'a script ed runs', program: undefined, folder: undefined, inputs: [] }])
+    expect(scripts('ed -s a.md < /tmp/fix.ed')).toEqual([{ what: 'a script ed runs', program: undefined, folder: undefined, inputs: ['/tmp/fix.ed'] }])
+    expect(scripts('vim -es -S /tmp/fix.vim a.md')).toEqual([{ what: 'a script vim runs', program: undefined, folder: undefined, inputs: ['/tmp/fix.vim'] }])
+    expect(scripts('vim -s keys.txt a.md')).toEqual([{ what: 'a script vim runs', program: undefined, folder: undefined, inputs: [`${CWD}/keys.txt`] }])
+  })
+  test('an editor given no script, opened on nothing or only asked about itself names no script and no file', () => {
+    expect(scripts('vim a.md')).toEqual([])
+    expect(paths('vim a.md')).toEqual([`${CWD}/a.md`])
+    expect(read('vim --version')).toEqual({ files: [], changes: [], unnamed: [] })
+    expect(read('which ed ex vim sponge')).toEqual({ files: [], changes: [], unnamed: [] })
+    expect(read('grep -n ed app/globals.css')).toEqual({ files: [], changes: [], unnamed: [] })
+  })
+  test('sponge writes the file it is given, and only that one', () => {
+    expect(paths(`sed 's/a/b/' app/globals.css | sponge app/globals.css`)).toEqual([F])
+    expect(paths(`echo 'a{}' | sponge -a app/globals.css`)).toEqual([F])
+    expect(edited(`echo 'a{}' | sponge app/globals.css`)).toEqual([])
+    expect(paths('sort app/globals.css | sponge /tmp/sorted.txt')).toEqual(['/tmp/sorted.txt'])
+  })
+  test('a program given its output file by an option writes that file, and reads every other', () => {
+    for (const command of [
+      'sort -o app/globals.css app/globals.css',
+      'sort --output=app/globals.css /tmp/new.css',
+      'sort --output app/globals.css /tmp/new.css',
+      'sort -uo app/globals.css /tmp/new.css',
+      'sort -oapp/globals.css /tmp/new.css',
+      'sort -k 2 -t , -o app/globals.css /tmp/new.css',
+      'shuf -n 3 -o app/globals.css /tmp/new.css',
+      'iconv -f latin1 -t utf-8 -o app/globals.css /tmp/new.css',
+      'base64 -d -i /tmp/new.b64 -o app/globals.css',
+      'openssl enc -d -aes-256-cbc -in /tmp/new.enc -out app/globals.css',
+    ])
+      expect([command, paths(command)]).toEqual([command, [F]])
+    for (const command of ['sort app/globals.css', 'sort -k2,2 -t, app/globals.css', 'sort -u app/globals.css', 'shuf -n 3 app/globals.css', 'iconv -f latin1 -t utf-8 app/globals.css', 'base64 -i app/globals.css', 'openssl base64 -in app/globals.css'])
+      expect([command, paths(command)]).toEqual([command, []])
+  })
+  test('a program whose second file is its output writes that file, and one given a single file only reads it', () => {
+    expect(paths('uniq /tmp/new.css app/globals.css')).toEqual([F])
+    expect(paths('uniq -f 1 /tmp/new.css app/globals.css')).toEqual([F])
+    expect(paths('xxd -r /tmp/new.hex app/globals.css')).toEqual([F])
+    expect(paths('xxd -l 16 /tmp/new.css app/globals.css')).toEqual([F])
+    expect(paths('link /tmp/new.css app/globals.css')).toEqual([F])
+    for (const command of ['uniq app/globals.css', 'uniq -c app/globals.css', 'uniq -f 1 app/globals.css', 'xxd app/globals.css', 'xxd -l 16 app/globals.css'])
+      expect([command, paths(command)]).toEqual([command, []])
+  })
+  test('a converter rewrites in place each file it is given, and one only printing or checking writes none', () => {
+    expect(edited('dos2unix app/globals.css')).toEqual([F])
+    expect(edited('unix2dos -c mac app/globals.css app/page.tsx')).toEqual([F, `${CWD}/app/page.tsx`])
+    expect(edited(`yq -i '.color = "red"' design-tokens.json`)).toEqual([`${CWD}/design-tokens.json`])
+    expect(paths(`yq '.color' design-tokens.json`)).toEqual([])
+    expect(edited('sd a b app/globals.css')).toEqual([F])
+    expect(paths('sd -p a b app/globals.css')).toEqual([])
+    expect(edited('plutil -convert xml1 design-tokens.json other.json')).toEqual([`${CWD}/design-tokens.json`, `${CWD}/other.json`])
+    expect(edited('plutil -replace color -string red design-tokens.json')).toEqual([`${CWD}/design-tokens.json`])
+    expect(paths('plutil -convert json -o design-tokens.json /tmp/in.plist')).toEqual([`${CWD}/design-tokens.json`])
+    expect(paths('plutil -convert json -o - design-tokens.json')).toEqual([])
+    expect(paths('plutil -lint design-tokens.json')).toEqual([])
+    expect(paths('plutil -p design-tokens.json')).toEqual([])
+    // -extract puts the value in place of the whole file, except in the raw form, which prints it.
+    expect(edited('plutil -extract color json design-tokens.json')).toEqual([`${CWD}/design-tokens.json`])
+    expect(paths('plutil -extract color raw design-tokens.json')).toEqual([])
+    expect(paths('plutil -extract color raw -o - design-tokens.json')).toEqual([])
+  })
+  test('gzip and its kin put a packed or unpacked twin beside each file and take the file away, unless told to keep it or to print', () => {
+    expect([paths('gzip app/globals.css'), removed('gzip app/globals.css')]).toEqual([[`${F}.gz`], [F]])
+    expect([paths('gzip -9k app/globals.css'), removed('gzip -9k app/globals.css')]).toEqual([[`${F}.gz`], []])
+    expect([paths('bzip2 app/globals.css'), removed('bzip2 app/globals.css')]).toEqual([[`${F}.bz2`], [F]])
+    expect([paths('xz app/globals.css'), removed('xz app/globals.css')]).toEqual([[`${F}.xz`], [F]])
+    // zstd keeps what it packs unless told to take it away, and -o names its output.
+    expect([paths('zstd app/globals.css'), removed('zstd app/globals.css')]).toEqual([[`${F}.zst`], []])
+    expect(removed('zstd --rm app/globals.css')).toEqual([F])
+    expect(paths('zstd -d /tmp/new.zst -o app/globals.css')).toEqual([F])
+    // Unpacking writes the name without its ending, which no word spells.
+    expect([paths('gunzip app/globals.css.gz'), removed('gunzip app/globals.css.gz')]).toEqual([[F], [`${F}.gz`]])
+    expect([paths('gzip -dk app/globals.css.gz'), removed('gzip -dk app/globals.css.gz')]).toEqual([[F], []])
+    expect(paths('bunzip2 app/globals.css.bz2')).toEqual([F])
+    expect(paths('unxz app/globals.css.xz')).toEqual([F])
+    expect(paths('xz --decompress app/globals.css.xz')).toEqual([F])
+    // Printing, testing and listing change no file.
+    expect(read('gzip -c app/globals.css > /tmp/a.gz')).toEqual({ files: [{ word: '/tmp/a.gz', path: '/tmp/a.gz' }], changes: [], unnamed: [], stdout: [{ word: '/tmp/a.gz', path: '/tmp/a.gz' }] })
+    for (const command of ['gzip -t app/globals.css.gz', 'gzip -l app/globals.css.gz', 'gunzip -c app/globals.css.gz', 'xz --stdout app/globals.css', 'zstd -t app/globals.css.zst'])
+      expect([command, paths(command), removed(command)]).toEqual([command, [], []])
+  })
+  test('given its files by xargs, each is a write the words do not name', () => {
+    for (const [command, what] of [
+      [`find . -name '*.css' | xargs gzip`, 'gzip given its files by xargs'],
+      [`find . -name '*.css' | xargs dos2unix`, 'dos2unix given its files by xargs'],
+      [`find . -name '*.css' | xargs ex -sc '%s/a/b/|x'`, 'ex given its files by xargs'],
+      [`find . -name '*.json' | xargs yq -i '.a = 1'`, 'yq given its files by xargs'],
+    ] as [string, string][])
+      expect([command, read(command).unnamed.map(u => u.what).includes(what)]).toEqual([command, true])
+    expect(read(`find . -name '*.css' | xargs sort`).unnamed).toEqual([])
+    expect(read(`find . -name '*.json' | xargs yq '.a'`).unnamed).toEqual([])
+  })
+})

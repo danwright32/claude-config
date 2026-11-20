@@ -96,14 +96,44 @@ allowed "navigating a tab to a local dev server is not this gate's business"
 
 echo "chrome loopback post gate: a script naming a loopback address beside a network call is refused"
 
-# The call that paged Dan, in the shape the session made it.
-run "$JS" "$(js 'const html = document.documentElement.outerHTML; await fetch("http://127.0.0.1:8765/", {method: "POST", body: html}); "sent"')"
-refused "a page posting itself to a receiver on 127.0.0.1 is refused"
-says "and it says why" "content security policy"
-says "and names the route that sends nothing" "saveAs"
-says "and where that route is written down" "capture-chrome.js"
-# It sees two words in the text, never where a request goes, so it says only that (L11).
-says "and claims only what it checked: the address named beside a network call" "names 127.0.0.1 beside a network call"
+# The two calls that paged Dan, in the sessions' own text (claude-config#2894). Each file beside this
+# suite is the script text of one javascript tool call, read from that session's transcript on the
+# work MacBook and kept byte for byte. Nothing in either came from work (each is the capture script
+# of its day followed by the post, and the page's address is read at run time), so nothing was
+# replaced: the text judged here is the exact text, and the sha256 is the recorded text's own, so a
+# fixture that drifts from the record fails rather than passing as real (L48). Both take one branch
+# of the gate: 127.0.0.1 is the only loopback host in the text and fetch the only network word.
+FIXTURES="$DIR/chrome-loopback-post-gate-fixtures"
+# js_file <file> [<find> <replace>]: the javascript tool's input for that file's exact text, on tab 7.
+js_file() { python3 -c '
+import json, sys
+text = open(sys.argv[1], encoding="utf-8", newline="").read()
+if len(sys.argv) > 3:
+    assert sys.argv[2] in text, "the text to swap is not in the fixture"
+    text = text.replace(sys.argv[2], sys.argv[3])
+print(json.dumps({"action": "javascript_exec", "text": text, "tabId": 7}))' "$@"; }
+incident() { # incident <date> <file> <sha256 of the recorded text>
+  local f="$FIXTURES/$2" got
+  # A missing file is said as that, once, and not as the seven failures and four tracebacks that
+  # reading it printed (L11).
+  if [ ! -f "$f" ]; then check "#2894 the $1 fixture is the recorded call, byte for byte" "there is no $2 in $FIXTURES"; return; fi
+  got="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$f" 2>&1)"
+  if [ "$got" = "$3" ]; then check "#2894 the $1 fixture is the recorded call, byte for byte" ok
+  else check "#2894 the $1 fixture is the recorded call, byte for byte" "sha256 ${got:0:80}, recorded $3"; fi
+  run "$JS" "$(js_file "$f")"
+  refused "#2894 the call that paged Dan on $1 is refused"
+  says "and it says why" "content security policy"
+  says "and names the route that sends nothing" "saveAs"
+  says "and where that route is written down" "capture-chrome.js"
+  # It sees two words in the text, never where a request goes, so it says only that (L11).
+  says "and claims only what it checked: the address named beside a network call" "names 127.0.0.1 beside a network call"
+  # The control, from the same recorded text: with the receiver at an ordinary address the capture
+  # script's own reads go through, so the loopback address is what was refused.
+  run "$JS" "$(js_file "$f" "http://127.0.0.1:8765/" "https://example.com/")"
+  allowed "and the same text with the receiver at an ordinary address goes through"
+}
+incident 2026-11-01 incident-2026-11-01.txt 896e33da2bb45ad04b9e0446dd0bdbc99798a9708a25e03e6e6f7cb4c17032ea
+incident 2026-11-11 incident-2026-11-11.txt 59e5474cbb8f48e7daa86466725031a309e061d4c9dfd229f0619e4b68d5915e
 run "$JS" "$(js 'await fetch("http://127.0.0.1:8765/", {method: "POST", body: "x"})')" a3211051898ed98b1
 refused "a subagent's is refused the same"
 run "$JS" "$(js 'navigator.sendBeacon("http://localhost:8765/save", document.documentElement.outerHTML)')"
