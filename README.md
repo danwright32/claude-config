@@ -7795,7 +7795,31 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why), a
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+since #3279 what a git command that moves committed work brings into the working tree (Dan,
+2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
+`switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
+and `stash apply`; before one runs the guard asks git which files it would change and the commit
+each comes from, with commands that change nothing: `git rev-parse --verify --quiet`, `git diff
+--name-status` between HEAD and the commit, from where a merged or rebased commit left this branch,
+or between the working tree and the commit for a reset, `git log --no-walk --name-status` for the
+commits a cherry-pick or revert names, `git for-each-ref` for the one remote branch a name may
+stand for, and `git ls-tree` for a stash's untracked files; each look changing file is then judged
+as a checkout of that file from that commit is, by the lines it changes where that rule applies,
+against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+`--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
+the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
+the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:
+one with a command before it on its line that may change what it brings in (anything but `cd`, a
+command that only reads and a restore of named paths, so a `git fetch` first, a commit, another
+move), told to run on its own, a `git pull`, which fetches before it merges, told to fetch first and
+merge on its own, and a commit git does not know in this checkout, told to fetch it first; one with
+no other way to run it, a rebase onto another base, from the root, interactive or running commands,
+`git switch --orphan`, `git stash branch`, a commit named through a value the shell fills in, more
+than 300 look changing files, or a question git fails, cannot be run for or answers at more length
+than can be read, is held with a card for Dan; a move inside a script file, `git worktree add`,
+`git clone`, `git bisect`, `git submodule update` and `git stash` taking uncommitted work away are
+not read), a
 program whose text names the files it writes (since #2847 also a python or node script file the
 command runs, its own code read as inline code is, a name its code writes where the folder cannot be
 followed held as could not check; since #2855 also a shell script's own commands and the scripts it
