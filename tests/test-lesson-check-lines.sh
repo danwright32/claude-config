@@ -134,6 +134,32 @@ bad_case "a marker spelled another way" "  Checked by: hooks/real-guard.sh (full
 bad_case "two check lines on one entry" "  CHECK: hooks/real-guard.sh (full)
   NO CHECK: it is a judgement no tool can see." "one"
 
+# A check line is read through a record whose fields are split at a tab and whose records end at a
+# line end (claude-config#3294). A tab inside the line cut it at the tab, so whatever followed went
+# unread: the first case below passed as a clean full check. A carriage return or another control
+# character kept the record whole but printed text nobody sees as written, and a line wrapped onto
+# the next one was judged on its first half. Each is refused by name, as the ask before saving
+# picker refuses it, and each case passed as a well formed line before the change.
+bad_case "a CHECK line holding a tab" $'  CHECK: hooks/real-guard.sh (full)\tany text nobody judged (full)' "a tab"
+bad_case "a NO CHECK line holding a tab" $'  NO CHECK: a judgement made\tcase by case' "a tab"
+bad_case "a NO CHECK line holding a carriage return" $'  NO CHECK: a judgement\rmade case by case' "a carriage return"
+bad_case "a CHECK line ending in a carriage return" $'  CHECK: hooks/real-guard.sh (full)\r' "a carriage return"
+bad_case "a NO CHECK line holding an escape character" $'  NO CHECK: a judgement made\033[1A case by case' "a control character"
+bad_case "a NO CHECK line wrapped onto the next line" "  NO CHECK: the field differs for every API
+  so no shared guard can see it" "one line"
+bad_case "a CHECK line wrapped onto the next line" "  CHECK: hooks/real-guard.sh (full)
+  and hooks/other-guard.sh for the rest" "one line"
+
+# Only the ends of the line are indentation, as the picker reads them: a tab or space there is not
+# part of what the line says, so the line is still read, and counted.
+lessons "- **L50. A newer rule a guard holds in full.**
+  (claude-config#1, 2026-01-01)
+"$'\t'"CHECK: hooks/real-guard.sh (full)"$'\t'"
+  SHORT: A newer rule a guard holds."
+out="$(run lesson-faults)"; rc=$?
+check "a check line indented and ended with a tab is not a fault" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc, said: ${out:0:200}")"
+says "and it is counted as the check holding the rule" "$(run lesson-checks)" "1 name the check that holds them (1 fully, 0 partly)"
+
 # A check line inside the bold rule sentence would be joined into the rule the index renders.
 lessons "- **L1. A rule that wraps
   CHECK: hooks/real-guard.sh (full)
