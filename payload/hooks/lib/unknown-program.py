@@ -38,9 +38,11 @@ it can refuse a command those let through and never the reverse:
     of the script. That leaves `op run -- ./post.sh` open.
   * Where a redirection is glued to one of those words (`node --test test/notify.test.js>out.txt`)
     the words are judged again with a space each side of it, as judge_unglued does for a glued
-    name: the shared reader splits words on white space alone, so the file was a word naming no
-    file. That reading is the reader's to correct (claude-config#3252); this closes it for the
-    words read here.
+    name: before claude-config#3252 the shared reader split words on white space alone, so the
+    file was a word naming no file. Since #3252 the reader takes a glued redirection off the
+    word in the readings it gives, so behind a script that runs its words the older rule now
+    refuses the glued form itself; the cases still open in the reader are claude-config#3322,
+    and this reading stays for the words read here.
   * The reader's wrappers (a shell's -c, eval, find -exec, watch, script, parallel) hand their
     command to the walk already, so a command that is one is left to that reading.
 
