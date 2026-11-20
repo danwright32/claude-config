@@ -6202,7 +6202,9 @@ one `~/.local/bin/claude` points at, never one a running process holds), the Git
 cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
 Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
 copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
-download cache, its logs and the pnpm store are shown there and never offered), and in build
+download cache, its logs and the pnpm store's own folder are shown there and never offered), the
+pnpm store's prune row (the same module, by his decision of 2026-11-19, "Offer a prune row",
+described below), and in build
 folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
 project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
 stays refused). Shown and never offered, each row saying why: in `claude-records.sh`, session notes
@@ -6289,6 +6291,23 @@ Two more decisions of 2026-11-19, recorded on #3235, each from its own picker:
   by its own path, and only when git says it holds its own repository, so a task folder that is
   not such a checkout stays refused whatever a judge says. A checkout in an open session is never
   offered.
+- **The pnpm store: "Offer a prune row".** The npm and pnpm caches kind lists one row whose target
+  is `store prune`, which is not a path: ticking it runs pnpm's own `pnpm store prune`, the way the
+  Docker kind's build cache row runs Docker's own prune. Nothing in the store is removed by this
+  config; pnpm decides what no project uses. The row is listed wherever `~/Library/pnpm/store`
+  holds a store, and offered when pnpm is on the PATH, `pnpm store path` (asked from the home
+  folder, so no project's settings choose the store) names a real folder directly inside
+  `~/Library/pnpm/store`, no running process holds a file in it, and nothing in it was changed or
+  opened in 30 days. Otherwise the row says which of those failed. It carries no size, since what
+  a prune frees is not known until pnpm has run, and the store's own folder stays a row that is
+  shown and never offered. The remover's `pnpm` method takes exactly that target and nothing
+  else, only for this kind: it asks pnpm where the store is and holds it to the same place,
+  measures the store, asks the judge again, writes the INTENT line, runs `pnpm store prune`, and
+  measures again. A prune that exits anything but 0 is a failure. One that leaves the store its
+  size is reported as pnpm having found nothing no project uses, and settled. One that shrinks it
+  is reported removed, by how much smaller `du` found the store, with the caution that a package
+  a project holds as a clone keeps its disk blocks, so the disk can gain less than that. Any
+  other pnpm target, the store's folder as one among them, is refused by name.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
@@ -6357,7 +6376,9 @@ is gone (or, for truncate, smaller); an OUTCOME line. The methods are `trash` (`
 which ships with macOS 15, and never a fallback to deleting without it), `delete`, `truncate` (with
 `tee`, for a log a process holds open), `worktree` (`git worktree remove` without `--force`),
 `docker` (named images and stopped containers, and the build cache; volumes and both prunes are
-refused by name) and `derived-data` (the sweep's `--remove-one` above). The result is one line per
+refused by name), `derived-data` (the sweep's `--remove-one` above) and `pnpm` (the one target
+`store prune`, which runs pnpm's own prune of its store and is checked by the store's size before
+and after; every other target is refused by name). The result is one line per
 item and the sum of the verified per item sizes, with trashed items counted apart because they free
 nothing until the Trash is emptied; the disk wide `df -m` change and any local Time Machine
 snapshots are printed as context only. Exit 0 when every item went, 5 when any was skipped or

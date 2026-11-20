@@ -111,16 +111,16 @@ dc_inside() { # <path> <root>
   done
 }
 
-# ---- the one folder shape under ~/.claude/state that disk-clean may offer (claude-config#3235) ----
-# disk-remove.sh refuses everything under ~/.claude/state, with one exception Dan signed on
-# 2026-11-19, recorded on #3235: "Allow it". The exception is a folder exactly four levels under
+# ---- the two folder shapes under ~/.claude/state that disk-clean may offer (claude-config#3235) ----
+# disk-remove.sh refuses everything under ~/.claude/state, with two exceptions Dan signed on
+# 2026-11-19, recorded on #3235. The first ("Allow it") is a folder exactly four levels under
 # session-notes (session-notes/<project>/<session>/<task>/<folder>), which is where the daily keep
 # rules leave an ended session's folder of images or documents, an open session's bulky leftover
-# ("Offer after 7 idle days") and a git checkout in a task folder. A second, on the same day ("Offer
-# when git says safe"), is a task folder that is itself a git checkout, three levels under. The
-# functions below are the whole of both shapes, read by disk-remove.sh (which lets them reach their
-# judge) and by categories/claude-records.sh (which offers them), so a row is offered only where the
-# remover takes it (L261).
+# ("Offer after 7 idle days") and a git checkout in a task folder. The second ("Offer when git says
+# safe") is a task folder that is itself a git checkout holding its own repository, three levels
+# under. The functions below are the whole of both shapes, read by disk-remove.sh (which lets them
+# reach their judge) and by categories/claude-records.sh (which offers them), so a row is offered
+# only where the remover takes it (L261).
 
 # True when <path>, as text, is exactly four levels under <home>/.claude/state/session-notes: no
 # level empty, none of them . or .., and no control character anywhere in it. It reads no disk, so

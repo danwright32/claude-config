@@ -77,11 +77,19 @@ Report what it printed, in plain words, in this order:
    changed or run for 7 days and no session is working there, which is the one row whose time is
    shorter than 30 days, so say the 7 days when you report it; and a git checkout an ended
    session kept, only when git says it has nothing uncommitted, no stash and no commit missing
-   from its remote, by the Finished worktrees test. All three are read from lists the keep rules
+   from its remote, by the Finished worktrees test. Only a checkout that holds its own repository
+   is one of these, which git is asked too: a worktree or submodule of a repository elsewhere is
+   shown and never offered. All three are read from lists the keep rules
    job writes once a day, so a row can be up to a day old. When the kind says any of them is
    unmeasured, say which and why in its words (the list is missing, over two days old, or the job
    is switched off on this Mac), and that `claude-sync remove-leftovers` writes new lists. npm and
-   pnpm caches offers only npx copies (Dan, 2026-11-18); its other rows are shown, never offered. What
+   pnpm caches offers two things: npx copies (Dan, 2026-11-18), and one row named store prune (Dan,
+   2026-11-19), which removes no folder and instead runs pnpm's own `pnpm store prune`, so pnpm
+   decides what no project uses. That row carries no size, because nothing says what a prune will
+   free until it has run; say so, never the store's size as what it frees. It is offered only when
+   pnpm is installed, pnpm says its store is in `~/Library/pnpm/store`, no process holds a file in
+   it and nothing in it was changed or run in 30 days; otherwise it is shown with the reason. The
+   kind's other rows, the pnpm store's own folder among them, are shown, never offered. What
    Claude Code sessions leave that can go is under Tool output beside transcripts, Old Claude Code
    versions, GitHub command line cache (one row, its kept entries counted in its note) and Project
    build folders (which now include Swift .build folders).
@@ -167,7 +175,9 @@ bash ~/.claude/skills/disk-clean/review-check.sh --entries trash --plan <folder>
 
 In the picker's question, say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
 personal files, Tools not used in 180 days, Tool output beside transcripts and every session notes row (a folder of images or documents, a bulky leftover of an open session, a git checkout) are moved to the Trash, which frees nothing until it
-is emptied (a worktree git has forgotten can still hold work nothing else has); everything else is
+is emptied (a worktree git has forgotten can still hold work nothing else has); the store prune row
+runs `pnpm store prune`, which leaves it to pnpm to remove from its store what no project uses, so
+how much it frees is known only afterwards; everything else is
 deleted because it regenerates, or, for a log a program holds open, emptied in place. Two options:
 remove them, or keep everything. On keep everything, say nothing was removed and stop.
 
@@ -191,7 +201,11 @@ the error), then the verified totals.
 - **Exit 0**: every item went. Go on to step 5.
 - **Exit 5**: at least one item was skipped or failed, or the scan record could not be marked with
   what went. Name each skipped or failed item with its reason in plain words; a failure that says
-  Permission denied goes to step 6. Then go on to step 5 for what did go.
+  Permission denied goes to step 6. Then go on to step 5 for what did go. The store prune row is
+  skipped, never failed, when pnpm ran and found nothing no project uses: say that pnpm's store
+  had nothing to prune, not that something went wrong. When it is removed, its figure is how much
+  smaller `du` found pnpm's store, which can be more than the disk gained where a project holds a
+  package as a clone sharing the store's disk blocks; say so, and trust the `df` figure of step 5.
 - **Exit 2**: it refused before touching anything (a plan or record it cannot use). Nothing was
   removed. Tell Dan the reason it printed and stop.
 - **Exit 3**: the scan is more than an hour old, so what it measured may have changed. Nothing was

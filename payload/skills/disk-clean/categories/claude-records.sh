@@ -278,10 +278,11 @@ leftover_rules() { # <target>
   esac
 }
 
-# Sets V for <target>: "not offerable: <why>" for everything but a folder in a session's task folder.
-# Sets REC_METHOD to how its row would go: the Trash for such a folder, and for the rest delete,
-# which nothing ever acts on, since none of them is offered. Sets REC_DETAIL to what a row says of
-# itself beyond its path, where its rule is not the 30 days the page states for every row.
+# Sets V for <target>: "not offerable: <why>" for everything but a folder in a session's task folder
+# (notes_rules) and a task folder that is itself a git checkout (task_rules). Sets REC_METHOD to how
+# its row would go: the Trash for those two, and for the rest delete, which nothing ever acts on,
+# since none of them is offered. Sets REC_DETAIL to what a row says of itself beyond its path, where
+# its rule is not the 30 days the page states for every row, and REC_FLAGS to its row's flags.
 rec_rules() { # <target>
   local t="${1%/}" n
   n="${t##*/}"

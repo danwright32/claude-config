@@ -72,8 +72,11 @@ DC_GUARDED_TOOLS="rm rmdir mkdir touch mv cp ln chmod tee sed find"
 # The tools the code under test may call that a test must stand in for. Each gets a stub that
 # records its call and refuses with exit 98 until a test gives it behaviour with dc_stub.
 # judge and derived-data-sweep are not system tools: they are what disk-remove.sh's two seams below
-# stand for, a category's judge and hooks/derived-data-sweep.sh (#1805).
-DC_STUB_NAMES="trash lsof du df docker git gh ps pgrep open pbcopy tmutil brew sudo xcodebuild osascript judge derived-data-sweep"
+# stand for, a category's judge and hooks/derived-data-sweep.sh (#1805). pnpm is here for the one
+# removal method that runs it, `pnpm store prune` (Dan, 2026-11-19, recorded on #3235: "Offer a
+# prune row"): a suite gives the stand in its behaviour and reads back the arguments it was run
+# with, and the real pnpm, which removes from a real store, is never reachable from code under test.
+DC_STUB_NAMES="trash lsof du df docker git gh ps pgrep open pbcopy tmutil brew sudo xcodebuild osascript pnpm judge derived-data-sweep"
 # Core tools a test may stand in for, for one case, with dc_stub, and give back with dc_unstub
 # (#1907). Unlike a name on DC_STUB_NAMES no stand in exists until a test writes one, so the core
 # tool runs by default: every category reads the disk with find, and only a stand in can produce the

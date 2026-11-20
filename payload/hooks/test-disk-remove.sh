@@ -80,6 +80,7 @@ default_stubs() {
   dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; $(printf %q "$DC_ROOT")/*) /bin/rm -rf \"\$a\" ;; *) echo \"trash stub: refused \$a\" >&2; exit 1 ;; esac; done"
   dc_stub git
   dc_stub docker
+  dc_stub pnpm
   dc_stub derived-data-sweep
 }
 
@@ -726,6 +727,180 @@ check "a running container is skipped" "$(has "$(grep -F 'container web-1' <<< "
 check "the build cache is pruned, freed as measured before and after" "$(has "$(grep -F 'builder cache' <<< "$OUT_TEXT")" "of build cache")"
 bad_docker="$(calls_of docker | awk '/^docker (volume|system prune|container rm|image prune)/')"
 check "nothing ever ran a volume, prune or running container command" "$([ -z "$bad_docker" ] && echo ok || echo "ran: $bad_docker")"
+
+# ================================================================================================
+# 11b. pnpm: its own `pnpm store prune`, on its store in ~/Library/pnpm/store, and nothing else
+#      (Dan, 2026-11-19, recorded on #3235: "Offer a prune row")
+# ================================================================================================
+# pnpm is a stand in that records its arguments; the real one is never run. The store holds one file
+# no project uses (the orphan) and one a project does. du is a stand in too: the store measures
+# 5000 KiB with the orphan in it and 1000 without, so the figures say what the prune did.
+PSTORE="$H/Library/pnpm/store"; PST="$PSTORE/v11"; ORPHAN="$PST/files/aa/orphan"; PRUNED="$DC_ROOT/pnpm-pruned"
+PLOG_AT="$DC_ROOT/log-at-prune"
+pnpm_home() { # [<what pnpm store prune does> [<what pnpm store path prints>]]
+  fresh
+  rm -f "$PRUNED" "$PLOG_AT"
+  mkdir -p "$PST/files/aa" "$PST/files/bb" "$H/w/other-store/v11"
+  printf 'unused\n' > "$ORPHAN"; printf 'used\n' > "$PST/files/bb/kept"; printf 'x\n' > "$H/w/other-store/v11/f"
+  dc_stub pnpm "case \"\$*\" in
+  'store path') ${2:-echo $(printf %q "$PST")} ;;
+  'store prune') : > $(printf %q "$PRUNED"); /bin/cp $(printf %q "$(LOGF s1)") $(printf %q "$PLOG_AT") 2>/dev/null; ${1:-/bin/rm -f $(printf %q "$ORPHAN")} ;;
+  *) echo \"unexpected pnpm \$*\" >&2; exit 99 ;;
+esac"
+  dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; *) if [ -e $(printf %q "$ORPHAN") ]; then printf '5000\t%s\n' \"\$a\"; else printf '1000\t%s\n' \"\$a\"; fi ;; esac; done"
+}
+pnpm_line() { grep -F -- 'pnpm ' <<< "$OUT_TEXT" | awk 'NR == 1'; }
+outcome_of() { awk -F '\t' -v id="$1" '$1 == "OUTCOME" && $4 == id { print $5 "|" $6 }' "$(LOGF s1)" 2>/dev/null; } # <id>: result|freed KiB
+
+pnpm_home
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: the prune row runs, and the plan exits 0" "$(eq "$RC" 0)"
+check "pnpm: it is reported removed, by how much smaller pnpm left its store" "$(has "$OUT_TEXT" "removed    pnpm store prune  ($(dcu_human 4000) less in pnpm's store")"
+check "pnpm: pnpm was run to say where its store is and to prune it, and for nothing else" "$(eq "$(calls_of pnpm | tr '\n' '|')" "pnpm store path|pnpm store prune|")"
+check "pnpm: the INTENT line names the method and its target, with the store's size before" \
+  "$(eq "$(awk -F '\t' '$1 == "INTENT" && $4 == "p1" { print $5 "|" $6 "|" $7 }' "$(LOGF s1)")" "pnpm|store prune|5000")"
+check "pnpm: the INTENT was in the log before pnpm store prune ran, and no OUTCOME was" \
+  "$(eq "$(awk -F '\t' '$4 == "p1" { print $1 }' "$PLOG_AT" 2>/dev/null | tr '\n' '|')" "INTENT|")"
+check "pnpm: the OUTCOME says removed, with what the store lost" "$(eq "$(outcome_of p1)" "removed|4000")"
+check "pnpm: the record marks the row removed, so nothing quotes it again" "$(has "$(grep '"id":"p1"' "$STATE/last-scan.json")" '"state":"removed"')"
+check "pnpm: the store and what a project uses are still there" "$(there "$PST/files/bb/kept")"
+check "pnpm: the report counts it among what was removed" "$(has "$OUT_TEXT" "removed 1 item(s), freeing $(dcu_human 4000)")"
+
+# A prune that found nothing: pnpm succeeded and the store is the size it was.
+pnpm_home ":"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a prune that leaves the store its size says pnpm found nothing no project uses" "$(has "$(pnpm_line)" "skipped    pnpm store prune: pnpm found nothing no project uses")"
+check "pnpm: and is logged as gone, freeing nothing, never as removed" "$(eq "$(outcome_of p1)" "gone|")"
+check "pnpm: and pnpm store prune did run" "$([ -e "$PRUNED" ] && echo ok || echo "it never ran")"
+
+# A prune that failed is a failure, whatever the store measures afterwards.
+pnpm_home "{ echo 'ERR_PNPM_STORE the store server is running' >&2; exit 1; }"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a prune that exits 1 is failed, with pnpm's own first line" "$(has "$(pnpm_line)" "failed     pnpm store prune: pnpm store prune failed (exit 1: ERR_PNPM_STORE the store server is running)")"
+check "pnpm: and is logged failed, and the plan exits 5" "$(eq "$RC|$(outcome_of p1)" "5|failed|")"
+pnpm_home "{ /bin/rm -f $(printf %q "$ORPHAN"); exit 3; }"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a prune that exits 3 after removing something is still failed, and says what the store lost" \
+  "$(has "$(pnpm_line)" "failed     pnpm store prune: pnpm store prune failed (exit 3: no output), though its store is $(dcu_human 4000) smaller")"
+check "pnpm: and nothing is counted as freed" "$(eq "$(outcome_of p1)" "failed|")"
+# pnpm said it worked, and the store is bigger: nothing confirms it removed anything.
+pnpm_home ":"
+dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; *) if [ -e $(printf %q "$PRUNED") ]; then printf '5000\t%s\n' \"\$a\"; else printf '1000\t%s\n' \"\$a\"; fi ;; esac; done"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a store that is bigger after a prune that exited 0 is failed" "$(has "$(pnpm_line)" "failed     pnpm store prune: pnpm's store is bigger after pnpm store prune ($(dcu_human 1000) before, $(dcu_human 5000) after)")"
+# The store's size could not be read: before, nothing runs; after, nothing confirms what it did.
+pnpm_home
+dc_stub du 'exit 1'
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: with the store's size unreadable before, it is skipped" "$(has "$(pnpm_line)" "skipped    pnpm store prune: the size of pnpm's store could not be read, so nothing could confirm what a prune did")"
+check "pnpm: and pnpm store prune never ran, and no INTENT was written" "$([ ! -e "$PRUNED" ] && [ "$(intents "$(LOGF s1)" '^p1$')" = 0 ] && echo ok || echo "it ran, or an INTENT was written")"
+pnpm_home
+dc_stub du "[ -e $(printf %q "$PRUNED") ] && exit 1; for a in \"\$@\"; do case \"\$a\" in -*) ;; *) printf '5000\t%s\n' \"\$a\" ;; esac; done"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: with the store's size unreadable after, it is failed, never called removed" \
+  "$(has "$(pnpm_line)" "failed     pnpm store prune: after pnpm store prune (exit 0) the size of its store could not be read, so nothing confirms what it did")"
+
+# Only "store prune", only for the package caches kind: every other target is refused by name, the
+# store folder itself among them, and pnpm is never run.
+pnpm_home
+item q1 package-caches pnpm "store prune --force"; item q2 package-caches pnpm "prune"; item q3 package-caches pnpm "$PST"
+item q4 package-caches pnpm "store"; item q5 package-caches pnpm "cache delete lodash"; item q6 package-caches pnpm "store  prune"
+item q7 package-caches pnpm "$PSTORE"; item q8 package-caches pnpm "store prune; rm -rf $H/w"; item q9 fixture pnpm "store prune"
+item q10 package-caches pnpm ""
+record s1 10; plan "$H/plan" s1 q1 q2 q3 q4 q5 q6 q7 q8 q9 q10
+run --plan "$H/plan"
+check "pnpm: eight targets that are not exactly store prune are each refused by name" \
+  "$(eq "$(awk -F '\t' '$1 == "OUTCOME" && $5 == "skipped" && $7 == "it is not a pnpm target this tool runs (store prune, and nothing else)" { printf "%s ", $4 }' "$(LOGF s1)")" "q1 q2 q3 q4 q5 q6 q7 q8 ")"
+check "pnpm: and an item with no target at all is skipped too" "$(eq "$(awk -F '\t' '$1 == "OUTCOME" && $4 == "q10" { print $5 }' "$(LOGF s1)")" skipped)"
+check "pnpm: the store folder itself is refused as a pnpm target" "$(has "$(grep -F -- "pnpm $PST:" <<< "$OUT_TEXT")" "it is not a pnpm target this tool runs")"
+check "pnpm: store prune under another kind is refused, since only the package caches kind's judge answers for it" \
+  "$(has "$OUT_TEXT" "the pnpm method is taken only for the package-caches kind, and this item's kind is fixture")"
+check "pnpm: the plan exits 5, and pnpm was never run for any of them" "$(eq "$RC|$(calls_of pnpm)" "5|")"
+check "pnpm: no INTENT was written for any of them" "$(eq "$(intents "$(LOGF s1)" '^q')" 0)"
+check "pnpm: the store is whole" "$([ -e "$ORPHAN" ] && [ -e "$PST/files/bb/kept" ] && echo ok || echo "something in the store is gone")"
+# The store folder asked for as a path, by deleting it or moving it to the Trash, is its judge's to
+# refuse (categories/package-caches.sh never offers it; test-disk-clean-categories.sh runs that judge).
+pnpm_home
+printf 'not offerable: pnpm%ss store\n' "'" > "$VERDICTS/v11"
+item r1 package-caches delete "$PST"; item r2 package-caches trash "$PST"; record s1 10; plan "$H/plan" s1 r1 r2
+run --plan "$H/plan"
+check "pnpm: the store folder is not deleted or trashed when its judge keeps it" "$(eq "$(grep -c "judged again just now: not offerable: pnpm's store" <<< "$OUT_TEXT")|$([ -e "$ORPHAN" ] && echo there)" "2|there")"
+
+# No pnpm on the PATH.
+pnpm_home
+rm -f "$DC_STUBS/pnpm"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: with no pnpm on the PATH it is skipped, saying so" "$(has "$(pnpm_line)" "skipped    pnpm store prune: pnpm is not on the PATH, so its store cannot be pruned")"
+dc_stub pnpm
+
+# The judge is asked again just before, and its refusal stops the prune.
+pnpm_home
+printf 'not offerable: changed within 30 days (files/aa/new)\n' > "$VERDICTS/store prune"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a row its judge no longer offers is skipped with the judge's reason" "$(has "$(pnpm_line)" "judged again just now: not offerable: changed within 30 days (files/aa/new)")"
+check "pnpm: the judge was asked about store prune" "$(has "$(calls_of judge)" "$(printf 'judge judge %q' "store prune")")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+
+# pnpm's store has to be a real folder directly inside ~/Library/pnpm/store, by pnpm's own answer.
+pnpm_home "" "echo $(printf %q "$H/w/other-store/v11")"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a store pnpm says is somewhere else is not pruned" \
+  "$(has "$(pnpm_line)" "pnpm says its store is $H/w/other-store/v11, which is not a folder directly inside ~/Library/pnpm/store, the only store this tool prunes")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+pnpm_home "" "echo $(printf %q "$PSTORE/v12")"
+ln -s "$H/w/other-store/v11" "$PSTORE/v12"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a store that is a link to somewhere else is not pruned" "$(has "$(pnpm_line)" "symbolic link")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+pnpm_home "" "echo $(printf %q "$PSTORE/v12")//"
+ln -s "$H/w/other-store/v11" "$PSTORE/v12"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: nor is one named with a trailing slash, which would otherwise be followed" "$(has "$(pnpm_line)" "symbolic link")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+pnpm_home "" "echo $(printf %q "$PSTORE/v99")"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: a store pnpm names that is not there is skipped as nothing to prune" "$(has "$(pnpm_line)" "skipped    pnpm store prune: pnpm's store ($PSTORE/v99) is not there, so there is nothing to prune")"
+pnpm_home "" "echo $(printf %q "$PSTORE")"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: the folder that holds the stores is not itself a store to prune" "$(has "$(pnpm_line)" "which is not a folder directly inside ~/Library/pnpm/store")"
+pnpm_home "" "{ echo 'ERR_PNPM no config' >&2; exit 1; }"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: when pnpm cannot say where its store is, it is skipped" "$(has "$(pnpm_line)" "skipped    pnpm store prune: pnpm could not say where its store is (pnpm store path exit 1)")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+pnpm_home "" "printf '%s\n' relative/store"
+item p1 package-caches pnpm "store prune"; record s1 10; plan "$H/plan" s1 p1
+run --plan "$H/plan"
+check "pnpm: an answer that is not one absolute path is refused" "$(has "$(pnpm_line)" "skipped    pnpm store prune: ")"
+check "pnpm: and pnpm store prune never ran" "$([ ! -e "$PRUNED" ] && echo ok || echo "it ran")"
+
+# A killed run that was pruning: nothing here can tell how far pnpm got, so the next run says that.
+fresh
+printf 'x\n' > "$H/w/z1"; item z1 fixture delete "$H/w/z1"; record s1 10; plan "$H/plan" s1 z1
+mkdir -p "$STATE/removals"; printf 'INTENT\t%s\t1-1\tpk\tpnpm\tstore prune\t5000\n' "$NOW" > "$(LOGF s1)"
+run --plan "$H/plan"
+check "pnpm: an interrupted prune is reported as not checked, never as a path still there" \
+  "$(has "$OUT_TEXT" "stopped partway while running pnpm store prune; whether it finished is not checked here")"
+check "pnpm: and its INTENT is settled as failed in the log" "$(eq "$(awk -F '\t' '$1 == "OUTCOME" && $4 == "pk" { print $5 }' "$(LOGF s1)")" failed)"
+# --propose, which names paths, never takes it.
+fresh
+run --propose pnpm "store prune"
+check "pnpm: --propose refuses the pnpm method with exit 2" "$(eq "$RC" 2)"
+check "pnpm: and pnpm was never run" "$(eq "$(calls_of pnpm)" "")"
 
 # ================================================================================================
 # 12. Xcode build caches, through derived-data-sweep.sh --remove-one under its own lock

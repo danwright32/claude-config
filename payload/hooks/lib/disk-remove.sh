@@ -55,6 +55,11 @@
 #                 never removed, and "volume prune" and "system prune" are refused by name.
 #   derived-data  hooks/derived-data-sweep.sh --remove-one <folder>, which takes the automatic sweep's
 #                 own lock and judges the folder again with the orphan rule before removing it.
+#   pnpm          the one target "store prune", which runs pnpm's own `pnpm store prune` and nothing
+#                 else (Dan, 2026-11-19, recorded on #3235: "Offer a prune row"). This tool removes
+#                 no file of the store itself: pnpm decides what no project uses. Taken only for the
+#                 package-caches kind, and only when pnpm says its store is a real folder directly
+#                 inside ~/Library/pnpm/store. Checked by the store's size before and after.
 #
 # THE JUDGE. A category is a module, payload/skills/disk-clean/categories/<category>.sh, run as
 # `<module> judge <target>` with DISK_CLEAN_CATEGORY set to its name. It prints ONE line: `offerable`,
@@ -92,8 +97,8 @@
 # HOME and TMPDIR, each inside the throwaway directory; outside test mode they are HOME, /private/tmp
 # and /private/var/folders.
 #
-# bash 3.2 safe. Commands: awk cat date df du git docker lsof ln mkdir mktemp mv readlink rm stat tee
-# tmutil, the trash and derived-data sweep above, and the category modules.
+# bash 3.2 safe. Commands: awk cat date df du git docker lsof ln mkdir mktemp mv pnpm readlink rm stat
+# tee tmutil, the trash and derived-data sweep above, and the category modules.
 set -uo pipefail
 
 LIB="${BASH_SOURCE[0]%/*}"; [ "$LIB" != "${BASH_SOURCE[0]}" ] || LIB=.
@@ -532,6 +537,12 @@ if [ -f "$LOG" ]; then
       # again below, which is where whether it went is checked.
       echo "An earlier run ($irun) stopped partway while removing docker $itarget; whether it went is not checked here."
       printf 'OUTCOME\t%s\t%s\t%s\tfailed\t\tinterrupted run; whether it went was not checked\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
+    elif [ "$imethod" = pnpm ]; then
+      # Its target is a command pnpm was running, not a path, so nothing here can tell how far it
+      # got. Its own item, if it is in this plan, is judged again below and pruned again, which
+      # pnpm takes up from wherever the store was left.
+      echo "An earlier run ($irun) stopped partway while running pnpm $itarget; whether it finished is not checked here."
+      printf 'OUTCOME\t%s\t%s\t%s\tfailed\t\tinterrupted run; whether it finished was not checked\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
     elif [ ! -e "$itarget" ] && [ ! -L "$itarget" ]; then
       echo "An earlier run ($irun) stopped partway while removing $itarget; it is gone now."
       printf 'OUTCOME\t%s\t%s\t%s\tgone\t\tfound gone after an interrupted run\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
@@ -624,6 +635,61 @@ do_docker() { # <id> <category> <target> <identity>
   esac
 }
 
+# ---------- pnpm ----------
+# The one pnpm target, "store prune": pnpm's own prune of its own store (Dan, 2026-11-19, recorded
+# on #3235: "Offer a prune row"). Nothing in the store is removed by this tool; pnpm decides what no
+# project uses. Like a Docker target it is not a path, so it is checked by what the owning tool
+# reports and by the store's size before and after, in the order every item is: refused by name
+# unless it is exactly that target, and unless its kind is the one whose judge answers for it;
+# pnpm asked where its store is, which has to be a real folder directly inside
+# ~/Library/pnpm/store by its own path (path_checks, then its parent), so a store pnpm was pointed
+# at somewhere else is never pruned from here; measured; judged again; INTENT; pnpm store prune;
+# measured again. Both pnpm calls run from the home folder, so no project's own settings choose
+# the store. A prune that exits anything but 0 is a failure whatever the store then measures, and
+# one that leaves the store its size found nothing to remove, which is settled, not removed.
+PNPM_CATEGORY=package-caches
+do_pnpm() { # <id> <category> <target> <identity>
+  local id="$1" cat="$2" t="$3" store out rc before after
+  [ "$t" = "store prune" ] || { finish_item "$id" skipped "" "pnpm $t" "it is not a pnpm target this tool runs (store prune, and nothing else)"; return; }
+  [ "$cat" = "$PNPM_CATEGORY" ] || { finish_item "$id" skipped "" "pnpm $t" "the pnpm method is taken only for the $PNPM_CATEGORY kind, and this item's kind is $cat"; return; }
+  command -v pnpm >/dev/null 2>&1 || { finish_item "$id" skipped "" "pnpm $t" "pnpm is not on the PATH, so its store cannot be pruned"; return; }
+  store="$(CDPATH= cd "$HOME_PHYS" 2>/dev/null && pnpm store path </dev/null 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { finish_item "$id" skipped "" "pnpm $t" "pnpm could not say where its store is (pnpm store path exit $rc)"; return; }
+  # A trailing slash would have the link test below follow a link rather than see it.
+  while :; do case "$store" in ?*/) store="${store%/}" ;; *) break ;; esac; done
+  case "$store" in
+    /*$'\n'*|[!/]*|'') finish_item "$id" skipped "" "pnpm $t" "pnpm did not name its store as one absolute path (it said: ${store%%$'\n'*})"; return ;;
+  esac
+  path_checks "$store" || { finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, and $WHY"; return; }
+  [ "${PHYS%/*}" = "$HOME_PHYS/Library/pnpm/store" ] || {
+    finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, which is not a folder directly inside ~/Library/pnpm/store, the only store this tool prunes"; return; }
+  gone_now "$PHYS" && { finish_item "$id" gone "" "pnpm $t" "pnpm's store ($store) is not there, so there is nothing to prune"; return; }
+  [ -d "$PHYS" ] || { finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, which is not a folder"; return; }
+  measure "$PHYS"
+  { [ -n "$SIZE_KIB" ] && [ -z "$SIZE_PARTIAL" ]; } || { finish_item "$id" skipped "" "pnpm $t" "the size of pnpm's store could not be read, so nothing could confirm what a prune did"; return; }
+  before="$SIZE_KIB"
+  run_judge "$cat" "$t" "$4"
+  [ "$JUDGE_VERDICT" = offerable ] || { finish_item "$id" skipped "" "pnpm $t" "judged again just now: $JUDGE_VERDICT"; return; }
+  intent "$id" pnpm "$t" "$before" || { finish_item "$id" skipped "" "pnpm $t" "its INTENT line could not be written to $LOG, so it was not touched"; return; }
+  out="$(CDPATH= cd "$HOME_PHYS" 2>/dev/null && pnpm store prune </dev/null 2>&1)"; rc=$?
+  out="${out%%$'\n'*}"
+  measure "$PHYS"
+  after=""; if [ -n "$SIZE_KIB" ] && [ -z "$SIZE_PARTIAL" ]; then after="$SIZE_KIB"; fi
+  if [ "$rc" -ne 0 ]; then
+    out="pnpm store prune failed (exit $rc: ${out:-no output})"
+    if [ -n "$after" ] && [ "$after" -lt "$before" ]; then out="$out, though its store is $(human "$((before - after))") smaller"; fi
+    finish_item "$id" failed "" "pnpm $t" "$out"; return
+  fi
+  [ -n "$after" ] || { finish_item "$id" failed "" "pnpm $t" "after pnpm store prune (exit 0) the size of its store could not be read, so nothing confirms what it did"; return; }
+  if [ "$after" -gt "$before" ]; then
+    finish_item "$id" failed "" "pnpm $t" "pnpm's store is bigger after pnpm store prune ($(human "$before") before, $(human "$after") after), so nothing confirms it removed anything"; return
+  fi
+  if [ "$after" -eq "$before" ]; then
+    finish_item "$id" gone "" "pnpm $t" "pnpm found nothing no project uses, so its store is the size it was ($(human "$before"))"; return
+  fi
+  finish_item "$id" removed "$((before - after))" "pnpm $t" "$(human "$((before - after))") less in pnpm's store, as du measures it; where a project holds a package as a clone sharing its disk blocks, the disk gains less than that"
+}
+
 # ---------- a path item ----------
 do_path() { # <id> <category> <method> <target> <identity>
   local id="$1" cat="$2" method="$3" t="$4" ident="$5" why out rc before_bytes after_bytes after_kib
@@ -702,6 +768,7 @@ while IFS="$S" read -r -u 3 id cat method target state bytes ident; do
   esac
   case "$method" in
     docker) do_docker "$id" "$cat" "$target" "$ident" ;;
+    pnpm) do_pnpm "$id" "$cat" "$target" "$ident" ;;
     trash|delete|truncate|worktree|derived-data) do_path "$id" "$cat" "$method" "$target" "$ident" ;;
     *) finish_item "$id" skipped "" "$target" "'$method' is not a method this tool knows" ;;
   esac

@@ -58,6 +58,7 @@ default_stubs() {
   dc_stub docker 'exit 1'
   dc_stub git
   dc_stub gh
+  dc_stub pnpm
   dc_stub derived-data-sweep
 }
 fresh() {
@@ -1519,6 +1520,147 @@ check "package caches judge: lsof saying anything on stderr makes an npx copy un
 run_scan --only package-caches
 check "package caches: and the scan the same" "$(has "$(state_of "$H/.npm/_npx/abc123")" "unmeasured: could not tell whether it is in use")"
 dc_stub lsof 'exit 1'
+# In every case above pnpm was a stand in given no behaviour, so it could not say where its store is.
+check "package caches: with pnpm unable to say where its store is, the prune row is unmeasured, never offered" \
+  "$(has "$(state_of "store prune")" "unmeasured: pnpm could not say where its store is (pnpm store path exit 98)")"
+
+# ------------------------------------------------------------------------------------------------
+# The pnpm store's prune row (Dan, 2026-11-19, recorded on #3235: "Offer a prune row"): one row,
+# which runs pnpm's own `pnpm store prune`. It is offered when pnpm is on the PATH, pnpm says its
+# store is a real folder directly inside ~/Library/pnpm/store, no process holds a file in it, and
+# nothing in it was changed or opened in 30 days. pnpm is a stand in that records its arguments;
+# the real one is never run. du is one too: the store measures 5000 KiB with the file no project
+# uses in it, and 1000 without.
+# ------------------------------------------------------------------------------------------------
+PSD="$H/Library/pnpm/store"; PSV="$PSD/v11"; PORPHAN="$PSV/files/aa/orphan"; PRUNE_ROW="store prune"
+prune_home() { # [<what pnpm store path does, default: prints the store>]
+  fresh
+  mkdir -p "$PSV/files/aa" "$PSV/files/bb" "$H/.npm/_npx/abc123" "$H/elsewhere/v11"
+  printf 'unused\n' > "$PORPHAN"; printf 'used\n' > "$PSV/files/bb/kept"; printf 'p\n' > "$H/.npm/_npx/abc123/package.json"
+  printf 'x\n' > "$H/elsewhere/v11/f"
+  old "$H"
+  dc_stub pnpm "case \"\$*\" in
+  'store path') ${1:-echo $(printf %q "$PSV")} ;;
+  'store prune') /bin/rm -f $(printf %q "$PORPHAN") ;;
+  *) echo \"unexpected pnpm \$*\" >&2; exit 99 ;;
+esac"
+  dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; */v11) if [ -e $(printf %q "$PORPHAN") ]; then printf '5000\t%s\n' \"\$a\"; else printf '1000\t%s\n' \"\$a\"; fi ;; *) printf '12\t%s\n' \"\$a\" ;; esac; done"
+}
+prune_rows() { dcr_review_items "$REC" | awk -F "$S" '$3 == "pnpm"' | wc -l | tr -d ' '; }
+
+prune_home
+run_scan --only package-caches
+check "prune row: with pnpm there, its store there and nothing in it used for 30 days, the row is offered" "$(eq "$RC|$(state_of "$PRUNE_ROW")" "0|offerable")"
+check "prune row: it goes by the pnpm method, and there is exactly one such row" "$(eq "$(method_of "$PRUNE_ROW")|$(prune_rows)" "pnpm|1")"
+check "prune row: it says what ticking it runs" "$(has "$(detail_of "$PRUNE_ROW")" "runs pnpm's own pnpm store prune")"
+check "prune row: and that how much it frees is not known until it runs" "$(has "$(detail_of "$PRUNE_ROW")" "how much that frees is not known until it runs")"
+check "prune row: it claims no size, since nothing says what a prune would free" "$(eq "$(field "$(item_of "$PRUNE_ROW")" 6)|$(field "$(item_of "$PRUNE_ROW")" 8)" "|unread")"
+check "prune row: the store folder itself is still shown, and still never offered" "$(has "$(state_of "$PSV")" "not offerable: pnpm's store")"
+check "prune row: the scan asked pnpm only where its store is, and pruned nothing" "$(eq "$(dc_calls pnpm | sort -u)|$([ -e "$PORPHAN" ] && echo there)" "pnpm store path|there")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: the same row is offerable" "$(eq "$JUDGED" offerable)"
+# The 30 day floor, on the store pnpm named: a file opened, then one changed, 5 days ago.
+touch -a -t "$RECENT" "$PSV/files/bb/kept"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: a file of the store opened 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: opened within 30 days")"
+old "$PSV"; touch -m -t "$RECENT" "$PSV/files/bb/kept"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: a file of the store changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+run_scan --only package-caches
+check "prune row floor: and the scan shows the row, not offerable, the same" "$(has "$(state_of "$PRUNE_ROW")" "not offerable: changed within 30 days")"
+old "$PSV"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: aged again it is offerable (the control)" "$(eq "$JUDGED" offerable)"
+# A process holding a file of the store (an install running), and lsof unable to say.
+dc_stub lsof "printf 'p10\ncnode\nf3\nn%s\n' $(printf %q "$PSV/files/bb/kept")"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a process holding a file of the store makes it not offerable" "$(has "$JUDGED" "not offerable: pnpm's store is in use by node")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+judge package-caches "$PRUNE_ROW"
+check "prune row: lsof saying anything on stderr makes it unmeasured" "$(has "$JUDGED" "unmeasured: could not tell whether pnpm's store is in use")"
+dc_stub lsof 'exit 1'
+# Targets that only resemble it.
+for t in "store prune --force" "prune" "store" "store  prune"; do
+  judge package-caches "$t"
+  check "prune row judge: '$t' is not the row, so it is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the caches this kind shows")"
+done
+
+# No pnpm on the PATH: the row is shown, saying so, and not offered.
+prune_home
+rm -f "$DC_STUBS/pnpm"
+run_scan --only package-caches
+check "prune row: with no pnpm on the PATH the row is not offerable, saying so" "$(has "$(state_of "$PRUNE_ROW")" "not offerable: pnpm is not on the PATH, so its own prune cannot be run")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: and the judge the same" "$(has "$JUDGED" "not offerable: pnpm is not on the PATH")"
+dc_stub pnpm
+# No store: no row, and nothing asks pnpm anything.
+prune_home
+rm -rf "$H/Library/pnpm"
+run_scan --only package-caches
+check "prune row: with no pnpm store there is no row" "$(eq "$(prune_rows)|$(item_of "$PRUNE_ROW")" "0|")"
+check "prune row: and pnpm was not asked anything" "$(eq "$(dc_calls pnpm)" "")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: with no store it is not offerable" "$(has "$JUDGED" "not offerable: there is no pnpm store in ~/Library/pnpm/store")"
+mkdir -p "$PSD"; run_scan --only package-caches
+check "prune row: an empty ~/Library/pnpm/store is no store either" "$(eq "$(prune_rows)" 0)"
+# pnpm pointed at a store somewhere else, at a link, or unable to answer.
+prune_home "echo $(printf %q "$H/elsewhere/v11")"
+run_scan --only package-caches
+check "prune row: a store pnpm says is somewhere else is not offerable" \
+  "$(has "$(state_of "$PRUNE_ROW")" "not offerable: pnpm says its store is $H/elsewhere/v11, which is not a folder directly inside ~/Library/pnpm/store, the only store this prunes")"
+prune_home "echo $(printf %q "$PSD/v12")"
+ln -s "$H/elsewhere/v11" "$PSD/v12"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a store that is a link is not offerable" "$(has "$JUDGED" "not offerable: pnpm says its store is $PSD/v12, which is not a folder directly inside ~/Library/pnpm/store")"
+prune_home "echo $(printf %q "$PSD/v99")"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a store pnpm names that is not there is not offerable" "$(has "$JUDGED" "not offerable: pnpm says its store is $PSD/v99, which is not a folder directly inside ~/Library/pnpm/store")"
+prune_home "{ echo 'ERR_PNPM no config' >&2; exit 1; }"
+judge package-caches "$PRUNE_ROW"
+check "prune row: pnpm failing to say where its store is makes it unmeasured, never offered" "$(has "$JUDGED" "unmeasured: pnpm could not say where its store is (pnpm store path exit 1)")"
+
+# The page and the remover agree, by the real judge: the row the page offers is run, logged before
+# pnpm ran, and checked by the store's size after.
+prune_home
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only package-caches
+PID_ROW="$(dcr_review_items "$REC" | awk -F "$S" '$3 == "pnpm" && $5 == "offerable" { print $1 }')"
+PSCAN="$(dcr_header "$REC" scan_id)"
+printf 'scan_id %s\ncount 1\nitem %s\n' "$PSCAN" "$PID_ROW" > "$H/prune-plan"
+: > "$DC_CALLS"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/prune-plan" 2>&1)"; RRC=$?
+check "prune agreement: disk-remove.sh runs the row the page offered" "$(eq "$RRC|$(grep -c '^removed    pnpm store prune ' <<< "$REMOVED")" "0|1")"
+check "prune agreement: pnpm store prune ran once, and pnpm was asked nothing but that and where its store is" \
+  "$(eq "$(dc_calls pnpm | grep -c '^pnpm store prune$')|$(dc_calls pnpm | sort -u | tr '\n' '|')" "1|pnpm store path|pnpm store prune|")"
+PLOGF="$STATE/removals/$PSCAN.log"
+check "prune agreement: it has an INTENT line naming pnpm and store prune, and an OUTCOME saying what the store lost" \
+  "$(eq "$(awk -F '\t' '$1 == "INTENT" { print $5 "|" $6 "|" $7 }' "$PLOGF")/$(awk -F '\t' '$1 == "OUTCOME" { print $5 "|" $6 }' "$PLOGF")" "pnpm|store prune|5000/removed|4000")"
+check "prune agreement: what no project uses is gone, and what one uses is still there" "$([ ! -e "$PORPHAN" ] && [ -e "$PSV/files/bb/kept" ] && echo ok || echo "the store is not as a prune leaves it")"
+check "prune agreement: nothing went to the Trash or was deleted by path" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')|$(grep -c '^trashed ' <<< "$REMOVED")" "0|0")"
+# Asked for outside the method, by a record that claims each is offerable.
+prune_home
+touch -m -t "$RECENT" "$PSV/files/bb/kept"
+: > "$DC_ROOT/open-items"
+oitem z1 package-caches pnpm "store prune"
+oitem z2 package-caches delete "$PSV"
+oitem z3 package-caches trash "$PSV"
+oitem z4 package-caches pnpm "$PSV"
+oitem z5 package-caches pnpm "store prune --force"
+oitem z6 caches pnpm "store prune"
+oitem z7 package-caches delete "$PSD"
+mkdir -p "$STATE"; dcr_write "$REC" prune-z "$(date +%s)" "$DC_ROOT/open-items"
+printf 'scan_id prune-z\ncount 7\nitem z1\nitem z2\nitem z3\nitem z4\nitem z5\nitem z6\nitem z7\n' > "$H/prune-plan"
+: > "$DC_CALLS"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/prune-plan" 2>&1)"; RRC=$?
+check "prune refusals: the plan exits 5 and removes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")" "5|0")"
+check "prune refusals: a store with a file changed 5 days ago is refused by its judge" "$(has "$(oline "pnpm store prune:")" "judged again just now: not offerable: changed within 30 days")"
+check "prune refusals: the store folder asked for by deleting or by the Trash is refused by its judge, twice" \
+  "$(eq "$(grep -c "skipped    $PSV: judged again just now: not offerable: pnpm's store" <<< "$REMOVED")" 2)"
+check "prune refusals: the store folder as a pnpm target is refused by name" "$(has "$(oline "pnpm $PSV:")" "it is not a pnpm target this tool runs (store prune, and nothing else)")"
+check "prune refusals: store prune with a flag is refused by name" "$(has "$(oline "pnpm store prune --force:")" "it is not a pnpm target this tool runs")"
+check "prune refusals: store prune under another kind is refused" "$(has "$REMOVED" "the pnpm method is taken only for the package-caches kind, and this item's kind is caches")"
+check "prune refusals: the folder that holds the stores is refused by its judge" "$(has "$(oline "$PSD:")" "judged again just now: not offerable: ")"
+check "prune refusals: pnpm store prune never ran, and the store is whole" \
+  "$(eq "$(dc_calls pnpm | grep -c '^pnpm store prune')|$([ -e "$PORPHAN" ] && [ -e "$PSV/files/bb/kept" ] && echo whole)" "0|whole")"
+default_stubs
 
 # ================================================================================================
 # Claude named items in the user temp folder: counted and sized in the kind's note, never listed
