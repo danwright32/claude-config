@@ -64,6 +64,7 @@ NOTES_MAX_DAYS=2 # the keep rules run once a day, so a list older than this mean
 # file <name>.tsv, and what each one's folders are, as the kind says it when one cannot be read.
 NOTES_WHAT="folders of images and documents in ended sessions' notes"
 OPEN_WHAT="bulky leftovers in the notes of sessions still open"
+CHECKOUT_WHAT="git checkouts ended sessions keep in their notes"
 # A bulky leftover in an open session is offered once nothing in its task folder was changed or
 # opened for this many days (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle days").
 OPEN_IDLE_DAYS=7
@@ -274,10 +275,11 @@ leftover_rules() { # <target>
 rec_rules() { # <target>
   local t="${1%/}" n
   n="${t##*/}"
-  REC_METHOD=delete REC_DETAIL=""
+  REC_METHOD=delete REC_DETAIL="" REC_FLAGS=""
   # Anything four levels under session-notes, by the shape disk-remove.sh reads, is notes_rules' to
   # answer; a path that only resembles one (a link, a file) is refused there with its own reason.
   if dc_notes_shape "$t" "$HOME" || dc_notes_shape "$t" "$DCS_HOME"; then notes_rules "$t"; return; fi
+  if dc_notes_task_shape "$t" "$HOME" || dc_notes_task_shape "$t" "$DCS_HOME"; then task_rules "$t"; return; fi
   case "$t" in
     "$HOME/.claude/state/session-notes")
       V="not offerable: sessions' notes and working files, which the daily keep rule for session notes looks after" ;;
@@ -335,13 +337,13 @@ do_scan() {
   # the shape is no row: the list can be a day old, and what is not there has no size to show.
   local list what
   if [ -d "$NOTES" ]; then
-    for list in "readable-folders|$NOTES_WHAT" "open-leftovers|$OPEN_WHAT"; do
+    for list in "readable-folders|$NOTES_WHAT" "open-leftovers|$OPEN_WHAT" "kept-checkouts|$CHECKOUT_WHAT"; do
       what="${list#*|}"; list_read "${list%%|*}"
       if [ -n "$LIST_WHY" ]; then
         unmeasured="${unmeasured:+$unmeasured; }$what: $LIST_WHY"
       else
         while IFS= read -r e; do
-          dc_notes_folder "$e" "$HOME" "$DCS_HOME" && ! grep -qxF -- "$e" "$DCS_WORK/rec.paths" && printf '%s\n' "$e" >> "$DCS_WORK/rec.paths"
+          dc_notes_item "$e" "$HOME" "$DCS_HOME" && ! grep -qxF -- "$e" "$DCS_WORK/rec.paths" && printf '%s\n' "$e" >> "$DCS_WORK/rec.paths"
         done < "$LIST_PATHS"
       fi
     done
@@ -363,7 +365,7 @@ do_scan() {
   local p kib size ident
   while IFS="$S" read -r p kib size ident; do
     rec_rules "$p"
-    dcs_item "$p" "$REC_METHOD" "$kib" "$size" "$V" "" "$REC_DETAIL" "$ident"
+    dcs_item "$p" "$REC_METHOD" "$kib" "$size" "$V" "$REC_FLAGS" "$REC_DETAIL" "$ident"
   done < "$DCS_WORK/rec.sized"
   local notes=""
   [ ! -s "$DCS_WORK/rec.rest" ] || notes="$(rec_count "$DCS_WORK/rec.rest" "other entries in ~/.claude/state") state that Claude Code and this config's hooks read as they run, never removed here."

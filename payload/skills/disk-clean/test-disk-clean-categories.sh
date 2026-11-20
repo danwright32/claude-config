@@ -1425,7 +1425,7 @@ CSCAN="$(dcr_header "$REC" scan_id)"
 { printf 'scan_id %s\ncount 2\n' "$CSCAN"; printf '%s\n' "$CIDS" | sed 's/^/item /'; } > "$H/ck-plan"
 REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/ck-plan" 2>&1)"; RRC=$?
 check "checkout agreement: disk-remove.sh takes both rows the page offered" "$(eq "$RRC|$(grep -c '^trashed ' <<< "$REMOVED")" "0|2")"
-check "checkout agreement: both are gone, through trash" "$([ ! -e "$CT/safe" ] && [ ! -e "$CSES/task-repo" ] && echo ok || echo "one is still there")|$(eq "$(dc_calls trash | wc -l | tr -d ' ')" 2)"
+check "checkout agreement: both are gone, through trash" "$(eq "$([ ! -e "$CT/safe" ] && [ ! -e "$CSES/task-repo" ] && echo gone || echo "one is still there")|$(dc_calls trash | wc -l | tr -d ' ')" "gone|2")"
 CLOG="$STATE/removals/$CSCAN.log"
 check "checkout agreement: each has an INTENT line naming the Trash and an OUTCOME line saying it went" \
   "$(eq "$(awk -F '\t' '$1 == "INTENT" && $5 == "trash"' "$CLOG" | wc -l | tr -d ' ')|$(awk -F '\t' '$1 == "OUTCOME" && $5 == "trashed"' "$CLOG" | wc -l | tr -d ' ')" "2|2")"
