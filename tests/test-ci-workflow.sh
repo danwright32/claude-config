@@ -673,6 +673,7 @@ UPLOAD_STEP="Hand what this part did not test to the suite job"
 FETCH_STEP="Fetch what each part did not test"
 RESTORE_STEP="Restore what main's last run did not test"
 SAY_STEP="Say which parts the checks did not test"
+CHECKOUT_STEP="Check out the tool that says what was not tested"
 KEEP_STEP="Keep what main did not test for the next comparison"
 untested_wiring(){ # untested_wiring <workflow> -> ok, or each thing missing
   local out="" parts up s st
@@ -700,6 +701,15 @@ untested_wiring(){ # untested_wiring <workflow> -> ok, or each thing missing
   done
   grep -qE 'pattern:[[:space:]]*part-unmeasured-\*' <<< "$(step_lines "$1" suite "$FETCH_STEP")" || out="$out the fan in does not fetch part-unmeasured-*;"
   grep -qF 'bash tools/ci-unmeasured-summary.sh' <<< "$(step_lines "$1" suite "$SAY_STEP")" || out="$out the fan in does not run tools/ci-unmeasured-summary.sh;"
+  # The tool is a file of the repository, and the fan in job holds it only when a step before the
+  # one that runs it checked the repository out. The first real run, on 2026-11-20, had no such
+  # step: the runner said "tools/ci-unmeasured-summary.sh: No such file or directory" and the run
+  # stayed green with no list. The step test below runs from this checkout, where the file always
+  # is, so only this reads what the runner will have.
+  awk -v say="$SAY_STEP" '
+    /^      - name:/ { l = $0; sub(/^      - name:[[:space:]]*/, "", l); if (l == say) exit !co }
+    /uses:[[:space:]]*actions\/checkout@/ { co = 1 }' <<< "$(wf_job_block "$1" suite)" \
+    || out="$out the fan in runs the tool with no checkout before it;"
   [ -z "$out" ] && echo ok || echo "${out# }"
 }
 r="$(untested_wiring "$REAL")"
@@ -712,6 +722,12 @@ r="$(untested_wiring "$TMPROOT/no-upload.yml")"
 [ "$r" = "no part step hands its record on;" ] \
   && check "#3312 a workflow whose parts do not hand on their record is refused, naming it" ok \
   || check "#3312 a workflow whose parts do not hand on their record is refused, naming it" "got: $r"
+# The second control: the same workflow with the fan in's checkout gone, which must be named.
+awk -v drop="$CHECKOUT_STEP" '/^      - / { s = 0 } /^      - name:/ { l = $0; sub(/^      - name:[[:space:]]*/, "", l); s = (l == drop) } !s' "$REAL" > "$TMPROOT/no-checkout.yml"
+r="$(untested_wiring "$TMPROOT/no-checkout.yml")"
+[ "$r" = "the fan in runs the tool with no checkout before it;" ] \
+  && check "#3312 a fan in that runs the tool with no checkout before it is refused, naming it" ok \
+  || check "#3312 a fan in that runs the tool with no checkout before it is refused, naming it" "got: $r"
 
 # The fan in's step, RUN against records as download-artifact lays them out.
 say_body="$(step_run_body "$REAL" suite "$SAY_STEP")"

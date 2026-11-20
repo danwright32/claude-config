@@ -700,6 +700,15 @@ jobs:
           key: claude-config-untested-main-none
           restore-keys: claude-config-untested-main-
 
+      # The tool below is a file of this repository, and this job holds no checkout otherwise: the
+      # first real run (2026-11-20) said "tools/ci-unmeasured-summary.sh: No such file or directory"
+      # and stayed green with no list. Pinned as the other checkouts are; the newest commit is
+      # enough, since the tool reads only the records the parts handed back.
+      - name: Check out the tool that says what was not tested
+        if: ${{ !cancelled() && needs.deal.outputs.reused-run == '' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Say which parts the checks did not test
         if: ${{ !cancelled() && needs.deal.outputs.reused-run == '' }}
         continue-on-error: true
