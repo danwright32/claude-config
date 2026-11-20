@@ -51,7 +51,8 @@ Report what it printed, in plain words, in this order:
 2. Each kind's total: what can go, with its item count, keeping "at least" wherever the scan said
    it, because then part of the kind could not be measured and the figure is a lower bound. A kind
    with nothing in it says nothing was found. Everything offered, the Trash apart, has gone 30 days
-   without being changed or run, on top of its kind's own rule; say "changed or run", never "used"
+   without being changed or run, on top of its kind's own rule (one row waits 7 days instead, a
+   bulky leftover in a session still open, which item 5 covers); say "changed or run", never "used"
    or "opened", because a data file read again and again without changing can still look unopened
    (access time records only the first read after each change). Docker images and the build cache
    are always unmeasured, since when they were last used is not read.

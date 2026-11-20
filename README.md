@@ -6325,7 +6325,10 @@ MacBook all look gone, and trashing one would sync the removal back. Its suite i
 On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
 `DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
 beneath it was changed (modification time) or opened (access time) in the last 30 days, and the
-floor can only take an item out of the offer, never add one. Opened is read from access times
+floor can only take an item out of the offer, never add one. One row has a shorter time by Dan's
+later decision, described above: a bulky leftover in a session still open asks the same question
+of its task folder over 7 days (`dcs_idle`, which the floor itself calls), and its row says so.
+Opened is read from access times
 because Spotlight's last used date only repeats the change date. That leaves a known gap: running a
 program moves its access time on every run, but a plain read of a data file moves it only on the
 first read after each change, so a data file read again and again without changing can look
