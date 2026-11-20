@@ -1289,7 +1289,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
     // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
     found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, worked, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
-    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null }
+    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null, filed: [] }
   }
   found.unmeasured.unshift(...unread)
   const at = await $.clock.now()
@@ -1301,6 +1301,8 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   const limit = stopped ? (({ text: _said, ...facts }) => facts)(stopped) : null
   try {
     for (const text of found.hits) await sleepNote($, recordPath, { kind: 'outward', at, by, text })
+    // #3273: an issue filed overnight that needs nothing from Dan, said once under Done, never a row.
+    for (const f of found.filed) await sleepNote($, recordPath, { kind: 'filed', at, by, repo: f.repo, issue: f.issue, text: f.title })
     for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text, ...(limit && text === stopped?.text ? { limit } : {}) })
     // What it read and left out as healthy (#2766), every time it runs: the report says it under
     // Needs a look, and a final report with no note of the check at all says it did not run.

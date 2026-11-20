@@ -82,6 +82,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
   woke, limit  reason?                      how the night ended (written by the scope modes mod)
   outward    text                           the overnight check (#834): something done overnight
                                             that the ban list exists to stop, read from GitHub
+  filed      repo, issue, text              the overnight check (#3273): an issue filed overnight
+                                            with every required field, in a repository worked
+                                            tonight, with no open twin; said in one line under
+                                            Done, never put to Dan (text is its title)
   unmeasured text, limit?                   the overnight check: a read it could not make; a stop
                                             at its time limit is one such note, said once, whose
                                             limit keeps where it stopped as data: part, parts,
@@ -159,13 +163,14 @@ def claim_branch(issue):
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress", "redone") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress", "redone",
+         "filed") + ENDED
 # How long an issue may be worked in a night before the overnight driver parks it: driver.ts
 # LIMITS.stuckMs, which test-sleep-report.sh reads beside this so the two cannot drift apart (#3276).
 STUCK_HOURS = 2
 STUCK_MS = STUCK_HOURS * 3600 * 1000
 # The notes the overnight check writes (#834, #2766): with none of them, a final report says it did not run.
-CHECK_KINDS = ("outward", "unmeasured", "checked")
+CHECK_KINDS = ("outward", "unmeasured", "checked", "filed")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -624,6 +629,15 @@ def overran_line(late):
         len(late), "" if one else "s", STUCK_HOURS, "was" if one else "were", issues_named(late))
 
 
+def filed_line(notes):
+    """The issues filed overnight that needed nothing from Dan, as the wake check noted them (#3273):
+    one sentence under Done, so the record is kept and no picker is put to him for any of them."""
+    keys = list(dict.fromkeys(k for k in (_issue_key(n) for n in notes if n["kind"] == "filed") if k is not None))
+    if not keys:
+        return None
+    return "%d issue%s filed overnight: %s." % (len(keys), " was" if len(keys) == 1 else "s were", issues_named(keys))
+
+
 def held_at(notes, by, at):
     """The issues session `by` held at moment `at`, in the order it claimed them."""
     held = {}
@@ -865,7 +879,7 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
     section("Questions for you", [asked_at(q) for q in questions_of(notes)])
 
     finished = finished_by(notes)
-    done_tail = [t for t in (overran_line(overran(notes, finished)),) if t]
+    done_tail = [t for t in (overran_line(overran(notes, finished)), filed_line(notes)) if t]
     if final:
         section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.", done_tail)
     else:
@@ -1310,7 +1324,7 @@ def _render_locked(path, record, final, github):
 
 # The kinds every session's report carries whoever wrote them (#1287): how the night began and
 # ended, the overnight check, and the limits and usage, which are the whole Mac's, not one session's.
-MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "checked", "usage", "wait")
+MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "checked", "filed", "usage", "wait")
 
 
 def session_reports(notes_file, record):
