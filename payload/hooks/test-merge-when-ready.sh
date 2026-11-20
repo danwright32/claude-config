@@ -4217,8 +4217,8 @@ check "#3312 it names the check and what it said it did not test" "Check suite, 
 check "#3312 with each part on its own line" "test-a.sh: no Chrome here" "$out"
 check "#3312 and that it is more than main" "Check suite, Not tested by the checks and more than on main: This run left more untested than main's last run" "$out"
 check_not "#3312 an annotation about something else is not printed" "Node.js 20 actions" "$out"
-said_at="$(grep -n 'test-b.sh: not macOS' <<< "$out" | head -1 | cut -d: -f1)"
-merge_at="$(grep -n 'Merging, pinned to that head' <<< "$out" | head -1 | cut -d: -f1)"
+said_at="$(awk 'index($0, "test-b.sh: not macOS") && !n { n = NR } END { if (n) print n }' <<< "$out")"
+merge_at="$(awk 'index($0, "Merging, pinned to that head") && !n { n = NR } END { if (n) print n }' <<< "$out")"
 [ -n "$said_at" ] && [ -n "$merge_at" ] && [ "$said_at" -lt "$merge_at" ] \
   && check_eq "#3312 said before it merges" ok ok \
   || check_eq "#3312 said before it merges" "before" "said at ${said_at:-never}, merge at ${merge_at:-never}"

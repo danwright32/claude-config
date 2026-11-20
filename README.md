@@ -4974,7 +4974,7 @@ hands its file on as the artifact `part-unmeasured-<part>`, a failing part inclu
 job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
 left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
 `Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
-the rest on the summary). The run is compared, suite by suite, with the record of main's last green
+a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
 full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
 untested says so on the summary's first line and in a second notice,
 `Not tested by the checks and more than on main`. A part that handed back no record is named, and
