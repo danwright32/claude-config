@@ -486,7 +486,9 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `unread`, for a write reaching a whole folder whose files cannot be listed (#2395), says why.
 // `inScript`, for a file a script file's own code writes (#2847), is that script as the command names it.
 // `moved`, for a file a git move brings into the working tree (#3279), read from git before it runs.
-// `move`, on a target that is a git move the guard could not read, is the move as written and what to do instead.
+// `move`, on every target a git move gives (#3279), is the move as written: on a file it brings in,
+// so a refusal can name the command, and on a move the guard could not read (with `unread`), where
+// it also carries what to do instead where there is something.
 type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; inScript?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string; moved?: true; move?: { said: string; remedy?: string } }
 
 // A path without its `.` segments or a trailing slash (`lib/.` and `lib/` are lib), as git lists it.
