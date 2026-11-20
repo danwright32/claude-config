@@ -70,6 +70,8 @@ import {
   spelledThrough,
   literalValue,
   tempRoots,
+  keptInTemp,
+  scriptHidesWrites,
   ROUND_FILES,
   checked,
   unsure,
@@ -467,6 +469,19 @@ test('#2792: the session notes folder is known by the home folder, any session o
   expect(inSessionNotes(`${'/Users'}/eve/.claude/state/session-notes/-w-slate/s1/app/page.tsx`, home)).toBe(false)
   expect(inSessionNotes('/.claude/state/session-notes/-w-slate/s1/app/page.tsx', '')).toBe(false)
   expect(inSessionNotes('dan/.claude/state/session-notes/-w-slate/s1/app/page.tsx', 'dan')).toBe(false)
+})
+
+// #3279: a script kept in a temporary folder is one a session wrote to run once. Known by where its
+// path lands: /tmp and /var/folders in both of macOS's spellings, and Claude Code's own temp folder.
+test('#3279: a script file is kept in a temporary folder by where its path lands, never by a folder merely named like one', () => {
+  const tmp = tempRoots(undefined)
+  for (const p of ['/tmp/fix.py', '/private/tmp/claude-501/-w-slate/s1/scratchpad/3279/gen.mjs', '/var/folders/ab/T/fix.py', '/private/var/folders/ab/T/x/fix.py', '/w/slate/../../tmp/fix.py'])
+    expect({ p, temp: keptInTemp(p, tmp) }).toEqual({ p, temp: true })
+  for (const p of ['/w/slate/scripts/gen.py', '/w/slate/tmp/gen.py', '/tmpx/gen.py', '/tmp/../w/slate/scripts/gen.py', `${'/Users'}/dan/.claude/state/session-notes/-w-slate/s1/3279/gen.py`, `${'/Users'}/dan/Temp Dir/gen.py`])
+    expect({ p, temp: keptInTemp(p, tmp) }).toEqual({ p, temp: false })
+  // Claude Code's temp folder, wherever CLAUDE_CODE_TMPDIR puts it.
+  expect(keptInTemp(`${'/Users'}/dan/Temp Dir/claude-501/x/s1/scratchpad/gen.py`, tempRoots(`${'/Users'}/dan/Temp Dir`))).toBe(true)
+  expect(scriptHidesWrites('/tmp/fix.py', 'app/globals.css')).toContain('/tmp/fix.py is kept in a temporary folder, its own code does not name every file it writes, and it names app/globals.css by a relative name')
 })
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every

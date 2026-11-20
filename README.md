@@ -7803,7 +7803,14 @@ runs, a script named through a variable the command sets, a script the command w
 heredoc, read as that text, and the local modules a script imports; since #3214 a script named
 through a variable the command never sets (`python3 $N/gen.py`, nothing setting N), which the guard
 cannot find and so cannot read, is held as could not check, while one named through a variable the
-command sets some other way (a loop, a command's output) is still not read; since #2991 a name
+command sets some other way (a loop, a command's output) is still not read; since #3279 a python or
+node script kept in a temporary folder or the session's scratchpad (under `/tmp`, `/var/folders` or
+Claude Code's own temporary folder), whose code does not name every file it writes and names a look
+changing file by a relative name, is held as could not check, since it may join that name onto any
+folder or open it after changing folder (Dan, 2026-11-19, "Hold the narrow case": 3 past commands in
+32 days), while a name that is a test by its own file name is left out, and the same script kept
+anywhere else is read as before, its relative names not judged (854 past commands, ruled out the
+same day); since #2991 a name
 such a
 script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
 that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and

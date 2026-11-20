@@ -60,6 +60,8 @@ import {
   scriptUnread,
   scriptNamesFile,
   scriptUnplaced,
+  scriptHidesWrites,
+  keptInTemp,
   scriptsRunIn,
   type ScriptRun,
   type ScriptReading,
@@ -724,7 +726,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // changing file it names from the top of the disk or the home folder. A relative look changing name
   // in such a script is not: over 14 days of this Mac's commands every one was usage text, a docstring
   // or a fixture for a scratch repository (make-switcher.py's `<out.html>`), never a write, where an
-  // inline program's names are its own (#1151). A file its code names where the folder it runs in
+  // inline program's names are its own (#1151); since #3279 one in a script kept in a temporary
+  // folder is held as could not check, below. A file its code names where the folder it runs in
   // cannot be followed, or a script that cannot be read, is held as could not check, and so since
   // #3214 is one that cannot be found, named through a variable the command never sets. A script whose
   // writes are not all named and whose text names the plugin store may write the guard's record,
@@ -787,11 +790,22 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // #3022 the variable or its f-string starting the path, rules.ts startsPath), as
       // test-score-adapters.sh's pages are. Anywhere else (`ch = "."`, a `$(pwd)`, `root + ch + ...`,
       // a value the guard cannot read) it is judged where guessAt places it, as before.
-      for (const m of (await namesInPieces(text, mentionedLookFiles, pauseTurn($))).filter(x => /^(\/|~\/)/.test(x))) {
+      const look = await namesInPieces(text, mentionedLookFiles, pauseTurn($))
+      for (const m of look.filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
         if (t?.path && !inScriptTemp(text, m, u.program ?? text, u.words, scriptsText)) targets.push({ ...t, inScript: s.word })
         await pace()
       }
+      // #3279 (Dan, 2026-11-19, "Hold the narrow case"): a relative look changing name in a python
+      // or node script kept in a temporary folder or the session's scratchpad (rules.ts keptInTemp)
+      // is held as could not check. Such a script is one a session wrote to run once, and the name
+      // may be joined onto any folder or opened after a change of folder: on 2026-11-19 one doing
+      // either rewrote app/globals.css with nothing asked. Over 32 days of this Mac's commands 3
+      // ran such a script; a script kept anywhere else (854 commands) is read as before, above.
+      // A name that is a test by its own file name (`page.test.tsx`) is one wherever it is joined,
+      // and a test is never held; one under a folder named tests may be joined above a checkout.
+      if ((s.lang === 'python' || s.lang === 'node') && keptInTemp(s.path, at.temps))
+        for (const m of look.filter(x => !/^(\/|~\/)/.test(x) && !isTestPath(x.split('/').pop() ?? ''))) targets.push({ word: m, unread: scriptHidesWrites(s.word, m), inScript: s.word })
     }
   }
   // A quoted pattern read as its one name (#1951) is still one the script may match itself.

@@ -960,6 +960,61 @@ test('#3279: an editor given a script, a pipe into sponge and the other programs
   expect(w.ran.length).toBe(near.length)
 })
 
+// #3279, Dan, 2026-11-19, "Hold the narrow case": a python or node script kept in a temporary folder
+// or the session's scratchpad, whose code does not name every file it writes and names a look
+// changing file by a relative name, is held as could not check. Before, one joining the name onto a
+// folder, or changing folder and opening it, rewrote app/globals.css with nothing asked. One step
+// short of each condition still runs: the same code kept in the project or in a notes folder, a
+// temporary script naming every file it writes, and one whose relative names change no look.
+test('#3279: a script kept in a temporary folder whose code hides where it writes and names a look changing file by a relative name is held as could not check', withKit, async ($, on) => {
+  const TEMP = '/private/tmp/claude-501/-w-slate/s1/scratchpad'
+  const JOIN = "import os\nroot = '/w/slate'\np = os.path.join(root, 'app', 'globals.css')\nopen(p, 'w').write('a{color:red}')\n"
+  const CHDIR = "import os\nos.chdir('/w/slate')\nopen('app/globals.css', 'w').write('a{color:red}')\n"
+  const NODE = "import { writeFileSync } from 'node:fs'\nimport { join } from 'node:path'\nconst root = process.argv[2]\nwriteFileSync(join(root, 'app/page.tsx'), '<main/>')\n"
+  const w = world($, on, {
+    files: {
+      '/w/slate/app/globals.css': 'a{}\n',
+      [`${TEMP}/join.py`]: JOIN,
+      [`${TEMP}/rel.py`]: CHDIR,
+      [`${TEMP}/gen.mjs`]: NODE,
+      '/tmp/fix.py': JOIN,
+      '/var/folders/ab/T/fix.py': CHDIR,
+      // One step short, each a script that runs.
+      '/w/slate/scripts/join.py': JOIN,
+      '/w/notes/3279/join.py': JOIN,
+      [`${TEMP}/whole.py`]: `"""Usage: whole.py, writes out.html from screen.css."""\nopen('${TEMP}/out.html', 'w').write('<main/>')\n`,
+      [`${TEMP}/notes.py`]: "import os\nroot = '/w/slate'\nopen(os.path.join(root, 'docs', 'notes.md'), 'w').write('x')\n",
+      [`${TEMP}/read.py`]: "import os\nprint(open(os.path.join('/w/slate', 'app', 'globals.css')).read())\n",
+      [`${TEMP}/tests.py`]: "import os\nroot = '/w/slate'\nopen(os.path.join(root, 'app', 'page.test.tsx'), 'w').write('x')\n",
+    },
+  })
+  const notHeld: string[] = []
+  for (const [command, script, file] of [
+    [`python3 ${TEMP}/join.py`, `${TEMP}/join.py`, 'globals.css'],
+    [`python3 ${TEMP}/rel.py`, `${TEMP}/rel.py`, 'app/globals.css'],
+    [`node ${TEMP}/gen.mjs /w/slate`, `${TEMP}/gen.mjs`, 'app/page.tsx'],
+    ['python3 /tmp/fix.py', '/tmp/fix.py', 'globals.css'],
+    ['cd /w/other && python3 /var/folders/ab/T/fix.py', '/var/folders/ab/T/fix.py', 'app/globals.css'],
+  ] as [string, string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('could not check where this call writes') || !why.includes(`${script} is kept in a temporary folder, its own code does not name every file it writes, and it names ${file}`)) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // Dan's answer for the issue does not say where such a script writes, so it is still held.
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ${TEMP}/join.py` }))).toContain('could not check where this call writes')
+  delete w.store['record:/w/slate|issue:978']
+  const near = ['python3 /w/slate/scripts/join.py', 'python3 /w/notes/3279/join.py', `python3 ${TEMP}/whole.py`, `python3 ${TEMP}/notes.py`, `python3 ${TEMP}/read.py`, `python3 ${TEMP}/tests.py`]
+  const asked: string[] = []
+  for (const command of near) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(near.length)
+})
+
 // #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path or a restore
 // puts back a look changing file, git rm and git mv take one away, and none had a round asked.
 test('git checkout of a path, git restore, git rm and git mv of a look changing file are held without a settled round', withKit, async ($, on) => {

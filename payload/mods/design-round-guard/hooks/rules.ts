@@ -1747,6 +1747,27 @@ export const scriptNamesFile = (script: string, file: string): string =>
 export const scriptUnplaced = (script: string, file: string): string =>
   `${script} names ${file} in its own code, and where that file is could not be followed, since the folder the script runs in is not known`
 
+/**
+ * Whether a script file is kept in a temporary folder (#3279): under /tmp or /var/folders, each
+ * also in the /private spelling macOS gives them, or under the folder Claude Code keeps its own
+ * temporary files in (`roots`, tempRoots), which is where the session's scratchpad is. A script
+ * there is one a session wrote to run once, as inline code is, never a tool the project keeps. A
+ * path that climbs (`/tmp/../w/slate/gen.py`) is read as where it lands.
+ */
+export const keptInTemp = (path: string, roots: readonly string[]): boolean => {
+  const at = resolvePath(path, '/', '')
+  return ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders', ...roots].some(r => at.startsWith(`${r}/`))
+}
+
+/**
+ * Why a python or node script kept in a temporary folder could not be checked (#3279; Dan,
+ * 2026-11-19, "Hold the narrow case"): its code does not name every file it writes, and it names a
+ * look changing file by a relative name, which it may join onto any folder or open after changing
+ * folder, so the file that write lands in cannot be told before it runs.
+ */
+export const scriptHidesWrites = (script: string, file: string): string =>
+  `${script} is kept in a temporary folder, its own code does not name every file it writes, and it names ${file} by a relative name, which it may join onto any folder, so where it writes that file could not be followed`
+
 /** Why a script file that is there could not be checked (#2847): reading it failed, so what its code writes is unknown. */
 export const scriptUnreadable = (script: string, why: string): string => `${script} could not be read for the files its own code writes (${why})`
 
