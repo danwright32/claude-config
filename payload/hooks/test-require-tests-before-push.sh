@@ -255,6 +255,22 @@ if [ -n "${STUB_CLAUDE_MEET:-}" ]; then
   esac
 fi
 [ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
+# STUB_CLAUDE_CLOCK_AT, a file holding "<text><TAB><seconds>": a call whose input holds the text
+# writes the seconds into REQUIRE_TESTS_CLOCK_FILE, so the hook's clock jumps forward while that
+# reading runs, with no real wait (#3327).
+if [ -n "${STUB_CLAUDE_CLOCK_AT:-}" ] && [ -n "${REQUIRE_TESTS_CLOCK_FILE:-}" ]; then
+  IFS=$'\t' read -r text secs < "$STUB_CLAUDE_CLOCK_AT"
+  case "$input" in *"$text"*) printf '%s\n' "$secs" > "$REQUIRE_TESTS_CLOCK_FILE" ;; esac
+fi
+# STUB_CLAUDE_ONCE, a file holding "<text><TAB><answer>": the first call whose input holds the text
+# claims the file by renaming it, which only one call can do, and gives that answer; every later
+# call goes on to the rules below. A judge that answers unreadably once (#3327).
+if [ -n "${STUB_CLAUDE_ONCE:-}" ] && [ -f "$STUB_CLAUDE_ONCE" ]; then
+  IFS=$'\t' read -r text answer < "$STUB_CLAUDE_ONCE"
+  case "$input" in *"$text"*)
+    if mv "$STUB_CLAUDE_ONCE" "$STUB_CLAUDE_ONCE.taken.$$" 2>/dev/null; then printf '%s' "$answer"; exit 0; fi ;;
+  esac
+fi
 if [ -n "${STUB_CLAUDE_RULES:-}" ]; then
   while IFS=$'\t' read -r text answer; do
     [ -n "$text" ] || continue
@@ -1563,6 +1579,121 @@ for mode in none tree copy src grep emptytree; do
     want_stderr "$COPY/hold.ts" "#2337 the copy is judged as untested source when git fails at: $mode"
   fi
 done
+
+# --- claude-config#3327: one unreadable reading must not decide a push --------------------------
+# On 2026-11-19 and 2026-11-20 the push of fix/3252 was refused as could not judge, then the same
+# head passed on a resend. Its one further reading had answered prose before its JSON, and the prose
+# quoted a shell function, busy(){ ...; }: the reply was read from its FIRST brace to its LAST, which
+# is not JSON, so a readable {"covered":[1]} counted as no answer. The replies below are shaped on
+# those two (the judge transcripts of 2026-11-19 16:01 and 2026-11-20 08:13 ET).
+envelope() { python3 -c 'import json,sys; print(json.dumps({"result": sys.argv[1]}))' "$1"; }
+BRACE_COVERED="$(envelope 'Change 1 is covered: `busy(){ bash -c ". lib-ok.sh && f"; }` is expected to pass.
+
+{"covered":[1]}')"
+BRACE_BLOCK="$(envelope 'The change in `add(){ :; }` has no test.
+
+{"verdict":"block","changes":[],"missing":["the add() fix"]}')"
+TWO_ANSWERS="$(envelope '{"covered":[]}
+
+Wait, correcting:
+
+{"covered":[1]}')"
+UNREADABLE='{"result":"I could not tell"}'
+
+# A further reading whose prose quotes a brace before its answer is read, and the push allowed.
+JUDGE_LOG="$TMPROOT/judge-log-3327a"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$BRACE_COVERED" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 0 "#3327 a further reading answering prose that quotes a brace before its JSON is read"
+if [ "$(ledger_last 4)" = pass ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3327 the record says $(ledger_last 4), expected pass"; fi
+
+# The same reply shape from the FIRST reading is a verdict, not a fail open: a refusal for the
+# missing test, where the push used to go through ungated.
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_OUT="$BRACE_BLOCK" run_hook "$W" "git push"
+want_code 2 "#3327 a first reading answering prose that quotes a brace is read as its verdict"
+want_stderr "have no test covering them" "#3327 and refused for the missing test, not let through ungated"
+
+# Two different answers in one reply are not read as either: still could not judge, never allowed.
+JUDGE_LOG="$TMPROOT/judge-log-3327e"; mkdir -p "$JUDGE_LOG"
+printf '%s\t%s\n' "$LATER_CALL" "$TWO_ANSWERS" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#3327 a reply holding two different answers is not taken as either"
+want_stderr "could not judge" "#3327 two different answers refuse as could not judge"
+
+# A further reading that answers unreadably ONCE is asked again, and the second answer decides.
+JUDGE_LOG="$TMPROOT/judge-log-3327c"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$TMPROOT/once-3327c"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_ONCE="$TMPROOT/once-3327c" STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#3327 a further reading unreadable once is asked again and the push allowed"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 3 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3327 an unreadable reading asked again took $n_calls calls, expected 3 (first, unreadable, again)"; fi
+if [ ! -e "$TMPROOT/once-3327c" ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3327 the unreadable answer was never given, so this case did not exercise asking again"; fi
+
+# A further reading that never answers readably: asked a set number of times, then refused as could
+# not judge, saying how many times it asked, which files that reading held, that nothing in the push
+# needs to change, and that the gate reads the branch as checked out, so fewer commits do not help.
+JUDGE_LOG="$TMPROOT/judge-log-3327d"; mkdir -p "$JUDGE_LOG"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$RULES"
+W="$(mk_repo)"; seed_issue_push "$W"
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#3327 a reading that never answers readably still refuses"
+want_stderr "could not judge" "#3327 as could not judge"
+want_stderr "asked 3 times" "#3327 saying how many times it asked"
+want_stderr "tests/stand-in.test.js" "#3327 naming the files that reading held"
+want_stderr "same push again" "#3327 saying the same push can be sent again"
+want_stderr "checked out" "#3327 saying the gate reads the branch as checked out"
+case "$ERR" in *'fewer commits'*) fail=$((fail+1)); echo "FAIL: #3327 an unreadable reading still advises pushing fewer commits" ;; *) pass=$((pass+1)) ;; esac
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 4 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3327 a reading that never answers took $n_calls calls, expected 4 (first and three tries)"; fi
+if [ "$(ledger_last 4)" = cantjudge ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #3327 the record says $(ledger_last 4), expected cantjudge"; fi
+case "$(ledger_last 14)" in *'asked 3 times'*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: #3327 the record's detail does not say why the gate could not judge: [$(ledger_last 14)]" ;; esac
+
+# No time left to ask again: the clock jumps while the unreadable reading runs (no real wait), so
+# the gate refuses after one try, saying there was no time to ask again, never asking past its deadline.
+JUDGE_LOG="$TMPROOT/judge-log-3327f"; mkdir -p "$JUDGE_LOG"
+printf '%s\t%s\n' "$LATER_CALL" "$UNREADABLE" > "$RULES"
+printf '%s\t%s\n' "$LATER_CALL" 200 > "$TMPROOT/clock-at-3327f"
+: > "$TMPROOT/clock-3327f"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_CLOCK_FILE="$TMPROOT/clock-3327f" STUB_CLAUDE_CLOCK_AT="$TMPROOT/clock-at-3327f" \
+  STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#3327 an unreadable reading with no time left refuses"
+want_stderr "no time" "#3327 saying there was no time to ask again"
+n_calls="$(calls_in "$JUDGE_LOG")"
+if [ "$n_calls" = 2 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #3327 with no time left the gate made $n_calls calls, expected 2"; fi
+# The clock file can only move the clock forward: a value that is not a whole number above zero is
+# ignored, and the push is read as usual.
+JUDGE_LOG="$TMPROOT/judge-log-3327g"; mkdir -p "$JUDGE_LOG"
+printf 'NEW_FIELD_MARKER\t%s\n' "$COVERED_ONE" > "$RULES"
+printf '%s\n' -500 > "$TMPROOT/clock-3327g"
+W="$(mk_repo)"; seed_issue_push "$W"
+REQUIRE_TESTS_CLOCK_FILE="$TMPROOT/clock-3327g" STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" \
+  run_hook "$W" "git push"
+want_code 0 "#3327 a clock file holding a negative number is ignored"
+
+# The first reading unreadable once is asked again too, and its second answer decides: a refusal for
+# the missing test where the push used to go through ungated.
+printf 'calc.test.js\t%s\n' "$UNREADABLE" > "$TMPROOT/once-3327h"
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_ONCE="$TMPROOT/once-3327h" STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"block\",\"changes\":[],\"missing\":[\"the add() fix\"]}"}' \
+  run_hook "$W" "git push"
+want_code 2 "#3327 a first reading unreadable once is asked again and its verdict stands"
+want_stderr "have no test covering them" "#3327 the second answer's refusal"
+# And one that never answers readably still fails open as before, saying how many times it asked.
+W="$(mk_repo)"; seed_source_and_test "$W"
+STUB_CLAUDE_OUT="$UNREADABLE" run_hook "$W" "git push"
+want_allowed_notice "#3327 a first reading never readable"
+want_stderr "asked 3 times" "#3327 the notice says how many times the first reading was asked"
 
 echo
 echo "passed: $pass, failed: $fail"

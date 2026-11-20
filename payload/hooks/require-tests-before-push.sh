@@ -31,7 +31,7 @@
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
 # Two exceptions refuse, as could not judge. A further call reading tests past the first call's
-# cut refuses when it fails: the first call has already called a change untested by then, and
+# cut refuses when it still fails after READ_TRIES tries (#3327): the first call has already called a change untested by then, and
 # before #1998 that alone refused the push, so failing open there would loosen the gate. And the
 # first call refuses when too little time is left to start it, or when it runs to a timeout the
 # deadline shortened (#2249): the hook used to be killed there, which refused with no reason.
@@ -66,6 +66,16 @@ PART_OVERLAP=4096      # bytes of a file repeated at the start of the next part,
 # REQUIRE_TESTS_DEADLINE_SECONDS sets another, for the suite; it can only end the readings sooner.
 TESTS_DEADLINE=110
 PART_MIN_SECONDS=20
+# A reading whose answer could not be read (no single JSON object, an error envelope, nothing at
+# all, or an object without the list asked for) is asked again, up to this many times in all, and
+# only while PART_MIN_SECONDS are left (claude-config#3327). Never a pass: a reading still
+# unreadable after the last try refuses as before, naming its files and how many times it was asked.
+# There is no wait between tries: a wait would spend the time the next try needs. In the judge
+# transcripts on this Mac to 2026-11-20, 5 of 199 further readings and 12 of 1,629 first readings
+# were unreadable; the five further ones were all the brace fault fixed in lib/push-changes.sh by the
+# same issue, and the twelve first ones held two different answers or a spend limit message. Whether
+# a second try on the same input misses again is not measured, so three is a setting.
+READ_TRIES=3
 
 # The notice library, loaded first because every allow below speaks through it.
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -142,6 +152,19 @@ TESTS_DEADLINE="$(whole_above_zero "${REQUIRE_TESTS_DEADLINE_SECONDS:-}" 2>/dev/
 parts_setting=""
 parts_setting="$(whole_above_zero "${REQUIRE_TESTS_MAX_PARTS:-}" 2>/dev/null)" || parts_setting=""
 [ -n "$parts_setting" ] && [ "$parts_setting" -lt "$TEST_PARTS_MAX" ] 2>/dev/null && TEST_PARTS_MAX=$parts_setting
+# The gate's clock, read against TESTS_DEADLINE: the seconds the hook has run, plus a whole number
+# above zero read from REQUIRE_TESTS_CLOCK_FILE when the suite names one, so a case can move the
+# clock past a deadline while a reading runs, with no real wait (claude-config#3327, L524). It can
+# only move the clock FORWARD, so like REQUIRE_TESTS_DEADLINE_SECONDS it can only end the readings
+# sooner, which refuses; it can never let a push through.
+gate_clock() {
+  local skew=0 v=""
+  if [ -n "${REQUIRE_TESTS_CLOCK_FILE:-}" ] && [ -r "$REQUIRE_TESTS_CLOCK_FILE" ]; then
+    IFS= read -r v < "$REQUIRE_TESTS_CLOCK_FILE" || :
+    v="$(whole_above_zero "$v" 2>/dev/null)" && skew=$v
+  fi
+  printf '%s' $(( SECONDS + skew ))
+}
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -845,79 +868,93 @@ EOF
 # Sets RT_STATE to pass (every change found tested), block (every part read, some change in none of
 # them) or cantjudge (stopped before every part was read, RT_WHY saying why and RT_UNSEEN naming the
 # test files no reading was shown in full), RT_MISSING to the changes still untested, one per line,
-# and RT_READINGS to the readings made, the first call included. $1 = the first call's missing
-# changes, one per line.
+# and RT_READINGS to the readings made, the first call and every try included. For cantjudge,
+# RT_CAUSE says which kind of stop it was, since each needs different advice (#3327): unreadable (a
+# reading asked READ_TRIES times never answered readably), notime (one unreadable with no time left
+# to ask again), time (no time to start the next wave), cap (more parts than TEST_PARTS_MAX) or
+# split (the gate's own scratch work failed). $1 = the first call's missing changes, one per line.
 judge_rest_of_tests() {
   local dir n k i left t nums part_in list obj answer covered x
   local -a miss=()
-  RT_STATE=cantjudge; RT_WHY=""; RT_UNSEEN=""; RT_MISSING="$1"; RT_READINGS=1
+  RT_STATE=cantjudge; RT_WHY=""; RT_CAUSE=""; RT_UNSEEN=""; RT_MISSING="$1"; RT_READINGS=1
   i=0
   while IFS= read -r x; do [ -n "$x" ] || continue; i=$((i+1)); miss[i]="$x"; nums="${nums:+$nums }$i"; done <<MISSING_EOF
 $1
 MISSING_EOF
-  dir="$(mktemp -d)" || { RT_WHY="the gate could not make a scratch directory to split the test changes in"; RT_UNSEEN="$tests_cut"; return 0; }
+  dir="$(mktemp -d)" || { RT_CAUSE=split; RT_WHY="the gate could not make a scratch directory to split the test changes in"; RT_UNSEEN="$tests_cut"; return 0; }
   n="$(printf '%s' "$diff_tests" | split_rest_of_tests "$t_budget" "$(( DIFF_BUDGET - ${#code_diff} ))" "$dir" 2>/dev/null)"
   if ! [ "$n" -ge 1 ] 2>/dev/null; then
-    rm -rf "$dir"; RT_WHY="the gate could not split the rest of the test changes into parts"; RT_UNSEEN="$tests_cut"; return 0
+    rm -rf "$dir"; RT_CAUSE=split; RT_WHY="the gate could not split the rest of the test changes into parts"; RT_UNSEEN="$tests_cut"; return 0
   fi
   # The parts are read in waves of up to PARTS_AT_ONCE readings made at once (#2153), each in its
   # own subshell writing what it got to files in $dir, since a background call cannot set this
   # shell's variables. A wave is started only inside the cap and with PART_MIN_SECONDS left, and
   # every reading in it is given at most the time that is left, so the wave ends by the deadline.
-  # A reading that fails or answers in a form that cannot be read ends the judging after its wave,
-  # and its part counts as unseen; a reading that leaves no result file at all counts as failed.
-  local last j p pids failed covered_all meta
+  # A reading that fails or answers in a form that cannot be read is asked again with the rest of
+  # its wave's failures, up to READ_TRIES times in all and only while PART_MIN_SECONDS are left
+  # (#3327); one still unreadable after that ends the judging, and its part counts as unseen. A
+  # reading that leaves no result file at all counts as failed. No change left untested, nothing is
+  # asked again.
+  local last j fj p pids failed covered_all meta todo again tries how
+  local -a part_err=()
   failed=""
   k=1
   while [ "$k" -le "$n" ] && [ -n "$nums" ]; do
     if [ "$k" -gt "$TEST_PARTS_MAX" ]; then
+      RT_CAUSE=cap
       RT_WHY="the test changes needed $((n + 1)) readings and the gate makes at most $((TEST_PARTS_MAX + 1)) for one push"; break
     fi
-    left=$(( TESTS_DEADLINE - SECONDS ))
+    left=$(( TESTS_DEADLINE - $(gate_clock) ))
     if [ "$left" -lt "$PART_MIN_SECONDS" ]; then
-      RT_WHY="it ran out of time: ${SECONDS} seconds had gone and the hook must finish inside 120"; break
+      RT_CAUSE=time
+      RT_WHY="it ran out of time: $(gate_clock) seconds had gone and the hook must finish inside 120"; break
     fi
     t=$JUDGE_TIMEOUT; [ "$left" -lt "$t" ] && t=$left
     last=$(( k + PARTS_AT_ONCE - 1 ))
     [ "$last" -gt "$n" ] && last=$n
     [ "$last" -gt "$TEST_PARTS_MAX" ] && last=$TEST_PARTS_MAX
-    list=""
-    for x in $nums; do list="${list}${x}. ${miss[x]}"$'\n'; done
-    pids=""
+    todo=""
     j=$k
-    while [ "$j" -le "$last" ]; do
-      part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
-        "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$j" "$n" "$(cat "$dir/part.$j")")"
-      (
-        if pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then rc=0; else rc=1; fi
-        printf '%s' "$PC_JUDGE_OBJ" > "$dir/obj.$j"
-        printf '%s' "$PC_JUDGE_ERR" > "$dir/err.$j"
-        printf '%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
-        printf '%s' "$rc" > "$dir/rc.$j"
-      ) >/dev/null 2>&1 &
-      pids="$pids $!"
-      j=$((j + 1))
-    done
-    for p in $pids; do wait "$p" 2>/dev/null || :; done
-    # The results, in part order, so the first failure named is the earliest part's.
+    while [ "$j" -le "$last" ]; do todo="$todo $j"; j=$((j + 1)); done
     covered_all=" "
-    j=$k
-    while [ "$j" -le "$last" ]; do
-      RT_READINGS=$((RT_READINGS + 1))
-      meta=""; [ -f "$dir/meta.$j" ] && IFS= read -r meta < "$dir/meta.$j"
-      # Split on a pipe, never a tab: a tab is whitespace to IFS, so empty fields would collapse.
-      IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
+    tries=1
+    while :; do
+      list=""
+      for x in $nums; do list="${list}${x}. ${miss[x]}"$'\n'; done
+      pids=""
+      for j in $todo; do
+        # A try's results replace the last try's, so a reading that dies leaves no stale answer.
+        rm -f "$dir/obj.$j" "$dir/err.$j" "$dir/meta.$j" "$dir/rc.$j"
+        part_in="$(printf 'COMMIT MESSAGES:\n%s\n\nCHANGES THE FIRST READER FOUND NO TEST FOR:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\n\n%s\n%s\n\nMORE TEST FILE CHANGES (reading %s of %s of the test changes the first reader was not shown in full):\n%s\n' \
+          "$msgs" "$list" "$failure_files" "$c_label" "$code_diff" "$j" "$n" "$(cat "$dir/part.$j")")"
+        (
+          if pc_judge "$JUDGE_MODEL" "$t" "$PART_RUBRIC" "$part_in"; then rc=0; else rc=1; fi
+          printf '%s' "$PC_JUDGE_OBJ" > "$dir/obj.$j"
+          printf '%s' "$PC_JUDGE_ERR" > "$dir/err.$j"
+          printf '%s|%s|%s|%s|%s\n' "$PC_JUDGE_START" "$PC_JUDGE_END" "$PC_JUDGE_BYTES" "$PC_JUDGE_MS" "$PC_JUDGE_COST" > "$dir/meta.$j"
+          printf '%s' "$rc" > "$dir/rc.$j"
+        ) >/dev/null 2>&1 &
+        pids="$pids $!"
+      done
+      for p in $pids; do wait "$p" 2>/dev/null || :; done
+      # The results, in part order, so the first failure named is the earliest part's.
+      again=""
+      for j in $todo; do
+        RT_READINGS=$((RT_READINGS + 1))
+        meta=""; [ -f "$dir/meta.$j" ] && IFS= read -r meta < "$dir/meta.$j"
+        # Split on a pipe, never a tab: a tab is whitespace to IFS, so empty fields would collapse.
+        IFS='|' read -r PC_JUDGE_START PC_JUDGE_END PC_JUDGE_BYTES PC_JUDGE_MS PC_JUDGE_COST <<META_EOF
 $meta
 META_EOF
-      add_call_cost
-      if [ "$(cat "$dir/rc.$j" 2>/dev/null)" != 0 ]; then
-        PC_JUDGE_ERR="$(cat "$dir/err.$j" 2>/dev/null)"
-        [ -n "$PC_JUDGE_ERR" ] || PC_JUDGE_ERR="the reading left no result behind"
-        [ -n "$RT_WHY" ] || RT_WHY="reading $j of the rest failed: $PC_JUDGE_ERR"
-        failed="$failed $j"; j=$((j + 1)); continue
-      fi
-      PC_JUDGE_OBJ="$(cat "$dir/obj.$j" 2>/dev/null)"
-      answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
+        add_call_cost
+        if [ "$(cat "$dir/rc.$j" 2>/dev/null)" != 0 ]; then
+          PC_JUDGE_ERR="$(cat "$dir/err.$j" 2>/dev/null)"
+          [ -n "$PC_JUDGE_ERR" ] || PC_JUDGE_ERR="the reading left no result behind"
+          part_err[j]="$PC_JUDGE_ERR"
+          again="$again $j"; continue
+        fi
+        PC_JUDGE_OBJ="$(cat "$dir/obj.$j" 2>/dev/null)"
+        answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
 sys.stdout.reconfigure(errors="replace")
 try:
@@ -930,16 +967,34 @@ try:
 except Exception:
     print("ERR")
 ' 2>/dev/null)"
-      case "$answer" in
-        OK*) covered_all="${covered_all}${answer#OK} " ;;
-        *) [ -n "$RT_WHY" ] || RT_WHY="reading $j of the rest answered without a list of covered changes, so its answer could not be read"
-           failed="$failed $j" ;;
-      esac
-      j=$((j + 1))
+        case "$answer" in
+          OK*) covered_all="${covered_all}${answer#OK} " ;;
+          *) part_err[j]="it answered without a list of covered changes, so its answer could not be read"
+             again="$again $j" ;;
+        esac
+      done
+      local still=""
+      for x in $nums; do case "$covered_all" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
+      nums="$still"
+      todo="$again"
+      # Nothing left to ask, or every change already found tested by the readings that answered.
+      { [ -n "$todo" ] && [ -n "$nums" ]; } || { todo=""; break; }
+      [ "$tries" -lt "$READ_TRIES" ] || { RT_CAUSE=unreadable; break; }
+      left=$(( TESTS_DEADLINE - $(gate_clock) ))
+      [ "$left" -ge "$PART_MIN_SECONDS" ] || { RT_CAUSE=notime; break; }
+      t=$JUDGE_TIMEOUT; [ "$left" -lt "$t" ] && t=$left
+      tries=$((tries + 1))
     done
-    local still=""
-    for x in $nums; do case "$covered_all" in *" $x "*) ;; *) still="${still:+$still }$x" ;; esac; done
-    nums="$still"
+    if [ -n "$todo" ]; then
+      failed="$todo"
+      fj="${todo# }"; fj="${fj%% *}"
+      how="time"; [ "$tries" -gt 1 ] && how="times"
+      case "$todo" in
+        " $fj") RT_WHY="reading $fj of the rest was asked $tries $how and never answered in a form the gate could read: ${part_err[fj]}" ;;
+        *) RT_WHY="readings$todo of the rest were each asked $tries $how and never answered in a form the gate could read (reading $fj: ${part_err[fj]})" ;;
+      esac
+      [ "$RT_CAUSE" = notime ] && RT_WHY="$RT_WHY; there was no time to ask again: $(gate_clock) seconds had gone and the hook must finish inside 120"
+    fi
     k=$((last + 1))
     [ -z "$RT_WHY" ] || break
   done
@@ -972,15 +1027,24 @@ except Exception:
 # refused as could not judge. Each changed outcome is a refusal where the old one was a kill or a
 # call answering in the hook's last seconds; a full length call that fails still fails open. Every
 # number in this paragraph is a setting, not measured.
-first_left=$(( TESTS_DEADLINE - SECONDS ))
+first_left=$(( TESTS_DEADLINE - $(gate_clock) ))
 first_t=$JUDGE_TIMEOUT; [ "$first_left" -lt "$first_t" ] && first_t=$first_left
+# What the gate reads, said in every could not judge refusal, because the advice it gave before
+# #3327, to push fewer commits, did nothing: pc_resolve reads from where the CHECKED OUT commit
+# leaves its base up to that commit, whatever commits the push command names, and a branch whose in
+# between commits are red cannot be pushed one at a time past the whole repository scanners anyway.
+range_note() {
+  printf 'The gate reads every commit the checked out commit adds to %s, whichever commits\nthe push command names, so pushing one commit at a time does not make it read less.\n' "${PC_BASE:-its base}"
+}
 first_cut() {   # $1 = why the reading was not made or not finished
   refuse cantjudge "$1" "${2:-}" <<REFUSAL
 PUSH BLOCKED: the test gate could not judge this push.
 
 $1, so the reviewer never answered. A gate that could not read the push does
-not approve it. Push fewer commits at a time (one commit, or split the branch) so the
-gate has less to read before it asks, then push again.
+not approve it. Nothing in the push needs to change for this: how long the gate takes
+depends on how busy the Mac is, so send the same push again, when fewer test suites are
+running if you can.
+$(range_note)
 $(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that every change in this push IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
@@ -990,20 +1054,48 @@ makes sense. Never override silently.
 REFUSAL
 }
 if [ "$first_left" -lt "$PART_MIN_SECONDS" ]; then
-  first_cut "The gate ran out of time before its first reading: ${SECONDS} seconds had gone reading the push, and the hook must finish inside 120"
+  first_cut "The gate ran out of time before its first reading: $(gate_clock) seconds had gone reading the push, and the hook must finish inside 120"
 fi
-if ! pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input"; then
+# The first reading, asked again while its answer could not be read (no single JSON object, an
+# error envelope, or nothing at all), up to READ_TRIES times in all and only with PART_MIN_SECONDS
+# left (#3327). A reading that timed out is not asked again: the deadline checks below decide it.
+# Every try but the last is added to the record's cost here; first_t and first_left are the last
+# try's, which the deadline checks read.
+FIRST_TRIES=0
+first_reading() {
+  while :; do
+    FIRST_TRIES=$((FIRST_TRIES + 1))
+    pc_judge "$JUDGE_MODEL" "$first_t" "$RUBRIC" "$judge_input" && return 0
+    case "$PC_JUDGE_ERR" in
+      "judge verdict was not readable JSON"|"judge returned an error envelope"|"judge unreachable"*) ;;
+      *) return 1 ;;
+    esac
+    [ "$FIRST_TRIES" -lt "$READ_TRIES" ] || return 1
+    first_left=$(( TESTS_DEADLINE - $(gate_clock) ))
+    [ "$first_left" -ge "$PART_MIN_SECONDS" ] || return 1
+    add_call_cost
+    first_t=$JUDGE_TIMEOUT; [ "$first_left" -lt "$first_t" ] && first_t=$first_left
+  done
+}
+if ! first_reading; then
+  # The last try's own times, before the record's sum over every try replaces them.
+  last_start="$PC_JUDGE_START"; last_end="$PC_JUDGE_END"
+  if [ "$FIRST_TRIES" -gt 1 ]; then
+    add_call_cost; use_call_costs
+    PC_JUDGE_ERR="$PC_JUDGE_ERR, asked $FIRST_TRIES times"
+  fi
   if [ "$first_t" -lt "$JUDGE_TIMEOUT" ]; then
     case "$PC_JUDGE_ERR" in
       "judge timed out"*) first_cut "The first reading was cut short at the gate's deadline: it started ${first_left} seconds before it, short of the ${JUDGE_TIMEOUT} a reading may take, and the hook must finish inside 120" judged ;;
     esac
-    if [ -n "$PC_JUDGE_START" ] && [ -n "$PC_JUDGE_END" ] && [ $(( PC_JUDGE_END - PC_JUDGE_START )) -ge "$first_t" ]; then
+    if [ -n "$last_start" ] && [ -n "$last_end" ] && [ $(( last_end - last_start )) -ge "$first_t" ]; then
       first_cut "The first reading ran to the gate's deadline without an answer ($PC_JUDGE_ERR), and the hook must finish inside 120" judged
     fi
   fi
   fail_open "$PC_JUDGE_ERR" judged
 fi
 add_call_cost
+if [ "$FIRST_TRIES" -gt 1 ]; then use_call_costs; fi
 
 verdict="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
 import sys, json
@@ -1030,7 +1122,8 @@ case "$verdict" in
     # that tests are missing: a test past the cut reads to it exactly like no test (#723, L11). So
     # the rest of the tests is read in further calls (#1998, step 6 above). What those calls could
     # not read is refused as COULD NOT JUDGE, naming its files, rather than waved through: a gate
-    # that could not read the push does not approve it (L42), and a smaller push is always judgeable.
+    # that could not read the push does not approve it (L42). A reading that could not be read was
+    # first asked again (#3327), and the refusal's advice depends on why the gate stopped.
     if [ -n "$tests_cut" ]; then
       judge_rest_of_tests "$(printf '%s\n' "$verdict" | sed '1d; s/^  - //')"
       use_call_costs
@@ -1047,7 +1140,17 @@ for the changes above."$'\n\n' ;;
       earlier_fit=""
       [ "${#EARLIER_TESTS[@]}" -gt 0 ] && earlier_fit="The tests this branch pushed earlier are read with every push of it, so a smaller
 push does not make them smaller; if they alone are too many, split the branch."$'\n'
-      refuse cantjudge "$missing_detail" judged <<REFUSAL
+      # What to do, by why the gate stopped (#3327). Only the cap is about the push's size; the rest
+      # are the reviewer or the clock, which the same push sent again can get past.
+      case "$RT_CAUSE" in
+        cap) rt_advice="The branch's test changes are more than the gate reads for one push. Move a self
+contained part of the work to its own branch cut from ${PC_BASE:-its base} and push that first." ;;
+        time) rt_advice="Nothing in the push needs to change for this: how long the readings take depends on
+how busy the Mac is, so send the same push again, when fewer test suites are running if you can." ;;
+        *) rt_advice="This was the reviewer failing to answer, not a finding about the push. Nothing in it
+needs to change: send the same push again, and every reading is asked afresh." ;;
+      esac
+      refuse cantjudge "$RT_WHY; called untested: $missing_detail" judged <<REFUSAL
 PUSH BLOCKED: the test gate could not judge this push in full.
 
 The reviewer said these changes have no test:
@@ -1060,8 +1163,9 @@ $RT_WHY.
 These test files were not shown in full to any reading that answered:
     $RT_UNSEEN
 A test in one of them reads to the reviewer exactly like no test, so this is not a
-finding that tests are missing. Push fewer commits at a time (one commit, or split the
-branch) so each push's tests fit, then push again.
+finding that tests are missing.
+$rt_advice
+$(range_note)
 ${earlier_fit}$(widened_note; merge_note; branch_note; modkit_note)
 OVERRIDE: if you have checked that each change named above IS tested, re-run with:
     SKIP_TEST_CHECK=1 <your original git push command>
