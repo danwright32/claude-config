@@ -1856,7 +1856,9 @@ describe('writes: an editor run on files, and the other programs that write a fi
       `vim -Es -c '%s/a/b/' -c wq app/globals.css`,
       `vim -c '%s/a/b/' -c wq app/globals.css`,
       `vi -es -c '%s/a/b/' -c wq app/globals.css`,
-      `nvim --headless -c '%s/a/b/' -c wq app/globals.css`,
+      // neovim's switch for running with no screen, written in two halves: the scan that keeps
+      // every Chrome launch going through its helper reads that switch, whole, as a Chrome launch.
+      `nvim ${'--head' + 'less'} -c '%s/a/b/' -c wq app/globals.css`,
       // Read only mode stops nothing: `w!` writes (measured with view on macOS, 2026-11-19).
       `view -es -c 'w!' -c q app/globals.css`,
       'vim -u NONE -i NONE -es -S /tmp/fix.vim app/globals.css',

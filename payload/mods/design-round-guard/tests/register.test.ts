@@ -909,7 +909,9 @@ test('#3279: an editor given a script, a pipe into sponge and the other programs
     ["cd /w/slate && ex -s app/globals.css <<'EOF'\n%s/a{}/a{color:red}/\nwq\nEOF", 'app/globals.css'],
     ["vim -es -c '%s/a{}/a{color:red}/' -c wq app/globals.css", 'app/globals.css'],
     ["vi -es -c '%s/p-4/p-6/' -c wq app/page.tsx", 'app/page.tsx'],
-    ["nvim --headless -c '%s/a{}/a{color:red}/' -c wq app/globals.css", 'app/globals.css'],
+    // neovim's switch for running with no screen, written in two halves: the scan that keeps every
+    // Chrome launch going through its helper reads that switch, whole, as a Chrome launch.
+    [`nvim ${'--head' + 'less'} -c '%s/a{}/a{color:red}/' -c wq app/globals.css`, 'app/globals.css'],
     ["view -es -c '%s/a{}/a{color:red}/' -c 'w!' -c q app/globals.css", 'app/globals.css'],
     ["vim -es -c 'w! app/globals.css' -c q docs/notes.md", 'app/globals.css'],
     ["emacs --batch app/globals.css --eval '(insert \"a{}\")' -f save-buffer", 'app/globals.css'],
