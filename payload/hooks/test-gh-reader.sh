@@ -100,7 +100,7 @@ asks(){ # asks <predicate words...> -- <command> : prints yes or no
   local cmd="${*: -1}"; local -a q=("${@:1:$#-2}")
   bash -c '. "$1/lib/push-scope.sh"; shift; c="$1"; shift; if "$@" "$c"; then echo yes; else echo no; fi' _ "$DIR" "$cmd" "${q[@]}"
 }
-runs(){ bash -c '. "$1/lib/push-scope.sh"; if ps_runs_gh "$2" "$3" "$4"; then printf "yes:%s" "${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$@"; }
+runs(){ bash -c ". \"$DIR/lib/push-scope.sh\"; if ps_runs_gh \"\$1\" \"\$2\" \"\$3\"; then printf 'yes:%s' \"\${PS_RUN_ARGS[*]-}\"; else echo no; fi" _ "$@"; }
 check_eq "ps_runs_gh sees pr create behind -R in front" "yes:-R o/x --fill" "$(runs 'gh -R o/x pr create --fill' pr create)"
 check_eq "ps_runs_gh sees pr edit behind env and a flag between" "yes:-R o/x 3" "$(runs 'env A=1 gh pr -R o/x edit 3' pr edit)"
 check_eq "ps_runs_gh does not take pr view for pr create" "no" "$(runs 'gh -R o/x pr view 3' pr create)"
@@ -249,7 +249,7 @@ check_eq "#1478 and through eval" "yes" "$(asks ps_is_git_push -- "eval '$G push
 check_eq "#1478 control: not one in echo" "no" "$(asks ps_is_git_push -- "echo \"bash -c '$G push'\"")"
 check_eq "#1478 ps_is_gh_pr_create sees one in sh -c" "yes" "$(asks ps_is_gh_pr_create -- "sh -c 'gh pr create --fill'")"
 check_eq "#1478 ps_is_git_commit sees one through rtk proxy" "yes" "$(asks ps_is_git_commit -- "rtk proxy $G commit -m x")"
-unread(){ bash -c '. "$1/lib/push-scope.sh"; if ps_unreadable "$2"; then printf "%s|%s" "$PS_UNREAD_WRAPPER" "$PS_UNREAD_WHY"; else echo none; fi' _ "$DIR" "$1"; }
+unread(){ bash -c ". \"$DIR/lib/push-scope.sh\"; if ps_unreadable \"\$1\"; then printf '%s|%s' \"\$PS_UNREAD_WRAPPER\" \"\$PS_UNREAD_WHY\"; else echo none; fi" _ "$1"; }
 u="$(unread 'X=1; bash -c "$CMD"')"
 check_eq "#1478 ps_unreadable names the wrapper" "bash -c" "${u%%|*}"
 case "$u" in *"variable"*) ok ;; *) bad "#1478 and says why it cannot be read: $u" ;; esac
@@ -408,6 +408,103 @@ for want in "position.sh:3:" "position.sh:4:" "lib/position.py:1:" "lib/position
 done
 case "$out" in *"position.sh:2:"*) bad "a comment naming the command is not a reading: $out" ;; *) ok ;; esac
 case "$out" in *"findings=6"*) ok ;; *) bad "exactly the six readings are flagged: $out" ;; esac
+
+# --- a redirection glued to a word or written among the words, and a function's body (#3252) ------
+# The shell ends a word at a redirection's operator and takes every redirection out of a command
+# before it reads the words, so `$G>/dev/null push`, `$G 2>/dev/null push` and `$G push>/dev/null`
+# each run a push. The reader took the first for a program named $G>/dev/null, the second for a
+# subcommand named 2>/dev/null and the third for one named push>/dev/null, so no gate asking for a
+# push saw one. The same for a runner (`env>/dev/null`), a redirection among a runner's options, a
+# cd, and the words a caller split itself. A function's body was unread twice over: its first
+# command was a program named f(), and a body written as a subshell was one command whole. These
+# strings are read, never run.
+each_tool(){ # each_tool <command>: the tool reading of every record, " ; " between them
+  printf '%s' "$1" | python3 -B "$SW" read | python3 -c '
+import sys
+print(" ; ".join(r.split("\x1c")[7].rstrip("\n").replace("\x1d", "|").replace("\x1f", ",") or "-" for r in sys.stdin.read().split("\x1e") if r.strip("\n")))'
+}
+each_dir(){ # each_dir <command>: the directory of every command, " ; " between them
+  printf '%s' "$1" | python3 -B "$SW" commands | python3 -c '
+import sys
+print(" ; ".join(r.split("\x1f")[0] or "-" for r in sys.stdin.read().split("\x1e") if r.strip("\n")))'
+}
+words_of(){ printf '%s' "$1" | python3 -B "$SW" words | tr '\037' ','; }
+check_eq "#3252 a redirection glued to the name" "$G|push||origin,main,>/dev/null" "$(reading "$G>/dev/null push origin main")"
+check_eq "#3252 an append glued to the name" "$G|push||>>log" "$(reading "$G>>log push")"
+check_eq "#3252 both streams glued to the name" "$G|push||&>/dev/null" "$(reading "$G&>/dev/null push")"
+check_eq "#3252 a copied descriptor glued to the name" "$G|push||>&2" "$(reading "$G>&2 push")"
+check_eq "#3252 input glued to the name" "$G|push||</dev/null" "$(reading "$G</dev/null push")"
+check_eq "#3252 a redirection of its own between the name and the subcommand" "$G|push||origin,main,2>/dev/null" "$(reading "$G 2>/dev/null push origin main")"
+check_eq "#3252 an operator and its target between the name and the subcommand" "$G|push||origin,main,>,/dev/null" "$(reading "$G > /dev/null push origin main")"
+check_eq "#3252 a redirection glued to the subcommand" "$G|push||>/dev/null,origin,main" "$(reading "$G push>/dev/null origin main")"
+check_eq "#3252 a redirection glued to the last word" "$G|push||origin,main,>/dev/null" "$(reading "$G push origin main>/dev/null")"
+check_eq "#3252 gh, glued to the name" "gh|pr|merge|7,>/dev/null" "$(reading 'gh>/dev/null pr merge 7')"
+check_eq "#3252 gh, glued to the subcommand" "gh|pr|merge|7,>/dev/null" "$(reading 'gh pr>/dev/null merge 7')"
+check_eq "#3252 gh, glued to the action" "gh|pr|merge|>/dev/null,7" "$(reading 'gh pr merge>/dev/null 7')"
+check_eq "#3252 gh, a redirection of its own before the subcommand" "gh|pr|merge|7,2>/dev/null" "$(reading 'gh 2>/dev/null pr merge 7')"
+check_eq "#3252 glued to rtk in front" "$G|push||" "$(reading "rtk>/dev/null $G push")"
+check_eq "#3252 glued to env in front" "$G|push||" "$(reading "env>/dev/null $G push")"
+check_eq "#3252 a redirection before a runner's positional" "$G|push||" "$(reading "timeout 2>/dev/null 30 $G push")"
+check_eq "#3252 a redirection before a runner's option" "gh|pr|merge|7" "$(reading 'env 2>/dev/null -u X gh pr merge 7')"
+check_eq "#3252 a redirection before rtk's own subcommand" "rtk|init||-g" "$(reading 'rtk 2>/dev/null init -g')"
+check_eq "#3252 a shell's string read past a redirection glued to the shell" "bash -c ; -" "$(redir_read "$SW" wrap "bash>log -c '$G push'")"
+check_eq "#3252 and the push in that string is read" "- ; $G|push||" "$(each_tool "bash>/dev/null -c '$G push'")"
+check_eq "#3252 a program with a redirection glued on is no wrapper" "-" "$(redir_read "$SW" wrap "$G>>log push")"
+# A real script file with a redirection glued on is reported by its true name, never by the kept
+# report below, which would name a file called ./build.sh>log (the lessons review at 6909f22).
+check_eq "#3252 a script file with a redirection glued on keeps its true name" "direct|it runs the script file ./build.sh, whose commands are in the file, not the command" "$(redir_read "$SW" wrap "./build.sh>log")"
+# Kept as it was: a glued redirection holding a slash made the name read as a script file, which
+# check-wrapped-commands.sh refuses beside git, gh or rtk. The report stays, word for word, beside
+# the true reading, until Dan decides whether that refusal goes (glued_script).
+check_eq "#3252 kept: a redirection holding a slash glued to the name is still reported as a script file" "direct|it runs the script file $G>/dev/null, whose commands are in the file, not the command" "$(redir_read "$SW" wrap "$G>/dev/null push")"
+check_eq "#3252 kept: and read as the push it is beside that" "$G|push||>/dev/null" "$(each_tool "$G>/dev/null push")"
+check_eq "#3252 kept: a shell so written is still reported as one, its string read after it" "direct|it runs the script file bash>/dev/null, whose commands are in the file, not the command ; -" "$(redir_read "$SW" wrap "bash>/dev/null -c '$G push'")"
+check_eq "#3252 kept: a program in a system folder was never a script file, glued or not" "-" "$(redir_read "$SW" wrap "/usr/bin/$G>/dev/null status")"
+check_eq "#3252 a cd with a redirection glued on moves the commands after it" "- ; /x" "$(each_dir "cd>/dev/null /x && $G push")"
+check_eq "#3252 the first command of a function's body" "$G|push||" "$(reading "f() { $G push")"
+check_eq "#3252 and behind the function keyword" "gh|pr|merge|7" "$(reading 'function f { gh pr merge 7')"
+check_eq "#3252 a body that is one command, as zsh takes it" "$G|push||" "$(reading "f() $G push")"
+check_eq "#3252 a body written as a subshell is read a command at a time" "$G|push|| ; -" "$(each_tool "f() ( $G push ); f")"
+check_eq "#3252 and every command of it" "- ; $G|push||origin ; -" "$(each_tool "f() ( true; $G push origin ); f")"
+check_eq "#3252 and a shell fed by a pipe inside it is seen" "- ; bash|it reads its commands from its input (a pipe, a here string, a heredoc or a file) ; -" "$(redir_read "$SW" wrap 'f() ( sort ok.sh | bash ); f')"
+check_eq "#3252 words a caller split with shlex: glued to the name" "$G|push|" "$(words_read "$SW" split "$G>/dev/null push")"
+check_eq "#3252 words a caller split with shlex: glued to the subcommand" "$G|push|" "$(words_read "$SW" split "$G push>/dev/null origin")"
+check_eq "#3252 words a caller split with shlex: glued to a runner" "gh|pr|merge" "$(words_read "$SW" split 'env>/dev/null gh pr merge 7')"
+check_eq "#3252 tokens: an operator and its target before the subcommand" "gh|pr|merge" "$(words_read "$SW" tokens 'gh > /dev/null pr merge 7')"
+check_eq "#3252 tokens: glued to the name" "gh|issue|create" "$(words_read "$SW" tokens 'gh>/dev/null issue create --title T')"
+# What must read exactly as it did: text that only looks like a redirection.
+check_eq "#3252 control: a redirection written last stays where it is" "$G|push||origin,2>&1" "$(reading "$G push origin 2>&1")"
+check_eq "#3252 control: a quoted message holding > is the message" "$G|commit||-m,a -> b,-m,c>d" "$(reading "$G commit -m \"a -> b\" -m 'c>d'")"
+check_eq "#3252 control: a quoted name holding > is a program of that name" "" "$(reading "'$G>/dev/null' push")"
+check_eq "#3252 control: an escaped > is part of the word" "" "$(reading "$G\\>x push")"
+check_eq "#3252 control: arithmetic, quotes and an escape are text" 'echo,$((1<2)),a>b,a>b,c<d,>out' "$(words_of 'echo $((1<2)) "a>b" a\>b '"'c<d'"' >out')"
+check_eq "#3252 control: a test compares and redirects nothing" "[[,a<b,]]" "$(words_of '[[ a<b ]]')"
+check_eq "#3252 a number ending a word is the word's, and the redirection after it a word of its own" "foo2,>out,bar" "$(words_of 'foo2>out bar')"
+check_eq "#3252 control: and written so it stays with its redirection" "echo,2>out" "$(words_of 'echo 2>out')"
+check_eq "#3252 control: zsh's numeric range is a word" "ls,file<1-10>.txt" "$(words_of 'ls file<1-10>.txt')"
+check_eq "#3252 the empty parentheses after the function keyword open no body, and the braces' first command is read" "$G|push|| ; - ; -" "$(each_tool "function f () { $G push; }; f")"
+check_eq "#3252 control: a call of a function is no definition" "-" "$(each_tool 'f')"
+# A string the first command of a function's body hands a shell is one nobody read before the
+# header was passed over. headed_string says which commands those are, for a caller that reads such
+# a string another way (the Slack drafts gate), and names no command whose string was read before.
+headed(){ # headed <one command's text>: wrapper|string where only the header hid its string, else -
+  python3 -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+found = sw.headed_string(sys.argv[2])
+print("|".join(found) if found else "-")' "$SW" "$1"
+}
+check_eq "#3252 a string handed a shell behind a function's header" "bash -c|echo hi" "$(headed 'f() { bash -c "echo hi"')"
+check_eq "#3252 and behind the function keyword" "sh -c|echo hi" "$(headed 'function f { sh -c "echo hi"')"
+check_eq "#3252 and where the body is the one command, as zsh takes it" "bash -c|echo hi" "$(headed 'f() bash -c "echo hi"')"
+check_eq "#3252 and behind a runner inside the body" "bash -c|echo hi" "$(headed 'f() { sudo bash -c "echo hi"')"
+check_eq "#3252 control: the same command with no header was always read" "-" "$(headed 'bash -c "echo hi"')"
+check_eq "#3252 control: and behind a reserved word alone" "-" "$(headed '{ bash -c "echo hi"')"
+check_eq "#3252 control: a header before a command that hands no string" "-" "$(headed "f() { $G push")"
+check_eq "#3252 control: a header before a shell handed a file, whose commands are not in the command" "-" "$(headed 'f() { bash ./x.sh')"
+check_eq "#3252 control: a function named as eval is, whose words were read before as eval's string" "-" "$(headed 'eval () { bash -c "echo hi"')"
 
 mkdir -p "$WORK/empty"
 scan "$WORK/empty"

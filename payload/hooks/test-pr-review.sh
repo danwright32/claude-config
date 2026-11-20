@@ -225,7 +225,7 @@ path_without(){ # path_without <directory name> <tool pattern>...
   printf '%s' "$dest"
 }
 prr(){ bash "$LIB" "$@" 2>&1; }
-key(){ bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repo_key '$REPO'"; }
+key(){ bash -c ". \"$DIR/lib/ai-review-common.sh\"; ar_repo_key '$REPO'"; }
 KEY="$(key)"
 final_of(){ printf '%s/%s-pr-%s.txt' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
 wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L290), with the hang
@@ -266,7 +266,7 @@ none_answered(){ check_eq "$1" "" "$(answered_of "$2")"; } # none_answered <name
 # ===========================================================================================
 # 1. Recognising `gh pr create` in command position, never a mention of it (L673).
 # ===========================================================================================
-is_create(){ bash -c ". '$DIR/lib/push-scope.sh'; ps_is_gh_pr_create \"\$1\"" _ "$1"; }
+is_create(){ bash -c ". \"$DIR/lib/push-scope.sh\"; ps_is_gh_pr_create \"\$1\"" _ "$1"; }
 for c in 'gh pr create --fill' \
          'GH_TOKEN=$(gh auth token -u danwright32) gh pr create --title x --body y' \
          'cd /tmp/x && gh pr create --base main' \
@@ -738,7 +738,7 @@ check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -
 #      it only through the helper. So the reviewer runner writes a "review" record for its own pid,
 #      good until its deadline plus slack, and removes it when it ends; one that crashes names a pid
 #      no longer running, which no reader believes (L409, L617).
-reviews_busy(){ bash -c ". '$DIR/lib/merge-turn.sh' && . '$DIR/lib/merge-phase.sh' && mp_reviews_busy \$(date +%s)"; }
+reviews_busy(){ bash -c ". \"$DIR/lib/merge-turn.sh\" && . \"$DIR/lib/merge-phase.sh\" && mp_reviews_busy \$(date +%s)"; }
 reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null

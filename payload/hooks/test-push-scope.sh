@@ -2450,6 +2450,22 @@ r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_push_source "git push
   || check "#3112 with no reader a push of the branch checked out is still let through" "exit $rc, printed [$r]"
 rm -rf "$RS"
 
+# A redirection glued to a word, or written among the words, and a function's body (claude-config
+# #3252). The shell runs each of these as a push; the shared reader named the program git>/dev/null,
+# or the subcommand 2>/dev/null or push>/dev/null, so ps_is_git_push saw none. The reader is fixed
+# in lib/shell-words.py; these hold that the fix reaches the push question every push gate asks.
+want_push "git>/dev/null push origin main" "#3252 a redirection glued to git's name is still a push"
+want_push "git>>log push" "#3252 an append glued to git's name is still a push"
+want_push "git 2>/dev/null push origin main" "#3252 a redirection between git and push is still a push"
+want_push "git > /dev/null push" "#3252 an operator and its target between git and push is still a push"
+want_push "git push>/dev/null origin main" "#3252 a redirection glued to push is still a push"
+want_push "env>/dev/null git push" "#3252 a redirection glued to a runner in front is still a push"
+want_push "timeout 2>/dev/null 30 git push" "#3252 a redirection before a runner's duration is still a push"
+want_push "f() { git push; }; f" "#3252 the first command of a function's body is read"
+want_push "f() ( git push ); f" "#3252 a function body written as a subshell is read"
+want_notpush "echo 'git>/dev/null push'" "#3252 control: the same text quoted as an argument is no push"
+want_notpush "git status>/dev/null" "#3252 control: another subcommand with a redirection glued on is no push"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
