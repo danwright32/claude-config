@@ -55,6 +55,11 @@
 #                 never removed, and "volume prune" and "system prune" are refused by name.
 #   derived-data  hooks/derived-data-sweep.sh --remove-one <folder>, which takes the automatic sweep's
 #                 own lock and judges the folder again with the orphan rule before removing it.
+#   pnpm          the one target "store prune", which runs pnpm's own `pnpm store prune` and nothing
+#                 else (Dan, 2026-11-19, recorded on #3235: "Offer a prune row"). This tool removes
+#                 no file of the store itself: pnpm decides what no project uses. Taken only for the
+#                 package-caches kind, and only when pnpm says its store is a real folder directly
+#                 inside ~/Library/pnpm/store. Checked by the store's size before and after.
 #
 # THE JUDGE. A category is a module, payload/skills/disk-clean/categories/<category>.sh, run as
 # `<module> judge <target>` with DISK_CLEAN_CATEGORY set to its name. It prints ONE line: `offerable`,
@@ -92,8 +97,8 @@
 # HOME and TMPDIR, each inside the throwaway directory; outside test mode they are HOME, /private/tmp
 # and /private/var/folders.
 #
-# bash 3.2 safe. Commands: awk cat date df du git docker lsof ln mkdir mktemp mv readlink rm stat tee
-# tmutil, the trash and derived-data sweep above, and the category modules.
+# bash 3.2 safe. Commands: awk cat date df du git docker lsof ln mkdir mktemp mv pnpm readlink rm stat
+# tee tmutil, the trash and derived-data sweep above, and the category modules.
 set -uo pipefail
 
 LIB="${BASH_SOURCE[0]%/*}"; [ "$LIB" != "${BASH_SOURCE[0]}" ] || LIB=.
@@ -164,11 +169,31 @@ allowed_root() { # <physical path>
 # exactly four levels under session-notes (session-notes/<project>/<session>/<task>/<folder>, the
 # shape lib/disk-clean-predicates.sh's dc_notes_shape reads) is let past this list to its judge when
 # path_checks set NOTES_OK for the item, and NOTES_USED then says the exception was taken. Nothing
-# else under the state folder is: session-notes itself, a project, a session, a task folder, and
-# anything five or more levels down stay refused here.
+# else under the state folder is: session-notes itself, a project, a session, a task folder (but
+# for the second exception below), and anything five or more levels down stay refused here.
+#
+# THE SAME SHAPE, FOR A SESSION STILL OPEN (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle
+# days"). That decision signs off a task folder's bulky folders, in a session still open, reaching
+# their judge. They are folders of this same four level shape, so no path is let past this list
+# that was not before: what changed is which of them the judge takes. This list never asked whether
+# a session had ended; the judge did, and still does for a folder of images or documents.
+#
+# A SECOND EXCEPTION, a task folder that is a git checkout (Dan, 2026-11-19, recorded on #3235:
+# "Offer when git says safe"). The daily keep rules keep a git checkout in an ended session's notes,
+# since it may hold work that exists nowhere else, and keep a task folder whole when it is one
+# itself. A checkout in a task folder is the four level shape above. A task folder that is one is
+# exactly three levels under session-notes (dc_notes_task_shape), and is let past this list on the
+# same terms: only for the claude-records kind going to the Trash, and path_checks then holds it to
+# dc_notes_checkout, a real folder reached by its own path that git says holds its own repository
+# (never a worktree or submodule of one elsewhere). So a task folder that is not such a checkout
+# stays refused here, whatever a judge would say. Whether its
+# session has ended and whether git calls it safe are the judge's to say.
 STATE_DENY="it is Claude Code's own state, this tool's records among it"
-# The category whose judge answers for a session notes folder: it takes one only when the daily
-# keep rules list it and nothing in it was changed or opened in 30 days (categories/claude-records.sh).
+# The category whose judge answers for a session notes folder (categories/claude-records.sh). It
+# takes one only when the daily keep rules list it, by their own rules: as an ended session's folder
+# of images or documents, with nothing in it changed or opened in 30 days, or as a bulky leftover
+# in a session still open, with nothing in its task folder changed or opened in 7 days and no live
+# session working there.
 NOTES_CATEGORY=claude-records
 NOTES_OK="" NOTES_USED=""
 deny_reason() { # <path>
@@ -196,10 +221,12 @@ deny_reason() { # <path>
     "$H/.pcloud"|"$H/.pcloud/"*|"$H/pCloud Drive"|"$H/pCloud Drive/"*) DENY='it is the store of pCloud, a sync client'; return 0 ;;
     "$H/.ssh"|"$H/.ssh/"*|"$H/.gnupg"|"$H/.gnupg/"*) DENY='it holds keys and credentials'; return 0 ;;
     "$H/.claude/state"|"$H/.claude/state/"*)
-      # The one exception (Dan, 2026-11-19, recorded on #3235: "Allow it"): a folder exactly four
-      # levels under session-notes, and only for an item path_checks opened it to (NOTES_OK). It is
-      # not removed by this: it reaches its judge, and path_checks then holds it to dc_notes_folder.
-      if [ -n "$NOTES_OK" ] && dc_notes_shape "$p" "$H"; then NOTES_USED=1
+      # The two exceptions (Dan, 2026-11-19, recorded on #3235: "Allow it" and "Offer when git says
+      # safe"): a folder exactly four levels under session-notes, or a task folder exactly three,
+      # and only for an item path_checks opened them to (NOTES_OK). Neither is removed by this: it
+      # reaches its judge, and path_checks then holds it to dc_notes_item, which takes a task
+      # folder only when it is a git checkout holding its own repository.
+      if [ -n "$NOTES_OK" ] && { dc_notes_shape "$p" "$H" || dc_notes_task_shape "$p" "$H"; }; then NOTES_USED=1
       else DENY="$STATE_DENY"; return 0; fi ;;
     "$H/.local"|"$H/.cache"|"$H/.config"|"$H/.claude"|"$H/.docker"|"$H/.Trash"|"$H/.vscode"|"$H/.nvm"|"$H/.cargo"|"$H/.rustup")
       DENY="it is the dotfolder ${p##*/} itself, which this tool never removes whole"; return 0 ;;
@@ -359,12 +386,14 @@ run_judge() { # <category> <target> <identity> [method]
 # Checks a path target as far as acting on it: sets PHYS and succeeds, or sets WHY and fails. Run in
 # the current shell, never a substitution, so PHYS reaches the caller.
 #
-# With a category and a method, the state folder's one exception is open to this item, and only
+# With a category and a method, the state folder's two exceptions (a folder inside a task folder of
+# a session's notes, and a task folder that is a git checkout) are open to this item, and only
 # when the category is the one whose judge asks the keep rules (NOTES_CATEGORY) and the method is
-# trash, so nothing let through here is ever deleted in place. --propose passes neither: a path
-# removed by name is judged by its identity alone, with no keep rules and no 30 day floor, so the
-# exception is never open to it. An item the exception let past the deny list is then held to
-# dc_notes_folder, the page's own predicate: a real folder, reached by its own path through no link.
+# trash, so nothing let through here is ever deleted in place. --propose passes neither: a path removed by name is judged
+# by its identity alone, with no keep rules and no 30 day floor, so neither exception is ever open
+# to it. An item an exception let past the deny list is then held to
+# dc_notes_item, the page's own predicate: a real folder, reached by its own path through no link,
+# and for a task folder one that git says is a checkout holding its own repository.
 path_checks() { # <target> [<category> <method>]
   local t="$1" r
   PHYS="" WHY="" NOTES_OK="" NOTES_USED=""
@@ -380,7 +409,7 @@ path_checks() { # <target> [<category> <method>]
   PHYS="$(dc_resolve "$t")" || { WHY='where it lies could not be read'; return 1; }
   if deny_reason "$PHYS"; then WHY="never removed: $DENY"; return 1; fi
   if [ -n "$NOTES_USED" ] && { [ -e "$t" ] || [ -L "$t" ]; }; then
-    dc_notes_folder "$t" "$HOME" "$HOME_PHYS" || { WHY="never removed: $STATE_DENY, and $DC_NOTES_WHY"; return 1; }
+    dc_notes_item "$t" "$HOME" "$HOME_PHYS" || { WHY="never removed: $STATE_DENY, and $DC_NOTES_WHY"; return 1; }
   fi
   allowed_root "$PHYS" || { WHY="it is outside the folders this tool removes from ($PHYS)"; return 1; }
   return 0
@@ -509,6 +538,12 @@ if [ -f "$LOG" ]; then
       # again below, which is where whether it went is checked.
       echo "An earlier run ($irun) stopped partway while removing docker $itarget; whether it went is not checked here."
       printf 'OUTCOME\t%s\t%s\t%s\tfailed\t\tinterrupted run; whether it went was not checked\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
+    elif [ "$imethod" = pnpm ]; then
+      # Its target is a command pnpm was running, not a path, so nothing here can tell how far it
+      # got. Its own item, if it is in this plan, is judged again below and pruned again, which
+      # pnpm takes up from wherever the store was left.
+      echo "An earlier run ($irun) stopped partway while running pnpm $itarget; whether it finished is not checked here."
+      printf 'OUTCOME\t%s\t%s\t%s\tfailed\t\tinterrupted run; whether it finished was not checked\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
     elif [ ! -e "$itarget" ] && [ ! -L "$itarget" ]; then
       echo "An earlier run ($irun) stopped partway while removing $itarget; it is gone now."
       printf 'OUTCOME\t%s\t%s\t%s\tgone\t\tfound gone after an interrupted run\n' "$((T0 + SECONDS))" "$irun" "$iid" >> "$LOG"
@@ -601,6 +636,61 @@ do_docker() { # <id> <category> <target> <identity>
   esac
 }
 
+# ---------- pnpm ----------
+# The one pnpm target, "store prune": pnpm's own prune of its own store (Dan, 2026-11-19, recorded
+# on #3235: "Offer a prune row"). Nothing in the store is removed by this tool; pnpm decides what no
+# project uses. Like a Docker target it is not a path, so it is checked by what the owning tool
+# reports and by the store's size before and after, in the order every item is: refused by name
+# unless it is exactly that target, and unless its kind is the one whose judge answers for it;
+# pnpm asked where its store is, which has to be a real folder directly inside
+# ~/Library/pnpm/store by its own path (path_checks, then its parent), so a store pnpm was pointed
+# at somewhere else is never pruned from here; measured; judged again; INTENT; pnpm store prune;
+# measured again. Both pnpm calls run from the home folder, so no project's own settings choose
+# the store. A prune that exits anything but 0 is a failure whatever the store then measures, and
+# one that leaves the store its size found nothing to remove, which is settled, not removed.
+PNPM_CATEGORY=package-caches
+do_pnpm() { # <id> <category> <target> <identity>
+  local id="$1" cat="$2" t="$3" store out rc before after
+  [ "$t" = "store prune" ] || { finish_item "$id" skipped "" "pnpm $t" "it is not a pnpm target this tool runs (store prune, and nothing else)"; return; }
+  [ "$cat" = "$PNPM_CATEGORY" ] || { finish_item "$id" skipped "" "pnpm $t" "the pnpm method is taken only for the $PNPM_CATEGORY kind, and this item's kind is $cat"; return; }
+  command -v pnpm >/dev/null 2>&1 || { finish_item "$id" skipped "" "pnpm $t" "pnpm is not on the PATH, so its store cannot be pruned"; return; }
+  store="$(CDPATH= cd "$HOME_PHYS" 2>/dev/null && pnpm store path </dev/null 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { finish_item "$id" skipped "" "pnpm $t" "pnpm could not say where its store is (pnpm store path exit $rc)"; return; }
+  # A trailing slash would have the link test below follow a link rather than see it.
+  while :; do case "$store" in ?*/) store="${store%/}" ;; *) break ;; esac; done
+  case "$store" in
+    /*$'\n'*|[!/]*|'') finish_item "$id" skipped "" "pnpm $t" "pnpm did not name its store as one absolute path (it said: ${store%%$'\n'*})"; return ;;
+  esac
+  path_checks "$store" || { finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, and $WHY"; return; }
+  [ "${PHYS%/*}" = "$HOME_PHYS/Library/pnpm/store" ] || {
+    finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, which is not a folder directly inside ~/Library/pnpm/store, the only store this tool prunes"; return; }
+  gone_now "$PHYS" && { finish_item "$id" gone "" "pnpm $t" "pnpm's store ($store) is not there, so there is nothing to prune"; return; }
+  [ -d "$PHYS" ] || { finish_item "$id" skipped "" "pnpm $t" "pnpm says its store is $store, which is not a folder"; return; }
+  measure "$PHYS"
+  { [ -n "$SIZE_KIB" ] && [ -z "$SIZE_PARTIAL" ]; } || { finish_item "$id" skipped "" "pnpm $t" "the size of pnpm's store could not be read, so nothing could confirm what a prune did"; return; }
+  before="$SIZE_KIB"
+  run_judge "$cat" "$t" "$4"
+  [ "$JUDGE_VERDICT" = offerable ] || { finish_item "$id" skipped "" "pnpm $t" "judged again just now: $JUDGE_VERDICT"; return; }
+  intent "$id" pnpm "$t" "$before" || { finish_item "$id" skipped "" "pnpm $t" "its INTENT line could not be written to $LOG, so it was not touched"; return; }
+  out="$(CDPATH= cd "$HOME_PHYS" 2>/dev/null && pnpm store prune </dev/null 2>&1)"; rc=$?
+  out="${out%%$'\n'*}"
+  measure "$PHYS"
+  after=""; if [ -n "$SIZE_KIB" ] && [ -z "$SIZE_PARTIAL" ]; then after="$SIZE_KIB"; fi
+  if [ "$rc" -ne 0 ]; then
+    out="pnpm store prune failed (exit $rc: ${out:-no output})"
+    if [ -n "$after" ] && [ "$after" -lt "$before" ]; then out="$out, though its store is $(human "$((before - after))") smaller"; fi
+    finish_item "$id" failed "" "pnpm $t" "$out"; return
+  fi
+  [ -n "$after" ] || { finish_item "$id" failed "" "pnpm $t" "after pnpm store prune (exit 0) the size of its store could not be read, so nothing confirms what it did"; return; }
+  if [ "$after" -gt "$before" ]; then
+    finish_item "$id" failed "" "pnpm $t" "pnpm's store is bigger after pnpm store prune ($(human "$before") before, $(human "$after") after), so nothing confirms it removed anything"; return
+  fi
+  if [ "$after" -eq "$before" ]; then
+    finish_item "$id" gone "" "pnpm $t" "pnpm found nothing no project uses, so its store is the size it was ($(human "$before"))"; return
+  fi
+  finish_item "$id" removed "$((before - after))" "pnpm $t" "$(human "$((before - after))") less in pnpm's store, as du measures it; where a project holds a package as a clone sharing its disk blocks, the disk gains less than that"
+}
+
 # ---------- a path item ----------
 do_path() { # <id> <category> <method> <target> <identity>
   local id="$1" cat="$2" method="$3" t="$4" ident="$5" why out rc before_bytes after_bytes after_kib
@@ -679,6 +769,7 @@ while IFS="$S" read -r -u 3 id cat method target state bytes ident; do
   esac
   case "$method" in
     docker) do_docker "$id" "$cat" "$target" "$ident" ;;
+    pnpm) do_pnpm "$id" "$cat" "$target" "$ident" ;;
     trash|delete|truncate|worktree|derived-data) do_path "$id" "$cat" "$method" "$target" "$ident" ;;
     *) finish_item "$id" skipped "" "$target" "'$method' is not a method this tool knows" ;;
   esac

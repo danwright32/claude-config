@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 #
 # disk-clean-predicates.sh: the one copy of the rules saying what a disk-clean test root is, and
-# whether a path lies inside one (claude-config#1804, moved here by #1805), and of the one folder
-# shape under ~/.claude/state that disk-clean may offer (#3235, at the end of this file).
+# whether a path lies inside one (claude-config#1804, moved here by #1805), and of the two folder
+# shapes under ~/.claude/state that disk-clean may offer (#3235, at the end of this file): a folder
+# four levels under session-notes, and a task folder, three levels under, that is a git checkout
+# holding its own repository.
 #
 # Sourced by the three things that must agree, so none keeps a copy of its own (L261):
 #   lib/disk-clean-harness.sh  dc_run refuses to run unless HOME is isolated by these rules
 #   lib/disk-clean-guard.sh    (through the harness) every guarded write is judged by dc_inside
 #   lib/disk-remove.sh         in test mode it refuses unless dc_home_isolated says HOME is inside
 #                              DISK_CLEAN_TEST_ROOT, and it reads paths physically with dc_resolve
-# and, for the session notes folder shape, by a fourth: skills/disk-clean/scan-lib.sh, through which
-# categories/claude-records.sh reads dc_notes_shape and dc_notes_folder as disk-remove.sh does.
+# and, for the two session notes shapes, by a fourth: skills/disk-clean/scan-lib.sh, through which
+# categories/claude-records.sh reads dc_notes_item, dc_notes_folder, dc_notes_checkout and
+# dc_git_own_repo as disk-remove.sh does.
 # They lived in the harness until disk-remove.sh needed them. The harness also holds dc_run and the
 # command check, which run commands no disk-clean script may (an `exec "$@"`, python3 through a
 # variable), so a script sourcing the whole harness would fail the command check it is held to.
 #
-# Commands it runs: id, readlink, and the builtins cd, pwd, printf and eval. bash 3.2 safe.
+# Commands it runs: id, readlink, git (one read, in dc_git_own_repo), and the builtins cd, pwd,
+# printf and eval. bash 3.2 safe.
 # Sourcing defines constants and functions and does nothing else.
 
 # Every root dc_setup makes is named so, and nothing else is accepted as one.
@@ -107,43 +111,107 @@ dc_inside() { # <path> <root>
   done
 }
 
-# ---- the one folder shape under ~/.claude/state that disk-clean may offer (claude-config#3235) ----
-# disk-remove.sh refuses everything under ~/.claude/state, with one exception Dan signed on
-# 2026-11-19, recorded on #3235: "Allow it". The exception is a folder exactly four levels under
+# ---- the two folder shapes under ~/.claude/state that disk-clean may offer (claude-config#3235) ----
+# disk-remove.sh refuses everything under ~/.claude/state, with two exceptions Dan signed on
+# 2026-11-19, recorded on #3235. The first ("Allow it") is a folder exactly four levels under
 # session-notes (session-notes/<project>/<session>/<task>/<folder>), which is where the daily keep
-# rules leave an ended session's folder of images or documents. These two functions are the whole
-# of that shape, read by disk-remove.sh (which lets it reach its judge) and by
-# categories/claude-records.sh (which offers it), so a row is offered only where the remover takes
-# it (L261).
+# rules leave an ended session's folder of images or documents, an open session's bulky leftover
+# ("Offer after 7 idle days") and a git checkout in a task folder. The second ("Offer when git says
+# safe") is a task folder that is itself a git checkout holding its own repository, three levels
+# under. The functions below are the whole of both shapes, read by disk-remove.sh (which lets them
+# reach their judge) and by categories/claude-records.sh (which offers them), so a row is offered
+# only where the remover takes it (L261).
 
 # True when <path>, as text, is exactly four levels under <home>/.claude/state/session-notes: no
 # level empty, none of them . or .., and no control character anywhere in it. It reads no disk, so
 # a link is not its to see; dc_notes_folder is. A trailing slash is refused, never trimmed here.
-dc_notes_shape() { # <path> <home>
+dc_notes_shape() { _dc_notes_levels "$1" "$2" 4; } # <path> <home>
+
+# The second shape (Dan, 2026-11-19, recorded on #3235: "Offer when git says safe"): a task folder,
+# exactly three levels under session-notes (session-notes/<project>/<session>/<task>), which the
+# daily keep rules keep whole when it is itself a git checkout. As text it is read as the first
+# shape is; dc_notes_checkout is what holds it to being a checkout.
+dc_notes_task_shape() { _dc_notes_levels "$1" "$2" 3; } # <path> <home>
+
+# True when <path>, as text, is exactly <levels> (3 or 4) levels under <home>/.claude/state/
+# session-notes, by the rules dc_notes_shape states. The one reading of both shapes.
+_dc_notes_levels() { # <path> <home> <levels: 3 or 4>
   local rest
   case "$1" in "$2/.claude/state/session-notes/"?*) ;; *) return 1 ;; esac
   rest="${1#"$2/.claude/state/session-notes/"}"
   case "$rest" in *[[:cntrl:]]*) return 1 ;; esac
   case "/$rest/" in *//*|*/./*|*/../*) return 1 ;; esac
-  # In a case pattern * crosses a slash, so five or more levels are refused before four are taken.
-  case "$rest" in
-    */*/*/*/*) return 1 ;;
-    */*/*/*) return 0 ;;
+  # In a case pattern * crosses a slash, so a level too many is refused before the count is taken.
+  case "$3:$rest" in
+    4:*/*/*/*/*|3:*/*/*/*) return 1 ;;
+    4:*/*/*/*|3:*/*/*) return 0 ;;
   esac
   return 1
 }
 
-# True when <path> is, on disk, a real folder of that shape reached by its own path: not a link,
-# and no link at any level above it, so what it names is where it lies. Otherwise it fails and
-# sets DC_NOTES_WHY to why. <home> is HOME as set and <physical home> the same folder resolved, so
-# a path written either way is read alike.
+# True when <path> is, on disk, a real folder of the four level shape reached by its own path: not
+# a link, and no link at any level above it, so what it names is where it lies. Otherwise it fails
+# and sets DC_NOTES_WHY to why. <home> is HOME as set and <physical home> the same folder resolved,
+# so a path written either way is read alike.
 dc_notes_folder() { # <path> <home> <physical home>
+  _dc_notes_real "$1" "$2" "$3" 4 "it is not a folder in a session's task folder (session-notes/<project>/<session>/<task>/<folder>)"
+}
+
+# True when <path> is, on disk, a real task folder (the three level shape, by its own path, as
+# dc_notes_folder reads the four level one) that is itself a git checkout holding its own
+# repository, which is dc_git_own_repo's to say. A task folder with no repository is a session's
+# notes, and one that is a worktree or submodule belongs to a repository somewhere else, for which
+# git run there would answer. Neither is ever let past disk-remove.sh's refusal of state.
+dc_notes_checkout() { # <path> <home> <physical home>
+  _dc_notes_real "$1" "$2" "$3" 3 "it is not a session's task folder (session-notes/<project>/<session>/<task>)" || return 1
+  dc_git_own_repo "$1" || {
+    DC_NOTES_WHY="it is a session's task folder and not a git checkout with a repository of its own ($DC_GIT_WHY)"; return 1; }
+  return 0
+}
+
+# True when the folder <path> is a git checkout holding its OWN repository: asked in that folder,
+# the git folder git answers from is the folder's own .git. Otherwise it fails and sets DC_GIT_WHY.
+#
+# Asked of git, never of the filesystem. What is being decided is which repository the questions
+# asked next (is anything uncommitted, stashed, missing from its remote) will be answered for, and
+# only git knows: in a worktree or a submodule .git is a file naming a repository somewhere else,
+# git follows a .git that is a link to wherever it leads, and a .git folder that holds no repository
+# is passed over for whichever one lies above it. Measured on real git, 2026-11-20: a full clone
+# prints its own .git, resolved; a worktree <repository>/.git/worktrees/<name>; a submodule
+# <superproject>/.git/modules/<name>; a .git link the folder the link names; a bare repository
+# itself; and a folder whose .git is empty, or holds only a HEAD, fails with exit 128 when nothing
+# above it is a repository. So one comparison refuses every one of those.
+#
+# The environment is left as it is on purpose. With GIT_DIR naming another repository, git answers
+# for that one here and in every later call the judge makes, so this refuses, which is the truth
+# about those calls. Clearing it for this one read would pass a folder git is not answering for.
+dc_git_own_repo() { # <path>
+  local t="${1%/}" phys g rc
+  DC_GIT_WHY=""
+  phys="$(dc_resolve "$t")" || { DC_GIT_WHY="where it lies could not be read"; return 1; }
+  g="$(git -C "$t" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { DC_GIT_WHY="git names no repository for it (git exit $rc)"; return 1; }
+  [ "$g" = "$phys/.git" ] && return 0
+  DC_GIT_WHY="git answers there for a repository that lies outside it ($g): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one"
+  return 1
+}
+
+# True when <path> is one of the two things under session-notes that may reach a judge: a real
+# folder of the four level shape, or a real task folder that is a git checkout. Which is asked is
+# decided by how many levels the path has, so a task folder is never read as the looser shape.
+# What disk-remove.sh holds an item to, and what categories/claude-records.sh offers (L261).
+dc_notes_item() { # <path> <home> <physical home>
+  local norm="${1%/}"
+  case "$norm" in "$2"/*) norm="$3/${norm#"$2"/}" ;; esac
+  if dc_notes_task_shape "$norm" "$3"; then dc_notes_checkout "$@"; else dc_notes_folder "$@"; fi
+}
+
+_dc_notes_real() { # <path> <home> <physical home> <levels> <why, when it is not of that shape>
   local t="${1%/}" norm phys
   DC_NOTES_WHY=""
   norm="$t"
   case "$norm" in "$2"/*) norm="$3/${norm#"$2"/}" ;; esac
-  dc_notes_shape "$norm" "$3" || {
-    DC_NOTES_WHY="it is not a folder in a session's task folder (session-notes/<project>/<session>/<task>/<folder>)"; return 1; }
+  _dc_notes_levels "$norm" "$3" "$4" || { DC_NOTES_WHY="$5"; return 1; }
   [ ! -L "$t" ] || { DC_NOTES_WHY="it is a symbolic link"; return 1; }
   phys="$(dc_resolve "$t")" || { DC_NOTES_WHY="where it lies could not be read"; return 1; }
   [ "$phys" = "$norm" ] || { DC_NOTES_WHY="its path passes through a symbolic link, so it lies somewhere else ($phys)"; return 1; }
