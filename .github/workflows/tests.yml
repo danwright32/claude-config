@@ -396,6 +396,31 @@ jobs:
         # needs it here. The lockfile pins the version and carries the linux-x64 binary.
         run: npm ci --prefix tools/typescript --no-audit --no-fund
 
+      # Claude Code, so tests/test-mods.sh runs `claude plugin validate` and `claude plugin test` on
+      # every mod and tests/test-mods-load-engine.sh loads them all, and a mod that fails either is a
+      # red check (claude-config#3297). Until then this runner had no claude and both said UNMEASURED
+      # inside a green check, so #3291 and #3285 reached main. One exact version, written in
+      # .github/claude-code-version alone and read by tools/install-claude-code.sh alone, so raising it
+      # is a one line pull request; the daily mods-on-newest-claude-code.yml tries the newest release.
+      # No sign in and no key: the mods' tests need only the program. Cached on that file, so a run
+      # downloads it only when the version moves.
+      - name: Restore Claude Code for the mods' tests
+        if: needs.deal.outputs.reused-run == ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/claude-code-for-mods
+          key: claude-code-for-mods-${{ runner.os }}-${{ hashFiles('.github/claude-code-version') }}
+
+      # Left OFF the PATH and named to the mods' suites alone in MODS_CLAUDE: many other suites start a
+      # real session whenever they find a claude, and none of them was written for this runner.
+      # MODS_CLAUDE also tells both suites a claude was promised, so one that cannot check the mods
+      # with it fails rather than saying UNMEASURED.
+      - name: Install Claude Code for the mods' tests
+        if: needs.deal.outputs.reused-run == ''
+        run: |
+          claude_bin="$(bash tools/install-claude-code.sh "$HOME/claude-code-for-mods")"
+          echo "MODS_CLAUDE=$claude_bin" >> "$GITHUB_ENV"
+
       # What is in the store now came from the deal; anything newer than this was written by this
       # part's suites, and only that is handed to the suite job to merge.
       - name: Mark the store before the suites run

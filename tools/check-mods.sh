@@ -17,6 +17,12 @@
 #      words are printed (#740). A definite failure of another mod outranks it, as it outranks 3.
 #   5  no mods: the folder holds none, so nothing was checked, which is never a pass (#3105, L98).
 #      Handed one mod's own folder, it checks that mod alone, its dependencies read beside it.
+#   6  CHECK_MODS_REQUIRE_CLAUDE=1 promised a working claude and the mods could not be checked with
+#      one: 3 or 4 above, where the caller installed Claude Code for exactly this (#3297).
+#
+# A whole folder passing on a claude records that build as the one the mods last passed on, in this
+# Mac's ~/.claude/state (CHECK_MODS_LAST_PASSED moves it, set empty turns it off), and a whole folder
+# run on another build says so in its first line (#3297, LAST_PASSED below).
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
@@ -86,10 +92,12 @@ if [ -f "$dir/.claude-plugin/plugin.json" ]; then
   dir="$(dirname "$one")"
   mods=("$one")
   scope="1 mod checked: $(basename "$one"), its dependencies read from $dir"
+  whole_folder=0
 else
   for d in "$dir"/*/; do
     [ -f "$d.claude-plugin/plugin.json" ] && mods+=("${d%/}")
   done
+  whole_folder=1
 fi
 n=${#mods[@]}
 # A run that checks no mod is not a pass (#3105, L98): handed one mod's subfolder, or any folder with
@@ -99,6 +107,49 @@ if [ "$n" -eq 0 ]; then
   exit 5
 fi
 scope="${scope:-$n mods checked in $dir}"
+
+# The claude command, found once, here, so the build it is can be said in the run's first line (#3297).
+bin="${CLAUDE_BIN:-}"
+if [ -z "$bin" ]; then
+  bin="$(command -v claude 2>/dev/null || true)"
+  [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
+fi
+cc_now=""
+[ -n "$bin" ] && [ -x "$bin" ] && cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
+# WHICH BUILD EVERY MOD LAST PASSED ON, ON THIS MAC (#3297). On 2026-11-18 Claude Code 2.1.328
+# arrived on the personal MacBook and two of the secret guard's tests failed from then on with no
+# commit to blame; three builders each spent time showing the failure was not theirs, because nothing
+# said Claude Code had changed since the suite last passed. So a whole folder passing on a claude
+# records that build, and the next whole folder run on another build says so in its first line.
+# One line, the build, a tab and the date, in this Mac's ~/.claude/state, which the sync never
+# carries: each Mac's record is about the build it runs. Written only by a run, never by hand, and
+# kept here rather than in a library this script would source, since the area check lets this script
+# run by its texts (payload/mods/area-check/hooks/named.ts). CHECK_MODS_LAST_PASSED names another
+# file (tests/test-mods.sh points every fixture at none), and set empty turns both the note and the
+# record off.
+LAST_PASSED="${CHECK_MODS_LAST_PASSED-$HOME/.claude/state/mods-last-passed.tsv}"
+last_passed_note(){   # $1 = build installed now: one line when the mods last passed on another
+  local was="" when=""
+  [ -n "$LAST_PASSED" ] && [ -n "${1:-}" ] && [ -f "$LAST_PASSED" ] || return 0
+  IFS=$'\t' read -r was when < "$LAST_PASSED" 2>/dev/null || true
+  [ -n "$was" ] && [ "$was" != "$1" ] || return 0
+  echo "check-mods: Claude Code changed since the mods last passed on this Mac: they passed on Claude Code $was${when:+ on $when}, and $1 is installed now. Read a failure below as that change first, before looking for a commit to blame."
+}
+last_passed_write(){   # $1 = build: written beside the record and moved over it, so a run killed halfway leaves the old one
+  local tmp=""
+  [ -n "$LAST_PASSED" ] && [ -n "${1:-}" ] || return 0
+  mkdir -p "$(dirname "$LAST_PASSED")" 2>/dev/null && tmp="$(mktemp "$LAST_PASSED.XXXXXX" 2>/dev/null)" \
+    && printf '%s\t%s\n' "$1" "$(date +%Y-%m-%d)" > "$tmp" && mv -f "$tmp" "$LAST_PASSED" && return 0
+  [ -z "$tmp" ] || rm -f "$tmp"
+  echo "check-mods: the pass above could not be recorded in $LAST_PASSED as the build the mods last passed on." >&2
+  return 1
+}
+[ "$whole_folder" -eq 0 ] || last_passed_note "$cc_now"
+# CHECK_MODS_REQUIRE_CLAUDE=1 is a caller's promise that a working claude is here, made where the pull
+# request checks install one for the mods (#3297). With it, a run that could not check the mods with
+# claude is a failure, exit 6, rather than UNMEASURED: on that runner it means the install broke, and
+# an UNMEASURED line inside a green check is read by nobody.
+require_claude="${CHECK_MODS_REQUIRE_CLAUDE:-}"
 
 # Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638). Without one, Claude Code
 # generates it in the installed copy, and the sync sends that up to main as a local edit. This needs
@@ -521,13 +572,14 @@ if [ "$untyped" -gt 0 ]; then
   echo "check-mods: UNMEASURED: $untyped of $n mods' types were not checked ($causes).$fix" >&2
 fi
 
-bin="${CLAUDE_BIN:-}"
-if [ -z "$bin" ]; then
-  bin="$(command -v claude 2>/dev/null || true)"
-  [ -n "$bin" ] || { [ -x "$HOME/.local/bin/claude" ] && bin="$HOME/.local/bin/claude"; }
-fi
 if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-  # CI's runner is always here. The type check above needs no Claude Code, so it has run (#953).
+  # A Mac without Claude Code is here. The type check above needs no Claude Code, so it has run (#953).
+  if [ "$require_claude" = 1 ]; then
+    echo "check-mods: FAILED: $n mod(s) in $dir, and no claude command to validate or test them with (looked for ${bin:-claude on PATH}), though CHECK_MODS_REQUIRE_CLAUDE=1 promised one. Find why the install did not leave it there." >&2
+    # A definite failure above outranks it, as it outranks 3 and 4.
+    [ "$failed" -eq 1 ] && exit 1
+    exit 6
+  fi
   echo "check-mods: UNMEASURED: $n mod(s) in $dir, and no claude command to validate or test them with (looked for ${bin:-claude on PATH}). That is not a pass. Their strict type check needs no Claude Code and is reported above." >&2
   # A definite failure (a missing tsconfig.json, a type error) outranks the unmeasured rest.
   [ "$failed" -eq 1 ] && exit 1
@@ -541,8 +593,7 @@ fi
 # command resolves to; a file holding no route at all (a stub, another build layout) is said, not
 # passed.
 bin_file="$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")"
-# Which build this is decides which routes it is held to (#1185); read once, and said again at the end.
-cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
+# Which build this is decides which routes it is held to (#1185); cc_now was read once, at the top.
 routes_now="$(grep -a -o -E '[A-Za-z_$]\("[A-Za-z.*]+",\([A-Za-z_$]+,[A-Za-z_$]+,[A-Za-z_$]+\)=>[A-Za-z_$]+\.to\([A-Za-z_$]+,"append"\)\)' "$bin_file" 2>/dev/null \
   | sed -E 's/^.\("([^"]+)".*/\1/' | LC_ALL=C sort -u || true)"
 if [ -z "$routes_now" ]; then
@@ -629,14 +680,25 @@ for i in "${!mods[@]}"; do
   echo "check-mods: $name ok (${types_of[i]})"
 done
 echo "check-mods: $scope"
-# A Mac running another build than the pinned one is told so, and nothing else changes: every verdict
-# above came from the pinned types, so it is the same on every build (#953). cc_now was read above.
+# A Mac running another build than the one the pinned TYPE FILES came from is told so, and nothing
+# else changes: every verdict above came from the pinned types, so it is the same on every build
+# (#953). It names the type files first, because it shows on nearly every run (the pin moves only
+# when somebody refreshes it) and must never be read as the note at the top, which compares with the
+# build the mods last passed on (#3297).
 if [ -n "$cc_now" ] && [ -n "$pinned_build" ] && [ "$cc_now" != "$pinned_build" ]; then
-  echo "check-mods: this Mac runs Claude Code $cc_now, and the types every mod was checked against are pinned at $pinned_build. To check against $cc_now's, run bash tools/refresh-claude-code-types.sh once a mod has loaded on it, then run tests/test-mods.sh and commit the result."
+  echo "check-mods: the pinned type files are from Claude Code $pinned_build, not the $cc_now installed here, which changes no verdict above. To type check against $cc_now's own, run bash tools/refresh-claude-code-types.sh once a mod has loaded on it, then run tests/test-mods.sh and commit the result."
 fi
 [ "$failed" -eq 1 ] && exit 1
 if [ "$unmeasured" -eq 1 ]; then
+  if [ "$require_claude" = 1 ]; then
+    echo "check-mods: FAILED: Claude Code has hooks modules switched off in this process, so its mods could not be checked, though CHECK_MODS_REQUIRE_CLAUDE=1 promised a claude that could. It said: $off_reason" >&2
+    exit 6
+  fi
   echo "check-mods: UNMEASURED: Claude Code has hooks modules switched off in this process, so its mods could not be checked. That is not a pass. It said: $off_reason" >&2
   exit 4
 fi
+# Every mod passed on this build. Recorded as the build the mods last passed on, for the note at the
+# top of the next run (#3297), only when the whole folder was checked: one mod passing says nothing
+# about the rest. A record that cannot be written is said, and the pass stands.
+[ "$whole_folder" -eq 0 ] || last_passed_write "$cc_now" || true
 exit 0
