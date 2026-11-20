@@ -1033,14 +1033,79 @@ const entryBlock = (block: string): string | undefined => {
  *   Add to LESSONS.md lapsed unused and he was asked For good about it again (#1691).
  */
 export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
+  const placed = lessonPlaced(tool, input, file)
+  return placed === undefined || placed.misplaced !== undefined ? undefined : placed.entry
+}
+
+/**
+ * The one entry a write adds to the lessons file, as lessonAddition reads it, and, where the place
+ * it is put is not an entry boundary of the file, where it would land instead (`misplaced`,
+ * boundaryFault). lessonAddition takes only an entry with no `misplaced`; the words are for the
+ * refusal, so the session can put the same entry in a sound place. A Write of a file that is not
+ * there yet holds nothing the entry could be put inside.
+ */
+export const lessonPlaced = (tool: string, input: Record<string, unknown>, file: string | undefined): { entry: string; misplaced?: string } | undefined => {
   if (tool === 'Edit') {
     const edited = editedFile(file, input)
     return file === undefined || edited === undefined ? undefined : insertedEntry(file, edited)
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
-  if (file === undefined) return entryBlock(content)
+  if (file === undefined) {
+    const entry = entryBlock(content)
+    return entry === undefined ? undefined : { entry }
+  }
   return insertedEntry(file, content)
+}
+
+// The two lines that can only begin something else in the lessons file, as its own reader takes
+// them (claude-sync lesson_entries_render): an entry's first line and a section heading. An entry
+// owns every line from its first down to the next of either, blank lines and all.
+const ENTRY_START = /^- \*\*L[0-9]+\./
+const SECTION_START = /^## /
+const quoted = (line: string): string => {
+  const text = line.trim()
+  return JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}...` : text)
+}
+
+/**
+ * Where an entry inserted at `at`, a line boundary of the lessons file `file`, would land when that
+ * is not an entry boundary, in words for the session that sent it; undefined at a boundary.
+ *
+ * The independent review of #3320: the approved Edit could put its entry inside another entry. The
+ * file's reader gives an entry every line down to the next entry or section heading, so a lesson
+ * approved with no SHORT line, written just above an existing entry's SHORT line, took that line
+ * as its own in the index, and the entry it was cut out of lost it. Two things make a boundary:
+ * - after the entry, the next line that is not blank is another entry's first line or a section
+ *   heading, or there is none. Any other line would be read as the new entry's: a SHORT line, a
+ *   check line, the rest of a wrapped rule, text that is nobody's.
+ * - before it stands an entry, which the first condition has shown to be whole, or a section
+ *   heading with nothing but blank lines between. Above the first section, or under text that is no
+ *   entry's, the new entry would belong to no section or sit under words nobody approved it beside.
+ */
+export const boundaryFault = (file: string, at: number): string | undefined => {
+  const above = file.slice(0, at).split('\n')
+  // The entry or the section heading that stands over the place, whichever is nearer, and whether
+  // any text lies between a heading and the place.
+  let over: string | undefined
+  let between: string | undefined
+  for (let i = above.length - 1; i >= 0 && over === undefined; i--) {
+    const l = above[i] ?? ''
+    if (ENTRY_START.test(l) || SECTION_START.test(l)) over = l
+    else if (!INDEX_BLANK.test(l)) between ??= l
+  }
+  const owner = over !== undefined && ENTRY_START.test(over) ? /^- \*\*(L[0-9]+)\./.exec(over)?.[1] : undefined
+  const next = file
+    .slice(at)
+    .split('\n')
+    .find(l => !INDEX_BLANK.test(l))
+  if (next !== undefined && !ENTRY_START.test(next) && !SECTION_START.test(next))
+    return owner !== undefined
+      ? `inside ${owner}'s entry: the line after it, ${quoted(next)}, is ${owner}'s, and the lessons index would read it as the new entry's`
+      : `above a line that starts no entry and no section, ${quoted(next)}, which the lessons index would read as part of the new entry`
+  if (over === undefined) return "above the file's first section heading, where it would belong to no section"
+  if (owner === undefined && between !== undefined) return `under text that is no entry's, ${quoted(between)}, and not under a section heading or after an entry`
+  return undefined
 }
 
 /**
@@ -1056,8 +1121,10 @@ export const editedFile = (file: string | undefined, input: Record<string, unkno
   return file.slice(0, at) + String(input.new_string ?? '') + file.slice(at + from.length)
 }
 
-// The entry block `content` is `file` with, inserted at one line boundary, or undefined.
-const insertedEntry = (file: string, content: string): string | undefined => {
+// The entry block `content` is `file` with, inserted at one line boundary, or undefined. Where the
+// same text can be read as inserted at more than one boundary, the first that is an entry boundary
+// of the file is the one taken; where none is, the entry comes back with where it would land.
+const insertedEntry = (file: string, content: string): { entry: string; misplaced?: string } | undefined => {
   const size = content.length - file.length
   if (size <= 0) return undefined
   // What the two share at the start and at the end, measured once: the block can sit only at a line
@@ -1070,13 +1137,17 @@ const insertedEntry = (file: string, content: string): string | undefined => {
   const lo = file.length - tail
   if (lo > head) return undefined
   const next = (from: number) => (from === 0 || file[from - 1] === '\n' ? from : file.indexOf('\n', from) === -1 ? file.length + 1 : file.indexOf('\n', from) + 1)
+  let first: { entry: string; misplaced: string } | undefined
   for (let b = next(lo); b <= head; b = next(b + 1)) {
     const block = content.slice(b, b + size)
     if (b !== file.length && !block.endsWith('\n')) continue
     const entry = entryBlock(block)
-    if (entry !== undefined) return entry
+    if (entry === undefined) continue
+    const misplaced = boundaryFault(file, b)
+    if (misplaced === undefined) return { entry }
+    first ??= { entry, misplaced }
   }
-  return undefined
+  return first
 }
 
 // A blank line as the lessons file's own reader takes one (claude-sync lesson_entries_render, awk's

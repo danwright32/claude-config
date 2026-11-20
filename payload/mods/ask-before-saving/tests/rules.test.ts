@@ -4,7 +4,7 @@ import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { LESSON_SHORT_KEY, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT, MAX_SHORT_TEXT, QUESTION_COLUMNS, addsThis, askFault, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, readCheckLine, readShortLine, rowsAt, ruleText, shellAppended, shortLine, shownFault, unseenIn } from '../hooks/rules.ts'
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
-import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, lessonPlaced, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { INDEX_LINE_CASES } from './index-lines.ts'
 
@@ -1570,4 +1570,80 @@ test('an approved entry is one whose index line is the text Dan was shown: his S
   // Neither half is the list holding one kind only.
   expect(INDEX_LINE_CASES.filter(c => c.approved).length).toBeGreaterThan(2)
   expect(INDEX_LINE_CASES.filter(c => !c.approved).length).toBeGreaterThan(2)
+})
+
+// The independent review of #3320: the approved Edit could put its entry INSIDE another entry. The
+// lessons file's reader gives an entry every line down to the next entry or section heading, so a
+// lesson approved with no SHORT line, written just above an existing entry's SHORT line, took that
+// line as its own, and the entry it was cut out of lost it. The entry is now added whole at an
+// entry boundary: the next line after it that is not blank starts another entry or a section, or
+// the file ends, and above it stands an entry or a section heading with nothing between.
+const PLACED_FILE = [
+  '# Lessons',
+  '',
+  '## Data safety',
+  '',
+  '- **L900. Ask Dan before every save to lasting memory, and never treat an earlier answer as covering a later',
+  '  write, because each save reaches every later session and he approves only what he read.** (claude-config#777, 2026-10-01)',
+  '  NO CHECK: a reader holds it',
+  '  SHORT: Ask Dan before every save to lasting memory; an earlier answer never covers a later write.',
+  '- **L901. Never destroy good state before its replacement is verified to exist.** (claude-config#5, 2026-06-01)',
+  '',
+  '## Honest failure',
+  '',
+  '- **L902. An error state and an empty state are different screens.** (claude-config#10, 2026-06-01)',
+  '',
+].join('\n')
+const PLACED_RULE = 'A guard that reads one line must agree with every other reader of that line, or they approve different text.'
+const PLACED_CHECK = 'NO CHECK: a reader holds it'
+const PLACED_ENTRY = `- **L1040. ${PLACED_RULE}** (claude-config#3320, 2026-11-20)\n  ${PLACED_CHECK}`
+const L900_FIRST = '- **L900. Ask Dan before every save to lasting memory, and never treat an earlier answer as covering a later'
+const L900_CHECK = '  NO CHECK: a reader holds it\n  SHORT: Ask Dan before every save'
+const L900_SHORT = '  SHORT: Ask Dan before every save to lasting memory; an earlier answer never covers a later write.'
+const L901 = '- **L901. Never destroy good state before its replacement is verified to exist.** (claude-config#5, 2026-06-01)'
+const L902 = '- **L902. An error state and an empty state are different screens.** (claude-config#10, 2026-06-01)'
+const placing = (old_string: string, new_string: string, file = PLACED_FILE) => lessonAddition('Edit', { file_path: 'x', old_string, new_string }, file)
+
+test('an approved entry is added whole at an entry boundary, never inside another entry, whose SHORT line it would take (#3320 review)', () => {
+  // The entry is one Dan approved: none of what follows is the entry being refused for itself.
+  expect(addsLesson(PLACED_ENTRY, PLACED_RULE, PLACED_CHECK)).toBe(true)
+  // The review's first case: just above L900's SHORT line, which the index then renders as L1040's.
+  expect(placing(L900_SHORT, `${PLACED_ENTRY}\n${L900_SHORT}`)).toBeUndefined()
+  // Its second: after the first line of L900's wrapped rule, which cuts that rule in two.
+  expect(placing(L900_FIRST, `${L900_FIRST}\n${PLACED_ENTRY}`)).toBeUndefined()
+  // Above L900's check line, which would be read as a second check line of the new entry.
+  expect(placing(L900_CHECK, `${PLACED_ENTRY}\n${L900_CHECK}`)).toBeUndefined()
+  // Above the file's first section heading, where no entry or section stands over it.
+  expect(placing('# Lessons\n', `# Lessons\n${PLACED_ENTRY}\n`)).toBeUndefined()
+  // Under text that is no entry's, and above a SHORT line left behind a blank line.
+  const loose = ['# Lessons', '', '## Data safety', '', 'These are about what is lost.', '', L901, '', '  SHORT: A line left behind.', '', '## Honest failure', '', L902, ''].join('\n')
+  expect(placing(L901, `${PLACED_ENTRY}\n${L901}`, loose)).toBeUndefined()
+  expect(placing(L901, `${L901}\n${PLACED_ENTRY}`, loose)).toBeUndefined()
+  // At a boundary it is the entry: the end of a section, straight under a heading, between two
+  // entries, after a section's last entry, and at the end of the file.
+  expect(placing('## Honest failure', `${PLACED_ENTRY}\n\n## Honest failure`)).toBe(PLACED_ENTRY)
+  expect(placing('## Data safety\n', `## Data safety\n${PLACED_ENTRY}\n`)).toBe(PLACED_ENTRY)
+  expect(placing(L901, `${PLACED_ENTRY}\n${L901}`)).toBe(PLACED_ENTRY)
+  expect(placing(L901, `${L901}\n${PLACED_ENTRY}`)).toBe(PLACED_ENTRY)
+  expect(placing(`${L902}\n`, `${L902}\n${PLACED_ENTRY}\n`)).toBe(PLACED_ENTRY)
+  expect(placing(L902, `${PLACED_ENTRY}\n${L902}`, loose)).toBe(PLACED_ENTRY)
+})
+
+test('an entry put inside another, or under no section, comes back with where it would land, in words (#3320 review)', () => {
+  const where = (old_string: string, new_string: string, file = PLACED_FILE) => lessonPlaced('Edit', { file_path: 'x', old_string, new_string }, file)
+  expect(where(L900_SHORT, `${PLACED_ENTRY}\n${L900_SHORT}`)).toEqual({
+    entry: PLACED_ENTRY,
+    misplaced: `inside L900's entry: the line after it, "SHORT: Ask Dan before every save to lasting memory; an earli...", is L900's, and the lessons index would read it as the new entry's`,
+  })
+  expect(where(L900_FIRST, `${L900_FIRST}\n${PLACED_ENTRY}`)?.misplaced).toContain(`inside L900's entry: the line after it, "write, because each save reaches`)
+  expect(where('# Lessons\n', `# Lessons\n${PLACED_ENTRY}\n`)?.misplaced).toBe("above the file's first section heading, where it would belong to no section")
+  const loose = ['# Lessons', '', '## Data safety', '', 'These are about what is lost.', '', L901, '', '## Honest failure', '', '  SHORT: A line left behind.', '', L902, ''].join('\n')
+  expect(where(L901, `${PLACED_ENTRY}\n${L901}`, loose)?.misplaced).toBe(`under text that is no entry's, "These are about what is lost.", and not under a section heading or after an entry`)
+  expect(where('## Honest failure\n', `## Honest failure\n${PLACED_ENTRY}\n`, loose)?.misplaced).toBe(`above a line that starts no entry and no section, "SHORT: A line left behind.", which the lessons index would read as part of the new entry`)
+  // At a boundary there is nothing to say, and a file that is not there yet holds nothing to land inside.
+  expect(where('## Honest failure', `${PLACED_ENTRY}\n\n## Honest failure`)).toEqual({ entry: PLACED_ENTRY })
+  expect(lessonPlaced('Write', { file_path: 'x', content: `${PLACED_ENTRY}\n` }, undefined)).toEqual({ entry: PLACED_ENTRY })
+  // What is no single entry is still nothing at all, wherever it is put.
+  expect(where('## Honest failure', `${PLACED_ENTRY}\n\nand a line beside it\n\n## Honest failure`)).toBeUndefined()
+  expect(where(L900_SHORT, `${PLACED_ENTRY}\n\nand a line beside it\n${L900_SHORT}`)).toBeUndefined()
 })
