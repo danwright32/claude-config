@@ -5283,6 +5283,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   the queue he triages and asked why)
   SHORT: A repair wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the unrepaired one.
 
+- **L1038. A deduplication keyed on fewer fields than tell its rows apart keeps one copy's value
+  for every field outside the key, so compare those fields before deleting and decide each
+  difference.** When the copies are the two arms of one condition, the survivor applies one arm's
+  condition to everyone and the other arm's population silently gets nothing.
+  (downbeat#722, 2026-11-20)
+  NO CHECK: which fields outside a dedupe key matter differs per dedupe
+  SHORT: A dedupe keyed on fewer fields than tell its rows apart keeps one copy's other fields, so compare them before deleting.
+
 - **L334. A deduplication that breaks a tie by AGE systematically keeps the copy holding the
   STALEST picture of the outside world, because being stored longest is exactly what gave it time
   to go stale.** Rank survivors by what each copy still asserts about that world (is it still
