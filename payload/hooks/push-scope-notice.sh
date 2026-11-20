@@ -197,7 +197,7 @@ answered_no() {   # $1 = the exit code
   [ -n "${PS_NO:-}" ] && [ "$1" -eq "$PS_NO" ]
 }
 unasked() {   # $1 = the library question  $2 = its exit code
-  printf 'PUSH REFUSED: push-scope-notice.sh could not ask whether this command changes what it pushes before it pushes: %s exited %s, which is none of its answers (127 means %s does not hold it, and any other code that the question crashed or that the library is older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again; if it still refuses, hand back and say so.\n' \
+  printf 'PUSH REFUSED: push-scope-notice.sh could not ask one of its questions about what this push sends and where it sends it: %s exited %s, which is none of its answers (127 means %s does not hold it, and any other code that the question crashed or that the library is older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again; if it still refuses, hand back and say so.\n' \
     "$1" "$2" "$HOOK_DIR/lib/push-scope.sh" >&2
   exit 2
 }
@@ -320,6 +320,11 @@ held_name_check() {   # $1 = the one repository directory the push runs in
   if [ "$kind" = unlisted ]; then
     printf 'PUSH REFUSED: this command pushes to the branch name %s, and the list of worktrees of the repository at %s could not be read (git worktree list failed), so whether another worktree has %s checked out could not be checked (claude-config#3338). A check that could not be made is not one that passed. Run git -C %s worktree list to see why (git worktree prune clears the records of folders that are gone), then push again.\n' \
       "$rest" "$top" "$rest" "$top" >&2
+    exit 2
+  fi
+  if [ "$kind" = unresolved ]; then
+    printf 'PUSH REFUSED: this command pushes to the branch name %s, which cannot be read before the command runs (a variable, a substitution or a pattern), so whether another worktree of the repository at %s has that branch checked out could not be checked (claude-config#3338). Name the branch outright, HEAD:<the branch> or HEAD:$(git branch --show-current) for the one checked out here. If a command works the name out, run that as a command of its own, then push naming it.\n' \
+      "$rest" "$top" >&2
     exit 2
   fi
   dst="${rest%%$'\x1f'*}"; rest="${rest#*$'\x1f'}"

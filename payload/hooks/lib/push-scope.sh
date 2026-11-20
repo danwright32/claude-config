@@ -2739,8 +2739,9 @@ ps__push_words() {
 # reads, and a pass here would be the silent fail open this exists to end.
 #
 # Prints `held <dst>` then, each after a unit separator, the worktree holding it, the source as
-# written and the remote as written (empty when none was), and returns 0; or `unlisted <dst>` and
-# returns 0; returns PS_NO when every refspec is let through.
+# written and the remote as written (empty when none was), and returns 0; or `unlisted <dst>`, or
+# `unresolved <dst>` for a name that cannot be read before the command runs, and returns 0;
+# returns PS_NO when every refspec is let through.
 ps_push_to_held_branch() {   # $1 = the command  $2 = the repository directory the push runs in (default .)
   ps__walk_pushes "$1" "${2:-.}" ps__push_dests
 }
@@ -2758,6 +2759,12 @@ ps__push_dests() {   # $1 = the repository directory
     case "$a" in *:?*) ;; *) continue ;; esac
     src="${a#+}"; dst="${src#*:}"; src="${src%%:*}"
     [ -n "$src" ] || continue
+    # The branch checked out here, spelled as a question to git, is this worktree's own name. Any
+    # other name that cannot be read before the command runs (a variable, a substitution, a
+    # pattern) cannot be compared with the names the worktrees hold, so it is refused, never
+    # skipped: skipped, it would be the one spelling this check never judges.
+    if ps__names_head "$dst"; then continue; fi
+    case "$dst" in *'$'*|*'`'*|*'*'*|*'?'*|*'['*) PS__SOURCE="unresolved $dst"; return 0 ;; esac
     # A branch by any spelling; a tag or another namespace is not a worktree's to hold.
     case "$dst" in
       refs/heads/*) short="${dst#refs/heads/}" ;;
@@ -2776,10 +2783,18 @@ ps__push_dests() {   # $1 = the repository directory
       /^worktree / { w = substr($0, 10) }
       $1 == "branch" && $2 == b && !found { print w; found = 1 }')"
     [ -n "$holder" ] || continue
-    # What is sent: an unresolvable source is ps_unread_push_source's to refuse, which runs first.
+    # What is sent. A name this command makes where HEAD is before the push (git branch new, git
+    # checkout -b new) does not resolve yet and holds what HEAD holds, as ps_unread_push_source
+    # reads it. Anything else that does not resolve sends what nobody can tell, so it is judged
+    # as not building on the branch: ps_unread_push_source refuses those first in any case.
+    ps__short_ref "$src"
     if ps__names_head "$src"; then sent="$(git -C "$dir" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sent=""
     else sent="$(git -C "$dir" rev-parse --verify --quiet "$src^{commit}" 2>/dev/null)" || sent=""; fi
-    [ -n "$sent" ] || continue
+    if [ -z "$sent" ]; then
+      case "$PS__SRC_MADE$PS__SRC_MADE_CUR" in
+        *" $PS__SHORT "*) sent="$(git -C "$dir" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sent="" ;;
+      esac
+    fi
     tip="$(git -C "$dir" rev-parse --verify --quiet "refs/heads/$short^{commit}" 2>/dev/null)" || tip=""
     [ -n "$tip" ] && [ "$sent" = "$tip" ] && continue
     if [ -n "$tip" ] && git -C "$dir" merge-base --is-ancestor "$tip" "$sent" 2>/dev/null; then

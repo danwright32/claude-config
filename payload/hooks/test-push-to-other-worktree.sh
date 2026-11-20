@@ -114,7 +114,20 @@ git commit --allow-empty -m more && git push origin HEAD:fix/b|@W@/wt-a
 git push origin HEAD:fix/a|@W@/wt-b
 git push origin HEAD:fix/b|@W@/wt-detached
 git push origin HEAD:fix/empty|@W@/wt-a
+git branch made && git push origin made:fix/b|@W@/wt-a
+git checkout -b made2 && git push origin made2:fix/b|@W@/wt-a
+git push origin HEAD:"$BRANCH"|@W@/wt-a
+git push origin HEAD:$(cat name.txt)|@W@/wt-a
+git push origin HEAD:fix/*|@W@/wt-a
 REFUSED
+
+# A name the command cannot read is refused with its own sentence, never skipped.
+run 'git push origin HEAD:"$BRANCH"' "$W/wt-a"; rc=$?
+err="$(cat "$W/err")"
+case "$rc:$err" in
+  2:*"cannot be read before the command runs"*) check "a branch name that cannot be read is refused, saying so" ok ;;
+  *) check "a branch name that cannot be read is refused, saying so" "exit $rc [${err:0:300}]" ;;
+esac
 
 echo "push to another worktree's branch name: what must go through still goes (claude-config#3338)"
 
@@ -124,6 +137,8 @@ while IFS='|' read -r c d why; do
   allowed "let through, $why: $c (from ${d##*/})" "$c" "$d"
 done <<'ALLOWED'
 git push origin HEAD:fix/a|@W@/wt-a|the branch to its own name
+git push origin HEAD:$(git branch --show-current)|@W@/wt-a|the branch to its own name asked of git
+git branch made3 && git push origin made3:fix/a|@W@/wt-a|a name made at HEAD sent to the branch's own name
 git push -u origin fix/a|@W@/wt-a|the branch by its own name
 git push origin HEAD:refs/heads/fix/a|@W@/wt-a|the branch to its own name spelled in full
 git push origin HEAD:fix/a-2|@W@/wt-a|a name no worktree holds
