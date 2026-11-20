@@ -8641,3 +8641,16 @@ test('the watchdog still parks a stuck claim with no done note beside one noted 
   await clock.advance(MIN)
   expect(w.released).toEqual([['/repo', '1', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
 })
+
+test('two claims the watchdog parks a minute apart are both said at the next Stop, the first never written over (#3330)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: [claimLine(1, PAST), claimLine(2, PAST + 30_000)].join('\n') })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #2 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released.map(r => r[1])).toEqual(['1'])
+  w.o.claims = claimLine(2, PAST + 30_000)
+  await clock.advance(MIN)
+  expect(w.released.map(r => r[1])).toEqual(['1', '2'])
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #1 \(.*\); its claim is ended, so leave it and claim the next issue\. The watchdog parked #2 \(.*\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
+})

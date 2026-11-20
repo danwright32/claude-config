@@ -468,10 +468,14 @@ _sq_done_over_end() {
 # includes any note that is not a done note naming an issue), or refused (exit 3).
 sleep_done_noted() {
   local note="${1:-}" got slug issue self bad gen dir line st nxt attempts reason entry err
-  if ! got="$(python3 "$_SQ_PY" noted "$note" "${CLAUDE_CODE_SESSION_ID:-}")"; then
-    printf 'not-released\t-\tnot a done note naming an issue\n'
-    return 1
-  fi
+  # 5 is the reader's answer that the note names nothing to end; any other failure (a crash exits
+  # 1, no python3 127) is a fault, refused, so the session is told its claim may still be held.
+  got="$(python3 "$_SQ_PY" noted "$note" "${CLAUDE_CODE_SESSION_ID:-}")"
+  case $? in
+    0) ;;
+    5) printf 'not-released\t-\tnot a done note naming an issue\n'; return 1 ;;
+    *) _sq_refuse "the done note could not be read for the claim it names"; return 3 ;;
+  esac
   IFS=$'\t' read -r slug issue self <<< "$got"
   bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }

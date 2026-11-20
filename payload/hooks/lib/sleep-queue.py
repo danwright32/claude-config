@@ -17,7 +17,7 @@ is tested on fixtures alone.
   note   KIND SESSION AT REPO ISSUE [EXTRA]  the night's note of a claim (EXTRA its attempt) or of
                                        its end (EXTRA why), for sleep_note (#905)
   noted  NOTE_JSON [SESSION]           REPO ISSUE SESSION of a done note naming an issue, the
-                                       claim it ends (#3330), or exit 1 for any other note
+                                       claim it ends (#3330), or exit 5 for any other note
 
 A claim is a directory per issue holding numbered entries, 1, 2, 3, each one JSON object written
 whole beside it and hard linked into place, which fails if the number is taken. So of two sessions
@@ -446,9 +446,11 @@ def main(argv):
         print(json.dumps(n))
         return 0
     if cmd == "noted" and len(argv) in (3, 4):
+        # Exit 5, never 1, for a note that names nothing to end: 1 is what an uncaught error
+        # exits, and a crash must not read as "nothing to end" (lessons review of feb6dd4).
         got = noted_done(argv[2], argv[3] if len(argv) == 4 else "")
         if got is None:
-            return 1
+            return 5
         print("%s\t%d\t%s" % got)
         return 0
     if cmd == "slug" and len(argv) == 3:

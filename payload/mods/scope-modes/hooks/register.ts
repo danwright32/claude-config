@@ -3671,7 +3671,10 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     if (!over) return null
     const where = await repoOf($)
     const rel: Release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
-    d.parked = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
+    // Several claims can now be parked a minute apart before the next Stop says so: each park is
+    // added after any not yet said, never written over it (lessons review of feb6dd4).
+    const told = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
+    d.parked = d.parked ? `${thenNext(d.parked)}${told}` : told
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return null
   })

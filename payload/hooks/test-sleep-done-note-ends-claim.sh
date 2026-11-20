@@ -137,5 +137,16 @@ sleep_note '{"kind":"done","by":"s1","repo":"danwright32/demo","issue":37,"text"
 check_eq "a refused done note exits 1" "1" "$?"
 check_eq "and leaves the claim held" "claim s1 1" "$(last 37)"
 
+# ---- a reader that crashes is a fault said as one, never read as a note naming nothing ----
+printf 'import sys\nsys.exit(1)\n' > "$WORK/crash.py"
+out="$(_SQ_PY="$WORK/crash.py" sleep_done_noted '{"kind":"done","by":"s1","repo":"danwright32/demo","issue":37,"pr":13}')"
+check_eq "a crashed reader is refused (exit 3)" "3" "$?"
+has "and says the note could not be read" "the done note could not be read" "$out"
+check_eq "and the claim is left held" "claim s1 1" "$(last 37)"
+
+# ---- a claim that could not be ended is said, with what to run ----
+sleep_note '{"kind":"done","by":"s 1","repo":"danwright32/demo","issue":37,"pr":14,"text":"merged"}' 2>"$WORK/err"
+has "a claim the queue refused to end is said on stderr" "end it with sleep-queue.sh release" "$(cat "$WORK/err")"
+
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -211,9 +211,11 @@ const notedDone = (notesText: string | null, self: string, c: Claim): boolean =>
 
 /**
  * The claims this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed
- * tonight. Read with tonight's notes, a claim this session noted done is not held (notedDone).
+ * tonight. Read with tonight's notes, a claim this session noted done is not held (notedDone). The
+ * notes are a required argument, so no caller can leave them out and park finished work unawares;
+ * null is only for notes that could not be read.
  */
-export const heldClaim = (claimsText: string, self: string, notesText: string | null = null): ClaimReading => {
+export const heldClaim = (claimsText: string, self: string, notesText: string | null): ClaimReading => {
   const all: Claim[] = []
   for (const line of claimsText.split('\n')) {
     if (!line.trim()) continue

@@ -311,7 +311,7 @@ describe('the circuit breaker (H3)', () => {
   })
   test('a claim entry with no time is never judged stuck by time, and reads as undated', () => {
     const line = JSON.stringify({ repo: 'o/r', issue: 4, attempts: 1, entries: [{ kind: 'claim', session: 's1' }] })
-    expect(heldClaim(line, 's1')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null }, all: [{ repo: 'o/r', issue: 4, attempts: 1, since: null }] })
+    expect(heldClaim(line, 's1', '')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null }, all: [{ repo: 'o/r', issue: 4, attempts: 1, since: null }] })
     const r = decideStop(input({ now: T0 + 10 * LIMITS.stuckMs, driver: ok(after({ progressAt: T0 + 10 * LIMITS.stuckMs, weeklyAt: T0 + 10 * LIMITS.stuckMs })), claim: { state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null } } }))
     expect('release' in r).toBe(false)
   })
@@ -465,9 +465,9 @@ describe('the readings', () => {
       line(2, [{ kind: 'claim', session: 's2', at: 7 }]),
       line(3, [{ kind: 'claim', session: 's1', at: 9 }]),
     ].join('\n')
-    expect(heldClaim(text, 's1')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 3, attempts: 2, since: 9 }, all: [{ repo: 'o/r', issue: 3, attempts: 2, since: 9 }] })
-    expect(heldClaim(line(1, [{ kind: 'claim', session: 's2', at: 1 }]), 's1')).toEqual({ state: 'none' })
-    expect(heldClaim('{oops', 's1').state).toBe('unknown')
+    expect(heldClaim(text, 's1', '')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 3, attempts: 2, since: 9 }, all: [{ repo: 'o/r', issue: 3, attempts: 2, since: 9 }] })
+    expect(heldClaim(line(1, [{ kind: 'claim', session: 's2', at: 1 }]), 's1', '')).toEqual({ state: 'none' })
+    expect(heldClaim('{oops', 's1', '').state).toBe('unknown')
   })
 })
 
@@ -628,18 +628,18 @@ describe('every claim held is timed from its own start, and a done note ends one
     decideStop(input({ now, driver: ok(after({ progressAt: now, weeklyAt: now })), claim: reading }))
 
   test('three claims of different ages: the one past its 2 hours is parked, though the newest is young', () => {
-    const r = at(T0, heldClaim(three, 's1'))
+    const r = at(T0, heldClaim(three, 's1', ''))
     expect(r.kind === 'block' && r.release).toEqual({ issue: 1, state: 'parked', why: `130 minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` })
     // The newest is still the claim in hand.
-    expect(heldClaim(three, 's1').state === 'held' && (heldClaim(three, 's1') as { claim: { issue: number } }).claim.issue).toBe(3)
+    expect(heldClaim(three, 's1', '').state === 'held' && (heldClaim(three, 's1', '') as { claim: { issue: number } }).claim.issue).toBe(3)
   })
   test('each claim reaches its limit at its own time, the longest held first', () => {
     // 30 minutes on, the second is past its 2 hours too; the first, held longer, goes first.
-    const later = at(T0 + 30 * MIN, heldClaim(three, 's1'))
+    const later = at(T0 + 30 * MIN, heldClaim(three, 's1', ''))
     expect(later.kind === 'block' && later.release?.issue).toBe(1)
     const two = [claim(2, T0 - 90 * MIN), claim(3, T0 - 10 * MIN)].join('\n')
-    expect('release' in at(T0 + 30 * MIN - 1, heldClaim(two, 's1'))).toBe(false)
-    const r = at(T0 + 30 * MIN, heldClaim(two, 's1'))
+    expect('release' in at(T0 + 30 * MIN - 1, heldClaim(two, 's1', ''))).toBe(false)
+    const r = at(T0 + 30 * MIN, heldClaim(two, 's1', ''))
     expect(r.kind === 'block' && r.release?.issue).toBe(2)
   })
   test('a claim its session noted done is not timed and never parked, released or not', () => {
