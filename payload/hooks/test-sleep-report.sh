@@ -1005,7 +1005,7 @@ check_eq "the morning picker gets the same rows (#3223)" "$pf" \
   "$(needs_rows "$SLEEPDIR/notes/g34.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
 
 # ---- a park on the clock does not outlast a done note (#3276) ----
-# On the night of 18 Nov 2026 one session held up to five claims at once and noted each finished
+# On the night of 2026-11-18 one session held up to five claims at once and noted each finished
 # issue with sleep_note done, never ending its claim, so the overnight driver's watchdog parked
 # seven finished, merged issues for passing their 2 hours (the clock ran on after each done note)
 # and the morning put each to Dan as a picker. How an issue ended is decided from its notes as one
@@ -1047,7 +1047,8 @@ check_eq "the morning picker gets the same two rows and no finished issue (#3276
 has "how many finished issues took longer than their time is said in one line, by claim to done (#3276)" \
   "2 issues took longer than the 2 hours an issue gets, from claim to done, and were still finished: o/r#31 and #33." "$r"
 lacks "and none of it is put to Dan as a row (#3276)" "took longer than" "$(needs_rows "$SLEEPDIR/notes/g35.needs.json")"
-# The report's 2 hours are the driver's own (driver.ts LIMITS.stuckMs), so the two cannot drift apart.
+# The report's 2 hours are the driver's own (driver.ts LIMITS.stuckMs, a limit the code sets, not
+# measured), so the two cannot drift apart.
 check_eq "the driver's limit is read (#3276)" 2 "$(sed -n 's/^ *stuckMs: \([0-9]*\) \* 60 \* MIN,.*/\1/p' "$DIR/../mods/scope-modes/hooks/driver.ts")"
 check_eq "the report's limit is the driver's (#3276)" \
   "$(sed -n 's/^ *stuckMs: \([0-9]*\) \* 60 \* MIN,.*/\1/p' "$DIR/../mods/scope-modes/hooks/driver.ts")" \

@@ -9519,7 +9519,8 @@ ended, was noted done afterwards; a session holding no claim finished its work w
 something done or a step of progress. A real refusal by the check is always
 its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
 are (#3223). How an issue ended is read from one record, its session's done note (#3276): an end
-the overnight driver wrote (its park after 2 hours, its attempts limit, its circuit breaker) is not
+the overnight driver wrote (its park after 2 hours, a limit the code sets, not measured; its
+attempts limit; its circuit breaker) is not
 listed when the session that held the issue noted it done, before that end or after it, since the
 driver times a claim, not the work, and a claim left held after its done note keeps counting. Under
 Done one sentence says how many finished issues took longer than the 2 hours, measured from claim

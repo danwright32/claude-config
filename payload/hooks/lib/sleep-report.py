@@ -51,7 +51,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   done       repo, issue?, pr?, text        finished; checked against GitHub at wake, so the
                                             writer refuses one without an owner/name repo and
                                             a pr or issue (#2011)
-  parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
+  parked     repo, issue, branch?, text,    set aside with why (phase 8: 2 hours or 2 attempts);
+             driver?                        one the driver wrote (driver true) is not listed once
+                                            the same session notes the issue done (#3276)
   failed     repo, issue?, text             could not be done (a refusal, an error); a refusal by auto
                                             mode's check, as scope modes notes it, also has tool,
                                             reason (as given), noVerdict (true when the check gave
@@ -890,9 +892,11 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
 
     # A park or a failure the queue replaced is not one (#1119): it lets the holder's done land over
     # the driver's own end once a merged pull request closed the issue, and that done note says so
-    # (`replaces`, by the same session, written after it). Only that one: a plain done after
-    # another session's failure leaves the failure listed (lessons review of 162acef). Ordered by
-    # when each was written, file order breaking a tie, as the claims above are.
+    # (`replaces`, by the same session, written after it). An end the driver itself wrote is also
+    # dropped by any done note of the same session for the issue, before or after it
+    # (driver_end_finished, #3276). Nothing else: a plain done after another session's failure, or
+    # after the session's own deliberate end, leaves it listed (lessons review of 162acef). Ordered
+    # by when each was written, file order breaking a tie, as the claims above are.
     def replaced(i, n):
         key = (n.get("repo"), n.get("issue"), n.get("by"))
         if n.get("issue") is None or not num(n.get("at")):

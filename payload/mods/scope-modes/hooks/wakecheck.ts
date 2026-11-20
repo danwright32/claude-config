@@ -5,8 +5,9 @@ import { errorText } from './mod-kit/skew.ts'
 // Sleep mode phase 3 (#834): the wake check. The overnight rules (overnight.ts) judge the words of a
 // call, and a text match always has a way around it, so at wake the real state since sleep began is
 // read: issues created, milestones touched, LESSONS.md changed (on GitHub and the installed copy),
-// and deploy runs. Every hit goes at the top of the night's report; a read that fails is said as not
-// checked, never as nothing found (L460, L11).
+// and deploy runs. Every hit goes at the top of the night's report; an issue filed overnight that
+// needs nothing from Dan is no hit but `filed`, said in one line under Done (#3273). A read that
+// fails is said as not checked, never as nothing found (L460, L11).
 //
 // Which repositories: every one the gh login had an event in since sleep began (read page by page,
 // as far back as GitHub keeps them, its newest 300, and any window before that said, #1160), every
