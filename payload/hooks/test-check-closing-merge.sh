@@ -115,6 +115,15 @@ expect_deny "a body that says it does not close an issue GitHub will close" "#43
 expect_deny "the refusal names the safe phrasing" "Part of #N"
 expect_deny "and what to do with the body" "gh pr edit 7"
 
+# claude-config#3252: a redirection glued to a word, and a function's body. The reader split on
+# spaces only, so this gate saw a program named gh>/dev/null, or a subcommand named 2>/dev/null or
+# pr>/dev/null, and the first command of a function's body as a program named f(), and read no body.
+for glued in "gh>/dev/null pr merge 7 --squash" "gh pr>/dev/null merge 7 --squash" "gh pr merge>/dev/null 7 --squash" \
+             "gh 2>/dev/null pr merge 7 --squash" "f() { gh pr merge 7 --squash; }; f"; do
+  run_hook "$glued"
+  expect_deny "#3252 the same body is refused: $glued" "#4358"
+done
+
 # claude-config#970: "Part of #953", and the next PR "closes #953". Merged, it closed #953 early.
 pr_json "Part of #953
 

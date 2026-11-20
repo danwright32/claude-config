@@ -413,6 +413,18 @@ redirected "a review behind both streams" "&>/dev/null gh pr review 5 --approve 
 redirected "gh api behind an error redirection" "2>/dev/null gh api repos/o/r/issues/22/comments -f body=\"Agreed. $LINK\"" glue
 allows "#2235 control: a clean comment behind a redirection" "2>/dev/null gh issue comment 22 --body-file clean.md"
 
+# --- a redirection glued to a word, and a function's body (claude-config#3252) ---
+# `gh>/dev/null pr comment` posts the comment. The reader split on spaces only, so the gate saw a
+# program named gh>/dev/null, or a subcommand named 2>/dev/null or issue>/dev/null, and the first
+# command of a function's body as a program named f(), and let the link through.
+denies "#3252 pr comment, a redirection glued to gh" "gh>/dev/null pr comment 5 --body \"Agreed. $LINK\""
+denies "#3252 issue comment, a redirection glued to issue" "gh issue>/dev/null comment 22 --body \"Agreed. $LINK\""
+denies "#3252 a review, a redirection between gh and pr" "gh 2>/dev/null pr review 5 --approve --body-file with-link.md"
+# Refused before the reader fix too (seen beside main's reader, 2026-11-19), so these two are controls.
+denies "#3252 control: a body file, a redirection glued to comment" "gh issue comment>/dev/null 22 --body-file with-link.md"
+denies "#3252 control: a comment as the first command of a function's body" "f() { gh pr comment 5 --body \"Agreed. $LINK\"; }; f"
+allows "#3252 control: a clean comment with a redirection glued to gh" "gh>/dev/null issue comment 22 --body-file clean.md"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
