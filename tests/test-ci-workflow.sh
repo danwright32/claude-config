@@ -647,6 +647,102 @@ grep -q 'green-tree-' "$DIR/../tools/ci-reuse-green-tree.sh" \
   && check "#2690 the helper looks for the same green-tree- name" ok \
   || check "#2690 the helper looks for the same green-tree- name" "the name differs"
 
+# ---------------------------------------------------------------------------
+# #3312: every run says which parts of the suites it did not test, with the reasons the suites gave.
+# ---------------------------------------------------------------------------
+# Each part's runner writes its record (HOOK_TESTS_UNMEASURED_FILE), each part hands it on even when
+# it failed, and the fan in lists them on the summary and as notices, compares them with main's last
+# full run, and keeps main's own record only from a green run on main. All of it reports: every new
+# step continues on an error, so it can never turn a green check red.
+step_lines(){ # step_lines <workflow> <job> <step name> -> that step's lines, comments stripped
+  local block; block="$(wf_job_block "$1" "$2")"
+  awk -v want="$3" '
+    /^      - / { s = 0 }
+    /^      - name:/ { l = $0; sub(/^      - name:[[:space:]]*/, "", l); s = (l == want) }
+    s { print }' <<< "$block"
+}
+step_run_body(){ # step_run_body <workflow> <job> <step name> -> its run: body, unindented
+  local job; job="$(awk -v j="$2" '$0 ~ "^  "j":[[:space:]]*$" { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }' "$1")"
+  awk -v want="$3" '
+    /^[[:space:]]*- name:/ { l = $0; sub(/^[[:space:]]*- name:[[:space:]]*/, "", l); s = (l == want); inrun = 0; next }
+    s && !inrun && /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ { inrun = 1; match($0, /^[[:space:]]*/); ind = RLENGTH; next }
+    s && inrun { match($0, /^[[:space:]]*/); if ($0 !~ /^[[:space:]]*$/ && RLENGTH <= ind) { s = 0; inrun = 0; next } print substr($0, ind + 3) }
+  ' <<< "$job"
+}
+UPLOAD_STEP="Hand what this part did not test to the suite job"
+FETCH_STEP="Fetch what each part did not test"
+RESTORE_STEP="Restore what main's last run did not test"
+SAY_STEP="Say which parts the checks did not test"
+KEEP_STEP="Keep what main did not test for the next comparison"
+untested_wiring(){ # untested_wiring <workflow> -> ok, or each thing missing
+  local out="" parts up s st
+  parts="$(wf_job_block "$1" parts)"
+  grep -qE 'HOOK_TESTS_UNMEASURED_FILE:[[:space:]]*\$\{\{ runner\.temp \}\}/unmeasured\.tsv' <<< "$parts" \
+    || out="$out the parts' suite step does not name the record;"
+  up="$(step_lines "$1" parts "$UPLOAD_STEP")"
+  if [ -z "$up" ]; then out="$out no part step hands its record on;"
+  else
+    grep -qE 'name:[[:space:]]*part-unmeasured-\$\{\{ matrix\.part \}\}' <<< "$up" && grep -qE 'path:[[:space:]]*\$\{\{ runner\.temp \}\}/unmeasured\.tsv' <<< "$up" \
+      || out="$out the upload is not part-unmeasured-<part> of the record;"
+    grep -qF '!cancelled()' <<< "$up" || out="$out a failing part does not hand its record on;"
+    grep -qE 'continue-on-error:[[:space:]]*true' <<< "$up" || out="$out the upload can fail the part;"
+  fi
+  for s in "$FETCH_STEP" "$RESTORE_STEP" "$SAY_STEP" "$KEEP_STEP"; do
+    st="$(step_lines "$1" suite "$s")"
+    [ -n "$st" ] || { out="$out the fan in has no step '$s';"; continue; }
+    grep -qE 'continue-on-error:[[:space:]]*true' <<< "$st" || out="$out '$s' can turn the run red;"
+    case "$s" in
+      "$KEEP_STEP")
+        grep -qF "github.ref == 'refs/heads/main'" <<< "$st" || out="$out '$s' is not on main only;"
+        grep -qE 'always\(\)|cancelled\(\)' <<< "$st" && out="$out '$s' keeps a record from a run that was not green;" ;;
+      *) grep -qF '!cancelled()' <<< "$st" || out="$out '$s' does not run when a part failed;" ;;
+    esac
+  done
+  grep -qE 'pattern:[[:space:]]*part-unmeasured-\*' <<< "$(step_lines "$1" suite "$FETCH_STEP")" || out="$out the fan in does not fetch part-unmeasured-*;"
+  grep -qF 'bash tools/ci-unmeasured-summary.sh' <<< "$(step_lines "$1" suite "$SAY_STEP")" || out="$out the fan in does not run tools/ci-unmeasured-summary.sh;"
+  [ -z "$out" ] && echo ok || echo "${out# }"
+}
+r="$(untested_wiring "$REAL")"
+[ "$r" = ok ] \
+  && check "#3312 every part records and hands on what it did not test, and the fan in says it, reporting only" ok \
+  || check "#3312 every part records and hands on what it did not test, and the fan in says it, reporting only" "$r"
+# The control: the same workflow with the part's upload gone, which must be named.
+awk -v drop="$UPLOAD_STEP" '/^      - / { s = 0 } /^      - name:/ { l = $0; sub(/^      - name:[[:space:]]*/, "", l); s = (l == drop) } !s' "$REAL" > "$TMPROOT/no-upload.yml"
+r="$(untested_wiring "$TMPROOT/no-upload.yml")"
+[ "$r" = "no part step hands its record on;" ] \
+  && check "#3312 a workflow whose parts do not hand on their record is refused, naming it" ok \
+  || check "#3312 a workflow whose parts do not hand on their record is refused, naming it" "got: $r"
+
+# The fan in's step, RUN against records as download-artifact lays them out.
+say_body="$(step_run_body "$REAL" suite "$SAY_STEP")"
+if [ -z "$say_body" ]; then
+  check "#3312 the fan in's summary step was found to run" "no run body under '$SAY_STEP'"
+else
+  US="$TMPROOT/untested-step"
+  say_run(){ # say_run: runs the step from the repository root; sets say_rc
+    : > "$US/summary"
+    (cd "$DIR/.." && RUNNER_TEMP="$US/rt" HOME="$US/home" GITHUB_STEP_SUMMARY="$US/summary" COUNT=2 bash -e -o pipefail -c "$say_body" > "$US/stdout" 2>&1)
+    say_rc=$?
+  }
+  mkdir -p "$US/rt/parts-unmeasured/part-unmeasured-1" "$US/rt/parts-unmeasured/part-unmeasured-2" "$US/home/.cache/claude-config-untested"
+  printf 'test-a.sh\tno claude here\n' > "$US/rt/parts-unmeasured/part-unmeasured-1/unmeasured.tsv"
+  : > "$US/rt/parts-unmeasured/part-unmeasured-2/unmeasured.tsv"
+  : > "$US/home/.cache/claude-config-untested/main.tsv"
+  say_run
+  [ "$say_rc" -eq 0 ] \
+    && [ "$(head -1 "$US/summary")" = "**More left untested than main's last run:** test-a.sh 1 part, none on main." ] \
+    && grep -qF '::notice title=Not tested by the checks::1 part in 1 suite was not tested on the runner' "$US/stdout" \
+    && [ "$(cat "$US/home/.cache/claude-config-untested/main.tsv")" = "$(printf 'test-a.sh\tno claude here')" ] \
+    && check "#3312 the fan in's step writes the summary, prints the notices and keeps this run's record for main" ok \
+    || check "#3312 the fan in's step writes the summary, prints the notices and keeps this run's record for main" "exit $say_rc, summary: $(head -3 "$US/summary"), out: $(head -5 "$US/stdout")"
+  rm -rf "$US/rt/parts-unmeasured/part-unmeasured-2"
+  say_run
+  [ "$say_rc" -eq 0 ] && [ ! -e "$US/home/.cache/claude-config-untested" ] \
+    && grep -qF 'Part 2 handed back no record' "$US/summary" \
+    && check "#3312 a part with no record is named, and nothing is kept as main's baseline" ok \
+    || check "#3312 a part with no record is named, and nothing is kept as main's baseline" "exit $say_rc, kept: $(ls "$US/home/.cache" 2>&1), summary: $(head -5 "$US/summary")"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

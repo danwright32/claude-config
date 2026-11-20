@@ -4953,6 +4953,22 @@ the word in the check's name), while a check that TESTS a report of unmeasured, 
 case arm, is a check like any other (#1452). A pull's closing sentence names the suites that ran
 with parts unmeasured, from the runner's block, and never says "all N of its suites" for them.
 
+The pull request checks say the same where a reviewer looks, not only in a part's log (#3312). With
+`HOOK_TESTS_UNMEASURED_FILE` set, the runner also writes every unmeasured part, uncapped, as
+`<suite><TAB><why>` to that file, started empty each run and never handed to a suite. Each part job
+hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
+job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
+left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
+`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
+the rest on the summary). The run is compared, suite by suite, with the record of main's last green
+full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
+untested says so on the summary's first line and in a second notice,
+`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
+exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
+from each check's annotations before it merges and prints them, so a merge's log says what its green
+did not cover; a read that fails is said and the merge goes on.
+
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
 through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's alone:
