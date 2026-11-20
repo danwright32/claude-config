@@ -1,0 +1,5 @@
+# The one Claude Code version the pull request checks install to run the mods' own tests
+# (claude-config#3297). Raising it is a one line pull request, whose checks then say whether every mod
+# still passes on that version. Read by tools/install-claude-code.sh alone; the daily run in
+# .github/workflows/mods-on-newest-claude-code.yml tests the newest version instead.
+2.1.328
