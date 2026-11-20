@@ -4030,13 +4030,14 @@ export const indexSource = (from: string): boolean => from === '' || from.starts
  * What to ask git about one move (#3279):
  * - `merge`: for each commit, the files that differ between where it left this branch and itself
  *   (`git diff HEAD...<commit>`), which is what a merge of it, or a rebase onto it, brings in;
- * - `tree`: the files that differ between HEAD and the commit (a switch, a checkout of a branch, a
- *   branch made from a start point), or with `worktree` between the working tree and it (a hard reset);
+ * - `tree`: the files that differ between HEAD and the commit (a branch made from a start point,
+ *   by `switch -c` or `checkout -b`), or with `worktree` between the working tree and it (a hard reset);
  * - `picks`: each commit's own files (`git log --no-walk`, which walks a range as cherry-pick does),
  *   with `revert` taken back to what its parent held;
  * - `stash`: the files a stash entry holds, its untracked ones included;
- * - `name`: a checkout or switch of one name, which git reads as a commit, else as the one remote
- *   branch of that name, else (`orPath`, a checkout) as a path put back from the index.
+ * - `name`: a checkout or switch of one name (a branch, a commit), which git reads as a commit,
+ *   else as the one remote branch of that name, each then read as the files that differ between
+ *   HEAD and it, else (`orPath`, a checkout) as a path put back from the index.
  */
 export type MoveAsk =
   | { ask: 'merge'; commits: string[] }
