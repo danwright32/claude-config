@@ -6252,7 +6252,7 @@ Two decisions of 2026-11-19, both recorded on #3235, are behind that:
   `dc_notes_shape` and `dc_notes_folder` in `hooks/lib/disk-clean-predicates.sh`, read by both the
   page and the remover, so a row is offered only where the remover takes it.
 
-Two more decisions of 2026-11-19, recorded on #3235, each from its own picker:
+Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
 
 - **Bulky leftovers in a session still open: "Offer after 7 idle days".** The daily rule removes a
   session's bulky leftovers only once it has ended, and an orchestrator session can stay open for
