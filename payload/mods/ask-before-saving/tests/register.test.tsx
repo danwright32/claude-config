@@ -943,9 +943,11 @@ test('a Write or Edit to /dev/stdin, /dev/fd/0 or a fifo never opens it, and a l
   expect(w.ran.map(r => r.input.file_path)).toEqual(['/dev/stdin', '/dev/stdin', '/dev/fd/0', '/dev/fd/0'])
   const memory = settled(await settles(w, call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' })), 'Write CLAUDE.md fifo')
   expect(refusalOf(memory)).toContain(ASKS)
-  // The lessons file as a fifo: an Edit adding a lesson is never judged a pure addition unread.
+  // The lessons file as a fifo: an Edit adding a lesson is never judged a pure addition unread. It
+  // is judged as if every entry it holds were new, so it is sent to the lesson picker, and no For
+  // good is asked for an entry behind a file nobody could read (independent review of #3320).
   const lesson = settled(await settles(w, call($, addLesson)), 'Edit LESSONS.md fifo')
-  expect(refusalOf(lesson)).toContain(ASKS)
+  expect(refusalOf(lesson)).toContain(PICKER_ONLY)
   expect(w.ran.length).toBe(4)
   expect(w.opened).toEqual([])
 })
@@ -1608,6 +1610,13 @@ test("a failure of a question that is not about a save is never reported as a sa
 // rule to that file; nothing Claude writes can.
 const LESSONS = `${HOME}/.claude/LESSONS.md`
 const LESSONS_SHOWN = '~/.claude/LESSONS.md'
+// What an Edit or Write that adds or changes a lesson entry is told when no answer in the lesson
+// picker covers it (independent review of #3320): it was asked about through For good until then.
+// refusedAs is what a write in a list of them is told: every Edit or Write of the lessons file in
+// those lists adds or changes an entry unless the test says otherwise, and anything else (another
+// file, a shell command) is asked about as before.
+const PICKER_ONLY = 'so he approves it only in the lesson picker'
+const refusedAs = (input: { tool?: unknown; file_path?: unknown }) => ((input.tool === 'Edit' || input.tool === 'Write') && input.file_path === LESSONS ? PICKER_ONLY : ASKS)
 // The rule and its why, as the durable lesson check has Claude propose it.
 const RULE = 'A merge on conflict must fill a stored null from a non null incoming value, not only refuse to overwrite it. A clause that never updates also never repairs.'
 const LESSONS_TEXT = '# Lessons\n\n## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n\n## Data safety\n\n- **L5. Never destroy good state.**\n'
@@ -1655,7 +1664,7 @@ test('a lesson Dan approved in the durable lesson picker is added with no second
   expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
   quietOnMain(w)
   // Used once: the same write again is asked about.
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran.length).toBe(1)
 })
 
@@ -1674,7 +1683,7 @@ test('an approved lesson does not let any other write through: other text, a rem
     // The rule, by a shell append: asked about through For good as before.
     { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` },
   ]
-  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   expect(w.ran).toEqual([])
   // None of them used it up: the approved write still goes through.
   expect((await call($, addLesson)).deny).toBeUndefined()
@@ -1700,7 +1709,7 @@ test("an approval only Dan's own answer in the dialog gives: answers Claude fill
   w.dialog.afk = false
   // A subagent's picker records nothing.
   await proposeLesson($, w, 'Add to LESSONS.md', { agentId: 'agent-a1' })
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -1711,7 +1720,7 @@ test("a typed answer to the lesson's picker approves nothing, Dan is told so, an
   expect(typed).toContain('Dan typed "yes but shorter" instead of choosing an answer, so it was not recorded, and the lesson is not approved')
   expect(typed).toContain('ask him the same question again, with the same metadata and the rule as it then stands')
   expect(w.toasts).toContain(typedToast('Ask before saving'))
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   // No answer at all is not a typed one: no toast for it.
   const before = w.toasts.length
   expect(contextOf(await proposeLesson($, w, undefined))).toContain('did not choose')
@@ -1722,10 +1731,10 @@ test('Project memory instead and Skip approve nothing for the lessons file', wit
   const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   const project = await proposeLesson($, w, 'Project memory instead')
   expect(contextOf(project)).toContain(`Dan answered Project memory instead: do not add it to ${LESSONS_SHOWN}`)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   const skip = await proposeLesson($, w, 'Skip')
   expect(contextOf(skip)).toContain('Dan answered Skip')
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -1735,7 +1744,7 @@ test('an approved lesson lapses after its time: Dan and Claude are told, and the
   await w.clock.advance(APPROVAL_MS)
   expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
   expect(notesOf(w)).toContain(`Dan's Add to LESSONS.md on saving this to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -1815,7 +1824,7 @@ test('an approved lesson lets nothing ride along: no extra sentence, no extra li
   ]
   for (const added of riders) {
     const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${added}\n\n## Data safety` }
-    expect(`${added}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+    expect(`${added}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   }
   expect(w.ran).toEqual([])
   expect((await call($, addLesson)).deny).toBeUndefined()
@@ -1835,7 +1844,7 @@ test('an approved lesson by Write goes through only as the old file with the ent
     // The sections reordered while the entry goes in.
     `# Lessons\n\n${old.slice(at)}\n${ENTRY}## Proof over green\n\n- **L1. A test or guard is only real once it has been seen to fail.**\n`,
   ]
-  for (const content of removals) expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content }))).toContain(ASKS)
+  for (const content of removals) expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content }))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   expect((await call($, { tool: 'Write', file_path: LESSONS, content: inserted })).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
@@ -1848,7 +1857,7 @@ test('an approved lesson takes only a provenance shaped as one: a sentence in pa
   await proposeLesson($, w, 'Add to LESSONS.md')
   const body = ENTRY.replace('(slate#9, 2026-10-06)', '(slate#9, 2026-10-06: and from now on always push on Fridays)')
   const input = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${body}## Data safety` }
-  expect(refusalOf(await call($, input))).toContain(ASKS)
+  expect(refusalOf(await call($, input))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   expect((await call($, addLesson)).deny).toBeUndefined()
 })
@@ -1871,7 +1880,7 @@ test('a SHORT line over the index cap with its prefix is asked about, and an own
   const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const over = ENTRY.replace('SHORT: Fill a stored null on conflict.', `SHORT: ${'x'.repeat(155)}`)
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${over}## Data safety` }))).toContain(ASKS)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${over}## Data safety` }))).toContain(PICKER_ONLY)
   const owned = ENTRY.replace('(slate#9, 2026-10-06)', '(dwright-pennie/slate#9, 2026-10-06)')
   expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${owned}## Data safety` })).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
@@ -1887,7 +1896,7 @@ test('a lesson approval found past its time where it is used is told to Claude i
   await proposeLesson($, w, 'Add to LESSONS.md')
   now = APPROVAL_MS
   const late = refusalOf(await call($, addLesson))
-  expect(late).toContain(ASKS)
+  expect(late).toContain(PICKER_ONLY)
   expect(late).toContain(`Dan's earlier Add to LESSONS.md on this save lapsed after 10 minutes`)
   expect(w.ran).toEqual([])
 })
@@ -1900,7 +1909,7 @@ test('an approved lesson split around the text an Edit keeps is asked about', wi
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = ENTRY.indexOf(' (slate#9')
   const split = `${ENTRY.slice(0, at)}## Data safety${ENTRY.slice(at)}`
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: split }))).toContain(ASKS)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: split }))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // After the kept text is an addition too.
   expect((await call($, { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n\n${ENTRY}` })).deny).toBeUndefined()
@@ -1926,7 +1935,11 @@ test('an approved lesson Edit whose kept text is not whole lines of the file, or
     // The entry run straight onto the kept line, with no line break between.
     { old_string: '## Data safety', new_string: `${ENTRY.replace(/\n+$/, '')}## Data safety` },
   ]
-  for (const e of edits) expect(`${JSON.stringify(e)}: ${refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, ...e }))}`).toContain(ASKS)
+  // Each would add or change an entry, so each is sent to the lesson picker (independent review of
+  // #3320), but the one whose kept text the file does not hold: that Edit can change nothing as the
+  // file stands, so it is asked about as before, and is judged again against the file when sent.
+  for (const e of edits)
+    expect(`${JSON.stringify(e)}: ${refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, ...e }))}`).toContain(e.old_string === '## Not a heading here' ? ASKS : PICKER_ONLY)
   expect(w.ran).toEqual([])
   expect((await call($, addLesson)).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
@@ -1937,7 +1950,7 @@ test('an approved lesson Write must insert the entry at a line boundary', withKi
   await proposeLesson($, w, 'Add to LESSONS.md')
   const at = LESSONS_TEXT.indexOf('Never destroy')
   const midLine = LESSONS_TEXT.slice(0, at) + ENTRY + LESSONS_TEXT.slice(at)
-  expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content: midLine }))).toContain(ASKS)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: LESSONS, content: midLine }))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -1948,7 +1961,7 @@ test('an approved lesson with no SHORT line is asked about when its rule is too 
   const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
   await proposeLesson($, w, 'Add to LESSONS.md')
   const bare = ENTRY.replace('  SHORT: Fill a stored null on conflict.\n', '')
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${bare}## Data safety` }))).toContain(ASKS)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${bare}## Data safety` }))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -1996,7 +2009,7 @@ test('a lesson Dan approved with its check line is added carrying that line, wit
   expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
   quietOnMain(w)
   // Used once: the same write again is asked about.
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   expect(w.ran.length).toBe(1)
 })
 
@@ -2023,7 +2036,7 @@ test('an approved check line covers that line on that lesson only: another line,
     // The approved line by itself, added to a lesson already in the file.
     { tool: 'Edit', file_path: LESSONS, old_string: '- **L5. Never destroy good state.**', new_string: `- **L5. Never destroy good state.**\n  ${CHECK}` },
   ]
-  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   expect(w.ran).toEqual([])
   // None of them used it up: the approved entry with its approved line still goes through.
   expect((await call($, addChecked)).deny).toBeUndefined()
@@ -2033,26 +2046,26 @@ test('an approved check line covers that line on that lesson only: another line,
 test('a check line Dan was not shown rides on no approval: none asked, none given, a lesson approved without one (#3245)', withKit, async ($, on) => {
   const w = world($, on, { auto: true, agents: ['agent-a1'], files: { [LESSONS]: LESSONS_TEXT } })
   // No lesson approval at all.
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // Project memory instead and Skip, the check line shown: nothing is approved.
   await proposeChecked($, w, 'Project memory instead')
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   await proposeChecked($, w, 'Skip')
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // His own typed words.
   await proposeChecked($, w, 'yes with that check')
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // A dialog that closed while he was away, whatever answer it carries.
   w.dialog.afk = true
   await proposeChecked($, w, 'Add to LESSONS.md')
   w.dialog.afk = false
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // A subagent's picker.
   await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(CHECK), RULE, { agentId: 'agent-a1' })
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // The lesson approved with no check line shown: his answer covers the rule, as it did before.
   await proposeLesson($, w, 'Add to LESSONS.md')
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   expect((await call($, addLesson)).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
@@ -2068,7 +2081,7 @@ test('a check line approved for one lesson is not carried to another lesson appr
   await proposeChecked($, w, 'Add to LESSONS.md')
   await proposeLesson($, w, 'Add to LESSONS.md', {}, OTHER, undefined, 'SHORT: Inject the clock into every retry.')
   // The second lesson with the first one's line: neither approval is for that pair.
-  expect(refusalOf(await call($, addEntry(entryWith(CHECK, OTHER_ENTRY))))).toContain(ASKS)
+  expect(refusalOf(await call($, addEntry(entryWith(CHECK, OTHER_ENTRY))))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // Each goes through as Dan approved it.
   expect((await call($, addEntry(OTHER_ENTRY))).deny).toBeUndefined()
@@ -2093,8 +2106,8 @@ test("the picker shows Dan the check line it approves, or approves nothing: a li
   }
   // Dan was asked nothing, and nothing was approved: not the line, and not the rule beside it.
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
 })
 
@@ -2137,8 +2150,8 @@ test('the picker refuses a check line Dan could not see whole, before he is aske
   expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, questionWith(`${pt(0xfeff)}${CHECK}`))).deny).toContain('on a line of its own')
   // Dan was asked nothing, and nothing was approved: not a line, and not the rule beside it.
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the picker refusing every check line: a line at the cap is asked and approved,
   // and so is one indented with spaces and a tab, which is the file's indentation and no part of it.
@@ -2162,7 +2175,7 @@ test('an approved check line is added only as Dan read it: one carrying an unsee
     // The approved line under a rule whose bold never closes, which the index would join it into.
     addEntry(entryWith(CHECK, ENTRY.replace('overwrite it.**', 'overwrite it.'))),
   ]
-  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   expect(w.ran).toEqual([])
   // None of them used it up, and the line as he read it still goes through, tab indented or not.
   expect((await call($, addEntry(entryWith(`${pt(0x09)}${CHECK}`)))).deny).toBeUndefined()
@@ -2182,13 +2195,13 @@ test('a check line in the metadata of any other picker changes nothing: its answ
     expect(q.options.map(o => o.label)).toEqual(['Add', 'Skip'])
     expect(contextOf(r)).not.toContain('Dan answered')
     // And his answer to it approved neither the lesson nor its check line.
-    expect(refusalOf(await call($, addChecked))).toContain(ASKS)
-    expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+    expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
+    expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   }
   // The same answer under the mod's own words, from a picker that is not the lesson's.
   const r = await proposeLesson($, w, 'Add to LESSONS.md', { metadata: { source: 'next-issue', rule: RULE, check: CHECK } }, RULE, questionWith(CHECK))
   expect(r.deny).toBeUndefined()
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the write being refused whatever was asked: the lesson's own picker approves it.
   await proposeChecked($, w, 'Add to LESSONS.md')
@@ -2204,12 +2217,12 @@ test('an approved check line lapses with its lesson after 10 minutes, and ends w
   expect(w.toasts.join('\n')).not.toContain('lapsed')
   await w.clock.advance(1)
   expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} lapsed after 10 minutes unused`)
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   // Approved again, then the session ends: the next session's write is asked about.
   await proposeChecked($, w, 'Add to LESSONS.md')
   await endSession($)
   expect(w.toasts.join('\n')).toContain(`The Add to LESSONS.md you gave for saving to ${LESSONS_SHOWN} was never used before the session ended`)
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // Neither refusal is the write being unapprovable: approved once more, it goes through.
   await proposeChecked($, w, 'Add to LESSONS.md')
@@ -2269,8 +2282,8 @@ test('the lesson picker refuses a rule or a question holding a character Dan can
   expect((await proposeChecked($, w, 'Add to LESSONS.md', CHECK, buried)).deny).toContain(`shows text whole only up to ${MAX_QUESTION}`)
   // Dan was asked nothing and nothing was approved, so the entry is asked about as any save is.
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
-  expect(refusalOf(await call($, addEntry(ENTRY.replace('stored null', `stored${pt(0x200b)}null`))))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
+  expect(refusalOf(await call($, addEntry(ENTRY.replace('stored null', `stored${pt(0x200b)}null`))))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the picker refusing every rule that is not ASCII: one quoting an accented letter,
   // curly quotes and a multiplication sign is asked, approved and added as he read it.
@@ -2329,7 +2342,7 @@ test('the lesson picker refuses a question taller than stays near the answers, m
   for (const [top, inQuestion, why] of fields) expect(`${JSON.stringify([top, inQuestion])}: ${(await ask(RULE, question, { ...top, questions: [{ ...own, ...inQuestion }] })).deny}`).toContain(why)
   // Dan was asked nothing and nothing was approved, so the entry is asked about as any save is.
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the picker refusing every bracket: code in backticks on one line is asked,
   // approved and added as he read it, beside fields that hold nothing odd. The header and the
@@ -2385,7 +2398,7 @@ test('an approved lesson is added only as Dan read it: an entry holding a charac
   for (const input of others) {
     // A tab at the end of a line is the file's indentation, as it is around a check line.
     if (input.new_string.includes(`conflict.${pt(0x09)}\n`)) continue
-    expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+    expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   }
   expect(w.ran).toEqual([])
   // None of them used it up: the entry as he read it still goes through.
@@ -2404,8 +2417,8 @@ test('answers Claude filled in are refused beside a check line too: Dan is asked
     expect(`${JSON.stringify(answers)}: ${contextOf(r)}`).not.toContain('Dan answered')
   }
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addChecked))).toContain(ASKS)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addChecked))).toContain(PICKER_ONLY)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the picker refusing a call for holding the field: with none filled in he is
   // asked, and his own answer approves the lesson with its line.
@@ -2494,7 +2507,7 @@ test('the lesson picker shows Dan the SHORT line it approves, or approves nothin
   // The picker as it was sent before this change: the rule is too long for the index line, so its
   // entry needs a SHORT line, and nobody was shown one.
   const none = await proposeLesson($, w, 'Add to LESSONS.md', {}, RULE, undefined, null)
-  expect(none.deny).toContain(`The rule is ${RULE.length} characters`)
+  expect(none.deny).toContain(`The rule is ${RULE.length} bytes`)
   expect(none.deny).toContain(`so this entry needs a SHORT line`)
   expect(none.deny).toContain('metadata "short"')
   // A SHORT line the metadata carries and the question does not state.
@@ -2517,7 +2530,7 @@ test('the lesson picker shows Dan the SHORT line it approves, or approves nothin
   // Longer than the index line holds under a lesson number of four digits.
   const ofLength = (n: number) => `SHORT: ${'abcd '.repeat(40).slice(0, n - 1)}e`
   const over = await proposeLesson($, w, 'Add to LESSONS.md', {}, RULE, undefined, ofLength(MAX_SHORT_TEXT + 1))
-  expect(over.deny).toContain(`Metadata "short" reads as no SHORT line: its text is ${MAX_SHORT_TEXT + 1} UTF-16 code units, and a SHORT line's text is at most ${MAX_SHORT_TEXT}`)
+  expect(over.deny).toContain(`Metadata "short" reads as no SHORT line: its text is ${MAX_SHORT_TEXT + 1} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and a SHORT line's text is at most ${MAX_SHORT_TEXT}`)
   // What Dan cannot see, and markup a surface may hide, refused in the words every shown text is.
   for (const [name, c, why] of HIDDEN) {
     const line = SHORT.replace('stored null', `stored${c}null`)
@@ -2529,7 +2542,7 @@ test('the lesson picker shows Dan the SHORT line it approves, or approves nothin
   expect((await proposeLesson($, w, 'Add to LESSONS.md', {}, RULE, undefined, commented)).deny).toContain('Metadata "short" reads as no SHORT line: it holds "<!--" at character ')
   // Dan was asked nothing and nothing was approved, so the entry is asked about as any save is.
   expect(w.asked).toEqual([])
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // None of that is the picker refusing every SHORT line: one at the cap is asked, and the pair he
   // reads, the line on a line of its own, is approved and added.
@@ -2562,7 +2575,7 @@ test('an approved lesson is written only with the SHORT line Dan read: another, 
   ]
   for (const input of others) {
     expect(input.new_string).not.toBe(addLesson.new_string)
-    expect(`${JSON.stringify(input.new_string)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+    expect(`${JSON.stringify(input.new_string)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   }
   expect(w.ran).toEqual([])
   // None of them used it up, and none of that is every entry being refused: the one he read goes through.
@@ -2579,7 +2592,7 @@ test('a lesson whose rule fits the index line is approved with no SHORT line, an
   expect(contextOf(asked)).toContain('and no SHORT line, since he was shown none')
   // A SHORT line added afterwards, which he never read: the review's own, and a harmless one.
   for (const line of [UNSHOWN, 'SHORT: Read a stored value back before comparing it.'])
-    expect(`${line}: ${refusalOf(await call($, addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${line}\n\n`))))}`).toContain(ASKS)
+    expect(`${line}: ${refusalOf(await call($, addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${line}\n\n`))))}`).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // The entry as he read it, with no SHORT line, is written with no second question.
   expect((await call($, addEntry(BRIEF_ENTRY))).deny).toBeUndefined()
@@ -2596,11 +2609,11 @@ test('a SHORT line approved for one lesson is not carried to another, and lapses
   // Two lessons approved, the second with no SHORT line: the first's line rides on the second's entry nowhere.
   await proposeLesson($, w, 'Add to LESSONS.md')
   await proposeLesson($, w, 'Add to LESSONS.md', {}, BRIEF, undefined, null)
-  expect(refusalOf(await call($, addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${SHORT}\n\n`))))).toContain(ASKS)
+  expect(refusalOf(await call($, addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${SHORT}\n\n`))))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // Past its time the approval covers nothing, its SHORT line included.
   await w.clock.advance(APPROVAL_MS)
-  expect(refusalOf(await call($, addLesson))).toContain(ASKS)
+  expect(refusalOf(await call($, addLesson))).toContain(PICKER_ONLY)
   expect(w.ran).toEqual([])
   // Neither refusal is the write being unapprovable: approved again, the entry he read goes through.
   await proposeLesson($, w, 'Add to LESSONS.md')
@@ -2655,12 +2668,15 @@ test('under no build, a lesson approved with its check line is added with that l
 
 test('a For good approval is answered by the noun the same way: the exact save once, nothing after (#1483)', withNoBuild, async ($, on) => {
   const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
-  const save = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '- Always ask before merging.\n\n## Data safety' }
+  // A save that is no lesson entry's: text under the title, above the first section. Since the
+  // independent review of #3320 a For good covers nothing that adds or changes an entry, and a line
+  // written under a section's last entry is that entry's to the file's reader.
+  const save = { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons\n\n- Always ask before merging.' }
   // Asked and approved For good before no build was on.
   await askDan($, w, refusalOf(await call($, save)), 'For good', LESSONS_SHOWN)
   w.files['/nobuild/on'] = ''
   // Other text to the same file is not the approved save.
-  expect((await call($, { ...save, new_string: '- Never ask.\n\n## Data safety' })).deny).toBe('NO BUILD: refused')
+  expect((await call($, { ...save, new_string: '# Lessons\n\n- Never ask.' })).deny).toBe('NO BUILD: refused')
   const sent = await call($, save)
   expect(sent.deny).toBeUndefined()
   expect(contextOf(sent)).toContain(`Saved to ${LESSONS_SHOWN}, as Dan answered For good.`)
@@ -2814,7 +2830,7 @@ test('the index line an approval covers is the one line linking that file: anyth
     // Two commands, the second writing elsewhere.
     { tool: 'Bash', command: `echo '${indexLine('rule.md')}' >> ${INDEX_SHOWN}; echo x >> ${MEMDIR_SHOWN}/notes.md` },
   ]
-  for (const input of asked) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  for (const input of asked) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
   expect(w.ran.length).toBe(1)
   // None of them used it up: the one line still goes through, then a second line is asked about.
   expect(refusalOf(await call($, { tool: 'Write', file_path: INDEX, content: `${INDEX_TEXT}${indexLine('rule.md')}\n` }))).toBe('')
@@ -2970,4 +2986,124 @@ test('a heredoc editing a script whose text names lasting memory in a quoted sen
   // And a Write or Edit of the file itself.
   expect(refusalOf(await call($, { tool: 'Write', file_path: `${HOME}/.claude/LESSONS.md`, content: '- rule\n' }))).toContain(ASKS)
   expect(w.ran.length).toBe(1)
+})
+
+// The independent review of #3320. The For good picker approves a save by its key and holds nothing
+// of what its question says, so an Edit the lesson approval did not cover could still reach the
+// lessons file under a question of the session's own wording, with a SHORT line Dan never read. An
+// Edit or Write that adds or changes a lesson entry is now covered by his answer in the lesson
+// picker or by nothing: it is refused in words that send Claude there, and no question waits on
+// it, so no For good can be given. What is no entry's is asked about as it was. (PICKER_ONLY, the
+// words of that refusal, stands with the lessons file's names above, where every test can read it.)
+const L5 ='- **L5. Never destroy good state.**'
+
+test('an Edit or Write that adds or changes a lesson entry is never asked For good: it is refused and sent to the lesson picker (#3320 review)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  // The review's route: an entry nobody approved, under a SHORT line of the session's own.
+  const adding = refusalOf(await call($, addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${UNSHOWN}\n\n`))))
+  expect(adding).toContain(PICKER_ONLY)
+  expect(adding).toContain('adds or changes a lesson entry in ~/.claude/LESSONS.md (L753)')
+  expect(adding).toContain('"source": "durable-lesson"')
+  expect(adding).not.toContain(ASKS)
+  // No question waits on it, so there is nothing a For good could answer.
+  expect(idIn(adding)).toBeUndefined()
+  // An entry already there, changed: its rule, a SHORT line or a check line given to it, by an
+  // Edit, a Write of the whole file, or an Edit of every place a phrase stands.
+  const changes = [
+    { tool: 'Edit', file_path: LESSONS, old_string: 'Never destroy good state.', new_string: 'Always destroy good state.' },
+    { tool: 'Edit', file_path: LESSONS, old_string: L5, new_string: `${L5}\n  ${UNSHOWN}` },
+    { tool: 'Edit', file_path: LESSONS, old_string: L5, new_string: `${L5}\n  NO CHECK: nobody looked` },
+    { tool: 'Write', file_path: LESSONS, content: LESSONS_TEXT.replace('seen to fail', 'seen to pass') },
+    { tool: 'Edit', file_path: LESSONS, old_string: 'good state', new_string: 'any state', replace_all: true },
+    // A line written under a section's last entry, behind a blank line: the index reads on to the
+    // next section heading, so this would be L1's SHORT line.
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `  ${UNSHOWN}\n\n## Data safety` },
+  ]
+  for (const input of changes) {
+    const said = refusalOf(await call($, input))
+    expect(`${JSON.stringify(input)}: ${said}`).toContain(PICKER_ONLY)
+    expect(`${JSON.stringify(input)}: ${said}`).not.toContain(ASKS)
+  }
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  // What is no entry's is asked about as it was: a section heading, an entry taken out whole, the title.
+  const others = [
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and safety' },
+    { tool: 'Edit', file_path: LESSONS, old_string: `${L5}\n`, new_string: '' },
+    { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons learned' },
+  ]
+  for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  // And his For good still saves one of those.
+  const heading = others[0] ?? {}
+  await askDan($, w, refusalOf(await call($, heading)), 'For good', LESSONS_SHOWN)
+  expect((await call($, heading)).deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
+
+test('an approved entry put inside another entry is refused in words that say where it would land, and the approval still stands (#3320 review)', withKit, async ($, on) => {
+  const kept = '  SHORT: Keep good state until its replacement exists.'
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT.replace(L5, `${L5}\n${kept}`) } })
+  await proposeLesson($, w, 'Add to LESSONS.md', {}, BRIEF, undefined, null)
+  // The entry he approved, with no SHORT line, written just above L5's SHORT line.
+  const inside = refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: kept, new_string: `${BRIEF_ENTRY.trimEnd()}\n${kept}` }))
+  expect(inside).toContain(`It would put the entry inside L5's entry: the line after it, "SHORT: Keep good state until its replacement exists.", is L5's`)
+  expect(inside).toContain('Add it whole at an entry boundary')
+  expect(inside).toContain(PICKER_ONLY)
+  expect(inside).not.toContain(ASKS)
+  expect(w.ran).toEqual([])
+  // The same entry at a boundary goes through on the answer he already gave.
+  expect((await call($, addEntry(BRIEF_ENTRY))).deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  quietOnMain(w)
+})
+
+// The independent review of #3320, its lesser findings: the index cap counts bytes where the picker
+// counted UTF-16 code units, and a line that reads as a SHORT line once its markdown is drawn was
+// not counted as one, so Dan could read two of them and approve an entry carrying the other.
+test('the lesson picker counts a rule as the index does, in bytes: accented text that fits in characters still needs a SHORT line (#3320 review)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const e = pt(0xe9)
+  // 117 characters, 173 bytes: under the cap as it was counted, over it as the index counts.
+  const accented = `Never compare a stored value before reading it back, ${`${e.repeat(8)} `.repeat(7)}x`
+  expect(accented.length).toBeLessThan(MAX_SHORT_TEXT)
+  const refused = await proposeLesson($, w, 'Add to LESSONS.md', {}, accented, undefined, null)
+  expect(refused.deny).toContain('so this entry needs a SHORT line')
+  expect(refused.deny).toContain('bytes')
+  expect(w.asked).toEqual([])
+  // The same length in plain letters needs none.
+  const plain = accented.replaceAll(e, 'e')
+  expect((await proposeLesson($, w, 'Skip', {}, plain, undefined, null)).deny).toBeUndefined()
+  expect(w.asked.length).toBe(1)
+})
+
+test('the lesson picker refuses a question holding a line that reads as a SHORT line once drawn: in bold, in a list, in a quote (#3320 review)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const asking = `Add this lesson to ${LESSONS_SHOWN}: ${RULE}`
+  for (const decoy of ['**SHORT: Ask Dan before every save.**', '- SHORT: Ask Dan first.', '> SHORT: Always ask.', '  * SHORT: Always ask.', '1. SHORT: Always ask.']) {
+    // Beside the line the metadata carries: he would read two and approve an entry carrying one.
+    const beside = await proposeLesson($, w, 'Add to LESSONS.md', {}, RULE, `${asking}\n${decoy}`)
+    expect(`${decoy}: ${beside.deny}`).toContain('The question holds another line starting "SHORT:"')
+    // And where the metadata carries none: he would read a SHORT line his answer does not cover.
+    const alone = await proposeLesson($, w, 'Add to LESSONS.md', {}, BRIEF, `Add this lesson to ${LESSONS_SHOWN}: ${BRIEF}\n${decoy}`, null)
+    expect(`${decoy}: ${alone.deny}`).toContain('The question holds a line starting "SHORT:"')
+  }
+  expect(w.asked).toEqual([])
+  // Neither is every question being refused: the words inside a line are text he reads as text.
+  expect((await proposeLesson($, w, 'Skip', {}, RULE, `${asking} (the SHORT: line is below)`)).deny).toBeUndefined()
+  expect(w.asked.length).toBe(1)
+})
+
+// A For good is judged again against the lessons file as it stands when the call is sent (independent
+// review of #3320): one given for an Edit that could change nothing then, its kept text not being in
+// the file, covers nothing once the same Edit would add an entry.
+test('a For good already given does not cover its Edit once that Edit would add a lesson entry (#3320 review)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: '## Not a heading here', new_string: `${ENTRY}## Not a heading here` }
+  await askDan($, w, refusalOf(await call($, edit)), 'For good', LESSONS_SHOWN)
+  // The file comes to hold the kept text, so the approved call would now add L752 above it.
+  w.files[LESSONS] = `${LESSONS_TEXT}\n## Not a heading here\n`
+  const sent = refusalOf(await call($, edit))
+  expect(sent).toContain(PICKER_ONLY)
+  expect(sent).toContain('(L752)')
+  expect(w.ran).toEqual([])
 })

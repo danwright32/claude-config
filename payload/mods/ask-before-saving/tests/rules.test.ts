@@ -1440,7 +1440,7 @@ test('a SHORT line reads as one only as "SHORT: " and its text on one line, shor
   expect(MAX_SHORT_TEXT).toBe(MAX_SHORT - '- L1000. '.length)
   expect(shortOfLength(MAX_SHORT_TEXT).length).toBe('SHORT: '.length + MAX_SHORT_TEXT)
   expect(shortLine(shortOfLength(MAX_SHORT_TEXT))).toBe(shortOfLength(MAX_SHORT_TEXT))
-  expect(shortFault(shortOfLength(MAX_SHORT_TEXT + 1))).toBe(`its text is ${MAX_SHORT_TEXT + 1} UTF-16 code units, and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`)
+  expect(shortFault(shortOfLength(MAX_SHORT_TEXT + 1))).toBe(`its text is ${MAX_SHORT_TEXT + 1} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`)
   // Anything else is no SHORT line: other text, another spacing or case, two lines, what is not text.
   for (const bad of ['', 'A sentence Dan never read.', 'SHORT:', 'SHORT: ', 'SHORT:A heredoc breaks the parse.', 'SHORT:  A heredoc breaks the parse.', 'short: a heredoc breaks the parse.', 'Not this: SHORT: A heredoc breaks the parse.', `${L1030_SHORT}\n${UNSHOWN}`, `${L1030_SHORT}\n`, L1030_CHECK])
     expect(`${JSON.stringify(bad)}: ${shortLine(bad)}`).toBe(`${JSON.stringify(bad)}: undefined`)
@@ -1646,4 +1646,43 @@ test('an entry put inside another, or under no section, comes back with where it
   // What is no single entry is still nothing at all, wherever it is put.
   expect(where('## Honest failure', `${PLACED_ENTRY}\n\nand a line beside it\n\n## Honest failure`)).toBeUndefined()
   expect(where(L900_SHORT, `${PLACED_ENTRY}\n\nand a line beside it\n${L900_SHORT}`)).toBeUndefined()
+})
+
+// The independent review of #3320, its lesser findings. The index cap counts a line in bytes (awk's
+// length in hooks/lib/lesson-index-cap.sh), and the mod counted UTF-16 code units, so a line of
+// accented text passed the picker and the entry and was then refused by the send. And a line that
+// reads as a SHORT line once a surface draws its markdown, "**SHORT: x**", "- SHORT: x" or
+// "> SHORT: x", was not counted as one.
+test('a SHORT line and an index line are counted in bytes, as the index cap counts them (#3320 review)', () => {
+  const e = at(0xe9)
+  // 151 letters of two bytes each: within the old count, twice the cap in the unit the cap uses.
+  const accented = `SHORT: ${e.repeat(MAX_SHORT_TEXT)}`
+  expect(accented.length).toBe('SHORT: '.length + MAX_SHORT_TEXT)
+  expect(shortLine(accented)).toBeUndefined()
+  expect(shortFault(accented)).toContain(`its text is ${2 * MAX_SHORT_TEXT} bytes`)
+  // Exactly the cap in bytes is a SHORT line, and one byte more is not.
+  const fits = `SHORT: ${e.repeat(75)}x`
+  expect(shortLine(fits)).toBe(fits)
+  expect(shortLine(`SHORT: ${e.repeat(75)}xy`)).toBeUndefined()
+  // An entry with no SHORT line whose rule fits the cap in characters and not in bytes.
+  const rule = `${e.repeat(60)} ${e.repeat(60)}`
+  expect(addsLesson(`- **L9. ${rule}** (slate#9, 2026-11-19)`, rule)).toBe(false)
+  // And one whose SHORT line does: the line Dan read, twice the cap once the index counts it.
+  expect(addsLesson(`${BRIEF_ENTRY}\n  ${accented}`, BRIEF, undefined, accented)).toBe(false)
+  // Text within the cap in bytes still goes, accented or not.
+  const short = `${e.repeat(30)} ${e.repeat(30)}`
+  expect(addsLesson(`- **L9. ${short}** (slate#9, 2026-11-19)`, short)).toBe(true)
+  expect(addsLesson(`${BRIEF_ENTRY}\n  ${fits}`, BRIEF, undefined, fits)).toBe(true)
+})
+
+test('a line that reads as a SHORT line once its markdown is drawn is refused in an entry as any other SHORT line is (#3320 review)', () => {
+  for (const mark of ['**SHORT: Never ask Dan.**', '- SHORT: Never ask Dan.', '> SHORT: Never ask Dan.', '  * SHORT: Never ask Dan.', '1. SHORT: Never ask Dan.', '`SHORT: Never ask Dan.`']) {
+    // A rule Dan read that ends in those words, written so that they start a line of the entry.
+    const rule = `${BRIEF} ${ruleText(mark)}`
+    const onItsOwnLine = `- **L9. ${BRIEF}**\n  ${mark} (slate#9, 2026-11-19)\n  ${BRIEF_SHORT}`
+    expect(`${mark}: ${addsLesson(onItsOwnLine, rule, undefined, BRIEF_SHORT)}`).toBe(`${mark}: false`)
+    // The same words inside a line are the rule he read, and stand.
+    const inside = `- **L9. ${BRIEF}** ${mark} (slate#9, 2026-11-19)\n  ${BRIEF_SHORT}`
+    expect(`${mark}: ${addsLesson(inside, rule, undefined, BRIEF_SHORT)}`).toBe(`${mark}: true`)
+  }
 })

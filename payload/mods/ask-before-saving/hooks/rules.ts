@@ -906,8 +906,36 @@ export const shownFault = (s: string): string | undefined => {
 export const LESSON_SHORT_KEY = 'short'
 
 /**
- * The longest text a SHORT line the picker shows may hold after its "SHORT: ", in UTF-16 code units,
- * the unit addsLesson counts the index line in: what MAX_SHORT leaves once the index line's own
+ * The length of text as the lessons index cap counts a line: its bytes in UTF-8. The cap is applied
+ * by awk's length (hooks/lib/lesson-index-cap.sh), which on these Macs counts bytes (measured
+ * 2026-11-20 by the independent review of #3320: one accented letter, one emoji and one plain
+ * letter count 7). The mod counted UTF-16 code units, so a SHORT line of 151 accented letters
+ * passed the picker and the entry and was then refused by the send, which holds the whole lessons
+ * file back. Bytes are never fewer than code units, so nothing counted here is let through that
+ * was refused before, and where an awk counts characters this only refuses a little early. A half
+ * of a surrogate pair standing alone counts 3, as the replacement character written for it does.
+ */
+export const indexLength = (s: string): number => {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+  }
+  return n
+}
+
+/**
+ * Whether a line reads as a SHORT line to somebody reading it drawn (independent review of #3320):
+ * "SHORT:" at its start once the marks a markdown surface draws instead of showing are set aside,
+ * a quote's ">", a list item's "-", "*", "+" or number, bold, italic, code and heading marks. The
+ * picker and the entry counted only a line starting "SHORT:" itself, so "**SHORT: x**",
+ * "- SHORT: x" and "> SHORT: x" stood in a question beside the one line his answer covers.
+ */
+export const readsAsShort = (line: string): boolean => /^[\s>*_~`#+-]*(?:\d+[.)])?[\s>*_~`#+-]*SHORT\s*:/.test(line)
+
+/**
+ * The longest text a SHORT line the picker shows may hold after its "SHORT: ", in bytes (indexLength),
+ * the unit the index cap and addsLesson count the index line in: what MAX_SHORT leaves once the index line's own
  * start, "- L<number>. ", is taken off at a number of four digits. The picker is asked before the
  * lesson has a number (`claude-sync next-lesson` reserves the one it prints, and it is asked for
  * only once Dan has approved), so the length is held where it can first be judged, against the
@@ -940,9 +968,9 @@ export const readShortLine = (s: unknown): { line: string } | { fault: string } 
   const m = /^SHORT: ([^ ].*)$/.exec(line)
   if (!m) return { fault: 'it is not in the shape "SHORT: <the rule in one line>", the word SHORT in capitals, a colon, one space and the text' }
   const text = m[1] ?? ''
-  if (text.length > MAX_SHORT_TEXT)
+  if (indexLength(text) > MAX_SHORT_TEXT)
     return {
-      fault: `its text is ${text.length} UTF-16 code units, and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`,
+      fault: `its text is ${indexLength(text)} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`,
     }
   return { line }
 }
@@ -1024,8 +1052,10 @@ const entryBlock = (block: string): string | undefined => {
  * The entry a write to the lessons file adds, under one fail-safe rule rather than a list of shapes
  * refused (the lessons reviews of #869 found a new shape each round: an entry split around kept text,
  * spliced mid line, beside a removal): the file it leaves must be the file as it is now with exactly
- * the entry block inserted at one line boundary (before the end, the block ends at a line end too).
- * `file` is the lessons file as it is now. Anything else is undefined, and is asked about.
+ * the entry block inserted at one line boundary (before the end, the block ends at a line end too),
+ * and since the independent review of #3320 that boundary must be an entry boundary of the file
+ * (boundaryFault), never a place inside another entry. `file` is the lessons file as it is now.
+ * Anything else is undefined, and no lesson approval covers it.
  * - A Write leaves its content.
  * - An Edit (never replace_all) whose old text is found exactly once leaves the file with that text
  *   replaced, judged by the same rule. It was once judged by the shape of its two texts instead, which
@@ -1107,6 +1137,79 @@ export const boundaryFault = (file: string, at: number): string | undefined => {
   if (owner === undefined && between !== undefined) return `under text that is no entry's, ${quoted(between)}, and not under a section heading or after an entry`
   return undefined
 }
+
+/**
+ * The entries of a lessons file, each as the lines its own reader gives it (claude-sync
+ * lesson_entries_render): from its first line down to the line before the next entry or section
+ * heading, the blank lines at its end dropped. Its rule, its check line and its SHORT line are all
+ * among them, and so is anything else written there, which that reader scans as the entry's.
+ */
+export const lessonEntries = (file: string): string[] => {
+  const out: string[] = []
+  let cur: string[] | undefined
+  const close = () => {
+    if (cur === undefined) return
+    while (cur.length > 1 && INDEX_BLANK.test(cur[cur.length - 1] ?? '')) cur.pop()
+    out.push(cur.join('\n'))
+    cur = undefined
+  }
+  for (const l of file.split('\n')) {
+    if (ENTRY_START.test(l)) {
+      close()
+      cur = [l]
+    } else if (SECTION_START.test(l)) close()
+    else cur?.push(l)
+  }
+  close()
+  return out
+}
+
+/**
+ * The lesson entries an Edit or Write leaves in the lessons file that were not in it before, word
+ * for word, each by its number: the entries it adds and the ones it changes, in a rule, a check
+ * line, a SHORT line or any other line that is the entry's. `file` is the lessons file as it is now,
+ * undefined when it is not there or could not be read, and the write is then judged as if every
+ * entry it holds were new. Nothing else a write does to the file counts here: taking an entry out,
+ * moving one whole, a section heading, text above the first section.
+ *
+ * The independent review of #3320: the For good picker approves a save by its key and holds
+ * nothing of what the question says, so an entry could reach the index under a question of the
+ * session's own wording, with a SHORT line Dan never read. An entry's lines are approved in the
+ * lesson picker and nowhere else, and this is what tells such a write from any other.
+ */
+export const entriesTouched = (tool: string, input: Record<string, unknown>, file: string | undefined): string[] => {
+  if (tool !== 'Edit' && tool !== 'Write') return []
+  const from = String(input.old_string ?? '')
+  const to = String(input.new_string ?? '')
+  // What the write leaves. An Edit is read as replacing its old text wherever that stands, which is
+  // every place a replace_all reaches and the one place any other Edit can.
+  const after = tool === 'Write' ? String(input.content ?? '') : file === undefined || !from ? to : file.split(from).join(to)
+  const before = new Map<string, number>()
+  for (const e of lessonEntries(file ?? '')) before.set(e, (before.get(e) ?? 0) + 1)
+  const touched: string[] = []
+  for (const e of lessonEntries(after)) {
+    const left = before.get(e) ?? 0
+    if (left > 0) before.set(e, left - 1)
+    else touched.push(/^- \*\*(L[0-9]+)\./.exec(e)?.[1] ?? 'L?')
+  }
+  return touched
+}
+
+/**
+ * What Claude is told when an Edit or Write would add or change a lesson entry with no answer of
+ * Dan's in the lesson picker covering it (independent review of #3320). It is refused, and he is
+ * not asked For good: that picker shows him a question of the session's own wording, and an entry's
+ * rule, check line and SHORT line are approved only where he reads each word for word. `misplaced`
+ * is where a single added entry would land when that is no entry boundary (boundaryFault).
+ */
+export const pickerOnly = (file: string, tool: string, touched: readonly string[], misplaced: string | undefined): string =>
+  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word. ` +
+  (misplaced !== undefined
+    ? `It would put the entry ${misplaced}. Add it whole at an entry boundary: straight after another entry's last line or under a section heading, with another entry's first line, a section heading or the end of the file as the next line that is not blank. `
+    : '') +
+  `If he answered ${LESSON_ADD} for this lesson in the last ${APPROVAL_MS / 60_000} minutes, send one Edit that adds exactly the entry that answer described, at an entry boundary. ` +
+  `Otherwise ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes. ` +
+  `To change an entry that is already there, ask him the same way for the entry as it should read, take the old one out (a removal is asked about as usual), and add the new one.`
 
 /**
  * The file an Edit leaves: `file` with its old text replaced, when that text is found exactly once
@@ -1236,6 +1339,9 @@ export const addsLesson = (added: string, rule: string, check?: unknown, short?:
   if (lines.some(l => INDEX_BLANK.test(l))) return false
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
+  // No other line of the entry reads as a SHORT line once its markdown is drawn (independent review
+  // of #3320): in bold, in a list or in a quote it would stand in the file beside the one he read.
+  if (lines.some((l, i) => i !== shortAt && readsAsShort(l))) return false
   const approved = checkLine(check)
   const end = shortAt === -1 ? lines.length : shortAt
   const raw = added.replace(/^\s*\n/, '').replace(/[ \t\n]+$/, '').split('\n')
@@ -1257,7 +1363,7 @@ export const addsLesson = (added: string, rule: string, check?: unknown, short?:
   // SHORT line, `- L<n>. <rule>`: an entry the index cannot hold is refused by the send, which holds
   // the whole lessons file back (sixth lessons review of #869).
   const shown = shortAt === -1 ? ruleText(rule) : (lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')
-  return `- L${m[1]}. ${shown}`.length <= MAX_SHORT
+  return indexLength(`- L${m[1]}. ${shown}`) <= MAX_SHORT
 }
 
 // One For good on a memory file also covers the one line in its folder's index linking to it (#1794,
