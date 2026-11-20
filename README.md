@@ -3658,7 +3658,11 @@ every session. The session writes it before it asks, states it on a line of its 
 and carries it in the picker's metadata, and the entry written under his answer carries exactly that
 line. A rule of at most 151 characters needs none, and its entry takes none. The 151 is the index
 cap of 160 less `- L1234. `: the lesson has no number until he approves it, so the line is sized for
-the longest number in use.
+the longest number in use. It is counted in bytes, as the cap is, so a letter with an accent counts
+two. An entry with no `SHORT:` line has its whole rule in bold and nothing else in bold, because
+the index renders the bold. Every entry is added whole at an entry boundary, never inside another
+entry, and a lesson entry is added or changed only under his answer in this picker: a For good
+does not cover one (the independent review of #3320, told in full where the mods are described).
 
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
@@ -7742,13 +7746,13 @@ carries into every session, which it once never showed: under an approval for on
 went through whose `SHORT:` line said something else. The line is carried in `metadata.short` as
 `SHORT: <text>` and stands on a line of its own in the question, and the one Edit his answer lets
 through carries exactly that line as its last: another line, one a word different, a second one, or
-none where he read one is asked about again. The picker is refused, before he is asked and with
+none where he read one is refused. The picker is refused, before he is asked and with
 the reason, when the line is in no such shape, is more than one line, fails the one function every
 shown text is judged by (`shownFault`, so the unseen class and the markup class above, with no
-second copy of either), or has text over 151 UTF-16 code units; when the rule is over 151 and no
+second copy of either), or has text over 151 bytes; when the rule is over 151 and no
 line is carried, since its entry would need one nobody was shown; and when the question holds any
 other line starting `SHORT:`. A rule of 151 or under is approved with no `SHORT:` line, and one
-added to its entry afterwards is asked about (rules.ts `readShortLine`, `addsLesson`). The 151 is
+added to its entry afterwards is refused (rules.ts `readShortLine`, `addsLesson`). The 151 is
 the index cap of 160 less `- L1234. `, because the picker is asked before the lesson has a number.
 Measured 2026-11-20 over the lessons file: of 895 entries 737 carry a `SHORT:` line; laid out with
 its rule and a check line each fits the 20 rows and 1,500 code units (the tallest takes 12 rows,
@@ -7756,6 +7760,29 @@ and 16 beside a check line of 300 characters); `shownFault` refuses one of the 7
 names two placeholders in angle brackets outside backticks); and 39 have text over 151, each
 written under a number of one or three digits. All 8 lesson pickers in the transcripts this Mac
 kept would be refused, each for a rule over 151 with no `SHORT:` line shown, which no picker had.
+An independent review of #3320 (2026-11-20) then tightened four things. With no `SHORT:` line the
+index renders an entry's bold span, and nothing held that span to the rule: under an approval for
+one sentence an entry went through whose bold closed after five words, and those five words were
+the lesson every session loaded. Such an entry is now taken only with the whole rule in bold and
+nothing else in bold, and no entry may hold a line of spaces (rules.ts `wholeRuleInBold`). The mod
+keeps no copy of the generator's reading: it requires a shape the generator reads one way, and
+`tests/test-lesson-index-line-shown.sh` runs the real generator over the entries listed in the
+mod's `tests/index-lines.ts` and holds each rendered line to the text Dan was shown, while the
+mod's own suite holds the mod to the same list. The approved Edit must add its entry whole at an
+entry boundary: after another entry's last line or under a section heading, with another entry's
+first line, a section heading or the end of the file as the next line that is not blank. Inside
+another entry it took that entry's `SHORT:` line as its own (`boundaryFault`). A For good no
+longer covers an Edit or Write that adds or changes a lesson entry in `~/.claude/LESSONS.md`: it
+is refused in words that send the session to the lesson picker, and no question waits on it
+(`entriesTouched`, `pickerOnly`). An entry is every line the file's reader gives it, down to the
+next entry or section heading. A write that touches no entry (a section heading, an entry taken
+out whole, text above the first section) and a shell command are asked about as before. Changing
+an entry already in the file therefore takes the lesson picker for the entry as it should read,
+then the old one taken out and the new one added. Length is counted in bytes, as the index cap
+counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
+drawn, in bold, in a list or in a quote, is refused in the question and in the entry
+(`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits of the lessons
+file were ever approved For good, both adding a whole lesson entry.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
