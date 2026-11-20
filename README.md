@@ -8584,7 +8584,10 @@ is still listed with why. The check runs once a night, when sleep
 mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
 limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
 parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
-file's changes, the milestones in each repository, then the deploy runs in each repository. Every
+file's changes, the milestones in each repository, then the deploy runs in each repository, a
+page of 100 at a time back to the moment sleep began (#3284: one page left a busy night's first
+hours unread), at most ten pages, the 1,000 runs GitHub lists for a window. A page not read says
+the window it left, sleep's start to the oldest run read, never a count. Every
 read it makes is kept with its part and how long it took, as `steps` on the one line it always
 writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
 stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same

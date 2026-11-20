@@ -19,8 +19,8 @@ const HOME = `${'/Users'}/x`
 const ok = (stdout: string): Ran => ({ exitCode: 0, stdout, stderr: '' })
 const fail = (stderr: string): Ran => ({ exitCode: 1, stdout: '', stderr })
 // The night's workflow runs in a repository, as GitHub's REST API lists them (#2766): created since
-// sleep began, with how each was started and how it ended.
-const RUNS = (repo: string) => `gh api repos/${repo}/actions/runs?per_page=100&created=>=2026-10-08T03:00:00Z`
+// sleep began, with how each was started and how it ended, a page of 100 at a time (#3284).
+const RUNS = (repo: string, page = 1) => `gh api repos/${repo}/actions/runs?per_page=100&created=>=2026-10-08T03:00:00Z&page=${page}`
 const runs = (list: object[], total = list.length): Ran => ok(JSON.stringify({ total_count: total, workflow_runs: list }))
 
 type World = Record<string, Ran>
@@ -157,14 +157,10 @@ describe('the wake check', () => {
       'when the Deploy run in o/r ran is unknown (GitHub gave no time)',
     ])
   })
-  test('a full page of milestones or runs says the rest were not read, runs by the window left (L24, #1160)', async () => {
+  test('a full page of milestones says the rest were not read (L24)', async () => {
     const ms = Array.from({ length: 100 }, (_, n) => ({ title: `m${n}`, updated_at: BEFORE }))
-    const many = Array.from({ length: 100 }, () => ({ name: 'CI', event: 'push', created_at: AFTER, html_url: 'u' }))
-    const r = await check({
-      'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify(ms)),
-      [RUNS('o/r')]: runs(many, 140),
-    })
-    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'the runs in o/r from 11:00 PM ET on Wed Oct 7 to 1:00 AM ET on Thu Oct 8 were not read for deploys (only the newest 100 of 140 were asked for)'])
+    const r = await check({ 'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify(ms)) })
+    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read'])
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = {
@@ -369,7 +365,7 @@ describe('a stop at the limit says where, how far, and what came after it (#3240
     const w: World = { ...QUIET, [RUNS('o/r')]: runs([]), [RUNS('o/claude-config')]: runs([]) }
     const r = await slow(w, { [RUNS('o/r')]: 30_000 })
     expect(r.unmeasured).toHaveLength(1)
-    expect(r.unmeasured[0]).toContain('in part 6 of 6 (the deploy runs in each repository): the last read it made, the deploy runs in o/r, took ')
+    expect(r.unmeasured[0]).toContain('in part 6 of 6 (the deploy runs in each repository): the last read it made, page 1 of the runs in o/r, took ')
     expect(r.unmeasured[0]).toContain('It had finished 1 of 2 repositories in this part. Nothing read the rest of it later: the check runs once a night, when sleep mode ends.')
   })
   test('every GitHub read is recorded with its part and how long it took, on a night it finished too', async () => {
@@ -379,7 +375,7 @@ describe('a stop at the limit says where, how far, and what came after it (#3240
     expect(r.steps.map(s => s.part)).toEqual([1, 2, 3, 4, 5, 5, 6, 6])
     expect(r.steps.every(s => s.ms === 2_000)).toBe(true)
     expect(r.steps[0]).toEqual({ part: 1, step: 'the GitHub login', ms: 2_000 })
-    expect(r.steps[6]).toEqual({ part: 6, step: 'the deploy runs in o/r', ms: 2_000 })
+    expect(r.steps[6]).toEqual({ part: 6, step: 'page 1 of the runs in o/r', ms: 2_000 })
   })
 })
 
@@ -645,6 +641,92 @@ describe('what needs nobody is counted, never listed (#2766)', () => {
     expect(r.checked).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
     // Without the login nothing on GitHub was read, and the line says so.
     expect((await check({ 'gh api user --jq .login': fail('not logged in') })).checked).toBe('The overnight check read no repositories on GitHub and left nothing out.')
+  })
+})
+
+// #3284: on waking on 2026-11-19 the check said the runs from 12:07 AM to 3:16 AM ET in one
+// repository "were not read for deploys (only the newest 100 of 160 were asked for)": GitHub lists
+// runs newest first, so a busy night's early hours were never checked for a failed deploy. Every
+// run since sleep began is now read, a page of 100 at a time (measured 2026-11-20: page 2 of a
+// created filter carries on where page 1 stopped, and total_count stays the whole window's count).
+describe('every run of the night is read, page by page (#3284)', () => {
+  const stamp = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  // `n` runs since sleep began, one a minute, newest first, as GitHub lists them: run i was made
+  // n minus i minutes after sleep began, so the oldest page holds the night's first hours.
+  const night = (n: number, o: (i: number) => Record<string, unknown> = () => ({})) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: 5000 + n - i,
+      name: 'Drift check',
+      event: 'schedule',
+      status: 'completed',
+      conclusion: 'success',
+      created_at: stamp(SINCE + (n - i) * 60_000),
+      html_url: `https://github.com/o/r/actions/runs/${5000 + n - i}`,
+      ...o(i),
+    }))
+  // Every page of o/r's runs, each saying the whole window's count, as GitHub answers.
+  const paged = (list: object[], total = list.length): World =>
+    Object.fromEntries(Array.from({ length: Math.max(1, Math.ceil(list.length / 100)) }, (_, p) => [RUNS('o/r', p + 1), runs(list.slice(p * 100, p * 100 + 100), total)]))
+  const runReads = (asked: string[]) => asked.filter(a => a.startsWith('gh api repos/o/r/actions/runs'))
+  const failedDeploy = (i: number) => (i === 150 ? { name: 'Deploy', event: 'push', conclusion: 'failure' } : {})
+
+  test('a failed deploy in the oldest page of a busy night is listed, and nothing is said unread', async () => {
+    const list = night(160, failedDeploy)
+    const r = await check(paged(list))
+    expect(r.hits).toEqual(['Deploy run overnight: o/r Deploy, failed (https://github.com/o/r/actions/runs/5010)'])
+    expect(r.unmeasured).toEqual([])
+    expect(runReads(r.asked)).toEqual([RUNS('o/r', 1), RUNS('o/r', 2)])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 159 scheduled runs passed.')
+  })
+  test('a night takes one read per 100 runs: 1 for 100, 2 for 160, 5 for 500, 10 for 1000', async () => {
+    const reads = async (n: number) => runReads((await check(paged(night(n)))).asked).length
+    expect([await reads(0), await reads(100), await reads(160), await reads(500), await reads(1000)]).toEqual([1, 1, 2, 5, 10])
+  })
+  test('a page that cannot be read says the window it would have covered, and what was read is still judged', async () => {
+    const list = night(160, i => (i === 20 ? { name: 'Deploy', event: 'push', conclusion: 'failure' } : {}))
+    const r = await check({ ...paged(list), [RUNS('o/r', 2)]: fail('HTTP 502: bad gateway') })
+    expect(r.hits).toEqual(['Deploy run overnight: o/r Deploy, failed (https://github.com/o/r/actions/runs/5140)'])
+    expect(r.unmeasured).toEqual(['the runs in o/r from 11:00 PM ET on Wed Oct 7 to 12:01 AM ET on Thu Oct 8 were not read for deploys (page 2: HTTP 502: bad gateway)'])
+  })
+  test('a page that is not JSON, or holds no list of runs, says the window too', async () => {
+    const list = night(160)
+    const bad = await check({ ...paged(list), [RUNS('o/r', 2)]: ok('<html>') })
+    expect(bad.unmeasured).toEqual(['the runs in o/r from 11:00 PM ET on Wed Oct 7 to 12:01 AM ET on Thu Oct 8 were not read for deploys (page 2: the answer was not JSON)'])
+    const empty = await check({ ...paged(list), [RUNS('o/r', 2)]: ok('{"total_count":160}') })
+    expect(empty.unmeasured).toEqual(['the runs in o/r from 11:00 PM ET on Wed Oct 7 to 12:01 AM ET on Thu Oct 8 were not read for deploys (page 2: the answer held no list of runs)'])
+  })
+  test('past the 1000 runs GitHub lists for a window, the rest are said unread by their window, never asked for', async () => {
+    const r = await check(paged(night(1200, failedDeploy)))
+    expect(runReads(r.asked)).toHaveLength(10)
+    expect(r.asked).not.toContain(RUNS('o/r', 11))
+    expect(r.hits).toEqual(['Deploy run overnight: o/r Deploy, failed (https://github.com/o/r/actions/runs/6050)'])
+    expect(r.unmeasured).toEqual(['the runs in o/r from 11:00 PM ET on Wed Oct 7 to 2:21 AM ET on Thu Oct 8 were not read for deploys (GitHub lists only the newest 1000 runs of a window, and this one held 1200)'])
+  })
+  test('a run pushed onto the next page by a newer one is judged once', async () => {
+    const list = night(160, i => (i === 99 ? { conclusion: 'failure' } : {}))
+    const r = await check({ ...paged(list, 161), [RUNS('o/r', 2)]: runs(list.slice(99), 161) })
+    expect(r.hits).toEqual(['Scheduled run overnight: o/r Drift check, failed (https://github.com/o/r/actions/runs/5061)'])
+    expect(r.unmeasured).toEqual([])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 159 scheduled runs passed.')
+  })
+  test('a page past the deadline, on the injected clock, says the window it left unread; the limit is said once', async () => {
+    const world: World = { ...QUIET, ...paged(night(160, failedDeploy)) }
+    let t = 0
+    const asked: string[] = []
+    const r = await wakeCheck(
+      async argv => {
+        const key = argv.join(' ')
+        asked.push(key)
+        if (argv[0] === 'gh') t += key === RUNS('o/r', 1) ? 30_000 : 500
+        return world[key] ?? fail(`unexpected: ${key}`)
+      },
+      { since: SINCE, home: HOME, github, now: () => t, mtimeOf: mtimeFrom(world) },
+    )
+    expect(asked).not.toContain(RUNS('o/r', 2))
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured.filter(u => /limit/.test(u))).toHaveLength(1)
+    expect(r.unmeasured[0]).toContain('in part 6 of 6 (the deploy runs in each repository): the last read it made, page 1 of the runs in o/r, took 30.0 s, and the next, page 2 of the runs in o/r, was not made.')
+    expect(r.unmeasured[1]).toBe('the runs in o/r from 11:00 PM ET on Wed Oct 7 to 12:01 AM ET on Thu Oct 8 were not read for deploys (page 2: the check ran out of time first)')
   })
 })
 

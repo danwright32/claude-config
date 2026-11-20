@@ -1540,7 +1540,20 @@ the ban list knowing that an action it does not name is approved.
   (page 4 answers HTTP 422, measured 2026-10-13), so three pages at most, each inside the same
   deadline on the engine's clock. A page that cannot be read, one past the deadline, or all 300
   still overnight is said by the window left unread, sleep's start to the oldest event read, never
-  as a count; a full page of deploy runs says its window the same way.
+  as a count.
+- The deploy runs are read the same way, page by page back to the moment sleep began (#3284): one
+  page of the newest 100 left 12:07 AM to 3:16 AM ET unread in one repository on 2026-11-19, 160
+  runs in the night, so a failed deploy in the early hours was never listed. Pages are asked for
+  with `per_page=100`, `created=>=` sleep's start and `page`; page 2 carries on where page 1
+  stopped and `total_count` stays the whole window's count (measured 2026-11-20), so the pages end
+  at a short page or once every run counted is read. Filtered by `created`, GitHub lists at most
+  1,000 runs (its REST documentation), so ten pages at most. A run a newer one pushed onto the next
+  page is judged once, by its id. A page that fails, is not a list, falls past the deadline or lies
+  beyond the 1,000 says the window left, sleep's start to the oldest run read; a first page that
+  fails is said as the repository's runs not checked, as before. A night takes one read per 100
+  runs: 2 for 160, 5 for 500. Two real pages took 2.75 s and 1.16 s on a loaded Mac (2026-11-20),
+  so a night of 160 fits the 30 s with room; `WAKE_CHECK_MS` was left as it is, and `steps` keeps
+  every page's time so the limit can be set from real nights.
 
 ### Sleep mode phase 6: the before bed questions about the queue's issues (#836), built
 
