@@ -58,6 +58,7 @@ default_stubs() {
   dc_stub docker 'exit 1'
   dc_stub git
   dc_stub gh
+  dc_stub pnpm
   dc_stub derived-data-sweep
 }
 fresh() {
@@ -1032,11 +1033,20 @@ DR="$DIR/../../hooks/lib/disk-remove.sh"
 # Days ago, as touch -t takes it (L290: the list's age is set, never waited for).
 ago() { date -v-"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days ago" '+%Y%m%d%H%M'; }
 ahead() { date -v+"$1"d '+%Y%m%d%H%M' 2>/dev/null || date -d "$1 days" '+%Y%m%d%H%M'; }
-# Writes a whole list naming each <path>, as keep_rules.py's remove run writes it, dated now.
-notes_listed() { # <path>...
-  local p
+# Writes one whole list naming each <path>, as keep_rules.py's remove run writes it, dated now.
+list_written() { # <list name> <path>...
+  local name="$1" p
+  shift
   mkdir -p "$KRS"
-  { printf 'readable-folders\t1\n'; for p in "$@"; do printf 'folder\t2000000\t%s\n' "$p"; done; printf 'end\t%s\n' "$#"; } > "$NLIST"
+  { printf '%s\t1\n' "$name"; for p in "$@"; do printf 'folder\t2000000\t%s\n' "$p"; done; printf 'end\t%s\n' "$#"; } > "$KRS/$name.tsv"
+}
+# The list of folders of images and documents naming each <path>. A real run writes every list each
+# day, so the lists of open sessions' bulky leftovers and of kept git checkouts are written beside
+# it, naming none, unless a case has put one there.
+notes_listed() { # <path>...
+  list_written readable-folders "$@"
+  [ -f "$KRS/open-leftovers.tsv" ] || list_written open-leftovers
+  [ -f "$KRS/kept-checkouts.tsv" ] || list_written kept-checkouts
 }
 notes_home() {
   fresh
@@ -1169,6 +1179,301 @@ check "agreement: they went through trash, twice" "$(eq "$(dc_calls trash | wc -
 check "agreement: and the notes beside them are untouched" "$([ -f "$NT/evidence.md" ] && [ -f "$NT/fixtures/a.bin" ] && echo ok || echo "a note is gone")"
 default_stubs
 
+# ------------------------------------------------------------------------------------------------
+# Bulky leftovers in a session that is still open (Dan, 2026-11-19, recorded on #3235: "Offer after
+# 7 idle days"). The daily keep rules list them in open-leftovers.tsv, by their own definition of
+# bulky, and remove none. Each is offered, to the Trash, once nothing in its TASK folder was changed
+# or opened for 7 days and no live session is working there.
+# ------------------------------------------------------------------------------------------------
+OSID=33333333-3333-4333-8333-333333333333
+OSES="$H/.claude/state/session-notes/-Users-x-proj/$OSID"
+OT="$OSES/task-9"; OBUSY="$OSES/task-busy"
+OLIST="$KRS/open-leftovers.tsv"
+open_listed() { list_written readable-folders; list_written kept-checkouts; list_written open-leftovers "$@"; }
+open_home() {
+  fresh
+  mkdir -p "$OT/fixtures" "$OT/node_modules" "$OT/small" "$OT/repo/.git" "$OBUSY/fixtures" "$H/.claude/sessions"
+  printf 'x\n' > "$OT/fixtures/a.bin"; printf 'x\n' > "$OT/node_modules/m.js"; printf 'n\n' > "$OT/handoff.md"
+  printf 'n\n' > "$OT/small/n.md"; printf 'x\n' > "$OT/repo/a.bin"; printf 'x\n' > "$OBUSY/fixtures/a.bin"
+  # The session is open, working somewhere else; a second one is working inside task-busy.
+  printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$OSID" > "$H/.claude/sessions/1.json"
+  printf '{"pid":2,"sessionId":"s2","cwd":"%s/fixtures/run"}\n' "$OBUSY" > "$H/.claude/sessions/2.json"
+  old "$H"
+  open_listed "$OT/fixtures" "$OT/node_modules" "$OT/repo" "$OBUSY/fixtures" "$OT/handoff.md" "$OT" "$OT/gone-since"
+}
+open_rows() { dcr_review_items "$REC" | awk -F "$S" -v p="$OSES/" '$2 == "claude-records" && index($4, p) == 1 { print $4 "|" $3 "|" $5 }' | sort; }
+
+open_home
+run_scan --only claude-records
+check "open leftovers: the scan exits 0, the kind measured" "$(eq "$RC|$(status_of claude-records)" "0|measured")"
+check "open leftovers: a listed folder whose task folder sat idle is offered, to the Trash" "$(eq "$(state_of "$OT/fixtures")|$(method_of "$OT/fixtures")" "offerable|trash")"
+check "open leftovers: and so is its sibling" "$(eq "$(state_of "$OT/node_modules")" offerable)"
+check "open leftovers: the row says its own rule, which is not the page's 30 days" "$(has "$(detail_of "$OT/fixtures")" "in a session still open, with nothing in its task folder changed or run in 7 days")"
+check "open leftovers: a listed folder that is a git checkout now is not offerable" "$(has "$(state_of "$OT/repo")" "not offerable: it is a git checkout now")"
+check "open leftovers: one in a task folder a live session is working inside is not offerable" "$(has "$(state_of "$OBUSY/fixtures")" "not offerable: a session is working in its task folder ($OBUSY/fixtures/run)")"
+check "open leftovers: a listed file, a listed task folder and a listed folder gone since are no rows" "$(eq "$(item_of "$OT/handoff.md")$(item_of "$OT")$(item_of "$OT/gone-since")" "")"
+check "open leftovers: a folder in the task folder the list does not name is no row" "$(eq "$(item_of "$OT/small")" "")"
+check "open leftovers: exactly the four listed folders are rows" "$(eq "$(open_rows | wc -l | tr -d ' ')" 4)"
+judge claude-records "$OT/fixtures"
+check "open leftovers judge: a listed folder in an idle task folder is offerable" "$(eq "$JUDGED" offerable)"
+judge claude-records "$OT/small"
+check "open leftovers judge: a child the keep rules do not call bulky is not offerable" "$(has "$JUDGED" "not offerable: the daily keep rules run does not list it")"
+judge claude-records "$OT/handoff.md"
+check "open leftovers judge: a notes file in the task folder is not offerable, listed or not" "$(has "$JUDGED" "not offerable: it is not a folder")"
+judge claude-records "$OT"
+check "open leftovers judge: the task folder itself is not offerable" "$(has "$JUDGED" "not offerable: ")"
+judge claude-records "$OSES"
+check "open leftovers judge: nor the session folder" "$(has "$JUDGED" "not offerable: ")"
+# Seven days, read over the whole task folder: one day short of it is not idle, whichever time moved.
+touch -m -t "$(ago 6)" "$OT/handoff.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a note beside it written 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days (handoff.md)")"
+touch -m -t "$(ago 8)" "$OT/handoff.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: the same note written 8 days ago leaves it offerable, well inside the 30 days other rows wait" "$(eq "$JUDGED" offerable)"
+touch -a -t "$(ago 6)" "$OT/small/n.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a file in a sibling folder opened 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was opened within 7 days (small/n.md)")"
+touch -a -t "$(ago 8)" "$OT/small/n.md"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: opened 8 days ago leaves it offerable" "$(eq "$JUDGED" offerable)"
+touch -m -t "$(ago 6)" "$OT/fixtures/a.bin"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a file inside the leftover itself changed 6 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days (fixtures/a.bin)")"
+touch -t "$OLD" "$OT/fixtures/a.bin"
+touch -m "$OT/small"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: a folder inside the task folder changed just now makes it not offerable" "$(has "$JUDGED" "not offerable: something in its task folder was changed within 7 days")"
+touch -t "$OLD" "$OT/small"
+# The task folder's own time moves when a leftover in it goes to the Trash, so it is never read.
+touch -m "$OT"; judge claude-records "$OT/fixtures"
+check "open leftovers idle: the task folder's own time, which a removal from it moves, does not count" "$(eq "$JUDGED" offerable)"
+mkdir -p "$OT/idle-locked"; printf 'x\n' > "$OT/idle-locked/f"; old "$OT/idle-locked"; chmod 000 "$OT/idle-locked"
+judge claude-records "$OT/fixtures"
+check "open leftovers idle: a part of the task folder whose times cannot be read makes it unmeasured" "$(has "$JUDGED" "unmeasured: ")"
+chmod 755 "$OT/idle-locked"; rm -rf "$OT/idle-locked"; old "$OT"
+# A live session working in the task folder is never idle, however old every file in it is.
+printf '{"pid":3,"sessionId":"s3","cwd":"%s"}\n' "$OT" > "$H/.claude/sessions/3.json"
+judge claude-records "$OT/fixtures"
+check "open leftovers judge: a live session whose working folder is the task folder makes it not offerable" "$(has "$JUDGED" "not offerable: a session is working in its task folder")"
+rm -f "$H/.claude/sessions/3.json"
+chmod 000 "$H/.claude/sessions/1.json"; judge claude-records "$OT/fixtures"
+check "open leftovers judge: when the live sessions cannot be read it is unmeasured, never offerable" "$(has "$JUDGED" "unmeasured: ")"
+chmod 644 "$H/.claude/sessions/1.json"
+# The list is read as the other one is: missing, old or cut, it offers nothing and says why.
+touch -t "$(ago 3)" "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: a list three days old makes the folder unmeasured" "$(has "$JUDGED" "unmeasured: whether it is one of the bulky leftovers in the notes of sessions still open is not known: the daily keep rules run last listed them 3 days ago")"
+rm -f "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: with no list the folder is unmeasured" "$(has "$JUDGED" "the daily keep rules run has not written its list")"
+run_scan --only claude-records
+check "open leftovers list: and the kind says which of its lists is missing" "$(has "$(status_of claude-records)" "unmeasured: bulky leftovers in the notes of sessions still open: the daily keep rules run has not written its list")"
+check "open leftovers list: and offers no row" "$(eq "$(open_rows | grep -c '|offerable$')" 0)"
+printf 'open-leftovers\t1\nfolder\t2000000\t%s\n' "$OT/fixtures" > "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: a list with no end line is unmeasured" "$(has "$JUDGED" "the daily keep rules run's list is not whole")"
+printf 'readable-folders\t1\nfolder\t2000000\t%s\nend\t1\n' "$OT/fixtures" > "$OLIST"; judge claude-records "$OT/fixtures"
+check "open leftovers list: the other list's header in its place is not read as this one" "$(has "$JUDGED" "the daily keep rules run's list is not whole")"
+
+# The page and the remover agree, by the real judge: both ticked leftovers of one task folder go to
+# the Trash in one plan (the first one's going moves the task folder's own time just before the
+# second is judged again), each logged before it went and checked gone after.
+open_home
+dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; $(printf %q "$DC_ROOT")/*) /bin/rm -rf \"\$a\" ;; *) echo \"trash stub: refused \$a\" >&2; exit 1 ;; esac; done"
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only claude-records
+OIDS="$(dcr_review_items "$REC" | awk -F "$S" -v p="$OSES/" '$2 == "claude-records" && index($4, p) == 1 && $5 == "offerable" { print $1 }')"
+check "open agreement: the scan offered the two idle leftovers (a control on the plan below)" "$(eq "$(printf '%s\n' "$OIDS" | grep -c .)" 2)"
+OSCAN="$(dcr_header "$REC" scan_id)"
+{ printf 'scan_id %s\ncount 2\n' "$OSCAN"; printf '%s\n' "$OIDS" | sed 's/^/item /'; } > "$H/open-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/open-plan" 2>&1)"; RRC=$?
+check "open agreement: disk-remove.sh takes both rows the page offered" "$(eq "$RRC|$(grep -c '^trashed ' <<< "$REMOVED")" "0|2")"
+check "open agreement: both leftovers are gone" "$([ ! -e "$OT/fixtures" ] && [ ! -e "$OT/node_modules" ] && echo ok || echo "one is still there")"
+check "open agreement: they went through trash, twice" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')" 2)"
+OLOG="$STATE/removals/$OSCAN.log"
+check "open agreement: each has an INTENT line naming the Trash, written before it went" "$(eq "$(awk -F '\t' '$1 == "INTENT" && $5 == "trash"' "$OLOG" | wc -l | tr -d ' ')" 2)"
+check "open agreement: and an OUTCOME line saying it was checked gone" "$(eq "$(awk -F '\t' '$1 == "OUTCOME" && $5 == "trashed"' "$OLOG" | wc -l | tr -d ' ')" 2)"
+check "open agreement: the notes, the small folder, the checkout and the busy task folder are untouched" \
+  "$([ -f "$OT/handoff.md" ] && [ -f "$OT/small/n.md" ] && [ -f "$OT/repo/a.bin" ] && [ -f "$OBUSY/fixtures/a.bin" ] && echo ok || echo "something else went")"
+# Asked for outside its exception, by a record that claims each is offerable: the remover itself
+# refuses what is not a folder of the shape, and the real judge refuses the rest.
+open_home
+: > "$DC_ROOT/open-items"
+oitem() { printf '%s\n' "$1$S$2$S$3$S$4$S${S}offerable$S" >> "$DC_ROOT/open-items"; }
+oitem x1 claude-records trash "$OT/handoff.md"
+oitem x2 claude-records trash "$OT/small"
+oitem x3 claude-records trash "$OT"
+oitem x4 claude-records trash "$OBUSY/fixtures"
+oitem x5 claude-records delete "$OT/fixtures"
+oitem x6 caches trash "$OT/fixtures"
+oitem x7 claude-records trash "$OT/repo"
+mkdir -p "$STATE"; dcr_write "$REC" open-x "$(date +%s)" "$DC_ROOT/open-items"
+printf 'scan_id open-x\ncount 7\nitem x1\nitem x2\nitem x3\nitem x4\nitem x5\nitem x6\nitem x7\n' > "$H/open-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/open-plan" 2>&1)"; RRC=$?
+oline() { grep -F -- "$1" <<< "$REMOVED" | awk 'NR == 1'; }
+check "open refusals: the plan exits 5 and trashes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")|$(dc_calls trash | wc -l | tr -d ' ')" "5|0|0")"
+check "open refusals: a task folder's notes file is refused by the remover as state" "$(has "$(oline "$OT/handoff.md:")" "never removed: it is Claude Code's own state")"
+check "open refusals: a child the keep rules do not call bulky is refused by its judge" "$(has "$(oline "$OT/small:")" "judged again just now: not offerable: the daily keep rules run does not list it")"
+check "open refusals: the task folder itself is refused by the remover as state" "$(has "$(oline "$OT:")" "never removed: it is Claude Code's own state")"
+check "open refusals: a leftover where a session is working is refused by its judge" "$(has "$(oline "$OBUSY/fixtures:")" "judged again just now: not offerable: a session is working in its task folder")"
+check "open refusals: a leftover asked for by deleting, or under another kind, is refused by the remover" "$(eq "$(grep -c "skipped.*$OT/fixtures: never removed: it is Claude Code's own state" <<< "$REMOVED")" 2)"
+check "open refusals: a listed folder that is a checkout now is refused by its judge" "$(has "$(oline "$OT/repo:")" "judged again just now: not offerable: it is a git checkout now")"
+check "open refusals: everything asked for is still there" "$([ -f "$OT/handoff.md" ] && [ -f "$OT/small/n.md" ] && [ -f "$OT/fixtures/a.bin" ] && [ -f "$OBUSY/fixtures/a.bin" ] && [ -f "$OT/repo/a.bin" ] && echo ok || echo "something went")"
+default_stubs
+
+# ------------------------------------------------------------------------------------------------
+# Git checkouts the keep rules keep in ENDED sessions' notes (Dan, 2026-11-19, recorded on #3235:
+# "Offer when git says safe"). The daily run lists them in kept-checkouts.tsv: a checkout in a task
+# folder, and a task folder that is one itself. Each is offered, to the Trash, only when git says it
+# has no uncommitted change, no stash and no commit missing from its remote, by the worktrees kind's
+# own test, on top of the 30 days.
+# ------------------------------------------------------------------------------------------------
+CSID=44444444-4444-4444-8444-444444444444
+CSES="$H/.claude/state/session-notes/-Users-x-proj/$CSID"
+CT="$CSES/task-3"; CKX="$H/.ckfx"; CLIST="$KRS/kept-checkouts.tsv"
+# One checkout: its folder, and what the git stub answers for it, kept OUTSIDE it so the stub
+# reading its answers moves no access time inside the folder the 30 day floor judges.
+ck() { # <folder> <key> <status> <branch> <head> <stash> <commits no remote has>
+  mkdir -p "$1/.git/objects" "$1/.git/refs" "$1/src" "$CKX/$2"
+  printf 'ref: x\n' > "$1/.git/HEAD"; printf 'x\n' > "$1/src/a.ts"
+  printf '%s' "$3" > "$CKX/$2/status"; printf '%s' "$4" > "$CKX/$2/branch"; printf '%s' "$5" > "$CKX/$2/head"
+  printf '%s' "$6" > "$CKX/$2/stash"; printf '%s\n' "$7" > "$CKX/$2/extra"
+}
+ck_home() {
+  fresh
+  mkdir -p "$CT" "$H/.claude/sessions"
+  ck "$CT/safe" safe "" feat-a aaa1 "" 0
+  ck "$CSES/task-repo" task-repo "" feat-a aaa1 "" 0
+  ck "$CT/dirty" dirty " M src/a.ts" feat-a aaa1 "" 0
+  ck "$CT/stashed" stashed "" feat-a aaa1 "stash@{0}: WIP on feat-a" 0
+  ck "$CT/unpushed" unpushed "" feat-d ddd2 "" 0
+  ck "$CT/sidebranch" sidebranch "" feat-a aaa1 "" 2
+  ck "$CT/nopr" nopr "" feat-e eee1 "" 0
+  ck "$CT/ghdown" ghdown "" feat-h hhh1 "" 0
+  ck "$OSES/task-9/openck" openck "" feat-a aaa1 "" 0
+  # A worktree of a repository elsewhere (its .git a file naming that repository's folder for it),
+  # the same as a task folder, a folder whose .git holds no repository, and one with no .git.
+  mkdir -p "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks/.git" "$H/.elsewhere/.git/worktrees/w"
+  printf 'ref: x\n' > "$H/.elsewhere/.git/worktrees/w/HEAD"; printf '../..\n' > "$H/.elsewhere/.git/worktrees/w/commondir"
+  printf 'gitdir: %s\n' "$H/.elsewhere/.git/worktrees/w" | tee "$CT/wt/.git" > "$CSES/task-wt/.git"
+  printf 'x\n' > "$CT/wt/a"; printf 'x\n' > "$CSES/task-wt/a"; printf 'x\n' > "$CT/plain/a"; printf 'x\n' > "$CT/looks/a"
+  printf 'n\n' > "$CT/handoff.md"
+  printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$OSID" > "$H/.claude/sessions/1.json"
+  old "$H"
+  list_written readable-folders; list_written open-leftovers
+  list_written kept-checkouts "$CT/safe" "$CSES/task-repo" "$CT/dirty" "$CT/stashed" "$CT/unpushed" "$CT/sidebranch" "$CT/nopr" "$CT/ghdown" \
+    "$OSES/task-9/openck" "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks" "$CT/handoff.md" "$CT" "$CSES"
+  dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+x="'"$CKX"'/${d##*/}"
+case "$1 $2" in
+  "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;;
+  "--no-optional-locks status") cat "$x/status" ;;
+  "symbolic-ref --short") b="$(cat "$x/branch")"; [ -n "$b" ] && echo "$b" || exit 1 ;;
+  "rev-parse HEAD") cat "$x/head" ;;
+  "remote get-url") echo https://github.com/dan/repo.git ;;
+  "stash list") cat "$x/stash" ;;
+  "rev-list --count") cat "$x/extra" ;;
+  *) echo "git stub: $*" >&2; exit 1 ;;
+esac'
+  dc_stub gh 'for a in "$@"; do case "$a" in feat-a) echo "41 aaa1" ;; feat-d) echo "42 ddd1" ;; feat-e) : ;; feat-h) echo "gh: could not resolve host" >&2; exit 1 ;; esac; done; exit 0'
+}
+ck_rows() { dcr_review_items "$REC" | awk -F "$S" -v p="$H/.claude/state/session-notes/" '$2 == "claude-records" && index($4, p) == 1 { print $4 "|" $3 "|" $5 }' | sort; }
+
+ck_home
+run_scan --only claude-records
+check "checkouts: the scan exits 0, the kind measured" "$(eq "$RC|$(status_of claude-records)" "0|measured")"
+check "checkouts: one git calls safe, in an ended session, is offered, to the Trash" "$(eq "$(state_of "$CT/safe")|$(method_of "$CT/safe")" "offerable|trash")"
+check "checkouts: and so is a task folder that is itself one" "$(eq "$(state_of "$CSES/task-repo")|$(method_of "$CSES/task-repo")" "offerable|trash")"
+check "checkouts: the row says what git found" "$(has "$(detail_of "$CT/safe")" "a git checkout an ended session kept: nothing uncommitted, no stash, branch feat-a, merged in pull request #41 at its HEAD")"
+check "checkouts: one uncommitted file makes it not offerable" "$(has "$(state_of "$CT/dirty")" "not offerable: it has uncommitted or untracked files")"
+check "checkouts: a stash makes it not offerable" "$(has "$(state_of "$CT/stashed")" "not offerable: it holds a stash")"
+check "checkouts: a commit its merged pull request does not have makes it not offerable" "$(has "$(state_of "$CT/unpushed")" "not offerable: it has commits its merged pull request #42 does not")"
+check "checkouts: commits on another branch that no remote has make it not offerable" "$(has "$(state_of "$CT/sidebranch")" "not offerable: it holds 2 commit(s) on another branch or tag that no remote has")"
+check "checkouts: no merged pull request for its branch makes it not offerable" "$(has "$(state_of "$CT/nopr")" "not offerable: no merged pull request")"
+check "checkouts: gh failing is unmeasured, never safe" "$(has "$(state_of "$CT/ghdown")" "unmeasured: gh could not say")"
+check "checkouts: one in a session that is open now is not offerable, whatever the list says" "$(has "$(state_of "$OSES/task-9/openck")" "not offerable: its session is open now")"
+check "checkouts: one whose .git is a file names a repository elsewhere, so it is not offerable" "$(has "$(state_of "$CT/wt")" "not offerable: git answers there for a repository that lies outside it ($(cd -P "$H" && pwd -P)/.elsewhere/.git/worktrees/w)")"
+check "checkouts: a listed task folder that is a worktree of a repository elsewhere is no row" "$(eq "$(item_of "$CSES/task-wt")" "")"
+check "checkouts: one whose .git folder holds no repository only looks like one, so it is not offerable" "$(has "$(state_of "$CT/looks")" "not offerable: git names no repository for it (git exit 128)")"
+check "checkouts: git was asked which repository it answers for before it was asked anything else of a checkout" \
+  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $4, $5 }')" "rev-parse --absolute-git-dir")"
+check "checkouts: and git was asked nothing more of a worktree than that" "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/wt") " | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
+check "checkouts: a listed folder that is no checkout now is not offerable" "$(has "$(state_of "$CT/plain")" "not offerable: ")"
+check "checkouts: a listed file, a listed task folder that is no checkout and a listed session are no rows" "$(eq "$(item_of "$CT/handoff.md")$(item_of "$CT")$(item_of "$CSES")" "")"
+check "checkouts: exactly two rows are offered" "$(eq "$(ck_rows | grep -c '|offerable$')" 2)"
+check "checkouts: every git status ran with optional locks off" "$(eq "$(dc_calls git | grep -c ' status ')" "$(dc_calls git | grep -cF -- ' --no-optional-locks status ')")"
+judge claude-records "$CT/safe"
+check "checkouts judge: a safe checkout is offerable" "$(eq "$JUDGED" offerable)"
+judge claude-records "$CSES/task-repo"
+check "checkouts judge: and a task folder that is one" "$(eq "$JUDGED" offerable)"
+judge claude-records "$CT"
+check "checkouts judge: a task folder that is no checkout is not offerable" "$(has "$JUDGED" "not offerable: it is a session's task folder and not a git checkout")"
+judge claude-records "$CSES/task-wt"
+check "checkouts judge: a task folder that is a worktree of a repository elsewhere is not offerable" "$(has "$JUDGED" "not offerable: it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
+judge claude-records "$CT/dirty"
+check "checkouts judge: one uncommitted file is not offerable" "$(has "$JUDGED" "not offerable: it has uncommitted or untracked files")"
+floor_checks claude-records "$CT/safe" "$CT/safe/src/a.ts" folder
+floor_checks claude-records "$CSES/task-repo" "$CSES/task-repo/src/a.ts"
+# git reads its own files on every look, so only their change times count against the 30 days.
+touch -a -t "$RECENT" "$CT/safe/.git/HEAD"; judge claude-records "$CT/safe"
+check "checkouts floor: git's own files opened lately, which every look does, leave it offerable" "$(eq "$JUDGED" offerable)"
+touch -m -t "$RECENT" "$CT/safe/.git/HEAD"; judge claude-records "$CT/safe"
+check "checkouts floor: but one of them changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+old "$CT/safe"
+# A live session working in it, and a list that cannot be read.
+printf '{"pid":4,"sessionId":"s4","cwd":"%s/src"}\n' "$CT/safe" > "$H/.claude/sessions/4.json"
+judge claude-records "$CT/safe"
+check "checkouts judge: a live session working inside it makes it not offerable" "$(has "$JUDGED" "not offerable: a session is working in it")"
+rm -f "$H/.claude/sessions/4.json"
+judge claude-records "$CT/dirty/src"
+check "checkouts judge: a folder inside a checkout is not offerable" "$(has "$JUDGED" "not offerable: ")"
+rm -f "$CLIST"; judge claude-records "$CT/safe"
+check "checkouts list: with no list a checkout is unmeasured" "$(has "$JUDGED" "unmeasured: whether it is one of the git checkouts ended sessions keep in their notes is not known: the daily keep rules run has not written its list")"
+judge claude-records "$CSES/task-repo"
+check "checkouts list: and so is a task folder that is one" "$(has "$JUDGED" "unmeasured: ")"
+run_scan --only claude-records
+check "checkouts list: and the kind says which of its lists is missing" "$(has "$(status_of claude-records)" "unmeasured: git checkouts ended sessions keep in their notes: the daily keep rules run has not written its list")"
+
+# The page and the remover agree, by the real judge: each row offered goes to the Trash, logged
+# before it went and checked gone after, and nothing else in the notes does.
+ck_home
+dc_stub trash "for a in \"\$@\"; do case \"\$a\" in -*) ;; $(printf %q "$DC_ROOT")/*) /bin/rm -rf \"\$a\" ;; *) echo \"trash stub: refused \$a\" >&2; exit 1 ;; esac; done"
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only claude-records
+CIDS="$(dcr_review_items "$REC" | awk -F "$S" -v p="$H/.claude/state/session-notes/" '$2 == "claude-records" && index($4, p) == 1 && $5 == "offerable" { print $1 }')"
+CSCAN="$(dcr_header "$REC" scan_id)"
+{ printf 'scan_id %s\ncount 2\n' "$CSCAN"; printf '%s\n' "$CIDS" | sed 's/^/item /'; } > "$H/ck-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/ck-plan" 2>&1)"; RRC=$?
+check "checkout agreement: disk-remove.sh takes both rows the page offered" "$(eq "$RRC|$(grep -c '^trashed ' <<< "$REMOVED")" "0|2")"
+check "checkout agreement: both are gone, through trash" "$(eq "$([ ! -e "$CT/safe" ] && [ ! -e "$CSES/task-repo" ] && echo gone || echo "one is still there")|$(dc_calls trash | wc -l | tr -d ' ')" "gone|2")"
+CLOG="$STATE/removals/$CSCAN.log"
+check "checkout agreement: each has an INTENT line naming the Trash and an OUTCOME line saying it went" \
+  "$(eq "$(awk -F '\t' '$1 == "INTENT" && $5 == "trash"' "$CLOG" | wc -l | tr -d ' ')|$(awk -F '\t' '$1 == "OUTCOME" && $5 == "trashed"' "$CLOG" | wc -l | tr -d ' ')" "2|2")"
+check "checkout agreement: every other checkout and the notes are untouched" \
+  "$(for f in "$CT/dirty/src/a.ts" "$CT/stashed/src/a.ts" "$CT/unpushed/src/a.ts" "$CT/sidebranch/src/a.ts" "$CT/nopr/src/a.ts" "$CT/wt/a" "$CSES/task-wt/a" "$CT/looks/a" "$CT/handoff.md" "$OSES/task-9/openck/src/a.ts"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; echo ok)"
+# Asked for outside the exception, by a record that claims each is offerable.
+ck_home
+: > "$DC_ROOT/open-items"
+oitem y1 claude-records trash "$CT/dirty"
+oitem y2 claude-records trash "$CT/stashed"
+oitem y3 claude-records trash "$CT/unpushed"
+oitem y4 claude-records trash "$OSES/task-9/openck"
+oitem y5 claude-records trash "$CT"
+oitem y6 claude-records trash "$CT/wt"
+oitem y7 claude-records delete "$CSES/task-repo"
+oitem y8 claude-records trash "$CSES/task-wt"
+oitem y9 claude-records trash "$CT/looks"
+mkdir -p "$STATE"; dcr_write "$REC" ck-y "$(date +%s)" "$DC_ROOT/open-items"
+printf 'scan_id ck-y\ncount 9\nitem y1\nitem y2\nitem y3\nitem y4\nitem y5\nitem y6\nitem y7\nitem y8\nitem y9\n' > "$H/ck-plan"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/ck-plan" 2>&1)"; RRC=$?
+check "checkout refusals: the plan exits 5 and trashes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")|$(dc_calls trash | wc -l | tr -d ' ')" "5|0|0")"
+check "checkout refusals: one uncommitted file is refused by its judge" "$(has "$(oline "$CT/dirty:")" "judged again just now: not offerable: it has uncommitted or untracked files")"
+check "checkout refusals: a stash is refused by its judge" "$(has "$(oline "$CT/stashed:")" "judged again just now: not offerable: it holds a stash")"
+check "checkout refusals: an unpushed commit is refused by its judge" "$(has "$(oline "$CT/unpushed:")" "judged again just now: not offerable: it has commits its merged pull request #42 does not")"
+check "checkout refusals: a checkout in an open session is refused by its judge" "$(has "$(oline "$OSES/task-9/openck:")" "judged again just now: not offerable: its session is open now")"
+check "checkout refusals: a task folder that is no checkout is refused by the remover as state" "$(has "$(oline "$CT:")" "never removed: it is Claude Code's own state")"
+check "checkout refusals: a worktree of a repository elsewhere is refused by its judge" "$(has "$(oline "$CT/wt:")" "judged again just now: not offerable: git answers there for a repository that lies outside it")"
+check "checkout refusals: a task folder that is a worktree is refused by the remover as state, for the repository git answers for" \
+  "$(has "$(oline "$CSES/task-wt:")" "never removed: it is Claude Code's own state, this tool's records among it, and it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
+check "checkout refusals: a folder whose .git only looks like a repository is refused by its judge" "$(has "$(oline "$CT/looks:")" "judged again just now: not offerable: git names no repository for it (git exit 128)")"
+check "checkout refusals: and both are still there" "$([ -e "$CSES/task-wt/a" ] && [ -e "$CT/looks/a" ] && echo ok || echo "one is gone")"
+check "checkout refusals: a checkout task folder asked for by deleting is refused by the remover" "$(has "$(oline "$CSES/task-repo:")" "never removed: it is Claude Code's own state")"
+default_stubs
+
 # ================================================================================================
 # npm and pnpm caches: each npx copy not run or changed in 30 days is offered (Dan, 2026-11-18:
 # "Offer npx copies only (Recommended)"); the download cache, npm's logs and the pnpm store are shown
@@ -1215,6 +1520,147 @@ check "package caches judge: lsof saying anything on stderr makes an npx copy un
 run_scan --only package-caches
 check "package caches: and the scan the same" "$(has "$(state_of "$H/.npm/_npx/abc123")" "unmeasured: could not tell whether it is in use")"
 dc_stub lsof 'exit 1'
+# In every case above pnpm was a stand in given no behaviour, so it could not say where its store is.
+check "package caches: with pnpm unable to say where its store is, the prune row is unmeasured, never offered" \
+  "$(has "$(state_of "store prune")" "unmeasured: pnpm could not say where its store is (pnpm store path exit 98)")"
+
+# ------------------------------------------------------------------------------------------------
+# The pnpm store's prune row (Dan, 2026-11-19, recorded on #3235: "Offer a prune row"): one row,
+# which runs pnpm's own `pnpm store prune`. It is offered when pnpm is on the PATH, pnpm says its
+# store is a real folder directly inside ~/Library/pnpm/store, no process holds a file in it, and
+# nothing in it was changed or opened in 30 days. pnpm is a stand in that records its arguments;
+# the real one is never run. du is one too: the store measures 5000 KiB with the file no project
+# uses in it, and 1000 without.
+# ------------------------------------------------------------------------------------------------
+PSD="$H/Library/pnpm/store"; PSV="$PSD/v11"; PORPHAN="$PSV/files/aa/orphan"; PRUNE_ROW="store prune"
+prune_home() { # [<what pnpm store path does, default: prints the store>]
+  fresh
+  mkdir -p "$PSV/files/aa" "$PSV/files/bb" "$H/.npm/_npx/abc123" "$H/elsewhere/v11"
+  printf 'unused\n' > "$PORPHAN"; printf 'used\n' > "$PSV/files/bb/kept"; printf 'p\n' > "$H/.npm/_npx/abc123/package.json"
+  printf 'x\n' > "$H/elsewhere/v11/f"
+  old "$H"
+  dc_stub pnpm "case \"\$*\" in
+  'store path') ${1:-echo $(printf %q "$PSV")} ;;
+  'store prune') /bin/rm -f $(printf %q "$PORPHAN") ;;
+  *) echo \"unexpected pnpm \$*\" >&2; exit 99 ;;
+esac"
+  dc_stub du "for a in \"\$@\"; do case \"\$a\" in -*) ;; */v11) if [ -e $(printf %q "$PORPHAN") ]; then printf '5000\t%s\n' \"\$a\"; else printf '1000\t%s\n' \"\$a\"; fi ;; *) printf '12\t%s\n' \"\$a\" ;; esac; done"
+}
+prune_rows() { dcr_review_items "$REC" | awk -F "$S" '$3 == "pnpm"' | wc -l | tr -d ' '; }
+
+prune_home
+run_scan --only package-caches
+check "prune row: with pnpm there, its store there and nothing in it used for 30 days, the row is offered" "$(eq "$RC|$(state_of "$PRUNE_ROW")" "0|offerable")"
+check "prune row: it goes by the pnpm method, and there is exactly one such row" "$(eq "$(method_of "$PRUNE_ROW")|$(prune_rows)" "pnpm|1")"
+check "prune row: it says what ticking it runs" "$(has "$(detail_of "$PRUNE_ROW")" "runs pnpm's own pnpm store prune")"
+check "prune row: and that how much it frees is not known until it runs" "$(has "$(detail_of "$PRUNE_ROW")" "how much that frees is not known until it runs")"
+check "prune row: it claims no size, since nothing says what a prune would free" "$(eq "$(field "$(item_of "$PRUNE_ROW")" 6)|$(field "$(item_of "$PRUNE_ROW")" 8)" "|unread")"
+check "prune row: the store folder itself is still shown, and still never offered" "$(has "$(state_of "$PSV")" "not offerable: pnpm's store")"
+check "prune row: the scan asked pnpm only where its store is, and pruned nothing" "$(eq "$(dc_calls pnpm | sort -u)|$([ -e "$PORPHAN" ] && echo there)" "pnpm store path|there")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: the same row is offerable" "$(eq "$JUDGED" offerable)"
+# The 30 day floor, on the store pnpm named: a file opened, then one changed, 5 days ago.
+touch -a -t "$RECENT" "$PSV/files/bb/kept"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: a file of the store opened 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: opened within 30 days")"
+old "$PSV"; touch -m -t "$RECENT" "$PSV/files/bb/kept"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: a file of the store changed 5 days ago makes it not offerable" "$(has "$JUDGED" "not offerable: changed within 30 days")"
+run_scan --only package-caches
+check "prune row floor: and the scan shows the row, not offerable, the same" "$(has "$(state_of "$PRUNE_ROW")" "not offerable: changed within 30 days")"
+old "$PSV"; judge package-caches "$PRUNE_ROW"
+check "prune row floor: aged again it is offerable (the control)" "$(eq "$JUDGED" offerable)"
+# A process holding a file of the store (an install running), and lsof unable to say.
+dc_stub lsof "printf 'p10\ncnode\nf3\nn%s\n' $(printf %q "$PSV/files/bb/kept")"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a process holding a file of the store makes it not offerable" "$(has "$JUDGED" "not offerable: pnpm's store is in use by node")"
+dc_stub lsof 'echo "lsof: WARNING: can not stat() fuse file system" >&2; exit 1'
+judge package-caches "$PRUNE_ROW"
+check "prune row: lsof saying anything on stderr makes it unmeasured" "$(has "$JUDGED" "unmeasured: could not tell whether pnpm's store is in use")"
+dc_stub lsof 'exit 1'
+# Targets that only resemble it.
+for t in "store prune --force" "prune" "store" "store  prune"; do
+  judge package-caches "$t"
+  check "prune row judge: '$t' is not the row, so it is not offerable" "$(has "$JUDGED" "not offerable: it is not one of the caches this kind shows")"
+done
+
+# No pnpm on the PATH: the row is shown, saying so, and not offered.
+prune_home
+rm -f "$DC_STUBS/pnpm"
+run_scan --only package-caches
+check "prune row: with no pnpm on the PATH the row is not offerable, saying so" "$(has "$(state_of "$PRUNE_ROW")" "not offerable: pnpm is not on the PATH, so its own prune cannot be run")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: and the judge the same" "$(has "$JUDGED" "not offerable: pnpm is not on the PATH")"
+dc_stub pnpm
+# No store: no row, and nothing asks pnpm anything.
+prune_home
+rm -rf "$H/Library/pnpm"
+run_scan --only package-caches
+check "prune row: with no pnpm store there is no row" "$(eq "$(prune_rows)|$(item_of "$PRUNE_ROW")" "0|")"
+check "prune row: and pnpm was not asked anything" "$(eq "$(dc_calls pnpm)" "")"
+judge package-caches "$PRUNE_ROW"
+check "prune row judge: with no store it is not offerable" "$(has "$JUDGED" "not offerable: there is no pnpm store in ~/Library/pnpm/store")"
+mkdir -p "$PSD"; run_scan --only package-caches
+check "prune row: an empty ~/Library/pnpm/store is no store either" "$(eq "$(prune_rows)" 0)"
+# pnpm pointed at a store somewhere else, at a link, or unable to answer.
+prune_home "echo $(printf %q "$H/elsewhere/v11")"
+run_scan --only package-caches
+check "prune row: a store pnpm says is somewhere else is not offerable" \
+  "$(has "$(state_of "$PRUNE_ROW")" "not offerable: pnpm says its store is $H/elsewhere/v11, which is not a folder directly inside ~/Library/pnpm/store, the only store this prunes")"
+prune_home "echo $(printf %q "$PSD/v12")"
+ln -s "$H/elsewhere/v11" "$PSD/v12"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a store that is a link is not offerable" "$(has "$JUDGED" "not offerable: pnpm says its store is $PSD/v12, which is not a folder directly inside ~/Library/pnpm/store")"
+prune_home "echo $(printf %q "$PSD/v99")"
+judge package-caches "$PRUNE_ROW"
+check "prune row: a store pnpm names that is not there is not offerable" "$(has "$JUDGED" "not offerable: pnpm says its store is $PSD/v99, which is not a folder directly inside ~/Library/pnpm/store")"
+prune_home "{ echo 'ERR_PNPM no config' >&2; exit 1; }"
+judge package-caches "$PRUNE_ROW"
+check "prune row: pnpm failing to say where its store is makes it unmeasured, never offered" "$(has "$JUDGED" "unmeasured: pnpm could not say where its store is (pnpm store path exit 1)")"
+
+# The page and the remover agree, by the real judge: the row the page offers is run, logged before
+# pnpm ran, and checked by the store's size after.
+prune_home
+dc_stub df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 100 50 5000 50%% /\n"'
+dc_stub tmutil 'echo "Snapshots for disk /:"'
+run_scan --only package-caches
+PID_ROW="$(dcr_review_items "$REC" | awk -F "$S" '$3 == "pnpm" && $5 == "offerable" { print $1 }')"
+PSCAN="$(dcr_header "$REC" scan_id)"
+printf 'scan_id %s\ncount 1\nitem %s\n' "$PSCAN" "$PID_ROW" > "$H/prune-plan"
+: > "$DC_CALLS"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/prune-plan" 2>&1)"; RRC=$?
+check "prune agreement: disk-remove.sh runs the row the page offered" "$(eq "$RRC|$(grep -c '^removed    pnpm store prune ' <<< "$REMOVED")" "0|1")"
+check "prune agreement: pnpm store prune ran once, and pnpm was asked nothing but that and where its store is" \
+  "$(eq "$(dc_calls pnpm | grep -c '^pnpm store prune$')|$(dc_calls pnpm | sort -u | tr '\n' '|')" "1|pnpm store path|pnpm store prune|")"
+PLOGF="$STATE/removals/$PSCAN.log"
+check "prune agreement: it has an INTENT line naming pnpm and store prune, and an OUTCOME saying what the store lost" \
+  "$(eq "$(awk -F '\t' '$1 == "INTENT" { print $5 "|" $6 "|" $7 }' "$PLOGF")/$(awk -F '\t' '$1 == "OUTCOME" { print $5 "|" $6 }' "$PLOGF")" "pnpm|store prune|5000/removed|4000")"
+check "prune agreement: what no project uses is gone, and what one uses is still there" "$([ ! -e "$PORPHAN" ] && [ -e "$PSV/files/bb/kept" ] && echo ok || echo "the store is not as a prune leaves it")"
+check "prune agreement: nothing went to the Trash or was deleted by path" "$(eq "$(dc_calls trash | wc -l | tr -d ' ')|$(grep -c '^trashed ' <<< "$REMOVED")" "0|0")"
+# Asked for outside the method, by a record that claims each is offerable.
+prune_home
+touch -m -t "$RECENT" "$PSV/files/bb/kept"
+: > "$DC_ROOT/open-items"
+oitem z1 package-caches pnpm "store prune"
+oitem z2 package-caches delete "$PSV"
+oitem z3 package-caches trash "$PSV"
+oitem z4 package-caches pnpm "$PSV"
+oitem z5 package-caches pnpm "store prune --force"
+oitem z6 caches pnpm "store prune"
+oitem z7 package-caches delete "$PSD"
+mkdir -p "$STATE"; dcr_write "$REC" prune-z "$(date +%s)" "$DC_ROOT/open-items"
+printf 'scan_id prune-z\ncount 7\nitem z1\nitem z2\nitem z3\nitem z4\nitem z5\nitem z6\nitem z7\n' > "$H/prune-plan"
+: > "$DC_CALLS"
+REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/prune-plan" 2>&1)"; RRC=$?
+check "prune refusals: the plan exits 5 and removes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")" "5|0")"
+check "prune refusals: a store with a file changed 5 days ago is refused by its judge" "$(has "$(oline "pnpm store prune:")" "judged again just now: not offerable: changed within 30 days")"
+check "prune refusals: the store folder asked for by deleting or by the Trash is refused by its judge, twice" \
+  "$(eq "$(grep -c "skipped    $PSV: judged again just now: not offerable: pnpm's store" <<< "$REMOVED")" 2)"
+check "prune refusals: the store folder as a pnpm target is refused by name" "$(has "$(oline "pnpm $PSV:")" "it is not a pnpm target this tool runs (store prune, and nothing else)")"
+check "prune refusals: store prune with a flag is refused by name" "$(has "$(oline "pnpm store prune --force:")" "it is not a pnpm target this tool runs")"
+check "prune refusals: store prune under another kind is refused" "$(has "$REMOVED" "the pnpm method is taken only for the package-caches kind, and this item's kind is caches")"
+check "prune refusals: the folder that holds the stores is refused by its judge" "$(has "$(oline "$PSD:")" "judged again just now: not offerable: ")"
+check "prune refusals: pnpm store prune never ran, and the store is whole" \
+  "$(eq "$(dc_calls pnpm | grep -c '^pnpm store prune')|$([ -e "$PORPHAN" ] && [ -e "$PSV/files/bb/kept" ] && echo whole)" "0|whole")"
+default_stubs
 
 # ================================================================================================
 # Claude named items in the user temp folder: counted and sized in the kind's note, never listed
