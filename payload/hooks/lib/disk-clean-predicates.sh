@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 #
 # disk-clean-predicates.sh: the one copy of the rules saying what a disk-clean test root is, and
-# whether a path lies inside one (claude-config#1804, moved here by #1805), and of the one folder
-# shape under ~/.claude/state that disk-clean may offer (#3235, at the end of this file).
+# whether a path lies inside one (claude-config#1804, moved here by #1805), and of the two folder
+# shapes under ~/.claude/state that disk-clean may offer (#3235, at the end of this file): a folder
+# four levels under session-notes, and a task folder, three levels under, that is a git checkout
+# holding its own repository.
 #
 # Sourced by the three things that must agree, so none keeps a copy of its own (L261):
 #   lib/disk-clean-harness.sh  dc_run refuses to run unless HOME is isolated by these rules
 #   lib/disk-clean-guard.sh    (through the harness) every guarded write is judged by dc_inside
 #   lib/disk-remove.sh         in test mode it refuses unless dc_home_isolated says HOME is inside
 #                              DISK_CLEAN_TEST_ROOT, and it reads paths physically with dc_resolve
-# and, for the session notes folder shape, by a fourth: skills/disk-clean/scan-lib.sh, through which
-# categories/claude-records.sh reads dc_notes_shape and dc_notes_folder as disk-remove.sh does.
+# and, for the two session notes shapes, by a fourth: skills/disk-clean/scan-lib.sh, through which
+# categories/claude-records.sh reads dc_notes_item, dc_notes_folder, dc_notes_checkout and
+# dc_git_own_repo as disk-remove.sh does.
 # They lived in the harness until disk-remove.sh needed them. The harness also holds dc_run and the
 # command check, which run commands no disk-clean script may (an `exec "$@"`, python3 through a
 # variable), so a script sourcing the whole harness would fail the command check it is held to.
 #
-# Commands it runs: id, readlink, and the builtins cd, pwd, printf and eval. bash 3.2 safe.
+# Commands it runs: id, readlink, git (one read, in dc_git_own_repo), and the builtins cd, pwd,
+# printf and eval. bash 3.2 safe.
 # Sourcing defines constants and functions and does nothing else.
 
 # Every root dc_setup makes is named so, and nothing else is accepted as one.
@@ -155,14 +159,41 @@ dc_notes_folder() { # <path> <home> <physical home>
 
 # True when <path> is, on disk, a real task folder (the three level shape, by its own path, as
 # dc_notes_folder reads the four level one) that is itself a git checkout holding its own
-# repository: a real .git FOLDER at its top. A task folder with no .git is a session's notes, and
-# one whose .git is a file or a link is a worktree or submodule of a repository somewhere else, for
-# which git run there would answer. Neither is ever let past disk-remove.sh's refusal of state.
+# repository, which is dc_git_own_repo's to say. A task folder with no repository is a session's
+# notes, and one that is a worktree or submodule belongs to a repository somewhere else, for which
+# git run there would answer. Neither is ever let past disk-remove.sh's refusal of state.
 dc_notes_checkout() { # <path> <home> <physical home>
   _dc_notes_real "$1" "$2" "$3" 3 "it is not a session's task folder (session-notes/<project>/<session>/<task>)" || return 1
-  [ -d "${1%/}/.git" ] && [ ! -L "${1%/}/.git" ] || {
-    DC_NOTES_WHY="it is a session's task folder and not a git checkout with a repository of its own (no .git folder at its top)"; return 1; }
+  dc_git_own_repo "$1" || {
+    DC_NOTES_WHY="it is a session's task folder and not a git checkout with a repository of its own ($DC_GIT_WHY)"; return 1; }
   return 0
+}
+
+# True when the folder <path> is a git checkout holding its OWN repository: asked in that folder,
+# the git folder git answers from is the folder's own .git. Otherwise it fails and sets DC_GIT_WHY.
+#
+# Asked of git, never of the filesystem. What is being decided is which repository the questions
+# asked next (is anything uncommitted, stashed, missing from its remote) will be answered for, and
+# only git knows: in a worktree or a submodule .git is a file naming a repository somewhere else,
+# git follows a .git that is a link to wherever it leads, and a .git folder that holds no repository
+# is passed over for whichever one lies above it. Measured on real git, 2026-11-20: a full clone
+# prints its own .git, resolved; a worktree <repository>/.git/worktrees/<name>; a submodule
+# <superproject>/.git/modules/<name>; a .git link the folder the link names; a bare repository
+# itself; and a folder whose .git is empty, or holds only a HEAD, fails with exit 128 when nothing
+# above it is a repository. So one comparison refuses every one of those.
+#
+# The environment is left as it is on purpose. With GIT_DIR naming another repository, git answers
+# for that one here and in every later call the judge makes, so this refuses, which is the truth
+# about those calls. Clearing it for this one read would pass a folder git is not answering for.
+dc_git_own_repo() { # <path>
+  local t="${1%/}" phys g rc
+  DC_GIT_WHY=""
+  phys="$(dc_resolve "$t")" || { DC_GIT_WHY="where it lies could not be read"; return 1; }
+  g="$(git -C "$t" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { DC_GIT_WHY="git names no repository for it (git exit $rc)"; return 1; }
+  [ "$g" = "$phys/.git" ] && return 0
+  DC_GIT_WHY="git answers there for a repository that lies outside it ($g): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one"
+  return 1
 }
 
 # True when <path> is one of the two things under session-notes that may reach a judge: a real

@@ -1326,7 +1326,7 @@ CT="$CSES/task-3"; CKX="$H/.ckfx"; CLIST="$KRS/kept-checkouts.tsv"
 # One checkout: its folder, and what the git stub answers for it, kept OUTSIDE it so the stub
 # reading its answers moves no access time inside the folder the 30 day floor judges.
 ck() { # <folder> <key> <status> <branch> <head> <stash> <commits no remote has>
-  mkdir -p "$1/.git" "$1/src" "$CKX/$2"
+  mkdir -p "$1/.git/objects" "$1/.git/refs" "$1/src" "$CKX/$2"
   printf 'ref: x\n' > "$1/.git/HEAD"; printf 'x\n' > "$1/src/a.ts"
   printf '%s' "$3" > "$CKX/$2/status"; printf '%s' "$4" > "$CKX/$2/branch"; printf '%s' "$5" > "$CKX/$2/head"
   printf '%s' "$6" > "$CKX/$2/stash"; printf '%s\n' "$7" > "$CKX/$2/extra"
@@ -1343,16 +1343,22 @@ ck_home() {
   ck "$CT/nopr" nopr "" feat-e eee1 "" 0
   ck "$CT/ghdown" ghdown "" feat-h hhh1 "" 0
   ck "$OSES/task-9/openck" openck "" feat-a aaa1 "" 0
-  mkdir -p "$CT/wt" "$CT/plain"; printf 'gitdir: /elsewhere/.git/worktrees/w\n' > "$CT/wt/.git"; printf 'x\n' > "$CT/wt/a"; printf 'x\n' > "$CT/plain/a"
+  # A worktree of a repository elsewhere (its .git a file naming that repository's folder for it),
+  # the same as a task folder, a folder whose .git holds no repository, and one with no .git.
+  mkdir -p "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks/.git" "$H/.elsewhere/.git/worktrees/w"
+  printf 'ref: x\n' > "$H/.elsewhere/.git/worktrees/w/HEAD"; printf '../..\n' > "$H/.elsewhere/.git/worktrees/w/commondir"
+  printf 'gitdir: %s\n' "$H/.elsewhere/.git/worktrees/w" | tee "$CT/wt/.git" > "$CSES/task-wt/.git"
+  printf 'x\n' > "$CT/wt/a"; printf 'x\n' > "$CSES/task-wt/a"; printf 'x\n' > "$CT/plain/a"; printf 'x\n' > "$CT/looks/a"
   printf 'n\n' > "$CT/handoff.md"
   printf '{"pid":1,"sessionId":"%s","cwd":"/x"}\n' "$OSID" > "$H/.claude/sessions/1.json"
   old "$H"
   list_written readable-folders; list_written open-leftovers
   list_written kept-checkouts "$CT/safe" "$CSES/task-repo" "$CT/dirty" "$CT/stashed" "$CT/unpushed" "$CT/sidebranch" "$CT/nopr" "$CT/ghdown" \
-    "$OSES/task-9/openck" "$CT/wt" "$CT/plain" "$CT/handoff.md" "$CT" "$CSES"
+    "$OSES/task-9/openck" "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks" "$CT/handoff.md" "$CT" "$CSES"
   dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
 x="'"$CKX"'/${d##*/}"
 case "$1 $2" in
+  "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;;
   "--no-optional-locks status") cat "$x/status" ;;
   "symbolic-ref --short") b="$(cat "$x/branch")"; [ -n "$b" ] && echo "$b" || exit 1 ;;
   "rev-parse HEAD") cat "$x/head" ;;
@@ -1378,7 +1384,12 @@ check "checkouts: commits on another branch that no remote has make it not offer
 check "checkouts: no merged pull request for its branch makes it not offerable" "$(has "$(state_of "$CT/nopr")" "not offerable: no merged pull request")"
 check "checkouts: gh failing is unmeasured, never safe" "$(has "$(state_of "$CT/ghdown")" "unmeasured: gh could not say")"
 check "checkouts: one in a session that is open now is not offerable, whatever the list says" "$(has "$(state_of "$OSES/task-9/openck")" "not offerable: its session is open now")"
-check "checkouts: one whose .git is a file names a repository elsewhere, so it is not offerable" "$(has "$(state_of "$CT/wt")" "not offerable: its .git is not a folder of its own")"
+check "checkouts: one whose .git is a file names a repository elsewhere, so it is not offerable" "$(has "$(state_of "$CT/wt")" "not offerable: git answers there for a repository that lies outside it ($(cd -P "$H" && pwd -P)/.elsewhere/.git/worktrees/w)")"
+check "checkouts: a listed task folder that is a worktree of a repository elsewhere is no row" "$(eq "$(item_of "$CSES/task-wt")" "")"
+check "checkouts: one whose .git folder holds no repository only looks like one, so it is not offerable" "$(has "$(state_of "$CT/looks")" "not offerable: git names no repository for it (git exit 128)")"
+check "checkouts: git was asked which repository it answers for before it was asked anything else of a checkout" \
+  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $4, $5 }')" "rev-parse --absolute-git-dir")"
+check "checkouts: and git was asked nothing more of a worktree than that" "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/wt") " | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkouts: a listed folder that is no checkout now is not offerable" "$(has "$(state_of "$CT/plain")" "not offerable: ")"
 check "checkouts: a listed file, a listed task folder that is no checkout and a listed session are no rows" "$(eq "$(item_of "$CT/handoff.md")$(item_of "$CT")$(item_of "$CSES")" "")"
 check "checkouts: exactly two rows are offered" "$(eq "$(ck_rows | grep -c '|offerable$')" 2)"
@@ -1389,6 +1400,8 @@ judge claude-records "$CSES/task-repo"
 check "checkouts judge: and a task folder that is one" "$(eq "$JUDGED" offerable)"
 judge claude-records "$CT"
 check "checkouts judge: a task folder that is no checkout is not offerable" "$(has "$JUDGED" "not offerable: it is a session's task folder and not a git checkout")"
+judge claude-records "$CSES/task-wt"
+check "checkouts judge: a task folder that is a worktree of a repository elsewhere is not offerable" "$(has "$JUDGED" "not offerable: it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
 judge claude-records "$CT/dirty"
 check "checkouts judge: one uncommitted file is not offerable" "$(has "$JUDGED" "not offerable: it has uncommitted or untracked files")"
 floor_checks claude-records "$CT/safe" "$CT/safe/src/a.ts" folder
@@ -1430,7 +1443,7 @@ CLOG="$STATE/removals/$CSCAN.log"
 check "checkout agreement: each has an INTENT line naming the Trash and an OUTCOME line saying it went" \
   "$(eq "$(awk -F '\t' '$1 == "INTENT" && $5 == "trash"' "$CLOG" | wc -l | tr -d ' ')|$(awk -F '\t' '$1 == "OUTCOME" && $5 == "trashed"' "$CLOG" | wc -l | tr -d ' ')" "2|2")"
 check "checkout agreement: every other checkout and the notes are untouched" \
-  "$(for f in "$CT/dirty/src/a.ts" "$CT/stashed/src/a.ts" "$CT/unpushed/src/a.ts" "$CT/sidebranch/src/a.ts" "$CT/nopr/src/a.ts" "$CT/wt/a" "$CT/handoff.md" "$OSES/task-9/openck/src/a.ts"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; echo ok)"
+  "$(for f in "$CT/dirty/src/a.ts" "$CT/stashed/src/a.ts" "$CT/unpushed/src/a.ts" "$CT/sidebranch/src/a.ts" "$CT/nopr/src/a.ts" "$CT/wt/a" "$CSES/task-wt/a" "$CT/looks/a" "$CT/handoff.md" "$OSES/task-9/openck/src/a.ts"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; echo ok)"
 # Asked for outside the exception, by a record that claims each is offerable.
 ck_home
 : > "$DC_ROOT/open-items"
@@ -1441,8 +1454,10 @@ oitem y4 claude-records trash "$OSES/task-9/openck"
 oitem y5 claude-records trash "$CT"
 oitem y6 claude-records trash "$CT/wt"
 oitem y7 claude-records delete "$CSES/task-repo"
+oitem y8 claude-records trash "$CSES/task-wt"
+oitem y9 claude-records trash "$CT/looks"
 mkdir -p "$STATE"; dcr_write "$REC" ck-y "$(date +%s)" "$DC_ROOT/open-items"
-printf 'scan_id ck-y\ncount 7\nitem y1\nitem y2\nitem y3\nitem y4\nitem y5\nitem y6\nitem y7\n' > "$H/ck-plan"
+printf 'scan_id ck-y\ncount 9\nitem y1\nitem y2\nitem y3\nitem y4\nitem y5\nitem y6\nitem y7\nitem y8\nitem y9\n' > "$H/ck-plan"
 REMOVED="$(dc_run env DISK_CLEAN_JUDGE= bash "$DR" --plan "$H/ck-plan" 2>&1)"; RRC=$?
 check "checkout refusals: the plan exits 5 and trashes nothing" "$(eq "$RRC|$(grep -c '^trashed \|^removed  ' <<< "$REMOVED")|$(dc_calls trash | wc -l | tr -d ' ')" "5|0|0")"
 check "checkout refusals: one uncommitted file is refused by its judge" "$(has "$(oline "$CT/dirty:")" "judged again just now: not offerable: it has uncommitted or untracked files")"
@@ -1450,7 +1465,11 @@ check "checkout refusals: a stash is refused by its judge" "$(has "$(oline "$CT/
 check "checkout refusals: an unpushed commit is refused by its judge" "$(has "$(oline "$CT/unpushed:")" "judged again just now: not offerable: it has commits its merged pull request #42 does not")"
 check "checkout refusals: a checkout in an open session is refused by its judge" "$(has "$(oline "$OSES/task-9/openck:")" "judged again just now: not offerable: its session is open now")"
 check "checkout refusals: a task folder that is no checkout is refused by the remover as state" "$(has "$(oline "$CT:")" "never removed: it is Claude Code's own state")"
-check "checkout refusals: a worktree of a repository elsewhere is refused by its judge" "$(has "$(oline "$CT/wt:")" "judged again just now: not offerable: its .git is not a folder of its own")"
+check "checkout refusals: a worktree of a repository elsewhere is refused by its judge" "$(has "$(oline "$CT/wt:")" "judged again just now: not offerable: git answers there for a repository that lies outside it")"
+check "checkout refusals: a task folder that is a worktree is refused by the remover as state, for the repository git answers for" \
+  "$(has "$(oline "$CSES/task-wt:")" "never removed: it is Claude Code's own state, this tool's records among it, and it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
+check "checkout refusals: a folder whose .git only looks like a repository is refused by its judge" "$(has "$(oline "$CT/looks:")" "judged again just now: not offerable: git names no repository for it (git exit 128)")"
+check "checkout refusals: and both are still there" "$([ -e "$CSES/task-wt/a" ] && [ -e "$CT/looks/a" ] && echo ok || echo "one is gone")"
 check "checkout refusals: a checkout task folder asked for by deleting is refused by the remover" "$(has "$(oline "$CSES/task-repo:")" "never removed: it is Claude Code's own state")"
 default_stubs
 

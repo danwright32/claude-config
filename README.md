@@ -6273,17 +6273,22 @@ Two more decisions of 2026-11-19, recorded on #3235, each from its own picker:
 - **Git checkouts in ended sessions' notes: "Offer when git says safe".** The keep rules keep a
   checkout because it may hold work that exists nowhere else, and list each in
   `kept-checkouts.tsv`. The page offers one to the Trash only when its session is not open now, no
-  live session is working in it, its `.git` is a folder of its own, the 30 day floor holds (git's
-  own files' access times apart, since every look reads them), and git says it is safe: nothing
+  live session is working in it, it holds its own repository, the 30 day floor holds (git's own
+  files' access times apart, since every look reads them), and git says it is safe: nothing
   uncommitted or untracked, on a branch whose merged pull request head is exactly its HEAD
   (`dcs_git_merged` in `scan-lib.sh`, the one test the Finished worktrees kind uses), no stash, and
-  no commit on another branch or tag that no remote has. A checkout whose `.git` is a file is a
-  worktree or submodule of a repository elsewhere, and is not offered. A checkout in a task folder
-  is the four level shape. A task folder that is itself a checkout is three levels under
-  `session-notes`, which needed the remover's second exception: `dc_notes_task_shape` and
+  no commit on another branch or tag that no remote has. Whether it holds its own repository is
+  asked of git, never read off the disk (`dc_git_own_repo` in `lib/disk-clean-predicates.sh`):
+  `git rev-parse --absolute-git-dir`, run in the folder, must name the folder's own `.git`. A
+  worktree or a submodule answers with a repository elsewhere, a `.git` that is a link with the
+  folder the link names, and a `.git` folder that holds no repository with nothing, so none of
+  them is offered: git run there would be answering for some other repository. A checkout in a
+  task folder is the four level shape. A task folder that is itself a checkout is three levels
+  under `session-notes`, which needed the remover's second exception: `dc_notes_task_shape` and
   `dc_notes_checkout` let it reach the judge only as a `claude-records` item going to the Trash,
-  by its own path, with a real `.git` folder at its top, so a task folder that is not a checkout
-  stays refused whatever a judge says. A checkout in an open session is never offered.
+  by its own path, and only when git says it holds its own repository, so a task folder that is
+  not such a checkout stays refused whatever a judge says. A checkout in an open session is never
+  offered.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so

@@ -415,17 +415,29 @@ check "task shape: an empty level does not count as one" "$(eq "$(tshape "$B/p//
 check "task shape: a .. level is refused" "$(eq "$(tshape "$B/p/s/..")" no)"
 check "task shape: a trailing slash is refused rather than read" "$(eq "$(tshape "$B/p/s/t/")" no)"
 check "task shape: the same shape under another home is not" "$(eq "$(tshape "$OUT/.claude/state/session-notes/p/s/t")" no)"
+# git is a stub here, so the one question dc_notes_checkout asks of it (which git folder it answers
+# from in a folder) is answered by the harness's stand in, which section "real git" below holds to
+# what real git says. A repository is a .git holding HEAD, objects and refs, as git itself reads one.
+repo_at() { mkdir -p "$1/.git/objects" "$1/.git/refs"; printf 'ref: refs/heads/main\n' > "$1/.git/HEAD"; } # <folder>
+git_dir_stub() { dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+case "$*" in "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;; esac
+echo "git stub: $*" >&2; exit 98'; }
 checkout_tree() {
   notes_tree
-  mkdir -p "$NS/repo-task/.git" "$NS/repo-task/src" "$NS/wt-task" "$NT/clone/.git" "$H/w/outside-repo/.git" "$NS/linked-git"
-  printf 'ref\n' > "$NS/repo-task/.git/HEAD"; printf 'x\n' > "$NS/repo-task/src/a"; printf 'x\n' > "$NT/clone/.git/HEAD"
-  printf 'gitdir: /elsewhere/.git/worktrees/w\n' > "$NS/wt-task/.git"; printf 'x\n' > "$NS/wt-task/a"
+  mkdir -p "$NS/repo-task/src" "$NS/wt-task" "$NS/linked-git" "$NS/empty-git/.git" "$H/w/outside-repo/.git/worktrees/w"
+  repo_at "$NS/repo-task"; repo_at "$NT/clone"; repo_at "$H/w/outside-repo"
+  printf 'x\n' > "$NS/repo-task/src/a"; printf 'x\n' > "$NS/empty-git/a"
+  # A worktree of the repository outside: its .git is a file naming that repository's folder for it.
+  printf 'ref: refs/heads/w\n' > "$H/w/outside-repo/.git/worktrees/w/HEAD"; printf '../..\n' > "$H/w/outside-repo/.git/worktrees/w/commondir"
+  printf 'gitdir: %s\n' "$H/w/outside-repo/.git/worktrees/w" > "$NS/wt-task/.git"; printf 'x\n' > "$NS/wt-task/a"
   ln -s "$H/w/outside-repo/.git" "$NS/linked-git/.git"
   ln -s "$NS/repo-task" "$NS/repo-link"
   ln -s "$NP" "$NOTES/proj-link"
+  git_dir_stub
 }
 checkout_tree
 item d1 claude-records trash "$NT"
+item d10 claude-records trash "$NS/empty-git"
 item d2 claude-records trash "$NS/wt-task"
 item d3 claude-records trash "$NS/linked-git"
 item d4 claude-records trash "$NS/repo-link"
@@ -436,27 +448,98 @@ item d8 claude-records trash "$NOTES/proj-link/${NS##*/}/repo-task"
 item d9 claude-records trash "$NS"
 item c1 claude-records trash "$NS/repo-task"
 item c2 claude-records trash "$NT/clone"
-record s1 10; plan "$H/plan" s1 d1 d2 d3 d4 d5 d6 d7 d8 d9 c1 c2
+record s1 10; plan "$H/plan" s1 d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 c1 c2
 run --plan "$H/plan"
 check "checkout: a task folder that is a git checkout reaches its judge and is moved to the Trash" "$(gone "$NS/repo-task")"
+check "checkout: git was asked which repository it answers for in that task folder" \
+  "$(has "$(calls_of git)" "$(printf 'git -C %q rev-parse --absolute-git-dir' "$NS/repo-task")")"
+check "checkout: and was asked nothing else, by the remover" "$(eq "$(calls_of git | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkout: and so does a checkout four levels down, by the first shape" "$(gone "$NT/clone")"
 check "checkout: the judge was asked about exactly those two" \
   "$(eq "$(calls_of judge | sort | tr '\n' '|')" "$(printf 'judge judge %q\n' "$NS/repo-task" "$NT/clone" | sort | tr '\n' '|')")"
 check "checkout: both went through trash, never rm" "$(eq "$(calls_of trash | wc -l | tr -d ' ')" 2)"
 check "checkout: an INTENT was written for each of the two, and for nothing refused" "$(eq "$(intents "$(LOGF s1)" '^c[12]$')|$(intents "$(LOGF s1)" '^d')" "2|0")"
 for pair in "a task folder that is no checkout|$NT:" "a task folder whose .git is a file, a worktree of a repository elsewhere|$NS/wt-task:" \
-  "a task folder whose .git is a link|$NS/linked-git:" "a session folder|$NS:"; do
+  "a task folder whose .git is a link|$NS/linked-git:" "a task folder whose .git folder holds no repository|$NS/empty-git:" "a session folder|$NS:"; do
   check "checkout: ${pair%%|*} stays refused as Claude Code's own state" "$(has "$(line_of "${pair#*|}")" "never removed: it is Claude Code's own state")"
 done
+check "checkout: a worktree is refused for the repository git answers for there, which lies outside it" \
+  "$(has "$(line_of "$NS/wt-task:")" "git answers there for a repository that lies outside it ($PH/w/outside-repo/.git/worktrees/w)")"
+check "checkout: a .git that is a link is refused the same way, for the repository the link names" \
+  "$(has "$(line_of "$NS/linked-git:")" "git answers there for a repository that lies outside it ($PH/w/outside-repo/.git)")"
+check "checkout: a .git folder holding no repository is refused because git names none" "$(has "$(line_of "$NS/empty-git:")" "git names no repository for it (git exit 128)")"
+check "checkout: a task folder with no .git is refused because git names none" "$(has "$(line_of "$NT:")" "git names no repository for it (git exit 128)")"
 check "checkout: a link to a checkout task folder is refused as a link" "$(has "$(line_of "$NS/repo-link:")" "symbolic link")"
 check "checkout: one reached through a link above it does not reach the judge" "$(has "$(line_of "$NOTES/proj-link/")" "never removed: it is Claude Code's own state")"
 check "checkout: the same task folder under another kind, by deleting, or named, stays refused" "$(eq "$(grep -c "skipped.*$NS/repo-task: never removed: it is Claude Code's own state" <<< "$OUT_TEXT")" 3)"
 check "checkout: everything refused is still there" \
-  "$(for f in "$NT/evidence.md" "$NS/wt-task/a" "$NS/linked-git" "$NS/handoff.md" "$H/w/outside-repo/.git"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; [ -L "$NS/repo-link" ] && echo ok || echo "the link is gone")"
+  "$(for f in "$NT/evidence.md" "$NS/wt-task/a" "$NS/linked-git" "$NS/empty-git/a" "$NS/handoff.md" "$H/w/outside-repo/.git"; do [ -e "$f" ] || { echo "$f is gone"; exit; }; done; [ -L "$NS/repo-link" ] && echo ok || echo "the link is gone")"
 checkout_tree
 run --propose trash "$NS/repo-task"
 check "checkout: --propose refuses a checkout task folder, since its judge is not git's" "$(has "$OUT_TEXT" "refused  $NS/repo-task: never removed: it is Claude Code's own state")"
 check "checkout: and it is still there" "$(there "$NS/repo-task/src/a")"
+# git itself failing (not installed, or refusing the folder) is a refusal, never a pass.
+checkout_tree
+dc_stub git 'exit 127'
+item f1 claude-records trash "$NS/repo-task"; record s1 10; plan "$H/plan" s1 f1
+run --plan "$H/plan"
+check "checkout: when git cannot be asked, the task folder stays refused" "$(has "$(line_of "$NS/repo-task:")" "git names no repository for it (git exit 127)")"
+check "checkout: and it is still there" "$(there "$NS/repo-task/src/a")"
+
+# ---- real git: what dc_git_own_repo says of each shape, asked of the git on this machine ----
+# Everything above stood in for git. Here the predicate is asked with the real one, on repositories
+# real git made, all inside the harness's throwaway home: a full clone holds its own repository;
+# a worktree, a submodule, a folder whose .git is a link, a bare repository, a folder whose .git
+# only looks like one, and a plain folder do not. Then the harness's stand in is run on the same
+# folders and must give the answer real git gave, or every stubbed case above proved nothing (L404).
+fresh
+if command -v git >/dev/null 2>&1; then
+  RG="$PH/.claude/state/session-notes/p/s"
+  rgit() { HOME="$H" GIT_CONFIG_NOSYSTEM=1 git -c user.email=t@example.invalid -c user.name=t -c commit.gpgsign=false -c protocol.file.allow=always -c init.defaultBranch=main "$@" </dev/null >/dev/null 2>&1; }
+  mkdir -p "$RG/plain" "$RG/empty/.git" "$RG/headonly/.git" "$RG/linked"
+  printf 'ref: refs/heads/main\n' > "$RG/headonly/.git/HEAD"; printf 'x\n' > "$RG/plain/a"
+  rgit init "$RG/clone"; printf 'x\n' > "$RG/clone/a"; rgit -C "$RG/clone" add a; rgit -C "$RG/clone" commit -m seed
+  rgit -C "$RG/clone" worktree add --detach "$RG/wt"
+  rgit init "$RG/super"; printf 'x\n' > "$RG/super/a"; rgit -C "$RG/super" add a; rgit -C "$RG/super" commit -m seed
+  rgit -C "$RG/super" submodule add "$RG/clone" sub
+  rgit init --bare "$RG/bare"
+  ln -s "$RG/clone/.git" "$RG/linked/.git"
+  check "real git: the fixtures were made (a clone, a worktree of it, a submodule, a bare repository)" \
+    "$([ -f "$RG/clone/.git/HEAD" ] && [ -f "$RG/wt/.git" ] && [ -f "$RG/super/sub/.git" ] && [ -f "$RG/bare/HEAD" ] && echo ok || echo "git did not make them")"
+  own() { if dc_git_own_repo "$1" 2>/dev/null; then echo yes; else echo "no: $DC_GIT_WHY"; fi; }
+  check "real git: a full clone holds its own repository" "$(eq "$(own "$RG/clone")" yes)"
+  check "real git: and so does the repository a submodule sits in" "$(eq "$(own "$RG/super")" yes)"
+  check "real git: a worktree does not, and the reason names the repository it belongs to" \
+    "$(eq "$(own "$RG/wt")" "no: git answers there for a repository that lies outside it ($RG/clone/.git/worktrees/wt): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one")"
+  check "real git: a submodule does not" "$(has "$(own "$RG/super/sub")" "no: git answers there for a repository that lies outside it ($RG/super/.git/modules/sub)")"
+  check "real git: a folder whose .git is a link to a repository does not" "$(has "$(own "$RG/linked")" "no: git answers there for a repository that lies outside it ($RG/clone/.git)")"
+  check "real git: a bare repository does not" "$(has "$(own "$RG/bare")" "no: git answers there for a repository that lies outside it ($RG/bare)")"
+  check "real git: an empty .git folder only looks like one" "$(eq "$(own "$RG/empty")" "no: git names no repository for it (git exit 128)")"
+  check "real git: a .git folder holding only a HEAD only looks like one" "$(eq "$(own "$RG/headonly")" "no: git names no repository for it (git exit 128)")"
+  check "real git: a plain folder is none" "$(eq "$(own "$RG/plain")" "no: git names no repository for it (git exit 128)")"
+  check "real git: a folder inside a clone is not the clone" "$(has "$(mkdir -p "$RG/clone/src"; own "$RG/clone/src")" "no: git answers there for a repository that lies outside it ($RG/clone/.git)")"
+  check "real git: a folder that is not there is none" "$(has "$(own "$RG/absent")" "no: ")"
+  check "real git: with git told to answer for another repository, a clone is refused, as the judge's own git calls would answer for that one" \
+    "$(has "$(GIT_DIR="$RG/super/.git" own "$RG/clone")" "no: git answers there for a repository that lies outside it ($RG/super/.git)")"
+  # The same folders, by the path as HOME writes it (a link above it on macOS), are read alike.
+  check "real git: a clone named through a link above it is still its own" "$(eq "$(own "$H/.claude/state/session-notes/p/s/clone")" yes)"
+  # The two shapes under session-notes, with real git: a clone task folder is the item, a worktree is not.
+  ck3() { if dc_notes_checkout "$1" "$H" "$PH" 2>/dev/null; then echo yes; else echo "no: $DC_NOTES_WHY"; fi; }
+  check "real git: a task folder that is a full clone is a checkout the remover takes" "$(eq "$(ck3 "$H/.claude/state/session-notes/p/s/clone")" yes)"
+  check "real git: a task folder that is a worktree is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/wt")" "no: it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
+  check "real git: a submodule four levels down is not a task folder, so it is refused by its shape" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/super/sub")" "no: it is not a session's task folder")"
+  check "real git: a task folder whose .git only looks like one is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/empty")" "(git names no repository for it (git exit 128))")"
+  # The stand in every stubbed suite uses, against real git, folder by folder.
+  git_dir_stub
+  for d in clone super wt super/sub linked empty headonly plain; do
+    real="$(git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; real="$?|$real"
+    stood="$(dc_run git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null)"; stood="$?|$stood"
+    check "real git: the stand in answers as real git does for $d" "$(eq "$stood" "$real")"
+  done
+  default_stubs
+else
+  check "real git: git is on this machine, so the predicate can be asked for real" "no git on the PATH"
+fi
 
 # ================================================================================================
 # 5. Symbolic links and the allowed root

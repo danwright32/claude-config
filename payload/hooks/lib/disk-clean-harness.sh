@@ -89,6 +89,24 @@ DC_STANDIN_CORE="find"
 #   DISK_CLEAN_DERIVED_DATA_SWEEP  hooks/derived-data-sweep.sh, which needs perl, ps, plutil and
 #                                  PlistBuddy; its own suite runs it for real
 DC_SEAMS="DISK_CLEAN_TRASH=trash DISK_CLEAN_JUDGE=judge DISK_CLEAN_DERIVED_DATA_SWEEP=derived-data-sweep"
+# A stand in for the ONE read `git -C <d> rev-parse --absolute-git-dir`, which dc_git_own_repo asks
+# (lib/disk-clean-predicates.sh, #3235): a fragment a suite's git stub runs with d set to the -C
+# folder, so every suite whose git is a stub answers that question one way. It prints the physical
+# git folder git would answer from there, or fails as git does (exit 128), by what real git was
+# measured to do on 2026-11-20: a .git folder, or a link to one, that holds a repository is printed
+# resolved; a .git file is read for the gitdir it names (a worktree's or a submodule's), printed when
+# that is one; a .git that holds no repository, and no .git, are not a repository. It never walks up
+# to a parent, so a fixture must not sit inside a repository. test-disk-remove.sh runs it beside
+# real git on each of those shapes and fails when the two differ (L404).
+DC_GIT_DIR_STANDIN='g="$d/.git"
+if [ -f "$g" ] && [ ! -L "$g" ]; then
+  IFS= read -r g < "$g"
+  case "$g" in "gitdir: /"*) g="${g#gitdir: }" ;; "gitdir: "?*) g="$d/${g#gitdir: }" ;; *) g="" ;; esac
+fi
+if [ -n "$g" ] && [ -f "$g/HEAD" ] && { [ -f "$g/commondir" ] || { [ -d "$g/objects" ] && [ -d "$g/refs" ]; }; }; then
+  (CDPATH= cd -P "$g" && pwd -P); exit $?
+fi
+echo "fatal: not a git repository (or any of the parent directories): .git" >&2; exit 128'
 
 # This file's own folder by parameter expansion, never dirname, which a PATH without it breaks
 # (claude-config#1104).

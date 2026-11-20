@@ -4,9 +4,10 @@
 # for the module calls.
 #
 # Shows, sized, what Claude Code and this config keep about their own work, so the review page says
-# where that space is. It offers only folders in a session's task folder that the daily keep rules
-# list, each by a decision of Dan's below; every other row says why it is never offered, and its
-# judge refuses every other path. Read from the code that writes each one, 2026-11-18:
+# where that space is. It offers only what the daily keep rules list under a session's notes
+# (folders in a task folder, and a task folder that is itself a git checkout), each by a decision of
+# Dan's below; every other row says why it is never offered, and its judge refuses every other path.
+# Read from the code that writes each one, 2026-11-18:
 #   ~/.claude/state/<entry>      state hooks and sessions read as they run, disk-clean's own scan
 #                                record among it; disk-remove.sh refuses all of it besides. One row
 #                                is session-notes, whose bulky leftovers Dan's daily keep rule looks
@@ -32,6 +33,16 @@
 #                                once nothing in its task folder was changed or opened for 7 days
 #                                (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle days");
 #                                leftover_rules says which times that reads and why
+#   a git checkout in an ENDED session's notes: a folder of the same shape, or a task folder that is
+#                                one itself (session-notes/<project>/<session>/<task>), which the
+#                                keep rules keep because it may hold work that exists nowhere else
+#                                and list in kept-checkouts.tsv. OFFERED, to the Trash, only when
+#                                git says nothing would be lost: it holds its own repository
+#                                (dc_git_own_repo, never a worktree or submodule of one elsewhere),
+#                                nothing uncommitted, no stash and no commit missing from its
+#                                remote, by the worktrees kind's own test, on top of the 30 days
+#                                (Dan, 2026-11-19, recorded on #3235: "Offer when git says safe");
+#                                checkout_rules says each step and why
 #   ~/.claude/file-history      Claude Code's copy of each file before an edit, which /rewind
 #                                restores: one can be the only copy of an earlier version, so whether
 #                                any goes is Dan's call (#3235)
@@ -74,7 +85,7 @@ OPEN_IDLE_DAYS=7
 # LIST_WHY to why they are unmeasured: no list, one that is not whole, one too old to stand for
 # today, or one in which the keep rules said they could not decide. A list is never read as a
 # shorter list, so a missing or cut one cannot pass for "none" (L10).
-list_read() { # <list name: readable-folders or open-leftovers>
+list_read() { # <list name: readable-folders, open-leftovers or kept-checkouts>
   LIST_PATHS="$DCS_WORK/rec.$1.paths" LIST_WHY=""
   if [ -f "$LIST_PATHS.why" ]; then LIST_WHY="$(cat "$LIST_PATHS.why")"; return 0; fi
   list_load "$1"
@@ -180,8 +191,9 @@ checkout_listed() { # <target>
 # 2026-11-19, recorded on #3235: "Offer when git says safe"). They keep it because it may hold work
 # that exists nowhere else, so it is offered only when git says none does. In order:
 #   its session is not open now (the list can be a day old), and no live session is working in it;
-#   its .git is a real folder, so the repository git answers for is the one inside it. A .git file
-#   names a repository somewhere else (a worktree, a submodule), and git here would answer for that;
+#   it holds its own repository, so the repository git answers for is the one inside it, which
+#   git itself says (dc_git_own_repo). A worktree or a submodule belongs to a repository somewhere
+#   else, and git here would answer for that one;
 #   the 30 day floor, before git runs, since git status reads files. Files inside .git are read by
 #   git on every look, so only their change times count, as for a worktree's .git file;
 #   dcs_git_merged, the worktrees kind's own test: nothing uncommitted or untracked, on a branch,
@@ -196,9 +208,7 @@ checkout_rules() { # <target>
   sessions_read || return
   if grep -qxF -- "$sid" "$DCS_WORK/rec.nd.ids"; then V="not offerable: its session is open now"; return; fi
   session_works_in "$t" it && return
-  if [ ! -d "$t/.git" ] || [ -L "$t/.git" ]; then
-    V="not offerable: its .git is not a folder of its own, so it is a worktree or submodule of a repository elsewhere, and git here would answer for that one"; return
-  fi
+  dc_git_own_repo "$t" || { V="not offerable: $DC_GIT_WHY"; return; }
   V=offerable
   dcs_floor "$t" .gitignore .gitattributes "$t/.git/*"
   [ "$V" = offerable ] || return

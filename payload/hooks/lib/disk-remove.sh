@@ -179,8 +179,9 @@ allowed_root() { # <physical path>
 # itself. A checkout in a task folder is the four level shape above. A task folder that is one is
 # exactly three levels under session-notes (dc_notes_task_shape), and is let past this list on the
 # same terms: only for the claude-records kind going to the Trash, and path_checks then holds it to
-# dc_notes_checkout, a real folder reached by its own path with a real .git folder at its top. So a
-# task folder that is not a checkout stays refused here, whatever a judge would say. Whether its
+# dc_notes_checkout, a real folder reached by its own path that git says holds its own repository
+# (never a worktree or submodule of one elsewhere). So a task folder that is not such a checkout
+# stays refused here, whatever a judge would say. Whether its
 # session has ended and whether git calls it safe are the judge's to say.
 STATE_DENY="it is Claude Code's own state, this tool's records among it"
 # The category whose judge answers for a session notes folder (categories/claude-records.sh). It
@@ -219,7 +220,7 @@ deny_reason() { # <path>
       # safe"): a folder exactly four levels under session-notes, or a task folder exactly three,
       # and only for an item path_checks opened them to (NOTES_OK). Neither is removed by this: it
       # reaches its judge, and path_checks then holds it to dc_notes_item, which takes a task
-      # folder only when it is a git checkout with a .git folder of its own.
+      # folder only when it is a git checkout holding its own repository.
       if [ -n "$NOTES_OK" ] && { dc_notes_shape "$p" "$H" || dc_notes_task_shape "$p" "$H"; }; then NOTES_USED=1
       else DENY="$STATE_DENY"; return 0; fi ;;
     "$H/.local"|"$H/.cache"|"$H/.config"|"$H/.claude"|"$H/.docker"|"$H/.Trash"|"$H/.vscode"|"$H/.nvm"|"$H/.cargo"|"$H/.rustup")
@@ -385,7 +386,8 @@ run_judge() { # <category> <target> <identity> [method]
 # trash, so nothing let through here is ever deleted in place. --propose passes neither: a path
 # removed by name is judged by its identity alone, with no keep rules and no 30 day floor, so the
 # exception is never open to it. An item the exception let past the deny list is then held to
-# dc_notes_folder, the page's own predicate: a real folder, reached by its own path through no link.
+# dc_notes_item, the page's own predicate: a real folder, reached by its own path through no link,
+# and for a task folder one that git says is a checkout holding its own repository.
 path_checks() { # <target> [<category> <method>]
   local t="$1" r
   PHYS="" WHY="" NOTES_OK="" NOTES_USED=""
