@@ -1389,7 +1389,13 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
 - Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
   parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
-  A claim entry with no time of its own is never judged stuck by time.
+  A claim entry with no time of its own is never judged stuck by time. Active time is wall time
+  from the claim entry to now less those waits only, so waiting for checks, for a merge turn or on
+  subagents counts, and so does any time after the work was noted done while the claim stayed held;
+  the watchdog times only the session's newest held claim, so a session holding several reaches
+  the older ones only after the newest passes 2 hours (measured on the night of 18 Nov 2026,
+  #3276). The report reads a park of the driver's against the session's done note for the issue
+  and does not list a finished one.
 - Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
   blocked on with the reason said: one failed read never stops the night. Three in a row stop it
   with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
