@@ -386,11 +386,12 @@ run_judge() { # <category> <target> <identity> [method]
 # Checks a path target as far as acting on it: sets PHYS and succeeds, or sets WHY and fails. Run in
 # the current shell, never a substitution, so PHYS reaches the caller.
 #
-# With a category and a method, the state folder's one exception is open to this item, and only
+# With a category and a method, the state folder's two exceptions (a folder inside a task folder of
+# a session's notes, and a task folder that is a git checkout) are open to this item, and only
 # when the category is the one whose judge asks the keep rules (NOTES_CATEGORY) and the method is
-# trash, so nothing let through here is ever deleted in place. --propose passes neither: a path
-# removed by name is judged by its identity alone, with no keep rules and no 30 day floor, so the
-# exception is never open to it. An item the exception let past the deny list is then held to
+# trash, so nothing let through here is ever deleted in place. --propose passes neither: a path removed by name is judged
+# by its identity alone, with no keep rules and no 30 day floor, so neither exception is ever open
+# to it. An item an exception let past the deny list is then held to
 # dc_notes_item, the page's own predicate: a real folder, reached by its own path through no link,
 # and for a task folder one that git says is a checkout holding its own repository.
 path_checks() { # <target> [<category> <method>]
