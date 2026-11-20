@@ -6,6 +6,10 @@ Full provenance per rule: ~/.claude/audits/2026-07-27-issue-audit/. Numbering is
 for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
+- **L1039. When a check breaks a Python file on purpose and then restores it, clear its __pycache__ before every test run, because Python reuses a compiled copy whose source has the same size and the same second's timestamp, so the run tests the old code and the check reads wrong.**
+  (intonation#17, 2026-11-20)
+  NO CHECK: ad hoc mutation edits run in a session cannot be detected by a hook or test
+  SHORT: After breaking then restoring a Python file, clear __pycache__ before each test run, or a same size same second edit tests the old code.
 - **L865. When a query API can answer from a sample, read the field that says so on every answer and treat a sampled answer as unmeasured. A positive control does not catch it, because a common control line reads above zero as an estimate while a rare needle in the same answer reads zero.**
   (slate#5204, 2026-11-19)
   SHORT: A query API that may answer from a sample must be checked on every answer: a control passes on an estimate while a rare needle reads zero.
