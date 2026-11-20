@@ -747,8 +747,8 @@ case "$grc:$gerr" in
   2:*notes/copied.md*) check "#3113 and the style gate then reads the line the copy brought in" ok ;;
   *) check "#3113 and the style gate then reads the line the copy brought in" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
 esac
-# A question that cannot be asked is not one answered no, for the two new questions as for the two
-# before them (copy_hook and run_copy are the #3098 cases' own, above).
+# A question that cannot be asked is not one answered no, for the #3113, #3112 and #3338 questions
+# as for the two before them (copy_hook and run_copy are the #3098 cases' own, above).
 for q in ps_unread_write ps_unread_push_source ps_push_to_held_branch; do
   copy_hook "$W/without-$q" "$q"
   if grep -q "^$q() {" "$W/without-$q/lib/push-scope.sh" 2>/dev/null || [ ! -s "$W/without-$q/lib/push-scope.sh" ]; then
