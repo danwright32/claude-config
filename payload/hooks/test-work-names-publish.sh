@@ -388,6 +388,24 @@ redirected "gh api behind an error redirection" '2>/dev/null gh api repos/danwri
 run '2>/dev/null gh pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'
 check "#2235 control: clean text behind a redirection passes: $out" passed
 
+# ---------------------------------------------------------------- a redirection glued to a word, and a function's body (claude-config#3252)
+# `gh>/dev/null pr create` opens the pull request. The reader split on spaces only, so the gate saw a
+# program named gh>/dev/null, or a subcommand named 2>/dev/null or pr>/dev/null, and the first command
+# of a function's body as a program named f(), and let a work name through.
+run 'gh>/dev/null pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the acme-widgets issue"'
+check "#3252 a public pull request, a redirection glued to gh: $out" refused
+run 'gh issue>/dev/null comment 5 --repo danwright-test/public-notes --body "the acme-corp board"'
+check "#3252 a comment, a redirection glued to issue: $out" refused
+run 'gh 2>/dev/null pr create --repo danwright-test/public-notes --title "Fix it" --body "copied from the acme-widgets issue"'
+check "#3252 a public pull request, a redirection between gh and pr: $out" refused
+# Refused before the reader fix too (seen beside main's reader, 2026-11-19), so these two are controls.
+run 'gh pr edit>/dev/null 5 --repo danwright-test/public-notes --body "zephyr"'
+check "#3252 control: a pull request edit, a redirection glued to edit: $out" refused
+run 'f() { gh issue comment 5 --repo danwright-test/public-notes --body "the acme-corp board"; }; f'
+check "#3252 control: a comment as the first command of a function's body: $out" refused
+run 'gh>/dev/null pr create --repo danwright-test/public-notes --title "Fix it" --body "nothing to see"'
+check "#3252 control: clean text with a redirection glued to gh passes: $out" passed
+
 # ---------------------------------------------------------------- the path of a body file, and a cd (claude-config#2909)
 # A session in a work project keeps its files in a notes folder named after the project, so the path
 # of every body file it writes carries the name, and so does a cd into its checkout. Neither is posted:

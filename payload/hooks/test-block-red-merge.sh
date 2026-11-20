@@ -169,6 +169,18 @@ fi
 if holds "$out" "wait_for_checks.py 7 --merge"; then pass; else
   fail "the refusal does not name the command to use instead: $out"
 fi
+# claude-config#3252: a redirection glued to a word, and a function's body. The reader split on
+# spaces only, so this gate saw a program named gh>/dev/null, or a subcommand named 2>/dev/null or
+# pr>/dev/null, and the first command of a function's body as a program named f(), and the merge ran
+# past the pinned tool.
+for glued in "gh>/dev/null pr merge 7 --squash" "gh pr>/dev/null merge 7 --squash" "gh pr merge>/dev/null 7 --squash" \
+             "gh 2>/dev/null pr merge 7 --squash" "f() { gh pr merge 7 --squash; }; f"; do
+  if denied "$(run_hook "$dir" "$glued")"; then pass; else
+    fail "#3252 a plain merge was allowed in a repo that carries the pinned merge tool: $glued"
+  fi
+done
+if denied "$(run_hook "$dir" "gh pr view>/dev/null 7 --json mergeable")"; then
+  fail "#3252 control: a view with a redirection glued on was refused as a merge"; else pass; fi
 rm -rf "$dir"
 
 # 2. Green is not enough on its own. This is the whole point: the rollup can
