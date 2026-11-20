@@ -871,8 +871,9 @@ EOF
 # and RT_READINGS to the readings made, the first call and every try included. For cantjudge,
 # RT_CAUSE says which kind of stop it was, since each needs different advice (#3327): unreadable (a
 # reading asked READ_TRIES times never answered readably), notime (one unreadable with no time left
-# to ask again), time (no time to start the next wave), cap (more parts than TEST_PARTS_MAX) or
-# split (the gate's own scratch work failed). $1 = the first call's missing changes, one per line.
+# to ask again), failed (a reading that timed out or could not start, which is not asked again),
+# time (no time to start the next wave), cap (more parts than TEST_PARTS_MAX) or split (the gate's
+# own scratch work failed). $1 = the first call's missing changes, one per line.
 judge_rest_of_tests() {
   local dir n k i left t nums part_in list obj answer covered x
   local -a miss=()
@@ -895,7 +896,7 @@ MISSING_EOF
   # (#3327); one still unreadable after that ends the judging, and its part counts as unseen. A
   # reading that leaves no result file at all counts as failed. No change left untested, nothing is
   # asked again.
-  local last j fj p pids failed covered_all meta todo again tries how
+  local last j fj p pids failed covered_all meta todo again tries how why
   local -a part_err=()
   failed=""
   k=1
@@ -951,7 +952,14 @@ META_EOF
           PC_JUDGE_ERR="$(cat "$dir/err.$j" 2>/dev/null)"
           [ -n "$PC_JUDGE_ERR" ] || PC_JUDGE_ERR="the reading left no result behind"
           part_err[j]="$PC_JUDGE_ERR"
-          again="$again $j"; continue
+          # Asked again only for the failures first_reading asks again for, and a reading that left
+          # nothing behind; a timeout or a missing claude would only fail the same way again.
+          case "$PC_JUDGE_ERR" in
+            "judge verdict was not readable JSON"|"judge returned an error envelope"|"judge unreachable"*|"the reading left no result behind")
+              again="$again $j" ;;
+            *) failed="$failed $j"; [ -n "$RT_WHY" ] || { RT_CAUSE=failed; RT_WHY="reading $j of the rest failed: $PC_JUDGE_ERR"; } ;;
+          esac
+          continue
         fi
         PC_JUDGE_OBJ="$(cat "$dir/obj.$j" 2>/dev/null)"
         answer="$(printf '%s' "$PC_JUDGE_OBJ" | python3 -c '
@@ -986,14 +994,15 @@ except Exception:
       tries=$((tries + 1))
     done
     if [ -n "$todo" ]; then
-      failed="$todo"
+      failed="$failed $todo"
       fj="${todo# }"; fj="${fj%% *}"
       how="time"; [ "$tries" -gt 1 ] && how="times"
       case "$todo" in
-        " $fj") RT_WHY="reading $fj of the rest was asked $tries $how and never answered in a form the gate could read: ${part_err[fj]}" ;;
-        *) RT_WHY="readings$todo of the rest were each asked $tries $how and never answered in a form the gate could read (reading $fj: ${part_err[fj]})" ;;
+        " $fj") why="reading $fj of the rest was asked $tries $how and never answered in a form the gate could read: ${part_err[fj]}" ;;
+        *) why="readings$todo of the rest were each asked $tries $how and never answered in a form the gate could read (reading $fj: ${part_err[fj]})" ;;
       esac
-      [ "$RT_CAUSE" = notime ] && RT_WHY="$RT_WHY; there was no time to ask again: $(gate_clock) seconds had gone and the hook must finish inside 120"
+      [ "$RT_CAUSE" = notime ] && why="$why; there was no time to ask again: $(gate_clock) seconds had gone and the hook must finish inside 120"
+      RT_WHY="${RT_WHY:+$RT_WHY, and }$why"
     fi
     k=$((last + 1))
     [ -z "$RT_WHY" ] || break
@@ -1147,6 +1156,10 @@ push does not make them smaller; if they alone are too many, split the branch."$
 contained part of the work to its own branch cut from ${PC_BASE:-its base} and push that first." ;;
         time) rt_advice="Nothing in the push needs to change for this: how long the readings take depends on
 how busy the Mac is, so send the same push again, when fewer test suites are running if you can." ;;
+        split) rt_advice="That was the gate's own scratch work failing, not a finding about the push. Nothing
+in it needs to change: send the same push again." ;;
+        failed) rt_advice="A reading failed rather than answered, for the reason above, which is not a finding
+about the push. Nothing in it needs to change: once that reason is cleared, send the same push again." ;;
         *) rt_advice="This was the reviewer failing to answer, not a finding about the push. Nothing in it
 needs to change: send the same push again, and every reading is asked afresh." ;;
       esac

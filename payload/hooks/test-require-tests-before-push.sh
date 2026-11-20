@@ -524,7 +524,7 @@ else pass=$((pass+1)); fi
 # Tests larger than the whole budget: the prompt says they are cut and names the file, never
 # "in full", and a "no test" verdict is refused as COULD NOT JUDGE, naming the file, rather than
 # as a finding that tests are missing. It still refuses: a gate that cannot read the push does not
-# wave it through (L42); the remedy it names is a smaller push. Since #1998 the rest of the test
+# wave it through (L42); the remedy it names is the same push sent again (#3327). Since #1998 the rest of the test
 # changes go to further calls, and this stub answers every call with a verdict, never the list of
 # covered changes those calls ask for, so the push is still refused as could not judge; the first
 # call's input is the prompt asserted on.
@@ -536,7 +536,9 @@ cp "$JUDGE_LOG/call.1" "$JUDGE_IN" 2>/dev/null
 want_code 2 "#723 a truncated push the reviewer calls untested is still refused"
 want_stderr "could not judge" "#723 the refusal says the gate could not judge the push in full"
 want_stderr "tests/register.test.js" "#723 and names the test file that was cut"
-want_stderr "fewer commits|smaller push|split" "#723 and says how to make it judgeable"
+# Its readings answer without the list asked for, so the remedy since #3327 is the same push sent
+# again (the old advice, a smaller push, read the same branch and did nothing).
+want_stderr "send the same push again" "#723 and says what to do"
 case "$ERR" in
   *'have no test covering them'*) fail=$((fail+1)); echo "FAIL: #723 a truncated push was refused as missing tests: [$ERR]" ;;
   *) pass=$((pass+1)) ;;
@@ -714,6 +716,9 @@ cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
 STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
 cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
 want_code 2 "#2153 readings that fail before launch still refuse"
+# A reading that could not start is not asked again (#3327): it would only fail the same way.
+case "$ERR" in *'asked 2 times'*|*'asked 3 times'*) fail=$((fail+1)); echo "FAIL: #3327 a reading with no claude to run was asked again" ;; *) pass=$((pass+1)) ;; esac
+want_stderr "once that reason is cleared" "#3327 a reading that could not start gets its own advice"
 rec_start="$(ledger_last 13)"
 case "$rec_start" in
   ''|*[!0-9]*) fail=$((fail+1)); echo "FAIL: #2153 the record's start is '$rec_start', expected epoch seconds" ;;

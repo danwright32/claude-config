@@ -3381,7 +3381,8 @@ the judge transcripts on this Mac to 2026-11-20, 5 of 199 further readings had f
 the new reading reads all 5; the 12 of 1,629 first readings it still cannot read held two answers
 or a spend limit message. Beyond that, a reading whose answer could not be read (no single object,
 an error envelope, nothing at all, or an object without the list asked for) is asked again, up to
-three times in all, with no wait between tries and only while 20 seconds of the deadline are left.
+three times in all, with no wait between tries and only while 20 seconds of the deadline are left;
+a reading that timed out or could not start is not asked again, since it would fail the same way.
 It is never a pass: a further reading still unreadable after that refuses as could not judge as
 before, saying how many times it was asked and which test files it held, and a first reading still
 unreadable fails open as before, saying how many times it was asked. Every could not judge refusal
