@@ -6701,7 +6701,7 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
 - **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
-  costs #1940 tracks: the share of subagent reads spent on code reading, the share of interactive
+  costs #1940 measured: the share of subagent reads spent on code reading, the share of interactive
   reads spent carrying agent reports, and the main sessions past a number of compactions. It
   reads each item's size and kind, never prints its text, and is the method both posted
   measurements used, so a re-measure on either Mac is comparable with them:
@@ -6973,7 +6973,11 @@ on any of the three first asks about a line it knows the answer for, since a cop
 loaded before #3093 answers with none of them and says nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
-`perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
+`perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
+(`ed`, `ex`, vi's family, `emacs`, with a script it is given as a write the words do not name),
+`sponge`'s file, a file named as output (`sort -o`, `base64 -o`, `openssl -out`, the second file of
+`uniq`, `xxd` and `link`), a file rewritten in place (`dos2unix`, `yq -i`, `sd`, `plutil`) and the
+packed or unpacked twin gzip's family leaves, curl and wget's files (`curl -o`, `wget -O`, a
 file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or `-P`,
 curl's cookie jar and trace, wget's log), each relative path resolved after any `cd` before it, a
 path part shaped like a route parameter (`[id]`, `[...slug]`, `[[...slug]]`, `[id=matcher]`,

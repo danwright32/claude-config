@@ -887,6 +887,79 @@ test('shell writes to a look changing file are caught: redirects, sed in place, 
   expect(w.ran).toEqual([])
 })
 
+// #3279: with no answer recorded, ed, ex or vim given a script and a pipe into sponge rewrote a look
+// changing file with nothing asked (23 of 72 routes tried on 2026-11-19), because mod-kit's write
+// reader knows a writer by its name and knew none of them. The same held for every other program
+// that writes the file its words name. Each is held as sed in place is; the ordinary command beside
+// each (reading the file, the same program on a file that changes no look) still runs unasked.
+test('#3279: an editor given a script, a pipe into sponge and the other programs that write the file they name are held like sed in place', withKit, async ($, on) => {
+  const w = world($, on)
+  // Every route is tried before any is judged, so a run names each one that was not held.
+  const notHeld: string[] = []
+  for (const [command, shown] of [
+    ["ed -s app/globals.css <<'EOF'\n1s/a{}/a{color:red}/\nw\nq\nEOF", 'app/globals.css'],
+    ["printf '1s/a{}/a{color:red}/\\nw\\nq\\n' | ed -s /w/slate/app/globals.css", 'app/globals.css'],
+    // The file named only inside the script the editor runs.
+    ["ed -s <<'EOF'\ne app/globals.css\n1s/a{}/a{color:red}/\nw\nq\nEOF", 'app/globals.css'],
+    // The same, the script handed as a here-string (the review of #3324).
+    ["ed -s <<< $'e app/globals.css\\n1s/a{}/a{color:red}/\\nw\\nq'", 'app/globals.css'],
+    ["ex -s <<< 'e app/globals.css | %s/a{}/a{color:red}/ | wq'", 'app/globals.css'],
+    ['vim -es <<< "e app/globals.css | wq"', 'app/globals.css'],
+    ["ex -sc '%s/a{}/a{color:red}/|x' app/globals.css", 'app/globals.css'],
+    ["cd /w/slate && ex -s app/globals.css <<'EOF'\n%s/a{}/a{color:red}/\nwq\nEOF", 'app/globals.css'],
+    ["vim -es -c '%s/a{}/a{color:red}/' -c wq app/globals.css", 'app/globals.css'],
+    ["vi -es -c '%s/p-4/p-6/' -c wq app/page.tsx", 'app/page.tsx'],
+    // neovim's switch for running with no screen, written in two halves: the scan that keeps every
+    // Chrome launch going through its helper reads that switch, whole, as a Chrome launch.
+    [`nvim ${'--head' + 'less'} -c '%s/a{}/a{color:red}/' -c wq app/globals.css`, 'app/globals.css'],
+    ["view -es -c '%s/a{}/a{color:red}/' -c 'w!' -c q app/globals.css", 'app/globals.css'],
+    ["vim -es -c 'w! app/globals.css' -c q docs/notes.md", 'app/globals.css'],
+    ["emacs --batch app/globals.css --eval '(insert \"a{}\")' -f save-buffer", 'app/globals.css'],
+    ["sed 's/a{}/a{color:red}/' app/globals.css | sponge app/globals.css", 'app/globals.css'],
+    ["echo 'a{color:red}' | sponge -a /w/slate/app/globals.css", 'app/globals.css'],
+    ['sort -o app/globals.css app/globals.css', 'app/globals.css'],
+    ['sort -uo app/globals.css /tmp/new.css', 'app/globals.css'],
+    ['uniq /tmp/new.css app/globals.css', 'app/globals.css'],
+    ['xxd -r /tmp/new.hex app/globals.css', 'app/globals.css'],
+    ['base64 -d -i /tmp/new.b64 -o app/globals.css', 'app/globals.css'],
+    ['openssl base64 -d -in /tmp/new.b64 -out app/globals.css', 'app/globals.css'],
+    ['iconv -f latin1 -t utf-8 -o app/globals.css /tmp/new.css', 'app/globals.css'],
+    ['link /tmp/new.css app/new.css', 'app/new.css'],
+    ['dos2unix app/globals.css', 'app/globals.css'],
+    ["yq -i '.color = \"red\"' design-tokens.json", 'design-tokens.json'],
+    ['sd p-4 p-6 app/page.tsx', 'app/page.tsx'],
+    ['plutil -replace color -string red design-tokens.json', 'design-tokens.json'],
+    ['gzip app/globals.css', 'app/globals.css'],
+    ['gunzip app/globals.css.gz', 'app/globals.css'],
+    ['xz -d app/globals.css.xz', 'app/globals.css'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('issue #978 in slate') || !why.includes(shown)) notHeld.push(command)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  const near = [
+    "sed -n '1,5p' app/globals.css",
+    "vim -es -c '%s/a/b/' -c wq docs/notes.md",
+    "ed -s docs/notes.md <<'EOF'\n1s/a/b/\nw\nq\nEOF",
+    'vim --version',
+    'sort app/globals.css | sponge /tmp/sorted.txt',
+    'sort -u app/globals.css',
+    'uniq -c app/globals.css',
+    'xxd -l 16 app/globals.css',
+    'base64 -i app/globals.css',
+    'openssl base64 -in app/globals.css',
+    "yq '.color' design-tokens.json",
+    'plutil -lint design-tokens.json',
+    'gzip -c app/globals.css > /tmp/globals.css.gz',
+    'gzip -k docs/notes.md',
+  ]
+  const asked: string[] = []
+  for (const command of near) if (refusalOf(await call($, { tool: 'Bash', command }))) asked.push(command)
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(near.length)
+})
+
 // #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path or a restore
 // puts back a look changing file, git rm and git mv take one away, and none had a round asked.
 test('git checkout of a path, git restore, git rm and git mv of a look changing file are held without a settled round', withKit, async ($, on) => {
