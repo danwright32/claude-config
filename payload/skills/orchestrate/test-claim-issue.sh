@@ -99,7 +99,7 @@ run() { # run <args...>   sets out and code
   out="$(PATH="$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_HOST="${HOST_OVERRIDE:-Daniels-MacBook-Pro-2}" bash "$SCRIPT" "$@" 2>&1)"
   code=$?
 }
-posted_count() { local n=0; for f in "$FAKE"/posted.*; do [ -e "$f" ] && n=$((n + 1)); done; echo "$n"; }
+posted_count() { local n=0 f; for f in "$FAKE"/posted.*; do [ -e "$f" ] && n=$((n + 1)); done; echo "$n"; }
 
 [ -x "$SCRIPT" ] && ok || bad "claim-issue.sh exists and is executable" "$SCRIPT"
 
@@ -207,6 +207,18 @@ for which in fail_issue fail_pr fail_branches empty_issue; do
   lacks "$which: never says free" "CLAIMED" "$out"
   is "$which: nothing posted" 0 "$(posted_count)"
 done
+
+# The shared branch reader failing (node missing or broken) is a read that failed too.
+new_case
+mkdir -p "$TMP/badnode"
+printf '#!/usr/bin/env bash\necho "node: simulated failure" >&2\nexit 1\n' >"$TMP/badnode/node"
+chmod +x "$TMP/badnode/node"
+echo "fix/3317-someone-else" >"$FAKE/branches"
+out="$(PATH="$TMP/badnode:$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_HOST=Daniels-MacBook-Pro-2 bash "$SCRIPT" claim "$REPO" 3317 "$MINE" 2>&1)"
+code=$?
+is "branch reader fails: exit 2" 2 "$code"
+has "branch reader fails: says it could not check" "COULD NOT CHECK" "$out"
+is "branch reader fails: nothing posted" 0 "$(posted_count)"
 
 # The post itself failing.
 new_case

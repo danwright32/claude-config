@@ -13,8 +13,9 @@
 #
 # claim does three reads, and refuses when any of them shows another session holds the issue:
 #   1. the claims on the issue: a live claim posted by this script from another Mac or branch;
-#   2. open pull requests naming it (#<issue> in the title or body, or the number in the branch);
-#   3. remote branches whose name carries the number.
+#   2. open pull requests naming it (#<issue> in the title or body, or a branch that names it);
+#   3. remote branches that name it.
+# Which issues a branch names is read by hooks/lib/branch-issues.mjs, the one shared reader.
 # When none does, it posts a claim naming the Mac (as Dan names them), the time in ET and the
 # branch, then reads the issue back. Two sessions that both found the issue free both post; the
 # claim GitHub shows first wins, and the later one posts its own release and exits 1.
@@ -37,6 +38,7 @@
 set -uo pipefail
 
 STALE_HOURS="${CLAIM_STALE_HOURS:-24}"
+BRANCH_READER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/branch-issues.mjs"
 
 usage() {
   echo "usage: claim-issue.sh claim|check <owner/repo> <issue> <branch>" >&2
@@ -95,7 +97,9 @@ read_issue() { # fills $tmp/issue; returns non zero, with the reason in $tmp/iss
 # ships does not have.
 live_claims() {
   awk '
-    NF == 6 && $1 ~ /^[0-9]+$/ && $2 == "<!--" && $4 ~ /^branch=/ && $5 ~ /^host=/ && $6 == "-->" {
+    NF == 6 && $2 == "<!--" && $6 == "-->" &&
+      $1 ~ /^[0-9]+$/ &&
+      $4 ~ /^branch=/ && $5 ~ /^host=/ {
       key = substr($4, 8) " " substr($5, 6)
       if ($3 == "orchestrate-claim") {
         if (!(key in when)) { n++; order[n] = key; pos[key] = n }
@@ -116,6 +120,7 @@ first_holder=""
 judge_claims() {
   local t b h
   blocking=(); stale=(); first_holder=""
+  live_claims >"$tmp/live"
   while read -r t b h; do
     [ -n "$t" ] || continue
     local who="$(mac_name "$h") claimed it at $(et_time "$t"), branch $b"
@@ -129,7 +134,7 @@ judge_claims() {
       [ -n "$first_holder" ] || first_holder=other
       blocking+=("claim: $who")
     fi
-  done < <(live_claims)
+  done <"$tmp/live"
 }
 
 fail_read() { # fail_read <what> <error file>
@@ -155,9 +160,10 @@ read_issue || fail_read "the issue's comments" "$tmp/issue.err"
 # ---- release ----
 if [ "$mode" = release ]; then
   ours=no
+  live_claims >"$tmp/live"
   while read -r t b h; do
     [ "$b" = "$branch" ] && [ "$h" = "$host" ] && ours=yes
-  done < <(live_claims)
+  done <"$tmp/live"
   if [ "$ours" = no ]; then
     echo "NOTHING TO RELEASE: $repo#$issue has no live claim from $(mac_name "$host") on branch $branch. Nothing posted."
     exit 0
@@ -186,19 +192,30 @@ if [ "$state" != OPEN ]; then
 fi
 
 judge_claims
-num_re="(^|[^0-9])${issue}([^0-9]|$)"
+
+# Which issues a branch's name names is read by the one shared reader, mod-kit's issuesOfBranch
+# through hooks/lib/branch-issues.mjs, never a pattern kept here (claude-config#1475): an agent
+# worktree's random id and a branch on two issues are where hand written readings drifted.
+{ cut -f 2 "$tmp/prs"; cat "$tmp/branches"; } >"$tmp/names"
+if ! node --experimental-strip-types --no-warnings "$BRANCH_READER" <"$tmp/names" >"$tmp/named.json" 2>"$tmp/named.err" ||
+  ! jq -r --argjson n "$issue" 'to_entries[] | select(any(.value[]; . == $n)) | .key' \
+    "$tmp/named.json" >"$tmp/naming" 2>>"$tmp/named.err"; then
+  fail_read "which issues the remote branches name" "$tmp/named.err"
+fi
+names_it() { grep -q -x -F -- "$1" "$tmp/naming"; }
+
 ref_re="#${issue}([^0-9]|$)"
 while IFS=$'\t' read -r n head title body; do
   [ -n "$n" ] || continue
   [ "$head" = "$branch" ] && continue
-  if [[ "$head" =~ $num_re ]] || [[ "$title" =~ $ref_re ]] || [[ "$body" =~ $ref_re ]]; then
+  if names_it "$head" || [[ "$title" =~ $ref_re ]] || [[ "$body" =~ $ref_re ]]; then
     blocking+=("pull request: #$n ($head) $title")
   fi
 done <"$tmp/prs"
 while IFS= read -r b; do
   [ -n "$b" ] || continue
   [ "$b" = "$branch" ] && continue
-  [[ "$b" =~ $num_re ]] && blocking+=("remote branch: $b")
+  names_it "$b" && blocking+=("remote branch: $b")
 done <"$tmp/branches"
 
 print_list() { local l; for l in "$@"; do echo "  $l"; done; }
