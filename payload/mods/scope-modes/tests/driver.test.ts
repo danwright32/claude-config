@@ -4,6 +4,7 @@ import {
   LIMITS, REST_RESUME, RESUME, activeMs, blockTold, busyWords, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
+import { parkedWith } from '../hooks/driver.ts'
 
 // The overnight driver's decisions (#844), on recorded state only. Every limit is read from LIMITS,
 // never written here as a literal at its edge (L401), so moving one moves its tests with it.
@@ -673,4 +674,21 @@ describe('every claim held is timed from its own start, and a done note ends one
     const one = claim(1, T0 - LIMITS.stuckMs - 10 * MIN)
     expect(heldClaim(one, 's1', done({}))).toEqual({ state: 'none' })
   })
+})
+
+// A park joined to the ones not yet said (#3330, lessons review of d137576).
+test('parkedWith: the first park is said as it is', () => {
+  expect(parkedWith(null, 'A.')).toBe('A.')
+})
+test('parkedWith: a park of another issue is added after the unsaid one', () => {
+  expect(parkedWith('A.', 'B.')).toBe('A. B.')
+})
+test("parkedWith: a refusal tried again takes the place of that issue's earlier refusal, wherever it sits", () => {
+  expect(parkedWith('A. old\ndata\nC.', 'new\ndata', 'old\ndata')).toBe('A. new\ndata\nC.')
+})
+test('parkedWith: an earlier refusal already said is not looked for, so the new one is added', () => {
+  expect(parkedWith('C.', 'new', 'old')).toBe('C. new')
+})
+test('parkedWith: a dollar sign in the new words is kept as written', () => {
+  expect(parkedWith('old', 'cost $& $1', 'old')).toBe('cost $& $1')
 })

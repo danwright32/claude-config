@@ -195,15 +195,17 @@ sleep_note() {
 }
 
 _sleep_note_ends_claim() {
-  local queue out
+  local queue out rc
   queue="$HOME/.claude/hooks/lib/sleep-queue.sh"
   [ -n "$_SLEEP_LIB_DIR" ] && [ -f "$_SLEEP_LIB_DIR/sleep-queue.sh" ] && queue="$_SLEEP_LIB_DIR/sleep-queue.sh"
   if [ ! -f "$queue" ]; then
     printf 'sleep_note: noted, but any claim it names is still held, since sleep-queue.sh is not there (%s); end it with sleep-queue.sh release\n' "$queue" >&2
     return 0
   fi
-  out="$(bash "$queue" done-noted "$1" 2>&1)"
-  case $? in
+  # The status is taken in a form `set -e` cannot act on. A caller that sourced this under set -e
+  # would otherwise be ended by the ordinary "nothing to end" answer (exit 1) before the case ran.
+  out="$(bash "$queue" done-noted "$1" 2>&1)" && rc=0 || rc=$?
+  case "$rc" in
     0) printf 'sleep_note: noted, and the claim on #%s is ended as done\n' "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "released" { print $2 }')" >&2 ;;
     1) ;; # nothing this session holds was named: nothing to end
     *) printf 'sleep_note: noted, but the claim it names could not be ended (%s); end it with sleep-queue.sh release\n' "${out:-sleep-queue.sh gave no reason}" >&2 ;;

@@ -73,7 +73,7 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, SLEEP_START, blockTold, overdueClaim, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
+  LIMITS, SLEEP_START, blockTold, overdueClaim, parkedWith, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
 } from './driver.ts'
 import { busyNow } from './busy.ts'
@@ -3544,6 +3544,9 @@ const stoppedHere = new Set<string>()
 const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
 // A park the watchdog made but could not record on disk, said at the next Stop all the same.
 const parkedHere = new Map<string, string>()
+// Each park the queue refused since the last Stop, by issue, in the words not yet said. The next
+// minute's try at the same issue replaces these words; it never says the failure a second time.
+const refusedHere = new Map<string, Map<number, string>>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
 // backgroundTasks is Claude Code's list of the session's work in flight sent with the stop, from which
@@ -3567,6 +3570,7 @@ const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ blo
       driver = { state: 'ok', record: { ...base, parked: base.parked ? `${thenNext(base.parked)}${unsavedPark}` : unsavedPark } }
     }
     parkedHere.delete(stopKey(en))
+    refusedHere.delete(stopKey(en))
     const notesText = await notesNow($, en)
     const claim = await claimNow($, en)
     const u = await usageNow($)
@@ -3673,8 +3677,16 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     const rel: Release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
     // Several claims can now be parked a minute apart before the next Stop says so: each park is
     // added after any not yet said, never written over it (lessons review of feb6dd4).
-    const told = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
-    d.parked = d.parked ? `${thenNext(d.parked)}${told}` : told
+    // A park the queue refused is tried again next minute, and its words then replace that
+    // issue's earlier refusal, so one failure is not said, and stored, once a minute until the
+    // next Stop (lessons review of d137576).
+    const failed = await endClaim($, en, where.root, rel)
+    const told = releaseTold('watchdog', rel, failed, { root: where.root, self: en.self })
+    const refused = refusedHere.get(stopKey(en)) ?? new Map<number, string>()
+    d.parked = parkedWith(d.parked, told, refused.get(rel.issue))
+    if (failed === null) refused.delete(rel.issue)
+    else refused.set(rel.issue, told)
+    refusedHere.set(stopKey(en), refused)
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return null
   })

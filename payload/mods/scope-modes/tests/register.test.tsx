@@ -6775,6 +6775,19 @@ test("a park the watchdog could not make is said at the next Stop with the queue
   framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(120 minutes of active work on it, past the 2 hours an issue gets\), so end its claim yourself with `bash ~\/\.claude\/hooks\/lib\/sleep-queue\.sh release \/repo 7 s1 parked '120 minutes of active work on it, past the 2 hours an issue gets'`, then claim the next issue\.$/)
 })
 
+test('a park the queue goes on refusing is said once at the next Stop, in its newest words, not once a minute (#3330)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, releaseFails: QUEUE_REFUSED })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(3)
+  w.o.claims = ''
+  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(122 minutes of active work on it/)
+})
+
 test("a claim the Stop could not end is said with the queue's answer only as data (#922)", withDeps, async ($, on) => {
   // Past the night's attempts, so this Stop parks it at once.
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 3, entries: [{ kind: 'claim', session: 's1', at: T0 }] })

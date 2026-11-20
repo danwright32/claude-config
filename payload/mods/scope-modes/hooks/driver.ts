@@ -313,6 +313,17 @@ export const queueData = (answer: string) =>
 /** One piece of a block's reason followed by the next: a space after a sentence, nothing after a line break. */
 export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
 
+/**
+ * A park's words joined to the ones not yet said. A park the queue refused leaves the claim held
+ * and overdue, so the watchdog tries it again each minute: its new words take the place of that
+ * issue's earlier refusal (`earlier`), so one failure is said once, not once a minute (#3330).
+ */
+export const parkedWith = (unsaid: string | null | undefined, told: string, earlier?: string): string => {
+  if (!unsaid) return told
+  if (earlier && unsaid.includes(earlier)) return unsaid.replace(earlier, () => told)
+  return `${thenNext(unsaid)}${told}`
+}
+
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const mins = (ms: number) => `${Math.round(ms / MIN)} minutes`
 

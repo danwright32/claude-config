@@ -144,6 +144,12 @@ check_eq "a crashed reader is refused (exit 3)" "3" "$?"
 has "and says the note could not be read" "the done note could not be read" "$out"
 check_eq "and the claim is left held" "claim s1 1" "$(last 37)"
 
+# ---- a caller under set -e survives the ordinary "nothing to end" answer ----
+# A done note naming only a pull request ends nothing (the queue answers exit 1), and sleep_note
+# must still return 0 to a caller that sourced it under set -e (lessons review of d137576).
+out="$(bash -ec '. "$1"; sleep_note "$2" 2>/dev/null; echo survived' _ "$LIB" '{"kind":"done","by":"s1","repo":"danwright32/demo","pr":11,"text":"merged"}' 2>&1)"
+check_eq "a caller under set -e is not ended by a done note that names no issue" "survived" "$out"
+
 # ---- a claim that could not be ended is said, with what to run ----
 sleep_note '{"kind":"done","by":"s 1","repo":"danwright32/demo","issue":37,"pr":14,"text":"merged"}' 2>"$WORK/err"
 has "a claim the queue refused to end is said on stderr" "end it with sleep-queue.sh release" "$(cat "$WORK/err")"
