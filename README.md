@@ -4975,6 +4975,16 @@ through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's a
 a file shaped like a test that nothing runs, and `test-skill-helper-exits.sh` on a skill helper that
 can report success when it failed (claude-config#676, #677).
 
+The pull request checks install Claude Code for the mods' own tests (#3297), at the one version
+written in `.github/claude-code-version` and read by `tools/install-claude-code.sh` alone, so every
+pull request runs `claude plugin validate` and `claude plugin test` on every mod and loads them all
+in a headless session, and a mod failing either is a red check. Raising the version is a one line
+pull request whose checks say whether the mods still pass on it. The command is kept off the PATH and
+named to the two mods suites alone, in `MODS_CLAUDE`, because many other suites start a real session
+whenever they find a `claude`. A daily run, `.github/workflows/mods-on-newest-claude-code.yml`, tests
+the mods on the newest release instead; it never runs on a push or a pull request, so a release that
+breaks a mod turns nobody's pull request red. Details under "Mods" below.
+
 ### Proving a check would notice
 
 A guard is only real once it has been seen to fail. That was done by hand here, by editing a
@@ -6714,7 +6724,26 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's file, whose band it would otherwise overwrite. One with no transcript of its own either
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
-- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
+- **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
+  costs #1940 measured: the share of subagent reads spent on code reading, the share of interactive
+  reads spent carrying agent reports, and the main sessions past a number of compactions. It
+  reads each item's size and kind, never prints its text, and is the method both posted
+  measurements used, so a re-measure on either Mac is comparable with them:
+
+      python3 tools/transcript-shares.py --project <part of a project folder name> \
+          --since 2026-11-02 --until 2026-11-16 --tz America/New_York --jobs 8
+
+  `--project` matches part of a folder name under `~/.claude/projects`, so it also matches that
+  repository's worktree folders and any folder it was in before a move; check which folders it
+  matched before comparing two runs. A part starting with a dash is written `--project=-...`.
+  It can be repeated, or left out to read every project. Its INPUT line says how many
+  files and requests it read. A file it cannot open, a folder it cannot list, and a file whose
+  read fails part way are each named on an UNREADABLE line; from the last, nothing is counted.
+  A line that is not JSON, is nested too deep to parse, or carries an id that is not a string is
+  counted on its file's MALFORMED line, and the rest of that file is read. Any of these puts
+  `complete=no` on END.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
+  `tools/test-transcript-shares.sh`.
 
 ## Mods
 
@@ -6968,7 +6997,11 @@ on any of the three first asks about a line it knows the answer for, since a cop
 loaded before #3093 answers with none of them and says nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
-`perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
+`perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
+(`ed`, `ex`, vi's family, `emacs`, with a script it is given as a write the words do not name),
+`sponge`'s file, a file named as output (`sort -o`, `base64 -o`, `openssl -out`, the second file of
+`uniq`, `xxd` and `link`), a file rewritten in place (`dos2unix`, `yq -i`, `sd`, `plutil`) and the
+packed or unpacked twin gzip's family leaves, curl and wget's files (`curl -o`, `wget -O`, a
 file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or `-P`,
 curl's cookie jar and trace, wget's log), each relative path resolved after any `cd` before it, a
 path part shaped like a route parameter (`[id]`, `[...slug]`, `[[...slug]]`, `[id=matcher]`,
@@ -7678,7 +7711,27 @@ save the payload write gate refuses is never asked about. Dan's Add to LESSONS.m
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
+still asks. Since #3295 the picker is refused, before he is asked and saying which character and
+where, when its rule or its question holds a character he cannot see: a control other than the
+newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
+width, bidirectional, the tag block, a soft hyphen, a byte order mark), private use, a code point
+no character is assigned to, a space that is not the plain one, or anything else drawn as nothing
+(rules.ts `unseenIn`; the spaces and tabs at a line's two ends are indentation). A rule is prose,
+so it is not held to ASCII as a check line is: an accented letter, a curly quote or a
+multiplication sign stands. Markup that a surface other than the terminal hides or redraws is
+refused too, as a class (Claude Code's typings say the desktop, VS Code and mobile surfaces draw
+the dialog with Markdown): `<` before a letter, `!`, `?` or `/`, `]` before `(`, `[` or `:`, and a
+character reference, in the text as sent and with its bold marks dropped. Code in backticks on one
+line stands, since it is drawn as written. Refused as well: text over 1,500 UTF-16 code units,
+since the dialog cuts a question at 2,000; two blank lines running; and text taking over 20 rows
+at 76 columns, since the dialog neither cuts nor scrolls a tall question (read in Claude Code
+2.1.328 on 2026-11-19). The row cap bounds how far above the answers a word can stand; it does
+not fit a question into a 24 row window, which shows about the last 8 rows of one at the cap.
+Every text of the call is judged by the one function, a title, a description and a placeholder
+included (rules.ts `shownFault`, `askFault`). The entry written under his answer is held to the
+unseen class, its `SHORT:` line included, which the picker never shows, and the question asked
+before a For good is held as the lesson's is.
+Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
 unless the line reads as a check line (`CHECK: <path> (full)` or `(partial)`, or `NO CHECK:` and a
@@ -7722,7 +7775,7 @@ writes is said whole, with why its new lines could not be told.
 </td><td>
 
 #618, #705, #707, #726, #743, #738, #867, #1241, #1483, #1592, #1794, #1765, #1814, #1883, #2216,
-#3245
+#3245, #3295
 
 </td></tr>
 <tr><td>
@@ -8373,7 +8426,11 @@ restart never repeats it; this is the one notification sent while asleep (#1545)
 does not give changes nothing and is logged, and a notifier that fails is logged and never ends
 sleep mode. While asleep (#834, phase 3, Dan's "everything not banned"), a worker session's own
 permission prompts are approved, never a question or the plan approval and never over a decision
-beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
+beneath; a classifier refusal is noted as `failed` and never retried by the mod, which drops any
+hook's request beneath it to run the call again (whether the session itself may send the call again
+is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
+a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
+session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
@@ -9108,13 +9165,45 @@ Two things are deliberately not carried:
   `tools/check-mods.sh` fails a mod without one, because the copy the engine would generate is
   otherwise sent up to main as a local edit (two arrived that way on 2026-10-04, #638).
 
-Before a push, `tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates
-every mod and runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. Where no `claude` command exists
-(CI's Linux runner) it reports UNMEASURED rather than a pass, and the same, with its own exit code
-and the engine's words, when `claude` answers that hooks modules are turned off in this process
-(its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test can
-set; it never counts that as every mod failing (#740). A failure carrying no verdict line names the
-exit code and the last lines of output instead of an empty reason.
+`tests/test-mods.sh` runs `tools/check-mods.sh` over `payload/mods`, which validates every mod and
+runs its own `*.test.ts` and `*.test.tsx` with `claude plugin test`. It runs in every full suite run
+on a Mac and in the pull request checks, which install Claude Code for it (#3297): no push gate runs
+it. Where no `claude` command exists it reports UNMEASURED rather than a pass, and the same, with its
+own exit code and the engine's words, when `claude` answers that hooks modules are turned off in this
+process (its cached rollout switch saved off, or a setting such as `disableAllHooks`), which no test
+can set; it never counts that as every mod failing (#740). A failure carrying no verdict line names
+the exit code and the last lines of output instead of an empty reason.
+
+In the pull request checks neither is UNMEASURED: the runner has no `claude` on its PATH, and the
+version in `.github/claude-code-version`, installed by `tools/install-claude-code.sh` from the
+vendor's npm package and cached on that file, is handed to `tests/test-mods.sh` and
+`tests/test-mods-load-engine.sh` alone in `MODS_CLAUDE`. That is a promise a claude is there, so
+`check-mods.sh` is run with `CHECK_MODS_REQUIRE_CLAUDE=1` and a missing or switched off claude fails
+with exit 6, and the load test fails when the claude it was given is missing. The load test no
+longer stands down under `CI=true`; a session that cannot finish is still UNMEASURED. No sign in
+and no key: measured on 2026-11-19 on 2.1.328, `claude plugin validate` and `claude plugin test`
+ran in an empty home folder with the network blocked. To move the checks to a newer Claude Code,
+change the version line in `.github/claude-code-version` and open a pull request.
+
+Once a day (6:17 AM ET in winter), `.github/workflows/mods-on-newest-claude-code.yml` installs the
+newest release and runs both suites on it, so a release that breaks a mod is found within a day
+without turning any pull request red (it never runs on a push or a pull request). A passing day posts
+nothing. A failing day opens one issue (labels `priority-p1`, `bug`, `mods`, milestone Ungrouped)
+naming the version and the failing mods, or, while that issue is open, comments on it instead
+(`tools/report-mods-on-newest-claude-code.sh`). Only the job that posts has write access, and it
+runs no Claude Code. A run that dies before reporting is red in the Actions tab, and GitHub emails
+whoever last changed its schedule. Nothing else notices a run that never starts: the list of runs
+(`gh run list --workflow mods-on-newest-claude-code.yml`) shows one a day while it is alive.
+
+Each Mac records the Claude Code build the mods last passed on, in
+`~/.claude/state/mods-last-passed.tsv` (the build and the date; never synced, since each Mac's
+record is about the build that Mac runs). `check-mods.sh` writes it when a whole mods folder passes
+on a real `claude`, never on a failure, an UNMEASURED run or one mod checked alone, and a run on
+another build says so in its first line, as does `tests/test-mods.sh` under its line in the
+runner's report: "Claude Code changed since the mods last passed on this Mac". A red with no commit
+to blame then reads as Claude Code's change first: on 2026-11-18, 2.1.328 turned two secret guard
+tests red and three builders each had to show it was not theirs. `CHECK_MODS_LAST_PASSED` moves the
+record, set empty it is off, and `tests/test-mods.sh` turns it off for every fixture.
 Handed one mod's own folder (`bash tools/check-mods.sh payload/mods/scope-modes`), it checks that
 mod alone, reading its dependencies from the folder holding it. A folder holding no mod at all
 exits 5 and says nothing was checked, never a pass: until #3105 one mod's folder was searched for
@@ -9196,7 +9285,9 @@ installed), and the run says UNMEASURED, counting them and naming the install co
 failure. `claude-sync status` names a sync clone where the pinned compiler is not installed yet,
 with its `npm ci` command (the apply does not install it, which would put npm and the network on
 every pull; the mods' checks install it on their first run there). The pinned types are Claude Code 2.1.307's
-(2026-10-22, #1484, all 20 mods clean; 2.1.294's before, from 2026-10-08). A run on a Mac with another build says so and changes no verdict;
+(2026-10-22, #1484, all 20 mods clean; 2.1.294's before, from 2026-10-08). A run on a Mac with
+another build ends with a line saying the pinned type files are from another build, which changes
+no verdict and is not the note above about the build the mods last passed on;
 to move the pin, run `bash tools/refresh-claude-code-types.sh` once a mod has loaded on the new build
 (it copies the engine and built-in tool types from `~/.claude/mods/mod-kit/.claude-plugin/types`, or
 a laid folder named as its argument, cuts the tsconfig's types back to the three, never takes the

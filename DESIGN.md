@@ -649,6 +649,43 @@ Rejected along the way:
   for byte identical to a deleted file, which the guard against resurrected deletions removes: the
   second emptying never arrived (seen failing in the suite with that line removed).
 
+### Testing the mods on Claude Code before merge, and on the newest release daily (#3297)
+
+Until 2026-11-19 the pull request checks had no `claude`, so `claude plugin validate`, every mod's
+own tests and the load test all said UNMEASURED inside a green check, and a mod change merged on
+whatever its builder ran locally (#3291 and #3285 both reached main that way). A Claude Code update
+also turned a Mac's suite red with no commit to blame: 2.1.328 failed two secret guard tests from
+2026-11-18, and three builders each had to show it was not theirs. Dan chose, by picker on
+2026-11-19, "Checks plus a daily run", three parts built together:
+
+- **Claude Code in the pull request checks, at one version written in one file.** The mods' tests
+  need only the program (measured 2026-11-19 on 2.1.328: no sign in, no key, no network). The version
+  sits in `.github/claude-code-version`, read by `tools/install-claude-code.sh` alone, for the same
+  reason tests.yml names its Ubuntu image rather than ubuntu-latest: main must never turn red with no
+  commit to blame, so moving to a new release is a pull request whose checks say whether the mods
+  still pass. It installs in every part, cached on that file, because which part runs the mods suites
+  is the deal's choice; installing only in that part is the lever not pulled (L308), since a deal
+  that moved the suite to a part without it would turn the mods back to UNMEASURED in silence. The
+  command stays off the PATH, named to the two mods suites in `MODS_CLAUDE`: at least a dozen other
+  suites start a real session when they find a `claude`, and none was written for that runner.
+  `MODS_CLAUDE` also makes a missing or switched off claude a failure there (exit 6 from
+  check-mods), since the install promised one and an UNMEASURED line in a green check is read by
+  nobody.
+- **A daily run on the newest release**, which only a schedule or a hand starts, so it can never
+  turn a pull request red. A failure opens one issue, or comments on the open one, found by a marker
+  in its body from the list of open issues (search lags); a clean day says nothing. Only the job that
+  posts can write, and it runs no Claude Code. Rejected: posting to Slack, which would need a secret
+  on the runner and Dan's sign off; and comparing against the last day's version to post only on a
+  change, which a failure that persists across releases would then go quiet on.
+- **A per Mac record of the build the mods last passed on**, in `~/.claude/state`, written by
+  check-mods on a whole folder's pass and compared at the start of the next run. The line check-mods
+  already printed compared the installed build with the one the pinned TYPE FILES came from, which
+  moves only when somebody refreshes the pin, so it showed on nearly every run and could not say
+  whether anything had changed since the last pass; it was reworded to name the type files first.
+
+What only a run can show, and was not measured before the change: the install's time on the runner
+and whether a headless session loads the mods there without a sign in.
+
 ### Trimming LESSONS.md rather than splitting it
 
 Rejected for #63. The obvious way to spend fewer tokens on 180 lessons is to write them shorter, and
