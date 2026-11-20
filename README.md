@@ -7721,8 +7721,11 @@ refuses the write, and says why. It asks only after the settings hooks beneath i
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
-`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. Since #3295 the picker is refused, before he is asked and saying which character and
+`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again. Since #3320 any
+other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
+under a For good and under his own "from now on" words alike; a write that touches no entry, and a
+shell command, still ask.
+Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
 width, bidirectional, the tag block, a soft hyphen, a byte order mark), private use, a code point
@@ -7774,7 +7777,9 @@ first line, a section heading or the end of the file as the next line that is no
 another entry it took that entry's `SHORT:` line as its own (`boundaryFault`). A For good no
 longer covers an Edit or Write that adds or changes a lesson entry in `~/.claude/LESSONS.md`: it
 is refused in words that send the session to the lesson picker, and no question waits on it
-(`entriesTouched`, `pickerOnly`). An entry is every line the file's reader gives it, down to the
+(`entriesTouched`, `pickerOnly`). Dan's own words that make a save permanent do not cover one
+either, a route the lessons review at the push found still open.
+An entry is every line the file's reader gives it, down to the
 next entry or section heading. A write that touches no entry (a section heading, an entry taken
 out whole, text above the first section) and a shell command are asked about as before. Changing
 an entry already in the file therefore takes the lesson picker for the entry as it should read,

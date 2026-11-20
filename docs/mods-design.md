@@ -2789,7 +2789,11 @@ and the band question is removed rather than kept beside it (L29). Three defects
   now refused, in words that send the session to the lesson picker, and no question waits on it
   (`entriesTouched`, `pickerOnly`, `lessonEditBy` in register.ts). An entry is every line the
   file's reader gives it, down to the next entry or section heading, and the check reads the file
-  as it stands on every send, so a For good given earlier is not taken either. Changing an entry
+  as it stands on every send, so a For good given earlier is not taken either. Nor do Dan's own
+  words that make a save permanent ("from now on", "always" leading a sentence): the lessons review
+  at the push found that route still open (L450), since such a call went on before the lessons file
+  was read, and `saveCall` now keeps a call that touches an entry out of the saves his words
+  approve. Changing an entry
   already in the file therefore takes the lesson picker for the entry as it should read, then the
   old one taken out and the new one added. Fourth: length was counted in UTF-16 code units, where
   the index cap counts bytes, so 151 accented letters passed the picker and made a line of 311;

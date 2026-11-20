@@ -638,7 +638,11 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   let files: string[] = []
   if (madePermanent((await $.state.get(promptRef)).value)) {
     const at = await whereOf($)
-    files = (await lastingTargets($, tool, input, at)).files
+    // His words cover no lesson entry (lessons review of #3320, L450): one added or changed is
+    // covered by his answer in the lesson picker or by nothing, so it is left for the tool.check
+    // hook to refuse, as it is under a For good. It went on unread here, SHORT line and all.
+    const entry = (await lessonEdit($, tool, input, at)).touched.length > 0
+    files = entry ? [] : (await lastingTargets($, tool, input, at)).files
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -931,10 +935,10 @@ export const register: Register = on => {
       const givenShort = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_SHORT_KEY]
       const readShort = givenShort === undefined ? undefined : readShortLine(givenShort)
       const short = readShort !== undefined && 'line' in readShort ? readShort.line : undefined
-      const shortShape = `"SHORT: <the rule in one line>", its text at most ${MAX_SHORT_TEXT} characters, on one line he can read as written`
+      const shortShape = `"SHORT: <the rule in one line>", its text at most ${MAX_SHORT_TEXT} bytes (a character outside ASCII counts two to four), on one line he can read as written`
       if (readShort !== undefined && 'fault' in readShort)
         return {
-          deny: `Metadata "${LESSON_SHORT_KEY}" reads as no SHORT line: ${readShort.fault}. Put the entry's SHORT line there, word for word as it will be added to ${file}: ${shortShape}. Leave "${LESSON_SHORT_KEY}" out only when the rule itself is at most ${MAX_SHORT_TEXT} characters, so the lessons index can hold it as it is.`,
+          deny: `Metadata "${LESSON_SHORT_KEY}" reads as no SHORT line: ${readShort.fault}. Put the entry's SHORT line there, word for word as it will be added to ${file}: ${shortShape}. Leave "${LESSON_SHORT_KEY}" out only when the rule itself is at most ${MAX_SHORT_TEXT} bytes, so the lessons index can hold it as it is.`,
         }
       // Counted as the index cap counts a line, in bytes (independent review of #3320): a rule of
       // accented text within the cap in characters was asked with no SHORT line, and its entry was
@@ -985,8 +989,8 @@ export const register: Register = on => {
       // his answer covers is not sent with a line of its own wording and asked about again.
       const shortened =
         short !== undefined
-          ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
-          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which renders what is in bold, so set the whole rule in bold and nothing else, "- **L<number>. <the rule>**" with the bold closed after the rule's last word and before the provenance, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
+          ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
+          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which renders what is in bold, so set the whole rule in bold and nothing else, "- **L<number>. <the rule>**" with the bold closed after the rule's last word and before the provenance, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
           `new_string that text, a newline and the entry, or the entry, a newline and that text. Put it at an entry boundary, never inside another entry: straight after another entry's last line or under a section heading, ` +

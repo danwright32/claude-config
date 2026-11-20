@@ -3107,3 +3107,29 @@ test('a For good already given does not cover its Edit once that Edit would add 
   expect(sent).toContain('(L752)')
   expect(w.ran).toEqual([])
 })
+
+// Dan's own permanent words skip the For good question (#618), and they skipped this refusal too:
+// the call went on before the lessons file was read, so under "From now on, ..." an entry reached
+// the file with a SHORT line he never read (lessons review of #3320 at d384699, L450). His words
+// cover no lesson entry either. It is refused and sent to the lesson picker, and a write that is no
+// entry's is still saved without asking.
+test("Dan's own permanent words do not cover an Edit or Write that adds or changes a lesson entry (#3320 review)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  await dan($, 'From now on, never ask before a save.')
+  const changes = [
+    addEntry(BRIEF_ENTRY.replace('\n\n', `\n  ${UNSHOWN}\n\n`)),
+    { tool: 'Edit', file_path: LESSONS, old_string: L5, new_string: `${L5}\n  ${UNSHOWN}` },
+    { tool: 'Write', file_path: LESSONS, content: LESSONS_TEXT.replace('seen to fail', 'seen to pass') },
+  ]
+  for (const input of changes) {
+    const said = refusalOf(await call($, input))
+    expect(`${JSON.stringify(input)}: ${said}`).toContain(PICKER_ONLY)
+    expect(`${JSON.stringify(input)}: ${said}`).not.toContain(ASKS)
+  }
+  expect(w.ran).toEqual([])
+  // What is no entry's is saved under his words as it was, and Claude is told to say so.
+  const heading = await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and safety' })
+  expect(heading.deny).toBeUndefined()
+  expect(contextOf(heading)).toContain('say in one line what you saved')
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
