@@ -33,7 +33,9 @@ jobs:
     runs-on: ubuntu-26.04
     # The two suites bound their own wall clock (payload/hooks/lib/suite-deadline.sh); this sits above
     # both of them together, with the install, so a suite is always the one to say where it hung.
-    timeout-minutes: 50
+    # Sixty five, not fifty: this workflow sets no deadline for the suite runner, so
+    # tests/test-claude-sync.sh (#210) holds each of its jobs above the runner's default of an hour.
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -73,7 +75,9 @@ jobs:
     needs: tests
     if: always()
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    # It ends in under a minute. The number is a backstop only, and sits above an hour for the same
+    # check (#210) as the tests job's.
+    timeout-minutes: 61
     permissions:
       contents: read
       issues: write
