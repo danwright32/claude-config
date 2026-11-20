@@ -553,6 +553,8 @@ test('#3279: gitMove reads what to ask git for each move, nothing for a move tha
   expect(ask('rebase --show-anything main')).toEqual({ ask: 'merge', commits: ['main'] })
   expect(gitMove(undefined)).toBeUndefined()
   expect(gitMove({ sub: undefined, args: [] })).toBeUndefined()
+  // A subcommand spelled like a member every object inherits is no move, and reading it never throws.
+  for (const sub of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) expect({ sub, move: gitMove({ sub, args: ['-m', 'x', 'topic'] }) }).toEqual({ sub, move: undefined })
   // Its words cannot say what it brings in.
   const unread = (line: string) => {
     const m = g(line)

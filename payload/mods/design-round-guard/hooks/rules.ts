@@ -4108,7 +4108,10 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
   const sub = git?.sub
   if (git === undefined || sub === undefined) return undefined
   const said = moveSaid(sub, git.args)
-  const { ops, flags, paths } = moveWords(git.args, MOVE_VALUED[sub] ?? new Set())
+  // Its own keys only: a subcommand spelled like a member every object inherits (`constructor`)
+  // finds no set here, never that member, which would throw where its options are read.
+  const valued: ReadonlySet<string> = Object.prototype.hasOwnProperty.call(MOVE_VALUED, sub) ? (MOVE_VALUED[sub] as ReadonlySet<string>) : new Set<string>()
+  const { ops, flags, paths } = moveWords(git.args, valued)
   const has = (...names: string[]) => names.some(n => flags.has(n))
   const asking = (ask: MoveAsk, refs: readonly string[]): GitMove => {
     const bad = refs.find(r => !namesCommit(r))
