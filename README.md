@@ -4556,9 +4556,10 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
 
-The suite's cost checks hold the gate's work in units, never its seconds (#3170). On CI's slowest
-runners a unit takes 0.16 to 0.22 s against 0.095 s on the personal MacBook, so a gate inside its
-ceiling still ran out of its 11 seconds there and the check failed for the runner's speed. Where
+The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
+CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
+on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
+failed for the runner's speed. Where
 the seconds run out, the check now judges the same line again on the step clock and holds those
 units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
 does more work fails on any machine, and a slow machine fails nothing by itself.
