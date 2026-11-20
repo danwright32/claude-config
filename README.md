@@ -4478,7 +4478,8 @@ double quoted `-c` or `eval` string holding a `$` or a backquote behind a backsl
 again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
 shell fills in replaced by the value the gate works out for it; where it works none out, the typed
 string is read with that part as a word of unknown value and a script on disk is left as before
-(this repository's `test-pr-review.sh` sources two files by `'$DIR/lib/...'` in such a string).
+(this repository's `test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string,
+until #3252 wrote those paths in double quotes).
 Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
@@ -4491,6 +4492,19 @@ alone. The wrapper sends a call to the rule when a command's first word holds a 
 a quote or a backslash, which named no shell or script as written. Left open, each recorded for an
 issue of its own: `turbo`, `nx` and `lerna`, and a loop over the words of a file (`for w in $(cat
 f); do $w; done`). Suite: `test-slack-drafts-unread-shapes.sh`.
+
+Since claude-config#3252 the shared reader passes a function's header over, so the first command of
+a body written on the header's own line (`busy(){ bash -c ". '$DIR/lib.sh' && f"; }`) is read, and
+with it the commands of a string it hands a shell. Read as written, that string sources a file named
+`$DIR/lib.sh` from a folder nobody knows, which is refused as a path that cannot be worked out. In a
+script on disk such a string is read as the inner shell gets it instead (`headed_filled`, by the
+steps of the reading above): every variable and substitution the outer shell fills in is replaced
+by the value the gate works out for it, so the file is the one in the script's folder, and one that
+posts is refused as posting. That reading stands in for the string's commands as written only where
+every value is worked out and the text it gives can be followed, and only for a command whose string
+no reading was given before #3252 (the reader's `headed_string`); the command itself is then judged
+as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
+command, a body over several lines, the same string at a script's top level, and anything typed.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same

@@ -158,7 +158,7 @@ fire_commit(){ # fire_commit <command> <exit code>
 # ===========================================================================================
 # 1. Recognising a commit in command position, never a mention of one (L673).
 # ===========================================================================================
-is_commit(){ bash -c ". '$DIR/lib/push-scope.sh'; ps_is_git_commit \"\$1\"" _ "$1"; }
+is_commit(){ bash -c ". \"$DIR/lib/push-scope.sh\"; ps_is_git_commit \"\$1\"" _ "$1"; }
 for c in 'git commit -m x' 'git -C /a/b commit -F msg.txt' 'rtk git commit --amend --no-edit' \
          'cd /tmp/x && git commit -q -m y' 'GIT_AUTHOR_NAME=a git commit -m z' '(git commit -m w)'; do
   is_commit "$c" && ok || bad "a commit is recognised: $c"
@@ -168,7 +168,7 @@ for c in 'echo "git commit -m x"' 'git log --grep commit' 'git status' \
   is_commit "$c" && bad "a command that only mentions a commit is not one: $c" || ok
 done
 # The push recogniser still answers as before after sharing its walker with the commit one.
-is_push(){ bash -c ". '$DIR/lib/push-scope.sh'; ps_is_git_push \"\$1\"" _ "$1"; }
+is_push(){ bash -c ". \"$DIR/lib/push-scope.sh\"; ps_is_git_push \"\$1\"" _ "$1"; }
 is_push 'git push -u origin feat' && ok || bad "a push is still a push"
 is_push '(cd x && git push)' && ok || bad "a push closing a subshell is still a push"
 is_push 'git commit -m push' && bad "a commit whose message says push is not a push" || ok

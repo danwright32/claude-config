@@ -602,6 +602,94 @@ D=.; bash -c "cd $D && echo \$(bash posts.sh)"
 EOF
 
 echo
+echo "slack drafts only: a string a one line function hands a shell is read as that shell gets it (claude-config#3252)"
+
+# The shared reader now passes a function's header over (#3252), so the first command of a body
+# written on the header's own line is read, and with it the commands of a string it hands a shell.
+# Read as written, the string of `busy(){ bash -c ". '$DIR/lib-ok.sh' && f"; }` sources a file named
+# $DIR/lib-ok.sh from a folder nobody knows, so every script holding such a line was refused:
+# mixed-ok.sh above, and six helpers of this repository's own suites. Before #3252 nobody read that
+# string at all. In a script on disk it is now read as the shell it is handed to gets it, with the
+# outer shell's variables filled in (sh_inner_text, the reading #3251 wrote), where the gate works
+# every one of them out and can follow the text that gives. Anywhere else the reader's commands
+# stand, as they did before this: a variable not worked out, a body's second command, a body over
+# several lines, the same string at a script's top level or typed.
+printf '%s\n' "f() { $POST; }" > "$S/lib-posts.sh"
+cat > "$S/fn-plain-ok.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-ok.sh' && f"; }
+function idle { sh -c ". '$DIR/lib-ok.sh'; f"; }
+busy; idle
+EOF
+cat > "$S/fn-plain-posts.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-posts.sh' && f"; }
+busy
+EOF
+cat > "$S/fn-mixed-posts.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-posts.sh' && f \$(date +%s)"; }
+busy
+EOF
+cat > "$S/fn-unknown.sh" <<'EOF'
+busy(){ bash -c ". '$NOWHERE/lib-ok.sh' && f"; }
+busy
+EOF
+cat > "$S/fn-handed.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-ok.sh' && . \"\$0/lib-ok.sh\" && f" "$DIR"; }
+busy
+EOF
+cat > "$S/fn-second.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ true; bash -c ". '$DIR/lib-ok.sh' && f \$(date +%s)"; }
+busy
+EOF
+cat > "$S/fn-lines.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy() {
+  bash -c ". '$DIR/lib-ok.sh' && f \$(date +%s)"
+}
+busy
+EOF
+cat > "$S/fn-then-posts.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-ok.sh' && f"; bash "$DIR/posts.sh"; }
+busy
+EOF
+cat > "$S/fn-line-after-posts.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+busy(){ bash -c ". '$DIR/lib-ok.sh' && f"; }
+bash "$DIR/posts.sh"
+EOF
+cat > "$S/top-mixed-posts.sh" <<'EOF'
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash -c ". '$DIR/lib-posts.sh' && f \$(date +%s)"
+EOF
+run_here 'bash fn-plain-ok.sh'
+allowed "#3252 a script whose one line functions source a file that posts nothing by the outer shell's variable passes"
+run_here 'bash fn-plain-posts.sh'
+read_refused "#3252 and one whose function sources a file that posts is refused"
+says "#3252 and the refusal is a finding that it posts, from the file the variable names" "sends a request to chat.postMessage"
+says "#3252 and it names the file" "lib-posts.sh"
+each read_refused "#3252 control: what was refused before the reader fix is refused still" 3<<'EOF'
+bash fn-mixed-posts.sh
+bash fn-second.sh
+bash fn-lines.sh
+bash fn-then-posts.sh
+bash fn-line-after-posts.sh
+bash top-mixed-posts.sh
+bash -c ". '$DIR/lib-ok.sh' && . '$DIR/lib-ok.sh' && f \$(date +%s)"
+bash -c ". '$DIR/lib-posts.sh' && f \$(date +%s)"
+D=.; busy(){ bash -c ". '$D/lib-posts.sh' && f \$(date +%s)"; }; busy
+busy(){ bash -c ". '$DIR/lib-ok.sh' && f \$(date +%s)"; }; busy
+EOF
+each read_refused "#3252 where a variable is not worked out, or the text the shell gets cannot be followed, the reader's commands stand" "a path the gate cannot work out" 3<<'EOF'
+bash fn-unknown.sh
+bash fn-handed.sh
+EOF
+
+echo
 echo "slack drafts only: in a script on disk these readings refuse only what posts (claude-config#3251)"
 
 # Each reading here puts a command together and reads it as a line of its own, which knows none of

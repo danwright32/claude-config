@@ -1033,6 +1033,38 @@ run_hook "$NV_GATE" "$(bash_payload '2>/dev/null git commit -m wip' a1b2c3d4)"
 allowed "#2235 control: an agent's plain commit behind a redirection goes through"
 
 # ---------------------------------------------------------------------------------------------
+echo "a redirection glued to a word, and a function's body, are read as the shell reads them (claude-config#3252)"
+# `git>/dev/null commit --no-verify` skips the hooks. The reader split on spaces only, so each gate
+# saw a program named git>/dev/null, or a subcommand named 2>/dev/null or push>/dev/null, and the
+# first command of a function's body as a program named f().
+nv_glued() { # nv_glued <label> <command>
+  run_hook "$NV_GATE" "$(bash_payload "$2" a1b2c3d4)"
+  refused "#3252 no-verify-gate.sh: an agent's $1 is refused"
+}
+nv_glued "commit --no-verify with a redirection glued to git" 'git>/dev/null commit --no-verify -m wip'
+nv_glued "commit -n with a redirection between git and commit" 'git 2>/dev/null commit -n -m wip'
+# Refused before the fix as well (the skip is read from git's words whatever the subcommand reads as),
+# so this one is a control that it stays refused, not a case the fix decides.
+nv_glued "push --no-verify with a redirection glued to push (refused before too)" 'git push>/dev/null --no-verify origin x'
+nv_glued "commit --no-verify with a redirection glued to a runner in front" 'env>/dev/null git commit --no-verify -m wip'
+nv_glued "commit --no-verify as the first command of a function's body" 'f() { git commit --no-verify -m wip; }; f'
+nv_glued "commit --no-verify in a function body written as a subshell" 'f() ( git commit --no-verify -m wip ); f'
+run_hook "$NV_GATE" "$(bash_payload 'git>/dev/null commit -m wip' a1b2c3d4)"
+allowed "#3252 control: an agent's plain commit with a redirection glued to git goes through"
+mon 'until gh>/dev/null pr merge 2679 --squash; do sleep 60; done'
+refused "#3252 monitor-action-gate.sh: a merge with a redirection glued to gh is refused"
+mon 'until gh pr merge>/dev/null 2679 --squash; do sleep 60; done'
+refused "#3252 monitor-action-gate.sh: a merge with a redirection glued to merge is refused"
+mon 'while true; do git>/dev/null push origin x && break; sleep 30; done'
+refused "#3252 monitor-action-gate.sh: a push with a redirection glued to git is refused"
+mon 'git 2>/dev/null commit -m wip'
+refused "#3252 monitor-action-gate.sh: a commit with a redirection between git and commit is refused"
+mon 'f() { git push origin x; }; f'
+refused "#3252 monitor-action-gate.sh: a push as the first command of a function's body is refused"
+mon 'tail -f /tmp/x/merge.log>/dev/null'
+allowed "#3252 control: a tail of the merge log with a redirection glued on is allowed"
+
+# ---------------------------------------------------------------------------------------------
 echo "settings.hooks.json: each gate is registered where its header says"
 reg() { # reg <matcher> <hook basename>
   jq -e --arg m "$1" --arg h "$2" '[.hooks.PreToolUse[] | select(.matcher == $m) | .hooks[].command | select(endswith("/hooks/" + $h))] | length == 1' "$SETTINGS" >/dev/null 2>&1

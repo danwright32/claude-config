@@ -222,6 +222,22 @@ redirected "push --force behind input and an assignment" '</dev/null A=1 git pus
 redirected "commit --amend behind nohup and a redirection" 'nohup 2>&1 git commit --amend --no-edit'
 agent_allowed "#2235 control: a plain commit behind a redirection" '2>/dev/null git commit -m x'
 
+# ---------------------------------------------------------------------------------------------
+echo "a redirection glued to a word, and a function's body, are read as the shell reads them (claude-config#3252)"
+# `git>/dev/null commit --amend` amends. The reader split on spaces only, so the gate saw a program
+# named git>/dev/null, or a subcommand named 2>/dev/null or push>/dev/null, and the rewrite went
+# through. The first command of a function's body was read as a program named f().
+agent_refused "#3252 commit --amend, a redirection glued to git" 'git>/dev/null commit --amend --no-edit'
+agent_refused "#3252 push -f, a redirection glued to git" 'git>/dev/null push -f origin feature'
+agent_refused "#3252 push --force, a redirection between git and push" 'git 2>/dev/null push --force origin feature'
+agent_refused "#3252 push --force, a redirection glued to push" 'git push>/dev/null --force origin feature'
+agent_refused "#3252 commit --amend, a redirection glued to commit" 'git commit>/dev/null --amend --no-edit'
+agent_refused "#3252 push --force, a redirection glued to a runner in front" 'env>/dev/null git push --force origin feature'
+agent_refused "#3252 push --force as the first command of a function's body" 'f() { git push --force origin feature; }; f'
+agent_refused "#3252 commit --amend in a function body written as a subshell" 'f() ( git commit --amend --no-edit ); f'
+agent_allowed "#3252 control: a plain commit with a redirection glued to git" 'git>/dev/null commit -m x'
+agent_allowed "#3252 control: a plain push with a redirection glued to push" 'git push>/dev/null origin feature'
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
