@@ -1673,6 +1673,7 @@ REQUIRE_TESTS_CLOCK_FILE="$TMPROOT/clock-3327f" STUB_CLAUDE_CLOCK_AT="$TMPROOT/c
   STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
 want_code 2 "#3327 an unreadable reading with no time left refuses"
 want_stderr "no time" "#3327 saying there was no time to ask again"
+want_stderr "how busy the Mac is" "#3327 with the advice for running out of time, not for a reviewer that failed"
 n_calls="$(calls_in "$JUDGE_LOG")"
 if [ "$n_calls" = 2 ]; then pass=$((pass+1))
 else fail=$((fail+1)); echo "FAIL: #3327 with no time left the gate made $n_calls calls, expected 2"; fi

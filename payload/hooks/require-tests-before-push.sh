@@ -1154,7 +1154,7 @@ push does not make them smaller; if they alone are too many, split the branch."$
       case "$RT_CAUSE" in
         cap) rt_advice="The branch's test changes are more than the gate reads for one push. Move a self
 contained part of the work to its own branch cut from ${PC_BASE:-its base} and push that first." ;;
-        time) rt_advice="Nothing in the push needs to change for this: how long the readings take depends on
+        time|notime) rt_advice="Nothing in the push needs to change for this: how long the readings take depends on
 how busy the Mac is, so send the same push again, when fewer test suites are running if you can." ;;
         split) rt_advice="That was the gate's own scratch work failing, not a finding about the push. Nothing
 in it needs to change: send the same push again." ;;
