@@ -8603,3 +8603,41 @@ test('every prompt the mod sends and every question it asks Dan holds back a rel
   const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
   expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
 })
+
+// #3330: the watchdog times every claim the session holds from its own start, and leaves alone a
+// claim the session noted done, released or not. A claim with no done note is parked as before.
+const claimLine = (issue: number, at: number) => JSON.stringify({ repo: 'o/r', issue, attempts: 1, entries: [{ kind: 'claim', session: 's1', at }] })
+const PAST = T0 - 2 * 60 * MIN + 40_000
+
+test('the watchdog parks an older claim past its 2 hours though the newest claim is young (#3330)', withDeps, async ($, on) => {
+  const claims = [claimLine(1, PAST), claimLine(2, T0 - 60 * MIN), claimLine(3, T0 - 5 * MIN)].join('\n')
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  // The first Stop, which starts the driver's counter, is still inside every claim's 2 hours.
+  expect((await stop($ as never)).block).toMatch(/^You hold #3 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '1', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+})
+
+test('the watchdog never parks a claim its session noted done, though it was never released (#3330)', withDeps, async ($, on) => {
+  const done = JSON.stringify({ v: 1, kind: 'done', repo: 'o/r', issue: 7, pr: 12, text: 'merged', by: 's1', at: T0 - 10 * MIN })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [NOTES]: `${done}\n` }, claims: claimLine(7, PAST) })
+  await start($ as never, clock)
+  // The Stop never tells the session to carry on with it, and the watchdog never parks it.
+  expect((await stop($ as never)).block).toMatch(/^You hold no issue/)
+  await clock.advance(3 * MIN)
+  expect(w.released).toEqual([])
+  expect((await stop($ as never)).block).toMatch(/^You hold no issue/)
+  expect(w.released).toEqual([])
+})
+
+test('the watchdog still parks a stuck claim with no done note beside one noted done (#3330)', withDeps, async ($, on) => {
+  const done = JSON.stringify({ v: 1, kind: 'done', repo: 'o/r', issue: 2, pr: 12, text: 'merged', by: 's1', at: T0 - 10 * MIN })
+  // The one noted done is the newer, so the stuck one is timed only once claims are timed one by one.
+  const claims = [claimLine(1, PAST), claimLine(2, T0 - 30 * MIN)].join('\n')
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [NOTES]: `${done}\n` }, claims })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #1 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '1', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+})

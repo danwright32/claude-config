@@ -73,7 +73,7 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
+  LIMITS, SLEEP_START, blockTold, overdueClaim, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
 } from './driver.ts'
 import { busyNow } from './busy.ts'
@@ -3488,7 +3488,9 @@ const notesNow = async ($: EngineInterface, en: Enrolled): Promise<string | null
 const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading> => {
   const r = await run($, ['bash', queueScript(en.home), 'claims'])
   if (r.exitCode !== 0) return { state: 'unknown', why: (r.stdout + r.stderr).trim().split('\n')[0]?.replace(/^refused\t-\t/, '') || `sleep-queue.sh claims exited ${r.exitCode}` }
-  return heldClaim(r.stdout, en.self)
+  // Tonight's notes read after the claims (#3330): a session writes its done note before its claim
+  // ends, so a claim read as held whose done note is already written is read as ended here.
+  return heldClaim(r.stdout, en.self, await notesNow($, en))
 }
 
 // The work on the issue this session holds, as the queue reads it (`sleep-queue.sh work`): the tip
@@ -3662,13 +3664,13 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
       return (await saveDriver($, en, d)) === null ? resumeWords(d) : null
     }
     if (d.stopped || d.resumeAt !== null) return null
-    const c = await claimNow($, en)
-    if (c.state !== 'held' || c.claim.since === null) return null
-    const active = activeMs(d.waits, c.claim.since, en.now)
-    if (active < LIMITS.stuckMs) return null
+    // Every claim held is timed from its own start, and one its session noted done is not held
+    // (#3330). A done note landing after this read races the park below for the claim's next
+    // entry, and the queue lets exactly one of the two land; either way the report reads the done.
+    const over = overdueClaim(await claimNow($, en), d.waits, en.now)
+    if (!over) return null
     const where = await repoOf($)
-    const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
-    const rel: Release = { issue: c.claim.issue, state: 'parked', why }
+    const rel: Release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
     d.parked = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
     return null
