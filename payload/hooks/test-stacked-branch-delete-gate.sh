@@ -135,6 +135,29 @@ judge "gh api -X DELETE repos/acme/widget/git/refs/heads/feat/x"
 check_eq "#1723 with nothing based on the branch the delete is allowed in silence" "0|" "$rc|$out"
 check "#1723 control: and the list was asked, so the allow is a reading, not a skip" "--base feat/x" "$calls"
 
+# 2a. A redirection glued to a word, and a function's body (claude-config#3252). The reader split on
+#     spaces only, so the gate saw a program named gh>/dev/null, or a subcommand named 2>/dev/null or
+#     api>/dev/null, and the first command of a function's body as a program named f(), and the delete
+#     of a branch with a pull request stacked on it ran unasked. Two shapes have no case here, each
+#     recorded for an issue of its own (measured 2026-11-19): a redirection glued to api, which is
+#     still allowed, and one glued to push, which is refused for a remote it takes the redirection for.
+for glued in "gh>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "gh 2>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "f() { gh api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service; }; f" \
+             "git>/dev/null push origin --delete 2337-http-service"; do
+  fresh
+  echo '[{"number":2763}]' > "$ST/stacked"
+  echo '[{"number":2760,"baseRefName":"main"}]' > "$ST/merged"
+  judge "$glued"
+  check_eq "#3252 the delete is refused: $glued" "2" "$rc"
+  check "#3252 and its refusal names the stacked pull request: $glued" "#2763" "$out"
+done
+fresh
+echo '[]' > "$ST/stacked"
+judge "gh>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/feat/x"
+check_eq "#3252 control: with nothing based on the branch the glued delete is allowed in silence" "0|" "$rc|$out"
+check "#3252 and the list was asked, so the allow is a reading, not the skip it was before the fix" "--base feat/x" "$calls"
+
 # 3. THE FAILURE PATH: a list GitHub will not give is never read as "nothing stacked".
 fresh
 echo 'gh: Resource not accessible by integration (HTTP 403)' > "$ST/list-fails"

@@ -888,6 +888,18 @@ redirected "no milestone, in a later segment behind a redirection" "true && 2>/d
 allows "#2235 control: a complete create behind a redirection" "2>/dev/null gh issue create --title \"T\" $ALL"
 allows "#2235 control: a number then a space runs a command named 2" "2 >/dev/null gh issue create --title \"T\" $P $C"
 
+# ============================ a redirection glued to a word, and a function's body (claude-config#3252) ============================
+# `gh>/dev/null issue create` files an issue. The reader split on spaces only, so the gate saw a
+# program named gh>/dev/null, or a subcommand named 2>/dev/null or issue>/dev/null, and the first
+# command of a function's body as a program named f(), and let an unmilestoned create through.
+denies "#3252 no milestone, a redirection glued to gh" "gh>/dev/null issue create --title \"T\" $P $C"
+denies "#3252 no priority, a redirection glued to issue" "gh issue>/dev/null create --title \"T\" $M $C"
+denies "#3252 no milestone, a redirection between gh and issue" "gh 2>/dev/null issue create --title \"T\" $P $C"
+# Refused before the reader fix too (seen beside main's reader, 2026-11-19), so these two are controls.
+denies "#3252 control: no category, a redirection glued to create" "gh issue create>/dev/null --title \"T\" $M $P"
+denies "#3252 control: no milestone, the first command of a function's body" "f() { gh issue create --title \"T\" $P $C; }; f"
+allows "#3252 control: a complete create with a redirection glued to gh" "gh>/dev/null issue create --title \"T\" $ALL"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -5524,7 +5524,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             # s's commands, or its wrapper's, and the wrappers it is inside, outermost first, each as
             # [its depth, its text, its directory, which of its string's commands is being read].
             wraps = []
+            # The depth of a function body's first command whose string was read as its shell gets
+            # it (headed_filled in lib/sh-walk-shapes.py, claude-config#3252), while the reader's
+            # commands for that string, which that reading stands in for, are passed over.
+            headed = None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
+                if headed is not None:
+                    if wdepth > headed:
+                        continue
+                    headed = None
                 d = self.settled_dir(d)  # a cd built from $0 or BASH_SOURCE, worked out (#2913)
                 while wraps and wraps[-1][0] >= wdepth:
                     wraps.pop()
@@ -5582,6 +5590,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 reason = self.sh_eval_text_reason(text, d, depth) if not wdepth else None
                 if reason:
                     return reason
+                # A string the first command of a function's body hands a shell, read as that shell
+                # gets it (#3252). Where that reading holds, the command is judged as it was before
+                # the reader passed the header over, with no wrapper named.
+                filled = self.headed_filled(d, text, wrapper, why, depth) if wrapper and not wdepth else None
+                if filled:
+                    return filled
+                if filled is not None:
+                    headed, wrapper = wdepth, ""
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason

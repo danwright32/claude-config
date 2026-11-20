@@ -273,7 +273,7 @@ grep -q '^afplay ' "$STUB_LOG" && check "an unreadable sleep record reads as awa
 DENIED_ROUTE="settings:PermissionDenied:payload-write-gate.sh"
 grep -q "^$DENIED_ROUTE"$'\t' "$ROUTES" && check "the write gate on PermissionDenied is found as a route" ok \
   || check "the write gate on PermissionDenied is found as a route" "not found, so the runs below judge a hook nothing registers"
-asleep_now() { env HOME="$H" bash -c '. "$1" && sleep_active' _ "$HOOKS/lib/sleep.sh" >/dev/null 2>&1; }
+asleep_now() { env HOME="$H" bash -c ". \"$HOOKS/lib/sleep.sh\" && sleep_active" >/dev/null 2>&1; }
 for state in awake asleep; do
   world denied "$state"
   if asleep_now; then seen=asleep; else seen=awake; fi

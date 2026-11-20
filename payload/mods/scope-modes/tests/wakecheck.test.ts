@@ -45,16 +45,23 @@ const mtimeFrom = (world: World, asked?: string[]) => async (path: string) => {
   if (r.exitCode !== 0) throw new Error(r.stderr)
   return Number(r.stdout)
 }
-const check = async (over: World = {}, read: GithubOf = github, worked?: string[]) => {
+const check = async (over: World = {}, read: GithubOf = github, worked?: string[], repos?: string[]) => {
   const world = { ...QUIET, ...over }
   const asked: string[] = []
   const r = await wakeCheck(async argv => {
     const key = argv.join(' ')
     asked.push(key)
     return world[key] ?? fail(`unexpected: ${key}`)
-  }, { since: SINCE, home: HOME, github: read, now: () => SINCE, mtimeOf: mtimeFrom(world, asked), worked })
+  }, { since: SINCE, home: HOME, github: read, now: () => SINCE, mtimeOf: mtimeFrom(world, asked), worked, repos })
   return { ...r, asked }
 }
+// #3273: an issue filed overnight is read whole (its labels, milestone and body), and its repository's
+// open issues once, so only one that needs Dan is put to him.
+const ISSUE = (repo: string, n: number) => `gh api repos/${repo}/issues/${n}`
+const OPEN = (repo: string) => `gh issue list -R ${repo} --state open --limit 1000 --json number,title`
+const COMPLETE = { labels: [{ name: 'priority-p2' }, { name: 'bug' }], milestone: { title: 'Ungrouped' }, body: 'What broke.\n\n## Open questions\n\n- None.\n' }
+const SEARCH_9 = (title = 'Filed overnight') =>
+  ({ [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: ok(JSON.stringify([{ repository: { nameWithOwner: 'o/r' }, number: 9, title, url: 'https://github.com/o/r/issues/9' }])) })
 
 describe('the wake check', () => {
   // The config repository is read from the live sync clone's remotes by mod-kit's reader (#951): a
@@ -94,11 +101,15 @@ describe('the wake check', () => {
         { name: 'Nightly', event: 'workflow_dispatch', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/3' },
         { name: 'Deploy', event: 'push', created_at: BEFORE, html_url: 'https://github.com/o/r/actions/runs/0' },
       ]),
-    })
+      [ISSUE('o/r', 9)]: ok(JSON.stringify(COMPLETE)),
+      [ISSUE('o/s', 3)]: ok(JSON.stringify(COMPLETE)),
+      [OPEN('o/r')]: ok(JSON.stringify([{ number: 9, title: 'Found overnight' }])),
+      [OPEN('o/s')]: ok('[]'),
+    }, github, undefined, ['o/r', 'o/s'])
     expect(r.unmeasured).toEqual([])
+    // #3273: each issue filed overnight is said once, as filed, and never put to Dan as a row.
+    expect(r.filed).toEqual([{ repo: 'o/r', issue: 9, title: 'Found overnight' }, { repo: 'o/s', issue: 3, title: 'Also overnight' }])
     expect(r.hits).toEqual([
-      'Issue created overnight: o/r#9 "Found overnight"',
-      'Issue created overnight: o/s#3 "Also overnight"',
       'Milestone touched overnight: o/r "New one", by changes nothing the night recorded accounts for: the milestone itself, at 1:00 AM ET on Thu Oct 8 (no issue event in it explains that)',
       'LESSONS.md changed overnight on GitHub: abcdef1 "Add L999"',
       'The installed LESSONS.md changed overnight, at 11:01 PM ET on Wed Oct 7',
@@ -397,7 +408,7 @@ describe('a milestone the night\'s own work explains is left out (#2393)', () =>
         { event: 'labeled', created_at: at('05:00:02'), actor: { login: 'eve' }, issue: { number: 9, milestone: ungrouped } },
         // Closed by a merge a session noted as done for this issue.
         closed(7, at('05:00:00'), 'dan'),
-        // Filed into it overnight: already its own line, as an issue created overnight.
+        // Filed into it overnight: already accounted for as an issue created overnight (`filed`).
         { event: 'milestoned', created_at: at('04:30:00'), actor: { login: 'dan' }, milestone: { title: 'Ungrouped' }, issue: { number: 9, milestone: ungrouped } },
         // Closed by pull request #20, which a session noted, though no note names #8 itself.
         closed(8, at('04:00:00'), 'dan'),
@@ -409,9 +420,12 @@ describe('a milestone the night\'s own work explains is left out (#2393)', () =>
         { number: 7, closedByPullRequestsReferences: [] },
       ])),
       [SEARCH]: ok(JSON.stringify([{ repository: { nameWithOwner: 'o/r' }, number: 9, title: 'Filed overnight', url: 'u' }])),
-    }, github, ['o/r#7', 'o/r#20'])
+      [ISSUE('o/r', 9)]: ok(JSON.stringify(COMPLETE)),
+      [OPEN('o/r')]: ok(JSON.stringify([{ number: 9, title: 'Filed overnight' }])),
+    }, github, ['o/r#7', 'o/r#20'], ['o/r'])
     expect(r.unmeasured).toEqual([])
-    expect(r.hits).toEqual(['Issue created overnight: o/r#9 "Filed overnight"'])
+    expect(r.hits).toEqual([])
+    expect(r.filed).toEqual([{ repo: 'o/r', issue: 9, title: 'Filed overnight' }])
   })
 
   test('a change no session made is reported, naming what changed', async () => {
@@ -631,5 +645,63 @@ describe('what needs nobody is counted, never listed (#2766)', () => {
     expect(r.checked).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
     // Without the login nothing on GitHub was read, and the line says so.
     expect((await check({ 'gh api user --jq .login': fail('not logged in') })).checked).toBe('The overnight check read no repositories on GitHub and left nothing out.')
+  })
+})
+
+// #3273: on 2026-11-19 the morning put #3270, an issue the night's session had filed with every
+// required field, to Dan as a picker ("Nothing needed ... I don't need to check every filed issue
+// overnight"). An issue filed overnight is already on his list by being an issue, so it is returned
+// as filed and said in one line; only one that needs him is still a row: filed without a required
+// field, in a repository no session worked tonight, or with the title of another open issue there.
+// A read that fails keeps it a row, saying what was not checked (L460).
+describe('an issue filed overnight is put to Dan only when it needs him (#3273)', () => {
+  const lead = 'Issue created overnight: o/r#9 "Filed overnight"'
+  const filedWith = (issue: object, open: object[] = [{ number: 9, title: 'Filed overnight' }], repos = ['o/r']) =>
+    check({ ...SEARCH_9(), [ISSUE('o/r', 9)]: ok(JSON.stringify(issue)), [OPEN('o/r')]: ok(JSON.stringify(open)) }, github, undefined, repos)
+
+  test('one filed with every field, in a repository worked tonight, with no twin, is filed and asks nothing', async () => {
+    const r = await filedWith(COMPLETE)
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual([])
+    expect(r.filed).toEqual([{ repo: 'o/r', issue: 9, title: 'Filed overnight' }])
+  })
+  test('one filed without a required field is a row naming each field it lacks', async () => {
+    const r = await filedWith({ labels: [{ name: 'bug' }], milestone: null, body: 'No section here.' })
+    expect(r.filed).toEqual([])
+    expect(r.hits).toEqual([`${lead} (filed without a milestone, a priority level and an Open questions section)`])
+    // A priority level alone is no category, and an Open questions heading must be a heading of its own.
+    const p = await filedWith({ ...COMPLETE, labels: [{ name: 'priority-p1' }], body: '## Open questions about the API\n' })
+    expect(p.hits).toEqual([`${lead} (filed without a category label and an Open questions section)`])
+  })
+  test('one filed in a repository no session worked tonight is a row', async () => {
+    const r = await filedWith(COMPLETE, undefined, [])
+    expect(r.filed).toEqual([])
+    expect(r.hits).toEqual([`${lead} (in a repository no session worked tonight)`])
+  })
+  test('one with the title of another open issue in its repository is a row naming that issue', async () => {
+    const r = await filedWith(COMPLETE, [{ number: 9, title: 'Filed overnight' }, { number: 4, title: '  filed   OVERNIGHT ' }])
+    expect(r.filed).toEqual([])
+    expect(r.hits).toEqual([`${lead} (with the same title as open issue #4)`])
+  })
+  test('a read that fails keeps it a row, saying what was not checked, never filed', async () => {
+    const r = await check({ ...SEARCH_9(), [ISSUE('o/r', 9)]: fail('HTTP 502: Bad Gateway'), [OPEN('o/r')]: fail('HTTP 503') }, github, undefined, ['o/r'])
+    expect(r.filed).toEqual([])
+    expect(r.hits).toEqual([`${lead} (its required fields were not checked: gh api: HTTP 502: Bad Gateway; whether it repeats an open issue was not checked: gh issue list: HTTP 503)`])
+    const big = await filedWith(COMPLETE, Array.from({ length: 1000 }, (_, i) => ({ number: 1000 + i, title: `Other ${i}` })))
+    expect(big.hits).toEqual([`${lead} (whether it repeats an open issue was not checked: only the first 1000 open issues were read)`])
+  })
+  test('the open issues of a repository are read once for every issue filed in it', async () => {
+    const r = await check({
+      [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: ok(JSON.stringify([
+        { repository: { nameWithOwner: 'o/r' }, number: 9, title: 'Filed overnight', url: 'u' },
+        { repository: { nameWithOwner: 'o/r' }, number: 10, title: 'Also filed', url: 'u' },
+      ])),
+      [ISSUE('o/r', 9)]: ok(JSON.stringify(COMPLETE)),
+      [ISSUE('o/r', 10)]: ok(JSON.stringify(COMPLETE)),
+      [OPEN('o/r')]: ok(JSON.stringify([{ number: 9, title: 'Filed overnight' }, { number: 10, title: 'Also filed' }])),
+    }, github, undefined, ['o/r'])
+    expect(r.hits).toEqual([])
+    expect(r.filed.map(f => f.issue)).toEqual([9, 10])
+    expect(r.asked.filter(a => a === OPEN('o/r'))).toHaveLength(1)
   })
 })

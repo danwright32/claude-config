@@ -100,6 +100,27 @@ run "#2464 a closing word mid sentence before an open issue is refused" $BLOCK \
   'git commit -m "Tidies the follow up fix #12 asked for"' "not at the start of a line or sentence"
 run "#2464 a commit message whose Closes line is in a heredoc passes" $ALLOW \
   $'git commit -F - <<\'EOF\'\nTidy the reader\n\nCloses #12\nEOF'
+
+# --- claude-config#3252: a redirection glued to a word, and a function's body ---
+# `git>/dev/null commit` commits. The reader split on spaces only, so this gate saw a program named
+# git>/dev/null, or a subcommand named 2>/dev/null or pr>/dev/null, and the first command of a
+# function's body as a program named f(), and never read the message.
+run "#3252 a commit with a redirection glued to git is read" $BLOCK \
+  'git>/dev/null commit -m "Tidies the follow up fix #12 asked for"' "not at the start of a line or sentence"
+run "#3252 a commit with a redirection between git and commit is read" $BLOCK \
+  'git 2>/dev/null commit -m "Tidies the follow up fix #12 asked for"' "not at the start of a line or sentence"
+run "#3252 a commit with a redirection glued to commit is read" $BLOCK \
+  'git commit>/dev/null -m "Tidies the follow up fix #12 asked for"' "not at the start of a line or sentence"
+run "#3252 a pull request with a redirection glued to gh is read" $BLOCK \
+  'gh>/dev/null pr create --title x --body "6 were cancelled, including the p0 fix #2451 and batch #2438, which"' \
+  "names pull request #2451"
+run "#3252 a pull request with a redirection glued to pr is read" $BLOCK \
+  'gh pr>/dev/null create --title x --body "6 were cancelled, including the p0 fix #2451 and batch #2438, which"' \
+  "names pull request #2451"
+run "#3252 a commit as the first command of a function's body is read" $BLOCK \
+  'f() { git commit -m "Tidies the follow up fix #12 asked for"; }; f' "not at the start of a line or sentence"
+run "#3252 control: a clean commit with a redirection glued to git passes" $ALLOW \
+  'git>/dev/null commit -m "Tidy the reader"'
 RUN_CWD="/tmp"
 run "#2464 with no repository to look a bare #N up in, it refuses rather than passes" $BLOCK \
   'git commit -m "Closes #12"' "which repository"

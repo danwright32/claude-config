@@ -1289,7 +1289,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
     // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
     found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, worked, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
-    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null }
+    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null, filed: [] }
   }
   found.unmeasured.unshift(...unread)
   const at = await $.clock.now()
@@ -1301,6 +1301,8 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   const limit = stopped ? (({ text: _said, ...facts }) => facts)(stopped) : null
   try {
     for (const text of found.hits) await sleepNote($, recordPath, { kind: 'outward', at, by, text })
+    // #3273: an issue filed overnight that needs nothing from Dan, said once under Done, never a row.
+    for (const f of found.filed) await sleepNote($, recordPath, { kind: 'filed', at, by, repo: f.repo, issue: f.issue, text: f.title })
     for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text, ...(limit && text === stopped?.text ? { limit } : {}) })
     // What it read and left out as healthy (#2766), every time it runs: the report says it under
     // Needs a look, and a final report with no note of the check at all says it did not run.
@@ -5248,7 +5250,7 @@ const sleepPromptNote = (r: SleepRecord, self: string, now: number) =>
   `Sleep mode is on until ${endSaid(r.until, now)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
-  "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
+  "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue. The one exception is a refusal that says auto mode's safety check gave no verdict: follow \"One unchanged resend after no verdict\" in ~/.claude/CLAUDE.md."
 const HOME_NOTE = `Dan is back at the Mac: ${MODE_DEF.home.will} (${PAGE_TOOL}).`
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -6036,8 +6038,8 @@ export const register: Register = on => {
     return { ...beneath, decision: { behavior: 'allow' } }
   })
 
-  // A refusal by the auto mode classifier while asleep (#834) is final: a `failed` note naming the
-  // reason, and never a retry, whatever beneath asked for.
+  // A refusal by the auto mode classifier while asleep (#834) gets a `failed` note naming the reason,
+  // and this handler never runs it again, whatever beneath asked; the session's own resend: #3224.
   on('classic.PermissionDenied', async ($, e, next) => {
     hear(e)
     const reading = await sleepNow($)

@@ -51,7 +51,9 @@ report knows, and the fields each reads (every other field is kept, and shown no
   done       repo, issue?, pr?, text        finished; checked against GitHub at wake, so the
                                             writer refuses one without an owner/name repo and
                                             a pr or issue (#2011)
-  parked     repo, issue, branch?, text     set aside with why (phase 8: 2 hours or 2 attempts)
+  parked     repo, issue, branch?, text,    set aside with why (phase 8: 2 hours or 2 attempts);
+             driver?                        one the driver wrote (driver true) is not listed once
+                                            the same session notes the issue done (#3276)
   failed     repo, issue?, text             could not be done (a refusal, an error); a refusal by auto
                                             mode's check, as scope modes notes it, also has tool,
                                             reason (as given), noVerdict (true when the check gave
@@ -82,6 +84,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
   woke, limit  reason?                      how the night ended (written by the scope modes mod)
   outward    text                           the overnight check (#834): something done overnight
                                             that the ban list exists to stop, read from GitHub
+  filed      repo, issue, text              the overnight check (#3273): an issue filed overnight
+                                            with every required field, in a repository worked
+                                            tonight, with no open twin; said in one line under
+                                            Done, never put to Dan (text is its title)
   unmeasured text, limit?                   the overnight check: a read it could not make; a stop
                                             at its time limit is one such note, said once, whose
                                             limit keeps where it stopped as data: part, parts,
@@ -159,9 +165,14 @@ def claim_branch(issue):
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress", "redone") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress", "redone",
+         "filed") + ENDED
+# How long an issue may be worked in a night before the overnight driver parks it: driver.ts
+# LIMITS.stuckMs, which test-sleep-report.sh reads beside this so the two cannot drift apart (#3276).
+STUCK_HOURS = 2
+STUCK_MS = STUCK_HOURS * 3600 * 1000
 # The notes the overnight check writes (#834, #2766): with none of them, a final report says it did not run.
-CHECK_KINDS = ("outward", "unmeasured", "checked")
+CHECK_KINDS = ("outward", "unmeasured", "checked", "filed")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -574,6 +585,61 @@ def _issue_key(n):
     return None
 
 
+# How an issue ended is one record (#3276): the session's own done note for it. On the night of 18
+# Nov 2026 a session holding five claims at once noted each finished issue done without ending its
+# claim, so the driver's watchdog went on timing finished work and parked seven merged issues for
+# passing their 2 hours, and the morning put each to Dan. An end the driver wrote (`driver`: its
+# watchdog's park on the clock, its attempts limit, its circuit breaker) is a reading of the clock or
+# a counter, never of the work, so a done note by the session that held the issue stands over it,
+# written before it or after it. Another session's done is no record of this claim's end (lessons
+# review of 162acef), and an end the session wrote itself stands unless a done replaces it, below.
+def finished_by(notes):
+    """(repo, issue, session) -> that session's first done note for the issue tonight."""
+    out = {}
+    for n in sorted((n for n in notes if n["kind"] == "done" and num(n.get("at"))), key=lambda n: n["at"]):
+        key = _issue_key(n)
+        if key is not None and isinstance(n.get("by"), str) and n["by"]:
+            out.setdefault(key + (n["by"],), n)
+    return out
+
+
+def driver_end_finished(n, finished):
+    """Whether `n` is an end the driver wrote for an issue its session noted done."""
+    key = _issue_key(n)
+    return (n["kind"] in ("parked", "failed") and n.get("driver") is True and key is not None
+            and key + (n.get("by"),) in finished)
+
+
+def overran(notes, finished):
+    """The issues finished more than STUCK_MS after their session's last claim of them before the
+    done note, in the order they were finished: measured claim to done, never claim to a park, since
+    the clock runs on past a done note while the claim stays held."""
+    late = []
+    for (repo, issue, by), d in sorted(finished.items(), key=lambda kv: kv[1]["at"]):
+        claims = [c["at"] for c in notes if c["kind"] == "claim" and c.get("by") == by and _issue_key(c) == (repo, issue)
+                  and num(c.get("at")) and c["at"] <= d["at"]]
+        if claims and d["at"] - max(claims) > STUCK_MS and (repo, issue) not in late:
+            late.append((repo, issue))
+    return late
+
+
+def overran_line(late):
+    if not late:
+        return None
+    one = len(late) == 1
+    return "%d issue%s took longer than the %d hours an issue gets, from claim to done, and %s still finished: %s." % (
+        len(late), "" if one else "s", STUCK_HOURS, "was" if one else "were", issues_named(late))
+
+
+def filed_line(notes):
+    """The issues filed overnight that needed nothing from Dan, as the wake check noted them (#3273):
+    one sentence under Done, so the record is kept and no picker is put to him for any of them."""
+    keys = list(dict.fromkeys(k for k in (_issue_key(n) for n in notes if n["kind"] == "filed") if k is not None))
+    if not keys:
+        return None
+    return "%d issue%s filed overnight: %s." % (len(keys), " was" if len(keys) == 1 else "s were", issues_named(keys))
+
+
 def held_at(notes, by, at):
     """The issues session `by` held at moment `at`, in the order it claimed them."""
     held = {}
@@ -734,12 +800,17 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
         out.append("No session was enrolled to work overnight.")
     out.append("")
 
-    def section(title, rows, empty=None):
-        if not rows and empty is None:
+    def section(title, rows, empty=None, tail=()):
+        # `tail`: sentences said after the rows, never rows themselves, so never put to Dan.
+        if not rows and empty is None and not tail:
             return
         out.append("## %s" % title)
         out.append("")
-        out.extend(["- %s" % r for r in rows] if rows else [empty])
+        if rows or empty is not None:
+            out.extend(["- %s" % r for r in rows] if rows else [empty])
+            if tail:
+                out.append("")
+        out.extend(tail)
         out.append("")
 
     # What needs a look comes first (L609), and on a good night says so (L610).
@@ -809,19 +880,23 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
 
     section("Questions for you", [asked_at(q) for q in questions_of(notes)])
 
+    finished = finished_by(notes)
+    done_tail = [t for t in (overran_line(overran(notes, finished)), filed_line(notes)) if t]
     if final:
-        section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.")
+        section("Done", github["done"], "Nothing was merged or closed in a repo worked tonight.", done_tail)
     else:
         done = ["%s%s: %s" % (where(n), ", PR #%s" % n["pr"] if n.get("pr") is not None else "", text_of(n)) for n in notes if n["kind"] == "done"]
         if done:
             done.insert(0, "As the sessions noted it; checked against GitHub at wake.")
-        section("Done", done)
+        section("Done", done, None, done_tail)
 
     # A park or a failure the queue replaced is not one (#1119): it lets the holder's done land over
     # the driver's own end once a merged pull request closed the issue, and that done note says so
-    # (`replaces`, by the same session, written after it). Only that one: a plain done after
-    # another session's failure leaves the failure listed (lessons review of 162acef). Ordered by
-    # when each was written, file order breaking a tie, as the claims above are.
+    # (`replaces`, by the same session, written after it). An end the driver itself wrote is also
+    # dropped by any done note of the same session for the issue, before or after it
+    # (driver_end_finished, #3276). Nothing else: a plain done after another session's failure, or
+    # after the session's own deliberate end, leaves it listed (lessons review of 162acef). Ordered
+    # by when each was written, file order breaking a tie, as the claims above are.
     def replaced(i, n):
         key = (n.get("repo"), n.get("issue"), n.get("by"))
         if n.get("issue") is None or not num(n.get("at")):
@@ -831,7 +906,7 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
     folds = no_verdict_folds(notes)
     pf = []
     for i, n in enumerate(notes):
-        if n["kind"] in ("parked", "failed") and replaced(i, n):
+        if n["kind"] in ("parked", "failed") and (replaced(i, n) or driver_end_finished(n, finished)):
             continue
         fold = folds.get(id(n))
         if fold is not None:
@@ -1253,7 +1328,7 @@ def _render_locked(path, record, final, github):
 
 # The kinds every session's report carries whoever wrote them (#1287): how the night began and
 # ended, the overnight check, and the limits and usage, which are the whole Mac's, not one session's.
-MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "checked", "usage", "wait")
+MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "checked", "filed", "usage", "wait")
 
 
 def session_reports(notes_file, record):

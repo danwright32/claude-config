@@ -727,21 +727,25 @@ def make(sh_special, sh_param, unknown_dir=None):
         reshaping = 0  # how many of these readings are inside one another
         reads_memo = {}  # the read commands of each text, for read_feed (one Judge runs in a process)
 
-        def inner_line(self, s, d, depth):
+        def inner_line(self, s, d, depth, strict=False, cwd_known=True):
             """line() for a text one of these readings puts together, read as typed or as a script
             on disk's own as the command it comes from is; the reason it posts, or None, or that it
-            is too deep to read."""
+            is too deep to read. strict says a text that is too deep or cannot be read is not
+            followed in a script on disk too, for a caller that would take the silence there for a
+            text read and found to post nothing (headed_filled); cwd_known False reads it as run
+            from a folder nobody knows."""
+            unread = self.unfollow if strict else self.unread_typed
             if depth >= self.pkg_max_depth:
-                return self.unread_typed(f"a command is put together more than {self.pkg_max_depth} texts deep, "
-                                         "which is not read, so whether it posts cannot be checked")
-            self.next_on_disk = self.sh_in_script()
+                return unread(f"a command is put together more than {self.pkg_max_depth} texts deep, "
+                              "which is not read, so whether it posts cannot be checked")
+            self.next_on_disk, self.next_cwd_known = self.sh_in_script(), cwd_known
             try:
                 return self.line(s, d, depth + 1, s)
             except self.sw.Unreadable:
-                return self.unread_typed(f"the command {s[:80]} cannot be read as commands, so whether it "
-                                         "posts cannot be checked")
+                return unread(f"the command {s[:80]} cannot be read as commands, so whether it "
+                              "posts cannot be checked")
             finally:
-                self.next_on_disk = False
+                self.next_on_disk, self.next_cwd_known = False, True
 
         def rejudge(self, d, new, text, depth, whole):
             """The reason the command new posts, or None: text with its program written as the
@@ -1098,29 +1102,82 @@ def make(sh_special, sh_param, unknown_dir=None):
             is filled in where the gate works it out (sh_inner_text). Where it does not, the text
             the inner shell gets is not known: typed, the string is read with that part as a word of
             unknown value, and in a script on disk it is left as before, as every reading there
-            leaves what cannot be worked out (this repository's own test-pr-review.sh sources two
-            files by `'$DIR/lib/...'` in such a string)."""
+            leaves what cannot be worked out (this repository's own test-pr-review.sh sourced two
+            files by `'$DIR/lib/...'` in such a string, until claude-config#3252 wrote those paths
+            in double quotes)."""
             if not ESCAPED_SUBST.search(text):
                 return None
-            found = self.sw.wrapped(rest)
-            if not found or found[1] is None:
-                return None
-            raws = self.raw_words(text)
-            if found[0] == "eval":
-                code = [r for r in raws[1:] if r != "--"]
-            elif found[0].endswith(" -c"):
-                inline = self.operands(raws)[1] if raws else None
-                code = [inline[1]] if inline else []
-            else:
-                return None
+            found, code = self.string_code(text, rest)
             if not any(ESCAPED_SUBST.search(r) for r in code):
                 return None
-            texts = [self.sh_inner_text(r, d) for r in code]
-            value = " ".join(t for t, _ in texts)
-            if value == found[1] or (any(u for _, u in texts) and self.sh_in_script()):
+            value, unknown = self.string_handed(code, d)
+            if value == found[1] or (unknown and self.sh_in_script()):
                 return None
             inner = self.inner_line(value, d, depth)
             return (f"{found[0]} runs a string whose substitution is written with a backslash, which the shell "
                     f"it is handed to runs: {inner}") if inner else None
+
+        def string_code(self, text, rest):
+            """(what the reader's wrapped() says of the command rest, the words of text that are the
+            code its eval or its shell's -c is handed, as written): no words for a command that
+            hands neither a string."""
+            found = self.sw.wrapped(rest)
+            if not found or found[1] is None:
+                return found, []
+            raws = self.raw_words(text)
+            if found[0] == "eval":
+                return found, [r for r in raws[1:] if r != "--"]
+            if found[0].endswith(" -c"):
+                inline = self.operands(raws)[1] if raws else None
+                return found, [inline[1]] if inline else []
+            return found, []
+
+        def string_handed(self, code, d):
+            """(the text the words code hand on once the outer shell has read them, whether part of
+            it is something that shell fills in whose value the gate does not work out), each word
+            by sh_inner_text."""
+            texts = [self.sh_inner_text(r, d) for r in code]
+            return " ".join(t for t, _ in texts), any(u for _, u in texts)
+
+        def headed_filled(self, d, text, wrapper, why, depth):
+            """For the first command of a function's body in a script on disk, where it hands a
+            shell a string by -c: None where the string's commands are to be read as the reader
+            gives them; else the reason the string posts, read as that shell gets it, or "" where
+            so read it posts nothing, and then the reader's commands for it are not to be read.
+
+            The reader passes a function's header over (claude-config#3252), so `busy(){ bash -c
+            ". '$DIR/lib.sh' && f"; }` is a command that hands bash a string, whose commands follow
+            it as written: a file named $DIR/lib.sh, in single quotes, sourced from a folder nobody
+            knows, since a body runs wherever its function is called. That is refused as a path
+            that cannot be worked out, and it refused this repository's own suites, where bash is
+            handed the folder and never the text $DIR. Before #3252 nobody read that string, bar the
+            reading escaped_string gives one holding a backslash. So it is read here as the inner
+            shell gets it, by that reading's own steps (string_code, string_handed, inner_line).
+
+            Only where nothing is lost by it. The command must be one whose string no reading was
+            given before the header was passed over (the reader's headed_string), so the commands
+            set aside are never ones a caller had. Every variable and substitution the outer shell
+            fills in must be worked out, the word must be the one the reader took the string from,
+            and the text that gives must be read whole: where it cannot be followed (a `$0` of the
+            string's own, a file it sources by a path not worked out) the reader's commands are
+            read as before. The text is read as run from a folder nobody knows where the body's is
+            not certain. The caller then judges the command itself as it was judged before #3252,
+            with no wrapper named, so every reading it had is kept."""
+            if why or not wrapper.endswith(" -c") or not self.sh_in_script() or not self.sw.headed_string(text):
+                return None
+            body = self.sh_strip_openers(text)
+            found, code = self.string_code(body, self.sw.join_continuations(self.rest_of(body)[0]))
+            if len(code) != 1 or self.words_of(code[0]) != [found[1]]:
+                return None
+            value, unknown = self.string_handed(code, d)
+            if unknown or value == found[1]:
+                return None
+            noted = len(self.unfollowed)
+            inner = self.inner_line(value, d, depth, strict=True, cwd_known=self.sh_cwd(d) != unknown_dir)
+            missed = self.unfollowed[noted:]
+            if missed and (not inner or any(u in inner for u in missed)):
+                del self.unfollowed[noted:]
+                return None
+            return f"{found[0]} runs a string, one of whose commands posts: {inner}" if inner else ""
 
     return ShWalkShapes

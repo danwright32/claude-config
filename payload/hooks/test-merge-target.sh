@@ -1705,6 +1705,28 @@ try:
 except Exception as e:
     print("broken: %s" % e)')" "True PreToolUse True" "#1924 and is one object Dan sees as a systemMessage and the session reads, not plain stdout nobody sees"
 
+echo "merge-target: a redirection glued to a word, and a function's body (claude-config#3252)"
+# `gh>/dev/null pr merge 7` merges. The reader split on spaces only, so the merge question saw a
+# program named gh>/dev/null, or a subcommand named 2>/dev/null or pr>/dev/null, and the first command
+# of a function's body as a program named f(), and the merge walked past every merge gate.
+for w in "gh>/dev/null pr merge 7 --squash" \
+         "gh pr>/dev/null merge 7 --squash" \
+         "gh pr merge>/dev/null 7 --squash" \
+         "rtk>/dev/null gh pr merge 7" \
+         "f() { gh pr merge 7 --squash; }; f" \
+         "f() ( gh pr merge 7 --squash ); f"; do
+  if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3252 a merge was not read as a merge: $w"; fi
+  eq "$(mt_pr_number "$w")" "7" "#3252 and it names its pull request: $w"
+done
+# A redirection of its own between gh and pr: read as a merge now. Its pull request is not named
+# yet (mt_pr_number prints nothing for it, measured 2026-11-19), which is recorded for an issue of
+# its own and has no case here.
+w="gh 2>/dev/null pr merge 7"
+if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3252 a merge was not read as a merge: $w"; fi
+for w in "echo gh>/dev/null pr merge 7" "git commit -m 'gh>/dev/null pr merge 7'" "gh pr view>/dev/null 7 --json mergeable"; do
+  if mt_runs_merge "$w"; then fail "#3252 control: a merge named in an argument, or a view, was read as a merge: $w"; else pass; fi
+done
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

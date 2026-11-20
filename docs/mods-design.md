@@ -1389,7 +1389,13 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
 - Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
   parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
-  A claim entry with no time of its own is never judged stuck by time.
+  A claim entry with no time of its own is never judged stuck by time. Active time is wall time
+  from the claim entry to now less those waits only, so waiting for checks, for a merge turn or on
+  subagents counts, and so does any time after the work was noted done while the claim stayed held;
+  the watchdog times only the session's newest held claim, so a session holding several reaches
+  the older ones only after the newest passes 2 hours (measured on the night of 18 Nov 2026,
+  #3276). The report reads a park of the driver's against the session's done note for the issue
+  and does not list a finished one.
 - Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
   blocked on with the reason said: one failed read never stops the night. Three in a row stop it
   with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
@@ -2646,15 +2652,82 @@ and the band question is removed rather than kept beside it (L29). Three defects
   The mod and the lessons file's own reading (`claude-sync lesson_check_records`) now differ both
   ways. The file is narrower over a `CHECK:` line, since it also holds each path's characters; the
   mod asks whether the text is a check line and nothing else, not whether it is a valid one. The
-  file is wider in three places, where the picker refuses a line the file takes and the session
-  rewords it: a `NO CHECK:` reason holding a character outside ASCII, a line over 300 characters,
-  and white space other than a space between words (at a tab the file's own record of the line
-  splits, so it judges only the part before it). In the entry every other line is still read as the
-  rule's, so a different check line, a second one, one in another place, the same line under
+  file is wider in two places, where the picker refuses a line the file takes and the session
+  rewords it: a `NO CHECK:` reason holding a character outside ASCII, and a line over 300
+  characters. Since #3294 the file's reader, like the picker, refuses a tab, a carriage return or
+  another control character inside the line, and a line running on to the next one (its record of
+  a line once split at a tab, so it judged only the part before it).
+  In the entry every other line is still read as the rule's, so a different check line, a second
+  one, one in another place, the same line under
   another rule or on another lesson, and any check line on an approval that showed him none fail
   the comparison and are asked about. An entry without the line still goes through, as it did
   before the line existed. The value is read back from storage through `checkLine` again (L50), so
   a damaged record covers the rule alone.
+  The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
+  question stated the rule and compared the entry with it through `ruleText`, which drops bold
+  marks and folds white space, and neither read a character: a rule holding a zero width
+  character, a bidirectional control, a run of tag characters or an escape sequence was approved
+  and written with what Dan never saw, an entry could hold a tab or a no break space where he read
+  a space, and the SHORT line, which the picker never shows, could hold anything. A rule is prose
+  and quotes real text, so it is not cut to ASCII as a check line is. What is refused is a class,
+  by Unicode's own properties, so a character nobody listed is still in it (`unseenIn`): every
+  control but the newline, every format character, private use, surrogate halves and code points
+  no character is assigned to, every space but the plain one with the line and paragraph
+  separators, whatever else is drawn as nothing by default (`Default_Ignorable_Code_Point`: the
+  variation selectors, the Hangul fillers), and the blank braille pattern. Every letter, mark and
+  symbol of any alphabet stands. The spaces and tabs at a line's two ends are indentation, as
+  around a check line. The refusal names the first such character by its code point, its place
+  counted in characters and the words before it, so the session can reword. It is applied in four
+  places: the rule in the picker's metadata, the picker's whole question, the entry as it is
+  written (every line, and the rule the approval holds, read back from storage), and the question
+  asked before a For good, whose words Just this session also puts in the system prompt. A file's
+  own name in that last question is set aside when it holds such a character, or its save could
+  never be asked about.
+  Three things the review of #3245 left unread were settled the same day, by reading Claude Code
+  2.1.328's own code for the terminal dialog and by test. A long question: the dialog cuts a
+  question at 2,000 characters and ends it with an ellipsis, so a rule or a check line past the
+  cut was approved unread. A question over `MAX_QUESTION` (1,500) is now refused, in both pickers;
+  the longest rule in the lessons file was 565 characters, and of the picker calls in the
+  transcripts this Mac kept the longest lesson question of 9 was 753 and the longest memory
+  question of 177 was 462. Markdown, an HTML comment and escape sequences: the dialog draws a
+  question as plain text, turns a tab into a space and puts a replacement mark over controls, the
+  bidirectional controls and most characters drawn as nothing, so there Dan saw a mark where
+  something stood and not what it was. Its one exception to plain text is a markdown link to a
+  file, in the part of one of its own confirmations after the first blank line, drawn as its label
+  alone. The desktop and mobile surfaces were not read, so markup is refused wherever the picker
+  is drawn (`shownFault`, and the review's round below). Whether an approval can outlive
+  its session: `$.state` is held by the host for one session and is never written to disk (only
+  `$.store` is, which this mod does not use), the mod empties it at `session.end`, and every
+  approval lapses 10 minutes after the press whatever else happens, so it cannot. And a picker
+  carrying its own answers beside a check line was refused already; a test now holds it.
+  None of the 895 entries of the lessons file and none of those 186 picker calls would have been
+  refused.
+  A security review of that change, the same day, found three things, fixed before it merged.
+  A question was held to a length and to no number of rows: a rule, 1,200 newlines and then another
+  sentence was asked and approved with the rule 1,200 rows above the answers, because the dialog
+  neither cuts nor scrolls a tall question (read in 2.1.328: the row limit it is handed locks a
+  least height only; not seen drawn). So two blank lines running are refused, and so is text over
+  `MAX_QUESTION_ROWS` (20) rows, counted by `rowsAt` as a window `QUESTION_COLUMNS` (76) wide
+  wraps it: 80 columns, which Apple Terminal opens at, less the 4 cells the dialog keeps back.
+  Twenty is what the length cap already allows running prose at that width, so it stops only the
+  tall and thin question. It bounds how far above the answers a word can stand and does not put
+  the whole question in view: with the dialog's own rows, about 16 with three answers, a question
+  at the cap fills a window of 36 rows, and a window of 24 shows its last 8 or so. Stating the
+  rule last, next to the answers, would close that gap and is a change to the hook's wording that
+  this round left alone. Second, an HTML comment and one link pattern were two spellings of a
+  class. Claude Code's typings say the dialog is drawn with Markdown on the desktop, VS Code and
+  mobile surfaces, so the class is refused (`markupIn`): `<` before a letter, `!`, `?` or `/`; `]`
+  before `(`, `[` or `:`; and a character reference; in the text as sent and with its bold marks
+  dropped, which is how a rule is stored. Code in backticks on one line stands, because a surface
+  that draws markdown draws a code span as written; spans are paired as CommonMark pairs them and
+  read strictly (`outsideCode`), and a link definition, a link to a file and a span holding `|`
+  are judged inside backticks too, since a definition and a table's cells are made out before any
+  code span is. Third, every text of the call is judged by that one function as the dialog will
+  get it (`askFault`): a title, a description and a placeholder went to it unjudged. Left as they
+  were, and refused though honest: an emoji that needs a joiner or a variation selector, and
+  Persian text, which needs a zero width non joiner. Accepted by design: a letter of another
+  script that looks Latin and a run of combining marks, which Dan can see. The SHORT line's markup
+  is not judged, since the picker never shows that line at all.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
