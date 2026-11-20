@@ -460,9 +460,10 @@ export const savesThis = (x: AskBeforeSavingApproval, key: string): boolean => x
  * Whether an approval is the one Dan gave in the durable lesson picker for the lesson this text adds
  * (#867): `added` is what lessonAddition read the call as adding to the lessons file, undefined when
  * the call is not one that only adds an entry, which no lesson approval matches. The entry may carry
- * the check line this approval holds (#3245), read back from storage as addsLesson reads it.
+ * the check line this approval holds (#3245), and carries the SHORT line it holds and no other
+ * (#3320), each read back from storage as addsLesson reads it.
  */
-export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check)
+export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check, x.short)
 
 /**
  * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
@@ -505,6 +506,8 @@ export const saveIdOf = (source: unknown): string | undefined => {
 // its own, and reads only the answer the dialog hands back. Since #3245 the picker may also carry the
 // lesson's check line in `metadata.check`, shown to Dan on a line of its own, and the same answer
 // then covers that one line on that one lesson (Dan, 2026-11-19: "Yes, cover the check line").
+// Since #3320 it carries the entry's SHORT line the same way, in `metadata.short`: the line the
+// index carries into every session is one he read, and the entry is held to it.
 export const LESSON_SOURCE = 'durable-lesson'
 export const LESSON_ADD = 'Add to LESSONS.md'
 export const LESSON_PROJECT = 'Project memory instead'
@@ -619,7 +622,6 @@ export const checkLine = (s: unknown): string | undefined => {
   const read = readCheckLine(s)
   return 'line' in read ? read.line : undefined
 }
-
 // What Dan cannot see (#3295). His answer in a picker covers text because he read it, so the text a
 // picker shows him, and the entry written under his answer, hold no character that is drawn as
 // nothing, that moves or hides the text around it, or that reads as a plain space and is not one.
@@ -897,8 +899,68 @@ export const shownFault = (s: string): string | undefined => {
   return rows > MAX_QUESTION_ROWS ? tooTall(rows) : undefined
 }
 
+/**
+ * The key the durable lesson picker's metadata carries the entry's SHORT line under (#3320).
+ * hooks/test-durable-lesson-check.sh holds the hook's instruction to this name.
+ */
+export const LESSON_SHORT_KEY = 'short'
+
+/**
+ * The longest text a SHORT line the picker shows may hold after its "SHORT: ", in UTF-16 code units,
+ * the unit addsLesson counts the index line in: what MAX_SHORT leaves once the index line's own
+ * start, "- L<number>. ", is taken off at a number of four digits. The picker is asked before the
+ * lesson has a number (`claude-sync next-lesson` reserves the one it prints, and it is asked for
+ * only once Dan has approved), so the length is held where it can first be judged, against the
+ * longest number in use, and an approved SHORT line then fits whichever number it gets (L667).
+ * Measured 2026-11-20: numbers are minted from 501 on the work MacBook and from 1001 on the
+ * personal one (lesson-bands/, the highest in the file L1037), and five digits start at 10,000,
+ * where addsLesson's own count of the whole index line still refuses a line too long. Of the 737
+ * SHORT lines in the lessons file, 698 are within this and 39 are 1 to 3 over, each under a number
+ * of one or three digits. hooks/test-durable-lesson-check.sh holds the hook's instruction to this
+ * number.
+ */
+export const MAX_SHORT_TEXT = MAX_SHORT - '- L1000. '.length
+
+/**
+ * Why text is no SHORT line, in words for the session that sent it, or the line itself, without the
+ * file's indentation. The one reading shortLine and the picker's refusal both take.
+ *
+ * A SHORT line is "SHORT: " and its text, on one line. It is prose, as a rule is, so it is not held
+ * to ASCII as a check line is: it is judged by shownFault, the one function every text a picker
+ * shows is judged by, with no second copy of the character and markup checks here. Measured
+ * 2026-11-20 over the 737 SHORT lines of the lessons file: all are in this shape, and shownFault
+ * refuses one, L731's, which names two placeholders in angle brackets outside backticks.
+ */
+export const readShortLine = (s: unknown): { line: string } | { fault: string } => {
+  if (typeof s !== 'string') return { fault: 'it is not text' }
+  const line = unindented(s)
+  if (line.includes('\n')) return { fault: 'it is more than one line' }
+  const fault = shownFault(line)
+  if (fault !== undefined) return { fault }
+  const m = /^SHORT: ([^ ].*)$/.exec(line)
+  if (!m) return { fault: 'it is not in the shape "SHORT: <the rule in one line>", the word SHORT in capitals, a colon, one space and the text' }
+  const text = m[1] ?? ''
+  if (text.length > MAX_SHORT_TEXT)
+    return {
+      fault: `its text is ${text.length} UTF-16 code units, and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`,
+    }
+  return { line }
+}
+
+/**
+ * A lesson's SHORT line as an approval holds it (#3320): the one line the lessons index renders for
+ * the lesson, and so the line a session loads when the lesson is in the core. Text reading as one
+ * (readShortLine) comes back without the file's indentation. Anything else is undefined: other
+ * text, text of more than one line, a line Dan could not read as written, one too long for the
+ * index line, and a value that is not text, which a record read back from storage can be (L50).
+ */
+export const shortLine = (s: unknown): string | undefined => {
+  const read = readShortLine(s)
+  return 'line' in read ? read.line : undefined
+}
+
 // The fields of an AskUserQuestion call that are never drawn: the engine's own, the metadata (its
-// rule and its check line have their own checks, and its source is for analytics alone), and
+// rule, its check line and its SHORT line have their own checks, and its source is for analytics alone), and
 // answers already filled in, which are refused whatever they hold.
 const NOT_DRAWN = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'metadata', 'answers'])
 // The fields of a question that are the dialog's own rows, the chip over it and the answers under
@@ -1044,10 +1106,19 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * No line of the entry holds a character Dan cannot see (#3295, unseenIn), and neither does the
  * rule the approval holds, which is read back from storage (L50). The comparison below folds every
  * run of white space into one space, so a tab, a no break space or a line separator in the entry
- * once read as the space he saw in the rule. And the SHORT line is never shown in the picker at
- * all, while the index carries it into every session, so it was where anything unseen could ride.
+ * once read as the space he saw in the rule.
+ *
+ * `short` is the SHORT line Dan read in the picker, when it showed him one (#3320). The SHORT line
+ * is what the index carries into every session, and it was once shown nowhere and compared with
+ * nothing, so under an approval for one rule an entry went through whose SHORT line said something
+ * else. The entry's SHORT line is now that line, equal to it but for the file's indentation, read
+ * from the same copy of the entry the check line is, and it stays the entry's last line. With no
+ * `short`, or one that is no SHORT line (shortLine), the entry takes no SHORT line at all, so one
+ * added after an approval that showed none is asked about. And where he read one, an entry
+ * without it is not the entry he read. Whether a lesson needs one is settled before he is asked:
+ * the picker refuses a rule too long for the index line that brings no SHORT line (register.ts).
  */
-export const addsLesson = (added: string, rule: string, check?: unknown): boolean => {
+export const addsLesson = (added: string, rule: string, check?: unknown, short?: unknown): boolean => {
   if (unseenIn(added) !== undefined || unseenIn(rule) !== undefined) return false
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
@@ -1055,6 +1126,9 @@ export const addsLesson = (added: string, rule: string, check?: unknown): boolea
   const approved = checkLine(check)
   const end = shortAt === -1 ? lines.length : shortAt
   const raw = added.replace(/^\s*\n/, '').replace(/[ \t\n]+$/, '').split('\n')
+  const shownShort = shortLine(short)
+  const written = shortAt === -1 || raw.length !== lines.length ? undefined : unindented(raw[shortAt] ?? '')
+  if (shortAt === -1 ? shownShort !== undefined : shownShort === undefined || written !== shownShort) return false
   const checked = approved !== undefined && end > 1 && raw.length === lines.length && unindented(raw[end - 1] ?? '') === approved
   if (checked && !/^- \*\*L\d+\.[\s\S]*\*\*/.test(lines.slice(0, end - 1).join('\n'))) return false
   const body = ruleText(lines.slice(0, checked ? end - 1 : end).join('\n'))

@@ -3653,6 +3653,13 @@ once for each lesson. For that the line is written in plain ASCII, at most 300 c
 just before the entry's `SHORT:` line, or last in an entry that has none: the place the approval
 covers, and one `claude-sync lesson-checks` reads.
 
+The `SHORT:` line is shown to him the same way (#3320), since it is the line the index carries into
+every session. The session writes it before it asks, states it on a line of its own in the proposal
+and carries it in the picker's metadata, and the entry written under his answer carries exactly that
+line. A rule of at most 151 characters needs none, and its entry takes none. The 151 is the index
+cap of 160 less `- L1234. `: the lesson has no number until he approves it, so the line is sized for
+the longest number in use.
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
@@ -7715,8 +7722,26 @@ at 76 columns, since the dialog neither cuts nor scrolls a tall question (read i
 not fit a question into a 24 row window, which shows about the last 8 rows of one at the cap.
 Every text of the call is judged by the one function, a title, a description and a placeholder
 included (rules.ts `shownFault`, `askFault`). The entry written under his answer is held to the
-unseen class, its `SHORT:` line included, which the picker never shows, and the question asked
-before a For good is held as the lesson's is.
+unseen class, and the question asked before a For good is held as the lesson's is.
+Since #3320 the picker also shows the entry's `SHORT:` line, the one line of a lesson the index
+carries into every session, which it once never showed: under an approval for one rule an entry
+went through whose `SHORT:` line said something else. The line is carried in `metadata.short` as
+`SHORT: <text>` and stands on a line of its own in the question, and the one Edit his answer lets
+through carries exactly that line as its last: another line, one a word different, a second one, or
+none where he read one is asked about again. The picker is refused, before he is asked and with
+the reason, when the line is in no such shape, is more than one line, fails the one function every
+shown text is judged by (`shownFault`, so the unseen class and the markup class above, with no
+second copy of either), or has text over 151 UTF-16 code units; when the rule is over 151 and no
+line is carried, since its entry would need one nobody was shown; and when the question holds any
+other line starting `SHORT:`. A rule of 151 or under is approved with no `SHORT:` line, and one
+added to its entry afterwards is asked about (rules.ts `readShortLine`, `addsLesson`). The 151 is
+the index cap of 160 less `- L1234. `, because the picker is asked before the lesson has a number.
+Measured 2026-11-20 over the lessons file: of 895 entries 737 carry a `SHORT:` line; laid out with
+its rule and a check line each fits the 20 rows and 1,500 code units (the tallest takes 12 rows,
+and 16 beside a check line of 300 characters); `shownFault` refuses one of the 737 (L731's, which
+names two placeholders in angle brackets outside backticks); and 39 have text over 151, each
+written under a number of one or three digits. All 8 lesson pickers in the transcripts this Mac
+kept would be refused, each for a rule over 151 with no `SHORT:` line shown, which no picker had.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused

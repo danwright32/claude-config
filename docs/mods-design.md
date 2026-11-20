@@ -1786,8 +1786,10 @@ morning offers what the night proposed, filing nothing he has not picked.
   `hooks/durable-lesson-check.sh` describe, and its picker carries the check line the morning
   session arrives at. That line is never read from the night's notes: the block of overnight text
   still gives each lesson's source and rule only, so the one line Dan's answer covers is one the
-  session worked out and he read. `hooks/test-durable-lesson-check.sh` holds the step numbers
-  named here to the hook's own.
+  session worked out and he read. Since #3320 the same holds for the entry's SHORT line, which
+  the morning session writes, shows on a line of its own and carries in `metadata.short`, where
+  the rule is too long for the index line. `hooks/test-durable-lesson-check.sh` holds the step
+  numbers named here to the hook's own, and the two metadata keys to the mod's.
 - A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
   line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
   days), counted as asked only once that prompt went in.
@@ -2615,7 +2617,8 @@ and the band question is removed rather than kept beside it (L29). Three defects
   unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
-  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it (the
+  SHORT line was the exception until #3320, below: it was held to the cap and to nothing else).
   Since #3245 (built 2026-11-19; Dan on the issue that day: "Yes, cover the check line") the picker
   may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
   rule or that none can, which the durable lesson check now asks for before a lesson is written.
@@ -2662,7 +2665,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   marks and folds white space, and neither read a character: a rule holding a zero width
   character, a bidirectional control, a run of tag characters or an escape sequence was approved
   and written with what Dan never saw, an entry could hold a tab or a no break space where he read
-  a space, and the SHORT line, which the picker never shows, could hold anything. A rule is prose
+  a space, and the SHORT line, which the picker did not show then, could hold anything. A rule is prose
   and quotes real text, so it is not cut to ASCII as a check line is. What is refused is a class,
   by Unicode's own properties, so a character nobody listed is still in it (`unseenIn`): every
   control but the newline, every format character, private use, surrogate halves and code points
@@ -2721,7 +2724,46 @@ and the band question is removed rather than kept beside it (L29). Three defects
   were, and refused though honest: an emoji that needs a joiner or a variation selector, and
   Persian text, which needs a zero width non joiner. Accepted by design: a letter of another
   script that looks Latin and a run of combining marks, which Dan can see. The SHORT line's markup
-  is not judged, since the picker never shows that line at all.
+  was not judged then, since the picker never showed that line at all.
+  The SHORT line is shown and held since #3320 (built 2026-11-20). It is the one line of a lesson
+  the index carries into every session, and the review of #3295 found it was shown nowhere and
+  compared with nothing: under an approval for one rule, `addsLesson` took an entry whose SHORT
+  line said something else, up to 160 characters. The picker now carries the line in
+  `metadata.short`, whole, as `SHORT: <text>`, the way it carries the check line, and Dan reads it
+  on a line of its own. The approval records it, and the entry's SHORT line must be that line but
+  for the file's indentation (`addsLesson`, read from the same copy of the entry the check line
+  is). An approval that showed none covers an entry with none, so a SHORT line added afterwards is
+  asked about, and where he read one an entry without it is not the entry he read. The line is
+  judged by `shownFault`, the function every shown text is judged by, through `readShortLine`:
+  there is no second copy of the character or markup checks, and a SHORT line is prose, so it is
+  not cut to ASCII as a check line is. The picker also refuses any other line starting `SHORT:`
+  in the question, which he would read as the entry's and the entry could not carry.
+  Two things are settled before he is asked, because the entry is written after (L667). Whether
+  the entry needs a SHORT line: a rule too long for the index line with none carried is refused,
+  or his answer would cover an entry that can only be written with a line he never saw. And the
+  line's length: the picker is asked before the lesson has a number, since `claude-sync
+  next-lesson` reserves the number it prints and is run only on his approval, so the text is held
+  to `MAX_SHORT_TEXT`, 151, which is the index cap of 160 less `- L1000. `, the prefix of the
+  longest number in use (bands start at 501 on the work MacBook and 1001 on the personal one, and
+  five digits start at 10,000, where `addsLesson`'s count of the whole index line still refuses).
+  Chosen over two other numbers: 154, the most that fits under any number, approves lines that
+  then cannot be written under the number the lesson gets, which costs Dan a second question; 150
+  is safe to 99,999 and takes one more character from every line today. Measured 2026-11-20 over
+  the lessons file, through the mod's own functions on a copy rg made: of 895 entries 737 carry a
+  SHORT line and all 737 are in the shape the picker takes; laid out as the picker shows them (the
+  rule as one paragraph, a blank line, the check line, the SHORT line) each fits the 20 rows and
+  1,500 code units, the tallest (L441) at 12 rows, or 16 beside a check line of 300 characters;
+  `shownFault` refuses one, L731's, which names two placeholders in angle brackets outside
+  backticks, as its rule does inside them; 39 have text over 151 (38 of 152 under a three digit
+  number, one of 154 under a one digit number); and of the 158 entries with no SHORT line, 6 have
+  a rule of 152 to 154 characters, which the picker would now ask a SHORT line for. Of the lesson
+  pickers in the transcripts this Mac kept, 8 calls, all answered Add to LESSONS.md, all 8 would
+  be refused: each rule is over 151 (202 to 434) and no picker showed a SHORT line, because none
+  could. That is the new requirement, not a fault in them. With a SHORT line of 151 characters
+  added, those 8 questions take 11 to 14 rows.
+  Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
+  by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
+  the file against their rules once, since none was ever shown.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same

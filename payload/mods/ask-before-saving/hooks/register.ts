@@ -14,13 +14,16 @@ import {
   LESSON_CHECK_KEY,
   LESSON_HEADER,
   LESSON_PROJECT,
+  LESSON_SHORT_KEY,
   LESSON_SKIP,
   LESSON_SOURCE,
   MAX_CHECK,
   MAX_SHORT,
+  MAX_SHORT_TEXT,
   MIN_RULE,
   addsThis,
   readCheckLine,
+  readShortLine,
   unindented,
   askFault,
   shownFault,
@@ -547,7 +550,7 @@ const agentRefusal = ({ files, guessed, handed }: Targets) =>
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
-type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown } }
+type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown; short?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -879,6 +882,36 @@ export const register: Register = on => {
         }
       if (check !== undefined && !question.split('\n').some(l => unindented(l) === check))
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
+      // The entry's SHORT line (#3320): the one line the index carries into every session, which the
+      // picker once never showed, so an entry went through under his answer with a SHORT line that
+      // said something else. It is carried and shown as the check line is, and judged by the one
+      // function every shown text is (readShortLine). Each fault stops the picker and says why,
+      // before he is asked anything: a line in no shape or one he could not read as written; a rule
+      // too long for the index line that brings no SHORT line, whose entry would need one nobody
+      // was shown; a line the question does not state on a line of its own; and any other line
+      // starting SHORT: in the question, which he would read as the entry's and the entry could not carry.
+      const givenShort = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_SHORT_KEY]
+      const readShort = givenShort === undefined ? undefined : readShortLine(givenShort)
+      const short = readShort !== undefined && 'line' in readShort ? readShort.line : undefined
+      const shortShape = `"SHORT: <the rule in one line>", its text at most ${MAX_SHORT_TEXT} characters, on one line he can read as written`
+      if (readShort !== undefined && 'fault' in readShort)
+        return {
+          deny: `Metadata "${LESSON_SHORT_KEY}" reads as no SHORT line: ${readShort.fault}. Put the entry's SHORT line there, word for word as it will be added to ${file}: ${shortShape}. Leave "${LESSON_SHORT_KEY}" out only when the rule itself is at most ${MAX_SHORT_TEXT} characters, so the lessons index can hold it as it is.`,
+        }
+      if (short === undefined && rule.length > MAX_SHORT_TEXT)
+        return {
+          deny: `The rule is ${rule.length} characters, and the lessons index holds one line a lesson, at most ${MAX_SHORT_TEXT} characters after its number, so this entry needs a SHORT line, and that line is what every session loads. Dan approves it only by reading it: put it in metadata "${LESSON_SHORT_KEY}" as ${shortShape}, and state it word for word on a line of its own in the question.`,
+        }
+      const shortLines = question.split('\n').map(unindented).filter(l => /^SHORT:/.test(l))
+      if (short !== undefined && !shortLines.includes(short))
+        return { deny: `The question must state the SHORT line word for word on a line of its own, as metadata "${LESSON_SHORT_KEY}" carries it, so Dan approves the line that is added to ${file} and loaded into every session.` }
+      if (shortLines.some(l => l !== short))
+        return {
+          deny:
+            short !== undefined
+              ? `The question holds another line starting "SHORT:" beside the one metadata "${LESSON_SHORT_KEY}" carries, and the entry takes one SHORT line, the one Dan approves. State that one line and no other.`
+              : `The question holds a line starting "SHORT:", and metadata "${LESSON_SHORT_KEY}" carries none, so Dan would read a SHORT line his answer does not cover. Put the line in metadata "${LESSON_SHORT_KEY}" too, as ${shortShape}, or take it out of the question when the rule needs none.`,
+        }
       // The whole question is what he reads (#3295): one holding what he cannot see, or longer than
       // the dialog shows, where the rule or the check line could stand past the cut, is not asked.
       // Every text of the call is judged as the dialog will get it, the mod's own header and answers
@@ -901,14 +934,20 @@ export const register: Register = on => {
       if (typeof chosen === 'string' && chosen.trim() && chosen !== LESSON_ADD)
         return say(await typedSaid($, chosen, { still: 'the lesson is not approved', again: 'ask him the same question again, with the same metadata and the rule as it then stands' }))
       if (chosen !== LESSON_ADD) return say(`Dan did not choose ${LESSON_ADD}, and gave no answer, so the lesson is not approved. Ask him again, or leave it.`)
-      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}) }
+      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}), ...(short !== undefined ? { short } : {}) }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
       const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line (last, when the entry has none),` : ''
+      // The SHORT line is the one he read, or none (#3320): Claude is told which, so the one Edit
+      // his answer covers is not sent with a line of its own wording and asked about again.
+      const shortened =
+        short !== undefined
+          ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
+          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
           `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked} and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked}${shortened}, with no blank line inside it. That is saved without asking him again. Anything else written to that file, a SHORT line he did not read included, is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {
