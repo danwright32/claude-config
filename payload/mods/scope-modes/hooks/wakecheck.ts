@@ -384,8 +384,8 @@ export const wakeCheck = async (
   // #2393: updated_at says only that a milestone changed, so the night's own merges and filings
   // were put to Dan every morning. The repository's issue events for the night say what changed;
   // one the night's notes account for (an issue or pull request a session worked, or an issue
-  // created overnight, already its own line above) is left out, and only the rest is reported, by
-  // name. A change no issue event records is the milestone itself. What cannot be read is said as
+  // created overnight, already a line above or `filed` under Done) is left out, and only the
+  // rest is reported, by name. A change no issue event records is the milestone itself. What cannot be read is said as
   // not checked, never as explained (L460).
   const worked = new Set((o.worked ?? []).map(k => k.toLowerCase()))
   // #2766: a change made from one of Dan's own accounts (other sessions of his, filing and closing

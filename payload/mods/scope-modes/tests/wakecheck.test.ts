@@ -408,7 +408,7 @@ describe('a milestone the night\'s own work explains is left out (#2393)', () =>
         { event: 'labeled', created_at: at('05:00:02'), actor: { login: 'eve' }, issue: { number: 9, milestone: ungrouped } },
         // Closed by a merge a session noted as done for this issue.
         closed(7, at('05:00:00'), 'dan'),
-        // Filed into it overnight: already its own line, as an issue created overnight.
+        // Filed into it overnight: already accounted for as an issue created overnight (`filed`).
         { event: 'milestoned', created_at: at('04:30:00'), actor: { login: 'dan' }, milestone: { title: 'Ungrouped' }, issue: { number: 9, milestone: ungrouped } },
         // Closed by pull request #20, which a session noted, though no note names #8 itself.
         closed(8, at('04:00:00'), 'dan'),
