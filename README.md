@@ -3370,6 +3370,30 @@ started with fewer than 20 seconds left, is given only what is left when that is
 refused as could not judge when it runs to that shortened limit. A full length first call that fails
 still fails open, as before.
 
+A reading whose answer could not be read is asked again (#3327). On 2026-11-19 and 2026-11-20 one
+branch was refused as could not judge twice and passed on a resend of the same head, minutes apart.
+Its one further reading had answered `{"covered":[1]}` after prose quoting a shell function,
+`busy(){ ...; }`, and the shared judge call (`pc_judge` in `lib/push-changes.sh`) read the answer
+from the first brace in the reply to the last, which is not JSON. It now reads each JSON object in
+the reply from its own opening brace, so a brace in the prose is passed over; a reply holding two
+different objects (the judge answering, then correcting itself) is still not read as either. Over
+the judge transcripts on this Mac to 2026-11-20, 5 of 199 further readings had failed that way and
+the new reading reads all 5; the 12 of 1,629 first readings it still cannot read held two answers
+or a spend limit message. Beyond that, a reading whose answer could not be read (no single object,
+an error envelope, nothing at all, or an object without the list asked for) is asked again, up to
+three times in all, with no wait between tries and only while 20 seconds of the deadline are left;
+a reading that timed out or could not start is not asked again, since it would fail the same way.
+It is never a pass: a further reading still unreadable after that refuses as could not judge as
+before, saying how many times it was asked and which test files it held, and a first reading still
+unreadable fails open as before, saying how many times it was asked. Every could not judge refusal
+now says what the gate reads (every commit the checked out commit adds to its base, whichever
+commits the push command names, so pushing one commit at a time reads the same) and gives advice
+by why it stopped: send the same push again when a reading failed or time ran out, and move a self
+contained part of the work to its own branch only when the cap on readings was reached. The
+record's detail for such a refusal starts with why. The suite moves the gate's clock with
+`REQUIRE_TESTS_CLOCK_FILE`, a whole number of seconds added to it, which can only bring the
+deadline closer.
+
 A branch that merges main and then pushes is judged on its own change, not on everything main
 gained since the branch was last pushed (#2028). On 2026-11-01 four pull requests in a work project were each
 refused for size alone after merging a busy main, and each needed a one time override. Both gates
