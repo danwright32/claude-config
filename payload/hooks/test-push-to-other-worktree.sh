@@ -153,6 +153,17 @@ git push origin --delete fix/b|@W@/wt-a|a deletion
 git push -n origin HEAD:fix/b|@W@/wt-a|a dry run
 ALLOWED
 
+# A worktree whose folder is gone but whose record git still keeps (prunable) holds nothing: nobody
+# works there, and the push the refusal would name cannot be run from it.
+g -C "$W/repo" worktree add -q -b fix/gone "$W/wt-gone" origin/main >/dev/null 2>&1
+commit_in "$W/wt-gone" gone.txt
+rm -rf "$W/wt-gone"
+case "$(g -C "$W/repo" worktree list --porcelain)" in
+  *"branch refs/heads/fix/gone"*prunable*) check "the fixture: fix/gone is held only by a prunable record" ok ;;
+  *) check "the fixture: fix/gone is held only by a prunable record" "git does not list it so, so the case below proves nothing" ;;
+esac
+allowed "let through, a name held only by a worktree whose folder is gone: git push origin HEAD:fix/gone (from wt-a)" "git push origin HEAD:fix/gone" "$W/wt-a"
+
 echo "push to another worktree's branch name: a worktree list that cannot be read (claude-config#3338)"
 
 # A git that answers everything but `worktree list`, as a repository whose worktree records git

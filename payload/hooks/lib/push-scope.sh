@@ -2779,9 +2779,13 @@ ps__push_dests() {   # $1 = the repository directory
       list="$(git -C "$dir" worktree list --porcelain 2>/dev/null)" || { PS__SOURCE="unlisted $dst"; return 0; }
       listed=1
     fi
-    holder="$(printf '%s\n' "$list" | awk -v b="refs/heads/$short" '
-      /^worktree / { w = substr($0, 10) }
-      $1 == "branch" && $2 == b && !found { print w; found = 1 }')"
+    # A record git marks prunable is a worktree whose folder is gone: nobody works there, and the
+    # push the refusal would name cannot be run from it, so it holds nothing here.
+    holder="$(printf '%s\n\n' "$list" | awk -v b="refs/heads/$short" '
+      /^worktree / { w = substr($0, 10); has = 0; gone = 0 }
+      $1 == "branch" && $2 == b { has = 1 }
+      $1 == "prunable" { gone = 1 }
+      /^$/ { if (has && !gone && !found) { print w; found = 1 }; has = 0; gone = 0 }')"
     [ -n "$holder" ] || continue
     # What is sent. A name this command makes where HEAD is before the push (git branch new, git
     # checkout -b new) does not resolve yet and holds what HEAD holds, as ps_unread_push_source
