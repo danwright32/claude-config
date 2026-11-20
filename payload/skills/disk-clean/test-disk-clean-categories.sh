@@ -978,6 +978,10 @@ mkdir -p "$H/.claude/state/session-notes/p/s" "$H/.claude/state/ai-review" "$H/.
 printf 'n\n' > "$H/.claude/state/session-notes/p/s/handoff.md"; printf 'a\n' > "$H/.claude/state/ai-review/x"
 printf 'v\n' > "$H/.claude/file-history/$U5/abc@v1"; printf '{}\n' > "$H/.claude-issue-spool/aaa.jsonl"
 printf '{}\n' > "$H/.claude-issue-spool.backup-20260829-161937/aaa.jsonl"; printf 'x\n' > "$H/.claude-payload-write-gate/toolu_1.list"
+# Three the kind names no row for, as on the work MacBook on 2026-11-19 (~/.claude-review-cases and
+# ten small ones, #3235): a hook's folder, the sync's log and Claude Code's own settings file.
+mkdir -p "$H/.claude-verification"; printf 'v\n' > "$H/.claude-verification/x"
+printf 'l\n' > "$H/.claude-sync.log"; printf '{}\n' > "$H/.claude.json"
 old "$H"
 dc_stub du 'for a in "$@"; do case "$a" in -*) ;; */session-notes) printf "500\t%s\n" "$a" ;; *) printf "12\t%s\n" "$a" ;; esac; done'
 run_scan --only claude-records
@@ -996,6 +1000,16 @@ for d in .claude-area-check .claude-quiz-verdicts .claude-allow-rule-backups .cl
 done
 check "claude records: nothing in the kind is offerable" "$(eq "$(dcr_review_items "$REC" | awk -F "$S" '$2 == "claude-records" && $5 == "offerable"' | wc -l | tr -d ' ')" 0)"
 check "claude records: each is sized" "$(eq "$(field "$(item_of "$H/.claude-issue-spool")" 8)" measured)"
+# The count is exact, so one of the eight home folder rows above counted again in the note would fail it.
+check "claude records: the other home entries named for Claude are counted and sized in the note" \
+  "$(has "$(note_of claude-records)" "3 other files and folders in the home folder named for Claude Code or this config hold 37 KB")"
+check "claude records: and they are not listed row by row" "$(eq "$(item_of "$H/.claude-verification")$(item_of "$H/.claude.json")$(item_of "$H/.claude-sync.log")" "")"
+judge claude-records "$H/.claude-verification"
+check "claude records judge: such an entry is not offerable, as a record a program reads" "$(has "$JUDGED" "not offerable: a file or folder that Claude Code, the sync or this config's hooks read")"
+judge claude-records "$H/.claude-verification/x"
+check "claude records judge: what is inside one is not one of its records" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
+judge claude-records "$H/.claude"
+check "claude records judge: ~/.claude itself is not one of its records" "$(has "$JUDGED" "not offerable: it is not one of the records this kind shows")"
 judge claude-records "$H/.claude-issue-spool"
 check "claude records judge: the spool is not offerable" "$(has "$JUDGED" "not offerable: ")"
 judge claude-records "$H/.claude/state/session-notes"
@@ -1039,6 +1053,7 @@ notes_listed "$NT/photos" "$NT/my sources" "$NT/trashed-yesterday" "$NT/linked" 
 run_scan --only claude-records
 check "notes folders: the scan exits 0" "$(eq "$RC" 0)"
 check "notes folders: with a list a day run wrote today, the kind is measured" "$(eq "$(status_of claude-records)" measured)"
+check "claude records: with no other home entry named for Claude, the note does not mention any" "$(hasnt "$(note_of claude-records)" "in the home folder named for")"
 check "notes folders: exactly the two listed folders of the shape are rows, each offered to the Trash" \
   "$(eq "$(notes_rows | tr '\n' ';')" "$NT/my sources|trash|offerable;$NT/photos|trash|offerable;")"
 check "notes folders: a bulky folder the list does not name is no row" "$(eq "$(item_of "$NT/fixtures")" "")"
