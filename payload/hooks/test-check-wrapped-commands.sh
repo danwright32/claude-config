@@ -447,6 +447,21 @@ allowed "a script by path naming none of the three" "./build.sh --fast"
 allowed "#2235 a program after a redirection whose target holds a slash" "2>/dev/null log show --last 5m && git status"
 allowed "#2235 control: with the target the next word, passed before as now" "> /dev/null ls -la && gh pr view 7"
 refused_file "#2235 a script after a redirection" "2>/dev/null ./build.sh && git push" "./build.sh"
+# A redirection glued to a word, and a function's body (claude-config#3252). A shell whose name had
+# a redirection glued on with no slash in it (`bash>log`) was a program of that name, so a string
+# nobody can read passed here beside git; and the first command of a function's body, or a body
+# written as a subshell, was never read as the wrapper or script it is.
+refused "#3252 a shell with a redirection glued to its name, running a variable" 'bash>log -c "$CMD" && git status' "bash -c"
+refused "#3252 a shell behind a redirection glued to a runner" 'env>log bash -c "$CMD" && git status' "bash -c"
+refused "#3252 the first command of a function's body" 'f() { bash -c "$CMD"; }; f; git status' "bash -c"
+refused_file "#3252 a script run in a function body written as a subshell" "f() ( ./build.sh ); f && git push" "./build.sh"
+refused_file "#3252 a script with a redirection glued on is named by its own path" "./build.sh>log && git push" "./build.sh"
+# Refused before this change and still refused, word for word: a program whose glued redirection
+# holds a slash read as a script file of that whole name. The reading is wrong, since the shell runs
+# the program, but dropping a refusal is Dan's decision and not this change's, so it is kept until
+# he makes it (the pull request for #3252 puts the choice to him).
+refused_file "#3252 kept: a program with a redirection holding a slash glued on is refused as before" "git>/dev/null status && git push" "git>/dev/null"
+refused_file "#3252 kept: and a shell so written, though its string is now read" "bash>/dev/null -c 'git status' && git push" "bash>/dev/null"
 allowed "paths as arguments" "git add ./build.sh scripts/x.sh && git -C /srv/x/repo status"
 allowed "a path echoed" "echo ./build.sh && git status"
 allowed "a path in a pipe's argument" "cat ~/x.txt | grep git"

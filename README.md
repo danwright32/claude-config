@@ -4478,7 +4478,8 @@ double quoted `-c` or `eval` string holding a `$` or a backquote behind a backsl
 again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
 shell fills in replaced by the value the gate works out for it; where it works none out, the typed
 string is read with that part as a word of unknown value and a script on disk is left as before
-(this repository's `test-pr-review.sh` sources two files by `'$DIR/lib/...'` in such a string).
+(this repository's `test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string,
+until #3252 wrote those paths in double quotes).
 Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
@@ -4491,6 +4492,19 @@ alone. The wrapper sends a call to the rule when a command's first word holds a 
 a quote or a backslash, which named no shell or script as written. Left open, each recorded for an
 issue of its own: `turbo`, `nx` and `lerna`, and a loop over the words of a file (`for w in $(cat
 f); do $w; done`). Suite: `test-slack-drafts-unread-shapes.sh`.
+
+Since claude-config#3252 the shared reader passes a function's header over, so the first command of
+a body written on the header's own line (`busy(){ bash -c ". '$DIR/lib.sh' && f"; }`) is read, and
+with it the commands of a string it hands a shell. Read as written, that string sources a file named
+`$DIR/lib.sh` from a folder nobody knows, which is refused as a path that cannot be worked out. In a
+script on disk such a string is read as the inner shell gets it instead (`headed_filled`, by the
+steps of the reading above): every variable and substitution the outer shell fills in is replaced
+by the value the gate works out for it, so the file is the one in the script's folder, and one that
+posts is refused as posting. That reading stands in for the string's commands as written only where
+every value is worked out and the text it gives can be followed, and only for a command whose string
+no reading was given before #3252 (the reader's `headed_string`); the command itself is then judged
+as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
+command, a body over several lines, the same string at a script's top level, and anything typed.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
@@ -8474,7 +8488,12 @@ needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot s
 passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
-not run. A failed, cancelled or timed out run is listed. The check runs once a night, when sleep
+not run. A failed, cancelled or timed out run is listed. An issue filed overnight is read whole,
+with its repository's open issues read once, and one with a milestone, a priority level, a
+category label and an Open questions section (the issue field gate's own rules), in a repository
+the night's notes name, and with no other open issue of the same title, is noted `filed` and said
+in one line under Done, never put to Dan (#3273); one missing any of those, or whose reads failed,
+is still listed with why. The check runs once a night, when sleep
 mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
 limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
 parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
@@ -9529,7 +9548,13 @@ never sent again unchanged and run, and after which its session did not finish t
 ended, was noted done afterwards; a session holding no claim finished its work when it later noted
 something done or a step of progress. A real refusal by the check is always
 its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
-are (#3223).
+are (#3223). How an issue ended is read from one record, its session's done note (#3276): an end
+the overnight driver wrote (its park after 2 hours, a limit the code sets, not measured; its
+attempts limit; its circuit breaker) is not
+listed when the session that held the issue noted it done, before that end or after it, since the
+driver times a claim, not the work, and a claim left held after its done note keeps counting. Under
+Done one sentence says how many finished issues took longer than the 2 hours, measured from claim
+to done note.
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,

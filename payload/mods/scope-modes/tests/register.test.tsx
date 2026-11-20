@@ -6203,6 +6203,11 @@ const permission = async ($: $T, tool_name: string, tool_input: Record<string, u
   (await $.classic.PermissionRequest({ tool_name, tool_input } as never)) as Decided
 const PUSH = { command: 'git push -u origin sleep-834' }
 const worker = { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } }
+// #3273: o/r#9 as GitHub holds it, with every required field, and o/r's open issues, where it has no twin.
+const FILED_9 = {
+  'gh api repos/o/r/issues/9': JSON.stringify({ labels: [{ name: 'priority-p2' }, { name: 'bug' }], milestone: { title: 'Ungrouped' }, body: '## Open questions\n\n- None.\n' }),
+  'gh issue list -R o/r --state open --limit 1000 --json number,title': JSON.stringify([{ number: 9, title: 'Filed overnight' }]),
+}
 
 test('asleep, a worker session has its permission prompts approved by themselves', withDeps, async ($, on) => {
   const { clock } = world(on, worker)
@@ -6390,19 +6395,39 @@ test('/wake puts what the overnight check found first, in the reply and the note
     ...worker,
     night: {
       'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      ...FILED_9,
       [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: { fails: 'ENOENT' },
     },
   })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
+  // Filed in a repository no note names, so it still needs a look (#3273).
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight" \(in a repository no session worked tonight\)\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
   const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
   // Written before the night's end note, so the final render puts them at the top of the report.
   expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'checked', 'woke'])
   // What it read and left out as healthy is said every time it runs (#2766).
   expect(notes[2]?.text).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
   expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
-  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
+  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight" (in a repository no session worked tonight)')
+})
+
+// #3273: an issue the night's own session filed with every field, in the repository it worked, is
+// written as a filed note for the report's one line under Done, never as a row put to Dan.
+test('/wake writes an issue filed overnight that needs nothing as filed, not as something to look at (#3273)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: '{"v":1,"kind":"claim","repo":"o/r","issue":7,"by":"s1"}\n' },
+    night: {
+      'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      ...FILED_9,
+    },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).not.toMatch(/Issue created overnight/)
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string; repo?: string; issue?: number })
+  expect(notes.filter(n => n.kind === 'outward')).toEqual([])
+  expect(notes.filter(n => n.kind === 'filed')).toEqual([expect.objectContaining({ kind: 'filed', repo: 'o/r', issue: 9, text: 'Filed overnight', by: 's1' })])
 })
 
 test('the wake check times its 30 s GitHub budget on the engine clock, so a slow night stops on it (#1147, L524)', withDeps, async ($, on) => {

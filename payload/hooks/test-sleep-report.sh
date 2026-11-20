@@ -1004,14 +1004,97 @@ check_eq "the section is the outage, the two that stopped work, the single refus
 check_eq "the morning picker gets the same rows (#3223)" "$pf" \
   "$(needs_rows "$SLEEPDIR/notes/g34.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
 
+# ---- a park on the clock does not outlast a done note (#3276) ----
+# On the night of 2026-11-18 one session held up to five claims at once and noted each finished
+# issue with sleep_note done, never ending its claim, so the overnight driver's watchdog parked
+# seven finished, merged issues for passing their 2 hours (the clock ran on after each done note)
+# and the morning put each to Dan as a picker. How an issue ended is decided from its notes as one
+# record: a done note by the session that held it stands over the driver's own end, before it or
+# after it; a park with no done stands, with its minutes; and how many finished issues took longer
+# than their 2 hours, claim to done, is said in one line. Shaped as that night's notes were.
+G=g35
+WHY(){ printf ',"text":"%s minutes of active work on it, past the 2 hours an issue gets","driver":true' "$1"; }
+record g35 '["aaaa1111","bbbb2222"]' "$SLEEPDIR/ended/g35.json"
+{
+  work claim aaaa1111 0 31 ',"attempts":1'
+  work claim aaaa1111 30 32 ',"attempts":1'
+  work claim aaaa1111 40 33 ',"attempts":1'
+  work claim aaaa1111 50 34 ',"attempts":1'
+  work claim aaaa1111 60 36 ',"attempts":1'
+  work done aaaa1111 98 32 ',"pr":62,"text":"merged inside its time"'
+  work done aaaa1111 179 31 ',"pr":61,"text":"merged after its time ran out"'
+  work done bbbb2222 200 36 ',"pr":66,"text":"finished by another session"'
+  work parked aaaa1111 230 34 "$(WHY 180)"
+  work parked aaaa1111 231 33 "$(WHY 191)"
+  work parked aaaa1111 232 36 "$(WHY 172)"
+  work parked aaaa1111 250 32 "$(WHY 220)"
+  work parked aaaa1111 269 31 "$(WHY 269)"
+  work done aaaa1111 340 33 ',"pr":63,"text":"merged after the watchdog parked it"'
+} > "$SLEEPDIR/notes/g35.jsonl"
+NOW=$(fold_at 400) py render --record "$SLEEPDIR/ended/g35.json" >/dev/null 2>&1
+r="$(report_of g35)"
+pf="$(section_rows "$r" 'Parked and failed')"
+lacks "an issue noted done before the watchdog parked it is not parked (#3276)" "o/r#31" "$pf"
+lacks "nor one finished well inside its time whose claim was never ended (#3276)" "o/r#32" "$pf"
+lacks "nor one noted done after the watchdog parked it, with no replaces (#3276)" "o/r#33" "$pf"
+has "an issue that ran past its time and was not finished is still parked, with its minutes (#3276)" \
+  "Parked o/r#34: 180 minutes of active work on it, past the 2 hours an issue gets" "$pf"
+has "a done by another session is no record of this claim's end, so its park stands (#3276)" \
+  "Parked o/r#36: 172 minutes of active work on it, past the 2 hours an issue gets" "$pf"
+check_eq "the section is those two parks and nothing else (#3276)" 2 "$(printf '%s\n' "$pf" | grep -c .)"
+check_eq "the morning picker gets the same two rows and no finished issue (#3276)" "$pf" \
+  "$(needs_rows "$SLEEPDIR/notes/g35.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
+has "how many finished issues took longer than their time is said in one line, by claim to done (#3276)" \
+  "2 issues took longer than the 2 hours an issue gets, from claim to done, and were still finished: o/r#31 and #33." "$r"
+lacks "and none of it is put to Dan as a row (#3276)" "took longer than" "$(needs_rows "$SLEEPDIR/notes/g35.needs.json")"
+# The report's 2 hours are the driver's own (driver.ts LIMITS.stuckMs, a limit the code sets, not
+# measured), so the two cannot drift apart.
+check_eq "the driver's limit is read (#3276)" 2 "$(sed -n 's/^ *stuckMs: \([0-9]*\) \* 60 \* MIN,.*/\1/p' "$DIR/../mods/scope-modes/hooks/driver.ts")"
+check_eq "the report's limit is the driver's (#3276)" \
+  "$(sed -n 's/^ *stuckMs: \([0-9]*\) \* 60 \* MIN,.*/\1/p' "$DIR/../mods/scope-modes/hooks/driver.ts")" \
+  "$(sed -n 's/^STUCK_HOURS = \([0-9]*\).*/\1/p' "$PY")"
+
+# ---- issues filed overnight are said once, under Done, never put to Dan (#3273) ----
+# On 2026-11-19 the morning put #3270, filed overnight with every required field, to Dan as a picker,
+# and he did not want to check every issue filed overnight. The wake check now writes such an issue
+# as a `filed` note, which the report says in one line under Done, with the numbers; one that needs
+# him (a field missing, a repository not worked, a twin, a read not made) is still an outward row.
+G=g36
+record g36 '["aaaa1111"]' "$SLEEPDIR/ended/g36.json"
+{
+  work claim aaaa1111 0 31 ',"attempts":1'
+  work done aaaa1111 30 31 ',"pr":61,"text":"merged"'
+  printf '{"v":1,"kind":"filed","at":%s,"by":"aaaa1111","repo":"o/r","issue":70,"text":"Time the new suite","generation":"g36"}\n' "$(fold_at 40)"
+  printf '{"v":1,"kind":"filed","at":%s,"by":"aaaa1111","repo":"o/r","issue":71,"text":"Another follow up","generation":"g36"}\n' "$(fold_at 40)"
+  printf '{"v":1,"kind":"outward","at":%s,"by":"aaaa1111","text":"Issue created overnight: o/q#5 \\"Elsewhere\\" (in a repository no session worked tonight)","generation":"g36"}\n' "$(fold_at 40)"
+} > "$SLEEPDIR/notes/g36.jsonl"
+NOW=$(fold_at 60) py render --record "$SLEEPDIR/ended/g36.json" >/dev/null 2>&1
+r="$(report_of g36)"
+has "the issues filed overnight are one line under Done, with their numbers (#3273)" \
+  "2 issues were filed overnight: o/r#70 and #71." "$(printf '%s\n' "$r" | sed -n '/^## Done$/,/^## /p')"
+look="$(section_rows "$r" 'Needs a look')"
+lacks "and none of them is a Needs a look row (#3273)" "o/r#70" "$look"
+has "one that needs Dan is still a row (#3273)" "Done overnight, check it: Issue created overnight: o/q#5 \"Elsewhere\" (in a repository no session worked tonight)" "$look"
+lacks "nor reaches the morning pickers (#3273)" "o/r#70" "$(needs_rows "$SLEEPDIR/notes/g36.needs.json")"
+lacks "a filed note is a kind the report knows, never Other notes (#3273)" "## Other notes" "$r"
+# The wake check judges a filed issue by the issue field gate's own rules, so the two cannot drift.
+WC="$DIR/../mods/scope-modes/hooks/wakecheck.ts"; GATE="$DIR/issue_field_gate.py"
+# Each read is pinned first, so two reads that both found nothing cannot pass as agreeing.
+check_eq "the gate's priority level is read (#3273)" '^priority-p[0-4]$' "$(sed -n 's/^LEVEL = re.compile(r"\(.*\)", re.IGNORECASE)$/\1/p' "$GATE")"
+check_eq "the gate's Open questions heading is read (#3273)" '^[ \t]*#{1,6}[ \t]*Open questions[ \t]*\r?$' "$(sed -n 's/^HEADING_LINE = re.compile(r"(?im)\(.*\)")$/\1/p' "$GATE")"
+check_eq "the wake check's priority level is the gate's (#3273)" \
+  "$(sed -n 's/^LEVEL = re.compile(r"\(.*\)", re.IGNORECASE)$/\1/p' "$GATE")" "$(sed -n 's|^const LEVEL = /\(.*\)/i$|\1|p' "$WC")"
+check_eq "the wake check's Open questions heading is the gate's (#3273)" \
+  "$(sed -n 's/^HEADING_LINE = re.compile(r"(?im)\(.*\)")$/\1/p' "$GATE")" "$(sed -n 's|^const OPEN_QUESTIONS = /\(.*\)/im$|\1|p' "$WC")"
+
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 17 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 19 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g35.md|Sleep report g36.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
