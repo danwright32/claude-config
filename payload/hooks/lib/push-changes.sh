@@ -289,8 +289,22 @@ try:
     txt = (env.get("result") or "").strip()
     txt = re.sub(r"^```[a-zA-Z]*", "", txt).strip()
     txt = re.sub(r"```$", "", txt).strip()
-    m = re.search(r"\{.*\}", txt, re.S)
-    obj = json.loads(m.group(0)) if m else None
+    # Every JSON object the reply holds, each read from a brace to where that object ends, never
+    # the span from the first brace in the reply to the last (claude-config#3327): prose before the
+    # answer that quotes code, busy(){ ...; } in the replies of 2026-11-19 and 2026-11-20, made that
+    # span unreadable, and a readable answer counted as none. A brace that starts no object is
+    # passed over, and an object inside another is part of it. Two DIFFERENT objects (the judge
+    # answering, then correcting itself) are not read as either.
+    dec, found, i = json.JSONDecoder(), [], txt.find("{")
+    while i != -1:
+        try:
+            got, end = dec.raw_decode(txt, i)
+        except ValueError:
+            i = txt.find("{", i + 1); continue
+        if isinstance(got, dict):
+            found.append(got)
+        i = txt.find("{", end)
+    obj = found[-1] if found and all(o == found[-1] for o in found) else None
     if not isinstance(obj, dict):
         print("ERR_VERDICT"); print(meta); sys.exit(0)
     print("OK"); print(meta); print(json.dumps(obj, separators=(",", ":")))
