@@ -1079,6 +1079,36 @@ const insertedEntry = (file: string, content: string): string | undefined => {
   return undefined
 }
 
+// A blank line as the lessons file's own reader takes one (claude-sync lesson_entries_render, awk's
+// [[:space:]]): nothing, or spaces, tabs and the other ASCII white space alone.
+const INDEX_BLANK = /^[ \t\v\f\r]*$/
+
+/**
+ * Whether an entry's lines, those above its check line, set the whole rule in bold and nothing
+ * else: "- **", then `numbered` (the number and the rule, "L753. <rule>"), then "**" at once, and no
+ * bold mark after that. `lines` hold no blank line.
+ *
+ * This is the one shape of an entry with no SHORT line that the mod takes (independent review of
+ * #3320), chosen so the index line is not in doubt and no second copy of the generator's reading is
+ * kept here. The generator (claude-sync lesson_entries_render) renders what stands between the
+ * entry's opening "- **" and the first "**" after it, its lines joined and each run of white space
+ * folded to one space. In this shape that text is the rule whichever way it is read: the first
+ * closing mark is the only one, and it stands right after the rule's last character. A bold closed
+ * early, opened late, opened twice or closed over the provenance is another shape and is refused,
+ * whatever the generator would make of it. White space is folded as awk folds it, the ASCII kinds
+ * only, so a space of another kind in the span is no match for the space in the rule.
+ */
+export const wholeRuleInBold = (lines: readonly string[], numbered: string): boolean => {
+  const marked = lines
+    .map(l => l.replace(/^[ \t\v\f\r]+/, ''))
+    .join(' ')
+    .replace(/[ \t\v\f\r]+/g, ' ')
+  const open = '- **'
+  if (!marked.startsWith(open)) return false
+  const close = marked.indexOf('**', open.length)
+  return close !== -1 && marked.slice(open.length, close) === numbered && marked.indexOf('**', close + 2) === -1
+}
+
 /**
  * Whether the added text is exactly that one lesson (lessons review of #869: anything else written
  * beside the rule reached every session unseen by Dan): one new entry, `- **L<n>.` then the rule as
@@ -1117,10 +1147,22 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * added after an approval that showed none is asked about. And where he read one, an entry
  * without it is not the entry he read. Whether a lesson needs one is settled before he is asked:
  * the picker refuses a rule too long for the index line that brings no SHORT line (register.ts).
+ *
+ * With no SHORT line the index renders the entry's BOLD SPAN as the lesson's line, and nothing held
+ * that span to the rule (independent review of #3320): under an approval for "Never ask Dan before
+ * any save that he has already refused in this session, ..." an entry went through whose bold closed
+ * after "Never ask Dan before any save", and that was the line every session loaded. Such an entry
+ * is now taken only in one shape (wholeRuleInBold): the whole rule in bold, and nothing else.
+ * Where he read a SHORT line the index renders that line, and where the bold closes is the file's
+ * layout, as it was. tests/test-lesson-index-line-shown.sh runs the real generator over the entries
+ * this function approves and holds what it renders to the text he was shown.
  */
 export const addsLesson = (added: string, rule: string, check?: unknown, short?: unknown): boolean => {
   if (unseenIn(added) !== undefined || unseenIn(rule) !== undefined) return false
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
+  // No line of the entry is blank, a line of spaces included: the index stops reading a wrapped
+  // rule at one, so the lines after it would be in the entry and out of the line it renders.
+  if (lines.some(l => INDEX_BLANK.test(l))) return false
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
   const approved = checkLine(check)
@@ -1139,6 +1181,7 @@ export const addsLesson = (added: string, rule: string, check?: unknown, short?:
   const provenance = String.raw`(?: \(${ref}(?:, ${ref})*(?:, \d{4}-\d{2}-\d{2})?\))?`
   const m = new RegExp(`^- L(\\d+)\\. ${escapeRe(ruleText(rule))}${provenance}$`).exec(body)
   if (!m) return false
+  if (shortAt === -1 && !wholeRuleInBold(lines.slice(0, checked ? end - 1 : end), `L${m[1]}. ${ruleText(rule)}`)) return false
   // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869), or, with no
   // SHORT line, `- L<n>. <rule>`: an entry the index cannot hold is refused by the send, which holds
   // the whole lessons file back (sixth lessons review of #869).

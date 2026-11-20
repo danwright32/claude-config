@@ -6,6 +6,7 @@ import { LESSON_SHORT_KEY, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
+import { INDEX_LINE_CASES } from './index-lines.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
@@ -1549,4 +1550,24 @@ test('the tallest real lesson fits the picker with its SHORT line shown, beside 
   expect(question.length).toBeLessThan(MAX_QUESTION)
   expect(shownFault(question)).toBeUndefined()
   expect(askFault({ questions: [{ question, header: 'Lesson', options: [], multiSelect: false }] })).toBeUndefined()
+})
+
+// The independent review of #3320. With no SHORT line the index renders an entry's BOLD SPAN, and
+// nothing held that span to the rule Dan read: under an approval for one sentence an entry went
+// through whose bold closed after five words, and those five words were the lesson every session
+// loaded. An entry approved with no SHORT line is now taken only with the whole rule in bold, from
+// its number to its last word, and nothing else in bold: a shape the index reads one way. The list
+// is shared with tests/test-lesson-index-line-shown.sh at the repository root, which runs the real
+// generator over each entry and holds what it renders to the same `line` (L58).
+test('an approved entry is one whose index line is the text Dan was shown: his SHORT line, or the whole rule in bold where he was shown none (#3320 review)', () => {
+  expect(INDEX_LINE_CASES.length).toBeGreaterThan(7)
+  for (const c of INDEX_LINE_CASES) {
+    expect(`${c.name}: ${addsLesson(c.entry, c.rule, c.check || undefined, c.short || undefined)}`).toBe(`${c.name}: ${c.approved}`)
+    // What he was shown, as the index would carry it under this entry's number.
+    const shown = `- L753. ${c.short ? c.short.replace(/^SHORT: /, '') : ruleText(c.rule)}`
+    expect(`${c.name}: ${c.line === shown}`).toBe(`${c.name}: ${c.approved}`)
+  }
+  // Neither half is the list holding one kind only.
+  expect(INDEX_LINE_CASES.filter(c => c.approved).length).toBeGreaterThan(2)
+  expect(INDEX_LINE_CASES.filter(c => !c.approved).length).toBeGreaterThan(2)
 })

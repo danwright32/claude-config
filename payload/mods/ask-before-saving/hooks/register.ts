@@ -943,7 +943,7 @@ export const register: Register = on => {
       const shortened =
         short !== undefined
           ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
-          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
+          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which renders what is in bold, so set the whole rule in bold and nothing else, "- **L<number>. <the rule>**" with the bold closed after the rule's last word and before the provenance, which with its "- L<number>. " is at most ${MAX_SHORT} characters`
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
           `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
