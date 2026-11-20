@@ -30,6 +30,18 @@ THE NOTES RULE, as a reader can check it against a folder:
   a task folder (handoff.md, evidence.md, tests.txt, pr-body.md, logs, corpora), every folder under
   1 MB, and every link, which is never followed and never removed.
 
+WHAT IT LISTS AND NEVER REMOVES, for /disk-clean to offer with a tick (Dan, 2026-11-19, each from a
+picker recorded on #3235). Each is a file in state/keep-rules written by `remove`, in the shape of
+readable-folders.tsv below, because a disk-clean script may not run python:
+  - open-leftovers.tsv ("Offer after 7 idle days"): in a session the registry shows OPEN, every
+    folder the rule above would remove from a task folder had the session ended. One definition of
+    bulky, this file's (judge_folder). A task folder that is, or holds, the working folder an open
+    session's registry record names is left out whole. Whether the task folder has been idle for 7
+    days is /disk-clean's to read, on the day it is asked.
+  - kept-checkouts.tsv ("Offer when git says safe"): in a session that has ENDED, every task folder,
+    and every folder in one, that the rule above keeps because it is a git checkout. Whether git
+    says it is safe to go is /disk-clean's to ask.
+
 THE TRANSCRIPTS RULE, under ~/.claude/projects/<project>/:
   Removed once last written more than TRANSCRIPT_DAYS (7) days ago:
     - a subagent transcript, <project>/<session>/subagents/**/agent-*.jsonl, and its agent-*.meta.json,
@@ -49,7 +61,8 @@ Modes, so the one that removes cannot be mistaken for the one that looks (L206):
                                                writes the same list of folders readable-folders
                                                prints to state/keep-rules/readable-folders.tsv,
                                                which /disk-clean reads in place of running this
-                                               (Dan, 2026-11-19: "Daily file, no list change").
+                                               (Dan, 2026-11-19: "Daily file, no list change"),
+                                               and the two lists above beside it.
 
 Time is handed in with --now (seconds since the epoch), so a test sets the clock rather than
 waiting for it. CLAUDE_HOME names the config folder (default ~/.claude).
@@ -89,9 +102,14 @@ BULKY_BYTES = 1024 * 1024
 READABLE_KEEP = "mostly images or documents, which somebody may have looked at or read"
 # The list of those folders `remove` writes each day in state/keep-rules, which /disk-clean reads
 # (skills/disk-clean/categories/claude-records.sh). A change to its shape is a new version number.
-READABLE_LIST = "readable-folders.tsv"
 READABLE_HEADER = "readable-folders"
 READABLE_VERSION = 1
+# Why a git checkout is kept. kept-checkouts.tsv lists exactly what an ended session keeps for it.
+GIT_KEEP = "is a git checkout, which may hold work that exists nowhere else"
+# The two lists of what this job never removes and /disk-clean may offer with a tick (the docstring).
+# Each has the shape of the list above under a header of its own, and is the file <header>.tsv.
+OPEN_HEADER = "open-leftovers"
+CHECKOUT_HEADER = "kept-checkouts"
 LOG_ROTATE_BYTES = 5 * 1024 * 1024
 MARK = ".keep-rules-removing."
 SESSION_DIR = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -169,6 +187,8 @@ class Plan:
         self.keep = []     # (reason, path, bytes)
         self.failures = []
         self.notes_failures = []        # the failures that are the notes rule's own (notes_failed)
+        self.open_bulky = []            # (path, bytes): bulky leftovers in OPEN sessions, listed, never removed
+        self.open_unknown = None        # why those could not be listed, when an open session's record cannot be read
         self.kept_notes = [0, 0]        # files, bytes of written notes in ended sessions
         self.kept_transcripts = [0, 0]  # files, bytes of transcripts this rule left
 
@@ -193,6 +213,18 @@ def plan_notes(home, now, plan):
     if registry.missing:
         notes_failed(plan, "%s, so no session could be told to have ended and the notes rule removed nothing" % registry.missing)
         return
+    # The working folders the registry's open sessions name, for plan_open. A record that may be a
+    # live session's and cannot be read may name any folder, so then nothing in an open session is
+    # listed, and the list says why.
+    records, damaged = registry.open_records(None)
+    if damaged:
+        plan.open_unknown = "the session registry holds a record that may be an open session's and cannot be read (%s), so which folders open sessions are working in is not known" % damaged[0]
+    cwds = []
+    for r in records:
+        for key in ("cwd", "repoRoot"):
+            c = r.get(key)
+            if isinstance(c, str) and c.startswith(os.sep):
+                cwds.extend({c.rstrip(os.sep), os.path.realpath(c)})
     for project in entries(root):
         pp = os.path.join(root, project)
         pst = lst(pp)
@@ -205,10 +237,10 @@ def plan_notes(home, now, plan):
             if not is_dir(sst) or not SESSION_DIR.match(sess):
                 plan.keep.append(("not a session folder", sp, 0))
                 continue
-            plan_session(sp, sess, registry, now, plan)
+            plan_session(sp, sess, registry, now, plan, cwds)
 
 
-def plan_session(sp, sess, registry, now, plan):
+def plan_session(sp, sess, registry, now, plan, cwds=()):
     state, why = registry.session(sess)
     # Newest WRITE, read from files and links only: a folder's own time moves whenever something in
     # it is removed, so this job's own removals would otherwise make an ended session look written to.
@@ -226,6 +258,8 @@ def plan_session(sp, sess, registry, now, plan):
         return
     if state == "open":
         plan.keep.append(("live session: the session registry shows it open", sp, total))
+        if plan.open_unknown is None:
+            plan_open(sp, plan, cwds)
         return
     if state != "gone":
         plan.keep.append(("the session registry cannot say whether it ended (%s)" % why, sp, total))
@@ -256,10 +290,35 @@ def plan_loose(p, st, plan):
         plan.kept_notes[1] += size_of(st)
 
 
+def judge_folder(p, name):
+    """Whether a folder inside a task folder is a bulky leftover: (True, kind, bytes) when the notes
+    rule removes it once its session has ended, (False, why it is kept, bytes) when it stays. The one
+    definition of bulky, read by the rule that removes (plan_task) and by the list of what an open
+    session holds (plan_open), so the two cannot come to disagree (L261)."""
+    total = readable = 0
+    # Only a checkout AT the folder's top counts: test fixtures hold many small repositories
+    # of their own, and those are exactly the leftovers this rule is for.
+    git = lst(os.path.join(p, ".git")) is not None
+    for q, qst in walk(p):
+        if is_file(qst):
+            total += size_of(qst)
+            if q.lower().endswith(READABLE):
+                readable += size_of(qst)
+    if name.startswith(MARK):
+        return True, "notes: folder an earlier run began removing", total
+    if git:
+        return False, GIT_KEEP, total
+    if total < BULKY_BYTES:
+        return False, "folder under 1 MB, kept as written notes", total
+    if readable * 2 > total:
+        return False, READABLE_KEEP, total
+    return True, "notes: folder in a task folder", total
+
+
 def plan_task(tp, plan):
     if lst(os.path.join(tp, ".git")) is not None:
         # The task folder is itself a checkout: removing its folders would gut uncommitted work.
-        plan.keep.append(("is a git checkout, which may hold work that exists nowhere else", tp, 0))
+        plan.keep.append((GIT_KEEP, tp, 0))
         return
     for name in entries(tp):
         p = os.path.join(tp, name)
@@ -267,25 +326,34 @@ def plan_task(tp, plan):
         if not is_dir(st):
             plan_loose(p, st, plan)
             continue
-        total = readable = 0
-        # Only a checkout AT the folder's top counts: test fixtures hold many small repositories
-        # of their own, and those are exactly the leftovers this rule is for.
-        git = lst(os.path.join(p, ".git")) is not None
-        for q, qst in walk(p):
-            if is_file(qst):
-                total += size_of(qst)
-                if q.lower().endswith(READABLE):
-                    readable += size_of(qst)
-        if name.startswith(MARK):
-            plan.remove.append(("notes: folder an earlier run began removing", p, total, True))
-        elif git:
-            plan.keep.append(("is a git checkout, which may hold work that exists nowhere else", p, total))
-        elif total < BULKY_BYTES:
-            plan.keep.append(("folder under 1 MB, kept as written notes", p, total))
-        elif readable * 2 > total:
-            plan.keep.append((READABLE_KEEP, p, total))
+        bulky, what, total = judge_folder(p, name)
+        if bulky:
+            plan.remove.append((what, p, total, True))
         else:
-            plan.remove.append(("notes: folder in a task folder", p, total, True))
+            plan.keep.append((what, p, total))
+
+
+def plan_open(sp, plan, cwds):
+    """A session the registry shows OPEN: nothing in it is removed, and nothing here plans a removal.
+    It records, for open-leftovers.tsv, each folder judge_folder calls bulky in each of its task
+    folders (Dan, 2026-11-19, recorded on #3235: "Offer after 7 idle days"). A task folder that is
+    itself a git checkout is left out whole, as plan_task keeps it whole, and so is one that is, or
+    holds, a working folder an open session's registry record names: that is somebody's place of
+    work however long its files have sat."""
+    for task in entries(sp):
+        tp = os.path.join(sp, task)
+        if not is_dir(lst(tp)) or lst(os.path.join(tp, ".git")) is not None:
+            continue
+        real = os.path.realpath(tp)
+        if any(c == t or c.startswith(t + os.sep) for c in cwds for t in (tp, real)):
+            continue
+        for name in entries(tp):
+            p = os.path.join(tp, name)
+            if not is_dir(lst(p)):
+                continue
+            bulky, _, total = judge_folder(p, name)
+            if bulky:
+                plan.open_bulky.append((p, total))
 
 
 def plan_transcripts(home, now, plan):
@@ -378,19 +446,18 @@ def report(plan, home, now):
     return "\n".join(out) + "\n"
 
 
-def readable_lines(plan):
-    """The lines saying which folders the notes rule keeps only because they are mostly images or
-    documents, in a session that has ENDED by this file's own rule: `folder<TAB>bytes<TAB>path` each.
-    When the notes rule could not decide (the registry cannot be read), the one line
-    `unmeasured<TAB>why` instead, so a reader never takes an unread registry for no such folders.
-    Returns (lines, decided). A path a line cannot carry (a tab, a newline, or bytes that are not
-    UTF-8) is left out. The one reading of this, for the `readable-folders` mode and for the list
-    `remove` writes (L261)."""
-    if plan.notes_failures:
-        return ["unmeasured\t%s" % " ".join(plan.notes_failures).replace("\t", " ").replace("\n", " ")], False
+def folder_lines(plan, folders, undecided=None):
+    """The lines of one list for /disk-clean: `folder<TAB>bytes<TAB>path` for each of `folders`,
+    (path, bytes) pairs. When the notes rule could not decide (the registry cannot be read), or
+    `undecided` says why this one list could not be made, the one line `unmeasured<TAB>why` instead,
+    so a reader never takes an unread registry for no such folders. Returns (lines, decided). A path
+    a line cannot carry (a tab, a newline, or bytes that are not UTF-8) is left out."""
+    why = list(plan.notes_failures) + ([undecided] if undecided else [])
+    if why:
+        return ["unmeasured\t%s" % " ".join(why).replace("\t", " ").replace("\n", " ")], False
     lines = []
-    for r, p, b in plan.keep:
-        if r != READABLE_KEEP or "\t" in p or "\n" in p:
+    for p, b in folders:
+        if "\t" in p or "\n" in p:
             continue
         try:
             p.encode("utf-8")
@@ -398,6 +465,27 @@ def readable_lines(plan):
             continue
         lines.append("folder\t%d\t%s" % (b, p))
     return lines, True
+
+
+def kept_for(plan, reason):
+    return [(p, b) for r, p, b in plan.keep if r == reason]
+
+
+def readable_lines(plan):
+    """The folders the notes rule keeps only because they are mostly images or documents, in a
+    session that has ENDED by this file's own rule. The one reading of this, for the
+    `readable-folders` mode and for the list `remove` writes (L261)."""
+    return folder_lines(plan, kept_for(plan, READABLE_KEEP))
+
+
+def the_lists(plan):
+    """Every list `remove` writes for /disk-clean, as (header, lines): the folders of images and
+    documents, the bulky leftovers of open sessions, and the git checkouts ended sessions keep."""
+    return [
+        (READABLE_HEADER, readable_lines(plan)[0]),
+        (OPEN_HEADER, folder_lines(plan, plan.open_bulky, plan.open_unknown)[0]),
+        (CHECKOUT_HEADER, folder_lines(plan, kept_for(plan, GIT_KEEP))[0]),
+    ]
 
 
 def readable_folders(home, now):
@@ -411,21 +499,20 @@ def readable_folders(home, now):
     return 0 if decided else 3
 
 
-def write_readable_list(state, plan):
-    """Writes readable_lines to state/keep-rules/readable-folders.tsv for /disk-clean to read, since
-    a disk-clean script may not run python (Dan, 2026-11-19, recorded on #3235: "Daily file, no list
-    change"). The file is its header `readable-folders<TAB>1`, the lines, and `end<TAB>count of folder
-    lines`, so a reader can tell a whole list from a cut one. It is written beside its name and renamed
+def write_list(state, header, lines):
+    """Writes one list to state/keep-rules/<header>.tsv for /disk-clean to read, since a disk-clean
+    script may not run python (Dan, 2026-11-19, recorded on #3235: "Daily file, no list change"). The
+    file is its header `<header><TAB>1`, the lines, and `end<TAB>count of folder lines`, so a reader
+    can tell a whole list from a cut one. It is written beside its name and renamed
     into place, so a reader sees the old list or the new one, never half of either. How old the list
     is, is the file's own time, which the reader holds to two days. Returns why it could not be
     written, or None."""
-    path = os.path.join(state, READABLE_LIST)
+    path = os.path.join(state, header + ".tsv")
     tmp = "%s.writing.%d" % (path, os.getpid())
-    lines, _ = readable_lines(plan)
     count = sum(1 for line in lines if line.startswith("folder\t"))
     try:
         with open(tmp, "w", encoding="utf-8", errors="backslashreplace") as fh:
-            fh.write("\n".join(["%s\t%d" % (READABLE_HEADER, READABLE_VERSION)] + lines + ["end\t%d" % count]) + "\n")
+            fh.write("\n".join(["%s\t%d" % (header, READABLE_VERSION)] + lines + ["end\t%d" % count]) + "\n")
         os.replace(tmp, path)
     except OSError as e:
         try:
@@ -530,12 +617,14 @@ def do_remove(home, now):
     removed = []
     for f in plan.failures:
         log.line(stamp(now), "failed", "-", 0, "-", f)
-    # The list /disk-clean reads, from this same plan: the folders it names are ones this run keeps,
-    # so nothing below changes it. A list that cannot be written fails the run, and the removals go on.
-    unlisted = write_readable_list(state, plan)
-    if unlisted:
-        failures.append(unlisted)
-        log.line(stamp(now), "failed", "-", 0, "-", unlisted)
+    # The lists /disk-clean reads, from this same plan: the folders they name are ones this run
+    # keeps, so nothing below changes them. A list that cannot be written fails the run, and the
+    # removals go on.
+    for header, lines in the_lists(plan):
+        unlisted = write_list(state, header, lines)
+        if unlisted:
+            failures.append(unlisted)
+            log.line(stamp(now), "failed", "-", 0, "-", unlisted)
     for kind, p, b, isdir in plan.remove:
         if log.error:
             break

@@ -169,7 +169,7 @@ ok "log: a run line closes the run" "grep -q '	run	ok	' '$LOG'"
 # The list /disk-clean reads, written by the same run from the same plan (Dan, 2026-11-19, recorded
 # on #3235: "Daily file, no list change").
 LIST="$H/state/keep-rules/readable-folders.tsv"
-extras(){ ls -A "$H/state/keep-rules" | grep -v -x -e .lock -e removed.log -e removed.log.1 -e readable-folders.tsv; }
+extras(){ ls -A "$H/state/keep-rules" | grep -v -x -e .lock -e removed.log -e removed.log.1 -e readable-folders.tsv -e open-leftovers.tsv -e kept-checkouts.tsv; }
 ok "list: the remove run wrote it" "[ -f '$LIST' ]"
 ok "list: it starts with its header" '[ "$(head -1 "$LIST")" = "readable-folders	1" ]'
 ok "list: names the ended session's folder of images, with its size" "grep -qE '^folder	[1-9][0-9]*	$E/t1/photos\$' '$LIST'"
@@ -185,6 +185,50 @@ out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
 ok "second run: exits 0" "[ $rc -eq 0 ]"
 ok "second run: removes nothing" 'has "KEEP-RULES-SUMMARY	ok	0	0	-" "$out"'
 ok "second run: the list is written again whole, never added to" '[ "$(head -1 "$LIST")" = "readable-folders	1" ] && [ "$(tail -1 "$LIST")" = "end	2" ] && [ "$(wc -l < "$LIST" | tr -d " ")" = 4 ]'
+
+# ---- the two lists of what this job never removes and /disk-clean may offer (Dan, 2026-11-19, #3235) ----
+# open-leftovers.tsv ("Offer after 7 idle days"): in a session the registry shows open, the folders
+# the notes rule would remove had it ended, by the rule's own definition of bulky. kept-checkouts.tsv
+# ("Offer when git says safe"): what an ENDED session keeps because it is a git checkout.
+plant
+L="$NOTES/-p/$LIVE"
+big "$L/t1/repo/a.bin"; note "$L/t1/repo/.git/HEAD"
+note "$L/t1/small/n.md"
+big "$L/t1/photos/a.jpg"
+big "$L/t2/.git/objects/x"; big "$L/t2/build/a.bin"
+big "$L/t3/fixtures/a.bin"
+big "$L/t4/out/a.bin"; big "$L/t4/b.tar"
+age "$L" 40
+printf '{"v":1,"sessionId":"%s","lastSeen":%s,"closedAt":null,"cwd":"%s"}\n' "$LIVE" "$(( NOW * 1000 ))" "$L/t3/fixtures/work" > "$REG/$LIVE.json"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+OPENL="$H/state/keep-rules/open-leftovers.tsv"; CKL="$H/state/keep-rules/kept-checkouts.tsv"
+ok "open list: the run is clean" "[ $rc -eq 0 ]"
+ok "open list: nothing in the open session was removed, bulky or not" "[ -f '$L/t1/fixtures/a.bin' ] && [ -f '$L/t4/out/a.bin' ] && [ -f '$L/t4/b.tar' ] && [ -f '$L/t3/fixtures/a.bin' ]"
+ok "open list: it starts with its header" '[ "$(head -1 "$OPENL")" = "open-leftovers	1" ]'
+ok "open list: names the open session's bulky folders, with their sizes, and nothing else" '[ "$(grep "^folder" "$OPENL" | cut -f3 | tr "\n" ";")" = "$L/t1/fixtures;$L/t4/out;" ] && grep -qE "^folder	[1-9][0-9]*	" "$OPENL"'
+ok "open list: ends with the count of its folders" '[ "$(tail -1 "$OPENL")" = "end	2" ] && [ "$(wc -l < "$OPENL" | tr -d " ")" = 4 ]'
+ok "open list: a git checkout in a task folder is not bulky" "! grep -q '$L/t1/repo' '$OPENL'"
+ok "open list: nor a folder under 1 MB, nor one of mostly images" "! grep -q -e '$L/t1/small' -e '$L/t1/photos' '$OPENL'"
+ok "open list: a task folder that is itself a checkout is left out whole" "! grep -q '$L/t2' '$OPENL'"
+ok "open list: a task folder an open session's record names as where it works is left out whole" "! grep -q '$L/t3' '$OPENL'"
+ok "open list: a tar file is not a folder, so it is no line" "! grep -q 'b.tar' '$OPENL'"
+ok "open list: an ended session's folders are never in it" "! grep -q '$ENDED' '$OPENL'"
+ok "checkout list: it starts with its header" '[ "$(head -1 "$CKL")" = "kept-checkouts	1" ]'
+ok "checkout list: names the ended session's checkout in a task folder and its task folder that is one" '[ "$(grep "^folder" "$CKL" | cut -f3 | tr "\n" ";")" = "$E/t1/wt;$E/t2;" ]'
+ok "checkout list: ends with the count of its folders" '[ "$(tail -1 "$CKL")" = "end	2" ]'
+ok "checkout list: an open session's checkouts are never in it" "! grep -q '$LIVE' '$CKL'"
+ok "checkout list: the checkouts it names are still on disk" "[ -f '$E/t1/wt/payload.bin' ] && [ -f '$E/t2/src/big.sh' ]"
+ok "the lists: nothing else is left beside them" '[ -z "$(extras)" ]'
+# A record that may be an open session's and cannot be read could name any folder as its place of work.
+plant
+printf 'not json\n' > "$REG/66666666-6666-4666-8666-666666666666.json"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "open list, a fresh record that cannot be read: it says unmeasured and why, and names no folder" "grep -q '^unmeasured	.*cannot be read' '$OPENL' && ! grep -q '^folder	' '$OPENL' && [ \"\$(tail -1 '$OPENL')\" = 'end	0' ]"
+ok "open list, a fresh record that cannot be read: the checkout list is still written whole" '[ "$(tail -1 "$CKL")" = "end	2" ]'
+plant
+rm -rf "$REG"
+out="$(CLAUDE_HOME="$H" python3 -B "$JOB" remove --now "$NOW" 2>&1)"; rc=$?
+ok "no registry: both new lists say unmeasured and why" "grep -q '^unmeasured	.*session registry' '$OPENL' && grep -q '^unmeasured	.*session registry' '$CKL'"
 
 # ---- a run already in progress: the second waits for nobody and removes nothing ----
 plant

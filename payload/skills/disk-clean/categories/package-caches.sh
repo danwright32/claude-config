@@ -4,8 +4,9 @@
 # for the module calls.
 #
 # Shows, sized, the package managers' own stores, which sessions fill by installing and by running
-# npx. Dan's decision on 2026-11-18 ("Offer npx copies only (Recommended)", #3235): only npx copies
-# are offered; every other row says why it is kept, and the judge refuses it.
+# npx. Dan's decisions, recorded on #3235: npx copies are offered (2026-11-18, "Offer npx copies
+# only (Recommended)"), and so is one row that runs pnpm's own prune of its store (2026-11-19,
+# "Offer a prune row"); every other row says why it is kept, and the judge refuses it.
 #   ~/.npm/_cacache         npm's download cache. It refills, but it is shared with every build Dan
 #                           runs himself, so it is only partly Claude's: shown, never offered.
 #                           npm's own `npm cache clean --force` empties it.
@@ -18,7 +19,16 @@
 #   ~/Library/pnpm/store/<version>  pnpm's store. On APFS pnpm copies a package into a project as a
 #                           clone that shares disk blocks with the store, so removing the store can
 #                           free far less than its size; `pnpm store prune` removes only what no
-#                           project uses.
+#                           project uses. Shown, never offered.
+#   store prune             not a path: the one row that runs `pnpm store prune`, through
+#                           disk-remove.sh's pnpm method, as the Docker kind's build cache row runs
+#                           Docker's own prune. Listed when a store is there. Offered when pnpm is on
+#                           the PATH, pnpm itself says its store is a real folder directly inside
+#                           ~/Library/pnpm/store (asked from the home folder, so no project's
+#                           settings choose it; a store anywhere else is not this row's to prune),
+#                           no running process holds a file in that store, and nothing in it was
+#                           changed or opened in 30 days (the floor). It carries no size: what a
+#                           prune frees is not known until pnpm has run.
 # Measured on the personal MacBook on 2026-11-18: ~/.npm 4,541 MB (the cache 3,567 MB, npx copies
 # 974 MB), growing about 47 MB a week; the pnpm store 111 MB, last written 2026-09-16.
 set -uo pipefail
@@ -27,6 +37,9 @@ HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 
 N="$HOME/.npm"
 PS="$HOME/Library/pnpm/store"
+# The prune row's target, which disk-remove.sh's pnpm method takes and no other, and what its row says.
+PRUNE="store prune"
+PRUNE_DETAIL="runs pnpm's own pnpm store prune, which removes from pnpm's store what no project uses; how much that frees is not known until it runs"
 
 open_listing() {
   OPEN_WHY=""
@@ -34,10 +47,46 @@ open_listing() {
   dcs_open_files "$LISTING" || { OPEN_WHY="$DCS_WHY"; : > "$LISTING"; }
 }
 
-# Sets V for <target>; open_listing has run. Only an npx copy can be offerable.
+# Succeeds when ~/Library/pnpm/store holds at least one real folder, which is what a store there is.
+store_there() {
+  local e
+  for e in "$PS"/*; do
+    if [ -d "$e" ] && [ ! -L "$e" ]; then return 0; fi
+  done
+  return 1
+}
+
+# Sets V for the prune row; open_listing has run. In order: pnpm has to be there to run; a store has
+# to be there to prune; pnpm is asked where its store is, from the home folder, and it has to be a
+# real folder directly inside ~/Library/pnpm/store, the place disk-remove.sh's pnpm method holds it
+# to (L261); no process may hold a file in it, since an install running now is using it; and the 30
+# day floor, on the store pnpm named, which is the one a prune removes from.
+prune_rules() {
+  local store rc held
+  command -v pnpm >/dev/null 2>&1 || { V="not offerable: pnpm is not on the PATH, so its own prune cannot be run"; return; }
+  store_there || { V="not offerable: there is no pnpm store in ~/Library/pnpm/store"; return; }
+  store="$(CDPATH= cd "$HOME" 2>/dev/null && pnpm store path </dev/null 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { V="unmeasured: pnpm could not say where its store is (pnpm store path exit $rc)"; return; }
+  # A trailing slash would have the link test below follow a link rather than see it.
+  while :; do case "$store" in ?*/) store="${store%/}" ;; *) break ;; esac; done
+  case "$store" in
+    /*$'\n'*|[!/]*|'') V="unmeasured: pnpm did not name its store as one absolute path (it said: ${store%%$'\n'*})"; return ;;
+  esac
+  if [ ! -d "$store" ] || [ -L "$store" ] || ! dcs_parent_is "$store" "$(dcs_phys "$PS" 2>/dev/null)"; then
+    V="not offerable: pnpm says its store is $store, which is not a folder directly inside ~/Library/pnpm/store, the only store this prunes"; return
+  fi
+  if [ -n "${OPEN_WHY:-}" ]; then V="unmeasured: could not tell whether pnpm's store is in use ($OPEN_WHY)"; return; fi
+  held="$(dcs_holders "$store" "$LISTING")"
+  if [ -n "$held" ]; then V="not offerable: pnpm's store is in use by $held"; return; fi
+  V=offerable
+  dcs_floor "$store"
+}
+
+# Sets V for <target>; open_listing has run. Only an npx copy and the prune row can be offerable.
 pc_rules() { # <target>
   local t="${1%/}" held
   case "$t" in
+    "$PRUNE") prune_rules ;;
     "$N/_npx/"*/*) V="not offerable: it is not one of the caches this kind shows" ;;
     "$N/_npx/"?*)
       dcs_parent_is "$t" "$(dcs_phys "$N/_npx" 2>/dev/null)" || { V="not offerable: it is not one of the caches this kind shows"; return; }
@@ -70,6 +119,12 @@ do_scan() {
     pc_rules "$p"
     dcs_item "$p" delete "$kib" "$size" "$V" "" "" "$ident"
   done < "$DCS_WORK/pc.sized"
+  # The prune row, after the sized rows: it has no size of its own to be ordered by. Only where a
+  # store is there, so a Mac that never ran pnpm shows no row about it.
+  if store_there; then
+    pc_rules "$PRUNE"
+    dcs_item "$PRUNE" pnpm "" unread "$V" "" "$PRUNE_DETAIL" ""
+  fi
   # Said once here rather than on each of a couple of dozen npx rows (L605).
   grep -q "/_npx/" "$DCS_WORK/pc.paths" && dcs_note "Each npx copy is one package npx has run, made again the next time npx runs it."
   return 0
