@@ -6700,7 +6700,26 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's file, whose band it would otherwise overwrite. One with no transcript of its own either
   is told once that its size is not being watched, and so is a subagent with a good id whose own
   transcript cannot be found, once per agent (claude-config#2035).
-- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`.
+- **Where the tokens go** (claude-config#1940). `tools/transcript-shares.py` measures the three
+  costs #1940 measured: the share of subagent reads spent on code reading, the share of interactive
+  reads spent carrying agent reports, and the main sessions past a number of compactions. It
+  reads each item's size and kind, never prints its text, and is the method both posted
+  measurements used, so a re-measure on either Mac is comparable with them:
+
+      python3 tools/transcript-shares.py --project <part of a project folder name> \
+          --since 2026-11-02 --until 2026-11-16 --tz America/New_York --jobs 8
+
+  `--project` matches part of a folder name under `~/.claude/projects`, so it also matches that
+  repository's worktree folders and any folder it was in before a move; check which folders it
+  matched before comparing two runs. A part starting with a dash is written `--project=-...`.
+  It can be repeated, or left out to read every project. Its INPUT line says how many
+  files and requests it read. A file it cannot open, a folder it cannot list, and a file whose
+  read fails part way are each named on an UNREADABLE line; from the last, nothing is counted.
+  A line that is not JSON, is nested too deep to parse, or carries an id that is not a string is
+  counted on its file's MALFORMED line, and the rest of that file is read. Any of these puts
+  `complete=no` on END.
+- Tests: `hooks/test-context-size-notice.sh`, `tools/test-cache-usage.sh`,
+  `tools/test-transcript-shares.sh`.
 
 ## Mods
 
@@ -6954,7 +6973,11 @@ on any of the three first asks about a line it knows the answer for, since a cop
 loaded before #3093 answers with none of them and says nothing), of which files a command
 changes (`$.modkit.writes({ command, cwd, home })`: redirects, `tee`, the destination of `cp`, `mv`,
 `ln`, `install`, `rsync` and `ditto` (into a folder, under each source's name), every file of `sed`,
-`perl`, `ruby` or `gawk` editing in place, `dd of=`, curl and wget's files (`curl -o`, `wget -O`, a
+`perl`, `ruby` or `gawk` editing in place, `dd of=`, since #3279 every file an editor is opened on
+(`ed`, `ex`, vi's family, `emacs`, with a script it is given as a write the words do not name),
+`sponge`'s file, a file named as output (`sort -o`, `base64 -o`, `openssl -out`, the second file of
+`uniq`, `xxd` and `link`), a file rewritten in place (`dos2unix`, `yq -i`, `sd`, `plutil`) and the
+packed or unpacked twin gzip's family leaves, curl and wget's files (`curl -o`, `wget -O`, a
 file saved under the address's own name by `curl -O` or a plain `wget`, into `--output-dir` or `-P`,
 curl's cookie jar and trace, wget's log), each relative path resolved after any `cd` before it, a
 path part shaped like a route parameter (`[id]`, `[...slug]`, `[[...slug]]`, `[id=matcher]`,
@@ -8379,7 +8402,11 @@ restart never repeats it; this is the one notification sent while asleep (#1545)
 does not give changes nothing and is logged, and a notifier that fails is logged and never ends
 sleep mode. While asleep (#834, phase 3, Dan's "everything not banned"), a worker session's own
 permission prompts are approved, never a question or the plan approval and never over a decision
-beneath; a classifier refusal is noted as `failed` and never retried; and in every session the ban
+beneath; a classifier refusal is noted as `failed` and never retried by the mod, which drops any
+hook's request beneath it to run the call again (whether the session itself may send the call again
+is "One unchanged resend after no verdict" in `payload/CLAUDE.md`, that rule's one home, #3224, and
+a call the check gave no verdict on that is sent again and runs is noted `redone`); and in every
+session the ban
 list in `hooks/overnight.ts` is refused by effect (issue, label and milestone writes, every gh write
 but a comment, opening, readying, retitling or merging a PR on the checkout's own repository, any
 write whose repository cannot be resolved, whatever `rtk proxy` runs judged as the same command
