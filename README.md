@@ -9497,9 +9497,13 @@ hear it (#3298). It reads what Claude Code reads: the managed settings file with
 `managed-settings.d` file beside it (`prependPlugins`, `appendPlugins`, and an `enabledPlugins` entry
 from a remote marketplace those settings declare), and `~/.claude/settings.json`, whose own two lists
 seat a person's mod wherever nothing sets them aside and are counted as unheard, since the types do
-not say otherwise. It keeps no list of mods allowed higher, and its last line names what is in no
-file it can open: managed settings from a device management profile or the organization's server,
-and a plugin the starting app marks as required. `tests/test-mod-tiers.sh` runs it in every full
+not say otherwise. A hook is any `on(` call, a member call such as `reg.on(` included, found by the
+matcher the screen scan's reader shares (`on_calls` in `tools/lib/ts_source.py`). Whatever it cannot
+read is exit 4 with words naming it, never a pass and never the exit 1 that names a seat: a hook
+whose event is not a plain string, a settings file or the folder it is in, a mod's source, the mods
+folder, or its own helper failing. It keeps no list of mods allowed higher, and its last line names
+what is in no file it can open: managed settings from a device management profile or the
+organization's server, and a plugin the starting app marks as required. `tests/test-mod-tiers.sh` runs it in every full
 suite run and in the pull request checks, on fixtures for each of those seats and on `payload/mods`
 with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
 through every hook but the calling one", the organization's included), so the guards could be seated

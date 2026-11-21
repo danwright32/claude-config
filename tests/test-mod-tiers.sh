@@ -22,7 +22,8 @@ check(){   # $1 = name  $2 = "ok" or the evidence of failure
   if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1: $2"; fi
 }
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-mod-tiers.XXXXXX")"
-trap 'rm -rf "$TMP"' EXIT
+# Section 13 takes read permission off some fixtures, so it is put back before the folder is removed.
+trap 'chmod -R u+rwx "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 mkmod(){   # $1 = mods dir  $2 = name  $3 = the hooks module's source
   mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks"
@@ -225,6 +226,37 @@ run "$S" "$M11"
   && check "a mod whose manifest cannot be read is refused with the unreadable exit code" ok \
   || check "a mod whose manifest cannot be read is refused with the unreadable exit code" "exit $code: $out"
 
+# 11b. A hook is a hook however its on( is spelled (the lessons review of #3298, L247): a member
+#      call is read as one, by the matcher the screen scan's reader of tool.call hooks uses, and a
+#      registration whose event is not a plain string cannot be read, so it is refused (exit 4),
+#      never passed over as no hook.
+M11B="$TMP/mods11b"
+mkmod "$M11B" member "export const register = reg => { reg.on('tool.call', async (\$, e, next) => next(e)) }"
+mkmod "$M11B" caller "export const register = () => {}"
+S="$TMP/seat11"
+run "$S" "$M11B"
+[ "$code" -eq 1 ] && seated_line caller | grep -qF "member (tool.call)" \
+  && check "a tool hook registered through a member call (reg.on) is read as a hook" ok \
+  || check "a tool hook registered through a member call (reg.on) is read as a hook" "exit $code: $out"
+M11C="$TMP/mods11c"
+mkmod "$M11C" named "const EVENT = 'tool.call'
+export const register = on => { on(EVENT, async (\$, e, next) => next(e)) }"
+mkmod "$M11C" caller "export const register = () => {}"
+run "$TMP/clean" "$M11C"
+[ "$code" -eq 4 ] && has "named registers a hook at hooks/register.ts:2 whose event is not a plain string" \
+  && check "a hook whose event is a name, not a string, is refused with the file and line" ok \
+  || check "a hook whose event is a name, not a string, is refused with the file and line" "exit $code: $out"
+run "$S" "$M11C"
+[ "$code" -eq 4 ] && has "whose event is not a plain string" && ! has "so this does not fail" \
+  && check "and a seated mod beside it is never said to be missed by nothing" ok \
+  || check "and a seated mod beside it is never said to be missed by nothing" "exit $code: $out"
+M11D="$TMP/mods11d"
+mkmod "$M11D" built "export const register = (on, kind) => { on(\`tool.\${kind}\`, async (\$, e, next) => next(e)) }"
+run "$TMP/clean" "$M11D"
+[ "$code" -eq 4 ] && has "built registers a hook at hooks/register.ts:1 whose event is not a plain string" \
+  && check "a hook whose event is built at run time is refused too" ok \
+  || check "a hook whose event is built at run time is refused too" "exit $code: $out"
+
 # 12. The real payload. First that the real guards are found at all: with one real mod seated by a
 #     fixture's managed settings, the mods the issue names must be among those that would not hear it.
 if [ -d "$ROOT/payload/mods" ]; then
@@ -244,6 +276,72 @@ if [ -d "$ROOT/payload/mods" ]; then
   else
     check "no mod in payload/mods is seated out of the guards' hearing on this machine" "exit $code: $out"
   fi
+fi
+
+# 13. No error path ends as no mod seated (L10, L11): each thing the check could not read is exit 4
+#     with words naming it. Shapes first, which hold for any user.
+S="$TMP/not-object"; settings "$S" '[]' ''
+run "$S"
+[ "$code" -eq 4 ] && has "$S/managed-settings.json cannot be read as JSON settings" \
+  && check "managed settings holding no object are refused" ok || check "managed settings holding no object are refused" "exit $code: $out"
+S="$TMP/enabled-shape"; settings "$S" '{"prependPlugins": [], "enabledPlugins": ["caller@acme"]}' ''
+run "$S"
+[ "$code" -eq 4 ] && has "enabledPlugins in $S/managed-settings.json is not an object" \
+  && check "an enabledPlugins that is not an object is refused" ok || check "an enabledPlugins that is not an object is refused" "exit $code: $out"
+S="$TMP/market-shape"; settings "$S" '{"prependPlugins": [], "enabledPlugins": {"caller@acme": true}, "extraKnownMarketplaces": {"acme": 7}}' ''
+run "$S"
+[ "$code" -eq 4 ] && has "the source of the marketplace acme" \
+  && check "a mod enabled from a marketplace whose source cannot be read is refused" ok \
+  || check "a mod enabled from a marketplace whose source cannot be read is refused" "exit $code: $out"
+# The check's own helper failing is exit 4 with words, never the exit 1 that means a mod is seated:
+# a copy of the script with no lib folder beside it cannot load the shared reader.
+mkdir -p "$TMP/alone"
+cp "$CHECK" "$TMP/alone/check-mod-tiers.sh"
+out="$(CHECK_MOD_TIERS_MANAGED="$TMP/clean/managed-settings.json" CHECK_MOD_TIERS_USER="$TMP/clean/settings.json" bash "$TMP/alone/check-mod-tiers.sh" "$MODS" 2>&1)"; code=$?
+[ "$code" -eq 4 ] && has "check-mod-tiers: the check itself failed" && has "so nothing was told" \
+  && check "the check's own helper failing is exit 4 with words, never a seat and never a pass" ok \
+  || check "the check's own helper failing is exit 4 with words, never a seat and never a pass" "exit $code: $out"
+# Then what only permissions can produce. Root reads everything, so there it is said and not measured (L411).
+if [ "$(id -u)" -eq 0 ]; then
+  echo "UNMEASURED: the cases of a file or folder this user may not read, because root may read them all."
+else
+  S="$TMP/locked-file"; settings "$S" '{"prependPlugins": ["caller"]}' ''
+  chmod 000 "$S/managed-settings.json"
+  run "$S"
+  [ "$code" -eq 4 ] && has "$S/managed-settings.json cannot be read as JSON" \
+    && check "a managed settings file this user may not read is refused" ok \
+    || check "a managed settings file this user may not read is refused" "exit $code: $out"
+  S="$TMP/locked-folder"; settings "$S/in" '{"prependPlugins": ["caller"]}' ''
+  chmod 000 "$S/in"
+  run "$S/in"
+  chmod 700 "$S/in"
+  [ "$code" -eq 4 ] && has "whether there is a managed settings file at $S/in/managed-settings.json cannot be told" && ! has "no managed settings file at" \
+    && check "a settings file in a folder this user may not enter is refused, never read as absent" ok \
+    || check "a settings file in a folder this user may not enter is refused, never read as absent" "exit $code: $out"
+  S="$TMP/locked-dropin"; settings "$S" '{"prependPlugins": []}' ''
+  mkdir -p "$S/managed-settings.d"
+  printf '{"prependPlugins": ["caller"]}\n' > "$S/managed-settings.d/10-more.json"
+  chmod 000 "$S/managed-settings.d"
+  run "$S"
+  chmod 700 "$S/managed-settings.d"
+  [ "$code" -eq 4 ] && has "$S/managed-settings.d cannot be listed" \
+    && check "a managed-settings.d folder this user may not list is refused, never read as empty" ok \
+    || check "a managed-settings.d folder this user may not list is refused, never read as empty" "exit $code: $out"
+  M13="$TMP/mods13"
+  mkmod "$M13" guard "export const register = on => { on('tool.call', async (\$, e, next) => next(e)) }"
+  mkmod "$M13" caller "export const register = () => {}"
+  chmod 000 "$M13/guard/hooks/register.ts"
+  run "$TMP/clean" "$M13"
+  [ "$code" -eq 4 ] && has "guard's hooks/register.ts cannot be read" \
+    && check "a mod's source this user may not read is refused, never read as no hook" ok \
+    || check "a mod's source this user may not read is refused, never read as no hook" "exit $code: $out"
+  mkdir -p "$TMP/locked-mods"
+  chmod 000 "$TMP/locked-mods"
+  run "$TMP/clean" "$TMP/locked-mods"
+  chmod 700 "$TMP/locked-mods"
+  [ "$code" -eq 4 ] && has "$TMP/locked-mods cannot be listed" \
+    && check "a mods folder this user may not list is refused with words, never a crash or a pass" ok \
+    || check "a mods folder this user may not list is refused with words, never a crash or a pass" "exit $code: $out"
 fi
 
 [ -x "$CHECK" ] && check "tools/check-mod-tiers.sh is executable" ok || check "tools/check-mod-tiers.sh is executable" "not executable"

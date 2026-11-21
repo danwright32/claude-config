@@ -345,20 +345,30 @@ def mod_code(folder):
                 yield os.path.join(base, name)
 
 
-def hook_events(text, jsx=False):
-    """Every event a module's on( calls name, in the order written: on('<event>' where the on is
-    code, never part of a comment, a string or a longer name, and the event is a plain string."""
-    code = code_only(text, jsx)
-    raw_kinds = kinds(text, jsx)
-    events = []
-    for m in re.finditer(r"(?<![\w.$])on\s*\(", code):
+# A hook registration, however its on( is reached: on('tool.call', ...) and reg.on('tool.call', ...)
+# alike. One matcher for every reader of hooks, so no two of them disagree about what a hook is
+# (the lessons review of #3298: the tier check read a member call as no hook, and the screen scan
+# read it as one).
+ON_CALL = re.compile(r"\bon\s*\(")
+EVENT_NAME = re.compile(r"\s*(['\"`])([A-Za-z][\w.*]*)\1")
+
+
+def on_calls(text, code, raw_kinds):
+    """Each on( call that is code, never part of a comment, a string or a longer name: (its match in
+    the code view, the event it names), the event None where it is not a plain string."""
+    for m in ON_CALL.finditer(code):
         if raw_kinds[m.start()] != CODE:
             continue
         # The event name is a string, so it is read from the text, not the code view that blanks it.
-        name = re.match(r"\s*(['\"`])([A-Za-z][\w.*]*)\1", text[m.end() :])
-        if name:
-            events.append(name.group(2))
-    return events
+        name = EVENT_NAME.match(text, m.end())
+        yield m, name.group(2) if name else None
+
+
+def hook_events(text, jsx=False):
+    """Every hook a module registers, in the order written: (line, event), the event None where the
+    on( call names it some other way than a plain string, which no reader here can follow."""
+    code = code_only(text, jsx)
+    return [(code.count("\n", 0, m.start()) + 1, event) for m, event in on_calls(text, code, kinds(text, jsx))]
 
 
 def tool_call_hooks(text, jsx=False):
@@ -367,10 +377,8 @@ def tool_call_hooks(text, jsx=False):
     code = code_only(text, jsx)
     raw_kinds = kinds(text, jsx)
     hooks = []
-    for m in re.finditer(r"\bon\s*\(", code):
-        # The event name is a string, so it is read from the text, not the code view that blanks it.
-        name = re.match(r"\s*(['\"`])tool\.call\1", text[m.end() :])
-        if not name or raw_kinds[m.start()] != CODE:
+    for m, event in on_calls(text, code, raw_kinds):
+        if event != "tool.call":
             continue
         open_at = m.end() - 1
         end = closing(code, open_at)
