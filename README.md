@@ -3689,6 +3689,17 @@ once for each lesson. For that the line is written in plain ASCII, at most 300 c
 just before the entry's `SHORT:` line, or last in an entry that has none: the place the approval
 covers, and one `claude-sync lesson-checks` reads.
 
+The `SHORT:` line is shown to him the same way (#3320), since it is the line the index carries into
+every session. The session writes it before it asks, states it on a line of its own in the proposal
+and carries it in the picker's metadata, and the entry written under his answer carries exactly that
+line. A rule of at most 151 characters needs none, and its entry takes none. The 151 is the index
+cap of 160 less `- L1234. `: the lesson has no number until he approves it, so the line is sized for
+the longest number in use. It is counted in bytes, as the cap is, so a letter with an accent counts
+two. An entry with no `SHORT:` line has its whole rule in bold and nothing else in bold, because
+the index renders the bold. Every entry is added whole at an entry boundary, never inside another
+entry, and a lesson entry is added or changed only under his answer in this picker: a For good
+does not cover one (the independent review of #3320, told in full where the mods are described).
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
@@ -7896,8 +7907,11 @@ refuses the write, and says why. It asks only after the settings hooks beneath i
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
-`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. Since #3295 the picker is refused, before he is asked and saying which character and
+`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again. Since #3320 any
+other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
+under a For good and under his own "from now on" words alike; a write that touches no entry, and a
+shell command, still ask.
+Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
 width, bidirectional, the tag block, a soft hyphen, a byte order mark), private use, a code point
@@ -7915,8 +7929,51 @@ at 76 columns, since the dialog neither cuts nor scrolls a tall question (read i
 not fit a question into a 24 row window, which shows about the last 8 rows of one at the cap.
 Every text of the call is judged by the one function, a title, a description and a placeholder
 included (rules.ts `shownFault`, `askFault`). The entry written under his answer is held to the
-unseen class, its `SHORT:` line included, which the picker never shows, and the question asked
-before a For good is held as the lesson's is.
+unseen class, and the question asked before a For good is held as the lesson's is.
+Since #3320 the picker also shows the entry's `SHORT:` line, the one line of a lesson the index
+carries into every session, which it once never showed: under an approval for one rule an entry
+went through whose `SHORT:` line said something else. The line is carried in `metadata.short` as
+`SHORT: <text>` and stands on a line of its own in the question, and the one Edit his answer lets
+through carries exactly that line as its last: another line, one a word different, a second one, or
+none where he read one is refused. The picker is refused, before he is asked and with
+the reason, when the line is in no such shape, is more than one line, fails the one function every
+shown text is judged by (`shownFault`, so the unseen class and the markup class above, with no
+second copy of either), or has text over 151 bytes; when the rule is over 151 and no
+line is carried, since its entry would need one nobody was shown; and when the question holds any
+other line starting `SHORT:`. A rule of 151 or under is approved with no `SHORT:` line, and one
+added to its entry afterwards is refused (rules.ts `readShortLine`, `addsLesson`). The 151 is
+the index cap of 160 less `- L1234. `, because the picker is asked before the lesson has a number.
+Measured 2026-11-20 over the lessons file: of 895 entries 737 carry a `SHORT:` line; laid out with
+its rule and a check line each fits the 20 rows and 1,500 code units (the tallest takes 12 rows,
+and 16 beside a check line of 300 characters); `shownFault` refuses one of the 737 (L731's, which
+names two placeholders in angle brackets outside backticks); and 39 have text over 151, each
+written under a number of one or three digits. All 8 lesson pickers in the transcripts this Mac
+kept would be refused, each for a rule over 151 with no `SHORT:` line shown, which no picker had.
+An independent review of #3320 (2026-11-20) then tightened four things. With no `SHORT:` line the
+index renders an entry's bold span, and nothing held that span to the rule: under an approval for
+one sentence an entry went through whose bold closed after six words, and those six words were
+the lesson every session loaded. Such an entry is now taken only with the whole rule in bold and
+nothing else in bold, and no entry may hold a line of spaces (rules.ts `wholeRuleInBold`). The mod
+keeps no copy of the generator's reading: it requires a shape the generator reads one way, and
+`tests/test-lesson-index-line-shown.sh` runs the real generator over the entries listed in the
+mod's `tests/index-lines.ts` and holds each rendered line to the text Dan was shown, while the
+mod's own suite holds the mod to the same list. The approved Edit must add its entry whole at an
+entry boundary: after another entry's last line or under a section heading, with another entry's
+first line, a section heading or the end of the file as the next line that is not blank. Inside
+another entry it took that entry's `SHORT:` line as its own (`boundaryFault`). A For good no
+longer covers an Edit or Write that adds or changes a lesson entry in `~/.claude/LESSONS.md`: it
+is refused in words that send the session to the lesson picker, and no question waits on it
+(`entriesTouched`, `pickerOnly`). Dan's own words that make a save permanent do not cover one
+either, a route the lessons review at the push found still open.
+An entry is every line the file's reader gives it, down to the
+next entry or section heading. A write that touches no entry (a section heading, an entry taken
+out whole, text above the first section) and a shell command are asked about as before. Changing
+an entry already in the file therefore takes the lesson picker for the entry as it should read,
+then the old one taken out and the new one added. Length is counted in bytes, as the index cap
+counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
+drawn, in bold, in a list or in a quote, is refused in the question and in the entry
+(`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits of the lessons
+file were ever approved For good, both adding a whole lesson entry.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
@@ -7995,7 +8052,32 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why), a
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+since #3279 what a git command that moves committed work brings into the working tree (Dan,
+2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
+`switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
+and `stash apply`; before one runs the guard asks git which files it would change and the commit
+each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
+`git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
+this branch, or between the working tree and the commit for a reset,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git for-each-ref` for the one remote branch a name may stand for, and `git ls-tree` for a stash's
+untracked files; each look changing file is then judged
+as a checkout of that file from that commit is, by the lines it changes where that rule applies,
+against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+`--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
+the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
+the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:
+one with a command before it on its line that may change what it brings in (anything but `cd`, a
+command that only reads and a restore of named paths, so a `git fetch` first, a commit, another
+move), told to run on its own, a `git pull`, which fetches before it merges, told to fetch first and
+merge on its own, and a commit git does not know in this checkout, told to fetch it first; one with
+no other way to run it, a rebase onto another base, from the root, interactive or running commands,
+`git switch --orphan`, `git stash branch`, a commit named through a value the shell fills in, more
+than 300 look changing files, or a question git fails, cannot be run for or answers at more length
+than can be read, is held with a card for Dan; a move inside a script file, `git worktree add`,
+`git clone`, `git bisect`, `git submodule update` and `git stash` taking uncommitted work away are
+not read), a
 program whose text names the files it writes (since #2847 also a python or node script file the
 command runs, its own code read as inline code is, a name its code writes where the folder cannot be
 followed held as could not check; since #2855 also a shell script's own commands and the scripts it
@@ -8003,7 +8085,14 @@ runs, a script named through a variable the command sets, a script the command w
 heredoc, read as that text, and the local modules a script imports; since #3214 a script named
 through a variable the command never sets (`python3 $N/gen.py`, nothing setting N), which the guard
 cannot find and so cannot read, is held as could not check, while one named through a variable the
-command sets some other way (a loop, a command's output) is still not read; since #2991 a name
+command sets some other way (a loop, a command's output) is still not read; since #3279 a python or
+node script kept in a temporary folder or the session's scratchpad (under `/tmp`, `/var/folders` or
+Claude Code's own temporary folder), whose code does not name every file it writes and names a look
+changing file by a relative name, is held as could not check, since it may join that name onto any
+folder or open it after changing folder (Dan, 2026-11-19, "Hold the narrow case": 3 past commands in
+32 days), while a name that is a test by its own file name is left out, and the same script kept
+anywhere else is read as before, its relative names not judged (854 past commands, ruled out the
+same day); since #2991 a name
 such a
 script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
 that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and
