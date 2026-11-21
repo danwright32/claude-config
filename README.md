@@ -8558,8 +8558,8 @@ command out where it stands and send it again), code the reader cannot read (inl
 exec, eval or the like, or a program piped in), which since #3287 is refused saying what was seen
 ("inline python that uses exec") and the one way to write it so that it is read, the code in the
 command itself with nothing built or loaded as it runs, never a file run by name, which no reader
-opens, while everything else on the list keeps "Do not look for another way", and a write through `&>`,
-which was cut off before the write check and ran, and a line running gh that way
+opens, while everything else on the list keeps "Do not look for another way", and a write through
+`&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
