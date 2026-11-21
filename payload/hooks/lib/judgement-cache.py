@@ -83,7 +83,9 @@ KEY_ENV = ("CARGO_TARGET_DIR", "CDPATH", "CURL_HOME", "DATA_GUARDED_RE", "GATE_D
 #   pure: reads no disk.  proxied: replaced by install()'s stand in.  audited: what it does to the disk
 #   raises an audit event (open, os.listdir, subprocess.Popen, ...) that marks the judgement not keepable.
 # A module first imported in the middle of a judgement reads its own files to load, which the audit
-# hook sees, so that judgement is not kept (the gate's lazy `import tokenize`, for instance).
+# hook sees, so that judgement is not kept (lib/program-runs.py's `import configparser` for a pytest
+# run, for instance; the gate's own `import tokenize` was another until it moved to the gate's top,
+# claude-config#3255).
 MODULES = {
     "ast": "proxied", "bisect": "pure", "fnmatch": "pure", "functools": "pure", "json": "pure", "re": "pure",
     "shlex": "pure", "signal": "pure", "sys": "pure", "time": "pure", "warnings": "pure", "zlib": "pure",
