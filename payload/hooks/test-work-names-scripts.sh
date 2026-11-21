@@ -464,15 +464,18 @@ mkdir -p "$ENVDIR/$SID"
 : > "$ENVDIR/$SID/sessionstart-hook-0.sh"
 out="$(printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$SID" | CLAUDE_ENV_FILE="$ENVDIR/$SID/sessionstart-hook-0.sh" bash "$START" 2>&1)"; rc=$?
 check "the SessionStart hook exits cleanly: rc=$rc $out" [ "$rc" -eq 0 ]
-check "and puts the guard first on PATH in the session's env file" grep -q -F "export PATH=\"$GUARD_BIN:\$PATH\"" "$ENVDIR/$SID/sessionstart-hook-0.sh"
-# What that file puts first on PATH is read out of the file, and a shell is started with it. The
-# file is one the hook writes while this suite runs, so the Slack drafts gate cannot read it before
-# the suite starts: a shell that sourced it here, by a path the gate does not work out, made the
-# whole suite a command that gate refuses (claude-config#3316). bash -n shows a shell can read it.
-first_on_path="$(sed -n 's/^export PATH="\(.*\):\$PATH"$/\1/p' "$ENVDIR/$SID/sessionstart-hook-0.sh")"
-got_path="$(env -i HOME="$HOMEDIR" PATH="$first_on_path:/usr/bin:/bin" bash -c 'command -v gh')"
-check "and a shell with what that file puts first on PATH runs the guard as gh: $got_path" [ "$got_path" = "$GUARD" ]
-check "and that file is one a shell can read" bash -n "$ENVDIR/$SID/sessionstart-hook-0.sh"
+env_line="export PATH=\"$GUARD_BIN:\$PATH\""
+check "and puts the guard first on PATH in the session's env file" grep -q -F "$env_line" "$ENVDIR/$SID/sessionstart-hook-0.sh"
+# A shell that sources that file must run the guard as gh. The file is one the hook writes while
+# this suite runs, so the Slack drafts gate cannot read it before the suite starts, and a shell that
+# sourced it here, by a path the gate does not work out, made the whole suite a command that gate
+# refuses (claude-config#3316). So the same thing is shown in two halves the gate can read: the
+# file, which began empty, holds that one line and nothing else, and a shell that runs that line,
+# written here, finds the guard. The file is compared and never run.
+env_file="$(cat "$ENVDIR/$SID/sessionstart-hook-0.sh")"
+check "and that line is the whole of the file, so nothing else in it can undo the line: $env_file" [ "$env_file" = "$env_line" ]
+got_path="$(env -i HOME="$HOMEDIR" PATH="/usr/bin:/bin" bash -c "$env_line; command -v gh")"
+check "and a shell that runs that line, as one that sources the file does, runs the guard as gh: $got_path" [ "$got_path" = "$GUARD" ]
 
 out="$(printf '{"session_id":"%s"}' "$SID" | env -u CLAUDE_ENV_FILE bash "$START" 2>&1)"; rc=$?
 check "with no env file the hook still exits cleanly: rc=$rc" [ "$rc" -eq 0 ]
