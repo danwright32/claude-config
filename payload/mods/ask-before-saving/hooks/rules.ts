@@ -518,7 +518,7 @@ export const saveIdOf = (source: unknown): string | undefined => {
 const SAVE_ANSWERS = new Set([FOR_GOOD, THIS_SESSION].map(x => x.toLowerCase()))
 export const asksBeforeTheSave = (ask: { questions?: unknown; metadata?: unknown }): boolean => {
   const source = typeof ask.metadata === 'object' && ask.metadata !== null ? (ask.metadata as { source?: unknown }).source : undefined
-  if (source !== undefined && (typeof source !== 'string' || !source.startsWith(MOD) || saveIdOf(source) !== undefined)) return false
+  if (source !== undefined && (typeof source !== 'string' || (source !== MOD && !source.startsWith(`${MOD}:`)) || saveIdOf(source) !== undefined)) return false
   const questions = Array.isArray(ask.questions) ? (ask.questions as { question?: unknown; options?: unknown }[]) : []
   return questions.some(q => {
     const text = typeof q?.question === 'string' ? q.question : ''

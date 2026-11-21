@@ -462,7 +462,9 @@ test("a question that is not the mod's own about memory, another guard's or a su
   expect((await call($, UNTIED('Mute this check for good?', ['For good', 'Not now']))).deny).toBeUndefined()
   expect((await call($, UNTIED('Save to ~/Apps/slate/CLAUDE.md for good: x?', ['For good'], { metadata: { source: 'area-check:t9' } }))).deny).toBeUndefined()
   expect((await call($, UNTIED('Save to ~/Apps/slate/CLAUDE.md for good: x?', ['For good'], { agentId: 'agent-a1' }))).deny).toBeUndefined()
-  expect(w.asked.length).toBe(4)
+  // A guard whose name only begins with this mod's is another guard.
+  expect((await call($, UNTIED('Save to ~/Apps/slate/CLAUDE.md for good: x?', ['For good'], { metadata: { source: 'ask-before-saving-other:t1' } }))).deny).toBeUndefined()
+  expect(w.asked.length).toBe(5)
   // None of them approves a save: the save is still refused and asked about.
   expect(refusalOf(await call($, { tool: 'Write', file_path: `${CWD}/CLAUDE.md`, content: '- x\n' }))).toContain(ASKS)
   expect(w.ran).toEqual([])
