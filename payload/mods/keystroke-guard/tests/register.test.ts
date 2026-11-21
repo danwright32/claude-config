@@ -3,6 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { publishInstead } from '../hooks/mod-kit/deliver.ts'
+import { dialogOf } from '../hooks/mod-kit/asked.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const DEBUG = `${'/Users'}/x/Build/Debug/Overture.app/Contents/MacOS/Overture`
@@ -11,7 +12,7 @@ const KEYWORD = 'key' + 'stroke'
 
 // `holdFails` makes mod-kit refuse the hold on keystroke-guard's reload (#2132), as an older or
 // missing mod-kit would.
-type World = { front: number; running: Record<number, string>; answer: string | 'dismiss'; away?: boolean; holdFails?: string }
+type World = { front: number; running: Record<number, string>; answer: string | 'dismiss'; away?: boolean; holdFails?: string; ownFails?: string }
 type Card = { toolUseId: string; guard: string; reason: string; safeWay?: string }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -75,6 +76,16 @@ const kit: { name: string; register: Register } = {
             const r = await built.process.run(['__modkit', 'release', JSON.stringify(input)])
             if (r.exitCode !== 0) throw new Error(r.stderr)
           },
+          // #3321: the mod saying the dialog it opens is its own and taking that back, asked of the
+          // world, which keeps them in order beside the question and can refuse one as mod-kit would.
+          asking: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'asking', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
+          answered: async (input: unknown) => {
+            const r = await built.process.run(['__modkit', 'answered', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+          },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
@@ -107,12 +118,19 @@ const world = (engine: Engine, on: On, w: World) => {
   const cards: Card[] = []
   // #2132: each hold on keystroke-guard's reload, its letting go, and each question, in order.
   const held: string[] = []
+  // #3321: the mod saying its dialog is its own, the question, and the taking back, in order.
+  const own: string[] = []
   const debug: string[] = []
   on('process.run', ($, e) => {
     const [cmd, ...args] = e.argv
     if (cmd === '__modkit' && (args[0] === 'hold' || args[0] === 'release')) {
       if (args[0] === 'hold' && w.holdFails) return { value: { exitCode: 1, stdout: '', stderr: w.holdFails, isStdoutTruncated: false, isStderrTruncated: false } }
       held.push(`${args[0]} ${args[1]}`)
+      return ok('')
+    }
+    if (cmd === '__modkit' && (args[0] === 'asking' || args[0] === 'answered')) {
+      if (args[0] === 'asking' && w.ownFails) return { value: { exitCode: 1, stdout: '', stderr: w.ownFails, isStdoutTruncated: false, isStderrTruncated: false } }
+      own.push(`${args[0]} ${args[1]}`)
       return ok('')
     }
     if (cmd === 'pgrep' && args[0] === '-f') {
@@ -138,6 +156,7 @@ const world = (engine: Engine, on: On, w: World) => {
     const q = qs[0]
     asked.push({ question: q?.question ?? '', header: q?.header ?? '', options: (q?.options ?? []).map(o => o.label) })
     held.push('ask')
+    own.push('ask')
     if (w.answer === 'dismiss') return { deny: 'dismissed' } as never
     // The tool's own result: answers keyed by each question's text, as the dialog records them.
     return { result: { questions: qs, answers: { [q?.question ?? '']: w.answer } }, text: `"${q?.question}"="${w.answer}"` } as never
@@ -165,7 +184,7 @@ const world = (engine: Engine, on: On, w: World) => {
     else if (!e.text.startsWith('CARD ') && !e.text.startsWith('HOLD ')) logs.push(e.text)
     return { value: undefined }
   })
-  return { reached, asked, toasts, cards, holds, held, debug, logs }
+  return { reached, asked, toasts, cards, holds, held, own, debug, logs }
 }
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
@@ -231,6 +250,37 @@ test('a record that cannot be kept is said once, and the Ready question is still
   expect(w.logs.length).toBe(1)
   expect(w.logs[0]).toContain('keystroke-guard could not record the size of a question it asked')
   expect(w.logs[0]).not.toContain('Overture')
+})
+
+// #3321: the Ready question reaches picker manners like a session's picker, with nothing on it
+// saying a mod raised it. So the mod tells mod-kit the dialog is its own before it asks and takes
+// that back on every way out, the whole dialog as one string, as mod-kit's recorder makes it.
+const READY_DIALOG = JSON.stringify({ mod: 'keystroke-guard', dialog: dialogOf("I'm about to type into Overture. Ready?", { options: ['Go ahead', 'Not now'], header: 'Taking over' }) })
+test('the Ready question is said to be the mod own dialog for as long as it is open (#3321)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.own).toEqual([`asking ${READY_DIALOG}`, 'ask', `answered ${READY_DIALOG}`])
+  expect(w.reached).toContain('Bash')
+})
+
+test('a dismissed Ready question is taken back all the same (#3321)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'dismiss' })
+  await $.tool.call(bash(KEY))
+  expect(w.own).toEqual([`asking ${READY_DIALOG}`, 'ask', `answered ${READY_DIALOG}`])
+  expect(w.reached).not.toContain('Bash')
+})
+
+// A mod-kit that cannot be told (an older copy still loaded) never stops the question: it is asked
+// all the same, said once in the transcript, and nothing is taken back.
+test('a Ready question mod-kit could not be told about is still asked, and said once (#3321)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead', ownFails: '$.modkit.asking is not a function' })
+  await $.tool.call(bash(KEY))
+  expect(w.own).toEqual(['ask'])
+  expect(w.reached).toContain('Bash')
+  expect(w.logs.filter(l => l.includes('could not say a question it asked is its own')).length).toBe(1)
 })
 
 test('a wrong frontmost app is refused, with the card and a toast', withKit, async ($, on) => {

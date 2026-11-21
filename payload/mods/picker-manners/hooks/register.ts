@@ -6,6 +6,7 @@ import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, w
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { guardAsks, guardIgnores } from './mod-kit/designquestions.ts'
 import { askFault } from './mod-kit/shown.ts'
+import { isOwnDialog } from './mod-kit/asked.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -119,6 +120,23 @@ export const checkOffAnswered = async ($: EngineInterface, e: { question: string
   }
 }
 
+// #3321: whether a call is a dialog some mod raised itself. The engine hands such a dialog on with
+// nothing saying so (seen on Claude Code 2.1.330), so the asking mod says it first: mod-kit's
+// recorder (hooks/mod-kit/asked.ts) calls $.modkit.asking, which keeps the whole dialog in
+// mod-kit's own $.state until $.modkit.answered. A session cannot put an entry there: $.state is
+// written by its owner alone, mod-kit writes this key only in those two nouns, and a noun is
+// called by a mod's code, never through a tool. The call must be that very dialog with nothing
+// beside it. A state that cannot be read, a mod-kit loaded before it kept this, or a call of any
+// other shape is a session's picker, the side that keeps the refusal on it.
+const askingRef = { plugin: 'mod-kit', key: 'asking' } as const
+const ownDialog = async ($: EngineInterface, call: Record<string, unknown>): Promise<boolean> => {
+  try {
+    return isOwnDialog((await $.state.get(askingRef)).value, call)
+  } catch {
+    return false
+  }
+}
+
 export const register: Register = on => {
   // #2261: a hook on a noun no loaded mod provides stops this whole mod loading, so with the design
   // round guard's member absent the same no-op bottom it provides is put here too, and nothing
@@ -153,13 +171,22 @@ export const register: Register = on => {
     // he could not read as written by the one check of text a person approves in a picker
     // (mod-kit's hooks/shown.ts), is refused before he sees it, as the guards' pickers are (Dan,
     // 2026-11-21: "Refuse outright"; before that it was asked and written onto no issue). A picker
-    // naming no issue is no approval this mod records, so it is asked whatever it holds. The call
-    // is judged as it arrived: a question a mod raises itself through its own dialog (/sleep's
-    // before bed round) arrives here like any other and is held to the same rule, and the mod
-    // that raised it is handed the refusal.
+    // naming no issue is no approval this mod records, so it is asked whatever it holds.
+    //
+    // A question a mod raises itself through its own dialog (/sleep's before bed round, the
+    // keystroke guard's Ready) arrives here like any other, and Dan's answer for those is another
+    // one (2026-11-21: "Record, then decide": their sizes are recorded and none is refused). Until
+    // he settles how the two meet, the coordinating session's rule (2026-11-21) is that such a
+    // dialog is asked, and when he could not have read it as written, written onto no issue, as
+    // every such picker was before the refusal. It is told apart by the asking mod's own word and
+    // nothing a session can set: see ownDialog.
+    let ownUnread = false
     if (writtenOnIssue(question, (e.metadata as { source?: unknown } | undefined)?.source)) {
       const unread = askFault(e as unknown as Record<string, unknown>)
-      if (unread !== undefined) return { deny: unreadRefusal(unread, question) }
+      if (unread !== undefined) {
+        if (!(await ownDialog($, e as unknown as Record<string, unknown>))) return { deny: unreadRefusal(unread, question) }
+        ownUnread = true
+      }
     }
     const r = await next(e)
     // #1279: a question about an issue goes into that issue's Open questions.
@@ -188,6 +215,14 @@ export const register: Register = on => {
     // read as settled while every edit stayed held. Nothing is added open either, since /sleep never
     // asks a guard question.
     if (guardAsks((e.metadata as { source?: unknown } | undefined)?.source)) return r
+    // #3321: a mod's own question he could not have read as written is on no issue, answered or
+    // open: a checked box there would read as settled by him, and an open item in those words
+    // would be asked again by /sleep and fail the same way each night (L665).
+    if (ownUnread) {
+      const where = `${issuesNamedIn(question).map(x => `${x}'s`).join(', ')} Open questions`
+      $.ui.log(`Picker manners: a mod's own question was not added to ${where}, since it would not have reached you as written.`)
+      return r
+    }
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
   })

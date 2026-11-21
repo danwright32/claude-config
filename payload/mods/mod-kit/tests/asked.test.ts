@@ -1,7 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
-import { ASKED_KEEP, type AskedIo, askedDir, askedOf, askingRefusal, dialogOf, dialogOfCall, isOwnDialog, recordedAsk, resetAskedSaid, withAsking, withoutAsking } from '../hooks/asked.ts'
+import { ASKED_KEEP, type AskedIo, askedDir, askedOf, askingRefusal, dialogOf, ENGINE_CHIP, dialogOfCall, isOwnDialog, recordedAsk, resetAskedSaid, withAsking, withoutAsking } from '../hooks/asked.ts'
 import { MAX_QUESTION } from '../hooks/shown.ts'
 
 // A question a mod asks Dan through its own dialog is counted before any limit is put on it
@@ -160,9 +160,12 @@ const CALL = { tool: 'AskUserQuestion', tool_use_id: 'toolu_x', questions: [{ qu
 test('a dialog reads the same from what the mod asked and from the call a hook is handed', () => {
   const asked = dialogOf('o/r#7: Keep the old flag?', { options: ['Keep it', 'Drop it'], header: 'Before bed' })
   expect(dialogOfCall(CALL)).toBe(asked)
-  // Answers given as a plain list carry no chip, and read the same from a call with none.
-  const plain = { ...CALL, questions: [{ question: 'Leave it open?', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] }
+  // Answers given as a plain list carry no chip of the mod's, and the engine puts its own over
+  // them (seen on Claude Code 2.1.330): the call a hook gets carries that one.
+  const plain = { ...CALL, questions: [{ question: 'Leave it open?', header: ENGINE_CHIP, options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] }
   expect(dialogOfCall(plain)).toBe(dialogOf('Leave it open?', ['Yes', 'No']))
+  expect(dialogOfCall(plain)).toBe(dialogOf('Leave it open?', { options: ['Yes', 'No'] }))
+  expect(dialogOfCall({ ...CALL, questions: [{ question: 'Leave it open?', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] })).not.toBe(dialogOf('Leave it open?', ['Yes', 'No']))
   // Any difference is another dialog: a word, an answer, the chip, several answers at once.
   const q = CALL.questions[0] as (typeof CALL.questions)[0]
   for (const other of [

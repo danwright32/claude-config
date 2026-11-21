@@ -85,6 +85,8 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
     }
     // #3321: asked through mod-kit's one recorder, which notes the question's size first (never a
     // word of it) and asks it whatever the record says (Dan, 2026-11-21: "Record, then decide").
+    // The recorder also tells mod-kit the dialog is this mod's own for as long as it is open, so
+    // picker manners never takes it for a session's picker.
     const io: AskedIo = {
       now: () => $.clock.now(),
       home: () => $.env.get('HOME'),
@@ -92,6 +94,8 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
       list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
       run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
       ask: (question, options) => $.ui.ask(question, options),
+      asking: dialog => $.modkit.asking({ mod: 'keystroke-guard', dialog }),
+      answered: dialog => $.modkit.answered({ mod: 'keystroke-guard', dialog }),
       said: line => $.ui.log(line),
     }
     answer = await whileHeld(held, () => recordedAsk(io, 'keystroke-guard', 'ready', `I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))

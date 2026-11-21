@@ -5,6 +5,7 @@ import type {} from '../types/index.d.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { checkOffAnswered, offTheDialog } from '../hooks/register.ts'
 import { GO_TO_SLEEP, itemChoices, openQuestionsIn, SKIP_QUESTION } from '../hooks/mod-kit/openquestions.ts'
+import { dialogOf } from '../hooks/mod-kit/asked.ts'
 
 // Picker manners (#615) leaves the asking to Claude Code's own dialog (#744, decided with Dan on
 // 2026-10-05): its band question waited for a press through the mod's own $ noun, which Claude Code
@@ -496,10 +497,12 @@ test("the before bed dialog's skip and go to sleep leave the issue's item open; 
   expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)'])
 })
 
-// #3321: the before bed dialog arrives here like any other picker, so one naming an issue that Dan
-// could not read as written is held to the same rule: it is never shown, nothing is written, and
-// the mod that raised it is handed the refusal, which /sleep says beside the issue it leaves out.
-test('the before bed dialog is refused the same way, and the mod that raised it is told why (#3321)', { plugins: [kitWithRepo, bedtime] }, async ($, on) => {
+// #3321: a mod's dialog arrives here like any other picker, with nothing on it saying a mod raised
+// it. One no mod told mod-kit is its own (this stand in asks without saying so, as a mod that
+// called the dialog past mod-kit's recorder would) is held to the session's rule: naming an issue
+// and unreadable as written, it is never shown, nothing is written, and the mod that raised it is
+// handed the refusal, which /sleep says beside the issue it leaves out.
+test('a dialog no mod said is its own is refused the same way, and the mod that raised it is told why (#3321)', { plugins: [kitWithRepo, bedtime] }, async ($, on) => {
   const OPEN = 'The bug.\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
   const w = issueWorld(on, 'Drop it', { 7: OPEN })
   const zw = String.fromCodePoint(0x200b)
@@ -512,6 +515,130 @@ test('the before bed dialog is refused the same way, and the mod that raised it 
   expect(r.text).toContain('The question would not reach Dan as written: character 20 of it is U+200B')
   expect(w.edits).toEqual([])
   expect(w.bodies[7]).toBe(OPEN)
+})
+
+// #3321: a question a mod asks through its own dialog is one of those Dan chose to record and
+// refuse none of (2026-11-21: "Record, then decide"), and it arrives here with nothing on it
+// saying a mod raised it. What tells it apart is the asking mod's own word, kept in mod-kit's
+// $.state from $.modkit.asking to $.modkit.answered: only mod-kit writes that state, and only a
+// mod's code can call a noun, so a session cannot put an entry there. The stand ins: a mod-kit
+// that keeps the entries as the real one does, and a mod that asks the way mod-kit's recorder
+// does (says the dialog is its own, asks, takes it back), or stops after saying so.
+const kitKeepingAsked: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const ref = { plugin: 'mod-kit', key: 'asking' } as const
+      const kept = async () => ((await built.state.get(ref as never)).value ?? []) as { mod: string; dialog: string }[]
+      const modkit = {
+        isDans: async () => false,
+        repo: async () => ({ github: 'o/r', name: 'r' }),
+        asking: async (one: { mod: string; dialog: string }) => void (await built.state.set(ref as never, [...(await kept()), one] as never)),
+        answered: async (one: { mod: string; dialog: string }) => {
+          const now = await kept()
+          const at = now.findIndex(a => a.mod === one.mod && a.dialog === one.dialog)
+          await built.state.set(ref as never, now.filter((_a, k) => k !== at) as never)
+        },
+      }
+      return { ...built, modkit: modkit as never }
+    })
+  },
+}
+const ownAsker: { name: string; register: Register } = {
+  name: 'own-asker',
+  register: on => {
+    on('command.run', { command: 'own' }, async ($, e) => {
+      const { question, options, header, dialog, leave } = JSON.parse(e.args) as { question: string; options: string[]; header?: string; dialog: string; leave?: true }
+      await $.modkit.asking({ mod: 'own-asker', dialog })
+      // `leave`: the dialog is said to be open and never asked here, as while a mod waits on it.
+      if (leave) return { text: 'left open' }
+      try {
+        return { text: await $.ui.ask(question, header === undefined ? options : { options, header }).catch((err: unknown) => `failed: ${err instanceof Error ? err.message : String(err)}`) }
+      } finally {
+        await $.modkit.answered({ mod: 'own-asker', dialog })
+      }
+    })
+  },
+}
+const ownArgs = (question: string, options: string[], header?: string, leave?: true) =>
+  JSON.stringify({ question, options, ...(header === undefined ? {} : { header }), dialog: dialogOf(question, header === undefined ? options : { options, header }), ...(leave ? { leave } : {}) })
+
+test("a mod's own question that names an issue is asked though Dan could not read it as written, and is written onto no issue (#3321)", { plugins: [kitKeepingAsked, ownAsker] }, async ($, on) => {
+  const OPEN = 'The bug.\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
+  const w = issueWorld(on, 'Drop it', { 7: OPEN })
+  const zw = String.fromCodePoint(0x200b)
+  // The before bed dialog, with its chip.
+  const bed = (await $.command.run({ command: 'own', args: ownArgs(`o/r#7: Keep the old${zw} flag?`, ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP], 'Before bed') } as never)) as { text?: string }
+  await w.settle()
+  expect(bed.text).toBe('Drop it')
+  // No checked box in words he could not read: the issue is as it was, and he is told.
+  expect(w.edits).toEqual([])
+  expect(w.bodies[7]).toBe(OPEN)
+  expect(w.logs).toEqual(["Picker manners: a mod's own question was not added to o/r#7's Open questions, since it would not have reached you as written."])
+  // One with no chip of the mod's (the engine puts its own over it) is told apart the same way.
+  const bare = (await $.command.run({ command: 'own', args: ownArgs(`Leave the branch for issue #7 as it is${zw}?`, ['Leave it as it is', 'Clean it up']) } as never)) as { text?: string }
+  await w.settle()
+  expect(bare.text).toBe('Drop it')
+  expect(w.edits).toEqual([])
+  expect(w.logs.length).toBe(2)
+  expect(w.logs[1]).toContain("issue #7's Open questions")
+  // One he could read is written onto its issue as any other question is.
+  w.answer = 'Keep it'
+  const plain = (await $.command.run({ command: 'own', args: ownArgs('o/r#7: Keep the old flag?', ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP], 'Before bed') } as never)) as { text?: string }
+  await w.settle()
+  expect(plain.text).toBe('Keep it')
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Keep it)'])
+})
+
+// The other side, which the mark must never open: a session's picker is refused as before while a
+// mod's dialog is open, unless it is that very dialog with nothing beside it, and once the mod has
+// taken its word back the same words are a session's again.
+test("a session's picker is refused as before while a mod's own dialog is open, whatever it borrows from it (#3321)", { plugins: [kitKeepingAsked, ownAsker] }, async ($, on) => {
+  const w = issueWorld(on, 'Drop it', { 7: 'The bug.' })
+  const zw = String.fromCodePoint(0x200b)
+  const question = `o/r#7: Keep the old${zw} flag?`
+  const labels = ['Keep it', 'Drop it']
+  expect(((await $.command.run({ command: 'own', args: ownArgs(question, labels, 'Before bed', true) } as never)) as { text?: string }).text).toBe('left open')
+  const session = async (q: object, extra: Record<string, unknown> = {}) =>
+    (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q11', questions: [q], ...extra } as never)) as { deny?: string; text?: string }
+  const same = { question, header: 'Before bed', multiSelect: false, options: labels.map(label => ({ label, description: '' })) }
+  // The same words with a source, a description, another answer, another chip, or a second
+  // unreadable question: each is a session's picker, and refused.
+  for (const r of [
+    await session(same, { metadata: { source: 'scope-modes' } }),
+    await session({ ...same, options: [{ label: 'Keep it', description: 'It is in use.' }, { label: 'Drop it', description: '' }] }),
+    await session({ ...same, options: [...same.options, { label: 'Both', description: '' }] }),
+    await session({ ...same, header: 'Bedtime' }),
+    await session({ ...same, question: `o/r#7: Drop the old${zw} flag?` }),
+  ]) {
+    expect(r.text).toBeUndefined()
+    expect(r.deny).toContain('The question would not reach Dan as written')
+  }
+  expect(w.edits).toEqual([])
+})
+
+test("once the mod has taken its word back, the same words are a session's picker again and refused (#3321)", { plugins: [kitKeepingAsked, ownAsker] }, async ($, on) => {
+  const w = issueWorld(on, 'Drop it', { 7: 'The bug.' })
+  const zw = String.fromCodePoint(0x200b)
+  const question = `o/r#7: Keep the old${zw} flag?`
+  const labels = ['Keep it', 'Drop it']
+  expect(((await $.command.run({ command: 'own', args: ownArgs(question, labels, 'Before bed') } as never)) as { text?: string }).text).toBe('Drop it')
+  await w.settle()
+  const r = (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q12', questions: [{ question, header: 'Before bed', multiSelect: false, options: labels.map(label => ({ label, description: '' })) }] } as never)) as { deny?: string; text?: string }
+  expect(r.text).toBeUndefined()
+  expect(r.deny).toContain('The question would not reach Dan as written')
+})
+
+// A mod-kit loaded before it kept these (a reload can leave one) holds no entry, so the dialog is
+// taken for a session's and refused: the side that keeps every check on it.
+test("with a mod-kit that keeps no such word, a mod's own unreadable question is refused as a session's would be (#3321)", { plugins: [kitWithRepo, bedtime] }, async ($, on) => {
+  const w = issueWorld(on, 'Drop it', { 7: 'The bug.' })
+  const zw = String.fromCodePoint(0x200b)
+  const r = (await $.command.run({ command: 'bedtime', args: JSON.stringify({ question: `o/r#7: Keep the old${zw} flag?`, options: ['Keep it', 'Drop it'] }) } as never)) as { text?: string }
+  await w.settle()
+  expect(r.text).toContain('failed: ')
+  expect(w.edits).toEqual([])
 })
 
 // #1299 (lessons review): a mod-kit loaded before it had repo cannot say the session's repository; the

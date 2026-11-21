@@ -68,23 +68,30 @@ export type Asked = {
   /** How many answers it offers, and the longest one's length. */
   options: number
   longest: number
-  /** The length of the chip over it, 0 when it has none. */
+  /** The length of the chip the mod gave it, 0 when it gave none and the engine shows its own (ENGINE_CHIP). */
   header: number
   /** Whether the shared check would refuse the dialog as it is asked (askFault). */
   refused: boolean
 }
 
+/**
+ * The chip the engine puts over a mod's own dialog that gives none (seen on Claude Code 2.1.330,
+ * in scope modes' suite, whose closing case fails if the engine's word changes).
+ */
+export const ENGINE_CHIP = 'Plugin'
+
 const labelsOf = (options: AskedOptions | undefined): readonly string[] => (options === undefined ? [] : Array.isArray(options) ? options : ((options as { options?: readonly string[] }).options ?? []))
 const headerOf = (options: AskedOptions | undefined): string => (options === undefined || Array.isArray(options) ? '' : ((options as { header?: string }).header ?? ''))
+/** The chip as the dialog shows it: the mod's own, or the engine's when it gave none. */
+const chipOf = (options: AskedOptions | undefined): string => headerOf(options) || ENGINE_CHIP
 
 /** The record of one question: its sizes, and the shared check's verdict on the call as the dialog gets it. */
 export const askedOf = (mod: string, which: string, question: string, options: AskedOptions | undefined, at: number): Asked => {
   const labels = labelsOf(options)
-  const header = headerOf(options)
   // As the engine hands a mod's own dialog on (seen on Claude Code 2.1.330): the question, its
-  // chip when it has one, and each answer with an empty description.
-  const call = { questions: [{ question, ...(header ? { header } : {}), options: labels.map(label => ({ label, description: '' })), multiSelect: false }] }
-  return { at, mod, which, units: question.length, rows: rowsAt(question), options: labels.length, longest: labels.reduce((most, l) => Math.max(most, l.length), 0), header: header.length, refused: askFault(call) !== undefined }
+  // chip (the engine's own when the mod gave none), and each answer with an empty description.
+  const call = { questions: [{ question, header: chipOf(options), options: labels.map(label => ({ label, description: '' })), multiSelect: false }] }
+  return { at, mod, which, units: question.length, rows: rowsAt(question), options: labels.length, longest: labels.reduce((most, l) => Math.max(most, l.length), 0), header: headerOf(options).length, refused: askFault(call) !== undefined }
 }
 
 const msg = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -143,9 +150,14 @@ export const recordAsked = async (io: AskedIo, mod: string, which: string, quest
 /** One dialog a mod has open that it raised itself, as mod-kit's $.state keeps it. */
 export type OwnDialog = { mod: string; dialog: string }
 
-/** A dialog as one string: its question, chip, answers and whether several may be chosen. */
+/**
+ * A dialog as one string, as the engine will hand it on: its question, its chip (the engine's own
+ * when the mod gives none), its answers and whether several may be chosen. What the engine changes
+ * beyond that is not mirrored (it pads fewer than two answers with its own), so such a dialog
+ * matches no call and is taken for a session's picker, the side that keeps every check on it.
+ */
 export const dialogOf = (question: string, options?: AskedOptions): string =>
-  JSON.stringify([question, headerOf(options), labelsOf(options), options !== undefined && !Array.isArray(options) && (options as { multiSelect?: true }).multiSelect === true])
+  JSON.stringify([question, chipOf(options), labelsOf(options), options !== undefined && !Array.isArray(options) && (options as { multiSelect?: true }).multiSelect === true])
 
 const onlyKeys = (o: object, allowed: readonly string[]): boolean => Object.keys(o).every(k => allowed.includes(k))
 

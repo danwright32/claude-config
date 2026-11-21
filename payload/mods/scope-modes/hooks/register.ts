@@ -637,6 +637,10 @@ const askDan = ($: EngineInterface, which: string, question: string, options?: A
     list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
     run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
     ask: (asked, offered) => $.ui.ask(asked, offered),
+    // The recorder tells mod-kit the dialog is this mod's own for as long as it is open, so picker
+    // manners never takes it for a session's picker.
+    asking: dialog => $.modkit.asking({ mod: 'scope-modes', dialog }),
+    answered: dialog => $.modkit.answered({ mod: 'scope-modes', dialog }),
     said: line => $.ui.log(line),
   }
   return recordedAsk(io, 'scope-modes', which, question, options)

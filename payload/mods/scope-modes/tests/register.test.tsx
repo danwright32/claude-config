@@ -19,6 +19,7 @@ import { branchAt } from './mod-kit/hooks/branch.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 import { PAGE_TOOL, publishInstead } from '../hooks/mod-kit/deliver.ts'
+import { dialogOfCall } from '../hooks/mod-kit/asked.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -105,6 +106,13 @@ const deps: { name: string; register: Register } = {
           },
           release: async (input: unknown) => {
             await kit('release', input)
+          },
+          // #3321: the mod saying a dialog it opens is its own, and taking that back, kept by the world.
+          asking: async (input: unknown) => {
+            await kit('asking', input)
+          },
+          answered: async (input: unknown) => {
+            await kit('answered', input)
           },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
@@ -537,6 +545,11 @@ const world = (on: On, o: Opts = {}) => {
     holding: new Set<string>(),
     /** #2132: each prompt or question the mod made with no hold standing, which a reload would drop. */
     unheld: [] as string[],
+    /** #3321: the dialogs the mod has told mod-kit are its own and not yet taken back. */
+    owning: [] as string[],
+    /** #3321: how many questions the mod asked itself, and each one asked while mod-kit had not been told that very dialog is its own. */
+    ownAsks: 0,
+    unowned: [] as string[],
     /** Reading this session's id throws from now on (#834: a permission decision that throws). */
     idThrows: false,
     released: [] as string[][],
@@ -780,6 +793,12 @@ const world = (on: On, o: Opts = {}) => {
       if (a[0] === 'hold') w.holding.add(id)
       else w.holding.delete(id)
       w.held.push(`${a[0]} ${a[1]}`)
+      return ok('')
+    }
+    if (cmd === '__modkit' && (a[0] === 'asking' || a[0] === 'answered')) {
+      const { dialog } = JSON.parse(a[1] as string) as { dialog: string }
+      if (a[0] === 'asking') w.owning.push(dialog)
+      else if (w.owning.includes(dialog)) w.owning.splice(w.owning.indexOf(dialog), 1)
       return ok('')
     }
     if (cmd === '__modkit') {
@@ -1092,6 +1111,10 @@ const world = (on: On, o: Opts = {}) => {
       if (/^toolu_/.test(String((e as unknown as { tool_use_id?: unknown }).tool_use_id))) {
         w.held.push('ask')
         if (!w.holding.size) w.unheld.push(`ask ${q.slice(0, 60)}`)
+        // #3321: the call as a hook gets it must be a dialog the mod said is its own, word for word.
+        w.ownAsks++
+        const dialog = dialogOfCall(e as unknown as Record<string, unknown>)
+        if (dialog === undefined || !w.owning.includes(dialog)) w.unowned.push(`ask ${q.slice(0, 60)}`)
       }
       w.asked.push(q)
       w.askedOptions.push((first?.options ?? []).map(x => (x && typeof x === 'object' ? String((x as { label?: unknown }).label) : String(x))))
@@ -1137,7 +1160,7 @@ const world = (on: On, o: Opts = {}) => {
   return { w, clock, readAttempted }
 }
 // #2132: every world made in this file, so the last test can read every wait the mod made in all of them.
-const everyWorld: { o: Opts; held: string[]; unheld: string[] }[] = []
+const everyWorld: { o: Opts; held: string[]; unheld: string[]; ownAsks: number; unowned: string[]; owning: string[] }[] = []
 
 type $T = {
   session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown>; receive: (e: never) => Promise<unknown> }
@@ -8721,6 +8744,16 @@ test('every prompt the mod sends and every question it asks Dan holds back a rel
   expect(worlds.flatMap(x => x.unheld)).toEqual([])
   const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
   expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
+})
+
+// #3321: a question the mod asks through its own dialog reaches picker manners with nothing on it
+// saying a mod raised it, so the mod tells mod-kit first, through mod-kit's recorder, and picker
+// manners reads that. Last in the file like the case above: of every question the mod asked in
+// every test, each was a dialog mod-kit had been told is the mod's own, word for word as a hook
+// gets it, and the count shows the questions were reached at all.
+test('every question the mod asks Dan itself is said to be its own dialog while it is open (#3321)', async () => {
+  expect(everyWorld.flatMap(x => x.unowned)).toEqual([])
+  expect(everyWorld.reduce((n, x) => n + x.ownAsks, 0)).toBeGreaterThan(50)
 })
 
 // #3330: the watchdog times every claim the session holds from its own start, and leaves alone a
