@@ -222,7 +222,7 @@ class _Start:
             self._data = None
             self._recorder.inside += 1
             try:
-                real = builtins.open(self._file, "rb")
+                real = builtins.open(self._file, mode="rb")
             finally:
                 self._recorder.inside -= 1
             real.seek(self._at)
