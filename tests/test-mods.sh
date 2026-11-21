@@ -1798,6 +1798,27 @@ for m in keys-destructure keys-kept keys-list; do
     || check "#3190: and names $m, pointing it at the copy of hooks/toolargs.ts" "$out"
 done
 case "$out" in *clean-asks-args*) check "#3190: a mod asking the copy of hooks/toolargs.ts, or reading one key alone, passes" "$out" ;; *) check "#3190: a mod asking the copy of hooks/toolargs.ts, or reading one key alone, passes" ok ;; esac
+# #3321: a mod that reads the answers Claude Code's question dialog hands back acts on what Dan
+# chose, and his answer covers only text he could read, so it first judges the call with askFault
+# from the copy of mod-kit's hooks/shown.ts. A mod reading the answers without it fails the run,
+# however its hook is laid out, and so does one that imports the check and never calls it. A mod
+# that calls it, one that hooks the dialog and reads no answer, and one that only names the dialog
+# in a comment pass.
+M9P="$TMPROOT/m9-picker-answers"
+mkmodsrc "$M9P" clean-judges-picker "import { askFault } from './mod-kit/shown.ts'; on('tool.call', { tool: 'AskUserQuestion' }, async (\$, e, next) => { if (askFault(e) !== undefined) return { deny: 'unread' }; const r = await next(e); return keep(r.result?.answers) })"
+mkmodsrc "$M9P" clean-reads-no-answer "on('tool.check', { tool: 'AskUserQuestion' }, async (\$, e, next) => { opened(e); return next(e) })"
+mkmodsrc "$M9P" clean-comment-only "// An AskUserQuestion picker is not this mod's.
+const answers = form.answers"
+mkmodsrc "$M9P" answers-in-hook "on('tool.call', { tool: 'AskUserQuestion' }, async (\$, e, next) => { const r = await next(e); return keep(r.result?.answers) })"
+mkmodsrc "$M9P" answers-any-call "on('tool.call', async (\$, e, next) => { const r = await next(e); if (e.tool === 'AskUserQuestion') note(r.result.answers); return r })"
+mkmodsrc "$M9P" answers-imported-not-called "import { askFault } from './mod-kit/shown.ts'; const DIALOG = 'AskUserQuestion'; const chosen = out.answers?.[asked]"
+out="$(bash "$SHARED" "$M9P" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#3321: a mod reading a picker's answers without the shared check fails the run" ok || check "#3321: a mod reading a picker's answers without the shared check fails the run" "exit=$code out=$out"
+for m in answers-in-hook answers-any-call answers-imported-not-called; do
+  printf '%s\n' "$out" | grep "$m reads the answers of an AskUserQuestion picker" | grep -q 'hooks/mod-kit/shown.ts' && check "#3321: and names $m, pointing it at the copy of hooks/shown.ts" ok \
+    || check "#3321: and names $m, pointing it at the copy of hooks/shown.ts" "$out"
+done
+case "$out" in *clean-judges-picker*|*clean-reads-no-answer*|*clean-comment-only*) check "#3321: a mod that judges the call first, reads no answer, or names the dialog only in a comment passes" "$out" ;; *) check "#3321: a mod that judges the call first, reads no answer, or names the dialog only in a comment passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
