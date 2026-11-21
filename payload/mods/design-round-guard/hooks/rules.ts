@@ -4139,6 +4139,31 @@ export const MOVE_ALONE_REMEDY = 'Run it as its own command, with nothing before
 export const MOVE_FETCH_REMEDY = 'Run git fetch as its own command first, then this one on its own, and the guard reads it then.'
 
 /**
+ * Whether git's whole message, from a read of the commits a cherry-pick or revert names that exited
+ * 128, is that it does not know one of them (#3333): `fatal: bad revision '<name>'` for a name or a
+ * range, `fatal: bad object <sha>` for a whole commit id (git 2.51.1, measured 2026-11-21). Only
+ * then can a fetch help. 128 is git's code for any fatal error, so a corrupt object, a damaged pack
+ * or a folder that is no repository exits 128 too, and an error line before the fatal one is such
+ * damage speaking, whatever the last line says.
+ */
+export const unknownCommitSaid = (stderr: string): boolean => /^fatal: bad (?:revision|object)(?: [^\n]*)?$/.test(stderr.trim())
+
+/** The most of git's own message a refusal quotes (#3333): a damaged object repeats its lines. */
+const GIT_SAID_MAX = 500
+
+/**
+ * What a refusal says when a read of the commits a cherry-pick or revert names exited 128 for a
+ * reason other than an unknown commit (#3333): the question, that the guard could not read the
+ * commits, and git's message, each distinct line once, in the order git printed them. No fetch is
+ * named, since nothing here says one would help.
+ */
+export const commitsUnread = (asked: string, stderr: string): string => {
+  const lines = [...new Set(stderr.split('\n').map(l => l.trim()).filter(Boolean))].join(' ')
+  const said = lines === '' ? 'nothing' : lines.length > GIT_SAID_MAX ? `${lines.slice(0, GIT_SAID_MAX - 3)}...` : lines
+  return `${asked} exited 128, so the guard could not read the commits it names. git said: ${said}`
+}
+
+/**
  * What a git command that moves committed work into the working tree brings in, as the question to
  * ask git (#3279), from mod-kit's reading of its words. Undefined for every other command, and for a
  * move that brings nothing in: `--abort`, `--continue`, `--skip` and `--quit` (the move they belong

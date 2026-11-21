@@ -1272,7 +1272,8 @@ export const wholeRuleInBold = (lines: readonly string[], numbered: string): boo
  * reader reads (claude-sync lesson_entries_render scans every line of the entry after its first, so
  * it also reads a line after the SHORT line, which no approval covers). Every other line is still
  * read as the rule's, so another check line, a second one, one in another place, or the same line
- * under another rule fails the comparison below and is asked about. With no `check`, or one that is
+ * under another rule fails the comparison below, and the write is refused and sent back to the
+ * lesson picker (pickerOnly). With no `check`, or one that is
  * no check line (checkLine), the entry takes no check line at all.
  *
  * The entry's line is compared as the entry holds it (security review of #3245). The lines above are
@@ -1292,7 +1293,8 @@ export const wholeRuleInBold = (lines: readonly string[], numbered: string): boo
  * else. The entry's SHORT line is now that line, equal to it but for the file's indentation, read
  * from the same copy of the entry the check line is, and it stays the entry's last line. With no
  * `short`, or one that is no SHORT line (shortLine), the entry takes no SHORT line at all, so one
- * added after an approval that showed none is asked about. And where he read one, an entry
+ * added after an approval that showed none is refused and sent back to the lesson picker. And
+ * where he read one, an entry
  * without it is not the entry he read. Whether a lesson needs one is settled before he is asked:
  * the picker refuses a rule too long for the index line that brings no SHORT line (register.ts).
  *
