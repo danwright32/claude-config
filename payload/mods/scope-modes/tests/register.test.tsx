@@ -5807,11 +5807,58 @@ test('asleep, a merge helper reading mod-kit cannot give refuses the call, where
   // wait, and a run that cannot be read for certain is refused there and here.
   expect(await call($ as never, bash('cat ~/.claude/hooks/lib/merge-when-ready.sh'))).toBe('ran')
   expect(await call($ as never, bash('bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight/)
-  expect(await call($ as never, bash('cd /quiet && bash -c "$MERGE"'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
+  // Since #3272 the refusal names the value nobody can follow, where a value is what names the command.
+  expect(await call($ as never, bash('cd /quiet && bash -c "$MERGE"'))).toMatch(/^Blocked overnight: this would run `\$MERGE`, a command named by a value this reader cannot follow, which may be merge-when-ready\.sh, and which repository this reaches could not be told/)
   // xargs may add a repository from its input after the one written, so it is refused too.
   expect(await call($ as never, bash('cd /quiet && echo 5 | xargs bash ~/.claude/hooks/lib/merge-when-ready.sh --repo o/quiet'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
   w.o.mergeHelperReaderFails = true
   expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(mod-kit is not loaded\)/)
+})
+
+// #3272: at 1:02 AM ET on 2026-11-19 a builder's read only loop over /bin/bash and /bin/zsh, each
+// running `$sh -c '<a function definition>'`, was held as a command that may run the merge helper,
+// on a night whose lists named no repository for it. The whole call, through the mod, as it was sent
+// but for its folder; then the same shape where it really merges, and where it cannot be read.
+test('asleep, a loop over shells written out runs, what it merges is still held, and a program a value names is refused with the word (#3272)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [], closed: [] }) })
+  await start($ as never, clock)
+  const loop = `for sh in /bin/bash /bin/zsh; do echo "== $sh"; $sh -c 'f() ( echo A-sub ); f' 2>&1; $sh -c 'f() echo B-plain; f' 2>&1 | head -2; $sh -c 'function f ( echo C-fn-paren ); f' 2>&1 | head -2; $sh -c 'function f () ( echo D ); f' 2>&1 | head -2; $sh -c 'f () (echo E); f' 2>&1; $sh -c 'function f { echo F; }; f' 2>&1; $sh -c 'f() if true; then echo G; fi; f' 2>&1 | head -2; $sh -c 'f() { echo>/dev/null H; echo>&2 H2; }; f' 2>&1; $sh -c 'echo>/dev/null I; echo J>/dev/stderr K; echo 2>/dev/null L; echo M2>/dev/null N; echo O 1>&2' 2>&1; $sh -c 'f g() ( echo P ); f; g' 2>&1 | head -3; $sh -c 'f() true && echo Q; f' 2>&1 | head -2; done`
+  expect(await call($ as never, bash(loop, 'l1'))).toBe('ran')
+  // The answer to the issue's question: written with each shell's name it ran before too.
+  expect(await call($ as never, bash(`/bin/bash -c 'f() ( echo A-sub ); f' 2>&1; /bin/zsh -c 'f() echo B-plain; f' 2>&1 | head -2`, 'l2'))).toBe('ran')
+  // What the loop merges is a merge, and what it is banned from doing is refused.
+  expect(await call($ as never, bash('for sh in /bin/bash /bin/zsh; do $sh ~/.claude/hooks/lib/merge-when-ready.sh 12 --squash; done', 'l3'))).toMatch(/^Blocked overnight: this would merge a PR with merge-when-ready\.sh, and o\/r is on neither list/)
+  expect(await call($ as never, bash(`for sh in /bin/bash /bin/zsh; do $sh -c 'gh pr merge 12 --squash'; done`, 'l4'))).toMatch(/^Blocked overnight: this would merge a PR, and o\/r is on neither list/)
+  expect(await call($ as never, bash(`for sh in /bin/bash /bin/zsh; do $sh -c 'git push --force origin fix-1'; done`, 'l5'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not force push\./)
+  // A program a value names in any other way may be the helper: held, naming the word to rewrite.
+  const named = asRegExp(
+    "Blocked overnight: this would run `$sh`, a command named by a value this reader cannot follow, which may be merge-when-ready.sh, and which repository this reaches could not be told, so tonight it neither merges nor deploys. If it merges nothing, write the command out where `$sh` stands: written that way it can be read, and you may send it again. If it does merge, leave the green PR open",
+  )
+  expect(await call($ as never, bash(`$sh -c 'f() ( echo A-sub ); f'`, 'l6'))).toMatch(named)
+  expect(await call($ as never, bash(`for sh in $SHELLS; do $sh -c 'f() ( echo A-sub ); f'; done`, 'l7'))).toMatch(named)
+  expect(await call($ as never, bash(`for sh in /bin/bash /bin/zsh; do read sh < shells.txt; $sh -c 'f() ( echo A-sub ); f'; done`, 'l8'))).toMatch(named)
+})
+
+// #3287: at 12:43 AM ET on 2026-11-19 a builder's python measurement was refused as code the reader
+// cannot read, with words telling it to look for no other way. It runs part of a file through exec,
+// which nobody can read before it runs, so it is still refused; the refusal now says what was seen
+// and how the same measurement is written so that it is read.
+test('asleep, inline code the reader cannot read is refused with what was seen and how to write it, and a ban keeps its words (#3287)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [], closed: [] }) })
+  await start($ as never, clock)
+  const python = `python3 -I -c '\nimport json,re,glob,os,runpy,sys\nsrc=open("measure.py").read().split("total = before")[0]\nexec(src)\nns=runpy.run_path("/tmp/wt/payload/hooks/no-ai-tells-detect.py",run_name="m")\n' 2>&1 | tail -3`
+  expect(await call($ as never, bash(python, 'p1'))).toBe(
+    'Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run code this reader cannot read: inline python that uses exec. This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else. It was refused because it could not be read, not for what it does. Written so that it can be read, you may send it again, and it is then judged by what it does: put the code in the command itself, with nothing built or loaded as it runs (no exec, eval or compile, no module loaded by a name worked out as it runs). Do it no other way. Carry on with work that does not need it, or skip this issue.',
+  )
+  // Written that way, the measurement is read and runs.
+  expect(await call($ as never, bash(`python3 -I -c '\nimport json,runpy\nns=runpy.run_path("/tmp/wt/payload/hooks/no-ai-tells-detect.py",run_name="m")\nprint(json.dumps(sorted(ns)))\n'`, 'p3'))).toBe('ran')
+  // Something Dan bans is told to wait for the morning, as before, whatever language runs it.
+  expect(await call($ as never, bash('git push --force origin fix-1', 'p4'))).toBe(
+    'Refused: sleep mode is on and Dan bans this while he sleeps, so this did not force push. This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else. Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.',
+  )
+  expect(await call($ as never, bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`, 'p5'))).toMatch(
+    /so this did not run code that runs gh, git or a database client, which cannot be judged\. This session keeps it .* Do not look for another way to do it; it waits for the morning\./,
+  )
 })
 
 // #1281: since 8:50 PM ET on 2026-10-16 a Bidspoke session started before #1251 had every Bash call

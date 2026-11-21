@@ -214,9 +214,9 @@ checkout_rules() { # <target>
   [ "$V" = offerable ] || return
   dcs_git_merged "$t"
   [ "$V" = offerable ] || return
-  out="$(git -C "$t" stash list 2> "$err" </dev/null)" || { V="unmeasured: git stash list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  out="$(dc_git "$t" stash list 2> "$err" </dev/null)" || { V="unmeasured: git stash list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
   [ -z "$out" ] || { V="not offerable: it holds a stash"; rm -f "$err"; return; }
-  n="$(git -C "$t" rev-list --count --branches --tags --not --remotes HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  n="$(dc_git "$t" rev-list --count --branches --tags --not --remotes HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-list failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
   rm -f "$err"
   case "$n" in
     0) ;;

@@ -6521,6 +6521,69 @@ disk-clean harness. `test-disk-clean-stat-order.sh` reads every disk-clean scrip
 from where they live, and fails on a `stat` that asks BSD's `-f` before GNU's `-c`, which is right
 on the Mac and wrong on the Linux runner (#1874).
 
+### git in a folder being judged
+
+The scan and the remover ask git about folders they did not make: a finished worktree, a checkout a
+session left in its notes. git answers with that repository's own configuration, and a setting
+there can name a program git then starts. So a repository copied into a session's notes, or a
+folder built to look like one, could make a scan that promises only to read run a program nobody
+chose (claude-config#3328; nothing shows it has happened). git's manual offers no switch for this
+(man git, SECURITY: "it is not safe to run Git commands in a .git directory (or the working tree
+that surrounds it) when that .git directory itself comes from an untrusted source"), only a clean
+copy made with `git clone --no-local`, which cannot be asked what a working tree holds. So every
+git call in a disk-clean script goes through one helper, `dc_git` in
+`hooks/lib/disk-clean-predicates.sh`, which turns off, for that one call, each setting measured to
+start a program, and refuses any git command nobody has measured. Measured on 2026-11-20 with git
+2.51.1 (Homebrew) and 2.54.0 (Apple), which agreed:
+
+| Called bare, git ran the repository's | During | Turned off with |
+| --- | --- | --- |
+| `core.fsmonitor` | status, and the status inside worktree remove | `-c core.fsmonitor=false` |
+| `hooks/post-index-change` | worktree remove | `-c core.hooksPath=/dev/null` |
+| `gpg.program` | stash list over a signed stash commit | `-c log.showSignature=false` |
+| `remote.<name>.uploadpack` | status and rev-list in a partial clone | `--no-lazy-fetch` |
+| `filter.<name>.clean` and `.process` | status and worktree remove | emptied by name, `.smudge` too |
+
+rev-parse, symbolic-ref, remote get-url, rev-list --count and a plain stash list ran nothing. Two
+more settings ride along at no cost: `--no-pager`, and `-c safe.bareRepository=explicit`, the one
+setting man git-config gives for a repository of unknown origin, under which git answers for no
+bare repository it merely finds at a folder.
+
+- **Filters have no single switch.** Each has a name, and a file's attributes say which it uses. So
+  before a status or a worktree remove, `dc_git` asks git which filters the repository's own
+  configuration names (the local and worktree scopes, files it includes among them) and empties
+  each for the call. It asks the same of every submodule checked out beneath, because status runs a
+  status in each with that submodule's own configuration. A filter from the user's own
+  configuration, where `git lfs install` puts its own, is the user's choice and stays on.
+- **What it changes in an answer.** With a repository's filter off git compares a file as it lies,
+  and one the repository marks required makes git fail; a partial clone missing an object fails
+  where it used to fetch. A failure is read as unmeasured by every caller, so none of these can turn
+  uncommitted work into a clean answer. A bare repository at a judged folder was refused before as
+  belonging elsewhere and is refused now as holding none. Nothing else moved: the suites compare
+  each answer with the bare call's.
+- **What it refuses, git never run.** A command other than status, rev-parse, symbolic-ref,
+  rev-list, remote get-url, stash list and worktree remove, since another command brings other
+  programs (fetch an ssh command and credential helpers, diff and log -p the diff drivers) and
+  none of those is turned off; an option before the command other than `--no-optional-locks`; a
+  stash list with anything after it, and a status with any option but `--porcelain` and
+  `--untracked-files=all`, since either can be asked to print a diff; a filter whose name holds an
+  equals sign, which `-c` cannot name; a submodule whose path git prints quoted; more than 100
+  submodules checked out beneath the folder, whose settings it will not read; a call with no
+  command; and an empty folder name, which git reads as the directory the caller stands in.
+  Adding a command or a status option means measuring it in `hooks/test-disk-clean-git.sh` first.
+- **The next call cannot forget.** The harness's command check refuses a `git` written anywhere in
+  a disk-clean script but inside `dc_git` (`DC_WRAPPED` in `hooks/lib/disk-clean-harness.sh`), by
+  every route a script can take to one, and refuses a second definition of the helper.
+- **Not covered.** A program the user's own configuration or environment names; `core.fsmonitor`
+  set to true, git's built in watcher, which the same setting turns off but which was never started
+  to see; and a setting a later git adds, which the suites would show only if it changed one of the
+  cases they hold.
+
+`hooks/test-disk-clean-git.sh` asks the git on the machine, never a stub: for each row above it
+builds a repository whose own settings name a marker program, sees the marker run with the call as
+the scripts used to write it, and sees nothing run through `dc_git`. `test-disk-remove.sh` and
+`test-disk-clean-categories.sh` then run the remover and two judges on such a repository.
+
 ## Removing anything: disk-remove.sh
 
 `hooks/lib/disk-remove.sh` is the one place the disk-full and disk-clean skills remove anything (claude-config#1805). It never takes a
@@ -7201,7 +7264,14 @@ command substitution, `derived` (#2141): what its substitutions run and, where e
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
 else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
-`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`, and since #3272 never
+the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, which is read once for each word as if typed with it, and only where every word of the list
+is plain characters as typed and nothing else in the line could have given the variable another
+value: a list from a variable, a substitution, a pattern, braces or a file, a quoted word, the name
+handed to a builtin or set in a sum, any other value the shell fills in, a pattern character or a
+brace the shell may act on, `eval`, `source`, a trap, an alias or a heredoc each leave it unread),
+setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
 every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
@@ -8807,8 +8877,17 @@ write whose repository cannot be resolved, whatever `rtk proxy` runs judged as t
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
 expands, which rtk splits into a command, is refused as unread), since #3021 every other command
 mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
-`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
-which was cut off before the write check and ran, and a line running gh that way
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands; since #3272 a program that
+is the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, is read as each of those programs running that string and judged as if typed so, after a
+loop of that shape that merged nothing was held on 2026-11-19 as one that may run the merge helper,
+and where a value still names the program the hold names the word, `$sh`, and says to write the
+command out where it stands and send it again), code the reader cannot read (inline code that uses
+exec, eval or the like, or a program piped in), which since #3287 is refused saying what was seen
+("inline python that uses exec") and the one way to write it so that it is read, the code in the
+command itself with nothing built or loaded as it runs, never a file run by name, which no reader
+opens, while everything else on the list keeps "Do not look for another way", and a write through
+`&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
