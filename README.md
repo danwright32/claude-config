@@ -4742,6 +4742,17 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
+typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
+(on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in
+`payload/mods/design-round-guard`). A mod's tests are run with `claude plugin test <mod folder>`,
+which the gate lets through, and the refusal now ends by naming that command with the mod's folder
+written out (`mod_tests_seen`, `mod_tests_note`). A folder is a mod's where it, or a folder above
+it, holds `.claude-plugin/plugin.json`. The sentence is added only for a `bun test` the call itself
+types, in a folder the gate is certain of, and only to a refusal that is no finding of a post: a
+test file that posts is refused as a post and is told to save a draft, as before. Nothing is refused
+or allowed that was not before. Suite: `test-slack-drafts-mod-tests.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a
@@ -5331,7 +5342,12 @@ changed, or that name a file it changed as a path: a slash, then the shortest en
 no other file in the head's tree has. It runs those in a throwaway clone of the head through the
 head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
 they started, every two minutes that they are still running with how many have finished, and how
-they ended. A suite that fails, could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
+they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+the base as origin's branch, and that branch as origin's default. A suite that asks git there what
+a push would add is then answered with the pull request's commits; in a clone that knew no remote
+the answer was the whole history, and the step's first real merge stopped on it (#3392, on
+2026-11-21). A clone that cannot be told refuses the merge. A suite that fails,
+could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
 (2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
 being read: a notice or record that cannot be fetched or does not add up (the records are kept a
 day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
@@ -8524,7 +8540,19 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why;
+since #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)") a look changing file of any kind
+that a checkout or restore puts back byte for byte as the default branch holds it is not asked
+about, since it changes no look that has not shipped: the guard decides that from git, never from
+the command's words, with `git rev-parse --verify --quiet` for the commit the checkout's record of
+its remote's default branch stands at and for the commit the command names, which must be the same
+commit, and `git ls-tree` for whether that commit holds the file; the command must be written as
+its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
+origin/main <file>`), with nothing before or beside it that may change what the name means, though
+on a line that groups nothing what runs once the restore has finished no longer counts, a test run
+piped to its last lines included; any other commit, a local branch that differs from what was
+fetched, the index, any option, a pattern, a file the default branch does not hold and every case
+git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
 2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
 `switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`

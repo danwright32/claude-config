@@ -117,8 +117,11 @@ says "#3278 and names the same file where the variables stop being followed" "at
 lacks "#3278 and gives no line of the hook that the hook does not have" "hook.sh, line 7,"
 says "#3278 and still says what the hook was judged by" "hook.sh is made from the code python3 is given and tool earlier in this command, and was judged by what those hold"
 
-# A line of the script's own, read after what it is made from, keeps its own number: the notes hold
-# four lines, so the hook's third line is the eighth of the joined text.
+# A line of the script's own, read after what it is made from, keeps its own number. The joined text
+# is three parts (Judge.content_parts): the notes' four lines, then the one newline the gate puts
+# before the file as it is on disk, which reads as an empty fifth line, then the hook's own three
+# lines. So the hook's third line is the eighth of the joined text, 4 + 1 + 3, and not the seventh:
+# printed line by line and counted on 2026-11-21, and "line 8" is what the gate said before #3278.
 run_s "bash payload/hooks/test-hook2.sh"
 refused "#3278 a hook whose own line sources a path nothing sets is refused when its suite runs alone"
 says "#3278 and the refusal names the hook and its line, as before" "hook2.sh, line 3, sources \"\$NOWHERE_3278/x.sh\""
