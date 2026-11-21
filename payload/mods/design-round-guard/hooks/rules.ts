@@ -1747,6 +1747,27 @@ export const scriptNamesFile = (script: string, file: string): string =>
 export const scriptUnplaced = (script: string, file: string): string =>
   `${script} names ${file} in its own code, and where that file is could not be followed, since the folder the script runs in is not known`
 
+/**
+ * Whether a script file is kept in a temporary folder (#3279): under /tmp or /var/folders, each
+ * also in the /private spelling macOS gives them, or under the folder Claude Code keeps its own
+ * temporary files in (`roots`, tempRoots), which is where the session's scratchpad is. A script
+ * there is one a session wrote to run once, as inline code is, never a tool the project keeps. A
+ * path that climbs (`/tmp/../w/slate/gen.py`) is read as where it lands.
+ */
+export const keptInTemp = (path: string, roots: readonly string[]): boolean => {
+  const at = resolvePath(path, '/', '')
+  return ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders', ...roots].some(r => at.startsWith(`${r}/`))
+}
+
+/**
+ * Why a python or node script kept in a temporary folder could not be checked (#3279; Dan,
+ * 2026-11-19, "Hold the narrow case"): its code does not name every file it writes, and it names a
+ * look changing file by a relative name, which it may join onto any folder or open after changing
+ * folder, so the file that write lands in cannot be told before it runs.
+ */
+export const scriptHidesWrites = (script: string, file: string): string =>
+  `${script} is kept in a temporary folder, its own code does not name every file it writes, and it names ${file} by a relative name, which it may join onto any folder, so where it writes that file could not be followed`
+
 /** Why a script file that is there could not be checked (#2847): reading it failed, so what its code writes is unknown. */
 export const scriptUnreadable = (script: string, why: string): string => `${script} could not be read for the files its own code writes (${why})`
 
@@ -1794,6 +1815,8 @@ export type RunCommand = {
   folder?: string | null
   /** Why what it runs cannot be read from its words, as mod-kit says it (#3021); absent where it can. */
   unread?: string
+  /** The settings written in front of it, as mod-kit gives them: where a git command names its repository by GIT_DIR or GIT_WORK_TREE (#3337). */
+  env?: string[]
 }
 
 // The words the shell reads as its own grammar where a command begins, which no expansion ever is,
@@ -3992,11 +4015,314 @@ export const leavesGitAlone = (words: readonly string[], git: { sub: string | un
 export const pathRestore = (git: { sub: string | undefined; args: readonly string[] } | undefined): boolean => {
   if (git?.sub === 'restore') return true
   if (git?.sub !== 'checkout' || git.args.some(a => ['-b', '-B', '--orphan'].includes(a))) return false
-  return git.args.includes('--') || git.args.filter(a => !a.startsWith('-')).length >= 2
+  // Words after `--` are paths. A `--` with nothing after it names none: the checkout switches to
+  // the branch before it, which gitMove reads, so it is no restore.
+  const dashes = git.args.indexOf('--')
+  if (dashes >= 0) return dashes < git.args.length - 1
+  return git.args.filter(a => !a.startsWith('-')).length >= 2
 }
 
 /** Whether a restore's source, as `git cat-file blob <from>:<path>` reads it, is git's index or one side of a conflict in it (#2830). */
 export const indexSource = (from: string): boolean => from === '' || from.startsWith(':')
+
+// #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): a git command that moves committed
+// work into the working tree (merge, rebase, cherry-pick, revert, switch, a checkout of a branch, a
+// hard reset, stash pop and apply, pull) names no file, so it ran with nothing asked whatever it
+// brought in. gitMove says, from the command's own words, what to ask git before it runs: the files
+// it would change in the working tree and the commit each comes from, which the guard then judges
+// as it judges a checkout of those files from that commit. It runs nothing and reads nothing.
+
+/**
+ * What to ask git about one move (#3279):
+ * - `merge`: for each commit, the files that differ between where it left this branch and itself
+ *   (`git diff HEAD...<commit>`), which is what a merge of it, or a rebase onto it, brings in;
+ * - `tree`: the files that differ between HEAD and the commit (a branch made from a start point,
+ *   by `switch -c` or `checkout -b`), or with `worktree` between the working tree and it (a hard reset);
+ * - `picks`: each commit's own files (`git log --no-walk`, which walks a range as cherry-pick does),
+ *   with `revert` taken back to what its parent held; with `mainline` (#3337), the parent each
+ *   commit is read against where the command's mainline number names one past the first (each
+ *   commit `git rev-list --no-walk` names, then `git diff <commit>^<mainline> <commit>`);
+ * - `stash`: the files a stash entry holds, its untracked ones included;
+ * - `name`: a checkout or switch of one name (a branch, a commit), which git reads as a commit,
+ *   else as the one remote branch of that name, each then read as the files that differ between
+ *   HEAD and it, else (`orPath`, a checkout) as a path put back from the index.
+ */
+export type MoveAsk =
+  | { ask: 'merge'; commits: string[] }
+  | { ask: 'tree'; commit: string; worktree?: true }
+  | { ask: 'picks'; revs: string[]; revert?: true; mainline?: number }
+  | { ask: 'stash'; entry: string }
+  | { ask: 'name'; name: string; orPath: boolean }
+
+/** One git move as its words read: what to ask git, or why it cannot be read at all, with what to do instead where there is something. */
+export type GitMove = { said: string } & ({ ask: MoveAsk } | { unread: string; remedy?: string })
+
+// The options of each moving subcommand that take the next word as their value, so it is never read
+// as a commit. An option missing here leaves its value read as a commit git does not know, which holds.
+const MOVE_VALUED: Readonly<Record<string, ReadonlySet<string>>> = {
+  merge: new Set(['-m', '-F', '--file', '-s', '--strategy', '-X', '--strategy-option', '--into-name', '--cleanup']),
+  rebase: new Set(['--onto', '-x', '--exec', '-s', '--strategy', '-X', '--strategy-option', '--empty', '--whitespace']),
+  'cherry-pick': new Set(['-m', '--mainline', '--strategy', '-X', '--strategy-option', '--cleanup', '--empty']),
+  revert: new Set(['-m', '--mainline', '--strategy', '-X', '--strategy-option', '--cleanup']),
+  switch: new Set(['-c', '-C', '--create', '--force-create', '--orphan', '--conflict']),
+  checkout: new Set(['-b', '-B', '--orphan', '--conflict', '--pathspec-from-file']),
+  reset: new Set(['--pathspec-from-file']),
+}
+
+// A move's words apart: its operands, its options by name (`--onto=x` as `--onto`), whether words
+// follow a `--`, which a checkout reads as paths, and whether it ends in a `--` with nothing
+// after it, which names no path and says the word before it is a branch or commit. `values` is
+// each option written with a value, in order, with that value (#3337): one joined on with `=`, or
+// the next word of an option that takes one, undefined where the command ends before it.
+const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; flags: Set<string>; values: [string, string | undefined][]; paths: boolean; ended: boolean } => {
+  const ops: string[] = []
+  const flags = new Set<string>()
+  const values: [string, string | undefined][] = []
+  let dashes = false
+  let after = 0
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (dashes) {
+      ops.push(a)
+      after++
+    } else if (a === '--') dashes = true
+    else if (a.startsWith('--') && a.includes('=')) {
+      flags.add(a.slice(0, a.indexOf('=')))
+      values.push([a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)])
+    } else if (valued.has(a)) {
+      flags.add(a)
+      values.push([a, args[i + 1]])
+      i++
+    } else if (a.startsWith('-') && a !== '-') flags.add(a)
+    else ops.push(a)
+  }
+  return { ops, flags, values, paths: after > 0, ended: dashes && after === 0 }
+}
+
+// #3337 (Dan, 2026-11-20, added to the issue): the mainline number of a cherry-pick or revert, which
+// names the parent each commit is read against (`git cherry-pick -m 2 <merge>` brings in what the
+// merge holds against its second parent). Until then its value was taken as an option's and dropped,
+// so every commit was read against its first parent. Read from `-m N`, `--mainline N`,
+// `--mainline=N` and `-mN`, each of which git 2.51.1 was measured taking. Why not, where the number
+// cannot be read: no whole number from 1 to 99, two that differ, and any option that may be the
+// mainline one spelled another way, which is held rather than read as no number: a shortened
+// `--mainline`, `--no-mainline`, and `m` inside a run of short options, before any letter whose
+// value is joined on (`-X`, `-S`). Undefined where the command gives none.
+const MAINLINE = '--mainline'
+export const MOVE_MAINLINE_REMEDY = 'Write the mainline number as -m and a whole number (git cherry-pick -m 2 <commit>), on the command itself, and the guard reads it then.'
+const mainlineOf = (values: readonly [string, string | undefined][], flags: ReadonlySet<string>): { parent: number } | { unread: string } | undefined => {
+  const given = values.filter(([name]) => name === '-m' || name === MAINLINE).map(([, value]) => value ?? '')
+  for (const f of flags) {
+    if (f === '-m' || f === MAINLINE) continue
+    if (!f.startsWith('--') && f.startsWith('-m')) given.push(f.slice(2))
+    else if (f.startsWith('--') ? MAINLINE.startsWith(f) || f === '--no-mainline' : /^-[A-RT-WYZa-z]+m/.test(f))
+      return { unread: `it may give its mainline number, the parent each commit is read against, as ${f}, which the guard does not read` }
+  }
+  if (!given.length) return undefined
+  const bad = given.find(v => !/^[1-9]\d?$/.test(v))
+  if (bad !== undefined) return { unread: `it gives its mainline number, the parent each commit is read against, as ${bad === '' ? 'nothing' : bad}, which the guard cannot read as a whole number` }
+  if (new Set(given).size > 1) return { unread: `it gives more than one mainline number (${given.join(' and ')}), and the guard does not choose between them` }
+  return { parent: Number(given[0]) }
+}
+
+// A commit as a command names it that the guard hands to git: no value the shell fills in, no
+// pattern, no space, never an option. `HEAD~2`, `main^`, `@{upstream}`, `stash@{1}` and `a..b` are.
+const namesCommit = (ref: string): boolean => ref !== '' && !ref.startsWith('-') && !/[$`*?[\]\\\s'"]/.test(ref)
+
+/** A move's words as a refusal quotes them, cut short where a message makes them long. */
+const moveSaid = (sub: string, args: readonly string[]): string => {
+  const said = ['git', sub, ...args].join(' ')
+  return said.length > 120 ? `${said.slice(0, 117)}...` : said
+}
+
+export const MOVE_ALONE_REMEDY = 'Run it as its own command, with nothing before it on the line but cd and commands that only read (git status, git log, cat), and the guard reads it then.'
+export const MOVE_FETCH_REMEDY = 'Run git fetch as its own command first, then this one on its own, and the guard reads it then.'
+
+/**
+ * What a git command that moves committed work into the working tree brings in, as the question to
+ * ask git (#3279), from mod-kit's reading of its words. Undefined for every other command, and for a
+ * move that brings nothing in: `--abort`, `--continue`, `--skip` and `--quit` (the move they belong
+ * to was read when it began), a branch made with no start point, a reset that leaves the working
+ * tree alone, `git stash` putting work away, and a checkout naming paths, which mod-kit's write
+ * reader already gives. `unread` where its words cannot say: a pull, which fetches first; a rebase
+ * that replays onto another base, interactively or running commands; a commit named through a value
+ * the shell fills in.
+ */
+export const gitMove = (git: { sub: string | undefined; args: readonly string[] } | undefined): GitMove | undefined => {
+  const sub = git?.sub
+  if (git === undefined || sub === undefined) return undefined
+  const said = moveSaid(sub, git.args)
+  // Its own keys only: a subcommand spelled like a member every object inherits (`constructor`)
+  // finds no set here, never that member, which would throw where its options are read.
+  const valued: ReadonlySet<string> = Object.prototype.hasOwnProperty.call(MOVE_VALUED, sub) ? (MOVE_VALUED[sub] as ReadonlySet<string>) : new Set<string>()
+  const { ops, flags, values, paths, ended } = moveWords(git.args, valued)
+  const has = (...names: string[]) => names.some(n => flags.has(n))
+  const asking = (ask: MoveAsk, refs: readonly string[]): GitMove => {
+    const bad = refs.find(r => !namesCommit(r))
+    return bad === undefined ? { said, ask } : { said, unread: `it names what it brings in as ${bad}, which the guard cannot hand to git to read` }
+  }
+  // A stopped move carried on, given up or looked at. `git rebase --show-current-patch` only prints
+  // the patch the rebase stopped on; it is told by how it starts and by naming no commit, since the
+  // shared parts scan reads that option's whole spelling as a branch read by hand (#980).
+  const resuming = has('--abort', '--continue', '--skip', '--quit', '--edit-todo') || (!ops.length && [...flags].some(f => f.startsWith('--show-')))
+  if (sub === 'pull')
+    return { said, unread: 'git pull fetches before it merges, so what it brings in is not known until it has run', remedy: 'Run git fetch as its own command first, then git merge (or git rebase) of the fetched branch on its own, and the guard reads that.' }
+  if (sub === 'merge') {
+    if (resuming) return undefined
+    const commits = ops.length ? ops : ['@{upstream}']
+    return asking({ ask: 'merge', commits }, commits)
+  }
+  if (sub === 'rebase') {
+    if (resuming) return undefined
+    if (has('--onto', '--root', '-i', '--interactive', '-x', '--exec') || ops.length > 1)
+      return { said, unread: 'this form of git rebase (onto another base, from the root, interactive, running commands, or switching to a branch first) changes more than the upstream it names brings in, which the guard does not read' }
+    const upstream = ops[0] ?? '@{upstream}'
+    return asking({ ask: 'merge', commits: [upstream] }, [upstream])
+  }
+  if (sub === 'cherry-pick' || sub === 'revert') {
+    if (resuming || !ops.length) return undefined
+    // The first parent is what `picks` always read, so only a later one is handed on (#3337).
+    const mainline = mainlineOf(values, flags)
+    if (mainline !== undefined && 'unread' in mainline) return { said, unread: mainline.unread, remedy: MOVE_MAINLINE_REMEDY }
+    return asking({ ask: 'picks', revs: ops, ...(sub === 'revert' ? { revert: true as const } : {}), ...(mainline !== undefined && mainline.parent > 1 ? { mainline: mainline.parent } : {}) }, ops)
+  }
+  if (sub === 'switch') {
+    if (has('--orphan')) return { said, unread: 'git switch --orphan takes every tracked file out of the working tree, which the guard does not read' }
+    if (!ops.length) return undefined
+    const to = ops[0] === '-' ? '@{-1}' : (ops[0] as string)
+    if (has('-c', '-C', '--create', '--force-create')) return asking({ ask: 'tree', commit: to }, [to])
+    return asking({ ask: 'name', name: to, orPath: false }, [to])
+  }
+  if (sub === 'checkout') {
+    // Paths after `--`, or after a source, are a restore of named files (mod-kit's gitOwn, #1136).
+    // A `--` with nothing after it names none: `git checkout main --` switches to main, and is
+    // read as that move.
+    if (paths || has('-p', '--patch')) return undefined
+    if (has('-b', '-B', '--orphan')) return ops.length ? asking({ ask: 'tree', commit: ops[0] as string }, [ops[0] as string]) : undefined
+    if (ops.length !== 1) return undefined
+    const to = ops[0] === '-' ? '@{-1}' : (ops[0] as string)
+    return asking({ ask: 'name', name: to, orPath: !ended }, [to])
+  }
+  if (sub === 'reset') {
+    if (!has('--hard', '--merge', '--keep')) return undefined
+    const commit = ops[0] ?? 'HEAD'
+    return asking({ ask: 'tree', commit, worktree: true }, [commit])
+  }
+  if (sub === 'stash') {
+    if (ops[0] === 'branch') return { said, unread: 'git stash branch checks out the commit the stash was made on and applies the stash there, which the guard does not read' }
+    if (ops[0] !== 'pop' && ops[0] !== 'apply') return undefined
+    const entry = ops[1] === undefined ? 'stash@{0}' : /^\d+$/.test(ops[1]) ? `stash@{${ops[1]}}` : ops[1]
+    return asking({ ask: 'stash', entry }, [entry])
+  }
+  return undefined
+}
+
+/** One file a move changes in the working tree, by its path inside the checkout: written from `from`, or taken away. */
+export type MovedFile = { rel: string; from: string } | { rel: string; removes: true }
+
+// What `--name-status -z --no-renames` prints, as [status, path] pairs: `M\0path\0A\0path\0`. Undefined
+// where the text is not that, so a reading that went wrong is never taken for no files.
+const nameStatus = (stdout: string): [string, string][] | undefined => {
+  if (stdout === '') return []
+  const parts = stdout.split('\0')
+  if (parts.pop() !== '' || parts.length % 2 !== 0) return undefined
+  const out: [string, string][] = []
+  for (let i = 0; i < parts.length; i += 2) {
+    const status = (parts[i] as string).replace(/^\n+/, '')
+    const rel = parts[i + 1] as string
+    if (!/^[AMDTU]$/.test(status) || rel === '') return undefined
+    out.push([status, rel])
+  }
+  return out
+}
+
+/**
+ * The files `git diff --name-status -z --no-renames` names (#3279), each written from `from` or,
+ * deleted, taken away. Undefined where the output is not what that command prints.
+ */
+export const movedFiles = (stdout: string, from: string): MovedFile[] | undefined =>
+  nameStatus(stdout)?.map(([status, rel]): MovedFile => (status === 'D' ? { rel, removes: true } : { rel, from }))
+
+/**
+ * The files each commit of `git log --no-walk --format=%x01%H --name-status -z --no-renames -m
+ * --first-parent` changes (#3279), in the order git gives them: written from that commit, a file it
+ * deleted taken away; or, with `revert`, put back to what its parent held, a file the commit added
+ * taken away. Undefined where the output is not what that command prints.
+ */
+export const pickedFiles = (stdout: string, revert = false): MovedFile[] | undefined => {
+  if (stdout !== '' && !stdout.startsWith('\u0001')) return undefined
+  const out: MovedFile[] = []
+  for (const block of stdout.split('\u0001').slice(1)) {
+    const end = block.indexOf('\0')
+    const sha = (end < 0 ? block : block.slice(0, end)).trim()
+    if (!/^[0-9a-f]{40,64}$/.test(sha)) return undefined
+    const entries = nameStatus(end < 0 ? '' : block.slice(end + 1).replace(/^\n+/, ''))
+    if (entries === undefined) return undefined
+    for (const [status, rel] of entries)
+      out.push(revert ? (status === 'A' ? { rel, removes: true } : { rel, from: `${sha}^` }) : status === 'D' ? { rel, removes: true } : { rel, from: sha })
+  }
+  return out
+}
+
+/** The most look changing files one move may bring in and still be read one by one (#3279): each costs a read of git, about 15 ms measured on 2026-11-20. */
+export const MOVE_FILES_MAX = 300
+
+/** The most commits one cherry-pick or revert with a mainline number may name and still be read one by one (#3337): each costs one read of git, as a file above does. */
+export const MAINLINE_PICKS_MAX = 50
+
+/**
+ * What a call is told when a git move in it could not be read (#3279): what it brings into the
+ * working tree is unknown, never nothing, so it is held. With `remedy`, there is a way to run it the
+ * guard can read, and nothing is asked of Dan.
+ */
+export const moveUnread = (said: string, why: string, remedy?: string): string =>
+  `Blocked: before a git command moves committed work into the working tree, the design round guard asks git which files it would bring in, and for \`${said}\` it could not: ${why}. So it cannot tell whether a file that changes how the screen looks arrives. ` +
+  (remedy !== undefined ? `${remedy} Nothing is asked of Dan for this.` : 'Bring the work in a way the guard can read (a merge, cherry-pick or checkout of a commit git knows here, run as its own command), or ask Dan.')
+
+/** The card for a move that could not be read and has no other way to run it (#3279). */
+export const moveUnreadCard = (said: string) => ({
+  reason: `Claude wants to run \`${said}\`, which brings committed work into the project, and the design round guard could not read which files it brings in, so it cannot tell whether one changes how something looks on screen.`,
+  safeWay: 'Claude brings the work in a way the guard can read, or asks you.',
+})
+
+/** What a refusal says of files held because a move brings them in (#3279), so the session knows why a command naming no file was held for one. */
+export const movedSaid = (said: string): string =>
+  `\`${said}\` names no file: the design round guard asked git which files it brings into the working tree, and judged each one as a checkout of that file from the commit it comes from.`
+
+// #3279 (Dan, 2026-11-20, "Skip what is on main"): a look change already on the default branch has
+// shipped, so a merge that takes the default branch in, or a rebase onto it, is not asked about it
+// again under the merging branch's issue. The one exemption among the moves, and no wider than this.
+// The default branch is the one the checkout records for its remote (mod-kit's reading of it), at
+// the commit it last fetched (defaultBranchRef), never a name the command gives and never a local
+// branch, which may be ahead of what shipped.
+// A file is skipped only where the commit being taken in holds it exactly as the newest commit it
+// shares with the default branch does, so whatever that commit holds beyond the default branch is
+// asked about (beyondDefault): a merge of another branch, a local main that is ahead.
+// Only a merge and a rebase onto an upstream are read this way. A cherry-pick, a revert, a switch,
+// a checkout, a hard reset and a stash are asked as before, whatever commit they name.
+// Where the default branch cannot be found, or git cannot answer, every file is asked about.
+
+/**
+ * The ref a checkout keeps its remote's default branch under, as last fetched (#3279), from the
+ * branch name mod-kit's branch reader gives. None where it gives no name, or one that is not a plain
+ * branch name, so nothing but one branch of the remote is ever handed to git.
+ */
+export const defaultBranchRef = (defaultBranch: string | null | undefined): string | undefined =>
+  typeof defaultBranch === 'string' && /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/.test(defaultBranch) && !defaultBranch.includes('..') ? `refs/remotes/origin/${defaultBranch}` : undefined
+
+/**
+ * The files a merge brings in, apart (#3279): `asked`, each one the commit holds differently from the
+ * newest commit it shares with the default branch (`beyond`, what git lists between the two), and
+ * `shipped`, each one it holds exactly as that commit does. By the file's exact name.
+ */
+export const beyondDefault = (files: readonly MovedFile[], beyond: readonly MovedFile[]): { asked: MovedFile[]; shipped: MovedFile[] } => {
+  const names = new Set(beyond.map(f => f.rel))
+  return { asked: files.filter(f => names.has(f.rel)), shipped: files.filter(f => !names.has(f.rel)) }
+}
+
+/** What the guard's log says of look changing files a move was not asked about (#3279): the files, the command, and the commit of the default branch they were read against. */
+export const onDefaultSaid = (said: string, files: readonly string[], ref: string, sha: string): string =>
+  `design-round-guard: not asked about ${listed(files)}, which \`${said}\` brings in exactly as the default branch holds ${files.length === 1 ? 'it' : 'them'} (${ref} at ${sha.slice(0, 12)}): a look change already on the default branch has shipped (#3279).`
 
 /**
  * Whether a path inside its checkout is where a settled design is committed (#1524): an HTML page, the
