@@ -2854,7 +2854,53 @@ and the band question is removed rather than kept beside it (L29). Three defects
   says LESSONS.md (#1883). They are asked about as before. Also out of reach: a removal, which
   the reader counts as no write, and a script that writes the file with no word of the command
   naming it.
-  A write that touches no entry is asked about as before. The approval is
+  The second is built (2026-11-21), as Dan decided on the issue on 2026-11-20 ("For good, held to
+  facts": "The For good question stays, and the mod refuses it unless it names each entry removed
+  or moved, by number, and each heading changed. No new picker."). A write that touches no entry's
+  words is still asked For good, and the question is held to what the write does. `lessonFacts`
+  reads the file as it is and as the write leaves it, in the one walk `entriesTouched` uses
+  (`lessonLayout`), and gives the entries taken out whole, the entries left word for word under
+  another heading, and the headings taken out or added. Four things were left to the build, each
+  decided toward the stricter reading and recorded in the pull request:
+  - How a name is judged (`unnamed`). A number is a whole token in its own case, so `L17` is not
+    named by `L174`, `XL17`, `L17th` or `l17`, and a range names its two ends only. A heading is
+    its text after `## `, less the white space at its ends, between double quotes: without the
+    quotes "Data safety" was named by any question holding "Data safety net". The mod checks that
+    a name is in the question and cannot check what the question says about it.
+  - Which entries a heading change moves. A heading is read as renamed when every entry that stood
+    under the old one stands under the new one and nothing else does; both names are named and its
+    entries are not, since they stay together in the one file the rename renames. Every other
+    entry whose heading changes is named: under a heading added above it, left by a heading taken
+    out, or in a section whose entries did not stay together. Naming every entry under a renamed
+    heading was the stricter reading and was not taken, for two reasons. The issue's own account
+    (the comment of 2026-11-20 he chose from) sets the two apart: a rename "renames a file every session imports",
+    and an added heading "moves every entry below it into another file". And it would not last:
+    measured 2026-11-21, the numbers of the largest section's 208 entries take 1,227 of the 1,500
+    code units a question may hold, so they fit today with little room for the sentence, and stop
+    fitting as that section grows, after which its rename could be asked only by moving its
+    entries out a few at a time. It is one condition in `lessonFacts` (`carried`) if Dan wants
+    every entry named.
+  - Text that is no entry's and no heading (above the first section, or between a heading and its
+    first entry) needs no name. The file's reader gives it to no index and no session loads it,
+    Dan's decision names entries and headings, and it has no number or heading a question could
+    be held to; a fixed phrase would show only that the session typed the phrase. Blank lines and
+    a change of order inside a section, or of whole sections, are not held either.
+  - Asleep it is what any save is: noted for the morning report and refused, with nothing asked.
+    The note says what the write would take out, since an Edit's new text says nothing of it.
+  The answer is held to the same facts as the question, wherever an answer is taken. The approval
+  keeps the question Dan read (`asked`), and `takeApproval` takes it only when that question names
+  what the call does to the file as it stands when the call is sent, so a For good stored before
+  this rule, or given while the same Edit took nothing out, covers no removal; the refusal says
+  first that his For good does not cover it and what its question lacked, and his next answer
+  about the same save replaces it. The `isApproved` noun answers the same way. His own permanent
+  words cover such a write only when they name the same things (`saveCall`, L450): under "from now
+  on" an unnamed removal went on unasked, the route #3320's review found open for an entry added.
+  Two refusals have no question: a lessons file that could not be read, since what the write
+  would take out cannot be told (`cannotHold`, L345), and a heading that could not be shown to Dan
+  as it is written, which no question he could read can name (`cannotName`, L665). The second is a
+  dead end for a heading already in the file; setting such a name aside from the shown check, as
+  a file's own name is, would end it and is an exemption for Dan to decide.
+  Any other write that touches no entry is asked about as before. The approval is
   used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same

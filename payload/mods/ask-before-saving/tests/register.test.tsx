@@ -2,7 +2,8 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, rowsAt, shownFault } from '../hooks/rules.ts'
+import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, shownFault } from '../hooks/rules.ts'
+import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
@@ -3037,9 +3038,10 @@ test('an Edit or Write that adds or changes a lesson entry is never asked For go
     { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons learned' },
   ]
   for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
-  // And his For good still saves one of those.
+  // And his For good still saves one of those. Since #3343 route 2 (Dan, 2026-11-20: "For good,
+  // held to facts") the question about a heading names it, old and new; the cases for that are below.
   const heading = others[0] ?? {}
-  await askDan($, w, refusalOf(await call($, heading)), 'For good', LESSONS_SHOWN)
+  await askDan($, w, refusalOf(await call($, heading)), 'For good', LESSONS_SHOWN, 'rename the section "Data safety" to "Data and safety"')
   expect((await call($, heading)).deny).toBeUndefined()
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
 })
@@ -3131,10 +3133,12 @@ test("Dan's own permanent words do not cover an Edit or Write that adds or chang
     expect(`${JSON.stringify(input)}: ${said}`).not.toContain(ASKS)
   }
   expect(w.ran).toEqual([])
-  // What is no entry's is saved under his words as it was, and Claude is told to say so.
-  const heading = await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and safety' })
-  expect(heading.deny).toBeUndefined()
-  expect(contextOf(heading)).toContain('say in one line what you saved')
+  // What is no entry's is saved under his words as it was, and Claude is told to say so. Since
+  // #3343 route 2 a heading changed or an entry taken out is saved under them only when they name
+  // it (the case for that is below), so this is the title, which is neither.
+  const title = await call($, { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons learned' })
+  expect(title.deny).toBeUndefined()
+  expect(contextOf(title)).toContain('say in one line what you saved')
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
 })
 
@@ -3278,4 +3282,304 @@ test('while asleep a shell write of the lessons file is noted for the morning re
   delete w.files['/night/asleep']
   expect(outcomeOf(refusalOf(await call($, append)))).toBe('refused, Edit named')
   expect(w.ran).toEqual([])
+})
+
+// #3343, route 2 (Dan, 2026-11-20: "For good, held to facts"): an Edit or Write of the installed
+// lessons file that touches no entry's words was asked For good in the session's own wording, so an
+// entry could leave every session, or change the file its index line loads from, under a question
+// that named nothing. The For good question stays, and it is refused unless it names each entry
+// taken out or moved to another section, by its number, and each section heading changed.
+// The file is shaped as the real one is (tests/lessons-shaped.ts).
+const takeOut = (...ns: string[]) => ({ tool: 'Write', file_path: LESSONS, content: without(SHAPED, ...ns) })
+const MUST_NAME = 'The question must name what this'
+// The question as Claude asks it, with `said` as its plain sentence.
+const askNaming = ($: Caller, w: W, refusal: string, said: string, answer: string | undefined = 'For good') => askDan($, w, refusal, answer, LESSONS_SHOWN, said)
+// One save through to the end: refused and told to ask, each question that names too little
+// refused before Dan is asked anything, the one that names it all asked, and the call sent again saved.
+const heldUntilNamed = async ($: Caller, w: W, input: Record<string, unknown>, tooLittle: string[], enough: string, missing: string[]) => {
+  const what = JSON.stringify(input).slice(0, 80)
+  const refusal = refusalOf(await call($, input))
+  expect(`${what}: ${refusal}`).toContain(ASKS)
+  for (const name of missing) expect(`${what}: ${refusal}`).toContain(name)
+  const before = w.asked.length
+  for (const said of tooLittle) {
+    const r = await askNaming($, w, refusal, said)
+    expect(`${what} asked "${said}": ${r.deny}`).toContain(MUST_NAME)
+  }
+  expect(w.asked.length).toBe(before)
+  expect(w.ran).toEqual([])
+  const asked = await askNaming($, w, refusal, enough)
+  expect(`${what} asked "${enough}": ${asked.deny}`).toBe(`${what} asked "${enough}": undefined`)
+  expect(w.asked.length).toBe(before + 1)
+  expect(contextOf(asked)).toContain('Dan answered For good')
+  const sent = await call($, input)
+  expect(`${what}: ${sent.deny}`).toBe(`${what}: undefined`)
+  expect(contextOf(sent)).toContain(`Saved to ${LESSONS_SHOWN}, as Dan answered For good.`)
+  expect(w.ran.length).toBe(1)
+}
+
+test('a For good question about taking a lesson entry out whole is refused until it names the entry by its number, and then asked as before (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  const refusal = refusalOf(await call($, edit))
+  // The first refusal already says what the question must name, so it can be asked right at once.
+  expect(refusal).toContain(ASKS)
+  expect(refusal).toContain('takes out L5 whole')
+  // The session's own wording, naming nothing: refused before Dan is asked, saying what is missing.
+  const unnamed = await askNaming($, w, refusal, 'tidy the lessons file')
+  expect(unnamed.deny).toContain(`${MUST_NAME} Edit does to ${LESSONS_SHOWN}`)
+  expect(unnamed.deny).toContain('it takes out L5 whole')
+  expect(unnamed.deny).toContain('It does not name L5.')
+  expect(w.asked).toEqual([])
+  // Named: asked with the mod's own answers, as any For good question is.
+  const named = await askNaming($, w, refusal, 'take out L5, which L7 now covers')
+  expect(named.deny).toBeUndefined()
+  expect(w.asked.length).toBe(1)
+  expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual(['For good', 'Just this session', 'Not at all'])
+  expect(w.ran).toEqual([])
+  const sent = await call($, edit)
+  expect(sent.deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  quietOnMain(w)
+})
+
+test('every entry taken out must be named: two leaving under a question that names one is refused, saying which is missing (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const both = takeOut('L5', 'L10')
+  const refusal = refusalOf(await call($, both))
+  const one = await askNaming($, w, refusal, 'take out L5')
+  expect(one.deny).toContain('It does not name L10.')
+  const other = await askNaming($, w, refusal, 'take out L10')
+  expect(other.deny).toContain('It does not name L5.')
+  expect(w.asked).toEqual([])
+  await heldUntilNamed($, w, both, ['take out two entries nobody reads'], 'take out L5 and L10', ['L5', 'L10'])
+})
+
+test('an entry moved whole to another section must be named by its number (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const l7 = entryOf('L7')
+  const moved = { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(l7, '').replace('## Honest failure\n', `## Honest failure\n${l7}`) }
+  const refusal = refusalOf(await call($, moved))
+  expect(refusal).toContain('moves L7 from "Data safety" to "Honest failure"')
+  await heldUntilNamed($, w, moved, ['reorder the file', 'move an entry to "Honest failure"'], 'move L7 to Honest failure', ['L7'])
+})
+
+test('a section heading renamed must be named, old and new, each in double quotes exactly as written; the entries under it need not be (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const rename = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and its safety' }
+  const refusal = refusalOf(await call($, rename))
+  expect(refusal).toContain('renames the section heading "Data safety" to "Data and its safety"')
+  // The new name alone holds the old one's words, and names it no more than a longer number names a shorter.
+  const newOnly = await askNaming($, w, refusal, 'call the section "Data and its safety"')
+  expect(newOnly.deny).toContain('It does not name "Data safety".')
+  await heldUntilNamed($, w, rename, ['rename a section', 'rename Data safety to Data and its safety', 'rename "data safety" to "Data and its safety"'], 'rename the section "Data safety" to "Data and its safety"', ['"Data safety"', '"Data and its safety"'])
+})
+
+test('a section heading added must be named, and so must every entry it takes into its section (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  // At the end of the file it takes no entry with it: the heading alone is named.
+  const atEnd = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L10'), new_string: `${entryOf('L10')}\n## Test speed\n` }
+  await heldUntilNamed($, w, atEnd, ['add a section for the speed lessons', 'add the section Test speed'], 'add the section "Test speed"', ['"Test speed"'])
+  // In the middle of a section it moves every entry below it into another section's file.
+  const split = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L17'), new_string: `## Checks\n${entryOf('L17')}` }
+  const refusal = refusalOf(await call($, split))
+  expect(refusal).toContain('moves L17, L174 from "Proof over green" to "Checks"')
+  expect(refusal).toContain('adds the section heading "Checks"')
+  const before = w.asked.length
+  const headingOnly = await askNaming($, w, refusal, 'add the section "Checks"')
+  expect(headingOnly.deny).toContain('It does not name L17, L174.')
+  const entriesOnly = await askNaming($, w, refusal, 'move L17 and L174 to a new section')
+  expect(entriesOnly.deny).toContain('It does not name "Checks".')
+  expect(w.asked.length).toBe(before)
+  expect((await askNaming($, w, refusal, 'add the section "Checks" above L17, which takes L17 and L174 into it')).deny).toBeUndefined()
+  expect(w.asked.length).toBe(before + 1)
+})
+
+test('a section heading taken out must be named, and so must every entry that falls into the section above (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const merge = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety\n', new_string: '' }
+  const refusal = refusalOf(await call($, merge))
+  expect(refusal).toContain('moves L5, L7 from "Data safety" to "Proof over green"')
+  expect(refusal).toContain('takes out the section heading "Data safety"')
+  await heldUntilNamed($, w, merge, ['merge two sections', 'take out the heading "Data safety"', 'fold L5 and L7 into the section above'], 'take out the heading "Data safety", so L5 and L7 join the section above', ['"Data safety"', 'L5', 'L7'])
+})
+
+test('a number inside a longer number or a word does not name an entry (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const out = takeOut('L17')
+  let refusal = refusalOf(await call($, out))
+  for (const said of ['take out L174', 'take out L170 and L1', 'take out XL17', 'take out L17th', 'take out l17', 'take out L 17', 'take out 17', 'take out L17_old']) {
+    const r = await askNaming($, w, refusal, said)
+    expect(`${said}: ${r.deny}`).toContain('It does not name L17.')
+  }
+  expect(w.asked).toEqual([])
+  // Punctuation around the number is not part of it.
+  for (const said of ['take out L17.', 'take out (L17)', 'L17: take it out', 'take out L17, then L174 is next']) {
+    const r = await askNaming($, w, refusal, said, 'Not at all')
+    expect(`${said}: ${r.deny}`).toBe(`${said}: undefined`)
+    // Not at all took the waiting question out, so the save is refused afresh for the next wording.
+    refusal = refusalOf(await call($, out))
+    expect(refusal).toContain(ASKS)
+  }
+  expect(w.asked.length).toBe(4)
+  expect(w.ran).toEqual([])
+})
+
+// The controls: what the mod asked or refused before is asked or refused in the same words.
+test('an Edit or Write that only adds or changes an entry still goes to the lesson picker, in the words it did, and another memory file is asked about in the words it was (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const adding = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${BRIEF_ENTRY}## Data safety` }
+  expect(refusalOf(await call($, adding))).toBe(pickerOnly(LESSONS_SHOWN, 'Edit', ['L753'], undefined))
+  const changing = { tool: 'Edit', file_path: LESSONS, old_string: 'seen to fail', new_string: 'seen to pass' }
+  expect(refusalOf(await call($, changing))).toBe(pickerOnly(LESSONS_SHOWN, 'Edit', ['L1'], undefined))
+  // An entry taken out beside one changed is still the picker's: nothing is asked For good.
+  const both = { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(entryOf('L5'), '').replace('seen to fail', 'seen to pass') }
+  expect(refusalOf(await call($, both))).toBe(pickerOnly(LESSONS_SHOWN, 'Write', ['L1'], undefined))
+  expect(w.asked).toEqual([])
+  // Another memory file, by Edit and by Write: the same instruction as ever, and the session's own
+  // wording is asked.
+  w.files[`${CWD}/CLAUDE.md`] = '# Slate\n\n## Rules\n- **L5. Never destroy good state.**\n'
+  const other = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: '## Rules\n- **L5. Never destroy good state.**\n', new_string: '' }
+  const r = await call($, other)
+  expect(refusalOf(r)).toBe(askInstruction(idIn(refusalOf(r)) ?? '', ['~/Apps/slate/CLAUDE.md']))
+  expect((await askDan($, w, refusalOf(r), 'For good', '~/Apps/slate/CLAUDE.md')).deny).toBeUndefined()
+  expect((await call($, other)).deny).toBeUndefined()
+  // Text above the first section, a blank line, entries put in another order inside their section:
+  // nothing leaves, moves section or changes a heading, so the question names nothing more.
+  const loose = [
+    { tool: 'Edit', file_path: LESSONS, old_string: 'Numbering is stable for reference.', new_string: 'Numbering is stable.' },
+    { tool: 'Edit', file_path: LESSONS, old_string: '\n## Honest failure', new_string: '\n\n## Honest failure' },
+    { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(entryOf('L5'), '').replace(entryOf('L7'), `${entryOf('L7')}${entryOf('L5')}`) },
+  ]
+  for (const input of loose) {
+    const said = await call($, input)
+    expect(`${JSON.stringify(input).slice(0, 90)}: ${refusalOf(said)}`).toBe(`${JSON.stringify(input).slice(0, 90)}: ${askInstruction(idIn(refusalOf(said)) ?? '', [LESSONS_SHOWN])}`)
+    expect((await askDan($, w, refusalOf(said), 'Not at all', LESSONS_SHOWN)).deny).toBeUndefined()
+  }
+})
+
+// A For good is judged again as the call is sent, against the lessons file as it then stands: one
+// whose question did not name what the call now takes out covers nothing, whichever code stored it.
+test('a For good already standing does not cover a removal its question did not name: one stored before this rule, and one given while the Edit took nothing out (#3343 route 2)', withKit, async ($, on) => {
+  // An approval as the code before this change stored it: no record of the question Dan answered.
+  let old = true
+  on('state.set', async ($$, e, next) => {
+    const x = e as unknown as { ref?: { key?: string }; key?: string; value?: unknown }
+    if (!old || (x.ref?.key ?? x.key) !== 'approvals' || !Array.isArray(x.value)) return next(e)
+    return next({ ...x, value: x.value.map(({ asked: _asked, ...rest }: Record<string, unknown>) => rest) } as never)
+  })
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED.replace(entryOf('L5'), '') } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  // Asked while the file held no such text, so the Edit took nothing out and the question named nothing.
+  expect((await askNaming($, w, refusalOf(await call($, edit)), 'take out L5')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  const stored = refusalOf(await call($, edit))
+  expect(stored).toContain(ASKS)
+  expect(stored).toContain("Dan's For good on this save does not cover it")
+  expect(stored).toContain('takes out L5 whole')
+  expect(w.ran).toEqual([])
+  // The same from the code as it is now: asked while the Edit took nothing out, in words that name nothing.
+  old = false
+  w.files[LESSONS] = SHAPED.replace(entryOf('L7'), '')
+  const edit7 = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L7'), new_string: '' }
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'tidy the file')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  const sent = refusalOf(await call($, edit7))
+  expect(sent).toContain(ASKS)
+  expect(sent).toContain("Dan's For good on this save does not cover it")
+  expect(sent).toContain('takes out L7 whole')
+  expect(w.ran).toEqual([])
+  // Asked again, naming it, and the same call is saved on that answer.
+  expect((await askNaming($, w, sent, 'take out L7')).deny).toBeUndefined()
+  expect((await call($, edit7)).deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  // His second answer about L7 replaced the first, so only the one about L5, which was never
+  // asked again, is left to lapse: no toast says of a save that landed that it was not saved.
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.filter(t => t.includes('lapsed after 10 minutes')).length).toBe(1)
+})
+
+// His own words that make a save permanent skip the For good question (#618). They are held to the
+// same facts as that question is (L450): they cover a removal, a move or a heading they name.
+test("Dan's own permanent words cover an entry taken out or a heading changed only when they name it (#3343 route 2)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  await dan($, 'From now on, never ask before a save.')
+  const out = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  const rename = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and its safety' }
+  for (const input of [out, rename]) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  await dan($, 'From now on L5 is gone: L7 says it better.')
+  const named = await call($, out)
+  expect(named.deny).toBeUndefined()
+  expect(contextOf(named)).toContain('say in one line what you saved')
+  // The words that named L5 name no heading.
+  expect(refusalOf(await call($, rename))).toContain(ASKS)
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
+
+// Asleep (#841) it is noted for the morning report like any other save, and the note says what
+// would leave, since the text an Edit adds says nothing of what it takes out.
+test('while asleep an entry taken out is noted for the morning report, saying which, and held to its number once awake (#3343 route 2)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '', [LESSONS]: SHAPED } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  expect(refusalOf(await call($, edit))).toContain('Dan is asleep (sleep mode)')
+  expect(nightNotes(w)).toEqual([{ kind: 'save', files: [LESSONS_SHOWN], rule: `This Edit takes out L5 whole.` }])
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  delete w.files['/night/asleep']
+  const awake = refusalOf(await call($, edit))
+  expect(awake).toContain(ASKS)
+  expect((await askNaming($, w, awake, 'tidy the file')).deny).toContain('It does not name L5.')
+})
+
+// The noun (#1483) answers as the check does: a For good covers a removal only when the question
+// Dan answered named it, as the lessons file stands when it is asked.
+test('under no build, the noun answers for a removal only on a For good whose question named it (#3343 route 2)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: without(SHAPED, 'L7') } })
+  const edit7 = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L7'), new_string: '' }
+  // Asked while the Edit took nothing out, in words that name nothing; then the file comes to hold L7.
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'tidy the file')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  w.files['/nobuild/on'] = ''
+  expect((await call($, edit7)).deny).toBe('NO BUILD: refused')
+  expect(w.ran).toEqual([])
+  // Asked again with no build off, naming it: the noun answers for that one call, once.
+  delete w.files['/nobuild/on']
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'take out L7')).deny).toBeUndefined()
+  w.files['/nobuild/on'] = ''
+  expect((await call($, edit7)).deny).toBeUndefined()
+  expect((await call($, edit7)).deny).toBe('NO BUILD: refused')
+  expect(w.ran.length).toBe(1)
+})
+
+// A heading Dan could not read as it is written cannot be named in a question he could read, so
+// the save is refused once, saying so, and no question waits on a name no question may hold (L665).
+test('a heading that could not be shown to Dan as written is refused in words that say so, new or already in the file, and no question waits (#3343 route 2)', withKit, async ($, on) => {
+  const odd = `Test${pt(0xa0)}speed`
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const adding = refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L10'), new_string: `${entryOf('L10')}\n## ${odd}\n` }))
+  expect(adding).toContain(`the question would have to name the section heading "${odd}", and he could not read that name as it is written: character 6 of it is U+00A0`)
+  expect(adding).toContain('Give the new heading a name he can read, and send the save again.')
+  w.files[LESSONS] = `${SHAPED}\n## ${odd}\n`
+  const leaving = refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: `\n## ${odd}\n`, new_string: '' }))
+  expect(leaving).toContain(`A heading already in ${LESSONS_SHOWN} that cannot be shown to him cannot be asked about here.`)
+  for (const said of [adding, leaving]) {
+    expect(said).not.toContain(ASKS)
+    expect(idIn(said)).toBeUndefined()
+  }
+  expect(w.asked).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+// What cannot be read cannot be held to (L345): a lessons file that is no ordinary file is never
+// opened, so what a write would take out of it cannot be told, and no For good is asked for it.
+test('a write to a lessons file that cannot be read is refused, never asked For good: what it takes out cannot be told (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, fifos: [LESSONS] })
+  const r = settled(await settles(w, call($, { tool: 'Write', file_path: LESSONS, content: '# Build-time lessons\n' })), 'Write LESSONS.md fifo')
+  expect(refusalOf(r)).toContain(`${LESSONS_SHOWN} could not be read before this Write`)
+  expect(refusalOf(r)).toContain('which entries and headings it would take out cannot be told')
+  expect(refusalOf(r)).not.toContain(ASKS)
+  expect(idIn(refusalOf(r))).toBeUndefined()
+  expect(w.ran).toEqual([])
+  expect(w.opened).toEqual([])
 })

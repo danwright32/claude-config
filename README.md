@@ -7309,7 +7309,14 @@ command substitution, `derived` (#2141): what its substitutions run and, where e
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
 else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
-`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`, and since #3272 never
+the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, which is read once for each word as if typed with it, and only where every word of the list
+is plain characters as typed and nothing else in the line could have given the variable another
+value: a list from a variable, a substitution, a pattern, braces or a file, a quoted word, the name
+handed to a builtin or set in a sum, any other value the shell fills in, a pattern character or a
+brace the shell may act on, `eval`, `source`, a trap, an alias or a heredoc each leave it unread),
+setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
 every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
@@ -8042,7 +8049,9 @@ for word in the question) approves the one Edit or Write that only adds that rul
 other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
 under a For good and under his own "from now on" words alike; a write that touches no entry still
 asks. Since #3343 a shell command that writes that file is refused too, with Edit or Write named in
-its place (told in full below).
+its place, and the For good question about a write that takes an entry out, moves one to another
+section or changes a section heading is refused until it names each of them (both told in full
+below).
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -8099,8 +8108,8 @@ is refused in words that send the session to the lesson picker, and no question 
 either, a route the lessons review at the push found still open.
 An entry is every line the file's reader gives it, down to the
 next entry or section heading. A write that touches no entry (a section heading, an entry taken
-out whole, text above the first section) is asked about as before, and so was a shell command
-until #3343, below. Changing
+out whole, text above the first section) is still asked about For good, held since #3343 to what
+it does, and a shell command was asked about until #3343 (both below). Changing
 an entry already in the file therefore takes the lesson picker for the entry as it should read,
 then the old one taken out and the new one added. Length is counted in bytes, as the index cap
 counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
@@ -8126,11 +8135,40 @@ standing for the same command does not cover it, and neither do Dan's own "from 
 command whose words show that it only reads the file runs unasked, as ever: `cat`, `grep`, `wc`,
 `sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
 program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
-Left as they were: a checkout's `payload/LESSONS.md` and a write that touches no entry, which are
-Dan's to decide on #3343; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+Left as they were: a checkout's `payload/LESSONS.md`, which Dan decided on #3343 to guard at the
+merge and is not built yet; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
 variable only a command's output sets), which is as likely a scratch copy and is asked about as
 before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
 with no word of the command naming it, which no reader of the words can see.
+Since #3343 (Dan, 2026-11-20: "For good, held to facts") the For good question about an Edit or
+Write of `~/.claude/LESSONS.md` that touches no entry's words is held to what the write does. It
+was asked in the session's own wording, so an entry could leave every session, or its index line
+move to another file, under a question that named nothing. The mod reads the file as it is and as
+the write would leave it (rules.ts `lessonFacts`, from the one walk `entriesTouched` uses) and
+finds three things: the entries taken out whole; the entries left word for word under another
+section heading, one put above the first heading among them, in no section; and the section
+headings taken out or added, a renamed heading being one of each. The question is refused, before
+Dan is asked, unless it names every one: each entry by its number as a whole token (`L17` is not
+named by `L174`, `XL17` or `l17`, and a range names only its two ends) and each heading in double
+quotes, word for word as it is written after `## ` (`unnamed`). The refusal says what the write
+does and which names are missing, and the refusal of the save says so first, so the question can
+be asked right at once. A renamed heading is named old and new, and the entries under it are not:
+a heading counts as renamed when every entry that stood under the old one stands under the new one
+and nothing else does. Any other entry whose heading changes is named, those under a heading added
+above them and those left by a heading taken out included, since their index lines change file.
+His answer is held to the same facts when the call is sent: the approval keeps the question he
+read, and covers the call only if that question names what the call does to the file as it then
+stands, so a For good given before this rule, or while the same Edit took nothing out, does not
+let a removal through. His own "from now on" words cover such a write only when they name the
+same things. Asleep it is noted for the morning report as any save is, and the note says what it
+would take out. A lessons file that cannot be read is not written under any For good, since what
+would leave it cannot be told, and a heading that could not be shown to him as it is written
+cannot be named, so its save is refused in words that say so. Not held: text that is no entry's and
+no heading (above the first section, or between a heading and its first entry), blank lines,
+entries put in another order inside their section, and whole sections put in another order, none
+of which takes a rule out of an index, moves it to another file or renames one. The mod checks
+that a name is in the question, never what the question says about it. When the names do not fit
+the 20 rows a question may take, the change is made in smaller Edits.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
@@ -8884,8 +8922,17 @@ write whose repository cannot be resolved, whatever `rtk proxy` runs judged as t
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
 expands, which rtk splits into a command, is refused as unread), since #3021 every other command
 mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
-`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
-which was cut off before the write check and ran, and a line running gh that way
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands; since #3272 a program that
+is the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, is read as each of those programs running that string and judged as if typed so, after a
+loop of that shape that merged nothing was held on 2026-11-19 as one that may run the merge helper,
+and where a value still names the program the hold names the word, `$sh`, and says to write the
+command out where it stands and send it again), code the reader cannot read (inline code that uses
+exec, eval or the like, or a program piped in), which since #3287 is refused saying what was seen
+("inline python that uses exec") and the one way to write it so that it is read, the code in the
+command itself with nothing built or loaded as it runs, never a file run by name, which no reader
+opens, while everything else on the list keeps "Do not look for another way", and a write through
+`&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
