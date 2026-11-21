@@ -277,6 +277,20 @@ case "$*" in
     n="$(rd "jobs-$id")"
     printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
     ;;
+  # A job's log (claude-config#3312): joblog-<id> holds it, empty when unset, and joblog-fails makes
+  # a read fail.
+  "api repos/acme/widget/actions/jobs/"*"/logs"*)
+    fail_read joblog
+    id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/jobs/([0-9]+)/logs.*#\1#p')"
+    [ ! -f "$ST/joblog-$id" ] || cat "$ST/joblog-$id"
+    ;;
+  # The artifacts a workflow run uploaded, listed (claude-config#3312): artifactsjson-<run> holds
+  # GitHub's answer, none when unset, and runartifacts-fails makes a read fail.
+  "api repos/acme/widget/actions/runs/"*"/artifacts"*)
+    fail_read runartifacts
+    id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/runs/([0-9]+)/artifacts.*#\1#p')"
+    if [ -s "$ST/artifactsjson-$id" ]; then cat "$ST/artifactsjson-$id"; else printf '%s\n' '{"total_count":0,"artifacts":[]}'; fi
+    ;;
   # The annotations of one check run (claude-config#3312): annotations-<id> holds GitHub's answer,
   # none when unset, and annotations-fails makes a read fail.
   "api repos/acme/widget/check-runs/"*"/annotations"*)
@@ -4401,6 +4415,16 @@ check_eq "#3312 a change no untested suite is touched by merges" "0" "$rc"
 check "#3312 saying none of them runs here" "None of the 3 suites the checks left a part of untested is changed by this pull request or names a file it changed, so none was run here" "$out"
 check_eq "#3312 and runs no suite" "0" "$(count runner-calls 'part ')"
 
+# A pull request that only deletes a file changes nothing at the head a suite could name: the list
+# of changed files leaves deletions out, so the deleted file is neither a key nor a file said to have
+# none, and an empty list never reads as every suite changed (test-two-file-awk.sh).
+ut_fixture deleted 'git rm -q hooks/lib/b-code.sh.orig'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a change that only deletes a file merges" "0" "$rc"
+check "#3312 with no suite chosen for it" "None of the 3 suites the checks left a part of untested is changed by this pull request" "$out"
+check_not "#3312 and the deleted file is not said to be one no suite can name" "Could not tell which suites test" "$out"
+check_eq "#3312 and none run" "0" "$(count runner-calls 'part ')"
+
 # A file whose name another file shares all the way up cannot be named, so which suites test it is
 # not known, and that is said, never passed over.
 ut_fixture notes 'echo more >> notes.txt'
@@ -4508,6 +4532,49 @@ ut_state; rm -f "$ST/annotations-501"; : > "$ST/has-untested-tool"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 no notice in a tree with the tool refuses the merge" "1" "$rc"
 check "#3312 saying why" "No check at ${UT_HEAD:0:7} says what it did not test, though its tree holds tools/ci-unmeasured-summary.sh" "$out"
+check "#3312 and that none says it reused an earlier run" "and none says in its log that it reused an earlier green run" "$out"
+
+# A run that reused an earlier green run of the same tree (claude-config#2690) carries no notice, and
+# its checks' logs name the run they stood on, as tests.yml writes it. That run is followed for its
+# notice and records, believed only when its own artifacts record that it tested that very tree.
+UT_TREE=1111111111111111111111111111111111111111
+ut_reused(){ # ut_reused <the tree the earlier run's own record names>
+  ut_state; : > "$ST/has-untested-tool"
+  mv "$ST/annotations-501" "$ST/annotations-602"; mv "$ST/artifacts-900" "$ST/artifacts-800"
+  printf '%s\n' '2026-11-20T10:00:01.0000000Z ##[group]Run echo "NOT RUN AGAIN. Tree $TREE already passed in run $RUN_URL on commit $RUN_SHA, so no suite ran in this run."' \
+    "2026-11-20T10:00:01.1000000Z NOT RUN AGAIN. Tree $UT_TREE already passed in run https://github.com/acme/widget/actions/runs/800 on commit 2222222222222222222222222222222222222222, so no suite ran in this run." > "$ST/joblog-501"
+  jq -nc --arg t "green-tree-$1" '{total_count: 3, artifacts: [{name: "part-unmeasured-1"}, {name: "part-unmeasured-2"}, {name: $t}]}' > "$ST/artifactsjson-800"
+  jq -nc '{total_count: 2, jobs: [{id: 601, name: "suites part 1"}, {id: 602, name: "suite"}]}' > "$ST/jobsjson-800"
+}
+ut_reused "$UT_TREE"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a run that reused an earlier one of the same tree merges" "0" "$rc"
+check "#3312 saying which run it followed" "The checks at ${UT_HEAD:0:7} reused workflow run 800, which tested the same tree (${UT_TREE:0:12}, on commit 2222222), so its list of what it did not test is used." "$out"
+check_eq "#3312 its records fetched from that run" "1" "$(count gh-calls 'run download 800')"
+check_eq "#3312 and the suite the change touches run here" "1" "$(count runner-calls 'part ')"
+ut_reused "$UT_TREE"; rm -rf "$ST/artifacts-800"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a reused run whose records are gone refuses the merge" "1" "$rc"
+check "#3312 saying which run was looked in" "from workflow run 800, the run the checks at ${UT_HEAD:0:7} reused" "$out"
+check_eq "#3312 nothing merged without them" "0" "$(count gh-calls 'pr merge')"
+ut_reused 3333333333333333333333333333333333333333
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a reused run of a different tree refuses the merge" "1" "$rc"
+check "#3312 saying which tree it recorded" "workflow run 800, which check suite at ${UT_HEAD:0:7} says it reused for tree ${UT_TREE:0:12}, records no green run of that tree (it records: green-tree-333333333333" "$out"
+check_eq "#3312 and fetches none of its records" "0" "$(count gh-calls 'run download')"
+ut_reused "$UT_TREE"; rm -f "$ST/annotations-602"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a reused run with no notice of its own refuses the merge" "1" "$rc"
+check "#3312 saying so" "No check of workflow run 800, which the checks at ${UT_HEAD:0:7} reused, says what it did not test" "$out"
+ut_reused "$UT_TREE"; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/joblog-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a check's log that cannot be read refuses the merge" "1" "$rc"
+check "#3312 saying which log" "could not read the log of check suite at ${UT_HEAD:0:7}" "$out"
+ut_reused "$UT_TREE"; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/runartifacts-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a reused run whose artifacts cannot be listed refuses the merge" "1" "$rc"
+check "#3312 saying which run" "could not read the artifacts of workflow run 800, which the checks at ${UT_HEAD:0:7} reused" "$out"
+
 ut_state; rm -f "$ST/annotations-501"; printf 'gh: Server Error (HTTP 502)\n' > "$ST/contents-down"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a tree that cannot be read for the tool refuses the merge" "1" "$rc"
@@ -4516,8 +4583,9 @@ check "#3312 saying what could not be read" "whether the tree at ${UT_HEAD:0:7} 
 # The head's own REAL run-all-tests.sh, with no stand in: it deals the tree, runs part 1, and judges
 # the suites, so the deal and part it is handed are proved against the runner itself (L3). Its runs
 # get a config folder of their own, never this Mac's (lib/fixture-runner-home.sh). Each look while
-# it runs moves the injected clock 5 seconds in no real time, so the bound is lifted here: these
-# cases are about the runner, and the bound has its own case above.
+# it runs moves the injected clock 5 seconds (a step the stand in sets, not measured) in no real
+# time, so the bound is lifted here: these cases are about the runner, and the bound has its own
+# case above.
 export MWR_UNTESTED_MAX_SECONDS=100000000
 UT_REAL=1 ut_fixture real 'echo "# more" >> hooks/test-a.sh'
 out="$(fixture_runner_home "$UT/real-home" && UT_RUNNER= ut_run 7 --squash)"; rc=$?

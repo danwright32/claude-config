@@ -5058,7 +5058,11 @@ they ended. A suite that fails, could not run, or is still running after `MWR_UN
 (2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
 being read: a notice or record that cannot be fetched or does not add up (the records are kept a
 day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
-whose checks carry no notice, as a run reusing an earlier green run does. A changed file no suite
+whose checks carry no notice. A run that reused an earlier green run of the same tree carries none,
+so the helper follows the run its checks' logs name ("NOT RUN AGAIN. Tree ... already passed in run
+..."), and takes that run's notice and records only when its own artifacts hold `green-tree-<tree>`
+for exactly that tree; a log, run, notice or record it cannot find or read there refuses, naming the
+run it looked for. A changed file no suite
 can name alone (its path ends the same way as another's all the way up) is said, never passed
 over, and a part a suite still cannot test on this Mac is said and is not a failure. After suites
 have run the helper asks every gate again; a pass is recorded under `MWR_UNTESTED_DIR`
