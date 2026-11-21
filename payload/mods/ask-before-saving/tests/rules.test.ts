@@ -1425,7 +1425,7 @@ test('every text a picker hands the dialog is judged by the one function, not on
   }
 })
 
-test('an approved lesson is added only as text Dan read: an entry holding a character he cannot see, in its rule, its provenance or its SHORT line, is asked about (#3295)', () => {
+test('an approved lesson is added only as text Dan read: an entry holding a character he cannot see, in its rule, its provenance or its SHORT line, is not covered by the approval (#3295)', () => {
   // None of what follows is the predicate refusing everything.
   expect(addsLesson(L1030_ADDED, L1030_RULE, undefined, L1030_SHORT)).toBe(true)
   for (const [name, c] of HIDDEN) {
@@ -1521,7 +1521,7 @@ test('a SHORT line is judged by the one function every shown text is: what Dan c
   for (const [name, text] of VISIBLE) expect(`${name}: ${shortLine(`SHORT: Read ${text.slice(0, 20)} back first.`)}`).toBe(`${name}: SHORT: Read ${text.slice(0, 20)} back first.`)
 })
 
-test('an approved lesson is written only with the SHORT line Dan read: another, one word different, one he was not shown, or none where he read one is asked about (#3320)', () => {
+test('an approved lesson is written only with the SHORT line Dan read: another, one word different, one he was not shown, or none where he read one is not covered by the approval (#3320)', () => {
   const adds = (entry: string, short?: unknown) => addsLesson(entry, L1030_RULE, undefined, short)
   // None of what follows is the predicate refusing everything.
   expect(adds(L1030_ADDED, L1030_SHORT)).toBe(true)
@@ -1550,7 +1550,7 @@ test('an approved lesson is written only with the SHORT line Dan read: another, 
   expect(addsLesson(withCheck(L1030_CHECK).replace(L1030_SHORT, UNSHOWN), L1030_RULE, L1030_CHECK, L1030_SHORT)).toBe(false)
 })
 
-test('a lesson whose rule fits the index line is written with no SHORT line, and one added afterwards, or left out where he read one, is asked about (#3320)', () => {
+test('a lesson whose rule fits the index line is written with no SHORT line, and one added afterwards, or left out where he read one, is not covered by the approval (#3320)', () => {
   // Approved with no SHORT line shown: the entry is the rule and its provenance, and its check line when he read one.
   expect(addsLesson(BRIEF_ENTRY, BRIEF)).toBe(true)
   expect(addsLesson(`${BRIEF_ENTRY}\n  NO CHECK: a judgement made case by case`, BRIEF, 'NO CHECK: a judgement made case by case')).toBe(true)
