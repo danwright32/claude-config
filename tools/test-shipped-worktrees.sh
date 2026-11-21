@@ -463,6 +463,16 @@ case " \$* " in
     if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$WT/lk-half/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*lk-refused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
+  # A stop part way that also leaves the worktree with a status git cannot give (#3355).
+  *" worktree remove "*lk-unread*)
+    if [ -n "\${SHIM_UNREAD:-}" ]; then
+      rm -f "$WT/lk-unread/f.txt"; printf 'not an index\n' > "$R/.git/worktrees/lk-unread/index"
+      echo "fatal: simulated stop part way" >&2; exit 128
+    fi ;;
+  # A filter that cannot be turned off, appearing at the last moment before one removal: when the
+  # removal asks which repository answers in that worktree, after the status it was judged by.
+  *lk-125" "*" rev-parse --path-format=absolute --git-common-dir "*)
+    if [ -n "\${SHIM_125:-}" ]; then "$REAL_GIT" -C "$R" config 'filter.e=q.clean' cat; fi ;;
   *lk-race" "*" status "*)
     if [ -n "\${SHIM_RACE:-}" ]; then
       "$REAL_GIT" -C "$R" worktree unlock "$WT/lk-race" 2>/dev/null
@@ -545,6 +555,30 @@ says "and says the lock is left off" "is not put back" "$out_r"
 says "a lock that changed hands during the run is not lifted" "its lock changed after it was judged" "$(row KEPT lk-race "$out_r")"
 if [ "$(lockof lk-race)" = "claude agent lk-race (pid 5010 start Sat Oct 17 09:00:00 2026)" ]; then ok
 else bad "the new holder's lock on lk-race was not left in place (now: $(lockof lk-race))"; fi
+
+# Git stopping part way and leaving a status git cannot give (#3355). Whether the worktree was left
+# whole or part deleted cannot be told, and until #3355 a failed status read as "no deleted files",
+# so the dead agent's lock went back on a worktree that could be part deleted, where it refuses the
+# one --force that finishes it. The lock stays off, and the run says the status could not be read.
+L_UNREAD="claude agent lk-unread (pid 5009 start Thu Oct 15 12:00:00 2026)"
+locked_agent lk-unread 41 "$L_UNREAD"
+out_n="$(PATH="$WORK/lshim:$PATH" SHIM_UNREAD=1 bash "$TOOL" --remove "$R" 2>&1)"
+says "a removal git stops part way, leaving a status git cannot give, is said" "simulated stop part way" "$(row "NOT DONE" lk-unread "$out_n")"
+if [ "$(lockof lk-unread)" = UNLOCKED ]; then ok; else bad "a worktree whose status could not be read after a failed removal had its dead agent's lock put back (now: $(lockof lk-unread))"; fi
+says "and says its status could not be read after that" "its status could not be read after that" "$out_n"
+says "with the command that finishes it by hand, once a person has looked" "worktree remove --force $WT/lk-unread" "$out_n"
+if exists "$WT/lk-unread"; then ok; else bad "lk-unread was removed, though git stopped part way"; fi
+
+# A removal refused before git was asked to remove anything (exit 125), whose status cannot be asked
+# for afterwards either: git deleted nothing, so the worktree is whole whatever its status would
+# say, and its lock goes back as it was found.
+L_125="claude agent lk-125 (pid 5011 start Thu Oct 15 12:00:00 2026)"
+locked_agent lk-125 42 "$L_125"
+out_t="$(PATH="$WORK/lshim:$PATH" SHIM_125=1 bash "$TOOL" --remove "$R" 2>&1)"
+git -C "$R" config --unset 'filter.e=q.clean'
+says "a removal refused before git was asked is said as not tried, with why" "its removal was not tried: dc_git: refused" "$(row "NOT DONE" lk-125 "$out_t")"
+if [ "$(lockof lk-125)" = "$L_125" ]; then ok; else bad "a worktree git was never asked to remove did not get its lock back (now: $(lockof lk-125))"; fi
+if exists "$WT/lk-125"; then ok; else bad "lk-125 was removed, though its removal was refused"; fi
 
 echo
 echo "passed: $pass, failed: $fail"

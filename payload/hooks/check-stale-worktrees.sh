@@ -44,7 +44,10 @@
 #      just before the removal; that covers the older form with no start time, "claude agent
 #      <name> (pid <pid>)", whose pid nothing has. If git then refuses and leaves the worktree
 #      whole, the lock is put back; if git stops part way and leaves it part deleted, the lock
-#      stays off, so the next run can finish the removal. A live agent's lock, a pid now held by a
+#      stays off, so the next run can finish the removal. Whole or part deleted is read from a
+#      status, and one git cannot give is neither: the marker stays, the lock stays off and the
+#      run says so (#3355). A removal never tried (exit 125) left it whole, and no status is asked
+#      for. A live agent's lock, a pid now held by a
 #      process whose start does not match the lock, an older lock whose pid is running, one whose
 #      agent cannot be read, and any lock that is not a Claude agent's are left exactly as they
 #      are. The same reading decides tools/shipped-worktrees.sh, so the two cleanups agree.
@@ -689,12 +692,30 @@ for i in "${!paths[@]}"; do
         # A lifted lock goes back only on a worktree left whole. One left part deleted keeps its
         # marker for the finisher above, whose single --force git refuses on a locked worktree, so
         # putting a dead agent's lock back there would keep it part deleted for ever.
-        if [ -d "$p" ] && [ -z "$(dc_git "$p" status --porcelain 2>/dev/null | grep '^ D ')" ]; then
-          rm -f "$mk"
-          relock
-        elif [ -n "$stale_lock" ]; then
-          echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal"
-        fi ;;
+        # Which of the two it is comes from a status, and a status git cannot give is neither
+        # (#3355): read as "no deleted files" it cleared the marker and put the lock back on a
+        # worktree that could be part deleted. So it is whole only when git was never asked to
+        # remove anything (125), or a status that could be read shows no deleted file.
+        after=part
+        if [ "$rrc" -eq 125 ]; then
+          after=whole
+        elif [ -d "$p" ]; then
+          if st="$(dc_git "$p" status --porcelain 2>/dev/null)"; then
+            case $'\n'"$st" in *$'\n'" D "*) ;; *) after=whole ;; esac
+          else
+            after=unread
+          fi
+        fi
+        case "$after" in
+          whole)
+            rm -f "$mk"
+            relock ;;
+          unread)
+            why="$(jw_status_why "$p")"
+            echo "    git could not read its status after that${why:+ ($why)}, so whether it was left whole or part deleted cannot be told. Its marker stays, and a run that can read its status finishes the removal or keeps it${stale_lock:+; its lock, left by a Claude agent that is gone, is not put back}" ;;
+          part)
+            [ -z "$stale_lock" ] || echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal" ;;
+        esac ;;
     esac
   fi
 done

@@ -374,6 +374,16 @@ case " \$* " in
     if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$LWT/agent-lhalf/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*agent-lrefused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
+  # A stop part way that also leaves the worktree with a status git cannot give (#3355).
+  *" worktree remove "*agent-lunread*)
+    if [ -n "\${SHIM_UNREAD:-}" ]; then
+      rm -f "$LWT/agent-lunread/f.txt"; printf 'not an index\n' > "$LREPO/.git/worktrees/agent-lunread/index"
+      echo "fatal: simulated stop part way" >&2; exit 128
+    fi ;;
+  # A filter that cannot be turned off, appearing at the last moment before one removal: when the
+  # removal asks which repository answers in that worktree, after the status it was judged by.
+  *agent-l125" "*" rev-parse --path-format=absolute --git-common-dir "*)
+    if [ -n "\${SHIM_125:-}" ]; then "$REAL_GIT" -C "$LREPO" config 'filter.e=q.clean' cat; fi ;;
   # The status is asked through dc_git (#3355), which writes its settings between the folder and
   # the command, so the two are no longer side by side.
   *agent-lrace" "*" status --porcelain"*)
@@ -486,6 +496,33 @@ check_eq "with its marker kept" yes "$([ -e "$LMARKS/agent-lhalf" ] && echo yes 
 lrun --remove
 check "and the next run finishes that removal" "finished removing agent-lhalf [fix/610-half]" "$OUT"
 check_eq "its folder is gone" yes "$(gone agent-lhalf)"
+# A removal that stops part way and leaves a status git cannot give (#3355). Whether the worktree is
+# whole or part deleted cannot be told, and until #3355 a failed status read as "no deleted files":
+# the marker was cleared and the dead agent's lock put back, on a worktree that could be part
+# deleted, which the finisher's one --force can then never take. So the marker stays and the lock
+# stays off, as for one known to be part deleted, and the run says the status could not be read.
+R_UNREAD="claude agent agent-lunread (pid 4009 start Thu Oct 15 12:00:00 2026)"
+ladd agent-lunread fix/613-unread 613 "$R_UNREAD"
+SHIM_UNREAD=1 lrun --remove
+check "a removal stopped part way that leaves a status git cannot give is said" "keeping agent-lunread [fix/613-unread]: git would not remove it: fatal: simulated stop part way" "$OUT"
+check "and says its status could not be read after that, so what was left cannot be told" "git could not read its status after that" "$OUT"
+check_eq "its marker is kept, since it may be part deleted" yes "$([ -e "$LMARKS/agent-lunread" ] && echo yes || echo no)"
+check_eq "and the dead agent's lock is not put back on it" UNLOCKED "$(lockof agent-lunread)"
+check_eq "its folder is still there" no "$(gone agent-lunread)"
+lrun --remove
+check "the next run does not force it either, its status still unreadable" "keeping agent-lunread [fix/613-unread]: an earlier removal of it was cut off part way, and git could not read its status now" "$OUT"
+check_eq "and its folder is still there" no "$(gone agent-lunread)"
+# A removal refused before git was asked to remove anything (exit 125), whose status cannot be asked
+# for afterwards either: git deleted nothing, so the worktree is whole whatever its status would say.
+# Its marker is cleared and its lock put back as found, never left as one that may be part deleted.
+R_125="claude agent agent-l125 (pid 4011 start Thu Oct 15 12:00:00 2026)"
+ladd agent-l125 fix/614-not-tried 614 "$R_125"
+SHIM_125=1 lrun --remove
+git -C "$LREPO" config --unset 'filter.e=q.clean'
+check "a removal refused before git was asked is said as not tried, with why" "keeping agent-l125 [fix/614-not-tried]: its removal was not tried: dc_git: refused" "$OUT"
+check_eq "nothing having been deleted, its marker is cleared though its status cannot be asked for" no "$([ -e "$LMARKS/agent-l125" ] && echo yes || echo no)"
+check_eq "and its lock is put back exactly as it was found" "$R_125" "$(lockof agent-l125)"
+check_eq "its folder is whole" no "$(gone agent-l125)"
 
 # The REAL ps, and the real boot time, on a process this suite started: its lock, written the way
 # Claude Code writes one (its start time as ps gives it under UTC), keeps its worktree, and the same

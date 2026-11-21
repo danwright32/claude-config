@@ -345,8 +345,21 @@ else
         still="$(git -C "$primary" worktree list --porcelain 2>/dev/null)"
         case $'\n'"$still"$'\n' in
           *$'\n'"worktree ${wt_path[n]}"$'\n'*)
-            gone_files="$(dc_git "$real" status --porcelain 2>/dev/null | grep -c '^ D ' || true)"
-            if [ "${gone_files:-0}" -gt 0 ]; then
+            # Which of the two it is comes from a status, and a status git cannot give is neither
+            # (#3355): read as "no deleted files" it put the lock back on a worktree that could be
+            # part deleted. So it is whole only when git was never asked to remove anything (125),
+            # or a status that could be read shows no deleted file.
+            if [ "$rrc" -eq 125 ]; then
+              gone_files=0
+            elif st="$(dc_git "$real" status --porcelain 2>/dev/null)"; then
+              gone_files="$(printf '%s\n' "$st" | grep -c '^ D ' || true)"
+            else
+              gone_files=unread
+            fi
+            if [ "$gone_files" = unread ]; then
+              why="$(jw_status_why "$real")"
+              printf '             its status could not be read after that%s, so whether git left it whole or part deleted cannot be told. Its lock, left by a Claude agent that is gone, is not put back. Look in it first: if git did leave it part deleted, it can be finished with: git -C %s worktree remove --force %s\n' "${why:+ ($why)}" "$primary" "$real"
+            elif [ "${gone_files:-0}" -gt 0 ]; then
               printf '             its lock, left by a Claude agent that is gone, is not put back, so it can be finished with: git -C %s worktree remove --force %s\n' "$primary" "$real"
             else
               git -C "$primary" worktree lock --reason "${wt_lockreason[n]}" "${wt_path[n]}" >/dev/null 2>&1 \

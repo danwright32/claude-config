@@ -6732,7 +6732,12 @@ which `payload/hooks/lib/judged-worktree.sh` sources and adds one thing to:
   partial clone missing an object fails where it used to fetch. Each of those keeps the worktree.
   One more changed with it: the sweep's finisher used to read a status git could not give as
   nothing changed, and then forced the removal, which on a fixture took a folder holding a changed
-  file. It now keeps that worktree and its marker and says why.
+  file. It now keeps that worktree and its marker and says why. The same reading sat after a
+  removal git fails: both cleanups ask for a status to tell a worktree left whole from one left part
+  deleted, and a status git could not give read as whole, so the marker was cleared and a dead
+  agent's lock put back on a worktree that might be part deleted. Now a status that cannot be read
+  leaves the marker and leaves the lock off, and the line says so. A removal that was never tried
+  left the worktree whole, so no status is asked for and the lock goes back.
 - **What stays plain.** git run in the repository itself about its own records (listing its
   worktrees, locking and unlocking one, reading a ref, deleting a local branch). That is the
   repository the tool was run for, where the session's every other git call runs too, and no call
