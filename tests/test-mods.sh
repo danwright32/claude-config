@@ -1605,9 +1605,15 @@ mkmodsrc "$M9B" branch-abbrev-ref 'const r = await run($, ["git", "rev-parse", "
 mkmodsrc "$M9B" branch-issues 'export const issuesOfBranch = b => [...b.matchAll(/(?:^|[^0-9])(\d{2,6})(?=$|[^0-9])/g)].map(m => Number(m[1]))'
 # #1306: a copy of the reading as it now stands, by the parts of the branch name, fails the same way.
 mkmodsrc "$M9B" branch-issue-parts 'export const issuesOfBranch = b => b.split(/[/_.-]+/).map(p => /^(\d{2,6})[a-z]?$/i.exec(p)?.[1]).filter(Boolean).map(Number)'
+# #3333: git rebase and git am take --show-current-patch, which prints the patch a stopped move is on
+# and reads no branch, so a mod naming only that option passes; --show-current at a line's end, as a
+# template string split over lines leaves it, is still a branch read by hand.
+mkmodsrc "$M9B" clean-names-patch-option 'const looking = flags.has("--show-current-patch") || words.includes(`--show-current-patch`)'
+mkmodsrc "$M9B" branch-show-current-end $'const cmd = `git branch --show-current\n`'
 out="$(bash "$SHARED" "$M9B" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a hand rolled reading of where a checkout stands fails the run" ok || check "a hand rolled reading of where a checkout stands fails the run" "exit=$code out=$out"
-for m in branch-show-current branch-origin-head branch-abbrev-ref branch-issues branch-issue-parts; do
+case "$out" in *clean-names-patch-option*) check "#3333 a mod naming only git's --show-current-patch is not taken for a branch read by hand" "$out" ;; *) check "#3333 a mod naming only git's --show-current-patch is not taken for a branch read by hand" ok ;; esac
+for m in branch-show-current branch-show-current-end branch-origin-head branch-abbrev-ref branch-issues branch-issue-parts; do
   printf '%s\n' "$out" | grep "$m keeps its own branch-reader" | grep -q 'modkit.branch(' && check "and names $m, pointing it at modkit.branch" ok \
     || check "and names $m, pointing it at modkit.branch" "$out"
 done
