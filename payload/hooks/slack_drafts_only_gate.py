@@ -85,6 +85,7 @@ import glob
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -92,6 +93,10 @@ import shlex
 import signal
 import sys
 import time
+# Here and not where py_marker_read uses it: a module first imported in the middle of a judgement
+# reads its own files to load, the judgement cache sees that read as one nobody recorded, and the
+# judgement is never kept (lib/judgement-cache.py MODULES; claude-config#3255).
+import tokenize
 import warnings
 
 # Loading lib/shell-words.py by path must leave no bytecode beside it in the installed lib/ (#2080).
@@ -739,8 +744,6 @@ def py_marker_read(text, docs_read, want_held):
         if isinstance(pat, ast.Constant) and isinstance(pat.value, (str, bytes)) and pat.end_lineno:
             spans.append((offset(pat.lineno, pat.col_offset), offset(pat.end_lineno, pat.end_col_offset)))
     if "#" in text:
-        import io
-        import tokenize  # only for a text that names an endpoint, so every other call skips the import
         try:
             # newline=None numbers lines on \r\n, \r and \n, as ast does; a token's column counts characters.
             for tok in tokenize.generate_tokens(io.StringIO(text, newline=None).readline):
