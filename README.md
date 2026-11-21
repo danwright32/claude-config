@@ -3332,6 +3332,16 @@ machine's bash dropped, and a gate killed from outside leaves a `scanners-gate.*
 temporary folder saying what the supervisor and the run were doing, which the suite prints when a
 call ends at its deadline.
 
+A run can also end by itself just as the stop comes, and bash can then lose its exit code (#3333,
+from the lessons review of pull request 3382). Measured on 2026-11-21 on a Mac under bash 3.2, in 5
+staged calls of 5, with the gate held in its wait while its run ended with 2 and the stop signal
+was sent: bash left the wait for the signal without recording the run's end, the wait after the
+kill found no child and gave -1, and the gate exited 255 over a run that had refused. So after the
+kill the supervisor reads an answer as the run's own only from 0 to 126, and 137 as its own kill.
+Given anything else it refuses with exit 2, says the run's exit code did not reach it and what bash
+gave, and shows what the run had printed, so a refusal the run had written still reaches the
+reader and a run that had passed costs one more push.
+
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
 on a busy Mac on 2026-10-29, so stopping it meant it could never finish and every push needing it was refused for
