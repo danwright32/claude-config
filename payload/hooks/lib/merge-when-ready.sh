@@ -751,6 +751,40 @@ rerun_failed_start(){
   done <<< "$runs_failed"
   return 1
 }
+# WHAT THE CHECKS DID NOT TEST (claude-config#3312). claude-config's tests workflow puts a notice on
+# its fan in naming every part a suite could not run on the runner, which a green check does not
+# cover (tools/ci-unmeasured-summary.sh writes them; tools/test-ci-unmeasured-summary.sh holds this
+# title equal to the one it writes). Just before the merge, each Actions check on the head is asked
+# for its annotations, the job id read from its details link in the rollup, and those carrying this
+# title are printed, so the log of a merge says what its green did not cover. It only reads and
+# prints: a read that fails is said and the merge goes on, and a head whose checks carry no such
+# notice (another repository's, or a check that is not an Actions job) prints nothing. Once per head.
+UNTESTED_TITLE_PREFIX="Not tested by the checks"
+untested_said_for=""
+say_untested(){
+  local rows id name out rc found jrc n t m first rest l
+  [ "$untested_said_for" = "$head" ] && return 0
+  untested_said_for="$head"
+  rows="$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | select((.detailsUrl // "") | test("/actions/runs/[0-9]+/job/[0-9]+"))
+    | "\(.detailsUrl | capture("/job/(?<id>[0-9]+)").id)\t\(.name // "a check")"] | unique | .[]' 2>/dev/null)"
+  [ -n "$rows" ] || return 0
+  while IFS=$'\t' read -r id name; do
+    [ -n "$id" ] || continue
+    out="$(gh_as api "repos/$slug/check-runs/$id/annotations?per_page=100" 2>&1 </dev/null)"; rc=$?
+    found="$(printf '%s' "$out" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" '.[] | select((.title // "") | startswith($p)) | {t: .title, m: (.message // "")}' 2>/dev/null)"; jrc=$?
+    if [ "$rc" -ne 0 ] || [ "$jrc" -ne 0 ]; then
+      say "Could not read what check $name said it did not test (${out:0:200}, exit $rc), so any part it left untested is not named here. Merging all the same: this is a report, not a gate."
+      continue
+    fi
+    while IFS= read -r n; do
+      [ -n "$n" ] || continue
+      t="$(printf '%s' "$n" | jq -r '.t')"; m="$(printf '%s' "$n" | jq -r '.m')"
+      first="$(printf '%s\n' "$m" | sed -n 1p)"; rest="$(printf '%s\n' "$m" | sed -n '2,61p')"
+      say "Check $name, $t: $first"
+      [ -z "$rest" ] || while IFS= read -r l; do emit "    $l"; done <<< "$rest"
+    done <<< "$found"
+  done <<< "$rows"
+}
 # A HEAD GITHUB HAS NOT CAUGHT UP WITH (claude-config#3254). On 2026-11-18 this helper updated #3242
 # at 14:36:13 ET and stopped at 14:40:28 on block-red-merge.sh's "PR has NO checks at all": GitHub
 # created the head's tests run at 14:40:29, 256 seconds after the update, and it went green. Over the
@@ -2235,6 +2269,7 @@ EOF_VIEW
   if ! why="$(ask_gate "$VERIFY_GATE" "$cmd")"; then
     stop 1 "Stopped: require-verification-run.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
+  say_untested
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
   # Judged by the state it leaves, never by what gh printed: gh can fail after the merge has landed.

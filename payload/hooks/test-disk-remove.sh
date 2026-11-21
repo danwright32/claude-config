@@ -108,6 +108,12 @@ LOGF() { printf '%s' "$STATE/removals/$1.log"; }
 # How many INTENT lines in <log> are for an item id matching the regular expression <re>; 0 for no log.
 intents() { [ -f "$1" ] || { echo 0; return; }; awk -F '\t' -v re="$2" '$1 == "INTENT" && $4 ~ re { n++ } END { print n + 0 }' "$1"; }
 calls_of() { dc_calls "$1"; }
+# How many times git was asked <question> in <folder>: a recorded call that starts with the folder
+# and ends with the question, whatever dc_git put between the two (#3328). What it puts there is
+# test-disk-clean-git.sh's to hold it to.
+git_asked() { # <folder> <question>
+  dc_calls git | awk -v p="git -C $(printf '%q' "$1") " -v s=" $2" 'index($0, p) == 1 && length($0) >= length(s) && substr($0, length($0) - length(s) + 1) == s { n++ } END { print n + 0 }'
+}
 
 # ================================================================================================
 # 1. Test mode: it runs only with HOME inside the throwaway directory, and seams only in test mode
@@ -420,7 +426,7 @@ check "task shape: the same shape under another home is not" "$(eq "$(tshape "$O
 # from in a folder) is answered by the harness's stand in, which section "real git" below holds to
 # what real git says. A repository is a .git holding HEAD, objects and refs, as git itself reads one.
 repo_at() { mkdir -p "$1/.git/objects" "$1/.git/refs"; printf 'ref: refs/heads/main\n' > "$1/.git/HEAD"; } # <folder>
-git_dir_stub() { dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+git_dir_stub() { dc_stub git "$DC_GIT_HELPER_STANDIN"'
 case "$*" in "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;; esac
 echo "git stub: $*" >&2; exit 98'; }
 checkout_tree() {
@@ -453,7 +459,7 @@ record s1 10; plan "$H/plan" s1 d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 c1 c2
 run --plan "$H/plan"
 check "checkout: a task folder that is a git checkout reaches its judge and is moved to the Trash" "$(gone "$NS/repo-task")"
 check "checkout: git was asked which repository it answers for in that task folder" \
-  "$(has "$(calls_of git)" "$(printf 'git -C %q rev-parse --absolute-git-dir' "$NS/repo-task")")"
+  "$(eq "$(git_asked "$NS/repo-task" "rev-parse --absolute-git-dir")" 1)"
 check "checkout: and was asked nothing else, by the remover" "$(eq "$(calls_of git | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkout: and so does a checkout four levels down, by the first shape" "$(gone "$NT/clone")"
 check "checkout: the judge was asked about exactly those two" \
@@ -514,7 +520,9 @@ if command -v git >/dev/null 2>&1; then
     "$(eq "$(own "$RG/wt")" "no: git answers there for a repository that lies outside it ($RG/clone/.git/worktrees/wt): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one")"
   check "real git: a submodule does not" "$(has "$(own "$RG/super/sub")" "no: git answers there for a repository that lies outside it ($RG/super/.git/modules/sub)")"
   check "real git: a folder whose .git is a link to a repository does not" "$(has "$(own "$RG/linked")" "no: git answers there for a repository that lies outside it ($RG/clone/.git)")"
-  check "real git: a bare repository does not" "$(has "$(own "$RG/bare")" "no: git answers there for a repository that lies outside it ($RG/bare)")"
+  # Asked through dc_git (#3328), git works with no bare repository it merely finds at a folder, so
+  # one is refused as holding none, where a bare call answered for the folder itself.
+  check "real git: a bare repository does not: git is asked to answer for none it merely finds" "$(eq "$(own "$RG/bare")" "no: git names no repository for it (git exit 128)")"
   check "real git: an empty .git folder only looks like one" "$(eq "$(own "$RG/empty")" "no: git names no repository for it (git exit 128)")"
   check "real git: a .git folder holding only a HEAD only looks like one" "$(eq "$(own "$RG/headonly")" "no: git names no repository for it (git exit 128)")"
   check "real git: a plain folder is none" "$(eq "$(own "$RG/plain")" "no: git names no repository for it (git exit 128)")"
@@ -530,13 +538,33 @@ if command -v git >/dev/null 2>&1; then
   check "real git: a task folder that is a worktree is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/wt")" "no: it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
   check "real git: a submodule four levels down is not a task folder, so it is refused by its shape" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/super/sub")" "no: it is not a session's task folder")"
   check "real git: a task folder whose .git only looks like one is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/empty")" "(git names no repository for it (git exit 128))")"
-  # The stand in every stubbed suite uses, against real git, folder by folder.
+  # The stand in every stubbed suite uses, against real git asked as dc_git_own_repo asks it,
+  # through dc_git, folder by folder. A bare repository is among them now that both say none.
   git_dir_stub
-  for d in clone super wt super/sub linked empty headonly plain; do
-    real="$(git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; real="$?|$real"
+  for d in clone super wt super/sub linked empty headonly plain bare; do
+    real="$(dc_git "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; real="$?|$real"
     stood="$(dc_run git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null)"; stood="$?|$stood"
     check "real git: the stand in answers as real git does for $d" "$(eq "$stood" "$real")"
   done
+  default_stubs
+  # The worktree method with real git, on a worktree whose repository names a program for each
+  # setting measured to start one (#3328): git removes it, and none of those programs runs. The
+  # same fixture run bare is test-disk-clean-git.sh's control, where each is seen to run.
+  fresh
+  RLOG="$DC_ROOT/markers.log"; : > "$RLOG"
+  REAL_GIT="$(command -v git)"
+  dc_marker_repo "$REAL_GIT" "$H/w/real-repo" "$RLOG" || check "real git: the marker repository was made" "dc_marker_repo failed"
+  _dc_rgit "$REAL_GIT" -C "$H/w/real-repo" worktree add "$H/w/real-wt" -b side >/dev/null
+  check "real git: the fixture is a worktree of a repository whose own configuration names programs" \
+    "$([ -f "$H/w/real-wt/.git" ] && grep -q 'fsmonitor = ' "$H/w/real-repo/.git/config" && [ -x "$H/w/real-repo/.git/hooks/post-index-change" ] && echo ok || echo "it was not made")"
+  touch -t 203001010000 "$H/w/real-wt/a.txt"; : > "$RLOG"
+  dc_stub git "GIT_CONFIG_NOSYSTEM=1 exec $(printf '%q' "$REAL_GIT") \"\$@\""
+  item r1 fixture worktree "$H/w/real-wt"; record s1 10; plan "$H/plan" s1 r1
+  run --plan "$H/plan"
+  check "real git: the remover removes a clean worktree through git" "$(eq "$RC|$([ -e "$H/w/real-wt" ] && echo there || echo gone)" "0|gone")"
+  check "real git: and no program the worktree's repository names ran while it did" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "real git: git was asked to remove it, with the repository's programs turned off, its filter by name" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false -c filter.mark.clean= -c filter.mark.smudge= -c filter.mark.process= worktree remove ")" 1)"
   default_stubs
 else
   check "real git: git is on this machine, so the predicate can be asked for real" "no git on the PATH"
@@ -680,12 +708,14 @@ check "disk-remove empties with tee and never with a redirection onto an item" \
 # ================================================================================================
 fresh
 mkdir -p "$H/w/wt-clean" "$H/w/wt-dirty"
-dc_stub git 'case "$2" in */wt-dirty) echo "fatal: '"'"'$2'"'"' contains modified or untracked files, use --force to delete it" >&2; exit 128 ;; esac; /bin/rm -rf "$2"'
+dc_stub git "$DC_GIT_HELPER_STANDIN"'
+case "$1 $2" in "worktree remove") ;; *) echo "git stub: $*" >&2; exit 98 ;; esac
+case "$d" in */wt-dirty) echo "fatal: '"'"'$d'"'"' contains modified or untracked files, use --force to delete it" >&2; exit 128 ;; esac; /bin/rm -rf "$d"'
 item w1 fixture worktree "$H/w/wt-clean"; item w2 fixture worktree "$H/w/wt-dirty"
 record s1 10; plan "$H/plan" s1 w1 w2
 run --plan "$H/plan"
 check "a clean worktree is removed" "$(gone "$H/w/wt-clean")"
-check "git was asked to remove it from inside, without --force" "$(has "$(calls_of git)" "git -C $H/w/wt-clean worktree remove $H/w/wt-clean")"
+check "git was asked to remove it from inside, without --force" "$(eq "$(git_asked "$H/w/wt-clean" "worktree remove $(printf '%q' "$H/w/wt-clean")")" 1)"
 check "and never with --force" "$(hasnt "$(calls_of git)" "--force")"
 check "a dirty worktree git refuses is skipped, quoting git" "$(has "$OUT_TEXT" "git refused to remove the worktree: fatal:")"
 check "and is still there" "$(there "$H/w/wt-dirty")"
