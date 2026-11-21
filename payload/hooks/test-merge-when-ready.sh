@@ -4302,6 +4302,10 @@ if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
 fi
 printf 'part %s of %s, slot %s, record %s\n' "${HOOK_TESTS_PART:-}" "${HOOK_TESTS_PARTS:-}" "${HOOK_TESTS_SLOT:-}" "${HOOK_TESTS_UNMEASURED_FILE:+set}" >> "$ST/runner-calls"
 cp "$HOOK_TESTS_DEALT" "$ST/runner-deal"
+# What the clone it is run in knows of what is published, asked of git as a push gate run there asks.
+{ git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo "origin/HEAD unknown"
+  git rev-list --count HEAD ^refs/remotes/origin/main 2>/dev/null || echo "origin/main unknown"
+  git config --get remote.origin.url 2>/dev/null || echo "no origin"; } > "$ST/runner-place"
 mine="$(awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p { print $2 }' "$HOOK_TESTS_DEALT")"
 n="$(printf '%s\n' "$mine" | grep -c .)"
 mode="$(cat "$ST/runner-mode" 2>/dev/null)"
@@ -4399,6 +4403,32 @@ check "#3312 and that they passed" "All 2 suites passed on this Mac at ${UT_HEAD
 check_eq "#3312 said before it merges" ok "$(ut_before "All 2 suites passed on this Mac" "Merging, pinned to that head" "$out")"
 check_eq "#3312 merged once" "1" "$(count gh-calls 'pr merge')"
 check_eq "#3312 the throwaway clone is removed" "0" "$(ut_left)"
+# THE CLONE KNOWS WHAT IS PUBLISHED. The step's first real merge, of #3392 on 2026-11-21, stopped on
+# a suite the pull request had not broken: the clone knew no remote at all, so the push gate that
+# suite asks about its own checkout took all 3347 commits of the history for ones a push would add,
+# and refused on the message of one from 2026-10-29. Suites are written for a builder's worktree and
+# a runner's checkout, which both know the remote and its default branch. So the stand in asks git,
+# in the clone, what such a gate asks: the default branch, how many commits are on the head and not
+# on it (one, the branch's edit, of the two in the history), and where origin is.
+check_eq "#3312 the clone the suites run in knows the remote's default branch, counts only the pull request's commit as unpublished, and names origin" \
+  "$(printf 'origin/main\n1\nhttps://github.com/acme/widget.git')" "$(cat "$ST/runner-place" 2>/dev/null)"
+# A clone that cannot be told is not run in: the suites would judge a repository that looks as if
+# nothing of it were published. git here fails the one write that names the default branch.
+mkdir -p "$STUBS/nodefault"
+cat > "$STUBS/nodefault/git" <<EOS
+#!/usr/bin/env bash
+case " \$* " in *" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/"*) echo "fatal: stub: the ref could not be written" >&2; exit 128 ;; esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$STUBS/nodefault/git"
+# The pass just recorded is kept, for the case after this one: this refusal comes before it is read.
+UT_KEEP_PASSES=1 ut_state
+out="$(PATH="$STUBS/nodefault:$PATH" ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a clone that could not be told what is published refuses the merge" "1" "$rc"
+check "#3312 saying what it could not record, in git's words" "could not be told which branch of acme/widget is published (fatal: stub: the ref could not be written)" "$out"
+check_eq "#3312 and no suite is run in it" "0" "$(count runner-calls 'part ')"
+check_eq "#3312 nothing merged from a clone it could not set up" "0" "$(count gh-calls 'pr merge')"
+check_eq "#3312 and that clone is removed" "0" "$(ut_left)"
 # Run again at the same head (a restart after a stop): the pass recorded for this head is believed,
 # and nothing runs a second time.
 UT_KEEP_PASSES=1 ut_state
