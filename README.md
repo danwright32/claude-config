@@ -4722,7 +4722,12 @@ program the gate reads by name: `hyperfine 'node --test test/notify.test.js'` an
 'bash post.sh' Enter` are refused, and so is `git commit -m '<exactly a refused command>'`, git
 commit being a program the gate does not know to be unable to run its words. A sentence that
 only mentions such a program starts with another word and is not read, so an ordinary commit
-message passes. Behind a function the text defines, a quoted word is read only where the body
+message passes. The word must also begin like a command line: its first command starts with a
+program the gate knows, which is one it reads by name, a runner, or one it knows to be unable to
+run its words (`cd`, `export`, `echo`). Text in another language does not begin so, and cut at
+its `|` marks it can hold a piece that starts with a program's name: `sed -i '27s|^python3
+a|python3 b|' file` is an edit of a file, and the first build of #3304 refused it.
+Behind a function the text defines, a quoted word is read only where the body
 does something with what it is handed as the words of a command; a body that only pipes it into
 a program's input is left as it was, which is what the gate's own suites do with every command
 they ask it about (`run_bash "<a refused command>"`). Left open, each for a stated reason:
@@ -4731,10 +4736,18 @@ they ask it about (`run_bash "<a refused command>"`). Left open, each for a stat
 - a posting address handed to a program the gate does not know as a plain argument, since no
   command stands behind it to judge and the same shape stores a webhook as a secret;
 - a quoted word whose own command starts with a second program the gate does not know
-  (`hyperfine 'op run -- node x.js'`), since read that way every sentence that mentions a program
-  would be a command line;
+  (`hyperfine 'op run -- node x.js'`), or whose first command does (`hyperfine 'mytool && node
+  x.js'`), since read that way every sentence that mentions a program, and every sed script
+  whose replacement starts with one, would be a command line;
 - a function that only pipes what it is handed into a program (`f() { echo "$1" | bash; }`), and
   one whose body builds the command from a part of its words (`f() { $1 --test x.js; }; f node`).
+
+Counted before it shipped (#3304), on the personal MacBook on 2026-11-21: each of the 62,780
+distinct Bash commands in its session records was judged by main's gate and by this one, in the
+folder it ran in. None was newly refused and none newly allowed (62,318 allowed by both, 462
+refused by both). That count is why a quoted word must begin like a command line: without it,
+four of 62,307 were newly refused, three sed scripts and one awk program. No commit message was
+among them. The work MacBook's records were not counted.
 
 Every refusal of the rule opens with the same words about the program (`NOT_KNOWN`), which is how
 its suite tells this rule's refusals from another rule's.

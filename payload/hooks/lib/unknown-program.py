@@ -81,6 +81,14 @@ their text alone: after ps (`-o command`), which (`which node`) and top in all b
 of which spells a refused command. The gate's own verdict on each was not taken: the installed
 gate refused the script that asks it (the pull request says what was and was not measured).
 
+The reading of a function's body and of a quoted word (claude-config#3304) was counted with the
+gate's own verdict: each of the 62,780 distinct commands in the personal MacBook's session records
+on 2026-11-21, judged in process by main's gate and by this one in the folder it ran in. None was
+newly refused and none newly allowed (62,318 allowed by both, 462 refused by both). Before a
+quoted word had to begin like a command line, four of 62,307 were newly refused: three sed scripts
+and one awk program. `git commit -m '<exactly a refused command>'` is refused, and no past command
+was one. The work MacBook's records were not counted.
+
 More than MAX_STARTS words that could each start a command, or be a command line of their own,
 are not all read: a typed command is
 refused as unread there, and a script on disk is left alone, as an unread feed is. The same holds
