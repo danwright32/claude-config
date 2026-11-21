@@ -124,10 +124,12 @@ echo "fatal: not a git repository (or any of the parent directories): .git" >&2;
 #   git -C <folder> <the settings that turn the repository's programs off> <the command>
 # and, before a status or a worktree remove, asks git two questions of its own: which filter
 # programs the repository's configuration names, and which submodules it holds. This fragment sets d
-# to the -C folder, drops exactly the settings dc_git adds today, so a stub's own case reads the
-# command as the script wrote it, and answers those two questions as a fixture with no filter and no
-# submodule does (nothing, exit 0). It names each setting rather than dropping whatever looks like
-# an option, so a setting dc_git gains later reaches the stub's own case and fails there, loudly.
+# to the -C folder, drops the settings dc_git adds, so a stub's own case reads the command as the
+# script wrote it, and answers those two questions as a fixture with no filter and no submodule
+# does (nothing, exit 0). It drops the two bare options by name, so a bare option dc_git gains
+# later reaches the stub's own case and fails there, loudly. A `-c name=value` pair it drops
+# whatever it names, so a `-c` setting dc_git gains later is not seen here: what catches that one
+# is test-disk-clean-git.sh, which holds DC_GIT_FIXED to the exact list measured.
 # Whether the settings do turn the programs off is never a stub's to say: test-disk-clean-git.sh
 # and the "real git" cases of the other suites ask the git on this machine.
 DC_GIT_HELPER_STANDIN='d=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
