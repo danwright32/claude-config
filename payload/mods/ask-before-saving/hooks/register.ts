@@ -472,7 +472,7 @@ const takeApproval = async ($: EngineInterface, key: string, facts: LessonFacts)
 // `now` reads the file as it is, by mod-kit's currentText, handed in so the noun (#1483), which may
 // not pass its engine to a helper, reads through its own. A lessons file that is no ordinary file (a
 // fifo, a link to a device) is never opened (#1814), and what a call adds to it cannot be told, so
-// it is asked about.
+// no lesson approval covers it.
 const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<Current>): Promise<string | undefined> => {
   if (tool !== 'Edit' && tool !== 'Write') return undefined
   const file = lessonsFile(at.home)
