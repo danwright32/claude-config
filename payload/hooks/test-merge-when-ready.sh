@@ -61,6 +61,8 @@ fi
 # as the hook suite after every pull runs it, there is no README, so its check is reported unmeasured
 # and the run passes (L411). In a checkout whose README has lost --log=, it still fails (L1).
 . "$DIR/lib/placement-copy.sh"
+# Section 33 runs the real run-all-tests.sh on fixtures, each run in a config folder of its own.
+. "$DIR/lib/fixture-runner-home.sh"
 PLACED=(hooks/test-merge-when-ready.sh hooks/lib skills/orchestrate/SKILL.md)
 placed_run() { MERGE_WHEN_READY_DOCS_ONLY=1 bash "$1/hooks/test-merge-when-ready.sh" 2>&1; }
 if copy="$(placement_copy installed "$WORKDIR/placed-installed" "$DIR/.." "${PLACED[@]}")"; then
@@ -282,6 +284,23 @@ case "$*" in
     id="$(printf '%s\n' "$*" | sed -nE 's#.*check-runs/([0-9]+)/annotations.*#\1#p')"
     if [ -s "$ST/annotations-$id" ]; then cat "$ST/annotations-$id"; else echo '[]'; fi
     ;;
+  # Whether the head's tree holds the tool that says what the checks did not test (claude-config#3312):
+  # has-untested-tool makes it there, and otherwise GitHub answers 404, as it does for any repository
+  # without it. contents-fails makes the read fail.
+  "api repos/acme/widget/contents/"*)
+    fail_read contents
+    if [ -e "$ST/has-untested-tool" ]; then printf '%s\n' 'tools/ci-unmeasured-summary.sh'; exit 0; fi
+    printf '%s\n' '{"message":"Not Found","status":"404"}'
+    echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+  # A workflow run's artifacts fetched (claude-config#3312): artifacts-<run> is a folder holding one
+  # folder per artifact, copied into --dir as gh lays them out. With none, gh's answer for a run whose
+  # artifacts have expired.
+  "run download"*)
+    fail_read download
+    id="$(printf '%s\n' "$*" | awk '{ print $3 }')"
+    dir="$(printf '%s\n' "$*" | sed -nE 's/.*--dir ([^ ]+).*/\1/p')"
+    [ -d "$ST/artifacts-$id" ] || { echo "no valid artifacts found to download" >&2; exit 1; }
+    mkdir -p "$dir" && cp -R "$ST/artifacts-$id"/. "$dir"/ ;;
   # A workflow run started again (claude-config#2537): on-rerun is a step run once when it is.
   "run rerun"*)
     fail_read rerun
@@ -4202,8 +4221,11 @@ check_not "#3118 and nothing said about a base" "based on" "$out"
 # 32. What the checks did not test is named before the merge (claude-config#3312). claude-config's
 #     tests workflow puts a notice on its fan in naming every part a suite could not run on the
 #     runner; read back here by its title from each check's annotations, so the log of a merge says
-#     what its green did not cover. It reports and never stops a merge.
+#     what its green did not cover. The report itself never stops a merge. Running the suites it
+#     names is section 33's, so these cases skip that step with its switch, which is what leaves
+#     the report on its own.
 # =================================================================================================
+export MWR_UNTESTED_SKIP="section 32 reads the report alone"
 UT_ROLLUP='[{"__typename":"CheckRun","name":"suite","workflowName":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"https://github.com/acme/widget/actions/runs/900/job/501"},{"__typename":"CheckRun","name":"deal","workflowName":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"https://github.com/acme/widget/actions/runs/900/job/502"}]'
 ut_fresh(){
   fresh "$OLD" 0 "$UT_ROLLUP"
@@ -4237,6 +4259,276 @@ fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#3312 a head with no Actions job links merges" "0" "$rc"
 check_eq "#3312 and reads no annotations" "0" "$(count gh-calls '/annotations')"
+unset MWR_UNTESTED_SKIP
+
+# =================================================================================================
+# 33. What the checks did not test is run here where the change touches it (claude-config#3312).
+#     Dan, 2026-11-20 at 6:45 PM ET, asked whether a part the runner did not test must pass on the
+#     merging Mac, picked "Only suites the change touches": before merging, the suites the checks
+#     left a part of untested that the pull request changed, or whose code it changed, run on this
+#     Mac at the head, and one that does not pass refuses the merge. The list is each part's record
+#     (the notice is cut at 4096 characters), believed only when it adds up to the notice's count.
+# =================================================================================================
+UT="$WORKDIR/ut"; UT_TMP="$WORKDIR/ut-tmp"; mkdir -p "$UT"
+# The stand in for the head's own run-all-tests.sh. Asked to deal (HOOK_TESTS_DEAL) it lists every
+# suite in the tree as part 1, as the real one prints a deal; asked for a part it keeps the deal it
+# was handed and answers as runner-mode says.
+cat > "$STUBS/untested-runner.sh" <<'EOS'
+#!/usr/bin/env bash
+if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
+  printf 'deal\n' >> "$ST/runner-calls"
+  [ -e "$ST/runner-deal-fails" ] && { echo "run-all-tests: the deal could not be made" >&2; exit 1; }
+  git ls-files | grep -E '(^|/)test-[^/]*\.sh$' | awk '{ printf "1\t%s\t1\tmedian\n", $0 }'
+  exit 0
+fi
+printf 'part %s of %s, slot %s, record %s\n' "${HOOK_TESTS_PART:-}" "${HOOK_TESTS_PARTS:-}" "${HOOK_TESTS_SLOT:-}" "${HOOK_TESTS_UNMEASURED_FILE:+set}" >> "$ST/runner-calls"
+cp "$HOOK_TESTS_DEALT" "$ST/runner-deal"
+mine="$(awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p { print $2 }' "$HOOK_TESTS_DEALT")"
+n="$(printf '%s\n' "$mine" | grep -c .)"
+mode="$(cat "$ST/runner-mode" 2>/dev/null)"
+case "$mode" in
+  sleep) printf '%s\n' "$$" > "$ST/runner-pid"; sleep 30; echo woke > "$ST/runner-woke"; exit 0 ;;
+  slow) sleep 2 ;;
+esac
+for s in $mine; do
+  name="${s##*/}"
+  if [ "$mode" = fail ] && [ "$name" = test-a.sh ]; then printf '  FAIL  %-38s %-26s %s\n' "$name" "1 failed" "1s"
+  elif [ "$mode" = notrun ] && [ "$name" = test-a.sh ]; then printf '  NOT RUN %-37s %s\n' "$name" "could not measure: no Chrome"
+  else printf '  ok    %-38s %-26s %s\n' "$name" "passed" "1s"; fi
+done
+[ "$mode" = unmeasured ] && printf 'test-a.sh\tno Chrome on this Mac either\n' >> "$HOOK_TESTS_UNMEASURED_FILE"
+case "$mode" in
+  fail) echo "    expected 1, got 2"; echo "1 of $n SUITES FAILED: test-a.sh"; exit 1 ;;
+  notrun) echo "1 SUITE(S) COULD NOT RUN HERE: test-a.sh"; echo "ALL $((n - 1)) SUITES THAT COULD RUN PASSED, and 1 could not run here"; exit 0 ;;
+esac
+echo "ALL $n SUITES PASSED"
+EOS
+chmod +x "$STUBS/untested-runner.sh"
+UT_NOTICE='3 parts in 3 suites were not tested on the runner, so these checks do not cover them:\ntest-a.sh: no Chrome\ntest-b.sh: no zsh\ntest-c.sh: not macOS'
+# ut_state [<notice's message>]: GitHub's side, for the head the fixture made: a green suite check
+# carrying the notice, and each part's record as the run's artifacts. This Mac's record of passes
+# goes too, so each case runs its suites, unless UT_KEEP_PASSES is set.
+ut_state(){
+  fresh "$UT_HEAD" 0 "$UT_ROLLUP"
+  [ -n "${UT_KEEP_PASSES:-}" ] || rm -rf "$UT/records"
+  jq -nc --arg m "$(printf "${1:-$UT_NOTICE}")" '[{path:".github",annotation_level:"notice",title:"Not tested by the checks",message:$m}]' > "$ST/annotations-501"
+  mkdir -p "$ST/artifacts-900/part-unmeasured-1" "$ST/artifacts-900/part-unmeasured-2"
+  printf 'test-a.sh\tno Chrome\ntest-b.sh\tno zsh\n' > "$ST/artifacts-900/part-unmeasured-1/unmeasured.tsv"
+  printf 'test-c.sh\tnot macOS\n' > "$ST/artifacts-900/part-unmeasured-2/unmeasured.tsv"
+  rm -rf "$UT_TMP"; mkdir -p "$UT_TMP"
+}
+# ut_fixture <name> <the branch's edit>: a bare acme/widget whose main holds three suites and the code
+# they name, and whose feat/x (also refs/pull/7/head, as GitHub keeps it) makes the edit. test-a.sh
+# names nothing, test-b.sh names hooks/lib/b-code.sh, test-c.sh names mods/one/register.ts (a name
+# mods/two/register.ts shares), and notes.txt shares its name with hooks/lib/notes.txt all the way up.
+ut_fixture(){
+  UB="$UT/$1.git"; UW="$UT/$1-work"; US="$UT/$1-session"; UT_CONF="$UT/$1.gitconfig"
+  git init -q --bare "$UB"; git init -q "$UW"
+  mkdir -p "$UW/hooks/lib" "$UW/tests" "$UW/mods/one" "$UW/mods/two"
+  printf '#!/usr/bin/env bash\necho a\n' > "$UW/hooks/test-a.sh"
+  printf '#!/usr/bin/env bash\n. "$HERE/../hooks/lib/b-code.sh"\n' > "$UW/tests/test-b.sh"
+  printf '#!/usr/bin/env bash\ncat "$ROOT/mods/one/register.ts"\ncat "$ROOT/hooks/lib/b-code.sh.orig"\n' > "$UW/tests/test-c.sh"
+  printf 'echo b\n' > "$UW/hooks/lib/b-code.sh"; printf 'echo b2\n' > "$UW/hooks/lib/b-code.sh.orig"
+  printf 'one\n' > "$UW/mods/one/register.ts"; printf 'two\n' > "$UW/mods/two/register.ts"
+  printf 'n\n' > "$UW/notes.txt"; printf 'n\n' > "$UW/hooks/lib/notes.txt"
+  # UT_REAL: suites that run and report as real ones do, beside a copy of the real runner and its
+  # libraries where a claude-config tree holds them, which the step runs when no stand in is named.
+  if [ -n "${UT_REAL:-}" ]; then
+    printf '#!/usr/bin/env bash\necho a\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$UW/hooks/test-a.sh"
+    printf '#!/usr/bin/env bash\n# reads "$HERE/../hooks/lib/b-code.sh"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$UW/tests/test-b.sh"
+    printf '#!/usr/bin/env bash\n# reads "$ROOT/mods/one/register.ts"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$UW/tests/test-c.sh"
+    chmod +x "$UW/hooks/test-a.sh" "$UW/tests/test-b.sh" "$UW/tests/test-c.sh"
+    mkdir -p "$UW/payload/hooks"; cp "$DIR/run-all-tests.sh" "$UW/payload/hooks/"; cp -R "$DIR/lib" "$UW/payload/hooks/lib"
+  fi
+  git -C "$UW" add -A; git -C "$UW" commit -qm base
+  git -C "$UW" checkout -q -b feat/x
+  (cd "$UW" && eval "$2"); git -C "$UW" add -A; git -C "$UW" commit -qm "the branch's edit"
+  git -C "$UW" push -q "$UB" main feat/x feat/x:refs/pull/7/head
+  git clone -q "$UB" "$US"
+  git -C "$US" remote set-url origin https://github.com/acme/widget.git
+  printf '[include]\n\tpath = %s\n[url "%s"]\n\tinsteadOf = https://github.com/acme/widget.git\n' "$GIT_CONFIG_GLOBAL" "$UB" > "$UT_CONF"
+  UT_HEAD="$(git -C "$UB" rev-parse feat/x)"
+  ut_state
+}
+UT_ROLLUP='[{"__typename":"CheckRun","name":"suite","workflowName":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"https://github.com/acme/widget/actions/runs/900/job/501"}]'
+ut_run(){ (cd "$US" && TMPDIR="$UT_TMP" GIT_CONFIG_GLOBAL="$UT_CONF" MWR_UNTESTED_RUNNER="${UT_RUNNER-$STUBS/untested-runner.sh}" MWR_UNTESTED_DIR="$UT/records" bash "$HELPER" "$@" 2>&1); }
+ut_left(){ find "$UT_TMP" -mindepth 1 -maxdepth 1 -name 'mwr-untested*' | wc -l | tr -d ' '; }
+ut_before(){ # ut_before <text> <later text> <output>: ok when the first is said before the second
+  local a b
+  a="$(awk -v t="$1" 'index($0, t) && !n { n = NR } END { if (n) print n }' <<< "$3")"
+  b="$(awk -v t="$2" 'index($0, t) && !n { n = NR } END { if (n) print n }' <<< "$3")"
+  if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then echo ok; else echo "at ${a:-never}, then ${b:-never}"; fi
+}
+
+# The pull request changes test-a.sh itself and the code test-b.sh names: those two run here, in a
+# part of their own, test-c.sh does not, and the merge goes on once both pass.
+ut_fixture touch 'echo "echo more" >> hooks/test-a.sh; echo "echo more" >> hooks/lib/b-code.sh'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 suites the change touches pass here, and it merges" "0" "$rc"
+check "#3312 it names the suite it changed" "test-a.sh (changed by this pull request)" "$out"
+check "#3312 and the suite that names code it changed" "test-b.sh (names hooks/lib/b-code.sh)" "$out"
+check_not "#3312 a longer name is not a mention (test-c.sh names b-code.sh.orig, not b-code.sh)" "test-c.sh (names" "$out"
+check_eq "#3312 the two run as part 1, the rest as part 2" "$(printf '1\thooks/test-a.sh\n1\ttests/test-b.sh\n2\ttests/test-c.sh')" "$(cut -f1,2 "$ST/runner-deal" 2>/dev/null | sort -k2)"
+check "#3312 run as one part of two, outside the Mac's full run slot, with the record of what is still untested asked for" "part 1 of 2, slot 0, record set" "$(cat "$ST/runner-calls" 2>/dev/null)"
+check "#3312 it says it started them" "Running on this Mac the 2 suites" "$out"
+check "#3312 and that they passed" "All 2 suites passed on this Mac at ${UT_HEAD:0:7}" "$out"
+check_eq "#3312 said before it merges" ok "$(ut_before "All 2 suites passed on this Mac" "Merging, pinned to that head" "$out")"
+check_eq "#3312 merged once" "1" "$(count gh-calls 'pr merge')"
+check_eq "#3312 the throwaway clone is removed" "0" "$(ut_left)"
+# Run again at the same head (a restart after a stop): the pass recorded for this head is believed,
+# and nothing runs a second time.
+UT_KEEP_PASSES=1 ut_state
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 run again at the same head, it merges" "0" "$rc"
+check "#3312 saying they already passed here at this head" "already passed on this Mac at ${UT_HEAD:0:7}" "$out"
+check_eq "#3312 and runs nothing again" "0" "$(count runner-calls 'part ')"
+
+# A new head with the same change is run again: a pass belongs to the head it ran at.
+UT_KEEP_PASSES=1 ut_fixture touch2 'echo "echo more" >> hooks/test-a.sh; echo "echo more" >> hooks/lib/b-code.sh'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 another head merges" "0" "$rc"
+check_eq "#3312 after its own run, not the other head's pass" "1" "$(count runner-calls 'part ')"
+
+# A file sharing its name is named by the shortest end of its path nobody else has: one/register.ts
+# chooses test-c.sh, and two/register.ts chooses nothing, which is said.
+ut_fixture one 'echo more >> mods/one/register.ts'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a change to mods/one/register.ts merges" "0" "$rc"
+check "#3312 after running test-c.sh, which names it" "test-c.sh (names mods/one/register.ts)" "$out"
+ut_fixture two 'echo more >> mods/two/register.ts'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a change no untested suite is touched by merges" "0" "$rc"
+check "#3312 saying none of them runs here" "None of the 3 suites the checks left a part of untested is changed by this pull request or names a file it changed, so none was run here" "$out"
+check_eq "#3312 and runs no suite" "0" "$(count runner-calls 'part ')"
+
+# A file whose name another file shares all the way up cannot be named, so which suites test it is
+# not known, and that is said, never passed over.
+ut_fixture notes 'echo more >> notes.txt'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a change it cannot judge still merges" "0" "$rc"
+check "#3312 saying which file it could not tell about, and why" "Could not tell which suites test notes.txt: another file in the tree has a path ending the same way, so no suite can name it alone" "$out"
+
+# A suite that fails refuses the merge, with the runner's own lines.
+ut_fixture fail 'echo "echo more" >> hooks/test-a.sh'
+printf fail > "$ST/runner-mode"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a suite that fails here refuses the merge" "1" "$rc"
+check "#3312 saying which, at which head" "Stopped: 1 of the suites the checks left a part of untested failed on this Mac at ${UT_HEAD:0:7}" "$out"
+check "#3312 with the runner's own lines" "expected 1, got 2" "$out"
+check_eq "#3312 nothing merged on a failure" "0" "$(count gh-calls 'pr merge')"
+check_eq "#3312 and nothing recorded as passed" "0" "$(find "$UT/records" -type f -name "$UT_HEAD" 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "#3312 the clone is removed after a refusal too" "0" "$(ut_left)"
+
+# A suite that could not run is not a pass.
+ut_state; printf notrun > "$ST/runner-mode"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a suite that could not run here refuses the merge" "1" "$rc"
+check "#3312 saying the runner did not report every one passed" "did not report all 1 passed" "$out"
+check_eq "#3312 nothing merged when one could not run" "0" "$(count gh-calls 'pr merge')"
+
+# A part still untested here is said, and the merge goes on: it ran, and nothing failed.
+ut_state; printf unmeasured > "$ST/runner-mode"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a part untested here too still merges" "0" "$rc"
+check "#3312 and is named" "Not tested on this Mac either: test-a.sh: no Chrome on this Mac either" "$out"
+check_eq "#3312 the pass is recorded under the repository and the head" "hooks/test-a.sh" "$(cat "$UT/records/acme_widget/$UT_HEAD" 2>/dev/null)"
+
+# The runner past the step's bound is stopped, all of it, and the merge refused.
+ut_state; printf sleep > "$ST/runner-mode"
+out="$(MWR_UNTESTED_MAX_SECONDS=60 ut_run 7 --squash)"; rc=$?
+check_eq "#3312 suites past their bound refuse the merge" "1" "$rc"
+check "#3312 saying they were stopped at the bound" "were still running after 1m 00s, the bound MWR_UNTESTED_MAX_SECONDS sets, so they were stopped" "$out"
+pid="$(cat "$ST/runner-pid" 2>/dev/null)"
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive=alive; else alive=gone; fi
+check_eq "#3312 and the runner is gone" "gone" "$alive"
+check_eq "#3312 nothing merged past the bound" "0" "$(count gh-calls 'pr merge')"
+
+# While they run it says it is still running, with how long and how many have finished.
+ut_state; printf slow > "$ST/runner-mode"
+out="$(MWR_HEARTBEAT_SECONDS=10 MWR_UNTESTED_MAX_SECONDS=1000000 ut_run 7 --squash)"; rc=$?
+check_eq "#3312 slow suites that pass merge" "0" "$rc"
+check "#3312 saying they are still running" "Still running the suites the checks left untested at ${UT_HEAD:0:7}:" "$out"
+
+# A runner that cannot make its deal, or is not there, could not start: refused.
+ut_state; : > "$ST/runner-deal-fails"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a runner that cannot deal refuses the merge" "1" "$rc"
+check "#3312 saying the suites could not be started" "could not be started on this Mac" "$out"
+ut_state
+out="$(UT_RUNNER="$UT/no-such-runner.sh" ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a missing runner refuses the merge" "1" "$rc"
+check "#3312 naming it" "no-such-runner.sh" "$out"
+
+# The switch skips the step for one run, saying so and why.
+ut_state
+out="$(MWR_UNTESTED_SKIP="the runner's Chrome is broken today" ut_run 7 --squash)"; rc=$?
+check_eq "#3312 the switch lets it merge without running them" "0" "$rc"
+check "#3312 saying it skipped them and why" "Did not run the suites the checks left untested, because MWR_UNTESTED_SKIP is set: the runner's Chrome is broken today" "$out"
+check_eq "#3312 and runs nothing" "0" "$(count runner-calls 'part ')"
+
+# Every way of not knowing the list refuses, saying what could not be read.
+ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 an annotations read that fails refuses the merge" "1" "$rc"
+check "#3312 saying what it could not read" "could not read what check suite said it did not test" "$out"
+check_eq "#3312 nothing merged on an unread notice" "0" "$(count gh-calls 'pr merge')"
+ut_state "Every suite measured every part on the runner."
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 checks that left nothing untested merge" "0" "$rc"
+check "#3312 saying nothing runs here" "The checks at ${UT_HEAD:0:7} left no part of any suite untested, so no suite was run here." "$out"
+check_eq "#3312 with no record fetched" "0" "$(count gh-calls 'run download')"
+ut_state '2 parts in 2 suites were not tested on the runner, so these checks do not cover them:\ntest-a.sh: no Chrome\nPart 2 handed back no record of what it did not test.'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a part with no record refuses the merge" "1" "$rc"
+check "#3312 saying the list is not whole" "not every part of the checks handed back its record" "$out"
+ut_state 'Something else entirely.'
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a notice it cannot read refuses the merge" "1" "$rc"
+check "#3312 quoting it" "could not read how many parts the notice on check suite counts (Something else entirely.)" "$out"
+ut_state; rm -rf "$ST/artifacts-900"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 records that cannot be fetched refuse the merge" "1" "$rc"
+check "#3312 saying what to do" "gh run rerun 900 --repo acme/widget" "$out"
+ut_state; printf 'test-c.sh\tnot macOS\n' > "$ST/artifacts-900/part-unmeasured-1/unmeasured.tsv"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 records that do not add up to the notice refuse the merge" "1" "$rc"
+check "#3312 saying both counts" "the records hold 2 parts and the notice counts 3" "$out"
+ut_state; printf 'test-a.sh\tno Chrome\ntest-gone.sh\tno zsh\n' > "$ST/artifacts-900/part-unmeasured-1/unmeasured.tsv"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a record naming a suite the head does not hold refuses the merge" "1" "$rc"
+check "#3312 naming it" "test-gone.sh" "$out"
+
+# No notice at all: a repository without the tool is none of this step's business; one with it is
+# a run that did not say what it left untested (a run reusing an earlier green run says nothing).
+ut_state; rm -f "$ST/annotations-501"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 no notice and no tool in the tree merges" "0" "$rc"
+check_not "#3312 and says nothing about untested suites" "untested" "$out"
+ut_state; rm -f "$ST/annotations-501"; : > "$ST/has-untested-tool"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 no notice in a tree with the tool refuses the merge" "1" "$rc"
+check "#3312 saying why" "No check at ${UT_HEAD:0:7} says what it did not test, though its tree holds tools/ci-unmeasured-summary.sh" "$out"
+ut_state; rm -f "$ST/annotations-501"; printf 'gh: Server Error (HTTP 502)\n' > "$ST/contents-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a tree that cannot be read for the tool refuses the merge" "1" "$rc"
+check "#3312 saying what could not be read" "whether the tree at ${UT_HEAD:0:7} holds tools/ci-unmeasured-summary.sh" "$out"
+
+# The head's own REAL run-all-tests.sh, with no stand in: it deals the tree, runs part 1, and judges
+# the suites, so the deal and part it is handed are proved against the runner itself (L3). Its runs
+# get a config folder of their own, never this Mac's (lib/fixture-runner-home.sh). Each look while
+# it runs moves the injected clock 5 seconds in no real time, so the bound is lifted here: these
+# cases are about the runner, and the bound has its own case above.
+export MWR_UNTESTED_MAX_SECONDS=100000000
+UT_REAL=1 ut_fixture real 'echo "# more" >> hooks/test-a.sh'
+out="$(fixture_runner_home "$UT/real-home" && UT_RUNNER= ut_run 7 --squash)"; rc=$?
+check_eq "#3312 the real runner passes the suite the change touches, and it merges" "0" "$rc"
+check "#3312 the real runner ran it alone" "All 1 suite passed on this Mac at ${UT_HEAD:0:7}: test-a.sh (changed by this pull request)" "$out"
+UT_REAL=1 ut_fixture realfail 'printf "#!/usr/bin/env bash\necho \"passed: 0, failed: 1\"\nexit 1\n" > hooks/test-a.sh'
+out="$(fixture_runner_home "$UT/real-home" && UT_RUNNER= ut_run 7 --squash)"; rc=$?
+check_eq "#3312 the real runner failing the suite refuses the merge" "1" "$rc"
+check "#3312 with the real runner's FAIL line" "FAIL  test-a.sh" "$out"
+check_eq "#3312 nothing merged on the real runner's failure" "0" "$(count gh-calls 'pr merge')"
+unset MWR_UNTESTED_MAX_SECONDS
 
 echo
 echo "passed: $pass, failed: $fail"
