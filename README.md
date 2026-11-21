@@ -5593,7 +5593,9 @@ CPUs up to 8, then two thirds of the CPUs
 How many processes the whole run may have in flight. Everything else is derived from it. A value
 that is not a positive whole number is refused rather than guessed at. The default keeps what every
 machine of up to 12 cores had under the old cap of 8 and gives a bigger Mac two thirds of its cores
-(12 on 18), the share the 12 core Mac runs at (#2548). Not measured on the 18 core Mac (#2589).
+(12 on 18), the share the 12 core Mac runs at (#2548). Measured on the 18 core Mac on 2026-11-21
+(#2589), three full runs at each budget: a whole run averaged 37m03s at 8, 32m20s at 12 and 33m08s
+at 16, where two suites failed first time in 2 of the 3 runs. So 12 stays.
 
 </td></tr>
 <tr><td>
