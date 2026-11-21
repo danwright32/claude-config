@@ -275,6 +275,13 @@ case "$*" in
     n="$(rd "jobs-$id")"
     printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
     ;;
+  # The annotations of one check run (claude-config#3312): annotations-<id> holds GitHub's answer,
+  # none when unset, and annotations-fails makes a read fail.
+  "api repos/acme/widget/check-runs/"*"/annotations"*)
+    fail_read annotations
+    id="$(printf '%s\n' "$*" | sed -nE 's#.*check-runs/([0-9]+)/annotations.*#\1#p')"
+    if [ -s "$ST/annotations-$id" ]; then cat "$ST/annotations-$id"; else echo '[]'; fi
+    ;;
   # A workflow run started again (claude-config#2537): on-rerun is a step run once when it is.
   "run rerun"*)
     fail_read rerun
@@ -4190,6 +4197,46 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#3118 based on main, it merges as before" "0" "$rc"
 check_eq "#3118 with no look for a base pull request" "0" "$(count gh-calls 'pr list --repo acme/widget --head')"
 check_not "#3118 and nothing said about a base" "based on" "$out"
+
+# =================================================================================================
+# 32. What the checks did not test is named before the merge (claude-config#3312). claude-config's
+#     tests workflow puts a notice on its fan in naming every part a suite could not run on the
+#     runner; read back here by its title from each check's annotations, so the log of a merge says
+#     what its green did not cover. It reports and never stops a merge.
+# =================================================================================================
+UT_ROLLUP='[{"__typename":"CheckRun","name":"suite","workflowName":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"https://github.com/acme/widget/actions/runs/900/job/501"},{"__typename":"CheckRun","name":"deal","workflowName":"tests","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-11-20T10:00:00Z","detailsUrl":"https://github.com/acme/widget/actions/runs/900/job/502"}]'
+ut_fresh(){
+  fresh "$OLD" 0 "$UT_ROLLUP"
+  jq -nc '[{path:".github",annotation_level:"notice",title:"Not tested by the checks",message:"3 parts in 2 suites were not tested on the runner, so these checks do not cover them:\ntest-a.sh: no claude here\ntest-a.sh: no Chrome here\ntest-b.sh: not macOS"},{path:".github",annotation_level:"notice",title:"Not tested by the checks and more than on main",message:"This run left more untested than main'"'"'s last run: test-b.sh 1 part, none on main."}]' > "$ST/annotations-501"
+  jq -nc '[{path:".github",annotation_level:"warning",title:"Node.js 20 actions are deprecated",message:"something else entirely"}]' > "$ST/annotations-502"
+}
+ut_fresh
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3312 a head whose checks left parts untested still merges" "0" "$rc"
+check "#3312 it names the check and what it said it did not test" "Check suite, Not tested by the checks: 3 parts in 2 suites were not tested on the runner" "$out"
+check "#3312 with each part on its own line" "test-a.sh: no Chrome here" "$out"
+check "#3312 and that it is more than main" "Check suite, Not tested by the checks and more than on main: This run left more untested than main's last run" "$out"
+check_not "#3312 an annotation about something else is not printed" "Node.js 20 actions" "$out"
+said_at="$(awk 'index($0, "test-b.sh: not macOS") && !n { n = NR } END { if (n) print n }' <<< "$out")"
+merge_at="$(awk 'index($0, "Merging, pinned to that head") && !n { n = NR } END { if (n) print n }' <<< "$out")"
+[ -n "$said_at" ] && [ -n "$merge_at" ] && [ "$said_at" -lt "$merge_at" ] \
+  && check_eq "#3312 said before it merges" ok ok \
+  || check_eq "#3312 said before it merges" "before" "said at ${said_at:-never}, merge at ${merge_at:-never}"
+check_eq "#3312 each check's annotations are read once" "1" "$(count gh-calls 'check-runs/501/annotations')"
+check_eq "#3312 and the other check's once" "1" "$(count gh-calls 'check-runs/502/annotations')"
+
+# A read that fails is said, and the merge goes on: this reports, it never gates.
+ut_fresh
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3312 an annotations read that fails does not stop the merge" "0" "$rc"
+check "#3312 and says what it could not read" "Could not read what check suite said it did not test" "$out"
+
+# Checks with no details link (another repository's, or another kind of check) are not read at all.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#3312 a head with no Actions job links merges" "0" "$rc"
+check_eq "#3312 and reads no annotations" "0" "$(count gh-calls '/annotations')"
 
 echo
 echo "passed: $pass, failed: $fail"
