@@ -156,13 +156,16 @@ const world = (engine: Engine, on: On, w: World) => {
     return { value: undefined }
   })
   const holds: { label: string; prompt: string }[] = []
+  // Every other line the mod writes to the transcript.
+  const logs: string[] = []
   on('ui.log', ($, e) => {
     if (e.text.startsWith('CARD ')) cards.push(JSON.parse(e.text.slice(5)))
     if (e.text.startsWith('HOLD ')) holds.push(JSON.parse(e.text.slice(5)))
     if (e.to === 'debug') debug.push(e.text)
+    else if (!e.text.startsWith('CARD ') && !e.text.startsWith('HOLD ')) logs.push(e.text)
     return { value: undefined }
   })
-  return { reached, asked, toasts, cards, holds, held, debug }
+  return { reached, asked, toasts, cards, holds, held, debug, logs }
 }
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
@@ -184,6 +187,50 @@ test('the right app, frontmost and alone, gets the agreed question once and then
   await $.tool.call(bash(KEY))
   expect(w.asked).toEqual([{ question: "I'm about to type into Overture. Ready?", header: 'Taking over', options: ['Go ahead', 'Not now'] }])
   expect(w.reached).toContain('Bash')
+})
+
+// #3321 (Dan, 2026-11-21: "Record, then decide"): the Ready question reaches the same dialog a
+// session's picker does, and no session record holds it, so its size is recorded as it is asked,
+// through mod-kit's one recorder (hooks/mod-kit/asked.ts): which question, how long, how many
+// answers, and whether the shared check would refuse it. Never a word of it. Recording only: the
+// question is asked whatever the record says and whether or not it could be kept.
+test("the Ready question's size is recorded as it is asked, and never a word of it (#3321)", withKit, async ($, on) => {
+  mock.clock(on, { now: 1_800_000_000_000 })
+  const written: Record<string, string> = {}
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/Users/x' : undefined }) as never)
+  on('fs.write', ($, e) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
+  on('fs.list', () => ({ value: Object.keys(written).map(p => ({ name: p.split('/').pop() ?? '', kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }) as never)
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  const question = "I'm about to type into Overture. Ready?"
+  expect(w.asked).toEqual([{ question, header: 'Taking over', options: ['Go ahead', 'Not now'] }])
+  expect(w.reached).toContain('Bash')
+  const paths = Object.keys(written)
+  expect(paths.length).toBe(1)
+  expect(/^\/Users\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(paths[0] ?? '')).toBe(true)
+  const text = written[paths[0] ?? ''] ?? ''
+  expect(JSON.parse(text)).toMatchObject({ mod: 'keystroke-guard', which: 'ready', units: question.length, rows: 1, options: 2, longest: 8, header: 11, refused: false })
+  for (const word of ['Overture', 'Ready', 'Go ahead', 'Taking over']) expect(text).not.toContain(word)
+  expect(w.logs).toEqual([])
+})
+
+// The record failing is said once, in the transcript, and the question is asked all the same.
+test('a record that cannot be kept is said once, and the Ready question is still asked (#3321)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  on('env.get', () => ({ value: '/Users/x' }) as never)
+  on('fs.write', () => {
+    throw new Error('EACCES: permission denied')
+  })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY))
+  expect(w.asked.length).toBe(1)
+  expect(w.reached).toContain('Bash')
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain('keystroke-guard could not record the size of a question it asked')
+  expect(w.logs[0]).not.toContain('Overture')
 })
 
 test('a wrong frontmost app is refused, with the card and a toast', withKit, async ($, on) => {

@@ -4,6 +4,7 @@ import { publishInstead } from './mod-kit/deliver.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import { neverThrows } from './mod-kit/hold.ts'
+import { type AskedIo, recordedAsk } from './mod-kit/asked.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
 // nothing sent to it (Dan, 2026-10-03). Kept in memory: a reload asks again, which errs toward
@@ -82,7 +83,18 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
       release: (input: { mod: string; id: string }) => $.modkit.release(input),
       log: (line: string) => $.ui.log(line, { to: 'debug' }),
     }
-    answer = await whileHeld(held, () => $.ui.ask(`I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
+    // #3321: asked through mod-kit's one recorder, which notes the question's size first (never a
+    // word of it) and asks it whatever the record says (Dan, 2026-11-21: "Record, then decide").
+    const io: AskedIo = {
+      now: () => $.clock.now(),
+      home: () => $.env.get('HOME'),
+      write: (path, text) => $.fs.write(path, text),
+      list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
+      run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
+      ask: (question, options) => $.ui.ask(question, options),
+      said: line => $.ui.log(line),
+    }
+    answer = await whileHeld(held, () => recordedAsk(io, 'keystroke-guard', 'ready', `I'm about to ${doing}. Ready?`, { options: ['Go ahead', 'Not now'], header: 'Taking over' }))
   } catch {
     return { reason: `The question about ${app} was dismissed.` }
   }

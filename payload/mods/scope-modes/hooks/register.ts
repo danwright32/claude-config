@@ -81,6 +81,7 @@ import { busyNow } from './busy.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
+import { type AskedIo, type AskedOptions, recordedAsk } from './mod-kit/asked.ts'
 import { itemChoices, openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { guardQuestion } from './mod-kit/designquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
@@ -623,9 +624,27 @@ const heldBy = ($: EngineInterface, id: string, what: string, ms: number = HOLD_
   log: (line: string) => $.ui.log(line, { to: 'debug' }),
 })
 
-const askOne = async ($: EngineInterface, question: string, options: string[], header: string, waitMs: number, late: (a: string) => Promise<void>): Promise<Asked> => {
+// A question this mod asks Dan itself, through its own dialog (#3321; Dan, 2026-11-21: "Record,
+// then decide"). It reaches the dialog a session's picker does and no session record holds it, so
+// mod-kit's one recorder (hooks/mod-kit/asked.ts) notes its size first, never a word of it, and
+// asks it whatever the record says. `which` is this mod's short name for the question. The one
+// place this mod calls the dialog: the scan holds every call to the recorder's line.
+const askDan = ($: EngineInterface, which: string, question: string, options?: AskedOptions): Promise<string> => {
+  const io: AskedIo = {
+    now: () => $.clock.now(),
+    home: () => $.env.get('HOME'),
+    write: (path, text) => $.fs.write(path, text),
+    list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
+    run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
+    ask: (asked, offered) => $.ui.ask(asked, offered),
+    said: line => $.ui.log(line),
+  }
+  return recordedAsk(io, 'scope-modes', which, question, options)
+}
+
+const askOne = async ($: EngineInterface, which: string, question: string, options: string[], header: string, waitMs: number, late: (a: string) => Promise<void>): Promise<Asked> => {
   let isLate = false
-  const ask = (): Promise<Asked> => $.ui.ask(question, { options, header }).then(
+  const ask = (): Promise<Asked> => askDan($, which, question, { options, header }).then(
     async (a: string) => {
       if (isLate && a !== GO_TO_SLEEP) await late(a).catch(err => $.ui.toast(`A late answer to "${question}" was not kept: ${msg(err)}`))
       return { answer: a }
@@ -645,7 +664,7 @@ const askOne = async ($: EngineInterface, question: string, options: string[], h
 // one that cannot be saved is never dropped (L11): it is noted for the morning report as a question
 // still to answer, and said in the session when even that fails.
 const askRepo = ($: EngineInterface, repo: string, path: string, waitMs: number) =>
-  askOne($, repoQuestion(repo), [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY, GO_TO_SLEEP], 'Overnight', waitMs, async a => {
+  askOne($, 'bedtime repository', repoQuestion(repo), [MERGE_NO_DEPLOY, HOLD_MERGES, MAY_DEPLOY, GO_TO_SLEEP], 'Overnight', waitMs, async a => {
     const failed = await recordAnswer($, path, repo, a).catch(err => msg(err))
     if (!failed) return
     const question = `Your answer about ${repo} ("${a}") was not saved: ${failed}. Choose again at the next /sleep.`
@@ -811,7 +830,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
       continue
     }
     const question = 'unread' in read ? goalUnreadQuestion(who, read.unread) : goalQuestion(who)
-    const asked = await askOne($, question, goalOptions(), BEDTIME_HEADER, left, async a => {
+    const asked = await askOne($, 'bedtime goal', question, goalOptions(), BEDTIME_HEADER, left, async a => {
       // Answered after the wait: the night has begun without it, so it is said, never kept silently.
       if (goalAnswer(a).goal !== null) $.ui.toast(`Your goal for ${who} came after the 10 minutes, so it does no work tonight. Set it there with /goal before the next /sleep.`)
     })
@@ -1073,7 +1092,7 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
     }
     // The last question offers no skip when it has answers (#1771): nothing follows it. Nor does
     // one with three answers or more, so none is hidden (#1792).
-    const asked = await askOne($, askText(q), askOptions(q, i === ordered.length - 1), BEDTIME_HEADER, waitMs, async a => {
+    const asked = await askOne($, 'bedtime issue question', askText(q), askOptions(q, i === ordered.length - 1), BEDTIME_HEADER, waitMs, async a => {
       // Answered after the wait: posted for the nights after; tonight its issues stay out.
       if (a === SKIP_QUESTION) return
       for (const issue of q.issues) {
@@ -4720,7 +4739,7 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => $.ui.ask(question, [asIs.keep, asIs.other]))
+    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => askDan($, 'left open', question, [asIs.keep, asIs.other]))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
@@ -4787,7 +4806,7 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => $.ui.ask(question, ['Leave it as it is', 'Clean it up']))
+    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => askDan($, 'left branch', question, ['Leave it as it is', 'Clean it up']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on the branch ${branch}.`
   }
@@ -4832,7 +4851,7 @@ const openCleanupBranch = async ($: EngineInterface, input: Record<string, unkno
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => $.ui.ask(question, ['Open it', 'Do not']))
+    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => askDan($, 'cleanup branch', question, ['Open it', 'Do not']))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still refuses the branch ${branch}.`
   }
@@ -5823,7 +5842,7 @@ export const register: Register = on => {
       }
       let answer: string
       try {
-        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => $.ui.ask(question, ['Yes', 'No']))
+        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => askDan($, 'no build', question, ['Yes', 'No']))
       } catch (err) {
         const text = `Dan was not asked (${msg(err)}): no build stays on.`
         return { result: text, text }

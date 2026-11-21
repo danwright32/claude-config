@@ -1541,6 +1541,26 @@ test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts 
   expect(lastModes(w)).toEqual([])
 })
 
+// #3321 (Dan, 2026-11-21: "Record, then decide"): a question this mod asks Dan itself reaches the
+// same dialog a session's picker does, and no session record holds it, so its size is recorded as
+// it is asked, through mod-kit's one recorder (hooks/mod-kit/asked.ts): which question, how long,
+// how many answers, and whether the shared check would refuse it. Never a word of it. Recording
+// only: the question is asked whatever the record says.
+test('a question scope modes asks itself is recorded by its size as it is asked, never a word of it (#3321)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'No' })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const no = await call($ as never, { tool: 'mcp__scope-modes__switch_to_build', change: 'edit app.ts to fix the date parse', tool_use_id: 't1' } as never)
+  const question = 'Claude wants to edit app.ts to fix the date parse. Switch to build?'
+  expect(w.asked).toEqual([question])
+  expect(no).toMatch(/Dan said no: no build stays on/)
+  const kept = Object.entries(w.files).filter(([p]) => p.includes('/.claude/state/asked-questions/'))
+  expect(kept.map(([p]) => /^\/Users\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(p))).toEqual([true])
+  const text = kept[0]?.[1] ?? ''
+  expect(JSON.parse(text)).toMatchObject({ mod: 'scope-modes', which: 'no build', units: question.length, rows: 1, options: 2, longest: 3, header: 0, refused: false })
+  for (const word of ['app.ts', 'date parse', 'Switch']) expect(text).not.toContain(word)
+})
+
 // #707: this mod answers switch_to_build itself, so the secret guard beneath it never sees the call;
 // it asks mod-kit's screen first. A change carrying a token is refused before Dan is asked about it.
 test('a switch to build a guard refuses is refused before Dan is asked (#707)', withDeps, async ($, on) => {
