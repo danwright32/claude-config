@@ -73,15 +73,45 @@ fresh(){   # a world of its own for each case
 record(){ cat "$LOAD_WINDOW_DIR/windows.tsv" 2>/dev/null; }
 run(){ OUT="$(bash "$TOOL" "$@" 2>&1)"; RC=$?; }
 
-# A command that says where it is: its own pid, the workers' group, and how many are in that group.
+# A command that says where it is: its own pid, the workers' group, and how many workers are running
+# in that group. The workers' shell is started beside the command, never before it, so a command can
+# be running before any worker is: on GitHub's runner on 2026-11-20 a count taken the moment the
+# command started found 3 in the group, its shell and the watchdog's two, where this Mac found all 6
+# in five runs of five (#3333). So a case that wants workers says how many (its third word), and the
+# command waits for that many, a condition with the ceiling only a hang reaches (L290), before it
+# counts. A worker is counted as what it is: a child of the group's shell, whose pid is the group's
+# id, running the loop with its limit written in as a number. The shell and its watchdog do not
+# carry that command line, and a process a launching worker has just started is not the shell's
+# child, so the count is the workers and nothing else.
+export LW_HANG_LIB="$DIR/../payload/hooks/lib/hang-wait.sh"
 cat > "$W/report.sh" <<'SH'
 #!/usr/bin/env bash
 echo "$$" > "$1.pid"
 echo "$LOAD_WINDOW_WORKERS_PGID" > "$1.wgroup"
-pgrep -g "$LOAD_WINDOW_WORKERS_PGID" | wc -l | tr -d ' ' > "$1.wcount"
+workers(){
+  [ -n "$LOAD_WINDOW_WORKERS_PGID" ] || { echo 0; return; }
+  pgrep -g "$LOAD_WINDOW_WORKERS_PGID" -P "$LOAD_WINDOW_WORKERS_PGID" -f 'SECONDS -lt [0-9]' | wc -l | tr -d ' '
+}
+want="${3:-}"   # by name: inside hang_wait a numbered word is hang_wait's own
+if [ -n "$want" ] && [ -z "${LW_COUNT_AT_ONCE:-}" ]; then
+  . "$LW_HANG_LIB"
+  hang_wait '[ "$(workers)" -ge "$want" ]' 0.05 || :
+fi
+workers > "$1.wcount"
 echo "the command ran"
 exit "${2:-0}"
 SH
+# While that command waits for its workers the window's clock must not run out under it: each look
+# of the window moves the injected clock on a second without a second passing. So a case that
+# counts workers holds the window's first look until the count is written, or the command has gone
+# without writing one, which the case's own check of the count then fails on.
+hold_look_for_count(){   # adds to the hook of the case's first look
+  cat >> "$case_dir/hook.1" <<SH
+. "$LW_HANG_LIB"
+$(declare -f gone)
+hang_wait '[ -s "$case_dir/r.wcount" ] || { [ -s "$case_dir/r.pid" ] && gone "\$(cat "$case_dir/r.pid")"; }'
+SH
+}
 # A command that never ends on its own.
 cat > "$W/forever.sh" <<'SH'
 #!/usr/bin/env bash
@@ -134,15 +164,14 @@ says "#1618 and said as such" "8 busy and 9 process launching workers" "$OUT"
 #    passes the command's exit back, and leaves nothing running.
 # =================================================================================================
 fresh quiet
-run --seconds 30 --workers 2 --spawners 1 --label "quiet case" -- bash "$W/report.sh" "$case_dir/r" 3
+hold_look_for_count
+run --seconds 30 --workers 2 --spawners 1 --label "quiet case" -- bash "$W/report.sh" "$case_dir/r" 3 3
 eq "#1618 the command's own exit comes back" 3 "$RC"
 says "#1618 the command's output is passed through" "the command ran" "$OUT"
 says "#1618 the start is said in ET" "Window started at 20:00:00 ET, until 20:00:30 ET at the latest: 2 busy and 1 process launching workers, \"quiet case\"" "$OUT"
 says "#1618 and the end, with how it ended" "the command finished (exit 3)" "$OUT"
-# 3 workers, their watchdog's subshell and its sleep, and the group's own shell: the workers ran
-# while the command did.
-wc_="$(cat "$case_dir/r.wcount" 2>/dev/null)"
-if [ "${wc_:-0}" -ge 4 ]; then ok; else bad "#1618 the workers were running while the command ran (group had ${wc_:-nothing})"; fi
+# All 3 workers, the 2 busy and the 1 launching processes, ran while the command did.
+eq "#1618 the workers were running while the command ran" 3 "$(cat "$case_dir/r.wcount" 2>/dev/null)"
 wg="$(cat "$case_dir/r.wgroup" 2>/dev/null)"
 if [ -n "$wg" ] && group_empty "$wg"; then ok; else bad "#1618 the workers' group is empty once the window ends (group '$wg')"; fi
 rec="$(record)"
@@ -150,6 +179,45 @@ says "#1618 the record holds the start" "$(printf 'start\t%s.' "$T0")" "$rec"
 says "#1618 with its deadline, workers and label" "$(printf '\t%s\t' $((T0 + 30)))" "$rec"
 says "#1618 and the end" "the command finished (exit 3)" "$rec"
 eq "#1618 the window's turn is given up" "" "$(ls "$LOAD_WINDOW_DIR/queue/turn" 2>/dev/null | grep -E '^[0-9]+$')"
+# The order GitHub's runner met (#3333), staged and not left to chance: a copy of the tool whose
+# workers' shell starts its watchdog and then waits at a gate before it starts any worker, so the
+# command is running with no worker beside it for as long as the gate is shut. The gate is a named
+# pipe the shell reads, which waits without a process of its own.
+SLOW="$W/slow"
+mkdir -p "$SLOW/tools" "$SLOW/payload/hooks"
+awk '{ print } /^    \(sleep "\$lim"; kill -KILL 0\) &$/ { print "    read _ < \"$LW_SLOW_GATE\" || :" }' "$TOOL" > "$SLOW/tools/load-window.sh"
+cp -R "$DIR/../payload/hooks/lib" "$SLOW/payload/hooks/lib"
+eq "#3333 the copy's workers wait at the gate, in one place" 1 "$(grep -c 'LW_SLOW_GATE' "$SLOW/tools/load-window.sh")"
+# Control: the gate is never opened and the command counts the moment it starts, as it did until
+# #3333. It finds no worker, which is what the runner's count of 3 was.
+fresh slowatonce
+mkfifo "$case_dir/gate"; export LW_SLOW_GATE="$case_dir/gate"
+OUT="$(LW_COUNT_AT_ONCE=1 bash "$SLOW/tools/load-window.sh" --seconds 30 --workers 2 --spawners 1 -- bash "$W/report.sh" "$case_dir/r" 0 3 2>&1)"; RC=$?
+eq "#3333 control: the command ran beside a workers' shell that had started none" 0 "$RC"
+eq "#3333 control: and a count taken at once finds no worker" 0 "$(cat "$case_dir/r.wcount" 2>/dev/null)"
+wg="$(cat "$case_dir/r.wgroup" 2>/dev/null)"
+if [ -n "$wg" ] && hang_wait 'group_empty "$wg"'; then ok; else bad "#3333 control: a workers' shell still at the gate is stopped with the window (group '$wg')"; fi
+# The same order with the command waiting for its workers: the window's first look finds none, opens
+# the gate, and holds until the command has counted. It keeps the gate open until then, so the word
+# it wrote is still there whenever the shell comes to read it.
+fresh slowwaits
+mkfifo "$case_dir/gate"; export LW_SLOW_GATE="$case_dir/gate"
+cat > "$case_dir/hook.1" <<SH
+. "$LW_HANG_LIB"
+hang_wait '[ -s "$case_dir/r.wgroup" ]'
+g="\$(cat "$case_dir/r.wgroup")"
+pgrep -g "\$g" -P "\$g" -f 'SECONDS -lt [0-9]' | wc -l | tr -d ' ' > "$case_dir/before"
+exec 3<>"$case_dir/gate"
+echo go >&3
+SH
+hold_look_for_count
+OUT="$(bash "$SLOW/tools/load-window.sh" --seconds 30 --workers 2 --spawners 1 -- bash "$W/report.sh" "$case_dir/r" 0 3 2>&1)"; RC=$?
+eq "#3333 a command started before any worker still finishes inside the window" 0 "$RC"
+eq "#3333 it was running with no worker beside it when the window first looked" 0 "$(cat "$case_dir/before" 2>/dev/null)"
+eq "#3333 and it counted its workers once all 3 were running" 3 "$(cat "$case_dir/r.wcount" 2>/dev/null)"
+wg="$(cat "$case_dir/r.wgroup" 2>/dev/null)"
+if [ -n "$wg" ] && hang_wait 'group_empty "$wg"'; then ok; else bad "#3333 the workers' group is empty once that window ends (group '$wg')"; fi
+unset LW_SLOW_GATE
 
 # =================================================================================================
 # 3. Waits for a merge-when-ready.sh run, without starting anything, and runs once it has gone.

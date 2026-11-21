@@ -4754,6 +4754,32 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
 
+Three things that pull request left were settled on 2026-11-21 (#3255), all measured that day on the
+personal MacBook with a unit at 0.097 s:
+
+- The judgement of the command that starts the gate's suite is now kept. The gate imported
+  `tokenize` where it used it, in the middle of a judgement; a module loaded there reads its own
+  files, the judgement cache sees a read nobody recorded, and nothing is kept. So that command cost
+  19.4 to 20.1 units every time it was asked (5 askings, one cache, 2026-11-21). With the import at the top of
+  the gate the first asking cost 20.2 units and the next four 1.8 each, answered from the cache.
+  Loading it at the start adds about 1.2 ms to every call (9 readings), which the gate's fixed cost
+  of 1.8 to 1.9 units does not show. No rule about what the cache keeps changed.
+- The refusal of the mods suite on 2026-11-19 was the work and not the load. The call was not
+  `bash tests/test-mods.sh` alone: it wrote a file first (`uptime > $S/load-before.txt; ...`). The
+  gate keeps a record of files already found clean, so a suite that runs one script hundreds of
+  times reads it once, and it keeps nothing once an earlier command of the call has written a file.
+  With that day's gate the whole call needed 122.4 to 123.3 units, 11.7 to 11.9 s of processor time
+  against the 11 s budget (3 readings, and refused 3 times of 3 on the real clock), and 14.4 to 14.8
+  with the first write taken out. Main's gate judges the same call in 58.2 to 60.2 units, the suite
+  alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
+  changing when it is kept is its own piece of work. Until then a call that starts a suite is
+  cheapest when it writes nothing before it.
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
+  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+  time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
+  already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
+  compiled once each for a shell name, about 3%. The limit was not moved.
+
 The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
 CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
 on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
@@ -4761,6 +4787,15 @@ failed for the runner's speed. Where
 the seconds run out, the check now judges the same line again on the step clock and holds those
 units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
 does more work fails on any machine, and a slow machine fails nothing by itself.
+
+A cost check that starts from an empty cache also fails when the judgement cache answered any of
+its samples (#3255, 2026-11-21). The least sample is the one held to the limit, and a judgement
+answered from the cache reads about 2 units, which would pass any limit there is. Each sample after
+the first already got an empty cache folder of its own; now the check reads the cache's own trace
+(`SLACK_GATE_CACHE_TRACE`) for every sample and fails unless it says the gate judged afresh. The
+two checks of a second asking are held the other way by the same reading: the trace must say the
+cache answered. That the first kind fails was not seen: the installed gate refused both commands
+that would have run it with the samples left in one folder.
 
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
@@ -6522,7 +6557,8 @@ Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
   say, moves a file's access time only on the first read after each change, so it can delay an
   offer once and never bring one forward. The task folder's own modification time is left out,
   because moving one ticked leftover to the Trash moves it just before the next one in the same
-  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  folder is judged again. The row states its 7 days, since it is the one row whose time differs
+  from the 30 days the page's opening sentence gives for a row that states no time of its own.
   The remover lets no new path through for this: these are the same four level folders, and what
   changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
   files and are not offered.
@@ -6688,7 +6724,9 @@ Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
 under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
 session notes folder shapes described above, and the home folder's standard folders and listed
-dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+dotfolders themselves), whatever the category says; a path ending in a slash refused, since no scan
+records one and the slash would have the link test follow a link rather than see it (#3332); a
+symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
@@ -6791,6 +6829,56 @@ gone; a lock whose agent cannot be checked because ps could not be read; and any
 a Claude agent's. Each is named with the reason it was kept. `tools/shipped-worktrees.sh` reads
 locks the same way, through `payload/hooks/lib/agent-lock.sh`, so the two cleanups agree. Without
 `--remove` the check reports and changes nothing, locks included.
+
+Both cleanups ask git about a worktree with that worktree's program running settings off
+(claude-config#3355). A status, a rev-list and the status inside `git worktree remove` are answered
+with the worktree's own configuration, which can name a program git then starts, and the sweep
+judges every worktree git lists, by itself, in every session. Before #3355 both ran those calls
+plain: on a fixture a status ran the repository's `core.fsmonitor` program, its filter, a filter
+only the worktree's own `config.worktree` named and the `post-index-change` hook. Now every such
+call goes through `dc_git` ("git in a folder being judged", above), the one helper disk-clean uses,
+which `payload/hooks/lib/judged-worktree.sh` sources and adds one thing to:
+
+- **`jw_remove <repository> <worktree> [--force]`** is how both remove a worktree. It runs
+  `git worktree remove` in the worktree, where both ran it in the repository before, because
+  `dc_git` reads which filters to turn off from the folder it is given, and from the repository's
+  folder a filter named only in the worktree's own configuration stayed on. Run in the worktree, git
+  removes whichever repository's worktree it finds there, so `jw_remove` first asks git which
+  repository answers in the worktree and in the repository's folder and refuses unless they are
+  one; a folder whose `.git` named another repository's worktree record was removed through that
+  repository without the check. A worktree whose folder is gone is removed from the repository's
+  folder, where git only drops its record. `--force` is what the sweep passes to finish a removal
+  cut off part way; git then asks for no status and ran nothing even called bare.
+- **Where the settings cannot be turned off, git is not run there.** A filter whose name holds an
+  equals sign, a submodule path git prints quoted, or a folder that answers for another repository
+  keeps the worktree, and the line that keeps it carries the reason (`dc_git: refused: ...` or
+  `jw_remove: refused: ...`). A removal refused this way reads "its removal was not tried", never
+  "git would not remove it".
+- **What it changes in an answer.** The same as for disk-clean: with a repository's own filter off
+  git compares a file as it lies, one the repository marks required makes the status fail, and a
+  partial clone missing an object fails where it used to fetch. Each of those keeps the worktree.
+  One more changed with it: the sweep's finisher used to read a status git could not give as
+  nothing changed, and then forced the removal, which on a fixture took a folder holding a changed
+  file. It now keeps that worktree and its marker and says why. The same reading sat after a
+  removal git fails: both cleanups ask for a status to tell a worktree left whole from one left part
+  deleted, and a status git could not give read as whole, so the marker was cleared and a dead
+  agent's lock put back on a worktree that might be part deleted. Now a status that cannot be read
+  leaves the marker and leaves the lock off, and the line says so. A removal that was never tried
+  left the worktree whole, so no status is asked for and the lock goes back.
+- **What stays plain.** git run in the repository itself about its own records (listing its
+  worktrees, locking and unlocking one, reading a ref, deleting a local branch). That is the
+  repository the tool was run for, where the session's every other git call runs too, and no call
+  the fixtures reach started a program there. Two they do not reach are log commands (the sweep's
+  `reflog show` and `log -1` over a remote branch, asked when a branch was pushed), which run the
+  repository's `gpg.program` over a signed commit when it sets `log.showSignature`, as #3328
+  measured for stash list. The lines the sweep prints for a person to run by hand are plain git too.
+
+`hooks/test-judged-worktree.sh` and `tools/test-shipped-worktrees-git.sh` ask the git on the
+machine, never a stub. Each sees the programs run with the call written bare, then runs the tool,
+report and `--remove`, over worktrees whose settings name them and sees nothing run. Each also
+reads its tool's source with the disk-clean command reader and fails on a `git` written outside
+`dc_git` in any form but a short list of calls about the repository's own records, so a status or
+a `worktree remove` written plain again is caught by its line.
 
 ## A build scored against its settled design
 
@@ -9052,7 +9140,8 @@ refused for git only where it would run git, never for the word in prose (#1124)
 when every git call in it is a local read (show, cat-file, log, diff and the like) with its
 subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+and deploy runs since sleep began, and notes each one that needs Dan for the top of the report
+(a complete issue filed overnight is not one, and is said under Done, as below). It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
 passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
 that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
@@ -9898,9 +9987,12 @@ It also fails a mod test that times its subject (`performance.now`, `process.hrt
 arithmetic, in the test or in any helper it calls) without a `timeoutMs` in its own options, by
 file, line and test name, again from the files alone (#1016). `claude plugin test` gives every test
 5,000 ms, a fixed number, so such a test is judged by how busy the Mac is: session-registry's #911
-test, which compares a list against a yardstick measured in the same run, failed at that limit
+test, which then compared a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
-judgement, and the test's own limit is set where only a hang reaches it.
+judgement, and the test's own limit is set where only a hang reaches it. That test reads no clock
+since #3333: its ratio of two times still moved with load (it failed once at a load average of 164
+on 12 cores on 2026-11-20), so it counts what each list asks of the filesystem, 2,003 requests
+against 4, which no load changes.
 Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
 mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
 mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has

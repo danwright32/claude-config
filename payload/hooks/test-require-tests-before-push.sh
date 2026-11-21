@@ -791,26 +791,50 @@ want_code 2 "#2153 with no default branch known the push is judged as before and
 want_stderr "adds or modifies no tests" "#2153 at the zero test floor, as before"
 want_stderr "earlier on this branch" "#2153 saying the branch's earlier tests could not be counted"
 
-# Tests the branch pushed earlier that cannot all be read are refused as could not judge, never
-# allowed, and the refusal says a smaller push does not shrink them, since they are read with every
-# push of the branch.
-printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
-W="$(mk_repo)"
-(
-  cd "$W" || exit 1
-  git checkout -qb feat
-) >/dev/null 2>&1
-seed_big_tests "$W" 120
-(
-  cd "$W" || exit 1
-  git push -qu origin feat
-  printf 'export const later = 1;\n' > lib/later.js
-  git add lib/later.js; git commit -qm "later code"
-) >/dev/null 2>&1
-STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
-want_code 2 "#2153 earlier branch tests too large to read are refused, not allowed"
+# Tests the branch pushed earlier that are more than the gate reads for one push are refused as
+# could not judge, never allowed, and the refusal says a smaller push does not shrink them, since
+# they are read with every push of the branch. The cap is lowered to 1 part here, as above.
+mk_branch_with_big_earlier_tests() {   # $1 = repo  ->  branch feat, 120 KB of tests on the remote, code not
+  (
+    cd "$1" || exit 1
+    git checkout -qb feat
+  ) >/dev/null 2>&1
+  seed_big_tests "$1" 120
+  (
+    cd "$1" || exit 1
+    git push -qu origin feat
+    printf 'export const later = 1;\n' > lib/later.js
+    git add lib/later.js; git commit -qm "later code"
+  ) >/dev/null 2>&1
+}
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; mk_branch_with_big_earlier_tests "$W"
+REQUIRE_TESTS_MAX_PARTS=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#2153 earlier branch tests too many to read are refused, not allowed"
 want_stderr "could not judge" "#2153 as could not judge"
+want_stderr "at most 2 " "#2153 the gate stopped at its cap on readings, so this case is about size"
 want_stderr "pushed earlier are read with every push" "#2153 saying a smaller push does not shrink the earlier tests"
+want_stderr "split the branch" "#2153 and that the branch is what to split"
+# The same branch stopped for a reason that is not its size (#3333): its readings never answer
+# readably. It is refused as before, and is not told to split the branch, which would not help;
+# the remedy is the same push sent again.
+printf '%s\t%s\n' "$LATER_CALL" '{"result":"I could not tell"}' > "$RULES"
+W="$(mk_repo)"; mk_branch_with_big_earlier_tests "$W"
+STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+want_code 2 "#3333 earlier branch tests whose readings never answer are still refused"
+want_stderr "could not judge" "#3333 as could not judge"
+want_stderr "asked 3 times" "#3333 for the reviewer never answering readably, so this case is not about size"
+want_stderr "same push again" "#3333 with the advice to send the same push again"
+case "$ERR" in *'split the branch'*|*'pushed earlier are read with every push'*) fail=$((fail+1)); echo "FAIL: #3333 a refusal for an unreadable reading still says to split the branch" ;; *) pass=$((pass+1)) ;; esac
+# A reading that could not start (no claude to run) is the same: refused, with no advice to split.
+printf '%s\t%s\n' "$LATER_CALL" "$COVERED_NONE" > "$RULES"
+W="$(mk_repo)"; mk_branch_with_big_earlier_tests "$W"
+cp "$STUB_DIR/claude" "$STUB_DIR/claude.keep"
+STUB_CLAUDE_VANISH=1 STUB_CLAUDE_RULES="$RULES" STUB_CLAUDE_OUT="$BLOCK_ONE" run_hook "$W" "git push"
+cp "$STUB_DIR/claude.keep" "$STUB_DIR/claude"; chmod +x "$STUB_DIR/claude"
+want_code 2 "#3333 earlier branch tests whose reading could not start are still refused"
+want_stderr "once that reason is cleared" "#3333 for a reading that failed, so this case is not about size"
+case "$ERR" in *'split the branch'*|*'pushed earlier are read with every push'*) fail=$((fail+1)); echo "FAIL: #3333 a refusal for a reading that could not start still says to split the branch" ;; *) pass=$((pass+1)) ;; esac
 
 # Out of time: the hook must finish inside the 120 seconds its registration sets (a setting, not
 # measured), so a later call is not started without time for it, and the push is refused saying so.

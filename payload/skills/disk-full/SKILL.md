@@ -315,7 +315,7 @@ Propose what you mean to remove, by path, with one method for the lot: `trash` f
 want back, `delete` for a cache that regenerates, and `truncate` for a log a running process still
 holds open (it is emptied in place, since deleting a file that is held open frees nothing until the
 process lets go). This measures each path, refuses the ones it never removes, removes nothing, and
-writes a plan:
+writes a plan. Name each path without a trailing slash, which it refuses (#3332):
 
 ```bash
 bash ~/.claude/hooks/lib/disk-remove.sh --propose trash ~/Downloads/old-installer.dmg
