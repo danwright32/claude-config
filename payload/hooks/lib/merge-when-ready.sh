@@ -1172,13 +1172,14 @@ STILL
     say "All $(ut_plural "$k" suite) passed on this Mac at $h7: $said_list. Asking every gate again before the merge, since they took $(dur $(( $(now) - started )))."
     ut_cleanup; ut_done_for="$head"; return 0
   fi
-  # All of it when short; else every status line, then the end, where the runner's verdict is, so
-  # the lines the refusal points at are always shown.
+  # All of it when short; else the status line of each suite that failed, could not run or was
+  # unmeasured, the first 100 of them, then the end, where the runner's verdict is, so the lines the
+  # refusal points at are always shown.
   lines="$(wc -l < "$ut_dir/run.out" | tr -d ' ')"
   if [ "${lines:-0}" -le 200 ]; then
     while IFS= read -r l; do emit "    $l"; done < "$ut_dir/run.out"
   else
-    emit "    (the runner printed $lines lines: each suite's status line, then its last 150)"
+    emit "    (the runner printed $lines lines: the status line of each suite that failed, could not run or was unmeasured, the first 100 of them, then its last 150)"
     grep -E '^  (FAIL|NOT RUN|UNMEASURED) ' "$ut_dir/run.out" | sed -n '1,100p' | while IFS= read -r l; do emit "    $l"; done
     tail -n 150 "$ut_dir/run.out" | while IFS= read -r l; do emit "    $l"; done
   fi
