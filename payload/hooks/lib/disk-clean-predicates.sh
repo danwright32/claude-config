@@ -18,8 +18,8 @@
 # command check, which run commands no disk-clean script may (an `exec "$@"`, python3 through a
 # variable), so a script sourcing the whole harness would fail the command check it is held to.
 #
-# Commands it runs: id, readlink, git (one read, in dc_git_own_repo), and the builtins cd, pwd,
-# printf and eval. bash 3.2 safe.
+# Commands it runs: id, readlink, git (only inside dc_git, the one way any disk-clean script runs
+# it, #3328), and the builtins cd, pwd, printf and eval. bash 3.2 safe.
 # Sourcing defines constants and functions and does nothing else.
 
 # Every root dc_setup makes is named so, and nothing else is accepted as one.
@@ -169,6 +169,125 @@ dc_notes_checkout() { # <path> <home> <physical home>
   return 0
 }
 
+# ---- git in a folder being judged (#3328) ----
+#
+# dc_git <folder> <git arguments...> is the ONE way a disk-clean script runs git, and the command
+# check refuses a git call written anywhere else (lib/disk-clean-harness.sh, DC_WRAPPED).
+#
+# Why. git runs every command with the repository's own configuration, and a setting there can name
+# a program git then starts. A repository copied into a session's notes, or a folder built to look
+# like one, could so make a scan that promises to read only run a program nobody chose. git's own
+# manual says as much (man git, SECURITY, git 2.51.1): "it is not safe to run Git commands in a
+# .git directory (or the working tree that surrounds it) when that .git directory itself comes from
+# an untrusted source. The commands in its config and hooks are executed in the usual way." It
+# offers no switch that makes a repository safe, only a clean copy made with git clone --no-local,
+# which cannot be asked what a working tree holds. So this turns off, for the one call, each
+# setting MEASURED to start a program for a command disk-clean runs, and refuses any command that
+# has not been measured. Measured 2026-11-20 on git 2.51.1 (Homebrew) and 2.54.0 (Apple), alike, by
+# test-disk-clean-git.sh, which sees each program run with a bare call and not run through here.
+#
+#   what ran, called bare                              what turns it off (man git, man git-config)
+#   core.fsmonitor: status, and the status inside      -c core.fsmonitor=false; a -c value "will
+#     worktree remove                                    override values from configuration files"
+#   hooks/post-index-change: worktree remove, whose    -c core.hooksPath=/dev/null, a folder that
+#     status rewrites the index                          holds no hook
+#   gpg.program: stash list, over a stash commit       -c log.showSignature=false
+#     carrying a signature, with log.showSignature
+#   remote.<name>.uploadpack: status and rev-list      --no-lazy-fetch ("Do not fetch missing
+#     in a partial clone missing an object               objects from the promisor remote on demand")
+#   filter.<name>.clean, .smudge, .process: status,    -c filter.<name>.clean= and the other two,
+#     and worktree remove, when a file's contents        for each filter the repository's own
+#     must be compared                                   configuration names (see below)
+# and two more that nothing was measured running, kept because they cost nothing:
+#   --no-pager                 core.pager and pager.<cmd> name a program, started only when output
+#                              goes to a terminal, which a scan's never does
+#   -c safe.bareRepository=explicit   the one setting man git-config gives for a repository of
+#                              unknown origin: with it git works with no bare repository it merely
+#                              finds at a folder, so a folder shaped like one is not answered for
+#
+# Filters have no single switch: each is named, and attributes say which files use which. So before
+# a command that can compare file contents (status, worktree remove) this asks git which filter
+# programs the repository's OWN configuration names (the local and worktree scopes of git config
+# --show-scope, files it includes among them) and empties each for the call. The same is asked of
+# every submodule checked out beneath, since status runs a status in each with that submodule's own
+# configuration; a -c setting reaches those (measured). A filter from the user's own configuration
+# (the global and system scopes, where git lfs install puts its own) is the user's choice and stays
+# on. What an emptied filter changes: git compares the file as it lies, so a checkout whose
+# repository filter would have altered a file is reported as git sees it without one, and one the
+# repository marks required makes git fail, which every caller reads as unmeasured. Neither can
+# turn uncommitted work into a clean answer.
+#
+# It refuses (exit 125, a line on stderr starting "dc_git: refused:", git never run):
+#   a command not listed below, because another command brings other programs with it (fetch runs
+#   an ssh command and credential helpers, diff and log -p run diff drivers) and none of those is
+#   turned off here. Adding one means measuring it in test-disk-clean-git.sh first;
+#   an option before the command other than --no-optional-locks, which could turn a setting back on;
+#   stash list with anything after it, and status -v, which print a diff;
+#   a filter whose name holds an equals sign, which -c cannot name (measured: it still ran), and a
+#   submodule whose path git prints quoted, whose settings could therefore not be read.
+# A failure of git's own is returned as git's exit code with git's words on stderr.
+#
+# Not covered: a program named by the USER's own configuration or environment, which is theirs;
+# core.fsmonitor=true, git's built in watcher, which is turned off with the rest but was never
+# started here to see; and a setting a later git adds. The environment is left as it is (see
+# dc_git_own_repo).
+DC_GIT_FIXED=(--no-pager --no-lazy-fetch -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false)
+dc_git() { # <folder> <git arguments...>
+  local d="${1:-}" a kind="" rest=0 off=() q=() qi=0 dir out scope key name line path named=$'\n'
+  [ $# -ge 2 ] || { echo "dc_git: refused: it takes a folder and a git command" >&2; return 125; }
+  shift
+  for a in "$@"; do
+    if [ -z "$kind" ]; then
+      case "$a" in
+        --no-optional-locks) ;;
+        -*) echo "dc_git: refused: $a is not an option it passes to git before the command" >&2; return 125 ;;
+        *) kind="$a" ;;
+      esac
+      continue
+    fi
+    rest=$((rest + 1))
+    case "$kind" in
+      remote|stash|worktree) [ "$rest" -eq 1 ] && kind="$kind $a" ;;
+      "stash list") echo "dc_git: refused: stash list takes nothing after it here, since what follows is read as log options, and one that prints a diff runs the repository's diff programs" >&2; return 125 ;;
+      status) case "$a" in -v|--verbose) echo "dc_git: refused: a status that prints a diff ($a) runs the repository's diff programs" >&2; return 125 ;; esac ;;
+    esac
+  done
+  case "$kind" in
+    rev-parse|symbolic-ref|rev-list|"remote get-url"|"stash list") ;;
+    status|"worktree remove")
+      q=("$d")
+      while [ "$qi" -lt "${#q[@]}" ]; do
+        dir="${q[$qi]}"; qi=$((qi + 1))
+        [ "$qi" -le 100 ] || { echo "dc_git: refused: more than 100 submodules lie under $d, more than it reads the settings of" >&2; return 125; }
+        out="$(git -C "$dir" "${DC_GIT_FIXED[@]}" config --show-scope --name-only --list </dev/null)" || return
+        while IFS=$'\t' read -r scope key; do
+          case "$scope" in system|global|command) continue ;; esac
+          case "$key" in filter.*.clean|filter.*.smudge|filter.*.process) ;; *) continue ;; esac
+          name="${key#filter.}"; name="${name%.*}"
+          case "$name" in
+            *=*) echo "dc_git: refused: this repository's own configuration names a filter program ($key) whose name holds an equals sign, which cannot be turned off for one call, so git was not run in $d" >&2; return 125 ;;
+          esac
+          case "$named" in *$'\n'"$name"$'\n'*) continue ;; esac
+          named="$named$name"$'\n'
+          off+=(-c "filter.$name.clean=" -c "filter.$name.smudge=" -c "filter.$name.process=")
+        done <<< "$out"
+        out="$(git -C "$dir" "${DC_GIT_FIXED[@]}" ls-files --stage </dev/null)" || return
+        while IFS= read -r line; do
+          case "$line" in "160000 "*) ;; *) continue ;; esac
+          path="${line#*$'\t'}"
+          case "$path" in
+            '"'*) echo "dc_git: refused: $dir holds a submodule path it cannot read ($path), so that submodule's settings could not be turned off, and git was not run in $d" >&2; return 125 ;;
+          esac
+          [ -d "$dir/$path" ] && [ ! -L "$dir/$path" ] || continue
+          [ -e "$dir/$path/.git" ] || [ -L "$dir/$path/.git" ] || continue
+          q+=("$dir/$path")
+        done <<< "$out"
+      done ;;
+    *) echo "dc_git: refused: 'git $kind' is not a command measured to run without the repository's own programs (lib/disk-clean-predicates.sh, #3328)" >&2; return 125 ;;
+  esac
+  git -C "$d" "${DC_GIT_FIXED[@]}" ${off[@]+"${off[@]}"} "$@"
+}
+
 # True when the folder <path> is a git checkout holding its OWN repository: asked in that folder,
 # the git folder git answers from is the folder's own .git. Otherwise it fails and sets DC_GIT_WHY.
 #
@@ -178,9 +297,11 @@ dc_notes_checkout() { # <path> <home> <physical home>
 # git follows a .git that is a link to wherever it leads, and a .git folder that holds no repository
 # is passed over for whichever one lies above it. Measured on real git, 2026-11-20: a full clone
 # prints its own .git, resolved; a worktree <repository>/.git/worktrees/<name>; a submodule
-# <superproject>/.git/modules/<name>; a .git link the folder the link names; a bare repository
-# itself; and a folder whose .git is empty, or holds only a HEAD, fails with exit 128 when nothing
-# above it is a repository. So one comparison refuses every one of those.
+# <superproject>/.git/modules/<name>; a .git link the folder the link names; and a folder whose
+# .git is empty, or holds only a HEAD, fails with exit 128 when nothing above it is a repository.
+# So one comparison refuses every one of those. A bare repository printed itself then; asked
+# through dc_git (#3328), which has git work with no bare repository it merely finds, it fails with
+# exit 128 like a folder that holds none, and is refused the same.
 #
 # The environment is left as it is on purpose. With GIT_DIR naming another repository, git answers
 # for that one here and in every later call the judge makes, so this refuses, which is the truth
@@ -189,7 +310,7 @@ dc_git_own_repo() { # <path>
   local t="${1%/}" phys g rc
   DC_GIT_WHY=""
   phys="$(dc_resolve "$t")" || { DC_GIT_WHY="where it lies could not be read"; return 1; }
-  g="$(git -C "$t" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; rc=$?
+  g="$(dc_git "$t" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; rc=$?
   [ "$rc" -eq 0 ] || { DC_GIT_WHY="git names no repository for it (git exit $rc)"; return 1; }
   [ "$g" = "$phys/.git" ] && return 0
   DC_GIT_WHY="git answers there for a repository that lies outside it ($g): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one"
