@@ -716,9 +716,17 @@ const moveFiles = async ($: EngineInterface, tree: GitAt, ask: MoveAsk, merged: 
 // script), one git cannot answer for, and one bringing in more look changing files than
 // MOVE_FILES_MAX. A checkout's one name that is a path is a restore of it from the
 // index, given as mod-kit gives one. A move in a folder that is in no checkout is in no project.
-const movedTargets = async ($: EngineInterface, command: string, at: Where): Promise<{ targets: Target[]; restores: { word: string; path: string }[] }> => {
+// `misplaced` (#3337) is why what git itself writes on the line (a checkout or restore of paths, git
+// rm, git mv, which mod-kit's reader places from the command's words alone, asking git nothing) may
+// land somewhere other than where the reader placed it: the command names its repository or working
+// folder apart and git, asked with that naming, cannot say where its files land, or says a folder
+// that is not the one the words give. A repository can keep its own working folder in its settings
+// (core.worktree, as a submodule's does), and named by --git-dir or GIT_DIR alone its files land
+// there, not in the folder the command runs in (measured with git 2.51.1).
+const movedTargets = async ($: EngineInterface, command: string, at: Where): Promise<{ targets: Target[]; restores: { word: string; path: string }[]; misplaced?: string }> => {
   const targets: Target[] = []
   const restores: { word: string; path: string }[] = []
+  let misplaced: string | undefined
   if (!/\bgit\b/.test(command)) return { targets, restores }
   const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
   const gits: (Awaited<ReturnType<typeof $.modkit.git>> | undefined)[] = []
@@ -727,6 +735,14 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
   const look = (p: string) => shapeKind(p) !== null || isModHookTs(p)
   for (const [i, c] of commands.entries()) {
     const g = gits[i]
+    if (g && misplaced === undefined && (g.gitDir !== undefined || g.workTree !== undefined) && ['checkout', 'restore', 'rm', 'mv'].includes(g.sub ?? '') && c.folder !== null) {
+      const ranIn = g.dir === undefined ? (c.folder ?? at.cwd) : resolvePath(g.dir, c.folder ?? at.cwd, at.home)
+      const named = await namedApart($, g, ranIn, at.home)
+      // The top of the working folder as the reader takes it from the words: the one named, else the folder it runs in.
+      const worded = plainPath(g.workTree === undefined ? ranIn : resolvePath(g.workTree, ranIn, at.home))
+      if (named !== undefined && 'why' in named) misplaced = named.why
+      else if (named !== undefined && named.tree !== worded) misplaced = `git says its files land in ${named.tree}, the working folder the repository it names keeps, not in ${worded}`
+    }
     const move = gitMove(g ?? undefined)
     if (!g || !move) continue
     const held = (unread: string, remedy?: string) => targets.push({ word: move.said, unread, move: { said: move.said, ...(remedy === undefined ? {} : { remedy }) } })
@@ -786,7 +802,7 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
     }
     for (const f of files) targets.push({ word: f.rel, path: `${tree}/${f.rel}`, move: { said: move.said }, ...('removes' in f ? { removes: true as const } : { from: f.from, moved: true as const }) })
   }
-  return { targets, restores }
+  return { targets, restores, ...(misplaced === undefined ? {} : { misplaced }) }
 }
 
 // #2395: a write marked `tree` reaches every file under its folder (a find -exec on the folder, rm -r,
@@ -881,6 +897,14 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // What a git move brings into the working tree (#3279), asked of git before it runs; a checkout's
   // one name that is a path is the restore of it from the index it is, all under it.
   const moves = await movedTargets($, command, at)
+  // #3337: where git's own files may land somewhere other than the reader placed them, each one
+  // that may change the look is held, saying why: a name with no extension, which may be a whole
+  // folder, a pattern, a look changing name, and any TypeScript file, which is a mod's hook file in
+  // the right folder.
+  if (moves.misplaced !== undefined)
+    for (const g of w.byGit ?? [])
+      if (!/[^/.]\.[A-Za-z0-9]+$/.test(g.word) || isPattern(g.word) || shapeKind(g.word) !== null || /\.[mc]?ts$/i.test(g.word))
+        targets.push({ word: g.word, unread: `where the command ${g.does === 'remove' ? 'takes away' : 'writes'} ${g.word} could not be followed: ${moves.misplaced}` })
   targets.push(...moves.targets)
   for (const r of moves.restores) {
     targets.push({ word: r.word, path: r.path, from: '' })

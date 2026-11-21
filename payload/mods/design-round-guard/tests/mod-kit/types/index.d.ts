@@ -468,7 +468,10 @@ export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unrea
  * `workTree` the working folder it names with --work-tree or GIT_WORK_TREE (#3337), each as written
  * and absent where it names none: a relative one is read from `dir`, or the folder the command runs
  * in. With `gitDir` alone that folder is the working folder; with `workTree` alone the repository is
- * the one found from that folder.
+ * the one found from that folder. A repository can keep its own working folder in its settings
+ * (core.worktree, as a submodule's does), and named by `gitDir` alone its files land there
+ * instead: only git can say so (`git rev-parse --show-toplevel` with the command's own naming), and
+ * the write reader, which asks git nothing, places a path in the folder the command runs in.
  */
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
 

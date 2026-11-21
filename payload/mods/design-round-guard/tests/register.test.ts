@@ -1654,6 +1654,7 @@ test('#3337: a restore naming its working folder apart is judged for the file it
   expect(notHeld).toEqual([])
   expect(w.ran).toEqual([])
   // One step short: a file that changes no look, and a working folder in no project.
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
   const asked: string[] = []
   for (const command of ['cd /w/other && git --work-tree=/w/slate restore docs/notes.md', 'cd /w/other && git --work-tree=/w/nowhere restore app/globals.css', 'cd /w/other && GIT_WORK_TREE=/w/nowhere git checkout -- app/globals.css']) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
@@ -1661,6 +1662,44 @@ test('#3337: a restore naming its working folder apart is judged for the file it
   }
   expect(asked).toEqual([])
   expect(w.ran.length).toBe(3)
+})
+
+// #3337: a repository can keep its own working folder in its settings (core.worktree, as a
+// submodule's repository under .git/modules does). Measured with git 2.51.1: named by --git-dir or
+// GIT_DIR alone and run from another project, `git restore app/page.tsx` put the file back in that
+// folder and left the folder it ran in alone. mod-kit's reader asks git nothing, so it places the
+// file in the folder the command runs in, and the guard judged a file git never touched. The guard
+// now asks git where such a command's files land, and holds what git itself writes where that is
+// not where the reader placed it. Here the other project's issue is answered and slate's is not.
+test('#3337: a restore whose named repository keeps its working folder elsewhere is held, since its file lands there', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/ui/app/globals.css': 'a{}\n', '/w/other/app/globals.css': 'a{}\n' } })
+  twoRepositories(w)
+  const top = '/w/other --git-dir=/w/slate/.git/modules/ui rev-parse --show-toplevel'
+  w.gitSays[top] = '/w/slate/ui\n'
+  const why = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  const notHeld: string[] = []
+  for (const command of [
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css',
+    'cd /w/other && GIT_DIR=/w/slate/.git/modules/ui git checkout -- app/globals.css',
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui rm app/globals.css',
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore .',
+  ]) {
+    const said = await why(command)
+    if (!said.includes('could not be followed') || !said.includes('/w/slate/ui')) notHeld.push(`${command}: ${said.slice(0, 300)}`)
+  }
+  // git cannot say where the files land: held, saying so.
+  delete w.gitSays[top]
+  const unsaid = await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css')
+  if (!unsaid.includes('which repository and working folder')) notHeld.push(`unsaid: ${unsaid.slice(0, 300)}`)
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // One step short: a file that changes no look, and a repository whose files land where the
+  // command runs, in the project whose issue is answered.
+  w.gitSays[top] = '/w/slate/ui\n'
+  expect(await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore docs/notes.md')).toBe('')
+  w.gitSays[top] = '/w/other\n'
+  expect(await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css')).toBe('')
+  expect(w.ran.length).toBe(2)
 })
 
 // #3337: git am lands its patch in the working folder the command names (measured with git 2.51.1:
@@ -3973,7 +4012,10 @@ test('#1158: a restore beside a command that may change its source is judged who
   w.gitSays[`/w/slate ${DIFF} HEAD ${C1}`] = ''
   const chained = [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git fetch | git checkout HEAD -- ${MOD_REL}`]
   // So does git told to read another index, repository or setting, by the environment or its own
-  // options before the subcommand (lessons review).
+  // options before the subcommand (lessons review). Since #3337 git is first asked where such a
+  // command's files land: here in this checkout, as the words say.
+  w.gitSays['/w/slate --git-dir=/other rev-parse --show-toplevel'] = '/w/slate\n'
+  w.gitSays['/w/slate --work-tree=/w/slate rev-parse --show-toplevel'] = '/w/slate\n'
   const elsewhere = [`GIT_INDEX_FILE=/tmp/idx git restore ${MOD_REL}`, `GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `env GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `git -c core.autocrlf=true checkout HEAD -- ${MOD_REL}`, `git --git-dir=/other checkout HEAD -- ${MOD_REL}`, `git --work-tree=/w/slate checkout HEAD -- ${MOD_REL}`]
   for (const [commands, said] of [[chained, 'the git checkout or restore and may change what it puts back'], [elsewhere, 'the command sets how git reads its repository']] as const)
     for (const command of commands) {

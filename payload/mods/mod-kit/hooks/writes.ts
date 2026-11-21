@@ -1373,14 +1373,18 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // #3337: the folder git reads a relative path from. Told where its working folder is
       // (--work-tree, GIT_WORK_TREE), git reads one from the folder the command runs in when that is
       // inside the working folder, and from the top of the working folder when it is not (measured
-      // with git 2.51.1); told only its repository, the folder it runs in is the working folder.
+      // with git 2.51.1); told only its repository, the folder it runs in is the working folder,
+      // unless that repository keeps its own in its settings (core.worktree), which this reader
+      // cannot see and a guard asks git for (`rev-parse --show-toplevel`).
       // Undefined, so the path is placed nowhere, where the working folder cannot be named, and
-      // where an earlier command on the line set either variable without it standing on the git
+      // where an earlier command on the line set GIT_WORK_TREE without it standing on the git
       // command itself: git reads it only if it was exported, which this reader does not follow.
+      // GIT_DIR set that way moves no path whether or not git is handed it, as the repository named
+      // alone moves none, so the path stays where every guard reading it has always judged it.
       const gitFolder = (): string | undefined => {
         const at = g?.dir === undefined ? dir : pathOf(g.dir, dir)
         if (g === undefined || at === undefined) return at
-        if ((g.gitDir === undefined && setBy.has('GIT_DIR')) || (g.workTree === undefined && setBy.has('GIT_WORK_TREE'))) return undefined
+        if (g.workTree === undefined && setBy.has('GIT_WORK_TREE')) return undefined
         if (g.workTree === undefined) return at
         const top = pathOf(g.workTree, at)
         if (top === undefined) return undefined
