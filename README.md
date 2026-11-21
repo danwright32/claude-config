@@ -4524,9 +4524,10 @@ as a line, so `cat post.sh | xargs -0 bash -c` and `echo post.sh | xargs bash` a
 double quoted `-c` or `eval` string holding a `$` or a backquote behind a backslash is judged
 again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
 shell fills in replaced by the value the gate works out for it; where it works none out, the typed
-string is read with that part as a word of unknown value and a script on disk is left as before
-(this repository's `test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string,
-until #3252 wrote those paths in double quotes).
+string is read with that part as a word of unknown value and a script on disk is left as before,
+unless the part stands inside single quotes of the string's own (#3316, below; this repository's
+`test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string, until #3252 wrote
+those paths in double quotes).
 Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
@@ -4550,8 +4551,30 @@ by the value the gate works out for it, so the file is the one in the script's f
 posts is refused as posting. That reading stands in for the string's commands as written only where
 every value is worked out and the text it gives can be followed, and only for a command whose string
 no reading was given before #3252 (the reader's `headed_string`); the command itself is then judged
-as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
-command, a body over several lines, the same string at a script's top level, and anything typed.
+as it was before #3252. Anywhere else the string's commands as written still stand: a variable not
+worked out, a body's second command, a body over several lines, the same string at a script's top
+level, and anything typed.
+
+Since claude-config#3316 a `-c` or `eval` string is also read as the shell it is handed to gets it
+wherever it stands, where a variable or a substitution of the outer shell is written inside single
+quotes of the string's own (`string_as_handed`, the reading #3251 gave a string holding a
+backslash, by the same one fill in, `sh_inner_text`). A script whose top level line is `bash -c ".
+'$DIR/lib-posts.sh' && f"`, `DIR` set from `BASH_SOURCE` the line before, passed: the outer shell
+fills `$DIR` in before bash is handed the string, and the string's commands as written name a file
+called `$DIR/lib-posts.sh`, which was looked up, found missing and passed over. Every loader shared
+the fault, in a script on disk and typed (measured 2026-11-20): `.`, `source`, a shell or an
+interpreter handed the file (`bash '$DIR/post.sh'`, `python3 '$DIR/post.py'`), a pipe or a
+redirection from it, a `cd '$DIR'` in front of a relative path, `sh`, `zsh`, `env bash` and `eval`.
+Each is now refused where the file posts and passes where it does not. It is one more reading after
+the ones there were, so it can refuse a command those let through and never the reverse. Where the
+gate does not work the variable out, the file it names cannot be read, and the command is judged
+as the same one written outside a string is: a file sourced is refused as a path the gate cannot
+work out (#2538), in a script on disk too, and a file run stays behind the #2683 switch. The part
+is then read twice, as written and as a variable nothing in the string can set, so an assignment of
+the same name inside the string never stands in for the outer shell's value. A loop's name is one
+the fill in does not work out. This repository's `test-work-names-scripts.sh` sourced a file its
+hook writes while the suite runs by such a string, and passed only because the file was looked up
+under the variable's name; it now reads what that file puts on `PATH` without sourcing it.
 
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
