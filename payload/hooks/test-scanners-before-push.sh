@@ -1527,9 +1527,12 @@ grep -q 'Send the same push again' <<< "$o3357" \
   && check "#3357 and says the remedy is to send the same push again" ok \
   || check "#3357 and says the remedy is to send the same push again" "out=$o3357"
 _alive3357=""
+_pids3357="$(cat "$TMPROOT/slowshim.pids" 2>/dev/null)"
 while IFS= read -r _p; do
   [ -n "$_p" ] && kill -0 "$_p" 2>/dev/null && { _alive3357="$_alive3357 $_p"; kill -9 "$_p" 2>/dev/null; }
-done < <(cat "$TMPROOT/slowshim.pids" 2>/dev/null)
+done <<PIDS
+$_pids3357
+PIDS
 [ -s "$TMPROOT/slowshim.pids" ] && [ -z "$_alive3357" ] \
   && check "#3357 and nothing it started before its scanners is left running" ok \
   || check "#3357 and nothing it started before its scanners is left running" "recorded: $(tr '\n' ' ' < "$TMPROOT/slowshim.pids" 2>/dev/null) still alive:${_alive3357:- none}"
@@ -1550,7 +1553,8 @@ o3357s="$(BASH_ENV="$TMPROOT/slowstart.sh" PATH="$SLOWBIN:$PATH" SCANNERS_STATE_
            FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" fire "$R3357" "git push")"; c3357s=$?
 _took3357s=$(( $(date +%s) - _t0 ))
 echo "MEASURED #3357: with its start held 3 seconds, the gate returned in ${_took3357s}s (exit $c3357s)"
-_lag3357="$(sed -n 's/.*[Ii]ts clock started \([0-9][0-9]*\) seconds after its process did.*/\1/p' <<< "$o3357s" | head -1)"
+_lag3357="$(sed -n 's/.*[Ii]ts clock started \([0-9][0-9]*\) seconds after its process did.*/\1/p' <<< "$o3357s")"
+_lag3357="${_lag3357%%$'\n'*}"
 # And the refusal is the gate's words only: bash's own report of the run it stopped ("Killed: 9" and
 # a line of source) reached it on 2026-11-20's first green run of this case.
 grep -q 'Killed' <<< "$o3357$o3357s" \
@@ -1559,7 +1563,10 @@ grep -q 'Killed' <<< "$o3357$o3357s" \
 [ "$c3357s" -eq 2 ] && [ -n "$_lag3357" ] && [ "$_lag3357" -ge 2 ] \
   && check "#3357 a held start up is measured and said in the stop" ok \
   || check "#3357 a held start up is measured and said in the stop" "exit=$c3357s took ${_took3357s}s lag=${_lag3357:-unsaid} out=$o3357s"
-while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done < <(cat "$TMPROOT/slowshim.pids" 2>/dev/null)
+_pids3357="$(cat "$TMPROOT/slowshim.pids" 2>/dev/null)"
+while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
+$_pids3357
+PIDS
 
 # How the gate names a repository in its state folder: its origin, or its path when it has none. The
 # fixtures below that are given an origin are given their own path as one, so this names them too.
@@ -1773,6 +1780,40 @@ nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'
 # folder inside it and says it could not be made.
 : > "$TMPROOT/nokey-notafolder"
 nokey_case state state 'could not be made' "$TMPROOT/nokey-notafolder/state"
+
+# --- a run without a key is stopped at the HARD stop too (claude-config#3357, from its lessons
+#     review). Each run leads a session of its own, so stopping the gate's own group does not reach
+#     it, and with no key no later push could count it. Here the gate cannot load its pid lock, so
+#     it has no key, its held scanner is running, and a stand in for ps never returns, so the gate
+#     hangs where it stops that run at its budget, and the hard stop is what ends it. The scanner
+#     must be gone afterwards, and the refusal must not promise a later push will count it.
+NK3357="$TMPROOT/nokey-3357-hooks"; nokey_hooks "$NK3357" pidlock
+PSBIN="$TMPROOT/psbin"; mkdir -p "$PSBIN"
+cat > "$PSBIN/ps" <<EOF
+#!/usr/bin/env bash
+echo \$\$ >> "$TMPROOT/psshim.pids"
+sleep 120
+EOF
+chmod +x "$PSBIN/ps"
+R3357k="$(mkrepo hardstopnokey)"; HOLD3357k="$TMPROOT/hold3357k"; : > "$HOLD3357k"
+add_held_scanner "$R3357k" lam3357 "$HOLD3357k" 0; commit_all "$R3357k"
+o3357k="$(H="$NK3357/scanners-before-push.sh" PATH="$PSBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/nokey-3357-state" \
+           SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$R3357k")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 \
+           SCANNERS_STOP_GRACE_SECONDS=3 FIRE_DEADLINE=50 FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" \
+           fire "$R3357k" "git push")"; c3357k=$?
+note_held lam3357
+_pid3357k="$(cat "$TMPROOT/lam3357.pid" 2>/dev/null)"
+if [ "$c3357k" -eq 2 ] && [ -n "$_pid3357k" ] && hang_wait '! kill -0 "$_pid3357k" 2>/dev/null' \
+   && grep -q 'were stopped too' <<< "$o3357k" && ! grep -q 'goes on in the background' <<< "$o3357k"; then
+  check "#3357 a run without a key is stopped at the hard stop, and the refusal says so" ok
+else
+  check "#3357 a run without a key is stopped at the hard stop, and the refusal says so" "exit=$c3357k scanner pid=${_pid3357k:-none} out=$o3357k"
+fi
+rm -f "$HOLD3357k"
+_pids3357="$(cat "$TMPROOT/psshim.pids" 2>/dev/null)"
+while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
+$_pids3357
+PIDS
 
 # --- the messages of the commits a push adds name no work organisation (claude-config#1995). This
 #     repository squash merges with the commit messages as the body, so a message naming one lands

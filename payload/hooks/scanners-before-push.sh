@@ -251,20 +251,48 @@ _sc_stop_refuse(){   # $1 = the supervisor's folder
     fi
     echo ""
     echo "Nothing here is a finding about your change: this Mac was too busy for the gate to finish."
-    echo "Send the same push again. A scanner it had started goes on in the background, and the next"
-    echo "push of the same tree counts its result rather than starting it again."
+    if [ -n "$_sc_keyless_stopped" ]; then
+      echo "Send the same push again. The scanners it had started were stopped too, because without a key"
+      echo "for what they read no later push could count their result, so the next push starts them again."
+    else
+      echo "Send the same push again. A scanner it had started goes on in the background, and the next"
+      echo "push of the same tree counts its result rather than starting it again."
+    fi
     echo ""
     echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
     echo "Explain to the user first why skipping is legitimate. Never override silently."
   } >&2
 }
 
+# Runs WITHOUT a key are the run's to stop at the budget (#1910: no later push could count them),
+# and each leads a session of its own, so stopping the run's group does not reach them. They are the
+# only runs kept inside the run's work folder, so they are found there by the pid each recorded
+# (a run this push started, so younger than the stop's cap) and their groups stopped. A run left going on purpose, with a
+# key, is kept in the state folder and is never found here.
+_sc_stop_keyless_runs(){
+  local f p
+  for f in "$_sc_sup_dir"/scanners-before-push.*/runs/*/pid; do
+    [ -f "$f" ] || continue
+    # The launcher writes the pid with no newline after it, so read reports end of file while still
+    # filling p: its status is not the test, the value is.
+    p=""; read -r p < "$f" 2>/dev/null
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -KILL -- "-$p" 2>/dev/null
+    _sc_keyless_stopped=1
+  done
+  return 0
+}
+_sc_keyless_stopped=""
+
 _sc_supervise(){
   local body timer rc self
   _sc_sup_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-gate.XXXXXXXX" 2>/dev/null)" || _sc_sup_dir=""
   if [ -z "$_sc_sup_dir" ] || ! command -v perl >/dev/null 2>&1; then
     # Said, never swallowed (L11): the run below is then bounded by its wait budget only, as
-    # before #3357, and the registration's onFailure "block" is what stands behind it.
+    # before #3357, and the registration's onFailure "block" is what stands behind it. A folder
+    # made before perl was found missing is removed here, since no trap has been set for it.
+    [ -n "$_sc_sup_dir" ] && rm -rf "$_sc_sup_dir"
+    _sc_sup_dir=""
     echo "scanners-before-push: its hard stop could not be set up (no temporary folder, or no perl), so this run is bounded only by its ${_sc_budget} second wait (claude-config#3357)." >&2
     return 0
   fi
@@ -279,8 +307,9 @@ _sc_supervise(){
   self="$HOOK_DIR/${BASH_SOURCE[0]##*/}"
   _sc_stopped=""
   trap '_sc_stopped=1' USR1
-  # A polite stop of this process stops the run with it, so nothing it started outlives the hook.
-  trap 'kill -KILL -- "-$body" 2>/dev/null; exit 2' TERM HUP INT
+  # A polite stop of this process stops the run with it, and the timer, so nothing it started
+  # outlives the hook (a timer left sleeping would later signal a pid that may be another process).
+  trap 'kill -KILL -- "-$body" 2>/dev/null; kill -9 "$timer" 2>/dev/null; _sc_stop_keyless_runs; exit 2' TERM HUP INT
   _SC_SUPERVISED=1 _SC_T0="$_sc_t0" _SC_PHASE_FILE="$_sc_sup_dir/phase" _SC_WORK_PARENT="$_sc_sup_dir" \
     perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' bash "$self" \
     < "$_sc_sup_dir/payload" > "$_sc_sup_dir/out" 2> "$_sc_sup_dir/err" &
@@ -302,6 +331,7 @@ _sc_supervise(){
   trap - USR1 TERM HUP INT
   # Stopped by the timer, and not merely finished at the same moment: refused in this gate's words.
   if [ -n "$_sc_stopped" ] && [ "$rc" -eq 137 ]; then
+    _sc_stop_keyless_runs
     _sc_stop_refuse "$_sc_sup_dir"
     exit 2
   fi
@@ -1260,7 +1290,7 @@ _sc_wait_bounded 2>/dev/null
 #
 # The deadline is counted in ATTEMPTS, so an injected sleep (SCANNERS_SLEEP, for the tests) cannot
 # turn it into a spin (L524, L704). 90 seconds by default, a setting: the bound that matters is the
-# gate's own budget of 150 seconds (#1881), which the wait is spent out of and stops at, and a run
+# gate's own budget, 140 seconds (150 until #3357, see _sc_budget_default) (#1881), which the wait is spent out of and stops at, and a run
 # of every scanner was measured at 15 to 18 seconds on 2026-09-21, so a wait of 90 plus a rerun fits
 # inside it on a quiet machine. On a busy one the budget, not this wait, decides, and a rerun it
 # cuts short is refused as out of time.
