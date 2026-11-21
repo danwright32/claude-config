@@ -476,6 +476,9 @@ test('the memory section tells every session to send a save before asking Dan ab
   expect(text).toContain('core memory')
   expect(text).toContain(SEND_FIRST)
   expect(text).not.toContain('# Rules for this session only')
+  // A lesson entry is approved only in the durable lesson check's picker, never by a save's refusal.
+  expect(text).not.toContain('or LESSONS.md)')
+  expect(text).toContain('durable lesson check')
 })
 
 // #777: a subagent's call raised the question in Dan's main session, and For good then asked the main

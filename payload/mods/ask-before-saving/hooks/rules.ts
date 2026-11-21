@@ -534,7 +534,8 @@ export const askedBeforeSave =
   `Do not ask yet: ${SEND_FIRST} (the Write, Edit or Bash call that writes it). It is refused with the one question to ask him and the metadata "source" that ties his answer to it, and then you ask him once. ` +
   `A question that is not about saving to memory offers neither ${FOR_GOOD} nor ${THIS_SESSION}.`
 export const sendFirstNote =
-  `Before asking Dan whether to save something to lasting memory (the memory folder, MEMORY.md, CLAUDE.md, AGENTS.md or LESSONS.md), ${SEND_FIRST}. ` +
+  `A lesson entry in LESSONS.md is approved only in the durable lesson check's picker. ` +
+  `Before asking Dan whether to save anything else to lasting memory (the memory folder, MEMORY.md, CLAUDE.md or AGENTS.md), ${SEND_FIRST}. ` +
   `It is refused with the one question to ask him and the metadata "source" that ties his answer to it. A question asked before the save approves nothing, so he would be asked it twice.`
 
 // The durable lesson check's picker (#867). payload/hooks/durable-lesson-check.sh tells Claude to ask
