@@ -4742,6 +4742,17 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
+typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
+(on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in
+`payload/mods/design-round-guard`). A mod's tests are run with `claude plugin test <mod folder>`,
+which the gate lets through, and the refusal now ends by naming that command with the mod's folder
+written out (`mod_tests_seen`, `mod_tests_note`). A folder is a mod's where it, or a folder above
+it, holds `.claude-plugin/plugin.json`. The sentence is added only for a `bun test` the call itself
+types, in a folder the gate is certain of, and only to a refusal that is no finding of a post: a
+test file that posts is refused as a post and is told to save a draft, as before. Nothing is refused
+or allowed that was not before. Suite: `test-slack-drafts-mod-tests.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a
