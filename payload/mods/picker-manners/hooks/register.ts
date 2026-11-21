@@ -1,7 +1,7 @@
 import type { EngineCreateResult, EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
-import { asksQuiet, refusal } from './pickers.ts'
+import { asksQuiet, issuesNamedIn, refusal, unreadRefusal, writtenOnIssue } from './pickers.ts'
 import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { guardAsks, guardIgnores } from './mod-kit/designquestions.ts'
@@ -92,10 +92,6 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
   }
 }
 
-// The issues a question names, as a log line says them, without asking GitHub or the session's
-// repository: owner/name#N as written, and a bare #N as issue #N.
-const issuesNamedIn = (question: string) => [...issueRefsIn(question, null).map(x => `${x.repo}#${x.issue}`), ...bareIssuesIn(question).map(n => `issue #${n}`)]
-
 // Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
 // back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
 const reportingFailure = ($: EngineInterface, work: () => Promise<unknown>) => () =>
@@ -151,9 +147,22 @@ export const register: Register = on => {
       source: (e.metadata as { source?: string } | undefined)?.source,
     })
     if (why) return { deny: why }
+    const question = String(e.questions?.[0]?.question ?? '')
+    // #3321: a checked box on an issue reads as settled by Dan, and his answer covers a question
+    // only because he read it. So a picker whose answer would be written onto an issue, and which
+    // he could not read as written by the one check of text a person approves in a picker
+    // (mod-kit's hooks/shown.ts), is refused before he sees it, as the guards' pickers are (Dan,
+    // 2026-11-21: "Refuse outright"; before that it was asked and written onto no issue). A picker
+    // naming no issue is no approval this mod records, so it is asked whatever it holds. The call
+    // is judged as it arrived: a question a mod raises itself through its own dialog (/sleep's
+    // before bed round) arrives here like any other and is held to the same rule, and the mod
+    // that raised it is handed the refusal.
+    if (writtenOnIssue(question, (e.metadata as { source?: unknown } | undefined)?.source)) {
+      const unread = askFault(e as unknown as Record<string, unknown>)
+      if (unread !== undefined) return { deny: unreadRefusal(unread, question) }
+    }
     const r = await next(e)
     // #1279: a question about an issue goes into that issue's Open questions.
-    const question = String(e.questions?.[0]?.question ?? '')
     const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
     // A multi-select answer arrives as a list, and is an answer all the same (lessons review).
     const given = answers?.[question]
@@ -179,20 +188,6 @@ export const register: Register = on => {
     // read as settled while every edit stayed held. Nothing is added open either, since /sleep never
     // asks a guard question.
     if (guardAsks((e.metadata as { source?: unknown } | undefined)?.source)) return r
-    // #3321: a checked box on an issue reads as settled by Dan, and his answer covers a question
-    // only because he read it. A picker he could not read as written, by the one check of text a
-    // person approves in a picker (mod-kit's hooks/shown.ts), is written onto no issue, answered
-    // or open: an open item in those words would be asked again by /sleep and fail the same way
-    // each night (L665). This mod is no gate on the question itself, which any guard that acts
-    // on its answer judges for itself, so the dialog's result stands and Claude is told.
-    const refs = issuesNamedIn(question)
-    const unread = refs.length ? askFault(e as unknown as Record<string, unknown>) : undefined
-    if (unread !== undefined) {
-      const where = `${refs.map(x => `${x}'s`).join(', ')} Open questions`
-      $.ui.log(`Picker manners: this question was not added to ${where}, since it would not have reached you as written.`)
-      const told = `${unread.what} would not reach Dan as written: ${unread.fault}. A question written onto an issue reads there as one he was asked, and its answer as settled by him, so this one was not added to ${where} and no answer of his is recorded there. Tell Dan that in one line, and when the answer is to stand on the issue ask the question again in plain words without what is at fault.`
-      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), told] }
-    }
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
   })

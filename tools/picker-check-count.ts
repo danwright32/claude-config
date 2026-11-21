@@ -22,12 +22,13 @@
 // counted (an upper bound); and a record older than Claude Code keeps is gone.
 //
 // Exit codes, each distinct (L11): 0 counted, 2 bad arguments, 3 the folder could not be read.
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { askFault } from '../payload/mods/mod-kit/hooks/shown.ts'
 import { guardAsks } from '../payload/mods/mod-kit/hooks/designquestions.ts'
-import { bareIssuesIn, issueRefsIn } from '../payload/mods/mod-kit/hooks/openquestions.ts'
+import { writtenOnIssue } from '../payload/mods/picker-manners/hooks/pickers.ts'
 import { LESSON_SOURCE, saveIdOf } from '../payload/mods/ask-before-saving/hooks/rules.ts'
 import { ASK_SOURCE } from '../payload/mods/area-check/hooks/rules.ts'
 
@@ -56,11 +57,8 @@ export const GUARDS: Guard[] = [
   },
   {
     name: 'picker manners (answer written to an issue)',
-    reads: 'a first question naming an issue, and no design round guard source',
-    mine: a => {
-      const q = String(questionsOf(a)[0]?.question ?? '')
-      return !guardAsks(sourceOf(a)) && q !== '' && (issueRefsIn(q, null).length > 0 || bareIssuesIn(q).length > 0)
-    },
+    reads: "the mod's own rule of which pickers it writes onto an issue",
+    mine: a => writtenOnIssue(String(questionsOf(a)[0]?.question ?? ''), sourceOf(a)),
   },
   { name: 'database apply approval (hook)', reads: `metadata source ${DB_APPLY_SOURCE}`, mine: a => sourceOf(a) === DB_APPLY_SOURCE },
   { name: 'database test project approval (hook)', reads: `metadata source ${DB_TRUST_SOURCE}`, mine: a => sourceOf(a) === DB_TRUST_SOURCE },
@@ -83,21 +81,50 @@ export const ruleOf = (fault: string): string =>
 
 type Picker = { file: string; line: number; ask: Ask; answered: boolean }
 
-/** Every picker of the main conversation in one session record that reached the dialog. */
-export const pickersIn = (file: string, text: string): Picker[] => {
+/**
+ * The lines of a file, read a piece at a time, so a session record of any size is never held
+ * whole (some are hundreds of megabytes, and the Mac counting them is short of memory).
+ */
+export function* linesOf(path: string): Generator<string> {
+  const fd = openSync(path, 'r')
+  try {
+    const piece = Buffer.alloc(1 << 20)
+    const decoder = new StringDecoder('utf8')
+    let rest = ''
+    for (;;) {
+      const n = readSync(fd, piece, 0, piece.length, null)
+      if (n === 0) break
+      const lines = (rest + decoder.write(piece.subarray(0, n))).split('\n')
+      rest = lines.pop() as string
+      yield* lines
+    }
+    rest += decoder.end()
+    if (rest !== '') yield rest
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * Every picker of the main conversation in one session record that reached the dialog. The
+ * record is its text, or its lines as linesOf gives them.
+ */
+export const pickersIn = (file: string, record: string | Iterable<string>): Picker[] => {
   const sent = new Map<string, { ask: Ask; line: number }>()
   const out: Picker[] = []
-  text.split('\n').forEach((raw, k) => {
-    if (!raw.includes('AskUserQuestion') && !(sent.size && raw.includes('tool_result'))) return
+  let k = -1
+  for (const raw of typeof record === 'string' ? record.split('\n') : record) {
+    k++
+    if (!raw.includes('AskUserQuestion') && !(sent.size && raw.includes('tool_result'))) continue
     let e: Record<string, unknown>
     try {
       e = JSON.parse(raw) as Record<string, unknown>
     } catch {
-      return
+      continue
     }
-    if (typeof e !== 'object' || e === null || e.isSidechain === true) return
+    if (typeof e !== 'object' || e === null || e.isSidechain === true) continue
     const content = (e.message as { content?: unknown } | undefined)?.content
-    if (!Array.isArray(content)) return
+    if (!Array.isArray(content)) continue
     for (const item of content as Record<string, unknown>[]) {
       if (typeof item !== 'object' || item === null) continue
       if (item.type === 'tool_use' && item.name === 'AskUserQuestion' && typeof item.id === 'string' && typeof item.input === 'object' && item.input !== null) {
@@ -116,7 +143,7 @@ export const pickersIn = (file: string, text: string): Picker[] => {
         out.push({ file, line: was.line, ask, answered })
       }
     }
-  })
+  }
   return out
 }
 
@@ -169,7 +196,7 @@ const main = (): number => {
         if (!name.endsWith('.jsonl')) continue
         files++
         try {
-          pickers.push(...pickersIn(name, readFileSync(join(dir, name), 'utf8')))
+          pickers.push(...pickersIn(name, linesOf(join(dir, name))))
         } catch {
           unread++
         }

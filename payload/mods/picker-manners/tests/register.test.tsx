@@ -396,27 +396,54 @@ test("one he did not answer is added open, and issue #N is read in the session's
 })
 
 // #3321: a checked box on an issue reads as settled by Dan, and his answer covers a question only
-// because he read it. So a picker he could not read as written, judged by the one check of text a
-// person approves in a picker (mod-kit's hooks/shown.ts), is written onto no issue, answered or
-// open, and Claude is told. The refused character is made from its code point, never written here.
-test('a question Dan could not read as written is written onto no issue, and Claude is told why (#3321)', { plugins: [kitWithRepo] }, async ($, on) => {
+// because he read it. So a picker whose answer would be written onto an issue, and which he could
+// not read as written by the one check of text a person approves in a picker (mod-kit's
+// hooks/shown.ts), is refused before he sees it, as the guards' pickers are (Dan, 2026-11-21:
+// "Refuse outright"), with words saying what to change. Before that it was asked and written onto
+// no issue. The refused character is made from its code point, never written here.
+test('a question naming an issue that Dan could not read as written is refused before he is asked (#3321)', { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, '7 days', { 12: SECTION })
   const zw = String.fromCodePoint(0x200b)
   const ask = async (question: string, extra: Record<string, unknown> = {}) =>
-    (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q9', questions: [{ question, header: 'Keep', multiSelect: false, options: [{ label: '1 day', description: 'x' }, { label: '7 days', description: 'y' }] }], ...extra } as never)) as { context?: string[] }
+    (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q9', questions: [{ question, header: 'Keep', multiSelect: false, options: [{ label: '1 day', description: 'x' }, { label: '7 days', description: 'y' }] }], ...extra } as never)) as { deny?: string; text?: string; context?: string[] }
   const hidden = await ask(`How long should issue #12 keep${zw} a record?`)
   await w.settle()
-  expect((hidden.context ?? []).join(' ')).toContain('The question would not reach Dan as written')
-  expect((hidden.context ?? []).join(' ')).toContain("was not added to issue #12's Open questions")
+  // The dialog never answered: the world's answer carries the text "answered".
+  expect(hidden.text).toBeUndefined()
+  expect(hidden.deny).toContain('The question would not reach Dan as written')
+  expect(hidden.deny).toContain('U+200B')
+  expect(hidden.deny).toContain("issue #12's Open questions")
+  expect(hidden.deny).toContain('Ask it again')
   const beside = await ask('How long should issue #12 keep a record?', { title: `Keep${zw}` })
   await w.settle()
-  expect((beside.context ?? []).join(' ')).toContain('Field "title" would not reach Dan as written')
+  expect(beside.text).toBeUndefined()
+  expect(beside.deny).toContain('Field "title" would not reach Dan as written')
+  // Longer than the dialog shows whole: the words say to ask it in parts.
+  const long = await ask(`How long should issue #12 keep a record? ${'Every word of this is plain. '.repeat(60)}`)
+  await w.settle()
+  expect(long.text).toBeUndefined()
+  expect(long.deny).toContain('UTF-16 code units')
   expect(w.edits).toEqual([])
-  // Asked in words he can read, the same question is checked off with his answer.
+  expect(w.logs).toEqual([])
+  // Asked in words he can read, the same question is asked and checked off with his answer.
   const plain = await ask('How long should issue #12 keep a record?')
   await w.settle()
-  expect((plain.context ?? []).join(' ')).not.toContain('would not reach Dan')
+  expect(plain.deny).toBeUndefined()
+  expect(plain.text).toBe('answered')
   expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] How long should issue #12 keep a record? (answered 1969-12-31 ET: 7 days)'])
+})
+
+// #3321: the refusal covers only a picker whose answer this mod would write onto an issue. One
+// naming no issue is no approval this mod records, so it is asked as before, whatever it holds;
+// a guard that acts on its answer judges it for itself.
+test('a question naming no issue is asked as before, readable or not (#3321)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, '7 days', {})
+  const zw = String.fromCodePoint(0x200b)
+  const r = (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q10', questions: [{ question: `How long should the registry keep${zw} a record?`, header: 'Keep', multiSelect: false, options: [{ label: '1 day', description: 'x' }, { label: '7 days', description: 'y' }] }] } as never)) as { deny?: string; text?: string }
+  await w.settle()
+  expect(r.deny).toBeUndefined()
+  expect(r.text).toBe('answered')
+  expect(w.edits).toEqual([])
 })
 
 // #1775: an item added open carries the answers its dialog offered, as mod-kit's reader reads them,
@@ -444,7 +471,8 @@ const bedtime: { name: string; register: Register } = {
   register: on => {
     on('command.run', { command: 'bedtime' }, async ($, e) => {
       const { question, options } = JSON.parse(e.args) as { question: string; options: string[] }
-      return { text: await $.ui.ask(question, { options, header: 'Before bed' }) }
+      // A dialog that could not be shown is kept as why, the way scope-modes keeps it (askOne).
+      return { text: await $.ui.ask(question, { options, header: 'Before bed' }).catch((err: unknown) => `failed: ${err instanceof Error ? err.message : String(err)}`) }
     })
   },
 }
@@ -466,6 +494,24 @@ test("the before bed dialog's skip and go to sleep leave the issue's item open; 
   await $.command.run({ command: 'bedtime', args: BEDTIME_ASK } as never)
   await w.settle()
   expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)'])
+})
+
+// #3321: the before bed dialog arrives here like any other picker, so one naming an issue that Dan
+// could not read as written is held to the same rule: it is never shown, nothing is written, and
+// the mod that raised it is handed the refusal, which /sleep says beside the issue it leaves out.
+test('the before bed dialog is refused the same way, and the mod that raised it is told why (#3321)', { plugins: [kitWithRepo, bedtime] }, async ($, on) => {
+  const OPEN = 'The bug.\n\n## Open questions\n\n- [ ] Keep the old flag? (choices: Keep it / Drop it)'
+  const w = issueWorld(on, 'Drop it', { 7: OPEN })
+  const zw = String.fromCodePoint(0x200b)
+  const unread = JSON.stringify({ question: `o/r#7: Keep the old${zw} flag?`, options: ['Keep it', 'Drop it', SKIP_QUESTION, GO_TO_SLEEP] })
+  const r = (await $.command.run({ command: 'bedtime', args: unread } as never)) as { text?: string }
+  await w.settle()
+  expect(r.text).toContain('failed: ')
+  // The engine hands a mod only the start of a refusal of its own dialog (about 100 characters,
+  // seen on 2.1.330), so the refusal leads with what is at fault.
+  expect(r.text).toContain('The question would not reach Dan as written: character 20 of it is U+200B')
+  expect(w.edits).toEqual([])
+  expect(w.bodies[7]).toBe(OPEN)
 })
 
 // #1299 (lessons review): a mod-kit loaded before it had repo cannot say the session's repository; the
