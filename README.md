@@ -6741,7 +6741,9 @@ Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
 under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
 session notes folder shapes described above, and the home folder's standard folders and listed
-dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+dotfolders themselves), whatever the category says; a path ending in a slash refused, since no scan
+records one and the slash would have the link test follow a link rather than see it (#3332); a
+symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
@@ -6844,6 +6846,56 @@ gone; a lock whose agent cannot be checked because ps could not be read; and any
 a Claude agent's. Each is named with the reason it was kept. `tools/shipped-worktrees.sh` reads
 locks the same way, through `payload/hooks/lib/agent-lock.sh`, so the two cleanups agree. Without
 `--remove` the check reports and changes nothing, locks included.
+
+Both cleanups ask git about a worktree with that worktree's program running settings off
+(claude-config#3355). A status, a rev-list and the status inside `git worktree remove` are answered
+with the worktree's own configuration, which can name a program git then starts, and the sweep
+judges every worktree git lists, by itself, in every session. Before #3355 both ran those calls
+plain: on a fixture a status ran the repository's `core.fsmonitor` program, its filter, a filter
+only the worktree's own `config.worktree` named and the `post-index-change` hook. Now every such
+call goes through `dc_git` ("git in a folder being judged", above), the one helper disk-clean uses,
+which `payload/hooks/lib/judged-worktree.sh` sources and adds one thing to:
+
+- **`jw_remove <repository> <worktree> [--force]`** is how both remove a worktree. It runs
+  `git worktree remove` in the worktree, where both ran it in the repository before, because
+  `dc_git` reads which filters to turn off from the folder it is given, and from the repository's
+  folder a filter named only in the worktree's own configuration stayed on. Run in the worktree, git
+  removes whichever repository's worktree it finds there, so `jw_remove` first asks git which
+  repository answers in the worktree and in the repository's folder and refuses unless they are
+  one; a folder whose `.git` named another repository's worktree record was removed through that
+  repository without the check. A worktree whose folder is gone is removed from the repository's
+  folder, where git only drops its record. `--force` is what the sweep passes to finish a removal
+  cut off part way; git then asks for no status and ran nothing even called bare.
+- **Where the settings cannot be turned off, git is not run there.** A filter whose name holds an
+  equals sign, a submodule path git prints quoted, or a folder that answers for another repository
+  keeps the worktree, and the line that keeps it carries the reason (`dc_git: refused: ...` or
+  `jw_remove: refused: ...`). A removal refused this way reads "its removal was not tried", never
+  "git would not remove it".
+- **What it changes in an answer.** The same as for disk-clean: with a repository's own filter off
+  git compares a file as it lies, one the repository marks required makes the status fail, and a
+  partial clone missing an object fails where it used to fetch. Each of those keeps the worktree.
+  One more changed with it: the sweep's finisher used to read a status git could not give as
+  nothing changed, and then forced the removal, which on a fixture took a folder holding a changed
+  file. It now keeps that worktree and its marker and says why. The same reading sat after a
+  removal git fails: both cleanups ask for a status to tell a worktree left whole from one left part
+  deleted, and a status git could not give read as whole, so the marker was cleared and a dead
+  agent's lock put back on a worktree that might be part deleted. Now a status that cannot be read
+  leaves the marker and leaves the lock off, and the line says so. A removal that was never tried
+  left the worktree whole, so no status is asked for and the lock goes back.
+- **What stays plain.** git run in the repository itself about its own records (listing its
+  worktrees, locking and unlocking one, reading a ref, deleting a local branch). That is the
+  repository the tool was run for, where the session's every other git call runs too, and no call
+  the fixtures reach started a program there. Two they do not reach are log commands (the sweep's
+  `reflog show` and `log -1` over a remote branch, asked when a branch was pushed), which run the
+  repository's `gpg.program` over a signed commit when it sets `log.showSignature`, as #3328
+  measured for stash list. The lines the sweep prints for a person to run by hand are plain git too.
+
+`hooks/test-judged-worktree.sh` and `tools/test-shipped-worktrees-git.sh` ask the git on the
+machine, never a stub. Each sees the programs run with the call written bare, then runs the tool,
+report and `--remove`, over worktrees whose settings name them and sees nothing run. Each also
+reads its tool's source with the disk-clean command reader and fails on a `git` written outside
+`dc_git` in any form but a short list of calls about the repository's own records, so a status or
+a `worktree remove` written plain again is caught by its line.
 
 ## A build scored against its settled design
 

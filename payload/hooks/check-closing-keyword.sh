@@ -39,6 +39,25 @@
 
 payload="$(cat)"
 
+# THE WORDS EVERY FALLBACK BELOW JUDGES BY, one list for all three (no library, no python3, a payload
+# no reader parses). With nothing able to read the command, a payload holding any of these is
+# refused; any other passes. Too broad, never too narrow: the group word pr alone, not only create,
+# since `gh pr new` is gh pr create and no list of gh's aliases is kept here (claude-config#2424);
+# pr glued to a redirection or a quote; and git anywhere before commit, since the reader takes
+# `git 2>/dev/null commit`, `git>/dev/null commit` and `git -C <dir> commit` for the commit they are
+# (#3252), and each of those passed a fallback that looked only for the text "git commit"
+# (claude-config#3280). This list is read only when a fallback runs, so it costs nothing on a call
+# the reader reads.
+CC_WORDS=('*pr create*' '*pr edit*' '*pr *' '*pr>*' '*pr<*' '*pr\\*' "*pr'*" '*git* commit*' '*git*commit*')
+cc_names_target() {
+  local w
+  for w in "${CC_WORDS[@]}"; do
+    # shellcheck disable=SC2254 # each word is a pattern by design
+    case "$1" in $w) return 0 ;; esac
+  done
+  return 1
+}
+
 
 # The library, not a copy: six near copies of this had already drifted (claude-config#102).
 # `raw` because this hook searches the whole command rather than splitting it.
@@ -51,9 +70,7 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
   # L10): with it missing nothing here can tell a pull request or a commit from any other command,
   # so a command naming one is refused, naming the file, and any other passes as it would have.
   case "$payload" in *SKIP_CLOSING_CHECK=1*) exit 0 ;; esac
-  # The group word pr alone, not only the word create: `gh pr new` is gh pr create, and no list of
-  # gh's aliases is kept here (claude-config#2424). Too broad, never too narrow.
-  case "$payload" in *"pr create"*|*"pr edit"*|*"pr "*|*"git commit"*) ;; *) exit 0 ;; esac
+  cc_names_target "$payload" || exit 0
   echo "BLOCKED: check-closing-keyword.sh could not load $HOOK_DIR/lib/push-scope.sh, which reads whether this command writes a pull request body or a commit message, so this command could not be checked. A library this gate cannot load is not a message with nothing to check. Reinstall the hooks with claude-sync pull. For this one command: SKIP_CLOSING_CHECK=1 <the same command>" >&2
   exit 2
 }
@@ -70,23 +87,21 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # reads with: with neither jq nor python3 the parse below exits 0 first and this question would
 # never be reached (L135, L667).
 #
-# Narrowed, on the raw payload, to git commit and any command naming `pr ` (which covers pr create
-# and pr edit, the two that can link an issue, and also catches harmless ones such as gh pr view),
-# so the refusal stays near the commands this hook is about (L36, L54). A substring rather than
+# Narrowed, on the raw payload, to the words in CC_WORDS: git before commit, and gh's pr group
+# (which covers pr create and pr edit, the two that can link an issue, and also catches harmless
+# ones such as gh pr view), so the refusal stays near the commands this hook is about (L36, L54). A
+# substring rather than
 # the leading token test used below, because with no reader there are no tokens: it can only ever
 # be too broad here, never too narrow. The override is read the same way (L109).
 if ps_reader_missing python3; then
-  case "$payload" in
-    *SKIP_CLOSING_CHECK=1*) exit 0 ;;
-    *"pr create"*|*"pr edit"*|*"pr "*|*"git commit"*)
-      echo "BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
-        "check-closing-keyword.sh reads this text with it (lib/closing-keyword.py), looking for a closing keyword beside an issue the text says it is not closing, so with python3 absent nothing here reads the text at all." \
-        "python3")" >&2
-      echo "A sentence like \"does not close #897\" closes the issue on merge regardless of the negation, which is why this is a gate rather than a note." >&2
-      echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
-      exit 2 ;;
-  esac
-  exit 0
+  case "$payload" in *SKIP_CLOSING_CHECK=1*) exit 0 ;; esac
+  cc_names_target "$payload" || exit 0
+  echo "BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
+    "check-closing-keyword.sh reads this text with it (lib/closing-keyword.py), looking for a closing keyword beside an issue the text says it is not closing, so with python3 absent nothing here reads the text at all." \
+    "python3")" >&2
+  echo "A sentence like \"does not close #897\" closes the issue on merge regardless of the negation, which is why this is a gate rather than a note." >&2
+  echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
+  exit 2
 fi
 
 # Taken raw above, before the library that cleans it loaded, and cleaned here before anything parses
@@ -94,7 +109,7 @@ fi
 # is judged by its words, as a missing library is above (#1922).
 payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" \
-  || ps_unparsed_refuse "$payload" check-closing-keyword.sh SKIP_CLOSING_CHECK "a pull request body or a commit message" '*pr create*' '*pr edit*' '*pr *' '*git commit*'
+  || ps_unparsed_refuse "$payload" check-closing-keyword.sh SKIP_CLOSING_CHECK "a pull request body or a commit message" "${CC_WORDS[@]}"
 cmd="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
