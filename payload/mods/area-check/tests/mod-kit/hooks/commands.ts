@@ -1149,7 +1149,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * splits it into the command itself, and a word the shell expands holds what nobody can read before
  * it runs (#2983); and eval, a command a value names, an alias, ssh and a trap whose text the shell
  * expands (#3021, unreadOf). Its words are never all of what runs, so every guard holds or refuses
- * one, never judging it by its words alone.
+ * one, never judging it by its words alone. A command whose program is the variable of a loop over
+ * words written out is not one (#3272, loopPrograms): it is given once for each word, that word in
+ * the variable's place, as if typed with it.
  * `worked` gives, for each word whose only expansions are old arithmetic (`$[...]`) of whole numbers
  * joined by + - and * (#3070, sumOf), the word as bash and zsh hand it on (`"x\\$[0-9]"` is `x\-9`),
  * null for every other word; absent where no word is one. dash and ksh hand such a word on as typed
@@ -1422,6 +1424,135 @@ export const placed = (c: Command, inSubstitution: boolean): Command => {
   return shellLeftAsWritten(at) ? { ...at, asWritten: true as const } : at
 }
 
+// A loop over programs written out (#3272): `for sh in /bin/bash /bin/zsh; do $sh -c '...'; done`.
+// On 2026-11-19 that command, which ran eleven one line scripts in two shells, was held overnight
+// as one that may run the merge helper: its program was a variable, so no reader could say what
+// ran. Where the loop's words are written out, the variable names each of them in turn and nothing
+// else, so a command whose program is the variable alone is read once for each word, as if typed
+// with that name. The answer is, for each command of the line it holds for, the names it is read by.
+//
+// It holds only where nothing the reader cannot see could have given the variable another value
+// between the loop setting it and the command running, so every answer below is no wherever it may:
+// - the loop is `for NAME in WORD...` then `do`, each word plain characters as typed (no quote, no
+//   expansion, no pattern, brace or tilde), none a word the shell or this reader treats as more than
+//   a program (a reserved word, a runner, a builtin that runs text);
+// - the command is in the loop's body, before the first `done` after it, and its program is `$NAME`
+//   or `${NAME}` alone;
+// - no other word of the line, quotes removed, hands a builtin the name (namesIt: an assignment,
+//   `read NAME`, `printf -vNAME`, a second loop over it), the loop's own words included, since a
+//   value that is the name reaches a builtin wherever the variable is written (`read $NAME`);
+// - every value the shell fills in anywhere in the line is such a loop's variable inside its body,
+//   standing apart from the characters around it, so no name is put together when the line runs
+//   (`read $a$b`, `read ${p}h`, zsh's `$NAME:t` and `$NAME[8,9]`); and the line holds no heredoc;
+// - every word with such a value in it is typed as it reads here, bare or inside one pair of double
+//   quotes, since quotes removed `$s"h"` reads as `$sh` while the shell runs what `$s` holds with
+//   an h after it;
+// - no word holds a pattern character or a brace the shell may act on (`read {sh,x}`, `read s?`,
+//   `arr[sh=5]=x`), each of which makes a name or sets one with no value filled in: every such
+//   character is quoted or after a backslash (PATTERN, quotedWhole);
+// - the line runs no text as commands of this shell (eval, source, `.`, trap, alias) and works out
+//   no arithmetic (let, `(( ))`, a whole number comparison, a variable declared with its kind, the
+//   name with an assignment or a step written after or before it in any word, quoted or not, such
+//   as `read 'arr[NAME=5]'`), each of which may set a variable no word names.
+// What it cannot see: a function or alias the shell already had under a name the line uses, which
+// no reading of a command's words can (L645); and a sum a builtin works out from another variable's
+// value (`read 'arr[y]'`, zsh's `printf %d y`, where y holds text read from a file), which can give
+// the variable a number and nothing else.
+const LOOP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const LOOP_VALUE = /^[A-Za-z0-9_./][A-Za-z0-9_./-]*$/
+const RESERVED = new Set([...LEADS, ...OPENS, ...CLOSES, 'in', 'case', 'function', 'time', 'coproc'])
+const RUNS_TEXT = new Set(['eval', 'source', '.', 'trap', 'alias', 'builtin'])
+const TESTS = new Set(['test', '[', '[['])
+const SUMS = new Set(['let', 'declare', 'typeset', 'integer', 'float', 'local', ...TESTS])
+const SUM_TEST = /^-(?:eq|ne|lt|le|gt|ge)$/
+const baseOf = (word: string | undefined): string => (word ?? '').split('/').pop() ?? ''
+const plainValue = (v: string): boolean => LOOP_VALUE.test(v) && !RESERVED.has(v) && !RUNS_TEXT.has(baseOf(v)) && !SUMS.has(baseOf(v)) && !RUNNERS.has(baseOf(v))
+// Each `$NAME` and `${NAME}` in a word, quotes removed, for the names given.
+const usesOf = (names: readonly string[]): RegExp => new RegExp(`\\$(?:\\{(?:${names.join('|')})\\}|(?:${names.join('|')})(?![A-Za-z0-9_]))`, 'g')
+// A word that hands a builtin the name, quotes removed: the name itself or a word starting with it
+// (`read NAME`, `NAME=x`, `NAME+=x`, `NAME[0]=x`, zsh's `NAME?prompt`), a builtin's option with it
+// attached (`printf -vNAME`, `read -aNAME`: one dash, letters, then the name), a value that is it
+// (`declare -n ref=NAME`), or `{NAME}`, which gives it a descriptor's number. A name inside a longer
+// one, after a dot or a slash, or ending a long option (`tests/run.sh` and `--squash` beside a
+// variable named sh) is no variable's name to any builtin. Anywhere in a word, the name with an
+// assignment or a step after it, or a step before it, is a sum that sets it wherever a builtin
+// works one out (`arr[NAME=5]`, `x+(NAME += 1)`, `NAME++`, `--NAME`).
+const namesIt = (name: string): RegExp =>
+  new RegExp(
+    `^${name}(?![A-Za-z0-9_])|^-[A-Za-z]+${name}$|=${name}(?![A-Za-z0-9_])|\\{${name}\\}` +
+      `|(?<![A-Za-z0-9_$])${name}\\s*(?:(?:\\*\\*|<<|>>|[-+*/%&|^])?=|\\+\\+|--)|(?:\\+\\+|--)\\s*${name}(?![A-Za-z0-9_])`,
+  )
+const APART_BEFORE = /(?:^|[\s/.,=(:-])$/
+const APART_AFTER = /^(?:$|[\s/.,)-])/
+// A character the shell may match against files or open out into words (GLOB_CHAR without the
+// tilde, which only ever gives a path), and the words that are the shell's own grammar.
+const PATTERN = /[*?[\]{}()^#]/
+const GRAMMAR = new Set(['[', '[[', ']', ']]', '{', '}', '(', ')', '((', '))'])
+const loopPrograms = (text: string, read: readonly Split[], begun: readonly Begun[], literal: ReadonlySet<number>, unexpanded: ReadonlySet<number>, closed: boolean): Map<number, string[]> => {
+  const none = new Map<number, string[]>()
+  if (closed) return none
+  // Each loop over words written out, by the command that opens it.
+  const loops = new Map<number, { name: string; values: string[] }>()
+  begun.forEach((b, k) => {
+    const [lead, name, into, ...values] = b.words
+    if (lead !== 'for' || name === undefined || into !== 'in' || !values.length || !LOOP_NAME.test(name)) return
+    const typed = values.every((v, n) => (b.starts[n + 3] ?? -1) >= 0 && text.startsWith(v, b.starts[n + 3]))
+    if (typed && values.every(plainValue) && read[k + 1]?.words[0] === 'do') loops.set(k, { name, values })
+  })
+  if (!loops.size) return none
+  const out = new Map<number, string[]>()
+  const names = [...new Set([...loops.values()].map(l => l.name))]
+  // The names written anywhere but as a loop's own variable or its value where the shell fills it in.
+  const written = new Set<string>()
+  const scope = new Map<string, string[]>()
+  for (let k = 0; k < read.length; k++) {
+    const r = read[k] as Split
+    const b = begun[k] as Begun
+    const head = baseOf(b.words[pastBuiltin(b.words)])
+    if (RUNS_TEXT.has(head) || (SUMS.has(head) && (!TESTS.has(head) || r.words.some(w => SUM_TEST.test(w))))) return none
+    if (b.words[0] === 'done') scope.clear()
+    const inScope = [...scope.keys()]
+    const uses = inScope.length ? usesOf(inScope) : undefined
+    for (let n = 0; n < r.words.length; n++) {
+      const word = r.words[n] as string
+      const at = r.starts[n] ?? -1
+      const filled = /[$`]/.test(word) && !unexpanded.has(at)
+      // IFS decides where bash cuts the variable's value into words, so the program may be a part of it.
+      if (/(?<![A-Za-z0-9_])IFS(?![A-Za-z0-9_])/.test(word)) return none
+      // The word as typed: one pair of quotes around all of it, or (double quotes only) none at all.
+      const inDouble = text.startsWith(`"${word}"`, at)
+      const quotedWhole = inDouble || text.startsWith(`'${word}'`, at)
+      // A pattern character or a brace the shell may act on makes a name no word here spells.
+      if (PATTERN.test(word) && !GRAMMAR.has(word) && !literal.has(at) && !quotedWhole) return none
+      if (filled) {
+        // Typed as it reads here, so the value named is the one the shell fills in.
+        if (!inDouble && !text.startsWith(word, at)) return none
+        // Every value the shell fills in is a loop's variable in its body, apart from what is beside it.
+        if (!uses || /[$`]/.test(word.replace(uses, ''))) return none
+        for (const m of word.matchAll(uses)) {
+          const from = m.index ?? 0
+          if (!APART_BEFORE.test(word.slice(0, from)) || !APART_AFTER.test(word.slice(from + m[0].length))) return none
+        }
+      }
+      // A loop's own variable, where its loop names it, is the one place a name may be written.
+      if (loops.has(k) && at === b.starts[1]) continue
+      const rest = filled && uses ? word.replace(uses, ' ') : word
+      for (const name of names) if (namesIt(name).test(rest)) written.add(name)
+    }
+    const loop = loops.get(k)
+    if (loop) scope.set(loop.name, loop.values)
+    else if (b.words[0] === 'for' || b.words[0] === 'select') scope.delete(b.words[1] ?? '')
+    const named = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/.exec(b.words[0] ?? '')
+    const values = named && (b.starts[0] ?? -1) >= 0 && !unexpanded.has(b.starts[0] as number) ? scope.get((named[1] ?? named[2]) as string) : undefined
+    if (values) out.set(k, values)
+  }
+  for (const [k] of out) {
+    const name = /[A-Za-z_][A-Za-z0-9_]*/.exec((begun[k] as Begun).words[0] ?? '')?.[0] ?? ''
+    if (written.has(name)) out.delete(k)
+  }
+  return out
+}
+
 /**
  * A command line read as its commands, each command substitution the shell runs in it given in its
  * place as the commands it runs (Line), read as a command line of its own, so one nested inside it
@@ -1528,6 +1659,8 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     while (j < read.length && !paren(j, '(') && !paren(j, ')')) j++
     if (paren(j, ')') && paren(j + 1, ')') && together(j)) for (let m = k + 2; m < j; m++) arithmetic.add(m)
   }
+  // Each command whose program is a loop's variable over words written out, with those words (#3272).
+  const looped = loopPrograms(text, read, begun, literal, unexpanded, heredocs.length > 0 || unended !== undefined || arithmetic.size > 0)
   // Each trap's text (#3021, trapText), read as the commands it runs once the rest of what its
   // shell runs is read: at the ) closing the subshell that set it, or at the end. Until then it was
   // a word of the trap, so `trap 'git push' EXIT` pushed past every guard, and the two mods reading
@@ -1561,7 +1694,12 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
     feed = { ...feed, ...marksOf(b, outer), ...(arithmetic.has(k) ? { arithmetic: true } : {}) }
     if (outer.found) feed = { ...feed, found: outer.found }
-    emit(b.words, fedOf(b), feed, out, opts, outer.splits ? b.starts.map(s => bare.get(s) ?? []) : undefined, b.starts.map(s => literal.has(s)), b.starts.map(s => unexpanded.has(s)), derivedOf(b), b.starts.map(s => worked.get(s) ?? null))
+    // A program a loop names is read once for each name, the name standing where the variable did
+    // and carrying no place in the text, so nothing said of the variable's word is said of it.
+    const names = looped.get(k)
+    const readAs: Begun[] = names ? names.map(v => ({ ...b, words: [v, ...b.words.slice(1)], starts: [-1, ...b.starts.slice(1)] })) : [b]
+    for (const c of readAs)
+      emit(c.words, fedOf(c), feed, out, opts, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null))
   })
   for (const texts of later.reverse()) runLater(texts)
   return out
