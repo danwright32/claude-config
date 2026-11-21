@@ -30,7 +30,8 @@
 # identity cannot be read is refused at --propose.
 #
 # EACH ITEM, IN ORDER (the plan's design, #1804 comment; L514): the identity deny list on the path
-# as recorded, whatever the category; refuse a symbolic link and resolve the rest of the path
+# as recorded, whatever the category; refuse a path ending in a slash, which would have the link
+# test follow a link (#3332); refuse a symbolic link and resolve the rest of the path
 # physically; the deny list again on the physical path; the allowed root; already gone; measure its
 # size; the category's own judge, run again now; for every method but truncate, an lsof open check,
 # last of all, so nothing slow sits between it and the removal (#1872, L1034); write INTENT to the
