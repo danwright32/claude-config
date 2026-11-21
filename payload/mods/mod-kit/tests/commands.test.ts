@@ -388,6 +388,37 @@ describe('git', () => {
     expect(git(['gh', 'pr', 'list'])).toBeUndefined()
     expect(git(['git'])).toEqual({ sub: undefined, args: [], dir: undefined })
   })
+  // #3337: a command can name its repository and its working folder apart from the folder it runs
+  // in, four ways. Until then each value was skipped and only -C's folder handed on, so a guard read
+  // the command as one about the folder it ran in. git reads the two variables exactly as the two
+  // options (measured with git 2.51.1): an option wins over the variable, and the last of each wins.
+  test('hands on the repository --git-dir or GIT_DIR names and the working folder --work-tree or GIT_WORK_TREE names (#3337)', () => {
+    expect(git(['git', '--git-dir=/other/.git', '--work-tree=/w/x', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    expect(git(['git', '--git-dir', '/other/.git', '--work-tree', '/w/x', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    expect(git(['git', 'merge', 'y'], ['GIT_DIR=/other/.git', 'GIT_WORK_TREE=/w/x'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    // One alone is handed on alone, beside -C's folder, which a relative value is read from.
+    expect(git(['git', '-C', '/w/a', '--git-dir=../other/.git', 'cherry-pick', 'abc'])).toEqual({ sub: 'cherry-pick', args: ['abc'], dir: '/w/a', gitDir: '../other/.git' })
+    expect(git(['git', '--work-tree=/w/x', 'restore', 'app.css'])).toEqual({ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' })
+    expect(git(['git', 'restore', 'app.css'], ['TMPDIR=/t', 'GIT_WORK_TREE=/w/x'])).toEqual({ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' })
+    // An option wins over the variable, and the last of each wins.
+    expect(git(['git', '--git-dir=/b/.git', 'merge', 'y'], ['GIT_DIR=/a/.git'])?.gitDir).toBe('/b/.git')
+    expect(git(['git', '--git-dir=/a/.git', '--git-dir', '/b/.git', 'merge', 'y'])?.gitDir).toBe('/b/.git')
+    expect(git(['git', 'merge', 'y'], ['GIT_WORK_TREE=/a', 'GIT_WORK_TREE=/b'])?.workTree).toBe('/b')
+    // A value written empty is handed on empty, never dropped: git reads it, and refuses it.
+    expect(git(['git', '--git-dir=', 'merge', 'y'])?.gitDir).toBe('')
+    // An option of the subcommand spelled the same is the subcommand's own, and names nothing.
+    expect(git(['git', 'merge', '--work-tree=/w/x', 'y'])).toEqual({ sub: 'merge', args: ['--work-tree=/w/x', 'y'], dir: undefined })
+  })
+  test('a command naming neither hands on neither, whatever else it is run with (#3337)', () => {
+    expect(git(['git', '-C', '/repo', 'merge', 'y'], ['GIT_AUTHOR_NAME=x', 'TMPDIR=/t'])).toEqual({ sub: 'merge', args: ['y'], dir: '/repo' })
+    expect(git(['git', '--namespace', 'ns', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined })
+  })
+  test('the settings the command reader gives a git command carry the two variables to it (#3337)', () => {
+    const read = (command: string) => pipeline(command).map(c => git(c.words, c.env))
+    expect(read('GIT_DIR=/other/.git git merge y')).toEqual([{ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git' }])
+    expect(read('env GIT_WORK_TREE=/w/x git restore app.css')).toEqual([{ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' }])
+    expect(read('GIT_DIR=/other/.git GIT_WORK_TREE=/w/x git cherry-pick abc')).toEqual([{ sub: 'cherry-pick', args: ['abc'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' }])
+  })
 })
 
 describe('heredocs name the descriptor they feed (#760)', () => {
@@ -1088,5 +1119,161 @@ describe('a backslash before a new line joins the two lines (#3022)', () => {
     expect(pipeline(cmd)[0]?.heredocs).toEqual([{ word: 1, body: 'body', quoted: false }])
     // A comment ending in a backslash continues nothing, so the body starts on the next line.
     expect(commands('cat <<EOF # \\\nbody\nEOF\ngit status')).toEqual([['cat', '<<EOF'], ['git', 'status']])
+  })
+})
+
+// #3272: on 2026-11-19 at 1:02 AM ET sleep mode held a loop over /bin/bash and /bin/zsh that ran
+// `$sh -c '<a function definition>'` eleven ways, as a command that may run the merge helper: the
+// program was a variable, so no reader could say what ran. A loop whose words are written out names
+// each program it runs, so the command is read once for each of them, as if typed with that name.
+// Everything else a value names stays unread, and so does a loop variable anything else in the line
+// could have changed.
+describe('commands: a loop over programs written out names each one (#3272)', () => {
+  const NAMED = 'named by a value the shell expands, so what it runs cannot be read'
+  const read = (cmd: string) => pipeline(cmd).map(c => ({ words: c.words, ...(c.unread ? { unread: c.unread } : {}) }))
+  const unreads = (cmd: string) => pipeline(cmd).filter(c => c.unread).map(c => [c.words[0], c.unread])
+  test('the command of 2026-11-19, cut to two of its eleven: each shell runs each string', () => {
+    const cmd = `for sh in /bin/bash /bin/zsh; do echo "== $sh"; $sh -c 'f() ( echo A-sub ); f' 2>&1; $sh -c 'f() echo B-plain; f' 2>&1 | head -2; done`
+    expect(unreads(cmd)).toEqual([])
+    // What each -c string runs, once for each shell, as a shell written by name is read.
+    expect(pipeline(cmd).filter(c => c.words[0] === 'echo').map(c => [c.words.join(' '), c.behind])).toEqual([
+      ['echo == $sh', undefined],
+      ['echo A-sub', ['bash']],
+      ['echo A-sub', ['zsh']],
+      ['echo B-plain', ['bash']],
+      ['echo B-plain', ['zsh']],
+    ])
+  })
+  test('a program that is no shell is read by its name too, with the words written after it', () => {
+    expect(read('for tool in gh /opt/homebrew/bin/gh; do $tool pr merge 12 --squash; done').filter(c => c.words.includes('merge'))).toEqual([
+      { words: ['gh', 'pr', 'merge', '12', '--squash'] },
+      { words: ['/opt/homebrew/bin/gh', 'pr', 'merge', '12', '--squash'] },
+    ])
+    expect(read('for sh in bash; do "${sh}" ~/.claude/hooks/lib/merge-when-ready.sh 12; done')[1]).toEqual({ words: ['bash', '~/.claude/hooks/lib/merge-when-ready.sh', '12'] })
+    // Behind a runner, and in a nested loop, where the inner loop's variable names the program.
+    expect(unreads('for sh in bash zsh; do nohup $sh -c "make"; done')).toEqual([])
+    expect(unreads('for n in 1 2; do for sh in bash zsh; do $sh -c "make"; done; done')).toEqual([])
+    // The name inside a longer word names no variable: a script ending .sh beside a variable named
+    // sh, a shell at /bin/sh, the option a one letter variable shares its letter with.
+    expect(read('for sh in /bin/sh /bin/bash; do $sh tests/run.sh --squash; done').slice(1, 3)).toEqual([{ words: ['/bin/sh', 'tests/run.sh', '--squash'] }, { words: ['/bin/bash', 'tests/run.sh', '--squash'] }])
+    expect(unreads(`for c in bash zsh; do $c -c 'make'; done`)).toEqual([])
+    // Controls for the cases below: the same lines with nothing that could change the variable.
+    const plain = [
+      `for sh in /bin/bash; do read line < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do printf '%s\\n' "$sh"; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do if [ -x "$sh" ]; then $sh -c 'make'; fi; done`,
+      `for sh in /bin/bash; do [[ -x $sh ]] && $sh -c 'make'; done`,
+      `for sh in /bin/bash; do ls -lt; $sh --version | head -1; done`,
+      `cd /tmp/work && for sh in /bin/bash /bin/zsh; do $sh ./check.sh > "out/$sh.txt" 2>&1; done`,
+      // Pattern characters the shell matches against no file: quoted whole, or after a backslash.
+      `for sh in /bin/bash; do echo "== $sh (x)"; $sh -c 'f() { echo "$1" *.txt; }; f x'; done`,
+      `for sh in /bin/bash; do $sh -c "ls *.txt" app/\\*x; done`,
+    ]
+    expect(plain.filter(cmd => unreads(cmd).length > 0)).toEqual([])
+  })
+  test('a value from anywhere but a loop over words written out is still unread', () => {
+    const held = [
+      // No loop at all, and a plain assignment, which this reading does not follow.
+      `$sh -c 'make'`,
+      `sh=/bin/bash; $sh -c 'make'`,
+      // A list the shell fills in: a variable, a substitution, a pattern, braces, a tilde, its arguments.
+      `for sh in $SHELLS; do $sh -c 'make'; done`,
+      `for sh in /bin/bash $OTHER; do $sh -c 'make'; done`,
+      `for sh in $(cat shells.txt); do $sh -c 'make'; done`,
+      `for sh in /bin/*sh; do $sh -c 'make'; done`,
+      `for sh in /bin/{bash,zsh}; do $sh -c 'make'; done`,
+      `for sh in ~/bin/bash; do $sh -c 'make'; done`,
+      `for sh in "$@"; do $sh -c 'make'; done`,
+      `for sh; do $sh -c 'make'; done`,
+      // A quoted word, whose value this reading does not work out.
+      `for sh in "/bin/bash" '/bin/zsh'; do $sh -c 'make'; done`,
+      // Another variable, and the loop's own outside its body.
+      `for sh in /bin/bash; do $other -c 'make'; done`,
+      `for sh in /bin/bash; do :; done; $sh -c 'make'`,
+      `$sh -c 'make'; for sh in /bin/bash; do :; done`,
+      // More than the variable alone.
+      `for sh in bash; do /bin/$sh -c 'make'; done`,
+      `for sh in bash; do $sh$x -c 'make'; done`,
+      `for sh in bash; do \${sh:-zsh} -c 'make'; done`,
+      // Another variable's value with characters quoted beside it, which reads as the loop's own
+      // once the quotes are gone: the shell runs whatever `$s` holds with an h after it.
+      `for sh in /bin/bash; do $s"h" -c 'make'; done`,
+      `for sh in /bin/bash; do $s'h' -c 'make'; done`,
+      `for sh in /bin/bash; do "$s"h -c 'make'; done`,
+      `for sh in /bin/bash; do $s\\h -c 'make'; done`,
+      // zsh's short loops, which close with no done.
+      `for sh in /bin/bash /bin/zsh; $sh -c 'make'`,
+      `for sh (/bin/bash /bin/zsh) $sh -c 'make'`,
+    ]
+    expect(held.filter(cmd => unreads(cmd).map(u => u[1]).join('|') !== NAMED)).toEqual([])
+  })
+  test('a loop variable anything else in the line could have changed is still unread', () => {
+    const held = [
+      // Set again by name, in the body or anywhere else in the line.
+      `for sh in /bin/bash; do sh=$EVIL; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do sh=/tmp/x; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read sh < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read "sh" < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read s\\h < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do export sh=x; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do printf -v sh x; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do unset sh; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do : \${sh:=x}; $sh -c 'make'; done`,
+      `swap() { sh=/tmp/x; }; for sh in /bin/bash; do swap; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do printf -vsh x; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read -ash < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read 'sh?name: '; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do exec {sh}>/dev/null; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do for sh in $OTHERS; do $sh -c 'make'; done; done`,
+      // A value that is the variable's own name, which the variable then hands to a builtin.
+      `for sh in sh bash; do read $sh < list; $sh -c 'make'; done`,
+      `for name in sh; do for sh in /bin/bash; do read $name < list; $sh -c 'make'; done; done`,
+      // Text run as commands by this shell, which may set anything.
+      `for sh in /bin/bash; do eval "$(cat x)"; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do source ./env.sh; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do . ./env.sh; $sh -c 'make'; done`,
+      `trap 'x=1' DEBUG; for sh in /bin/bash; do $sh -c 'make'; done`,
+      `for sh in /bin/bash; do let x=1; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do (( x = 1 )); $sh -c 'make'; done`,
+      `for sh in /bin/bash; do [[ x -eq 1 ]]; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do declare -i n=x; $sh -c 'make'; done`,
+      // IFS set, which decides where bash cuts the value into words.
+      `IFS=a; for sh in /bin/bash; do $sh -c 'make'; done`,
+      // Any other value the shell fills in, which may be the variable's name, and a heredoc.
+      `for sh in /bin/bash; do read $name < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read $a$b < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do echo $(date); $sh -c 'make'; done`,
+      `for sh in /bin/bash; do echo "$HOME"; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do cat <<X\nhi\nX\n$sh -c 'make'; done`,
+      `for sh in /bin/bash; do echo $'s\\x68'; $sh -c 'make'; done`,
+      // A name put together from a loop's value and what is written beside it.
+      `for p in s; do for sh in /bin/bash; do read \${p}h < list; $sh -c 'make'; done; done`,
+      `for sh in /bin/bash; do echo $sh:t; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do echo $sh[8,9]; $sh -c 'make'; done`,
+      `for p in s; do for ph in x; do for sh in /bin/bash; do read $p"h" < list; $sh -c 'make'; done; done; done`,
+      // A name the shell makes from braces or by matching a file, with no value filled in.
+      `for sh in /bin/bash; do read {sh,x} < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read s{h,} < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read s? < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read [s]h < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read "s"* < list; $sh -c 'make'; done`,
+      // A sum that sets it, in a subscript or in a number a builtin is handed.
+      `for sh in /bin/bash; do arr[sh=5]=x; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do read 'arr[sh=5]' < list; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do unset 'arr[sh++]'; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do printf '%d' 'x+(sh = 5)'; $sh -c 'make'; done`,
+      `for sh in /bin/bash; do printf '%d' '1+(--sh)'; $sh -c 'make'; done`,
+      // A value that is itself a word the shell or this reader treats as more than a program.
+      `for run in eval; do $run "$x"; done`,
+      `for run in env sudo; do $run make; done`,
+      `for run in source; do $run ./env.sh; done`,
+      `for run in if; do $run true; done`,
+    ]
+    expect(held.filter(cmd => !unreads(cmd).some(u => u[1] === NAMED))).toEqual([])
+  })
+  test('the loop, and every other command in it, is read as before', () => {
+    expect(commands('for sh in /bin/bash /bin/zsh; do echo hi; done')).toEqual([['for', 'sh', 'in', '/bin/bash', '/bin/zsh'], ['echo', 'hi'], ['done']])
+    // A variable that names an operand, never a program, is left as written.
+    expect(commands('for f in a.txt b.txt; do cat $f; done')).toEqual([['for', 'f', 'in', 'a.txt', 'b.txt'], ['cat', '$f'], ['done']])
   })
 })

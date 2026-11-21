@@ -500,7 +500,7 @@ broken_hook() { # broken_hook <folder> <question> <body> -> a copy whose questio
   copy_hook "$1" || return 1
   printf '\n%s() { %s; }\n' "$2" "$3" >> "$1/lib/push-scope.sh"
 }
-for q in ps_pending_merge_of_default ps_unread_commit_route ps_unread_move_or_stage ps_unread_write ps_unread_push_source; do
+for q in ps_pending_merge_of_default ps_unread_commit_route ps_unread_move_or_stage ps_unread_write ps_unread_push_source ps_push_to_held_branch; do
   for how in unbound failing; do
     case "$how" in
       # shellcheck disable=SC2016  # the copied library expands it, and must find it unset
@@ -665,6 +665,15 @@ esac
 printf '%s\n' "$MAIN_LINE" > "$PN/notes/mine.md"
 git -C "$PN" add notes/mine.md >/dev/null 2>&1
 git -C "$PN" -c user.name=t -c user.email=t@t.t -c commit.gpgsign=false commit -qm mine >/dev/null 2>&1
+# While wt-other has other checked out, feat's commits sent under that name are the 2026-11-20
+# incident, refused since claude-config#3338 (its own cases are in test-push-to-other-worktree.sh).
+# With that worktree gone, nothing holds the name and this hook lets it through as #3112 decided.
+out="$(run "git push origin HEAD:other" "$PN")"; rc=$?
+case "$rc:$(cat "$W/err")" in
+  2:*"claude-config#3338"*) check "#3338 HEAD pushed under the name another worktree has checked out is refused" ok ;;
+  *) check "#3338 HEAD pushed under the name another worktree has checked out is refused" "exit $rc [$(head -c 200 "$W/err")]" ;;
+esac
+git -C "$PN" worktree remove --force "$W/wt-other" >/dev/null 2>&1
 pending_allowed "#3112 HEAD pushed under another branch's name is let through here" "git push origin HEAD:other" "$PN"
 gate check-style-guide.sh "git push origin HEAD:other" "$PN"; grc=$?
 gerr="$(cat "$W/gate.err")"
@@ -738,14 +747,15 @@ case "$grc:$gerr" in
   2:*notes/copied.md*) check "#3113 and the style gate then reads the line the copy brought in" ok ;;
   *) check "#3113 and the style gate then reads the line the copy brought in" "exit $grc [${gerr:0:200}], so the two command form would not be judged either" ;;
 esac
-# A question that cannot be asked is not one answered no, for the two new questions as for the two
-# before them (copy_hook and run_copy are the #3098 cases' own, above).
-for q in ps_unread_write ps_unread_push_source; do
+# A question that cannot be asked is not one answered no, for the #3113, #3112 and #3338 questions
+# as for the two before them (copy_hook and run_copy are the #3098 cases' own, above).
+for q in ps_unread_write ps_unread_push_source ps_push_to_held_branch; do
   copy_hook "$W/without-$q" "$q"
   if grep -q "^$q() {" "$W/without-$q/lib/push-scope.sh" 2>/dev/null || [ ! -s "$W/without-$q/lib/push-scope.sh" ]; then
     check "the copied library has $q taken away" "it does not, so the case below proves nothing"
   else check "the copied library has $q taken away" ok; fi
-  case "$q" in ps_unread_write) c="$written"; d="$PX" ;; *) c="$named"; d="$PN" ;; esac
+  # #3338's question is asked of every push that resolves to one repository, so a plain one reaches it.
+  case "$q" in ps_unread_write) c="$written"; d="$PX" ;; ps_push_to_held_branch) c="git push"; d="$PN" ;; *) c="$named"; d="$PN" ;; esac
   run_copy "$W/without-$q" "$c" "$d"; rc=$?
   err="$(cat "$W/err")"
   case "$rc:$err" in

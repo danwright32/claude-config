@@ -3,6 +3,12 @@
 // each rule is tested on its own.
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { withinGrace } from './mod-kit/hold.ts'
+import { shownFault, unindented, unseenIn } from './mod-kit/shown.ts'
+
+// The check of text Dan approves in a picker (#3295) is mod-kit's since #3321, one implementation
+// every guard that records a picker's answer is held to. It is handed on here under the names this
+// mod's own files and tests read it by.
+export { MAX_QUESTION, MAX_QUESTION_ROWS, QUESTION_COLUMNS, askFault, rowsAt, shownFault, unindented, unseenIn } from './mod-kit/shown.ts'
 
 export const MOD = 'ask-before-saving'
 
@@ -460,9 +466,10 @@ export const savesThis = (x: AskBeforeSavingApproval, key: string): boolean => x
  * Whether an approval is the one Dan gave in the durable lesson picker for the lesson this text adds
  * (#867): `added` is what lessonAddition read the call as adding to the lessons file, undefined when
  * the call is not one that only adds an entry, which no lesson approval matches. The entry may carry
- * the check line this approval holds (#3245), read back from storage as addsLesson reads it.
+ * the check line this approval holds (#3245), and carries the SHORT line it holds and no other
+ * (#3320), each read back from storage as addsLesson reads it.
  */
-export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check)
+export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson, x.check, x.short)
 
 /**
  * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
@@ -496,6 +503,42 @@ export const saveIdOf = (source: unknown): string | undefined => {
   return source.slice(MOD.length + 1) || undefined
 }
 
+// A question asked before the save (#3293). The save id is handed out only in the refusal of the
+// save itself, so a session that asked Dan "save this to memory?" first had an answer that could
+// approve nothing: the save was refused and he was asked the identical question again (twice in
+// one session on 2026-11-19). Matching such an answer to a later save was ruled unsafe, since it
+// could approve a save he did not mean, so the question is refused before he is asked instead.
+// Recognised narrowly, by the mod's own answers: a question that names lasting memory (a file, as
+// `mentioned` reads one, or the word) and offers For good or Just this session. Counted over this
+// Mac's session records on 2026-11-21 before it refused anything: 4 of 1,651 pickers with no save id
+// took that shape, each followed by the refused save and the same question with the id; a question
+// that only names a memory file (35) or says save and memory (10) was as often something else, a
+// choice of route or a question about a file's contents, so neither is refused. Another guard's
+// picker (a source of its own) and a subagent's are never this mod's to refuse.
+const SAVE_ANSWERS = new Set([FOR_GOOD, THIS_SESSION].map(x => x.toLowerCase()))
+export const asksBeforeTheSave = (ask: { questions?: unknown; metadata?: unknown }): boolean => {
+  const source = typeof ask.metadata === 'object' && ask.metadata !== null ? (ask.metadata as { source?: unknown }).source : undefined
+  if (source !== undefined && (typeof source !== 'string' || (source !== MOD && !source.startsWith(`${MOD}:`)) || saveIdOf(source) !== undefined)) return false
+  const questions = Array.isArray(ask.questions) ? (ask.questions as { question?: unknown; options?: unknown }[]) : []
+  return questions.some(q => {
+    const text = typeof q?.question === 'string' ? q.question : ''
+    const offers = Array.isArray(q?.options) ? (q.options as { label?: unknown }[]) : []
+    return (mentionsAny(text) || /\bmemory\b/i.test(text)) && offers.some(o => typeof o?.label === 'string' && SAVE_ANSWERS.has(o.label.trim().toLowerCase()))
+  })
+}
+
+/** What Claude is told to do instead (#3293): in the refusal of the early question, and in the memory section. */
+export const SEND_FIRST = 'send the save itself first'
+export const askedBeforeSave =
+  `Not asked: this question is about saving to lasting memory and carries no save id in metadata "source", so Dan's answer could approve nothing, and he would be asked the same question again once the save was refused. ` +
+  `Do not ask yet: ${SEND_FIRST} (the Write, Edit or Bash call that writes it). It is refused with the one question to ask him and the metadata "source" that ties his answer to it, and then you ask him once. ` +
+  `A lesson entry in LESSONS.md is the exception: it is approved only in the durable lesson check's picker, which its refusal names. ` +
+  `A question that is not about saving to memory offers neither ${FOR_GOOD} nor ${THIS_SESSION}.`
+export const sendFirstNote =
+  `A lesson entry in LESSONS.md is approved only in the durable lesson check's picker. ` +
+  `Before asking Dan whether to save anything else to lasting memory (the memory folder, MEMORY.md, CLAUDE.md or AGENTS.md), ${SEND_FIRST}. ` +
+  `It is refused with the one question to ask him and the metadata "source" that ties his answer to it. A question asked before the save approves nothing, so he would be asked it twice.`
+
 // The durable lesson check's picker (#867). payload/hooks/durable-lesson-check.sh tells Claude to ask
 // with this `metadata.source` and the rule in `metadata.rule`; its suite holds the two to these names.
 // Dan's "Add to LESSONS.md", read from the dialog's own result, approves the write that adds that rule
@@ -505,6 +548,8 @@ export const saveIdOf = (source: unknown): string | undefined => {
 // its own, and reads only the answer the dialog hands back. Since #3245 the picker may also carry the
 // lesson's check line in `metadata.check`, shown to Dan on a line of its own, and the same answer
 // then covers that one line on that one lesson (Dan, 2026-11-19: "Yes, cover the check line").
+// Since #3320 it carries the entry's SHORT line the same way, in `metadata.short`: the line the
+// index carries into every session is one he read, and the entry is held to it.
 export const LESSON_SOURCE = 'durable-lesson'
 export const LESSON_ADD = 'Add to LESSONS.md'
 export const LESSON_PROJECT = 'Project memory instead'
@@ -564,14 +609,6 @@ export const LESSON_CHECK_KEY = 'check'
 export const MAX_CHECK = 300
 
 /**
- * A line of the lessons file without its indentation: the spaces and tabs at its two ends, and
- * nothing else. The language's own trim also takes a byte order mark, a no break space and the line
- * and paragraph separators, so a check line carrying one of those at an end compared equal to the
- * line Dan read (security review of #3245).
- */
-export const unindented = (s: string): string => s.replace(/^[ \t]+/, '').replace(/[ \t]+$/, '')
-
-/**
  * Why text is no check line, in words for the session that sent it, or the line itself. The one
  * reading checkLine and the picker's refusal both take, so the refusal names what the rule refused.
  */
@@ -620,330 +657,92 @@ export const checkLine = (s: unknown): string | undefined => {
   return 'line' in read ? read.line : undefined
 }
 
-// What Dan cannot see (#3295). His answer in a picker covers text because he read it, so the text a
-// picker shows him, and the entry written under his answer, hold no character that is drawn as
-// nothing, that moves or hides the text around it, or that reads as a plain space and is not one.
-// A rule is prose and quotes real text, so unlike a check line it is not held to ASCII: every
-// letter, mark and symbol of any alphabet stands. What is refused is a class, by Unicode's own
-// properties, so a character nobody listed is still in it:
-// - every control but the newline (Cc: the tab, the carriage return, the escape that starts a
-//   terminal sequence, the C1 controls),
-// - every format character (Cf: the zero width ones, the bidirectional controls, the tag block, the
-//   soft hyphen, the byte order mark),
-// - private use, surrogate halves and code points no character is assigned to (Co, Cs, Cn; a
-//   character newer than the engine's Unicode tables reads as unassigned, and is refused),
-// - every space but the plain one, and the line and paragraph separators (Zs, Zl, Zp),
-// - whatever else is drawn as nothing by default (Default_Ignorable_Code_Point: the variation
-//   selectors, the Hangul fillers, the combining grapheme joiner), and the blank braille pattern,
-//   which no property covers.
-// Claude Code's own dialog puts a replacement mark over most of the same class (read in 2.1.328 on
-// 2026-11-19), which shows Dan that something is there and not what, while the text written is the
-// character itself. The class is written as property escapes and one code point by number, so the
-// source holds none of the characters it refuses.
-const UNSEEN = new RegExp(String.raw`[^\P{C}\n]|[^\P{Z} ]|\p{Default_Ignorable_Code_Point}|` + String.fromCodePoint(0x2800), 'u')
+/**
+ * The key the durable lesson picker's metadata carries the entry's SHORT line under (#3320).
+ * hooks/test-durable-lesson-check.sh holds the hook's instruction to this name.
+ */
+export const LESSON_SHORT_KEY = 'short'
 
-const within = (p: number, ...ranges: [number, number][]) => ranges.some(([from, to]) => p >= from && p <= to)
-
-/** A refused character in words, for the session that must find it and reword: the commonest by name, the rest by kind. */
-const unseenName = (c: string): string => {
-  const p = c.codePointAt(0) ?? 0
-  const named: Record<number, string> = {
-    0x09: 'a tab',
-    0x0d: 'a carriage return',
-    0x1b: 'the escape character, which starts a terminal escape sequence',
-    0xa0: 'a no break space',
-    0xad: 'a soft hyphen',
-    0x200b: 'a zero width space',
-    0x200c: 'a zero width non joiner',
-    0x200d: 'a zero width joiner',
-    0x2028: 'a line separator',
-    0x2029: 'a paragraph separator',
-    0xfeff: 'a byte order mark',
+/**
+ * The length of text as the lessons index cap counts a line: its bytes in UTF-8. The cap is applied
+ * by awk's length (hooks/lib/lesson-index-cap.sh), which on these Macs counts bytes (measured
+ * 2026-11-20 by the independent review of #3320: one accented letter, one emoji and one plain
+ * letter count 7). The mod counted UTF-16 code units, so a SHORT line of 151 accented letters
+ * passed the picker and the entry and was then refused by the send, which holds the whole lessons
+ * file back. Bytes are never fewer than code units, so nothing counted here is let through that
+ * was refused before, and where an awk counts characters this only refuses a little early. A half
+ * of a surrogate pair standing alone counts 3, as the replacement character written for it does.
+ */
+export const indexLength = (s: string): number => {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0) ?? 0
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
   }
-  const name = named[p]
-  if (name !== undefined) return name
-  if (p === 0x61c || within(p, [0x200e, 0x200f], [0x202a, 0x202e], [0x2066, 0x2069])) return 'a bidirectional control'
-  if (within(p, [0xe0000, 0xe007f])) return 'a tag character'
-  if (within(p, [0xfe00, 0xfe0f], [0xe0100, 0xe01ef])) return 'a variation selector'
-  if (/\p{Cc}/u.test(c)) return 'a control character'
-  if (/\p{Cf}/u.test(c)) return 'a format character, which is drawn as nothing'
-  if (/\p{Co}/u.test(c)) return 'a private use character'
-  if (/\p{Cs}/u.test(c)) return 'half of a surrogate pair'
-  if (/\p{Cn}/u.test(c)) return 'a code point no character is assigned to'
-  if (/\p{Zs}/u.test(c)) return 'a space that is not the plain one'
-  return 'a character drawn as nothing'
+  return n
 }
 
 /**
- * The first character of `s` Dan cannot see (the class above), or undefined when he can read all of
- * it: `at` is its place counted in characters from 1, `code` its code point, `what` its name or
- * kind, and `after` the visible text of its own line just before it, at most 24 characters, empty
- * at the start of a line.
- *
- * The spaces and tabs at the two ends of a line are the text's indentation and are not judged, as
- * around a check line (unindented): a wrapped rule is indented in the lessons file, by either. A tab
- * anywhere else is refused, since the dialog draws it as a space and the file would hold the tab.
+ * Whether a line reads as a SHORT line to somebody reading it drawn (independent review of #3320):
+ * "SHORT:" at its start once the marks a markdown surface draws instead of showing are set aside,
+ * a quote's ">", a list item's "-", "*", "+" or number, bold, italic, code and heading marks. The
+ * picker and the entry counted only a line starting "SHORT:" itself, so "**SHORT: x**",
+ * "- SHORT: x" and "> SHORT: x" stood in a question beside the one line his answer covers.
  */
-export const unseenIn = (s: string): { at: number; code: string; what: string; after: string } | undefined => {
-  let start = 0
-  for (const line of s.split('\n')) {
-    const lead = /^[ \t]*/.exec(line)?.[0].length ?? 0
-    const m = UNSEEN.exec(unindented(line))
-    if (m) {
-      const index = start + lead + m.index
-      const code = (m[0].codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')
-      return { at: Array.from(s.slice(0, index)).length + 1, code: `U+${code}`, what: unseenName(m[0]), after: Array.from(line.slice(0, lead + m.index).replace(/^[ \t]+/, '')).slice(-24).join('') }
+export const readsAsShort = (line: string): boolean => /^[\s>*_~`#+-]*(?:\d+[.)])?[\s>*_~`#+-]*SHORT\s*:/.test(line)
+
+/**
+ * The longest text a SHORT line the picker shows may hold after its "SHORT: ", in bytes (indexLength),
+ * the unit the index cap and addsLesson count the index line in: what MAX_SHORT leaves once the index line's own
+ * start, "- L<number>. ", is taken off at a number of four digits. The picker is asked before the
+ * lesson has a number (`claude-sync next-lesson` reserves the one it prints, and it is asked for
+ * only once Dan has approved), so the length is held where it can first be judged, against the
+ * longest number in use, and an approved SHORT line then fits whichever number it gets (L667).
+ * Measured 2026-11-20: numbers are minted from 501 on the work MacBook and from 1001 on the
+ * personal one (lesson-bands/, the highest in the file L1037), and five digits start at 10,000,
+ * where addsLesson's own count of the whole index line still refuses a line too long. Of the 737
+ * SHORT lines in the lessons file, 698 are within this and 39 are 1 to 3 over, each under a number
+ * of one or three digits. hooks/test-durable-lesson-check.sh holds the hook's instruction to this
+ * number.
+ */
+export const MAX_SHORT_TEXT = MAX_SHORT - '- L1000. '.length
+
+/**
+ * Why text is no SHORT line, in words for the session that sent it, or the line itself, without the
+ * file's indentation. The one reading shortLine and the picker's refusal both take.
+ *
+ * A SHORT line is "SHORT: " and its text, on one line. It is prose, as a rule is, so it is not held
+ * to ASCII as a check line is: it is judged by shownFault, the one function every text a picker
+ * shows is judged by, with no second copy of the character and markup checks here. Measured
+ * 2026-11-20 over the 737 SHORT lines of the lessons file: all are in this shape, and shownFault
+ * refuses one, L731's, which names two placeholders in angle brackets outside backticks.
+ */
+export const readShortLine = (s: unknown): { line: string } | { fault: string } => {
+  if (typeof s !== 'string') return { fault: 'it is not text' }
+  const line = unindented(s)
+  if (line.includes('\n')) return { fault: 'it is more than one line' }
+  const fault = shownFault(line)
+  if (fault !== undefined) return { fault }
+  const m = /^SHORT: ([^ ].*)$/.exec(line)
+  if (!m) return { fault: 'it is not in the shape "SHORT: <the rule in one line>", the word SHORT in capitals, a colon, one space and the text' }
+  const text = m[1] ?? ''
+  if (indexLength(text) > MAX_SHORT_TEXT)
+    return {
+      fault: `its text is ${indexLength(text)} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and a SHORT line's text is at most ${MAX_SHORT_TEXT}, so that its index line, "- L<number>. " and the text, fits the ${MAX_SHORT} the lessons index holds under a lesson number of up to four digits`,
     }
-    start += line.length + 1
-  }
-  return undefined
-}
-
-// Markup (#3295, security review). Claude Code's typings for plugins say of the AskUserQuestion
-// dialog "Markdown on those three alone", the desktop, VS Code and mobile surfaces (read in 2.1.328
-// on 2026-11-19, not seen drawn), and the terminal draws a model's question as plain text. So what
-// a surface drawing markdown or HTML does not draw as its text is refused wherever the picker is
-// drawn (L648), as a class and not by its spellings:
-// - "<" before a letter, "!", "?" or "/": a tag, whose name and attribute text are not drawn, a
-//   comment, a declaration, a processing instruction, a CDATA section, an autolink;
-// - "]" before "(" or "[": an inline link or an image, whose address and title are not drawn, and a
-//   reference link; and "]:", a link definition or a footnote, which is not drawn at all. Every
-//   link, image and definition needs one of the three pairs, whatever its label, address or title holds;
-// - a character reference ("&nbsp;", "&#8203;"), drawn as another character, which can be one of
-//   the class unseenIn refuses.
-// Not in the class, by choice: marks that restyle text and hide none of it (emphasis, a heading, a
-// list, a quote, a table, a backslash before punctuation), and whatever a surface adds beyond
-// markdown and HTML (mathematics between dollar signs, say), which was not read.
-const HTML_TAG = /<[A-Za-z!?\/]/
-const MD_LINK = /\][(\[]/
-const MD_DEFINITION = /\]:/
-const CHAR_REFERENCE = /&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);/
-// The one link Claude Code's terminal dialog draws as its label alone (read in 2.1.328: a bracket
-// pair before a parenthesis pair whose address starts file:///, in its own confirmations).
-const FILE_LINK = /\]\(file:/i
-
-/**
- * `s` with the text inside each code span replaced by filler of the same length, so a place in the
- * result is the same place in `s`; or `s` itself when it holds no span every reading agrees on.
- *
- * A surface that draws markdown draws the text of a code span as written, and the terminal draws
- * it plain with its backticks, so markup inside one hides nothing, and code is how a rule names a
- * tag, a placeholder or a call on an indexed value (measured 2026-11-19: of the 895 rules in the
- * lessons file, the one holding any of the class, L731, holds it in a code span). Spans are paired
- * as CommonMark pairs them, a run of backticks closed by the next run of the same length, and read
- * strictly, toward judging the text (L648), because a span this reads and a surface does not is a
- * way to hide words:
- * - within one line only, and when any run in the whole text has no partner on its own line no
- *   span is taken anywhere: a span a surface closes on a later line pairs the runs after it another way;
- * - none anywhere when a backslash stands before a backtick, which a surface reads as a plain backtick;
- * - a span holding "|" is not taken, since a table splits its row into cells at every "|" before
- *   any code span is made out.
- * A link definition is made out before any code span too, so "]:" is judged in the text as it
- * stands (markupIn), never here.
- */
-const outsideCode = (s: string): string => {
-  if (!s.includes('`') || s.includes('\\`')) return s
-  const out: string[] = []
-  for (const line of s.split('\n')) {
-    const runs = [...line.matchAll(/`+/g)]
-    let masked = ''
-    let done = 0
-    for (let i = 0; i < runs.length; i++) {
-      const open = runs[i]
-      const j = runs.findIndex((r, k) => k > i && r[0].length === open?.[0].length)
-      const close = runs[j]
-      if (open === undefined || close === undefined) return s
-      const from = (open.index ?? 0) + open[0].length
-      const to = close.index ?? 0
-      const inside = line.slice(from, to)
-      masked += line.slice(done, from) + (inside.includes('|') ? inside : 'x'.repeat(inside.length))
-      done = to
-      i = j
-    }
-    out.push(masked + line.slice(done))
-  }
-  return out.join('\n')
-}
-
-const CODE_STANDS = '. Code in backticks on one line is drawn as written, so quote it that way or reword it (a span holding "|" or "]:" is still judged, since a table or a link definition is made out before any code is)'
-
-/**
- * The first markup in `s` that a surface drawing markdown or HTML would not draw as its text (the
- * class above), in words for the session that sent it, or undefined. Text inside a code span is
- * not judged (outsideCode), but for a link definition and a link to a file.
- */
-const markupIn = (s: string): string | undefined => {
-  const code = outsideCode(s)
-  const kinds: [RegExp, string, string][] = [
-    [HTML_TAG, code, `which a surface that draws HTML takes for a tag or a comment and does not draw${CODE_STANDS}`],
-    [MD_LINK, code, `which a surface that draws markdown takes for a link, an image or a link definition and draws as less than its text${CODE_STANDS}`],
-    [MD_DEFINITION, s, `which a surface that draws markdown takes for a link, an image or a link definition and draws as less than its text${CODE_STANDS}`],
-    [CHAR_REFERENCE, code, `which a surface that draws markdown draws as another character${CODE_STANDS}`],
-    [FILE_LINK, s, 'a link to a file, which the terminal dialog can draw as its label alone'],
-  ]
-  let first: { index: number; shown: string; why: string } | undefined
-  for (const [re, text, why] of kinds) {
-    const m = re.exec(text)
-    if (!m || (first !== undefined && first.index <= m.index)) continue
-    // A tag and a link are shown up to the next white space, the rest as they matched.
-    const shown = re === HTML_TAG || re === MD_LINK ? (/^\S{1,30}/.exec(s.slice(m.index))?.[0] ?? m[0]) : s.slice(m.index, m.index + m[0].length)
-    first = { index: m.index, shown, why }
-  }
-  if (first === undefined) return undefined
-  return `it holds ${JSON.stringify(first.shown)} at character ${Array.from(s.slice(0, first.index)).length + 1}, ${first.why}`
+  return { line }
 }
 
 /**
- * The longest text a picker of this mod's hands the dialog, in UTF-16 code units, the unit the
- * dialog cuts in. Dan answers for text he read, and Claude Code's dialog cuts a question at 2,000
- * of these and ends it with an ellipsis (read in 2.1.328 on 2026-11-19: the question is sliced to
- * 2,000 before it is drawn), so a rule or a check line past the cut was approved unread. The cap
- * sits under the cut with room for a surface that shows less. Measured the same day: the longest
- * rule in the lessons file was 565 and a check line is at most MAX_CHECK, and of the picker calls
- * in the transcripts this Mac kept, the longest lesson question of 9 was 753 and the longest memory
- * question of 177 was 462.
+ * A lesson's SHORT line as an approval holds it (#3320): the one line the lessons index renders for
+ * the lesson, and so the line a session loads when the lesson is in the core. Text reading as one
+ * (readShortLine) comes back without the file's indentation. Anything else is undefined: other
+ * text, text of more than one line, a line Dan could not read as written, one too long for the
+ * index line, and a value that is not text, which a record read back from storage can be (L50).
  */
-export const MAX_QUESTION = 1500
-
-/**
- * The width text above a picker's answers is wrapped at when its rows are counted (rowsAt): 80
- * columns, which is what Apple Terminal opens at (its Basic profile, this Mac's default on
- * 2026-11-19, sets no size of its own), less the 4 cells Claude Code's dialog keeps back from the
- * boxes it draws (read in 2.1.328: `columns - 4`). A wider window wraps less, so rows counted here
- * are the most a window of 80 columns or more draws.
- */
-export const QUESTION_COLUMNS = 76
-
-/**
- * The most rows the text above a picker's answers may take, wrapped at QUESTION_COLUMNS (security
- * review of #3295: a question was held to MAX_QUESTION and to no number of rows, so a rule, 1,200
- * newlines and then another sentence was asked and approved with the rule 1,200 rows above the
- * answers). Claude Code's dialog neither cuts nor scrolls a tall question (read in 2.1.328: the
- * row limit it is handed locks a least height and nothing more; not seen drawn), so whatever does
- * not fit the window is above its top edge.
- *
- * 20 is what MAX_QUESTION already allows running prose at that width (1,500 / 76 rounds up to
- * 20), so this takes nothing from a question the length cap let through as prose, and stops the
- * tall and thin one. It bounds how far above the answers a word can stand. It does not put the
- * whole question in view: with the dialog's own rows (about 16 with three answers, an estimate
- * from the dialog as drawn, not read row by row) a question at the cap fills a window of 36 rows,
- * and a window of 24 shows its last 8 or so.
- */
-export const MAX_QUESTION_ROWS = 20
-
-/**
- * The rows `s` takes in a window `columns` wide: one for each line, and one more each time a line
- * runs past the width, words kept whole where they fit. Counted toward more rows wherever a
- * terminal could differ (L648): a character outside ASCII takes two columns, as the widest do; a
- * tab takes eight; spaces are never dropped at a wrap; and a word that does not fit starts a row.
- */
-export const rowsAt = (s: string, columns: number = QUESTION_COLUMNS): number => {
-  let rows = 0
-  for (const line of s.split('\n')) {
-    rows++
-    let col = 0
-    for (const piece of line.split(/( +)/)) {
-      let width = 0
-      for (const c of piece) width += c === '\t' ? 8 : (c.codePointAt(0) ?? 0) > 0x7e ? 2 : 1
-      // A word that does not fit beside what the row holds starts the next; spaces fill on.
-      if (col > 0 && col + width > columns && !piece.startsWith(' ')) {
-        rows++
-        col = 0
-      }
-      const more = Math.max(0, Math.ceil((col + width) / columns) - 1)
-      rows += more
-      col = col + width - more * columns
-    }
-  }
-  return rows
-}
-
-const tooTall = (rows: number): string =>
-  `it takes ${rows} rows in a window ${QUESTION_COLUMNS} columns wide, and text is asked only up to ${MAX_QUESTION_ROWS} rows, so that no part of it is far above the answers`
-
-const BLANK = /^[ \t]*$/
-
-/**
- * Why Dan would not read text as it is written, in words for the session that sent it, or undefined
- * when he would (#3295). The one function every text a picker hands the dialog is judged by: the
- * rule, the question, and each field beside it (askFault). The first found of:
- * - a character he cannot see (unseenIn), named by its code point and its place;
- * - more than MAX_QUESTION code units, past which the dialog cuts;
- * - markup a surface other than the terminal hides or redraws (markupIn), in the text as it is
- *   sent and with its bold marks dropped, which is how a rule is stored, compared and written
- *   (ruleText): marks set inside "<!--" or between a link's two halves once let both be written whole;
- * - two blank lines one after the other, which push what stands above them away from the answers
- *   (one blank line between paragraphs is how a question is laid out);
- * - more than MAX_QUESTION_ROWS rows (rowsAt).
- * A place is counted in characters, which are code points, and a length in UTF-16 code units, each
- * under its own name.
- *
- * Measured 2026-11-19 over the 895 rules of the lessons file and the 186 picker calls in the
- * transcripts this Mac kept: none is refused.
- */
-export const shownFault = (s: string): string | undefined => {
-  const unseen = unseenIn(s)
-  if (unseen) return `character ${unseen.at} of it is ${unseen.code}, ${unseen.what}, ${unseen.after ? `right after ${JSON.stringify(unseen.after)}` : 'at the start of its line'}`
-  if (s.length > MAX_QUESTION) return `it is ${s.length} UTF-16 code units, and the dialog shows text whole only up to ${MAX_QUESTION}`
-  const markup = markupIn(s)
-  if (markup !== undefined) return markup
-  const stored = s.replace(/\*\*/g, '')
-  const unmarked = stored === s ? undefined : markupIn(stored)
-  if (unmarked !== undefined) return `with its bold marks dropped, as it is stored, ${unmarked}`
-  const lines = s.split('\n')
-  const second = lines.findIndex((l, k) => k > 0 && BLANK.test(l) && BLANK.test(lines[k - 1] ?? 'x'))
-  if (second !== -1) return `lines ${second} and ${second + 1} of it are both blank, and a run of blank lines pushes what stands above it away from the answers`
-  const rows = rowsAt(s)
-  return rows > MAX_QUESTION_ROWS ? tooTall(rows) : undefined
-}
-
-// The fields of an AskUserQuestion call that are never drawn: the engine's own, the metadata (its
-// rule and its check line have their own checks, and its source is for analytics alone), and
-// answers already filled in, which are refused whatever they hold.
-const NOT_DRAWN = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'metadata', 'answers'])
-// The fields of a question that are the dialog's own rows, the chip over it and the answers under
-// it: judged like any text, and not counted with the rows above the answers.
-const DIALOG_ROWS = new Set(['header', 'options', 'multiSelect'])
-
-/**
- * Why a picker's call would not reach Dan as written, as what is at fault and why (shownFault), or
- * undefined. Every text the call hands the dialog is judged, in whatever field and however deep
- * (security review of #3295: a title, a description and a placeholder beside the question went to
- * the dialog unjudged), so it is given the call as the dialog will get it, with the mod's own
- * header and answers in place. The rows of everything above the answers are counted together, so
- * a description cannot add the rows a question may not take.
- *
- * `files` are the names the save is for. A file's own name is the mod's to show, in the question
- * and in the answers, so one that would itself be refused is set aside before the text around it
- * is judged, or its save could never be asked about at all (L665).
- */
-export const askFault = (ask: Record<string, unknown>, files: readonly string[] = []): { what: string; fault: string } | undefined => {
-  const odd = files.filter(f => f !== '' && shownFault(f) !== undefined)
-  const aside = (text: string) => odd.reduce((t, f) => t.split(f).join('x'.repeat(f.length)), text)
-  const texts = (v: unknown): string[] => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(texts) : typeof v === 'object' && v !== null ? Object.values(v).flatMap(texts) : [])
-  const first: unknown = Array.isArray(ask.questions) ? ask.questions[0] : undefined
-  const one = typeof first === 'object' && first !== null ? (first as Record<string, unknown>) : {}
-  const question = typeof one.question === 'string' ? aside(one.question) : ''
-  const fault = shownFault(question)
-  if (fault !== undefined) return { what: 'The question', fault }
-  let rows = rowsAt(question)
-  const judged = (what: string, v: unknown, counted: boolean): { what: string; fault: string } | undefined => {
-    for (const text of texts(v).map(aside)) {
-      const why = shownFault(text)
-      if (why !== undefined) return { what, fault: why }
-      if (counted) rows += rowsAt(text)
-    }
-    return undefined
-  }
-  for (const [k, v] of Object.entries(one)) {
-    const bad = k === 'question' ? undefined : judged(`Field ${JSON.stringify(k)} of the question`, v, !DIALOG_ROWS.has(k))
-    if (bad !== undefined) return bad
-  }
-  for (const [k, v] of Object.entries(ask)) {
-    const bad = NOT_DRAWN.has(k) ? undefined : judged(`Field ${JSON.stringify(k)}`, k === 'questions' && Array.isArray(v) ? v.slice(1) : v, true)
-    if (bad !== undefined) return bad
-  }
-  return rows > MAX_QUESTION_ROWS ? { what: 'The question', fault: `with the other text sent beside it, ${tooTall(rows)}` } : undefined
+export const shortLine = (s: unknown): string | undefined => {
+  const read = readShortLine(s)
+  return 'line' in read ? read.line : undefined
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -962,8 +761,10 @@ const entryBlock = (block: string): string | undefined => {
  * The entry a write to the lessons file adds, under one fail-safe rule rather than a list of shapes
  * refused (the lessons reviews of #869 found a new shape each round: an entry split around kept text,
  * spliced mid line, beside a removal): the file it leaves must be the file as it is now with exactly
- * the entry block inserted at one line boundary (before the end, the block ends at a line end too).
- * `file` is the lessons file as it is now. Anything else is undefined, and is asked about.
+ * the entry block inserted at one line boundary (before the end, the block ends at a line end too),
+ * and since the independent review of #3320 that boundary must be an entry boundary of the file
+ * (boundaryFault), never a place inside another entry. `file` is the lessons file as it is now.
+ * Anything else is undefined, and no lesson approval covers it.
  * - A Write leaves its content.
  * - An Edit (never replace_all) whose old text is found exactly once leaves the file with that text
  *   replaced, judged by the same rule. It was once judged by the shape of its two texts instead, which
@@ -971,15 +772,418 @@ const entryBlock = (block: string): string | undefined => {
  *   Add to LESSONS.md lapsed unused and he was asked For good about it again (#1691).
  */
 export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
+  const placed = lessonPlaced(tool, input, file)
+  return placed === undefined || placed.misplaced !== undefined ? undefined : placed.entry
+}
+
+/**
+ * The one entry a write adds to the lessons file, as lessonAddition reads it, and, where the place
+ * it is put is not an entry boundary of the file, where it would land instead (`misplaced`,
+ * boundaryFault). lessonAddition takes only an entry with no `misplaced`; the words are for the
+ * refusal, so the session can put the same entry in a sound place. A Write of a file that is not
+ * there yet holds nothing the entry could be put inside.
+ */
+export const lessonPlaced = (tool: string, input: Record<string, unknown>, file: string | undefined): { entry: string; misplaced?: string } | undefined => {
   if (tool === 'Edit') {
     const edited = editedFile(file, input)
     return file === undefined || edited === undefined ? undefined : insertedEntry(file, edited)
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
-  if (file === undefined) return entryBlock(content)
+  if (file === undefined) {
+    const entry = entryBlock(content)
+    return entry === undefined ? undefined : { entry }
+  }
   return insertedEntry(file, content)
 }
+
+// The two lines that can only begin something else in the lessons file, as its own reader takes
+// them (claude-sync lesson_entries_render): an entry's first line and a section heading. An entry
+// owns every line from its first down to the next of either, blank lines and all.
+const ENTRY_START = /^- \*\*L[0-9]+\./
+const SECTION_START = /^## /
+const quoted = (line: string): string => {
+  const text = line.trim()
+  return JSON.stringify(text.length > 60 ? `${text.slice(0, 60)}...` : text)
+}
+
+/**
+ * Where an entry inserted at `at`, a line boundary of the lessons file `file`, would land when that
+ * is not an entry boundary, in words for the session that sent it; undefined at a boundary.
+ *
+ * The independent review of #3320: the approved Edit could put its entry inside another entry. The
+ * file's reader gives an entry every line down to the next entry or section heading, so a lesson
+ * approved with no SHORT line, written just above an existing entry's SHORT line, took that line
+ * as its own in the index, and the entry it was cut out of lost it. Two things make a boundary:
+ * - after the entry, the next line that is not blank is another entry's first line or a section
+ *   heading, or there is none. Any other line would be read as the new entry's: a SHORT line, a
+ *   check line, the rest of a wrapped rule, text that is nobody's.
+ * - before it stands an entry, which the first condition has shown to be whole, or a section
+ *   heading with nothing but blank lines between. Above the first section, or under text that is no
+ *   entry's, the new entry would belong to no section or sit under words nobody approved it beside.
+ */
+export const boundaryFault = (file: string, at: number): string | undefined => {
+  const above = file.slice(0, at).split('\n')
+  // The entry or the section heading that stands over the place, whichever is nearer, and whether
+  // any text lies between a heading and the place.
+  let over: string | undefined
+  let between: string | undefined
+  for (let i = above.length - 1; i >= 0 && over === undefined; i--) {
+    const l = above[i] ?? ''
+    if (ENTRY_START.test(l) || SECTION_START.test(l)) over = l
+    else if (!INDEX_BLANK.test(l)) between ??= l
+  }
+  const owner = over !== undefined && ENTRY_START.test(over) ? /^- \*\*(L[0-9]+)\./.exec(over)?.[1] : undefined
+  const next = file
+    .slice(at)
+    .split('\n')
+    .find(l => !INDEX_BLANK.test(l))
+  if (next !== undefined && !ENTRY_START.test(next) && !SECTION_START.test(next))
+    return owner !== undefined
+      ? `inside ${owner}'s entry: the line after it, ${quoted(next)}, is ${owner}'s, and the lessons index would read it as the new entry's`
+      : `above a line that starts no entry and no section, ${quoted(next)}, which the lessons index would read as part of the new entry`
+  if (over === undefined) return "above the file's first section heading, where it would belong to no section"
+  if (owner === undefined && between !== undefined) return `under text that is no entry's, ${quoted(between)}, and not under a section heading or after an entry`
+  return undefined
+}
+
+/**
+ * The entries of a lessons file, each as the lines its own reader gives it (claude-sync
+ * lesson_entries_render): from its first line down to the line before the next entry or section
+ * heading, the blank lines at its end dropped. Its rule, its check line and its SHORT line are all
+ * among them, and so is anything else written there, which that reader scans as the entry's.
+ */
+export const lessonEntries = (file: string): string[] => lessonLayout(file).entries.map(e => e.text)
+
+/**
+ * A lessons file as its own reader walks it (claude-sync lesson_entries_render), in the one walk
+ * every reading here is made from (L370): its section headings in order, each as the text after
+ * "## ", which is what the reader names that section's index file from, and its entries, each with
+ * its number, its lines (lessonEntries) and the heading it stands under, undefined above the first
+ * one, where the reader files it under no section's name (its split rendering calls that
+ * "Unsectioned"). No suite yet runs that reader beside this walk over one fixture, as
+ * tests/test-lesson-index-line-shown.sh does for an entry's index line.
+ */
+export const lessonLayout = (file: string): { heads: string[]; entries: { n: string; text: string; under: string | undefined }[] } => {
+  const heads: string[] = []
+  const entries: { n: string; text: string; under: string | undefined }[] = []
+  let cur: string[] | undefined
+  let under: string | undefined
+  const close = () => {
+    if (cur === undefined) return
+    while (cur.length > 1 && INDEX_BLANK.test(cur[cur.length - 1] ?? '')) cur.pop()
+    entries.push({ n: /^- \*\*(L[0-9]+)\./.exec(cur[0] ?? '')?.[1] ?? 'L?', text: cur.join('\n'), under })
+    cur = undefined
+  }
+  for (const l of file.split('\n')) {
+    if (ENTRY_START.test(l)) {
+      close()
+      cur = [l]
+    } else if (SECTION_START.test(l)) {
+      close()
+      under = l.slice(3)
+      heads.push(under)
+    } else cur?.push(l)
+  }
+  close()
+  return { heads, entries }
+}
+
+/**
+ * What an Edit or Write leaves in a file that holds `file` now (undefined when it is not there or
+ * could not be read). A Write leaves its content. An Edit is read as replacing its old text
+ * wherever that stands, which is every place a replace_all reaches and the one place any other
+ * Edit can; with no old text, or no file, it is read as leaving its new text alone.
+ */
+export const leftBy = (tool: string, input: Record<string, unknown>, file: string | undefined): string => {
+  if (tool === 'Write') return String(input.content ?? '')
+  const from = String(input.old_string ?? '')
+  const to = String(input.new_string ?? '')
+  return file === undefined || !from ? to : file.split(from).join(to)
+}
+
+/**
+ * The lesson entries an Edit or Write leaves in the lessons file that were not in it before, word
+ * for word, each by its number: the entries it adds and the ones it changes, in a rule, a check
+ * line, a SHORT line or any other line that is the entry's. `file` is the lessons file as it is now,
+ * undefined when it is not there or could not be read, and the write is then judged as if every
+ * entry it holds were new. Nothing else a write does to the file counts here: taking an entry out,
+ * moving one whole, a section heading, text above the first section. The first three are read by
+ * lessonFacts, below, which the For good question about such a write is held to (#3343 route 2).
+ *
+ * The independent review of #3320: the For good picker approves a save by its key and holds
+ * nothing of what the question says, so an entry could reach the index under a question of the
+ * session's own wording, with a SHORT line Dan never read. An entry's lines are approved in the
+ * lesson picker and nowhere else, and this is what tells such a write from any other.
+ */
+export const entriesTouched = (tool: string, input: Record<string, unknown>, file: string | undefined): string[] => {
+  if (tool !== 'Edit' && tool !== 'Write') return []
+  const before = new Map<string, number>()
+  for (const e of lessonEntries(file ?? '')) before.set(e, (before.get(e) ?? 0) + 1)
+  const touched: string[] = []
+  for (const e of lessonLayout(leftBy(tool, input, file)).entries) {
+    const left = before.get(e.text) ?? 0
+    if (left > 0) before.set(e.text, left - 1)
+    else touched.push(e.n)
+  }
+  return touched
+}
+
+/**
+ * What an Edit or Write does to the lessons file without changing one word of an entry (#3343 route
+ * 2), which entriesTouched does not count and the For good question is held to (Dan, 2026-11-20:
+ * "For good, held to facts"):
+ * - `removed`, the numbers of the entries it takes out whole. A rule leaves every session, and
+ *   `claude-sync lesson` fails for its number.
+ * - `moved`, the entries it leaves word for word under another section heading than they stood
+ *   under, with both headings (undefined above the first one, where an entry belongs to no
+ *   section). The index is one generated file a section, so the entry's line moves to another
+ *   file. A section is its heading's text, as its index file is: two headings of the same words
+ *   are one section here.
+ * - `gone` and `arrived`, the section headings it takes out and adds, a heading whose words
+ *   change being one of each. The index file is named from the heading and CLAUDE.md imports it by
+ *   that name.
+ * - `renamed`, those of `gone` and `arrived` that are one section under a new name: every entry
+ *   that stood under the old heading and is still in the file stands under the new one, and
+ *   nothing else does. Those entries are not `moved`: they stay together, in the one file the
+ *   rename renames. Any other entry whose heading changes is, an entry under a heading added above
+ *   it or left by a heading taken out among them.
+ * - `unread`, set by the caller when the file could not be read, with why: nothing else is known.
+ *
+ * Entries are paired by their whole text, as entriesTouched pairs them, so an entry changed in any
+ * word reads here as taken out, and there as added. A write that adds or changes an entry is the
+ * lesson picker's and is never asked For good, so these are read only for a write that touches none.
+ * Not counted, since nothing leaves an index, changes file or renames one: text that is no entry's
+ * and no heading (above the first section, or between a heading and its first entry), blank lines,
+ * entries or whole sections put in another order.
+ */
+export type LessonFacts = {
+  removed: string[]
+  moved: { entry: string; from: string | undefined; to: string | undefined }[]
+  gone: string[]
+  arrived: string[]
+  renamed: { from: string; to: string }[]
+  unread?: string
+}
+export const NO_FACTS: LessonFacts = { removed: [], moved: [], gone: [], arrived: [], renamed: [] }
+
+// `a` less `b`, each member as often as it is in `a` beyond `b`, in `a`'s order.
+const less = (a: readonly string[], b: readonly string[]): string[] => {
+  const left = new Map<string, number>()
+  for (const x of b) left.set(x, (left.get(x) ?? 0) + 1)
+  return a.filter(x => {
+    const n = left.get(x) ?? 0
+    if (n > 0) left.set(x, n - 1)
+    return n === 0
+  })
+}
+
+export const lessonFacts = (tool: string, input: Record<string, unknown>, file: string | undefined): LessonFacts => {
+  if (tool !== 'Edit' && tool !== 'Write') return NO_FACTS
+  const was = lessonLayout(file ?? '')
+  const is = lessonLayout(leftBy(tool, input, file))
+  // Each entry the write leaves, paired with one of the same words in the file as it is: the one
+  // under the same heading when there is one, so an entry that stays is never read as moved.
+  const pool = new Map<string, (string | undefined)[]>()
+  for (const e of was.entries) pool.set(e.text, [...(pool.get(e.text) ?? []), e.under])
+  const pairs: { entry: string; from: string | undefined; to: string | undefined }[] = []
+  for (const e of is.entries) {
+    const left = pool.get(e.text)
+    if (!left?.length) continue
+    const k = left.indexOf(e.under)
+    pairs.push({ entry: e.n, from: left.splice(k === -1 ? 0 : k, 1)[0], to: e.under })
+  }
+  // What is left unpaired was taken out, each number once.
+  const removed: string[] = []
+  for (const e of was.entries) {
+    const left = pool.get(e.text)
+    if (!left?.length) continue
+    left.pop()
+    if (!removed.includes(e.n)) removed.push(e.n)
+  }
+  const gone = less(was.heads, is.heads)
+  const arrived = less(is.heads, was.heads)
+  const renamed: { from: string; to: string }[] = []
+  for (const from of new Set(gone))
+    for (const to of new Set(arrived))
+      if (!is.heads.includes(from) && !was.heads.includes(to) && pairs.some(p => p.from === from) && pairs.every(p => (p.from === from) === (p.to === to))) renamed.push({ from, to })
+  const carried = (p: { from: string | undefined; to: string | undefined }) => renamed.some(r => r.from === p.from && r.to === p.to)
+  const moved: LessonFacts['moved'] = []
+  for (const p of pairs) if (p.from !== p.to && !carried(p) && !moved.some(m => m.entry === p.entry && m.from === p.from && m.to === p.to)) moved.push(p)
+  return { removed, moved, gone, arrived, renamed }
+}
+
+// A heading as it is named: the text after "## " less the white space at its ends, in double
+// quotes, so that one heading's words inside a longer heading's are not taken for it.
+const headingNamed = (h: string): string => `"${h.trim()}"`
+
+/**
+ * What a question must hold to name `facts`, each once: the number of each entry taken out or
+ * moved, as written (L174), and each heading taken out or added, in double quotes as it is written
+ * after "## ". A renamed heading is both its old name and its new one.
+ */
+export const factNames = (facts: LessonFacts): string[] => [...new Set([...facts.removed, ...facts.moved.map(m => m.entry), ...[...facts.gone, ...facts.arrived].map(headingNamed)])]
+
+/**
+ * Those of factNames that `text` does not hold. A number counts only as a whole token: not inside a
+ * longer number (L17 in L174) or a word (XL17, L17th, L17_old), and in its own case. A heading
+ * counts only between double quotes, in its own case, word for word. `text` is the question Dan
+ * read, or his own message; none names nothing.
+ */
+export const unnamed = (facts: LessonFacts, text: string | null | undefined): string[] => {
+  const t = text ?? ''
+  // The name is matched as it is written, never as a pattern (lessons review at c258904): the
+  // fallback number of an entry line that could not be numbered, "L?", read as a pattern makes its
+  // letter optional and is found in any text holding two marks side by side.
+  return factNames(facts).filter(name => (name.startsWith('"') ? !t.includes(name) : !new RegExp(`(?<![A-Za-z0-9_])${escapeRe(name)}(?![A-Za-z0-9_])`).test(t)))
+}
+
+/**
+ * Whether `text` covers a write that does `facts` to the lessons file: it names every one of them
+ * (unnamed), and what the write takes out could be read at all. A write that does none of them is
+ * covered by any text, and by none.
+ */
+export const coversFacts = (facts: LessonFacts, text: string | null | undefined): boolean => facts.unread === undefined && unnamed(facts, text).length === 0
+
+const sectionSaid = (h: string | undefined): string => (h === undefined ? 'no section (the place above the first section heading)' : headingNamed(h))
+
+/**
+ * `facts` in words, as what a write does, to follow "this Edit" or "it"; empty when it does none.
+ * Entries that move together are said together, and a renamed heading as renamed.
+ */
+export const factsSaid = (facts: LessonFacts): string => {
+  const parts: string[] = []
+  if (facts.removed.length) parts.push(`takes out ${facts.removed.join(', ')} whole`)
+  const ways: { from: string | undefined; to: string | undefined; entries: string[] }[] = []
+  for (const m of facts.moved) {
+    const way = ways.find(w => w.from === m.from && w.to === m.to)
+    if (way) way.entries.push(m.entry)
+    else ways.push({ from: m.from, to: m.to, entries: [m.entry] })
+  }
+  for (const w of ways) parts.push(`moves ${w.entries.join(', ')} from ${sectionSaid(w.from)} to ${sectionSaid(w.to)}`)
+  for (const r of facts.renamed) parts.push(`renames the section heading ${headingNamed(r.from)} to ${headingNamed(r.to)}`)
+  for (const h of less(facts.gone, facts.renamed.map(r => r.from))) parts.push(`takes out the section heading ${headingNamed(h)}`)
+  for (const h of less(facts.arrived, facts.renamed.map(r => r.to))) parts.push(`adds the section heading ${headingNamed(h)}`)
+  return parts.join('; ')
+}
+
+// How a fact is named, said in one wording where the save is refused (factsAsk) and where a
+// question that names too little is (heldToFacts).
+const HOW_NAMED = `Name each entry by its number as it is written here (a number inside a longer number or a word does not count) and each heading in double quotes, word for word as it is written here, in a plain sentence that says what happens to it. If they do not all fit one question, make the change in smaller Edits, each asked about by itself`
+
+/**
+ * What the refusal of a save adds to its instruction to ask Dan (askInstruction) when the save
+ * does `facts` to the lessons file: what it does, and that the question must name each, so the
+ * question can be asked right the first time. Empty when it does none.
+ */
+export const factsAsk = (tool: string, facts: LessonFacts): string => {
+  const said = factsSaid(facts)
+  return said ? `This ${tool} ${said}, and the question must name each of those (${factNames(facts).join(', ')}), or it is refused before he is asked. ${HOW_NAMED}. ` : ''
+}
+
+/**
+ * What Claude is told when its For good question about a write to the lessons file does not name
+ * everything the write takes out, moves or renames (#3343 route 2), in the shape of the lesson
+ * picker's refusal of a question that does not state the rule: what the question must hold, and
+ * why. `missing` are the names it lacks (unnamed).
+ */
+export const heldToFacts = (file: string, tool: string, facts: LessonFacts, missing: readonly string[]): string =>
+  `The question must name what this ${tool} does to ${file}, so Dan decides on the entries and headings themselves: it ${factsSaid(facts)}. ` +
+  `It does not name ${missing.join(', ')}. ${HOW_NAMED}. Ask again with the same metadata.`
+
+/**
+ * What Claude is told when a write to the lessons file that adds or changes no entry cannot be held
+ * to what it takes out, because the file could not be read (L345: what cannot be read is not taken
+ * for nothing removed). It is refused, and no question waits on it.
+ */
+export const cannotHold = (file: string, tool: string, why: string): string =>
+  `Not saved, and Dan is not asked For good about it: ${file} could not be read before this ${tool} (${why}), so which entries and headings it would take out cannot be told, ` +
+  `and a For good question about that file is asked only when it can be held to what the write takes out. Once ${file} is an ordinary file that can be read, send the save again.`
+
+/**
+ * The first heading a question would have to name that Dan could not read as it is written
+ * (shownFault, the one judgement of every text a picker shows him), with why, and whether the
+ * write adds it. The question naming it would be refused for holding it (askFault), and one that
+ * left it out for not naming it, so the save is refused once, in words that say so (L665).
+ */
+export const unshownName = (facts: LessonFacts): { name: string; fault: string; arriving: boolean } | undefined => {
+  for (const h of [...facts.arrived, ...facts.gone]) {
+    const name = headingNamed(h)
+    const fault = shownFault(name)
+    if (fault !== undefined) return { name, fault, arriving: facts.arrived.includes(h) }
+  }
+  return undefined
+}
+
+/** What Claude is told of a save whose question would have to name such a heading (unshownName). */
+export const cannotName = (file: string, unshown: { name: string; fault: string; arriving: boolean }): string =>
+  `Not saved, and Dan is not asked For good about it: the question would have to name the section heading ${unshown.name}, and he could not read that name as it is written: ${unshown.fault}. ` +
+  (unshown.arriving
+    ? `Give the new heading a name he can read, and send the save again.`
+    : `A heading already in ${file} that cannot be shown to him cannot be asked about here. Tell Dan in one line, naming where the heading stands: he can change it himself.`)
+
+/**
+ * What a refused save says first when a For good of Dan's stands for the same call and does not
+ * cover it: the question he answered did not name what the call does to the lessons file as it
+ * stands now. `missing` are the names that question lacks.
+ */
+export const notCovered = (file: string, missing: readonly string[]): string =>
+  `Dan's For good on this save does not cover it as ${file} stands now: the question he answered did not name ${missing.join(', ')}.`
+
+// Why an entry is approved in the lesson picker and nowhere else, and how Claude asks there: said in
+// one wording by the refusal of an Edit or Write (pickerOnly) and of a shell command (byShellOnly).
+const ENTRY_REACH = `an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word`
+const PICKER_ASK = `ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes`
+
+/**
+ * What Claude is told when an Edit or Write would add or change a lesson entry with no answer of
+ * Dan's in the lesson picker covering it (independent review of #3320). It is refused, and he is
+ * not asked For good: that picker shows him a question of the session's own wording, and an entry's
+ * rule, check line and SHORT line are approved only where he reads each word for word. `misplaced`
+ * is where a single added entry would land when that is no entry boundary (boundaryFault).
+ */
+export const pickerOnly = (file: string, tool: string, touched: readonly string[], misplaced: string | undefined): string =>
+  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and ${ENTRY_REACH}. ` +
+  (misplaced !== undefined
+    ? `It would put the entry ${misplaced}. Add it whole at an entry boundary: straight after another entry's last line or under a section heading, with another entry's first line, a section heading or the end of the file as the next line that is not blank. `
+    : '') +
+  `If he answered ${LESSON_ADD} for this lesson in the last ${APPROVAL_MS / 60_000} minutes, send one Edit that adds exactly the entry that answer described, at an entry boundary. ` +
+  `Otherwise ${PICKER_ASK}. ` +
+  `To change an entry that is already there, ask him the same way for the entry as it should read, take the old one out (a removal is asked about as usual), and add the new one.`
+
+/**
+ * Whether the installed lessons file is among a shell command's lasting memory (register.ts
+ * lastingTargets, each file as Dan reads it), whichever way the command was found to write it
+ * (#3343): named by its words, handed to a script, or mentioned by its path beside a write the
+ * words do not name. Only that file by its path counts. A checkout's `payload/LESSONS.md` does not,
+ * nor does a LESSONS.md the reader could place nowhere (`$S/LESSONS.md` through a variable only a
+ * command's output or a condition sets, a bare name in a patch's prose): each may be a scratch copy
+ * or a checkout's, and is asked about as before.
+ */
+export const lessonsByShell = (files: readonly string[], home: string): boolean => files.includes(display(lessonsFile(home), home))
+
+/**
+ * What Claude is told when a shell command writes, or may write, the installed lessons file (#3343).
+ * It is refused, no question waits on it and no approval covers it: the mod reads which files a
+ * command writes, never what it writes to them, so it cannot hold an entry to what Dan read, and a
+ * For good there approved an entry under a question of the session's own wording. The Edit route is
+ * named, where a write is read: an entry goes to the lesson picker (pickerOnly) and anything else is
+ * asked about as before. `file` is the installed lessons file as Dan reads it; `how` says when it
+ * was found only by a mention (`guessed`) or only as a script's argument (`handed`), so the refusal
+ * claims only what was measured (L11) and says how a command that only reads the file is sent;
+ * `others` is the rest of the lasting memory the command writes. A command whose words show it only
+ * reads the file never gets here.
+ */
+export const byShellOnly = (file: string, how: { guessed?: boolean; handed?: boolean }, others: readonly string[]): string =>
+  `Not run, and Dan is not asked For good about it: ${writesWhat([file], how.guessed ? [file] : [], how.handed ? [file] : [])}. ` +
+  `What a shell command does to a lesson entry cannot be read before it runs, and ${ENTRY_REACH}. ` +
+  `Make the change to ${file} with Edit or Write instead, which are read before they run: one that adds or changes an entry is covered by his answer in the lesson picker and by nothing else, and one that touches no entry is asked about as usual. ` +
+  `For an entry, ${PICKER_ASK}. ` +
+  (how.guessed || how.handed
+    ? `If this command only reads or quotes ${file}, send it so that nothing it writes is left unread: feed a script the file on standard input (< ${file}) or hand it a copy, and keep every other write to a file the command's own words name. `
+    : '') +
+  (others.length ? `Its other lasting memory (${others.join(', ')}) is judged when sent in a command that leaves ${file} alone. ` : '') +
+  `A command whose words show that it only reads ${file} (cat, grep, wc, claude-sync lesson) is not refused.`
 
 /**
  * The file an Edit leaves: `file` with its old text replaced, when that text is found exactly once
@@ -994,8 +1198,10 @@ export const editedFile = (file: string | undefined, input: Record<string, unkno
   return file.slice(0, at) + String(input.new_string ?? '') + file.slice(at + from.length)
 }
 
-// The entry block `content` is `file` with, inserted at one line boundary, or undefined.
-const insertedEntry = (file: string, content: string): string | undefined => {
+// The entry block `content` is `file` with, inserted at one line boundary, or undefined. Where the
+// same text can be read as inserted at more than one boundary, the first that is an entry boundary
+// of the file is the one taken; where none is, the entry comes back with where it would land.
+const insertedEntry = (file: string, content: string): { entry: string; misplaced?: string } | undefined => {
   const size = content.length - file.length
   if (size <= 0) return undefined
   // What the two share at the start and at the end, measured once: the block can sit only at a line
@@ -1008,13 +1214,47 @@ const insertedEntry = (file: string, content: string): string | undefined => {
   const lo = file.length - tail
   if (lo > head) return undefined
   const next = (from: number) => (from === 0 || file[from - 1] === '\n' ? from : file.indexOf('\n', from) === -1 ? file.length + 1 : file.indexOf('\n', from) + 1)
+  let first: { entry: string; misplaced: string } | undefined
   for (let b = next(lo); b <= head; b = next(b + 1)) {
     const block = content.slice(b, b + size)
     if (b !== file.length && !block.endsWith('\n')) continue
     const entry = entryBlock(block)
-    if (entry !== undefined) return entry
+    if (entry === undefined) continue
+    const misplaced = boundaryFault(file, b)
+    if (misplaced === undefined) return { entry }
+    first ??= { entry, misplaced }
   }
-  return undefined
+  return first
+}
+
+// A blank line as the lessons file's own reader takes one (claude-sync lesson_entries_render, awk's
+// [[:space:]]): nothing, or spaces, tabs and the other ASCII white space alone.
+const INDEX_BLANK = /^[ \t\v\f\r]*$/
+
+/**
+ * Whether an entry's lines, those above its check line, set the whole rule in bold and nothing
+ * else: "- **", then `numbered` (the number and the rule, "L753. <rule>"), then "**" at once, and no
+ * bold mark after that. `lines` hold no blank line.
+ *
+ * This is the one shape of an entry with no SHORT line that the mod takes (independent review of
+ * #3320), chosen so the index line is not in doubt and no second copy of the generator's reading is
+ * kept here. The generator (claude-sync lesson_entries_render) renders what stands between the
+ * entry's opening "- **" and the first "**" after it, its lines joined and each run of white space
+ * folded to one space. In this shape that text is the rule whichever way it is read: the first
+ * closing mark is the only one, and it stands right after the rule's last character. A bold closed
+ * early, opened late, opened twice or closed over the provenance is another shape and is refused,
+ * whatever the generator would make of it. White space is folded as awk folds it, the ASCII kinds
+ * only, so a space of another kind in the span is no match for the space in the rule.
+ */
+export const wholeRuleInBold = (lines: readonly string[], numbered: string): boolean => {
+  const marked = lines
+    .map(l => l.replace(/^[ \t\v\f\r]+/, ''))
+    .join(' ')
+    .replace(/[ \t\v\f\r]+/g, ' ')
+  const open = '- **'
+  if (!marked.startsWith(open)) return false
+  const close = marked.indexOf('**', open.length)
+  return close !== -1 && marked.slice(open.length, close) === numbered && marked.indexOf('**', close + 2) === -1
 }
 
 /**
@@ -1032,7 +1272,8 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * reader reads (claude-sync lesson_entries_render scans every line of the entry after its first, so
  * it also reads a line after the SHORT line, which no approval covers). Every other line is still
  * read as the rule's, so another check line, a second one, one in another place, or the same line
- * under another rule fails the comparison below and is asked about. With no `check`, or one that is
+ * under another rule fails the comparison below, and the write is refused and sent back to the
+ * lesson picker (pickerOnly). With no `check`, or one that is
  * no check line (checkLine), the entry takes no check line at all.
  *
  * The entry's line is compared as the entry holds it (security review of #3245). The lines above are
@@ -1044,17 +1285,45 @@ const insertedEntry = (file: string, content: string): string | undefined => {
  * No line of the entry holds a character Dan cannot see (#3295, unseenIn), and neither does the
  * rule the approval holds, which is read back from storage (L50). The comparison below folds every
  * run of white space into one space, so a tab, a no break space or a line separator in the entry
- * once read as the space he saw in the rule. And the SHORT line is never shown in the picker at
- * all, while the index carries it into every session, so it was where anything unseen could ride.
+ * once read as the space he saw in the rule.
+ *
+ * `short` is the SHORT line Dan read in the picker, when it showed him one (#3320). The SHORT line
+ * is what the index carries into every session, and it was once shown nowhere and compared with
+ * nothing, so under an approval for one rule an entry went through whose SHORT line said something
+ * else. The entry's SHORT line is now that line, equal to it but for the file's indentation, read
+ * from the same copy of the entry the check line is, and it stays the entry's last line. With no
+ * `short`, or one that is no SHORT line (shortLine), the entry takes no SHORT line at all, so one
+ * added after an approval that showed none is refused and sent back to the lesson picker. And
+ * where he read one, an entry
+ * without it is not the entry he read. Whether a lesson needs one is settled before he is asked:
+ * the picker refuses a rule too long for the index line that brings no SHORT line (register.ts).
+ *
+ * With no SHORT line the index renders the entry's BOLD SPAN as the lesson's line, and nothing held
+ * that span to the rule (independent review of #3320): under an approval for "Never ask Dan before
+ * any save that he has already refused in this session, ..." an entry went through whose bold closed
+ * after "Never ask Dan before any save", and that was the line every session loaded. Such an entry
+ * is now taken only in one shape (wholeRuleInBold): the whole rule in bold, and nothing else.
+ * Where he read a SHORT line the index renders that line, and where the bold closes is the file's
+ * layout, as it was. tests/test-lesson-index-line-shown.sh runs the real generator over the entries
+ * this function approves and holds what it renders to the text he was shown.
  */
-export const addsLesson = (added: string, rule: string, check?: unknown): boolean => {
+export const addsLesson = (added: string, rule: string, check?: unknown, short?: unknown): boolean => {
   if (unseenIn(added) !== undefined || unseenIn(rule) !== undefined) return false
   const lines = added.replace(/^\s*\n/, '').replace(/\s+$/, '').split('\n')
+  // No line of the entry is blank, a line of spaces included: the index stops reading a wrapped
+  // rule at one, so the lines after it would be in the entry and out of the line it renders.
+  if (lines.some(l => INDEX_BLANK.test(l))) return false
   const shortAt = lines.findIndex(l => /^\s*SHORT:/.test(l))
   if (shortAt !== -1 && (shortAt !== lines.length - 1 || shortAt === 0)) return false
+  // No other line of the entry reads as a SHORT line once its markdown is drawn (independent review
+  // of #3320): in bold, in a list or in a quote it would stand in the file beside the one he read.
+  if (lines.some((l, i) => i !== shortAt && readsAsShort(l))) return false
   const approved = checkLine(check)
   const end = shortAt === -1 ? lines.length : shortAt
   const raw = added.replace(/^\s*\n/, '').replace(/[ \t\n]+$/, '').split('\n')
+  const shownShort = shortLine(short)
+  const written = shortAt === -1 || raw.length !== lines.length ? undefined : unindented(raw[shortAt] ?? '')
+  if (shortAt === -1 ? shownShort !== undefined : shownShort === undefined || written !== shownShort) return false
   const checked = approved !== undefined && end > 1 && raw.length === lines.length && unindented(raw[end - 1] ?? '') === approved
   if (checked && !/^- \*\*L\d+\.[\s\S]*\*\*/.test(lines.slice(0, end - 1).join('\n'))) return false
   const body = ruleText(lines.slice(0, checked ? end - 1 : end).join('\n'))
@@ -1065,11 +1334,12 @@ export const addsLesson = (added: string, rule: string, check?: unknown): boolea
   const provenance = String.raw`(?: \(${ref}(?:, ${ref})*(?:, \d{4}-\d{2}-\d{2})?\))?`
   const m = new RegExp(`^- L(\\d+)\\. ${escapeRe(ruleText(rule))}${provenance}$`).exec(body)
   if (!m) return false
+  if (shortAt === -1 && !wholeRuleInBold(lines.slice(0, checked ? end - 1 : end), `L${m[1]}. ${ruleText(rule)}`)) return false
   // Counted as the index renders it, `- L<n>. <short>` (third lessons review of #869), or, with no
   // SHORT line, `- L<n>. <rule>`: an entry the index cannot hold is refused by the send, which holds
   // the whole lessons file back (sixth lessons review of #869).
   const shown = shortAt === -1 ? ruleText(rule) : (lines[shortAt] ?? '').replace(/^\s*SHORT:\s*/, '')
-  return `- L${m[1]}. ${shown}`.length <= MAX_SHORT
+  return indexLength(`- L${m[1]}. ${shown}`) <= MAX_SHORT
 }
 
 // One For good on a memory file also covers the one line in its folder's index linking to it (#1794,
@@ -1249,15 +1519,18 @@ export const writesWhat = (files: string[], guessed: string[] = [], handed: stri
 /**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
  * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's
- * asking"), and on For good send the same call again.
+ * asking"), and on For good send the same call again. `held` is what else the question must name,
+ * as a sentence of its own (factsAsk, for a write that takes an entry out of the lessons file,
+ * moves one or changes a heading); none for any other save.
  */
-export const askInstruction = (id: string, files: string[], guessed: string[] = [], handed: string[] = []): string => {
+export const askInstruction = (id: string, files: string[], guessed: string[] = [], handed: string[] = [], held: string = ''): string => {
   const where = files.join(', ')
   return (
     `Not saved yet: ${writesWhat(files, guessed, handed)}, so Dan decides first. ` +
     (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and writes another file, make the change with Edit or Write on that file instead. ` : '') +
     `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${where} and states the rule in one plain sentence, never the command or the raw text, ` +
     `such as "Save to ${files[0]} for good: <the rule>?", with the options ${FOR_GOOD}, ${THIS_SESSION} and ${NOT_AT_ALL}. ` +
+    held +
     `If he answers ${FOR_GOOD}, send this same call again unchanged and it is saved. Until he answers, do not write it any other way.`
   )
 }

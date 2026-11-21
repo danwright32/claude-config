@@ -5,6 +5,7 @@ import { asksQuiet, refusal } from './pickers.ts'
 import { bareIssuesIn, etDateOf, issueRefsIn, leavesUnanswered, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { guardAsks, guardIgnores } from './mod-kit/designquestions.ts'
+import { askFault } from './mod-kit/shown.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -178,6 +179,20 @@ export const register: Register = on => {
     // read as settled while every edit stayed held. Nothing is added open either, since /sleep never
     // asks a guard question.
     if (guardAsks((e.metadata as { source?: unknown } | undefined)?.source)) return r
+    // #3321: a checked box on an issue reads as settled by Dan, and his answer covers a question
+    // only because he read it. A picker he could not read as written, by the one check of text a
+    // person approves in a picker (mod-kit's hooks/shown.ts), is written onto no issue, answered
+    // or open: an open item in those words would be asked again by /sleep and fail the same way
+    // each night (L665). This mod is no gate on the question itself, which any guard that acts
+    // on its answer judges for itself, so the dialog's result stands and Claude is told.
+    const refs = issuesNamedIn(question)
+    const unread = refs.length ? askFault(e as unknown as Record<string, unknown>) : undefined
+    if (unread !== undefined) {
+      const where = `${refs.map(x => `${x}'s`).join(', ')} Open questions`
+      $.ui.log(`Picker manners: this question was not added to ${where}, since it would not have reached you as written.`)
+      const told = `${unread.what} would not reach Dan as written: ${unread.fault}. A question written onto an issue reads there as one he was asked, and its answer as settled by him, so this one was not added to ${where} and no answer of his is recorded there. Tell Dan that in one line, and when the answer is to stand on the issue ask the question again in plain words without what is at fault.`
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), told] }
+    }
     offTheDialog($, () => recordOnIssues($, question, answer, choices))
     return r
   })

@@ -36,15 +36,12 @@
 import importlib.util
 import os
 import re
-import shlex
 import sys
 
 cmd = os.environ.get("MT_CMD", "")
 # A newline starts a new command the way a semicolon does, and a backslash before one does not.
 # shlex reads both as ordinary whitespace, so they are rewritten before it sees them.
 cmd = cmd.replace("\\\n", " ").replace("\n", " ; ")
-lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-lex.whitespace_split = True
 OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
 ENDERS = OPENERS | {")", "}"}
 
@@ -444,15 +441,14 @@ def read_api_route(args, named):
 
 
 # ---- the walk ----------------------------------------------------------------------------------
-toks = []
-while True:
-    try:
-        t = lex.get_token()
-    except ValueError:
-        break
-    if t is None or t == lex.eof:
-        break
-    toks.append(t)
+# The shared reader's tokens (claude-config#3322), cut as this file's own lexer cut them (a # starts
+# a comment, and the walk stops at the first token it cannot read), but for a redirection: its
+# descriptor number stays with its operator, and an operator written outside quotes is marked as
+# one, so gh_command takes it out with its target. Read by a lexer of this file's own, `gh
+# 2>/dev/null pr merge 7` was a subcommand named 2 that named no pull request, `gh pr merge
+# 2>/dev/null 7` named pull request 2, and `gh api >/dev/null -X PUT repos/o/x/pulls/7/merge` was
+# a call to an endpoint named >, which is no merge.
+toks = SW.shell_tokens(cmd, commenters="#", partial=True)
 
 found = None
 at_start, i, n = True, 0, len(toks)

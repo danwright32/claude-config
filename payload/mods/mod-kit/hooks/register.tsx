@@ -335,7 +335,7 @@ export const register: Register = (on, options) => {
       // Read as the shell the call runs in reads it (#1834), found from the session's environment.
       writes: async ({ command, cwd, home }) =>
         commandWrites(command, cwd, home, callShell({ CLAUDE_CODE_SHELL: await built.env.get('CLAUDE_CODE_SHELL'), SHELL: await built.env.get('SHELL') })),
-      git: async ({ words }) => git(words),
+      git: async ({ words, env }) => git(words, env),
       gh: async ({ words }) => ghArgs(words),
       mergeHelper: async command => mergeHelperArgs(command),
       // The one reader of a transcript's /goal (#1252), each read bounded at 5 seconds (chosen, not

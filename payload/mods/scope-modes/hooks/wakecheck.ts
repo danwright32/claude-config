@@ -555,7 +555,11 @@ export const wakeCheck = async (
   // Milestones touched and deploy runs, in each repository.
   const deployHits: string[] = []
   // What the runs left out as healthy (#2766), said in the one line the check always writes.
-  const left = { passed: 0, skipped: 0, running: 0, deploys: 0 }
+  // Runs no change to the code started are counted by what started them (#3282): a schedule or a
+  // bot's dispatch, a dispatch by anyone else, and another workflow.
+  const tally = () => ({ passed: 0, skipped: 0, running: 0 })
+  const left = { scheduled: tally(), dispatched: tally(), workflow: tally(), deploys: 0 }
+  const RUN_NOUN = { scheduled: ['scheduled run', 'scheduled runs'], dispatched: ['dispatched run', 'dispatched runs'], workflow: ['run started by another workflow', 'runs started by another workflow'] } as const
   if (me) {
     // Each repository's index is how many were finished in the part before it began (#3240).
     part = 5
@@ -581,7 +585,8 @@ export const wakeCheck = async (
       // since sleep began. A run started by a schedule, or dispatched by a cron (a bot started it),
       // that passed, was skipped or is still running needs nobody, so it is counted, never listed;
       // one that failed, was cancelled or timed out is listed. A deploy that passed for a merge the
-      // night's notes account for is counted too; every other deploy or dispatch is listed, as before.
+      // night's notes account for is counted too. #3282 widened the first rule to every run no change
+      // to the code started, whoever started it (said where it is decided, below).
       type Actor = { login?: string; type?: string } | null
       type RunRow = { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
       // #3284: GitHub lists runs newest first, so one page of 100 left a busy night's first hours
@@ -646,8 +651,11 @@ export const wakeCheck = async (
       for (const r of runs) {
         const name = r.name ?? ''
         const starter = r.triggering_actor ?? r.actor
-        const cron = r.event === 'schedule' || ((r.event === 'workflow_dispatch' || r.event === 'repository_dispatch') && (starter?.type === 'Bot' || /\[bot\]$/i.test(starter?.login ?? '')))
-        if (!/deploy|release|publish/i.test(name) && r.event !== 'workflow_dispatch' && !cron) continue
+        const dispatch = r.event === 'workflow_dispatch' || r.event === 'repository_dispatch'
+        const cron = r.event === 'schedule' || (dispatch && (starter?.type === 'Bot' || /\[bot\]$/i.test(starter?.login ?? '')))
+        const deployNamed = /deploy|release|publish/i.test(name)
+        // Both kinds of dispatch are read (#3282), so a failed one is listed and a healthy one counted.
+        if (!deployNamed && !dispatch && !cron) continue
         const w = when(r.created_at)
         if (w === 'unknown') {
           unmeasured.push(`when the ${name} run in ${repo} ran ${NO_TIME}`)
@@ -656,11 +664,21 @@ export const wakeCheck = async (
         if (w !== 'overnight') continue
         const done = r.status === undefined || r.status === 'completed'
         const conclusion = typeof r.conclusion === 'string' ? r.conclusion : ''
-        if (cron) {
-          if (!done) left.running++
-          else if (conclusion === 'success') left.passed++
-          else if (conclusion === 'skipped') left.skipped++
-          if (!done || conclusion === 'success' || conclusion === 'skipped') continue
+        // #3282: on 2026-11-19, 18 healthy runs were listed because the rule above took for a cron's
+        // only a schedule or a bot's dispatch. A canary and drift checks an outside timer dispatched
+        // with a person's token, and an alert another workflow started (workflow_run) that skipped
+        // because no deploy failed, all read as deploys. A run no change to the code started (a
+        // schedule, a dispatch, another workflow) needs nobody when it ended well, whoever started
+        // it: one whose name is not a deploy's that passed, was skipped or is still running, and any
+        // that skipped, since a skipped run ran no job. A deploy one that passed or is running is
+        // still judged below, as is every run a push started; anything that failed is listed.
+        const unprompted = r.event === 'schedule' || dispatch || r.event === 'workflow_run'
+        const healthy = !done || conclusion === 'success' || conclusion === 'skipped'
+        if (healthy && (cron || (unprompted && (!deployNamed || conclusion === 'skipped')))) {
+          const kind = cron ? 'scheduled' : dispatch ? 'dispatched' : 'workflow'
+          const ended = !done ? 'running' : conclusion === 'success' ? 'passed' : 'skipped'
+          left[kind][ended]++
+          continue
         }
         const outcome = !done ? ', still running' : conclusion ? `, ${ENDED[conclusion] ?? conclusion.replace(/_/g, ' ')}` : ''
         let why = ''
@@ -681,15 +699,22 @@ export const wakeCheck = async (
             }
           } else if (p.exitCode !== SKIPPED) why = `; which merge started it could not be read (${p.exitCode !== 0 ? firstLine(p.stderr) || `exit ${p.exitCode}` : 'the answer was not JSON'})`
         }
-        deployHits.push(`${cron ? 'Scheduled' : 'Deploy'} run overnight: ${repo} ${name}${outcome} (${r.html_url ?? ''})${why}`)
+        // Said as what GitHub says it was: a deploy by its name, else by what started it (#3282).
+        deployHits.push(`${cron ? 'Scheduled' : deployNamed ? 'Deploy' : 'Dispatched'} run overnight: ${repo} ${name}${outcome} (${r.html_url ?? ''})${why}`)
       }
     }
   }
   // One line, every time the check runs (#2766): what it read and what it left out as healthy.
   const counted = [
-    left.passed ? `${plural(left.passed, 'scheduled run', 'scheduled runs')} passed` : '',
-    left.skipped ? `${plural(left.skipped, 'scheduled run', 'scheduled runs')} skipped` : '',
-    left.running ? `${plural(left.running, 'scheduled run', 'scheduled runs')} still running` : '',
+    ...(['scheduled', 'dispatched', 'workflow'] as const).flatMap(k => {
+      const [one, many] = RUN_NOUN[k]
+      const t = left[k]
+      return [
+        t.passed ? `${plural(t.passed, one, many)} passed` : '',
+        t.skipped ? `${plural(t.skipped, one, many)} skipped` : '',
+        t.running ? `${plural(t.running, one, many)} still running` : '',
+      ]
+    }),
     left.deploys ? `${plural(left.deploys, 'deploy run of a merge', 'deploy runs of merges')} the night accounts for passed` : '',
     ownChanges ? `${plural(ownChanges, 'milestone change', 'milestone changes')} made from your own accounts` : '',
   ].filter(Boolean)

@@ -1787,6 +1787,61 @@ their text is not on this machine, a public gist's files are read the same way (
 refused when no file is named; a `-` is refused by the command hook and read by the guard), and `gh repo create` is judged on its own
 text for a public repository with or without `--push`, as is `gh repo edit`.
 
+A redirection among a command's words (#3322). The shell takes every redirection out before the
+program gets its words, and the shared reader used to hand each on among them, leaving every gate
+to step over it. Three did not: the stacked branch delete gate read `>/dev/null` as the endpoint of
+`gh api >/dev/null -X DELETE <ref>` and let the delete run unasked, read it as the remote of a push,
+and `lib/merge-selector.py`, lexing for itself, read `gh pr merge 2>/dev/null 7` as pull request 2
+and `gh api >/dev/null -X PUT .../pulls/7/merge` as no merge. The fix is one place, not a step in
+each reader: `tool_words` in `lib/shell-words.py` makes a gh or git command's words from its text
+with `unredirected` applied, and both `tool_field` (the bash gates) and `tool_command` (the python
+ones) go through it. It works on the text because only there is a quoted `'>'` told from the
+operator. Taking a word out by its look, after the quotes are gone, was rejected: it would take a
+quoted message such as `--body '>'` and the word after it, and a gate reading that body would then
+read less than before. For the callers that cut a command into tokens themselves, `shell_tokens`
+marks each operator it read outside quotes (the token is the same text and compares as it always
+did), and `rejoin` writes a marked one back bare; a token a caller got any other way is never taken
+for a redirection, so those callers read exactly what they read before. `merge-selector.py` gave up
+its own lexer for `shell_tokens`, keeping its two habits through arguments (a `#` starts a comment,
+and the walk keeps the tokens before one it cannot read). The five readers in `lib/push-scope.sh`
+that stepped over a redirection themselves no longer do, so a quoted path or start point that only
+looks like one is now read as the word it is, which reads more and never less; the crude cut, used
+when nothing can read the command, takes them out in one place as well (`ps__drop_redirections`).
+What deliberately keeps every redirection: the command's own words (`PS__R_WORDS`), which
+`ps__writes_out` judges a write by, and the stages `gh_issue_scan.py` reads a body on standard
+input from. `rtk_field` is left as it was: `check-rtk-init.sh` refuses any word it does not know,
+a redirection included, which is the stricter reading. Two more readers had the fault and no case.
+`lib/temp-worktree.py` made its own words, read `git worktree add >/dev/null /tmp/x` as a worktree
+placed at `>/dev/null` and let it through; it takes its words from `tool_words` now. The push to
+main gate (`linux-sections-before-push.sh`) read a redirection before the remote as the remote,
+which is not the shared repository, so `git push 2>&1 origin main` went through until the words
+it is handed held none. One reader still has it: `lib/agent-overrides.py` makes its own words for
+the amend, forced push, hook skip and standard input readers, and a redirection whose target
+reads as an option (`git commit > -m --amend`) hides each from them. The same swap there would
+also change what the standard input reader refuses (`git commit -F - < /dev/stdin` is refused
+today because the spaced target is a word), so it was recorded for a change of its own.
+
+A compiled program read as a script file (#3299). A caller that asks the reader for the commands
+inside the script files a command runs was handed the bytes of a compiled program run by its path
+as commands, so a verdict could turn on noise. The fix is one question, `compiled_program`, which
+looks at a file's first 16 bytes. `script_text` asks it before reading any file as a script, and a
+guard that wants to judge a compiled program its own way can ask it the same way. What counts as
+compiled was decided by running the files, never by how they look. The issue's own wording (a NUL
+in the first block, or bytes that do not decode) was measured and rejected: `echo x`, a newline and
+a NUL runs under every shell tried, and so does a script with Latin-1 bytes, so calling either
+compiled would let a guard pass a script it refuses today. So was the magic number alone
+(`\x7fELF;cmd` runs cmd by its path under zsh, bash, dash and ksh) and a NUL anywhere on the first
+line (`\x7fELF;cmd;\0` is refused by zsh, bash and dash and run by ksh). What is left is the shape
+every real header has and no shell tried runs: the magic number, then a NUL among the first 16 bytes
+before anything that ends a shell word. It applies only to a file run by its path or handed to
+bash. zsh, dash and a sourcing shell run a compiled file's lines as commands; sh and ksh refused the
+fixtures on this Mac but are other shells on other machines, so they stay read. A file left read is
+the reading every guard had before, which can only add commands. Two guards ask for script files
+(the add scope guard through `lib/push-scope.sh`, and the screenshot gate) and both treat a
+compiled program as a program whose commands they cannot read, as they treat a python script.
+Treating a compiled program at a path a session could have written as a reason to refuse was left
+out: it is a new refusal, and a decision of its own.
+
 The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
 line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
 text `create` before reading a command, so `gh issue new` and `gh pr new` passed them unread. Their

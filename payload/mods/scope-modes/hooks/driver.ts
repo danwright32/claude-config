@@ -263,10 +263,27 @@ export type Note = Record<string, unknown> & { kind: string }
 /** A claim the driver ends through sleep-queue.sh, which writes the matching note itself (one writer, #844). */
 export type Release = { issue: number; state: 'parked' | 'failed'; why: string }
 
-/** A block's reason leaves out what its release came to, known only after the queue answers: say it with blockTold (#925). */
+/**
+ * Every claim a stopping session holds, each ended (#3342): a stopped session is no longer working,
+ * so none is left held by it, and each is ended with the stop's own state and reason. The claim in
+ * hand comes first, then the older ones, oldest first. `own` is a release already decided for one
+ * claim on its own terms (a park past the night's attempts), kept as decided for that claim. Each
+ * issue is ended once. Claims that cannot be read end nothing, since none can be named.
+ */
+export const endEvery = (reading: ClaimReading | undefined, state: Release['state'], why: string, own?: Release): Release[] => {
+  const held = reading?.state === 'held' ? [reading.claim, ...(reading.all ?? []).filter(c => c.issue !== reading.claim.issue)] : []
+  const out: Release[] = own ? [own] : []
+  for (const c of held) if (!out.some(r => r.issue === c.issue)) out.push({ issue: c.issue, state, why })
+  return out
+}
+
+/**
+ * A block's reason leaves out what its release came to, known only after the queue answers: say it
+ * with blockTold (#925). A block ends at most one claim; a stop ends every claim held (#3342).
+ */
 export type StopDecision =
   | { kind: 'block'; reason: string; record: DriverRecord; notes: Note[]; release?: Release }
-  | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; release?: Release; why: string }
+  | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; releases: Release[]; why: string; release?: undefined }
   /**
    * Let the session stop, idle, until `record.resumeAt`, keeping its claim, then start it again: for
    * mods out of step, with `reload` true, so they load again (#1281); or while its own background
@@ -357,12 +374,11 @@ export const decideStop = (i: StopInput): StopDecision => {
   const { now, self } = i
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so the driver cannot count its blocks and stopped rather than loop`
-    // The claim in hand is ended too, as on every other stop, never left held by a stopped session.
-    const held = i.claim.state === 'held' ? i.claim.claim : null
-    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed', why } } : {}), notes: [{ kind: 'stopped', text: why }] }
+    // Every claim held is ended too, as on every other stop, never left held by a stopped session.
+    return { kind: 'stop', record: null, why, releases: endEvery(i.claim, 'failed', why), notes: [{ kind: 'stopped', text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, self, now)
-  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
+  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, releases: [], notes: [] }
   // A turn that ended (rather than failed) starts the waits over.
   d.waitStep = 0
   d.resumeAt = null
@@ -377,27 +393,28 @@ export const decideStop = (i: StopInput): StopDecision => {
   }
   const claim = i.claim.state === 'held' ? i.claim.claim : null
   const where = claim ? { repo: claim.repo, issue: claim.issue } : i.repo ? { repo: i.repo } : {}
-  const stop = (why: string, release?: Release, extra: Note[] = []): StopDecision => {
+  // Every claim held is ended at a stop (#3342), each by the queue, which writes its note.
+  const stop = (why: string, releases: Release[], extra: Note[] = []): StopDecision => {
     d.stopped = why
     // A stop with no claim to end still leaves a failed note when it is a fault, so it shows in the report.
-    return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...extra, { kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: d, why, releases, notes: [...extra, { kind: 'stopped', ...where, text: why }] }
   }
 
   // Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker
   // left without one at bedtime does nothing, and a claim it somehow holds is given up.
-  if (i.goal === null) return stop(NO_GOAL_WHY, claim ? { issue: claim.issue, state: 'parked', why: NO_GOAL_WHY } : undefined)
+  if (i.goal === null) return stop(NO_GOAL_WHY, endEvery(i.claim, 'parked', NO_GOAL_WHY))
 
   if (saidStopped(i.notesText, self, d.since)) {
-    return stop('the session said it stopped (its stopped note)', claim ? { issue: claim.issue, state: 'parked', why: 'the session said it stopped while still holding this issue' } : undefined)
+    return stop('the session said it stopped (its stopped note)', endEvery(i.claim, 'parked', 'the session said it stopped while still holding this issue'))
   }
 
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) {
     const why = `the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`
-    return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
+    return stop(why, endEvery(i.claim, 'parked', why))
   }
   if (d.blocks >= LIMITS.nightCap) {
     const why = `this session reached the night's cap of ${LIMITS.nightCap} blocks`
-    return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
+    return stop(why, endEvery(i.claim, 'failed', why), claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
   // #1281: mods out of step refuse every call, and a busy session never loads its mods again (a
   // reload lands only once it is idle, measured on 2.1.302). One rest lets it idle so the reload can
@@ -413,7 +430,7 @@ export const decideStop = (i: StopInput): StopDecision => {
       return { kind: 'rest', record: d, why, reload: true, notes: [{ kind: 'finding', ...where, text: why }] }
     }
     const why = `${skew} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
-    return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
+    return stop(why, endEvery(i.claim, 'parked', why))
   }
   d.rested = false
   // Claims that cannot be read just now judge nothing stuck and park nothing, and the work goes on:
@@ -424,7 +441,7 @@ export const decideStop = (i: StopInput): StopDecision => {
     d.claimFails++
     if (d.claimFails >= LIMITS.claimReadFails) {
       const why = `the claims could not be read ${d.claimFails} times in a row (${i.claim.why})`
-      return stop(why, undefined, [{ kind: 'failed', ...where, text: why }])
+      return stop(why, [], [{ kind: 'failed', ...where, text: why }])
     }
     unread = `The claims could not be read just now, so carry on with the issue in hand.\n${queueData(i.claim.why)}`
   } else {
@@ -438,7 +455,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   const idle = progressed ? 0 : d.idleBlocks
   if (busy === null && (idle >= LIMITS.breakerBlocks || idleMs >= LIMITS.breakerMs)) {
     const why = `circuit breaker: ${idle >= LIMITS.breakerBlocks ? `${idle} blocks in a row` : `${mins(idleMs)} of active time`} with no new commit, claim or note`
-    return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
+    return stop(why, endEvery(i.claim, 'failed', why), claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
 
   let release: Release | undefined
@@ -478,11 +495,14 @@ export const decideStop = (i: StopInput): StopDecision => {
     const why = `the weekly usage has had no reading for ${mins(now - measuredAt)}, so the night stops after the issue in hand (unmeasured)`
     const unmeasured: Note[] = first ? [{ kind: 'finding', ...where, text: why }] : []
     // Claims that cannot be read just now may still hold one: blocked on rather than stopped on it.
-    if ((!claim && i.claim.state !== 'unknown') || release) return stop(why, release, unmeasured)
+    // It stops once nothing is left to finish, or the claim in hand is itself ended, every older
+    // claim then ended with it (#3342). An older claim parked past its time leaves the claim in hand
+    // to finish: that park is said in this block, never a stop that leaves the claim in hand held.
+    if ((!claim && i.claim.state !== 'unknown') || (release && release.issue === claim?.issue)) return stop(why, endEvery(i.claim, 'parked', why, release), unmeasured)
     d.blocks++
     if (!progressed) d.idleBlocks++
     return {
-      kind: 'block', record: d, notes: [...unmeasured, { kind: 'heartbeat', ...where }],
+      kind: 'block', record: d, ...(release ? { release } : {}), notes: [...unmeasured, { kind: 'heartbeat', ...where }],
       reason: `${told}${unread}Finish ${claim ? `#${claim.issue}` : 'the issue in hand'} and release it, then claim nothing new: ${why}. ${i.rules}`,
     }
   }
@@ -519,7 +539,7 @@ export const blockTold = (d: Extract<StopDecision, { kind: 'block' }>, failed: s
 
 export type FailureDecision =
   | { kind: 'wait'; record: DriverRecord; minutes: number; notes: Note[] }
-  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[]; release?: Release }
+  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[]; releases: Release[] }
 
 /**
  * A turn that ended on an API error (classic.StopFailure). It carries no reset time and calls an
@@ -532,20 +552,18 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   const said = i.message.replace(/\s+/g, ' ').trim().slice(0, 200)
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so after the ${i.error} error the driver stopped rather than retry on a count it cannot keep`
-    const held = i.claim?.state === 'held' ? i.claim.claim : null
-    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed' as const, why } } : {}), notes: [{ kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: null, why, releases: endEvery(i.claim, 'failed', why), notes: [{ kind: 'stopped', ...where, text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, i.self, i.now)
-  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
+  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, releases: [], notes: [] }
   if (i.weekly !== null) d.weeklyAt = i.now
-  // A stop ends the claim in hand as Stop's own stops do: parked at the weekly limit, failed on an
-  // error waiting does not cure, through the queue, which writes that note (one writer, #905).
+  // A stop ends every claim held as Stop's own stops do (#3342): parked at the weekly limit, failed
+  // on an error waiting does not cure, through the queue, which writes each note (one writer, #905).
   const claim = i.claim?.state === 'held' ? i.claim.claim : null
   const stop = (why: string, failed: boolean): FailureDecision => {
     d.stopped = why
-    const release: Release | undefined = claim ? { issue: claim.issue, state: failed ? 'failed' : 'parked', why } : undefined
     const own: Note[] = failed && !claim ? [{ kind: 'failed', ...where, text: why }] : []
-    return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...own, { kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: d, why, releases: endEvery(i.claim, failed ? 'failed' : 'parked', why), notes: [...own, { kind: 'stopped', ...where, text: why }] }
   }
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) return stop(`the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`, false)
   if (!RETRY.has(i.error)) return stop(`the API answered ${i.error}${said ? ` (${said})` : ''}, which waiting does not cure`, true)

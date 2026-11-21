@@ -32,7 +32,7 @@ root = sys.argv[1]
 # literal and JSX text as what they are (#735): this file's own stripper took a regex holding // or
 # /* for a comment, and JSX text's // or apostrophe for a comment or a quote.
 sys.path.insert(0, sys.argv[2])
-from ts_source import is_jsx, strip_comments
+from ts_source import is_jsx, mod_code, strip_comments
 failed = 0
 mods = {}
 for entry in sorted(os.listdir(root)):
@@ -80,19 +80,12 @@ def nouns(folder, man):
         return None
     return re.findall(r"^\s*([A-Za-z_$][\w$]*)\??\s*:", "".join(top), re.M)
 
-SOURCE = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
-# Not the mod's code: its tests (which stand in for other mods), its own contract, and what Claude
-# Code generates into its folder.
-SKIP_DIRS = {"tests", "types", ".claude-plugin", "node_modules"}
-
 def mod_source(folder):
+    # Which files are the mod's own code is one rule, shared with the tier check (mod_code, #3298).
     texts = []
-    for base, dirs, files in os.walk(folder):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-        for name in sorted(files):
-            if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
-                with open(os.path.join(base, name), errors="replace") as f:
-                    texts.append(strip_comments(f.read(), is_jsx(name)))
+    for path in mod_code(folder):
+        with open(path, errors="replace") as f:
+            texts.append(strip_comments(f.read(), is_jsx(path)))
     return texts
 
 for name, (folder, man) in mods.items():

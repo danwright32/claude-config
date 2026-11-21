@@ -108,6 +108,12 @@ LOGF() { printf '%s' "$STATE/removals/$1.log"; }
 # How many INTENT lines in <log> are for an item id matching the regular expression <re>; 0 for no log.
 intents() { [ -f "$1" ] || { echo 0; return; }; awk -F '\t' -v re="$2" '$1 == "INTENT" && $4 ~ re { n++ } END { print n + 0 }' "$1"; }
 calls_of() { dc_calls "$1"; }
+# How many times git was asked <question> in <folder>: a recorded call that starts with the folder
+# and ends with the question, whatever dc_git put between the two (#3328). What it puts there is
+# test-disk-clean-git.sh's to hold it to.
+git_asked() { # <folder> <question>
+  dc_calls git | awk -v p="git -C $(printf '%q' "$1") " -v s=" $2" 'index($0, p) == 1 && length($0) >= length(s) && substr($0, length($0) - length(s) + 1) == s { n++ } END { print n + 0 }'
+}
 
 # ================================================================================================
 # 1. Test mode: it runs only with HOME inside the throwaway directory, and seams only in test mode
@@ -365,10 +371,13 @@ check "notes: an INTENT was written for each of the two" "$(eq "$(intents "$(LOG
 check "notes: and for nothing that was refused" "$(eq "$(intents "$(LOGF s1)" '^r')" 0)"
 line_of() { grep -F -- "$1" <<< "$OUT_TEXT" | awk 'NR == 1'; }
 for pair in "the state folder itself|$H/.claude/state:" "session-notes itself|$NOTES:" "a project|$NP:" "a session|$NS:" "a task folder|$NT:" "a five level path|$NT/deep/inner:" \
-  "another folder of state|$H/.claude/state/ai-review:" "a task folder with a trailing slash|$NT/:" "a task folder whose name holds a space|$NS/my task:" \
+  "another folder of state|$H/.claude/state/ai-review:" "a task folder whose name holds a space|$NS/my task:" \
   "a file at four levels|$NT/loose.txt:"; do
   check "notes: ${pair%%|*} stays refused as Claude Code's own state" "$(has "$(line_of "${pair#*|}")" "never removed: it is Claude Code's own state")"
 done
+# The deny list reads it without its slash, as the task folder the second exception lets past, so
+# until #3332 only dc_notes_item, which refuses a trailing slash, stopped it; now the slash does.
+check "notes: a task folder with a trailing slash stays refused, for the slash" "$(has "$(line_of "$NT/:")" "its path ends in a slash")"
 check "notes: a .. at the end of a four level path is refused" "$(has "$(line_of "$NT/photos/..:")" ". or .. component")"
 check "notes: a .. inside a path that lands four levels down is refused" "$(has "$(line_of "$NT/deep/../other:")" ". or .. component")"
 check "notes: a link at the fourth level is refused as a link" "$(has "$(line_of "$NT/leaf-link:")" "symbolic link")"
@@ -420,7 +429,7 @@ check "task shape: the same shape under another home is not" "$(eq "$(tshape "$O
 # from in a folder) is answered by the harness's stand in, which section "real git" below holds to
 # what real git says. A repository is a .git holding HEAD, objects and refs, as git itself reads one.
 repo_at() { mkdir -p "$1/.git/objects" "$1/.git/refs"; printf 'ref: refs/heads/main\n' > "$1/.git/HEAD"; } # <folder>
-git_dir_stub() { dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+git_dir_stub() { dc_stub git "$DC_GIT_HELPER_STANDIN"'
 case "$*" in "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;; esac
 echo "git stub: $*" >&2; exit 98'; }
 checkout_tree() {
@@ -453,7 +462,7 @@ record s1 10; plan "$H/plan" s1 d1 d2 d3 d4 d5 d6 d7 d8 d9 d10 c1 c2
 run --plan "$H/plan"
 check "checkout: a task folder that is a git checkout reaches its judge and is moved to the Trash" "$(gone "$NS/repo-task")"
 check "checkout: git was asked which repository it answers for in that task folder" \
-  "$(has "$(calls_of git)" "$(printf 'git -C %q rev-parse --absolute-git-dir' "$NS/repo-task")")"
+  "$(eq "$(git_asked "$NS/repo-task" "rev-parse --absolute-git-dir")" 1)"
 check "checkout: and was asked nothing else, by the remover" "$(eq "$(calls_of git | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkout: and so does a checkout four levels down, by the first shape" "$(gone "$NT/clone")"
 check "checkout: the judge was asked about exactly those two" \
@@ -514,7 +523,9 @@ if command -v git >/dev/null 2>&1; then
     "$(eq "$(own "$RG/wt")" "no: git answers there for a repository that lies outside it ($RG/clone/.git/worktrees/wt): it is a worktree or submodule of a repository elsewhere, or its .git is a link to one")"
   check "real git: a submodule does not" "$(has "$(own "$RG/super/sub")" "no: git answers there for a repository that lies outside it ($RG/super/.git/modules/sub)")"
   check "real git: a folder whose .git is a link to a repository does not" "$(has "$(own "$RG/linked")" "no: git answers there for a repository that lies outside it ($RG/clone/.git)")"
-  check "real git: a bare repository does not" "$(has "$(own "$RG/bare")" "no: git answers there for a repository that lies outside it ($RG/bare)")"
+  # Asked through dc_git (#3328), git works with no bare repository it merely finds at a folder, so
+  # one is refused as holding none, where a bare call answered for the folder itself.
+  check "real git: a bare repository does not: git is asked to answer for none it merely finds" "$(eq "$(own "$RG/bare")" "no: git names no repository for it (git exit 128)")"
   check "real git: an empty .git folder only looks like one" "$(eq "$(own "$RG/empty")" "no: git names no repository for it (git exit 128)")"
   check "real git: a .git folder holding only a HEAD only looks like one" "$(eq "$(own "$RG/headonly")" "no: git names no repository for it (git exit 128)")"
   check "real git: a plain folder is none" "$(eq "$(own "$RG/plain")" "no: git names no repository for it (git exit 128)")"
@@ -530,13 +541,33 @@ if command -v git >/dev/null 2>&1; then
   check "real git: a task folder that is a worktree is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/wt")" "no: it is a session's task folder and not a git checkout with a repository of its own (git answers there for a repository that lies outside it")"
   check "real git: a submodule four levels down is not a task folder, so it is refused by its shape" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/super/sub")" "no: it is not a session's task folder")"
   check "real git: a task folder whose .git only looks like one is not" "$(has "$(ck3 "$H/.claude/state/session-notes/p/s/empty")" "(git names no repository for it (git exit 128))")"
-  # The stand in every stubbed suite uses, against real git, folder by folder.
+  # The stand in every stubbed suite uses, against real git asked as dc_git_own_repo asks it,
+  # through dc_git, folder by folder. A bare repository is among them now that both say none.
   git_dir_stub
-  for d in clone super wt super/sub linked empty headonly plain; do
-    real="$(git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; real="$?|$real"
+  for d in clone super wt super/sub linked empty headonly plain bare; do
+    real="$(dc_git "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null </dev/null)"; real="$?|$real"
     stood="$(dc_run git -C "$RG/$d" rev-parse --absolute-git-dir 2>/dev/null)"; stood="$?|$stood"
     check "real git: the stand in answers as real git does for $d" "$(eq "$stood" "$real")"
   done
+  default_stubs
+  # The worktree method with real git, on a worktree whose repository names a program for each
+  # setting measured to start one (#3328): git removes it, and none of those programs runs. The
+  # same fixture run bare is test-disk-clean-git.sh's control, where each is seen to run.
+  fresh
+  RLOG="$DC_ROOT/markers.log"; : > "$RLOG"
+  REAL_GIT="$(command -v git)"
+  dc_marker_repo "$REAL_GIT" "$H/w/real-repo" "$RLOG" || check "real git: the marker repository was made" "dc_marker_repo failed"
+  _dc_rgit "$REAL_GIT" -C "$H/w/real-repo" worktree add "$H/w/real-wt" -b side >/dev/null
+  check "real git: the fixture is a worktree of a repository whose own configuration names programs" \
+    "$([ -f "$H/w/real-wt/.git" ] && grep -q 'fsmonitor = ' "$H/w/real-repo/.git/config" && [ -x "$H/w/real-repo/.git/hooks/post-index-change" ] && echo ok || echo "it was not made")"
+  touch -t 203001010000 "$H/w/real-wt/a.txt"; : > "$RLOG"
+  dc_stub git "GIT_CONFIG_NOSYSTEM=1 exec $(printf '%q' "$REAL_GIT") \"\$@\""
+  item r1 fixture worktree "$H/w/real-wt"; record s1 10; plan "$H/plan" s1 r1
+  run --plan "$H/plan"
+  check "real git: the remover removes a clean worktree through git" "$(eq "$RC|$([ -e "$H/w/real-wt" ] && echo there || echo gone)" "0|gone")"
+  check "real git: and no program the worktree's repository names ran while it did" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "real git: git was asked to remove it, with the repository's programs turned off, its filter by name" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false -c filter.mark.clean= -c filter.mark.smudge= -c filter.mark.process= worktree remove ")" 1)"
   default_stubs
 else
   check "real git: git is on this machine, so the predicate can be asked for real" "no git on the PATH"
@@ -562,6 +593,35 @@ check "a relative path is skipped" "$(has "$OUT_TEXT" "not absolute")"
 check "a path with a .. component is skipped" "$(has "$OUT_TEXT" ". or .. component")"
 check "and the file it named is still there" "$(there "$H/w/real")"
 check "no write was refused by the guard: disk-remove refused them itself" "$(eq "$(dc_refusals)" "")"
+
+# A recorded target ending in a slash (#3332). The link test on "link/" follows the link rather than
+# seeing it, so before this every such item passed the link refusal: delete removed the link as if
+# it were what was measured, the worktree and derived-data methods were handed it, and truncate
+# emptied the file it named, outside HOME. No scan module records a trailing slash, so it is refused.
+fresh
+mkdir -p "$H/w/realdir" "$H/w/plain" "$DC_ROOT/beside-home"; printf 'x\n' > "$H/w/realdir/f"; printf 'x\n' > "$H/w/plain/f"
+for n in 1 2 3 4 5; do ln -s "$H/w/realdir" "$H/w/dlink$n"; done
+printf 'keep\n' > "$DC_ROOT/beside-home/kept"; ln -s "$DC_ROOT/beside-home/kept" "$H/w/flink"
+item e1 fixture truncate "$H/w/flink/"; item e2 fixture worktree "$H/w/dlink1/"; item e3 fixture derived-data "$H/w/dlink2/"
+item e4 fixture trash "$H/w/dlink3/"; item e5 fixture delete "$H/w/dlink4/"; item e6 fixture delete "$H/w/dlink5//"
+item e7 fixture delete "$H/w/realdir/"; item e8 fixture delete "/"; item e9 fixture delete "$H/w/plain"
+record s1 10; plan "$H/plan" s1 e1 e2 e3 e4 e5 e6 e7 e8 e9
+run --plan "$H/plan"
+for pair in "truncate through a link to a file|$H/w/flink/:" "worktree|$H/w/dlink1/:" "derived-data|$H/w/dlink2/:" \
+  "trash|$H/w/dlink3/:" "delete|$H/w/dlink4/:" "two slashes|$H/w/dlink5//:" "a real folder, not a link|$H/w/realdir/:"; do
+  check "trailing slash: ${pair%%|*} is refused, saying its path ends in a slash" "$(has "$(line_of "${pair#*|}")" "its path ends in a slash")"
+done
+check "trailing slash: the file outside HOME that a link named was not emptied" "$(eq "$(cat "$DC_ROOT/beside-home/kept")" keep)"
+check "trailing slash: no link was removed, and the folder they name is whole" \
+  "$(n=0; for l in 1 2 3 4 5; do [ -L "$H/w/dlink$l" ] && n=$((n + 1)); done; [ "$n" -eq 5 ] && [ -L "$H/w/flink" ] && [ -f "$H/w/realdir/f" ] && echo ok || echo "$n of the 5 folder links are left")"
+check "trailing slash: neither git nor the Xcode build cache sweep was handed a link" "$(eq "$(calls_of git)$(calls_of derived-data-sweep)" "")"
+check "trailing slash: nothing was moved to the Trash" "$(eq "$(calls_of trash)" "")"
+check "trailing slash: no INTENT was written for any of them" "$(eq "$(intents "$(LOGF s1)" '^e[1-8]$')" 0)"
+check "trailing slash: the path / alone is still refused as the root of the disk" "$(has "$(line_of "skipped    /:")" "it is the root of the disk")"
+check "trailing slash: a folder named without one, in the same plan, is removed as before" "$(eq "$(intents "$(LOGF s1)" '^e9$')|$(gone "$H/w/plain")" "1|ok")"
+mkdir -p "$H/w/realdir"; ln -sfn "$H/w/realdir" "$H/w/plink"
+run --propose delete "$H/w/plink/"
+check "trailing slash: --propose refuses a path given with one too" "$(eq "$RC|$(has "$(line_of "$H/w/plink/:")" "its path ends in a slash")" "5|ok")"
 
 # The temp folder is an allowed root too.
 fresh
@@ -680,12 +740,14 @@ check "disk-remove empties with tee and never with a redirection onto an item" \
 # ================================================================================================
 fresh
 mkdir -p "$H/w/wt-clean" "$H/w/wt-dirty"
-dc_stub git 'case "$2" in */wt-dirty) echo "fatal: '"'"'$2'"'"' contains modified or untracked files, use --force to delete it" >&2; exit 128 ;; esac; /bin/rm -rf "$2"'
+dc_stub git "$DC_GIT_HELPER_STANDIN"'
+case "$1 $2" in "worktree remove") ;; *) echo "git stub: $*" >&2; exit 98 ;; esac
+case "$d" in */wt-dirty) echo "fatal: '"'"'$d'"'"' contains modified or untracked files, use --force to delete it" >&2; exit 128 ;; esac; /bin/rm -rf "$d"'
 item w1 fixture worktree "$H/w/wt-clean"; item w2 fixture worktree "$H/w/wt-dirty"
 record s1 10; plan "$H/plan" s1 w1 w2
 run --plan "$H/plan"
 check "a clean worktree is removed" "$(gone "$H/w/wt-clean")"
-check "git was asked to remove it from inside, without --force" "$(has "$(calls_of git)" "git -C $H/w/wt-clean worktree remove $H/w/wt-clean")"
+check "git was asked to remove it from inside, without --force" "$(eq "$(git_asked "$H/w/wt-clean" "worktree remove $(printf '%q' "$H/w/wt-clean")")" 1)"
 check "and never with --force" "$(hasnt "$(calls_of git)" "--force")"
 check "a dirty worktree git refuses is skipped, quoting git" "$(has "$OUT_TEXT" "git refused to remove the worktree: fatal:")"
 check "and is still there" "$(there "$H/w/wt-dirty")"

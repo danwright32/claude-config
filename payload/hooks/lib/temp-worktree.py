@@ -219,7 +219,8 @@ def bash(s, cwd):
         why = wrap.partition("\x1d")[2]
         if why and PLACES.search(text):
             raise Unread("it hands a string to a shell that cannot be read: %s" % why)
-        words = sw.command_words(rest)
+        # The words git gets: a redirection among them is no word, so the path is never one (#3322).
+        words = sw.tool_words(rest)
         reading = sw.git_read(words)
         if reading is None:
             head = words[0] if words else ""

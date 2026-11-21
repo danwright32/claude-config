@@ -11,10 +11,19 @@
 #     connection opened BEFORE the wrapper starts and handed down to the command is NOT closed to
 #     it, which is asserted as measured so the wrapper's "what it does not cover" stays true;
 #   * the command's exit code, its words and its input come through unchanged;
+#   * a hand off to something outside the sandbox (claude-config#3288): open, osascript, launchctl
+#     and whatever else the wrapper lists each start without the wrapper and are refused with it,
+#     by their own path and through a link; the requests behind them (to have something opened, to
+#     send an Apple event, to have launchd make a job) are allowed without it and denied with it,
+#     by asking the sandbox and making none of them; and a copy of open signed again on this Mac
+#     still starts, and a service is still found by its name, each asserted as measured so the
+#     wrapper's "what it does not cover" stays true. Every start here is the program with --help,
+#     which prints its usage and ends, so nothing is opened, scripted, loaded or scheduled;
 #   * nothing is run when no command is given, when the first word starts with a dash, when the
 #     sandbox tool is missing, when the profile cannot be applied, when the sandbox does not block
 #     the wrapper's own connection, when that connection does not arrive even outside the sandbox,
-#     and when the check gets no answer.
+#     when the check gets no answer, when the sandbox does not refuse to start a listed program,
+#     and when a listed program does not start even outside the sandbox.
 #
 # The wrapper has no option and reads no setting, so the cases that need it to meet a broken sandbox
 # run a COPY of it with one line changed, and each copy is checked to differ from the wrapper. The
@@ -487,6 +496,142 @@ if [ -n "$PORT" ]; then
   else check "held: NOT COVERED, with the wrapper a post on a connection opened before it still arrives" "outcome '$OUTCOME', arrived $(arrived shut-held): the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
 fi
 
+echo "no network run: a hand off to a program outside the sandbox is refused (claude-config#3288)"
+
+# Every start below is one that prints and ends: --help makes each of these programs print its
+# usage, and nothing is opened, scripted, loaded or scheduled, whether the start is refused or not.
+cat > "$T/start.py" <<'PY'
+"""start.py <program>: tries to start the program with --help. Prints started, refused (the
+permission error the sandbox gives), absent, or the error it met."""
+import errno
+import subprocess
+import sys
+
+try:
+    subprocess.run([sys.argv[1], "--help"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=20)
+except FileNotFoundError:
+    print("absent")
+except subprocess.TimeoutExpired:
+    print("no answer")
+except OSError as e:
+    print("refused" if e.errno == errno.EPERM else "error: %s" % e)
+else:
+    print("started")
+PY
+# What the sandbox this process is in answers for one operation, with nothing started. It is the
+# question the system's own daemons put about a caller before they act for it.
+cat > "$T/ask.py" <<'PY'
+"""ask.py <operation> <none|global-name|appleevent> [value]: prints allowed or denied."""
+import ctypes
+import os
+import sys
+
+KIND = {"none": 0, "global-name": 2, "appleevent": 4}[sys.argv[2]]
+NO_REPORT = 0x40000000
+lib = ctypes.CDLL("/usr/lib/system/libsystem_sandbox.dylib")
+lib.sandbox_check.restype = ctypes.c_int
+lib.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+if KIND:
+    rc = lib.sandbox_check(os.getpid(), sys.argv[1].encode(), KIND | NO_REPORT, ctypes.c_char_p(sys.argv[3].encode()))
+else:
+    rc = lib.sandbox_check(os.getpid(), sys.argv[1].encode(), NO_REPORT)
+print({0: "allowed", 1: "denied"}.get(rc, "answer %d" % rc))
+PY
+
+# The three the issue names are this suite's own list, and whatever else the wrapper lists is
+# measured with them, so a program added there cannot go unmeasured here (L96).
+LISTED="$(sed -n "s/^HANDOFFS='\(.*\)'\$/\1/p" "$WRAP")"
+if [ -n "$LISTED" ]; then check "the wrapper lists the programs it refuses to start" ok
+else check "the wrapper lists the programs it refuses to start" "no line HANDOFFS='...' in $WRAP"; fi
+PROGRAMS="/usr/bin/open /usr/bin/osascript /bin/launchctl"
+for prog in $LISTED; do
+  case " $PROGRAMS " in *" $prog "*) ;; *) PROGRAMS="$PROGRAMS $prog" ;; esac
+done
+for prog in /usr/bin/open /usr/bin/osascript /bin/launchctl; do
+  case " $LISTED " in *" $prog "*) check "the wrapper's list names $prog" ok ;; *) check "the wrapper's list names $prog" "its list is '$LISTED'" ;; esac
+done
+for prog in $PROGRAMS; do
+  run "$PY_FIXED" -I "$T/start.py" "$prog"
+  if [ "$OUT" = "absent" ]; then
+    echo "SUITE-PART-UNMEASURED $prog being refused under the wrapper: it is not on this machine"
+    continue
+  fi
+  if [ "$OUT" != "started" ]; then
+    check "without the wrapper $prog starts" "it said '$OUT', so its being refused under the wrapper would prove nothing"
+    continue
+  fi
+  check "without the wrapper $prog starts" ok
+  run "$WRAP" "$PY_FIXED" -I "$T/start.py" "$prog"
+  if [ "$OUT" = "refused" ]; then check "with the wrapper $prog is refused" ok
+  else check "with the wrapper $prog is refused" "it said '$OUT'"; fi
+done
+
+# As the wrapper's own command: the sandbox tool cannot start it, and says so with its own code.
+# The words looked for are the sandbox tool's, not "Operation not permitted" alone, which the
+# wrapper's own line about the network says on every run.
+run "$WRAP" /usr/bin/open --help
+exits "open as the wrapper's command is not started" 71
+says "open as the wrapper's command says the sandbox tool could not start it" "execvp() of '/usr/bin/open' failed: Operation not permitted"
+
+# By another path. A link is read through to the file it names, so it is refused as the file is.
+ln -s /usr/bin/open "$T/open-link"
+run "$PY_FIXED" -I "$T/start.py" "$T/open-link"
+if [ "$OUT" = "started" ]; then
+  check "without the wrapper a link to open starts it" ok
+  run "$WRAP" "$PY_FIXED" -I "$T/start.py" "$T/open-link"
+  if [ "$OUT" = "refused" ]; then check "with the wrapper a link to open is refused" ok
+  else check "with the wrapper a link to open is refused" "it said '$OUT'"; fi
+else
+  check "without the wrapper a link to open starts it" "it said '$OUT'"
+fi
+
+# MEASURED NOT COVERED (2026-11-20, macOS 26.6.2). A plain copy of one of these programs is ended
+# by macOS itself, with or without the wrapper (a launch constraint: the crash record says so),
+# which is not run here because each try leaves a crash record in the user's own Library. A copy
+# signed again on this Mac is no longer Apple's program, starts, and is not refused by its path.
+# What then stands in its way is the rules on the requests themselves, asked below. This holds the
+# wrapper's "what it does not cover" to what the sandbox does: it fails on the day that changes.
+if [ -x /usr/bin/codesign ] && cp /usr/bin/open "$T/open-copy" && /usr/bin/codesign -f -s - "$T/open-copy" >/dev/null 2>&1; then
+  run "$PY_FIXED" -I "$T/start.py" "$T/open-copy"
+  if [ "$OUT" = "started" ]; then
+    run "$WRAP" "$PY_FIXED" -I "$T/start.py" "$T/open-copy"
+    if [ "$OUT" = "started" ]; then check "copy: NOT COVERED, a copy of open signed again on this Mac still starts under the wrapper" ok
+    else check "copy: NOT COVERED, a copy of open signed again on this Mac still starts under the wrapper" "it said '$OUT': the sandbox no longer behaves as no-network-run.sh and the README say, so bring both up to date"; fi
+  else
+    echo "SUITE-PART-UNMEASURED whether a copy of open signed again on this Mac starts under the wrapper: outside it the copy said '$OUT'"
+  fi
+else
+  echo "SUITE-PART-UNMEASURED whether a copy of open signed again on this Mac starts under the wrapper: it could not be copied and signed here"
+fi
+
+# The requests themselves, whoever makes them. Outside the wrapper each must be allowed, or its
+# being denied inside would prove nothing.
+# asked <what> <wanted under the wrapper> <operation> <kind> [value]
+asked() {
+  local what="$1" want="$2"
+  shift 2
+  run "$PY_FIXED" -I "$T/ask.py" "$@"
+  if [ "$OUT" != "allowed" ]; then
+    check "without the wrapper $what is allowed" "the sandbox answered '$OUT' ${ERR:0:200}"
+    return
+  fi
+  check "without the wrapper $what is allowed" ok
+  run "$WRAP" "$PY_FIXED" -I "$T/ask.py" "$@"
+  if [ "$OUT" = "$want" ]; then check "with the wrapper $what is $want" ok
+  else check "with the wrapper $what is $want" "the sandbox answered '$OUT' ${ERR:0:200}"; fi
+}
+asked "a request to have something opened (what open asks)" denied lsopen none
+asked "an Apple event to another app (what osascript sends)" denied appleevent-send appleevent com.apple.finder
+# ALREADY SO before #3288 (measured 2026-11-20, macOS 26.6.2: denied under the profile that named
+# the network alone), so this case was never seen to fail. The rule is written out so that the
+# profile does not lean on a default, and the case holds it there.
+asked "a request to launchd to make a job (what launchctl asks)" denied job-creation none
+# MEASURED NOT COVERED (2026-11-20). Finding a service by its name is still allowed, the clipboard's
+# here: denying every such lookup also broke looking up a user's name, watching a folder and
+# reading a preference in the same measurement, so it was left for Dan to decide (README).
+asked "finding a service by name: NOT COVERED, and so it" allowed mach-lookup global-name com.apple.pasteboard.1
+
 echo "no network run: the sandbox is proved on every run, and a run that cannot prove it runs nothing"
 
 changed unapplied "s|^PROFILE=.*|PROFILE='(version 1)(allow default'|"
@@ -506,6 +651,29 @@ run "$T/deaf.sh" /usr/bin/touch "$T/ran.deaf"
 exits "a connection that does not arrive even outside the sandbox is refused" 70
 says "a control that fails says a block would prove nothing" "would prove nothing"
 not_ran "a control that fails runs nothing" deaf
+
+# The programs the profile refuses to start are proved the same way on every run (#3288). A
+# profile that still takes the network away and no longer refuses them: nothing is run.
+changed nostarts 's|(deny process-exec\*\$DENY_STARTS)||'
+run "$T/nostarts.sh" /usr/bin/touch "$T/ran.nostarts"
+exits "a sandbox that does not refuse to start a listed program is refused" 70
+says "a sandbox that does not refuse to start a listed program says so" "did NOT refuse to start"
+not_ran "a sandbox that does not refuse to start a listed program runs nothing" nostarts
+
+# A listed program that cannot be started even outside the sandbox, here a file that is there and
+# is no program: its not starting inside would prove nothing, so nothing is run.
+changed unstartable "s|^HANDOFFS=.*|HANDOFFS='/etc/hosts'|"
+run "$T/unstartable.sh" /usr/bin/touch "$T/ran.unstartable"
+exits "a listed program that does not start even outside the sandbox is refused" 70
+says "a start control that fails says a refusal would prove nothing" "would prove nothing"
+not_ran "a start control that fails runs nothing" unstartable
+
+# A listed program that is not on the machine at all cannot be handed anything, so it is passed
+# over and the command runs.
+changed absent "s|^HANDOFFS=.*|HANDOFFS='/nonexistent-3288/open'|"
+run "$T/absent.sh" /usr/bin/touch "$T/ran.absent"
+exits "a listed program that is not on this machine does not stop the run" 0
+ran "a listed program that is not on this machine: the command is run" absent
 
 # A sandbox tool that never answers: the check gives up at its limit, shortened here on the copy,
 # and nothing is run. The stand in is ended by the check itself.

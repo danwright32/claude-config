@@ -165,8 +165,12 @@ export const policyOf = (night: unknown, repo: string | undefined): Policy => {
   return { kind: 'closed', repo, why: `${repo} is on neither list in ${REPO_LIST_FILE}` }
 }
 
-/** One thing a command would do that this phase judges, and the repository it names, when it names one. */
-export type Act = { kind: 'merge' | 'deploy' | 'push-default'; what: string; repo?: string | null }
+/**
+ * One thing a command would do that this phase judges, and the repository it names, when it names
+ * one. `rewrite` is how the command is written so that it can be read (#3272), where the act is only
+ * that it could not be: the refusal says it, since a refused call is otherwise sent no other way.
+ */
+export type Act = { kind: 'merge' | 'deploy' | 'push-default'; what: string; repo?: string | null; rewrite?: string }
 
 /**
  * A package.json's scripts as the judge needs them: each script's body as the commands mod-kit's
@@ -187,6 +191,9 @@ const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
 // gh reads them (L613, #961, #1251), asked once per command: the repository it names, undefined for
 // none, null for one that cannot be read.
 const helperRepo = (h: ModKitGh): string | null | undefined => (h.unreadable ? null : h.named)
+// The word naming a command's program, where mod-kit's reader says a value the shell expands names
+// it (its `unread`, #3021): `$sh` in `$sh -c '...'`, past the `builtin` that only runs it.
+const valueNamed = (c: Cmd): string | undefined => (c.unread?.startsWith('named by a value') ? c.words[c.words[0] === 'builtin' ? 1 : 0] : undefined)
 const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)$/
 // Mutations that write a branch directly, which can be the default branch: refused everywhere, as a push to it is.
 const BRANCH_MUTATION = /^(?:createCommitOnBranch|updateRef|updateRefs|createRef|deleteRef)$/
@@ -251,8 +258,17 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
   // mod-kit finds it run, whatever its arguments, and one that may run it but cannot be read for
   // certain is a merge into a repository that cannot be told (#1251). Reading its file is neither.
   if (c.mergeHelper) {
-    const what = c.mergeHelper.unreadable ? 'run a command that may run merge-when-ready.sh, which cannot be read' : 'merge a PR with merge-when-ready.sh'
-    out.push({ kind: 'merge', what, repo: helperRepo(c.mergeHelper) })
+    // Where what cannot be read is the program itself, a word the shell fills in, the act names that
+    // word and how to write it (#3272): on 2026-11-19 a loop running `$sh -c '...'` in two shells
+    // was held with words that named neither, and its builder had nothing to rewrite.
+    const word = c.mergeHelper.unreadable ? valueNamed(c) : undefined
+    const what = word
+      ? `run \`${word}\`, a command named by a value this reader cannot follow, which may be merge-when-ready.sh`
+      : c.mergeHelper.unreadable
+        ? 'run a command that may run merge-when-ready.sh, which cannot be read'
+        : 'merge a PR with merge-when-ready.sh'
+    const rewrite = word ? { rewrite: `If it merges nothing, write the command out where \`${word}\` stands: written that way it can be read, and you may send it again.` } : {}
+    out.push({ kind: 'merge', what, repo: helperRepo(c.mergeHelper), ...rewrite })
   }
   if (c.git?.sub === 'push') {
     const p = pushToDefault(c.git.args, where)
@@ -440,7 +456,7 @@ export const judgeNight = (night: unknown, commands: Cmd[], places: (Place | nul
           what: act.what,
           ...(repo ? { repo } : {}),
           why,
-          deny: `Blocked overnight: this would ${act.what}, and ${why}. Leave the green PR open and write a note for the morning report saying what is waiting and why; carry on with other work.`,
+          deny: `Blocked overnight: this would ${act.what}, and ${why}. ${act.rewrite ? `${act.rewrite} If it does merge, leave` : 'Leave'} the green PR open and write a note for the morning report saying what is waiting and why; carry on with other work.`,
         }
     }
   }

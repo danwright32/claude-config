@@ -70,6 +70,15 @@ import {
   spelledThrough,
   literalValue,
   tempRoots,
+  keptInTemp,
+  scriptHidesWrites,
+  gitMove,
+  movedFiles,
+  pickedFiles,
+  moveUnread,
+  defaultBranchRef,
+  beyondDefault,
+  onDefaultSaid,
   ROUND_FILES,
   checked,
   unsure,
@@ -467,6 +476,213 @@ test('#2792: the session notes folder is known by the home folder, any session o
   expect(inSessionNotes(`${'/Users'}/eve/.claude/state/session-notes/-w-slate/s1/app/page.tsx`, home)).toBe(false)
   expect(inSessionNotes('/.claude/state/session-notes/-w-slate/s1/app/page.tsx', '')).toBe(false)
   expect(inSessionNotes('dan/.claude/state/session-notes/-w-slate/s1/app/page.tsx', 'dan')).toBe(false)
+})
+
+// #3279: a script kept in a temporary folder is one a session wrote to run once. Known by where its
+// path lands: /tmp and /var/folders in both of macOS's spellings, and Claude Code's own temp folder.
+test('#3279: a script file is kept in a temporary folder by where its path lands, never by a folder merely named like one', () => {
+  const tmp = tempRoots(undefined)
+  for (const p of ['/tmp/fix.py', '/private/tmp/claude-501/-w-slate/s1/scratchpad/3279/gen.mjs', '/var/folders/ab/T/fix.py', '/private/var/folders/ab/T/x/fix.py', '/w/slate/../../tmp/fix.py'])
+    expect({ p, temp: keptInTemp(p, tmp) }).toEqual({ p, temp: true })
+  for (const p of ['/w/slate/scripts/gen.py', '/w/slate/tmp/gen.py', '/tmpx/gen.py', '/tmp/../w/slate/scripts/gen.py', `${'/Users'}/dan/.claude/state/session-notes/-w-slate/s1/3279/gen.py`, `${'/Users'}/dan/Temp Dir/gen.py`])
+    expect({ p, temp: keptInTemp(p, tmp) }).toEqual({ p, temp: false })
+  // Claude Code's temp folder, wherever CLAUDE_CODE_TMPDIR puts it.
+  expect(keptInTemp(`${'/Users'}/dan/Temp Dir/claude-501/x/s1/scratchpad/gen.py`, tempRoots(`${'/Users'}/dan/Temp Dir`))).toBe(true)
+  expect(scriptHidesWrites('/tmp/fix.py', 'app/globals.css')).toContain('/tmp/fix.py is kept in a temporary folder, its own code does not name every file it writes, and it names app/globals.css by a relative name')
+})
+
+// #3279: what each git command that moves committed work brings into the working tree, as the
+// question to ask git, read from mod-kit's reading of its words alone.
+test('#3279: gitMove reads what to ask git for each move, nothing for a move that brings nothing in, and why for one its words cannot say', () => {
+  const g = (line: string) => {
+    const [sub, ...args] = line.split(' ')
+    return gitMove({ sub, args })
+  }
+  const ask = (line: string) => {
+    const m = g(line)
+    return m && 'ask' in m ? m.ask : m
+  }
+  expect(ask('merge origin/main')).toEqual({ ask: 'merge', commits: ['origin/main'] })
+  expect(ask('merge --no-ff -m msg a b')).toEqual({ ask: 'merge', commits: ['a', 'b'] })
+  expect(ask('merge --ff-only')).toEqual({ ask: 'merge', commits: ['@{upstream}'] })
+  expect(ask('merge -s ours --strategy-option=theirs FETCH_HEAD')).toEqual({ ask: 'merge', commits: ['FETCH_HEAD'] })
+  expect(ask('rebase origin/main')).toEqual({ ask: 'merge', commits: ['origin/main'] })
+  expect(ask('rebase')).toEqual({ ask: 'merge', commits: ['@{upstream}'] })
+  expect(ask('cherry-pick -x -m 1 abc1234 def5678')).toEqual({ ask: 'picks', revs: ['abc1234', 'def5678'] })
+  expect(ask('cherry-pick main..topic')).toEqual({ ask: 'picks', revs: ['main..topic'] })
+  expect(ask('revert --no-edit HEAD~2')).toEqual({ ask: 'picks', revs: ['HEAD~2'], revert: true })
+  expect(ask('switch topic')).toEqual({ ask: 'name', name: 'topic', orPath: false })
+  expect(ask('switch -')).toEqual({ ask: 'name', name: '@{-1}', orPath: false })
+  expect(ask('switch -c new origin/main')).toEqual({ ask: 'tree', commit: 'origin/main' })
+  expect(ask('checkout topic')).toEqual({ ask: 'name', name: 'topic', orPath: true })
+  expect(ask('checkout --detach abc1234')).toEqual({ ask: 'name', name: 'abc1234', orPath: true })
+  // `--` with nothing after it names no path: it is git's own way to say the word before it is a
+  // branch or commit, so the checkout is a move, never a path put back (lessons review of 690e551).
+  expect(ask('checkout topic --')).toEqual({ ask: 'name', name: 'topic', orPath: false })
+  expect(ask('checkout --detach abc1234 --')).toEqual({ ask: 'name', name: 'abc1234', orPath: false })
+  expect(ask('checkout -B new origin/main --')).toEqual({ ask: 'tree', commit: 'origin/main' })
+  expect(g('checkout topic -- app/globals.css')).toBeUndefined()
+  expect(g('checkout --')).toBeUndefined()
+  expect(ask('checkout -B new origin/main')).toEqual({ ask: 'tree', commit: 'origin/main' })
+  expect(ask('reset --hard')).toEqual({ ask: 'tree', commit: 'HEAD', worktree: true })
+  expect(ask('reset --keep origin/main')).toEqual({ ask: 'tree', commit: 'origin/main', worktree: true })
+  expect(ask('stash pop')).toEqual({ ask: 'stash', entry: 'stash@{0}' })
+  expect(ask('stash apply --index 2')).toEqual({ ask: 'stash', entry: 'stash@{2}' })
+  expect(ask('stash pop stash@{1}')).toEqual({ ask: 'stash', entry: 'stash@{1}' })
+  // Nothing comes into the working tree, or mod-kit's write reader gives the files already.
+  for (const line of [
+    'merge --abort',
+    'merge --continue',
+    'rebase --skip',
+    'rebase --edit-todo',
+    'rebase --show-current-patch',
+    'cherry-pick --quit',
+    'cherry-pick',
+    'revert --abort',
+    'switch -c new',
+    'switch --detach',
+    'checkout -b new',
+    'checkout',
+    'checkout HEAD -- app/page.tsx',
+    'checkout origin/main app/page.tsx',
+    'checkout -p topic',
+    'reset',
+    'reset --soft HEAD~1',
+    'reset HEAD app/page.tsx',
+    'stash',
+    'stash push -u',
+    'stash list',
+    'stash drop',
+    'fetch origin',
+    'status',
+    'commit -m merge',
+  ])
+    expect({ line, move: g(line) }).toEqual({ line, move: undefined })
+  // An option that only shows is told by how it starts, and never where the command names a commit.
+  expect(ask('merge --show-anything topic')).toEqual({ ask: 'merge', commits: ['topic'] })
+  expect(ask('rebase --show-anything main')).toEqual({ ask: 'merge', commits: ['main'] })
+  expect(gitMove(undefined)).toBeUndefined()
+  expect(gitMove({ sub: undefined, args: [] })).toBeUndefined()
+  // A subcommand spelled like a member every object inherits is no move, and reading it never throws.
+  for (const sub of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) expect({ sub, move: gitMove({ sub, args: ['-m', 'x', 'topic'] }) }).toEqual({ sub, move: undefined })
+  // Its words cannot say what it brings in.
+  const unread = (line: string) => {
+    const m = g(line)
+    return m && 'unread' in m ? m.unread : ''
+  }
+  expect(unread('pull')).toContain('git pull fetches before it merges')
+  expect(unread('pull --rebase origin main')).toContain('git pull fetches before it merges')
+  for (const line of ['rebase --onto main a', 'rebase --onto=main a', 'rebase -i main', 'rebase --root', 'rebase -x make main', 'rebase main topic']) expect({ line, said: unread(line).includes('this form of git rebase') }).toEqual({ line, said: true })
+  expect(unread('switch --orphan empty')).toContain('takes every tracked file out')
+  expect(unread('stash branch rescue')).toContain('git stash branch')
+  for (const line of ['merge $BRANCH', 'cherry-pick `cat sha`', 'checkout feat*', 'reset --hard $(cat base)']) expect({ line, said: unread(line).includes('which the guard cannot hand to git to read') }).toEqual({ line, said: true })
+  // A pull and a rebase the guard cannot read each say how to run them so it can, or nothing.
+  const pull = g('pull')
+  expect(pull && 'remedy' in pull ? pull.remedy : '').toContain('Run git fetch as its own command first')
+  // The words a refusal quotes are cut short where a message makes them long.
+  expect(g(`merge -m ${'x'.repeat(200)} topic`)?.said.length).toBe(120)
+})
+
+// #3337: the mainline number of a cherry-pick or revert names the parent each commit is read
+// against. gitMove took it as an option's value and dropped it, so every one was read against the
+// first parent.
+test('#3337: gitMove hands on the mainline number of a cherry-pick or revert, and says why where it cannot read one', () => {
+  const g = (line: string) => {
+    const [sub, ...args] = line.split(' ')
+    return gitMove({ sub, args })
+  }
+  const ask = (line: string) => {
+    const m = g(line)
+    return m && 'ask' in m ? m.ask : m
+  }
+  for (const line of ['cherry-pick -m 2 abc1234', 'cherry-pick --mainline 2 abc1234', 'cherry-pick --mainline=2 abc1234', 'cherry-pick -m2 abc1234', 'cherry-pick abc1234 -m 2', 'cherry-pick -m 2 -m 2 abc1234'])
+    expect({ line, ask: ask(line) }).toEqual({ line, ask: { ask: 'picks', revs: ['abc1234'], mainline: 2 } })
+  expect(ask('revert --no-edit -m 3 abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'], revert: true, mainline: 3 })
+  expect(ask('cherry-pick -m 12 a..b')).toEqual({ ask: 'picks', revs: ['a..b'], mainline: 12 })
+  // The first parent is what was always read, so it is handed on as no number at all.
+  for (const line of ['cherry-pick -m 1 abc1234', 'cherry-pick --mainline=1 abc1234', 'cherry-pick -m1 abc1234', 'cherry-pick abc1234']) expect({ line, ask: ask(line) }).toEqual({ line, ask: { ask: 'picks', revs: ['abc1234'] } })
+  expect(ask('revert -m 1 abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'], revert: true })
+  // A number it cannot read, an option that may be the mainline one spelled another way, and two that differ.
+  const unreadOf = (line: string) => {
+    const m = g(line)
+    return m && 'unread' in m ? `${m.unread} ${m.remedy ?? ''}` : ''
+  }
+  for (const line of [
+    'cherry-pick -m $N abc1234',
+    'cherry-pick -m two abc1234',
+    'cherry-pick -m 0 abc1234',
+    'cherry-pick -m 02 abc1234',
+    'cherry-pick -m 2x abc1234',
+    'cherry-pick --mainline= abc1234',
+    'cherry-pick --main 2 abc1234',
+    'cherry-pick --mainl=2 abc1234',
+    'cherry-pick --m=2 abc1234',
+    'cherry-pick --no-mainline abc1234',
+    'cherry-pick -xm2 abc1234',
+    'cherry-pick -em 2 abc1234',
+    'cherry-pick -m 1 -m 2 abc1234',
+    'cherry-pick -m 2 --mainline=3 abc1234',
+    'revert -m $N abc1234',
+    'revert -nm 2 abc1234',
+  ])
+    expect({ line, said: unreadOf(line).includes('mainline number') && unreadOf(line).includes('Write the mainline number as -m and a whole number') }).toEqual({ line, said: true })
+  // A sequence carried on, or no commit named, brings nothing in whatever its options.
+  for (const line of ['cherry-pick --continue', 'cherry-pick -m 2', 'revert --abort']) expect({ line, move: g(line) }).toEqual({ line, move: undefined })
+  // Every other option of the two is read as before.
+  expect(ask('cherry-pick -x --strategy recursive -X theirs abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  expect(ask('cherry-pick --no-commit --ff abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  // A letter m inside the value joined onto -X or -S is that option's value, never the mainline one.
+  expect(ask('cherry-pick -Xrenormalize -Smykey abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  expect(ask('merge -m 2 topic')).toEqual({ ask: 'merge', commits: ['topic'] })
+})
+
+test('#3279: movedFiles and pickedFiles read what git lists, and give nothing rather than no files for anything else', () => {
+  const sha = 'a'.repeat(40)
+  const other = 'b'.repeat(40)
+  expect(movedFiles('', sha)).toEqual([])
+  expect(movedFiles('M\0app/page.tsx\0A\0app/new.css\0D\0app/old.css\0T\0link\0', sha)).toEqual([{ rel: 'app/page.tsx', from: sha }, { rel: 'app/new.css', from: sha }, { rel: 'app/old.css', removes: true }, { rel: 'link', from: sha }])
+  // A name with a space or a newline comes whole between the zeros.
+  expect(movedFiles('M\0app/my page.tsx\0', sha)).toEqual([{ rel: 'app/my page.tsx', from: sha }])
+  for (const bad of ['M\tapp/page.tsx\n', 'warning: something\n', 'M\0app/page.tsx', 'R100\0a\0b\0', 'M\0\0']) expect({ bad, read: movedFiles(bad, sha) }).toEqual({ bad, read: undefined })
+  // git log --no-walk: one block per commit, a newline after the zero that ends its name.
+  const log = `\u0001${sha}\0\nM\0app/page.tsx\0D\0app/old.css\0\u0001${other}\0\nA\0app/new.css\0`
+  expect(pickedFiles(log)).toEqual([{ rel: 'app/page.tsx', from: sha }, { rel: 'app/old.css', removes: true }, { rel: 'app/new.css', from: other }])
+  // Reverted, each file goes back to what the commit's parent held, and one the commit added goes.
+  expect(pickedFiles(log, true)).toEqual([{ rel: 'app/page.tsx', from: `${sha}^` }, { rel: 'app/old.css', from: `${sha}^` }, { rel: 'app/new.css', removes: true }])
+  expect(pickedFiles('')).toEqual([])
+  expect(pickedFiles(`\u0001${sha}\n`)).toEqual([])
+  for (const bad of ['fatal: bad revision\n', `\u0001not-a-sha\0\nM\0a\0`, `\u0001${sha}\0\nM\ta\n`]) expect({ bad, read: pickedFiles(bad) }).toEqual({ bad, read: undefined })
+  // What the session is told: with another way to run it nothing is asked of Dan; with none, it may ask.
+  expect(moveUnread('git pull', 'it fetches first', 'Run git fetch first.')).toContain('for `git pull` it could not: it fetches first. So it cannot tell whether a file that changes how the screen looks arrives. Run git fetch first. Nothing is asked of Dan for this.')
+  expect(moveUnread('git rebase -i main', 'this form')).toContain('or ask Dan')
+  expect(moveUnread('git rebase -i main', 'this form')).not.toContain('Nothing is asked of Dan')
+})
+
+// #3279, Dan, 2026-11-20, "Skip what is on main": the pure parts of telling which files a merge of
+// the default branch brings in exactly as that branch holds them.
+test('#3279: the default branch is read only from a plain branch name under the remote, and a merge is still asked about every file its commit holds beyond that branch', () => {
+  expect(defaultBranchRef('main')).toBe('refs/remotes/origin/main')
+  expect(defaultBranchRef('release/2026.11')).toBe('refs/remotes/origin/release/2026.11')
+  // No name, or one that would read as anything but one branch where git is handed it: none, so the merge is asked about.
+  for (const bad of [null, undefined, '', '-main', 'main..topic', 'a b', '$X', 'main^', 'main~1', 'x:y', 'HEAD@{1}', 'a*', '/main', 'main/', 'a//b', '.main', 'a/.b', 'main\n'])
+    expect({ bad, ref: defaultBranchRef(bad) }).toEqual({ bad, ref: undefined })
+  const sha = 'a'.repeat(40)
+  const css = { rel: 'app/globals.css', from: sha }
+  const theme = { rel: 'app/theme.css', from: sha }
+  const old = { rel: 'app/old.css', removes: true as const }
+  // The commit holds nothing beyond the default branch: nothing is asked.
+  expect(beyondDefault([css, theme, old], [])).toEqual({ asked: [], shipped: [css, theme, old] })
+  // It changed one file since leaving it: that file is asked about, by its exact name, and no other.
+  expect(beyondDefault([css, theme, old], [theme, { rel: 'docs/notes.md', from: sha }])).toEqual({ asked: [theme], shipped: [css, old] })
+  expect(beyondDefault([css, theme, old], [{ rel: 'app/old.css', removes: true }, { rel: 'app/Globals.css', from: sha }])).toEqual({ asked: [old], shipped: [css, theme] })
+  expect(beyondDefault([css], [css])).toEqual({ asked: [css], shipped: [] })
+  expect(beyondDefault([], [css])).toEqual({ asked: [], shipped: [] })
+  // What the guard's log says of a skip: the files, the command, and the commit of the default branch it was read against.
+  const said = onDefaultSaid('git merge origin/main', ['app/globals.css', 'app/old.css'], 'refs/remotes/origin/main', 'd'.repeat(40))
+  expect(said).toBe(
+    'design-round-guard: not asked about app/globals.css and app/old.css, which `git merge origin/main` brings in exactly as the default branch holds them (refs/remotes/origin/main at dddddddddddd): a look change already on the default branch has shipped (#3279).',
+  )
+  expect(onDefaultSaid('git rebase', ['app/globals.css'], 'refs/remotes/origin/main', 'd'.repeat(40))).toContain('brings in exactly as the default branch holds it (refs/remotes/origin/main at dddddddddddd)')
 })
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
@@ -2989,6 +3205,10 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
   expect(pathRestore({ sub: 'checkout', args: ['HEAD', '--', 'f'] })).toBe(true)
   expect(pathRestore({ sub: 'checkout', args: ['main', 'f'] })).toBe(true)
   expect(pathRestore({ sub: 'checkout', args: ['main'] })).toBe(false)
+  // A `--` with nothing after it names no path, so the checkout switches branch and is no
+  // restore, as gitMove reads it (lessons review of 371124a).
+  expect(pathRestore({ sub: 'checkout', args: ['main', '--'] })).toBe(false)
+  expect(pathRestore({ sub: 'checkout', args: ['--'] })).toBe(false)
   expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
   expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
   expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])

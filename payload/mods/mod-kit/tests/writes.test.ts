@@ -502,6 +502,59 @@ describe('writes: what the words do not name', () => {
     // Pointed at a folder it can name, a name whose every $ is left as written is resolved there.
     expect(read(`git -C /repo checkout -- 'a$.ts'`).byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a$.ts', '/repo/a$.ts']])
   })
+  // #3337: git told where its working folder is (--work-tree, GIT_WORK_TREE) reads a relative path
+  // from the top of that folder when the command runs outside it, and from the folder the command
+  // runs in when that is inside it (measured with git 2.51.1: run from the project, `git
+  // --git-dir=<other>/.git --work-tree=<wt> restore app/globals.css` put back <wt>/app/globals.css
+  // and left the project's file alone). Until then every such path was placed in the folder the
+  // command ran in, so a guard judged a file git never touched and missed the one it wrote.
+  const byGit = (command: string, cwd = CWD) => read(command, cwd).byGit ?? []
+  test('a path git is handed is placed in the working folder the command names (#3337)', () => {
+    const paths = (command: string, cwd = CWD) => byGit(command, cwd).map(g => [g.word, g.path ?? null])
+    const HERE = [['app/globals.css', '/w/x/app/globals.css']]
+    expect(paths('git --git-dir=/other/.git --work-tree=/w/x restore app/globals.css')).toEqual(HERE)
+    expect(paths('git --work-tree /w/x checkout -- app/globals.css')).toEqual(HERE)
+    expect(paths('GIT_WORK_TREE=/w/x git restore app/globals.css')).toEqual(HERE)
+    expect(paths('GIT_DIR=/other/.git GIT_WORK_TREE=/w/x git checkout HEAD -- app/globals.css')).toEqual(HERE)
+    expect(paths('env GIT_WORK_TREE=/w/x git rm app/globals.css')).toEqual(HERE)
+    // A relative working folder is read from the folder -C names, or the one the command runs in.
+    expect(paths('git -C /w/a --work-tree=../x restore app/globals.css')).toEqual(HERE)
+    expect(paths('cd /w/a && git --work-tree=../x restore app/globals.css')).toEqual(HERE)
+    // Run inside the working folder, a path is read from the folder the command runs in.
+    expect(paths('git --work-tree=/w/x restore globals.css', '/w/x/app')).toEqual([['globals.css', '/w/x/app/globals.css']])
+    expect(paths('git --work-tree=/w/x restore app/globals.css', '/w/x')).toEqual(HERE)
+    // A folder whose name only starts the same is outside it.
+    expect(paths('git --work-tree=/w/x restore app/globals.css', '/w/xy')).toEqual(HERE)
+  })
+  test('with only the repository named, the folder the command runs in is the working folder, as before (#3337)', () => {
+    expect(byGit('git --git-dir=/other/.git restore app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
+    expect(byGit('GIT_DIR=/other/.git git checkout -- app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
+  })
+  // Where the reader cannot know the working folder, it hands on the path it handed on before #3337,
+  // in the folder the command runs in: a guess, kept so the guards that judge a file by this path
+  // (the collision guard, winding down) judge every call they judged before, since each skips an
+  // entry with no path. A guard that must not act on the guess holds for itself, as the design
+  // round guard does from `git`'s reading of the command and the command's own text.
+  test('a working folder the reader cannot know leaves a relative path where it was placed before (#3337)', () => {
+    const paths = (command: string) => byGit(command).map(g => [g.word, g.path ?? null])
+    const AS_BEFORE = [['app/globals.css', `${CWD}/app/globals.css`]]
+    // A value the shell fills in.
+    expect(paths('git --work-tree="$W" restore app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('GIT_WORK_TREE="$W" git checkout -- app/globals.css')).toEqual(AS_BEFORE)
+    // Set by an earlier command on the line, git reads it only if it was exported, there or before,
+    // which the reader does not follow.
+    expect(paths('export GIT_WORK_TREE=/w/x; git restore app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('GIT_WORK_TREE=/w/x; git restore app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('export GIT_DIR=/other/.git GIT_WORK_TREE=/w/x && git checkout -- app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('export GIT_DIR=/other/.git && git checkout -- app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('GIT_DIR=/other/.git; git restore app/globals.css')).toEqual(AS_BEFORE)
+    expect(paths('export GIT_DIR=/other/.git; git --work-tree=/w/x rm app/globals.css')).toEqual(AS_BEFORE)
+    // After a cd and with -C, as before too.
+    expect(paths('export GIT_WORK_TREE=/w/x; cd /w/a && git restore app/globals.css')).toEqual([['app/globals.css', '/w/a/app/globals.css']])
+    expect(paths('git -C /w/a --work-tree="$W" restore app/globals.css')).toEqual([['app/globals.css', '/w/a/app/globals.css']])
+    // A path written whole names the file it spells wherever git's folders are.
+    expect(paths('export GIT_WORK_TREE=/w/x; git restore /w/x/app/globals.css')).toEqual([['/w/x/app/globals.css', '/w/x/app/globals.css']])
+  })
   // #1765: a device named as what a command reads (/dev/stdin, /dev/fd/0, /proc/self/fd/0) is never
   // an input, so no guard opens it: a read of one waits for ever on the mod worker's own standard
   // input, and the call it judges never runs. The write is still named, as one whose input is unknown.

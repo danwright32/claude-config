@@ -470,8 +470,8 @@ EOF
   # A .git is printed before the dataless prune and never entered, so a worktree whose own .git
   # file iCloud keeps only in the cloud is still found, and worktrees.sh says so (#1860).
   find "$H" \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.ssh" -o -path "$H/.gnupg" -o -path "$H/.claude/projects" \
-      -o -path "$H/Dropbox" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
-      -o -path "$H/Box" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
+      -o -path "$H/Dropbox" -o -path "$H/Dropbox (*" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
+      -o -path "$H/Box" -o -path "$H/Box Sync" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
       -o -name '*.app' -o -name '*.photoslibrary' -o -name '*.musiclibrary' -o -name '*.tvlibrary' -o -name '*.imovielibrary' \
       -o -name '*.aplibrary' -o -name '*.fcpbundle' -o -name '*.lrdata' -o -name '*.lrlibrary' -o -name '*.lrcat-data' \
       -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
@@ -569,7 +569,11 @@ dcs_icloud() { # <path>
 # Drive, Desktop or Documents when iCloud syncs them, any ~/Library/CloudStorage mount (Google Drive,
 # OneDrive, Dropbox and Box through macOS's file provider), or a sync client's own folder in home.
 # Moving anything there to the Trash removes it on every device that syncs it, and a folder that
-# looks missing there may only not have arrived yet (#2346).
+# looks missing there may only not have arrived yet (#2346). Dropbox names its folder for the account
+# when a personal and a team account are linked, ~/Dropbox (Personal) and ~/Dropbox (<team>), and Box
+# Sync, Box's older client, keeps ~/Box Sync (#3233, from Dropbox's and Box's help pages).
+# build-folders.sh and forgotten-worktrees.sh both leave out what this matches, and dcs_walk's prune
+# list names the same home folders, so a folder added here goes there too.
 dcs_synced() { # <path>
   local p="${1%/}" h
   for h in "$HOME" "$DCS_HOME"; do
@@ -577,9 +581,9 @@ dcs_synced() { # <path>
       "$h/Library/Mobile Documents/"*) DCS_WHY="iCloud Drive"; return 0 ;;
       "$h/Library/CloudStorage/"*) DCS_WHY="a cloud storage folder"; return 0 ;;
       "$h/Google Drive/"*) DCS_WHY="Google Drive"; return 0 ;;
-      "$h/Dropbox/"*|"$h/.dropbox/"*) DCS_WHY="Dropbox"; return 0 ;;
+      "$h/Dropbox/"*|"$h/Dropbox ("*|"$h/.dropbox/"*) DCS_WHY="Dropbox"; return 0 ;;
       "$h/OneDrive/"*|"$h/OneDrive - "*) DCS_WHY="OneDrive"; return 0 ;;
-      "$h/Box/"*) DCS_WHY="Box"; return 0 ;;
+      "$h/Box/"*|"$h/Box Sync/"*) DCS_WHY="Box"; return 0 ;;
       "$h/pCloud Drive/"*|"$h/.pcloud/"*) DCS_WHY="pCloud"; return 0 ;;
       "$h/SynologyDrive/"*) DCS_WHY="Synology Drive"; return 0 ;;
       "$h/Desktop/"?*) dcs_icloud "$p" && { DCS_WHY="Desktop, which iCloud syncs"; return 0; } ;;
@@ -631,12 +635,12 @@ dcs_github_repo() { # <url>
 dcs_git_merged() { # <checkout>
   local t="${1%/}" st br head url repo out err="$DCS_WORK/git.err.$$" n oid
   D=""
-  st="$(git -C "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  st="$(dc_git "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
   [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
-  br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
+  br="$(dc_git "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
   [ -n "$br" ] || { V="not offerable: it is on no branch, so no pull request can be matched to it"; rm -f "$err"; return; }
-  head="$(git -C "$t" rev-parse HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-parse failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
-  url="$(git -C "$t" remote get-url origin 2>/dev/null </dev/null)" || { V="not offerable: it has no origin remote, so no pull request can say it merged"; rm -f "$err"; return; }
+  head="$(dc_git "$t" rev-parse HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-parse failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  url="$(dc_git "$t" remote get-url origin 2>/dev/null </dev/null)" || { V="not offerable: it has no origin remote, so no pull request can say it merged"; rm -f "$err"; return; }
   repo="$(dcs_github_repo "$url")" || { V="not offerable: its repository is not on GitHub ($url), so no pull request can say it merged"; rm -f "$err"; return; }
   out="$(gh pr list --repo "$repo" --head "$br" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2> "$err" </dev/null)" || {
     V="unmeasured: gh could not say whether its pull request merged ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }

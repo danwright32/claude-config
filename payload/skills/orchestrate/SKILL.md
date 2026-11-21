@@ -31,6 +31,26 @@ Matching items to agents:
 
 Show the board, then one picker: start as planned, or change something. Nothing is dispatched before he says yes.
 
+### Claiming an issue before its builder starts
+
+On 2026-11-19 two sessions, one on each Mac, built the same fix, because a branch that exists only in a local worktree is invisible to the other Mac and nothing on the issue said the work was taken (claude-config#3317). So a `build` item whose Source is a GitHub issue is claimed on the issue before its builder is dispatched, in the response that dispatches it, in a Bash call of its own just before the `Agent` call:
+
+    bash ~/.claude/skills/orchestrate/claim-issue.sh claim <owner/repo> <issue number> <branch>
+
+It reads the issue's claims, the open pull requests naming it and the remote branches carrying its number, and posts the claim (which Mac, the time in ET, the branch) only when none of them shows another session at work. Dispatch on exit 0 only:
+
+- Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder.
+- Exit 1, `HELD` or `CLOSED`: the item is not started. Its board row shows `held by <who>`, taken from the lines the script prints, and Dan is told in one line.
+- Exit 2, `COULD NOT CHECK`: the item is not started, and nothing was claimed unless the message says a claim may have been posted, when it names the release command to run straight away. Show the reason it prints on the board and run it again later; never read a failed check as free.
+
+A `check` or `investigate` item changes nothing and needs no claim. `claim-issue.sh check` does the same reads and posts nothing, for a look before the board is shown.
+
+A claimed item that ends any way other than a merged pull request that closes its issue (dropped, parked, handed back unfinished, merged with only a reference) is released on the issue in the same step, so the claim does not block the next session:
+
+    bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch> "<reason>"
+
+A claim with no release stops counting after 24 hours; an open pull request or remote branch naming the issue blocks whatever the claim's age.
+
 ### Which model a builder runs on
 
 A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961), in three tiers since Fable became his default model (Dan, 2026-11-09, claude-config#2547), keeping ordinary builders off Fable to limit usage. This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
@@ -58,7 +78,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 ## 4. While agents run
 
 - No more agents running than the session's agent cap, a reviewer agent you start included. When one returns, start the next queued item in the same response.
-- Reprint the board whenever anything changes, with each item's state: `queued`, `running since 2:14 PM ET`, `reported`, `in review`, `merged`, `live`, `needs Dan`, `failed: <why>`. Running, stuck and failed must never look alike.
+- Reprint the board whenever anything changes, with each item's state: `queued`, `held by <who>`, `running since 2:14 PM ET`, `reported`, `in review`, `merged`, `live`, `needs Dan`, `failed: <why>`. Running, stuck and failed must never look alike.
 - An agent silent well past what its item should take: check it with `ListAgents`, then ask it with `SendMessage` for a one paragraph status (found so far, waiting on what, how long). Never read its output file; it is the whole transcript. If it is stuck, stop it with `TaskStop` and restart the item with a brief carrying what it found and what hung it, or mark it failed and say why.
 - Dan adds items mid run: add them to the board and run the matching rules again. When a running agent already owns that area, send the new item to it with `SendMessage` instead of starting another agent: it fixes both on its branch only if they are one fault, and otherwise finishes its own item, reports on the new one, and builds it once its own pull request has merged.
 - An agent's question that only Dan can answer becomes one picker while the others keep running.
@@ -89,6 +109,7 @@ When nothing is running or queued:
 - A final table: item, outcome in one sentence, pull request and live status, and anything that still needs Dan.
 - Each draft reply saved, with its link, so Dan knows where to find and send it; and each list row whose Status moved, with the value it now holds.
 - One git status line per repo.
+- Every claim this session posted for an item that ended without closing its issue, released with `claim-issue.sh release` (see "Claiming an issue before its builder starts").
 - Each decision left for Dan as its own picker, one at a time.
 - Stop anything this session started in the background, and say so.
 - Then `/next-issue`.
@@ -113,5 +134,6 @@ A decision that belongs to an issue goes on that issue as a comment, where the n
 | Two builders in the same files because the items read differently | Match on files touched, not on wording |
 | Board kept in your head | Reprint it on every change |
 | A new item started as a new agent in an area already owned | `SendMessage` to the owner |
+| A builder started on an issue with nothing on the issue saying so | `claim-issue.sh claim` first, and dispatch on exit 0 only |
 | Merging the moment checks go green | Review the diff first, one merge per repo at a time |
 | An item finished with its alert or list row left unanswered | A draft in the message's thread, or the row's Status moved |

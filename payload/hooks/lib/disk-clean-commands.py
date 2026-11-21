@@ -2,7 +2,7 @@
 """disk-clean-commands.py: every command a shell script calls, read from its source (claude-config#1804).
 
     disk-clean-commands.py --core "<names>" --stubs "<names>" --seams "<VAR=stub ...>" \
-        --roots "<dir per line>" -- <file>...
+        --wrapped "<name=function ...>" --roots "<dir per line>" -- <file>...
 
 The static half of the disk-clean test harness (lib/disk-clean-harness.sh, dc_check_commands). A
 test that only RUNS a script sees the commands on the paths it happened to take, so a branch no
@@ -17,7 +17,8 @@ Prints one line per command call, tab separated: kind, name, file:line, detail. 
   follow    a file sourced or run with bash, found by name in the caller's folder or --roots and read too
   fail      anything else, with the reason: not stubbed, called by its full path, through a variable
             that is no seam, a script that sets PATH, `command -p`, `env -i`, a shell reading code
-            from standard input, a file it cannot find, and any file it cannot read as bash
+            from standard input, a file it cannot find, any file it cannot read as bash, and a
+            command on --wrapped called anywhere but inside its one function
 Exit 0 when nothing failed, 1 when something did, 2 on a usage error.
 
 Why not lib/shell-words.py: that reads ONE typed command line. Measured 2026-10-27 on
@@ -30,6 +31,13 @@ backticks, <( ) and >( ), ${ } (skipped, its own $( ) read), $(( )) and (( )) (s
 spellings, array assignments, redirections, and the commands that run another command: xargs, env,
 command, exec, nohup, nice, time, builtin, find -exec, bash/sh -c, eval and trap. Not followed: a
 $( ) inside $(( )), and the inside of sudo (a stub, so what it would run never runs).
+
+--wrapped name=function (claude-config#3328): the command <name> may be called only from inside the
+body of the shell function <function>, the braces that follow its definition. Called anywhere else,
+by any route above (plainly, in a $( ), through xargs, env or command, in a bash -c or eval string),
+it fails, and so does a second definition of <function>, which would be a second helper. git is the
+one such command today: it runs with the judged repository's own configuration, so every call goes
+through the helper that turns that repository's program running settings off.
 """
 
 import bisect
@@ -62,6 +70,8 @@ MSG_ENV_I = 'env -i clears PATH, so the command it runs is found on the system d
 MSG_STDIN = 'a shell reading code from standard input, which the check cannot read'
 MSG_NOT_FOUND = 'runs or sources a file the check cannot find, so its commands cannot be listed'
 MSG_UNSTUBBED = 'neither stubbed nor a core tool'
+MSG_WRAPPED = 'called outside %s, the one function these scripts may run it from'
+MSG_WRAPPER_TWICE = 'defined %d times, and the one function %s may be run from must have one definition'
 
 
 class ParseError(Exception):
@@ -109,12 +119,21 @@ def dequote(raw):
 class Parser:
     """Reads one piece of bash text, recording the command calls it makes into `sink`."""
 
-    def __init__(self, text, sink, line_of):
+    def __init__(self, text, sink, line_of, braces=None):
         self.t = text
         self.n = len(text)
         self.sink = sink          # the Scanner, which records calls and functions
         self.line_of = line_of    # position in self.t -> line in the file
         self.heredocs = []        # (delimiter, strip tabs) waiting for the next newline
+        self.braces = list(braces or [])  # one per open { }: the function it is the body of, or None
+        self.pending = None       # a function just defined, whose body is the { that comes next
+
+    def inside(self):
+        """The function whose body is being read, the innermost when one is defined in another."""
+        for name in reversed(self.braces):
+            if name is not None:
+                return name
+        return None
 
     # ---- lexing ----
 
@@ -254,7 +273,7 @@ class Parser:
         if j >= n:
             raise ParseError(i, 'a backquote that is never closed')
         line = self.line_of(i)
-        self.sink.scan_text(''.join(body), lambda _p, line=line: line)
+        self.sink.scan_text(''.join(body), lambda _p, line=line: line, self.inside())
         return j + 1
 
     def skip_arith(self, i):
@@ -314,8 +333,17 @@ class Parser:
 
         def finish():
             if words:
-                self.sink.command([w.text for w in words], self.line_of(words[0].pos))
+                self.pending = None
+                self.sink.command([w.text for w in words], self.line_of(words[0].pos), self.inside())
                 del words[:]
+
+        def define(name, pos):
+            self.sink.function(name, self.line_of(pos))
+            self.pending = dequote(name)
+
+        def closer(word):
+            if word == '}' and self.braces:
+                self.braces.pop()
 
         while True:
             tok = self.lex(i)
@@ -350,7 +378,7 @@ class Parser:
             if fname:
                 fname = False
                 if k == 'word':
-                    self.sink.function(x)
+                    define(x, tok.pos)
                     nxt = self.lex(i)
                     if nxt.kind == 'op' and nxt.text == '(':
                         close = self.lex(nxt.end)
@@ -406,7 +434,7 @@ class Parser:
                     elif len(words) == 1:
                         close = self.lex(i)
                         if close.kind == 'op' and close.text == ')':
-                            self.sink.function(words[0].text)
+                            define(words[0].text, words[0].pos)
                             del words[:]
                             i = close.end; cmd_start = True
                         else:
@@ -426,6 +454,7 @@ class Parser:
                 continue
             # a word. A closer straight after a closer (`fi }`, `fi done`) is still a closer.
             if not cmd_start and not words and (x in RESERVED_CLOSE or x == 'esac'):
+                closer(x)
                 if x == 'esac':
                     if not (cases and cases[-1] == 'body'):
                         raise ParseError(tok.pos, 'esac outside a case')
@@ -437,6 +466,9 @@ class Parser:
                         self.sink.fail('PATH', self.line_of(tok.pos), MSG_SETS_PATH)
                     continue
                 if x in RESERVED_START:
+                    if x == '{':
+                        self.braces.append(self.pending)
+                    self.pending = None
                     continue
                 if x == 'time':
                     nxt = self.lex(i)
@@ -444,6 +476,7 @@ class Parser:
                         i = nxt.end
                     continue
                 if x in RESERVED_CLOSE:
+                    closer(x)
                     cmd_start = False
                     continue
                 if x == 'esac' and cases and cases[-1] == 'body':
@@ -467,31 +500,49 @@ class Parser:
 
 
 class Scanner:
-    def __init__(self, core, stubs, seams, roots):
+    def __init__(self, core, stubs, seams, roots, wrapped=None):
         self.core, self.stubs, self.seams, self.roots = core, stubs, seams, roots
-        self.records = []        # (kind, name, file, line, detail) before functions are known
+        self.wrapped = wrapped or {}  # command name -> the one function it may be called inside
+        self.records = []        # (kind, name, file, line, detail, inside) before functions are known
         self.functions = set()
+        self.defined = {}        # function name -> [(file, line)], one per definition read
+        self.inside = None       # the function whose body holds the command being recorded
         self.queue, self.seen = [], set()
         self.file = None
 
     # ---- what a parser reports ----
 
-    def function(self, name):
-        self.functions.add(dequote(name))
+    def function(self, name, line=0):
+        name = dequote(name)
+        self.functions.add(name)
+        self.defined.setdefault(name, []).append((self.file, line))
 
     def fail(self, name, line, detail):
-        self.records.append(('fail', name, self.file, line, detail))
+        self.records.append(('fail', name, self.file, line, detail, self.inside))
 
     def note(self, kind, name, line, detail=''):
-        self.records.append((kind, name, self.file, line, detail))
+        self.records.append((kind, name, self.file, line, detail, self.inside))
 
-    def scan_text(self, text, line_of):
-        Parser(text, self, line_of).parse(0)
+    def scan_text(self, text, line_of, inside=False):
+        """Code held in a string (a backquote, bash -c, eval, trap), read as lying inside the
+        function its command lies in: <inside> when a parser passes one, else the one the command
+        being read was recorded with."""
+        was = self.inside
+        if inside is not False:
+            self.inside = inside
+        try:
+            Parser(text, self, line_of, [self.inside]).parse(0)
+        finally:
+            self.inside = was
 
-    def command(self, raws, line):
-        """One simple command, its words as written, leading assignments already removed."""
+    def command(self, raws, line, inside=False):
+        """One simple command, its words as written, leading assignments already removed.
+        <inside> is the function whose body it lies in, when a parser says; a command a runner
+        reads out of another's arguments, as xargs does, keeps that command's."""
         if not raws:
             return
+        if inside is not False:
+            self.inside = inside
         name_raw, args = raws[0], raws[1:]
         name = dequote(name_raw)
         if name in ('export', 'local', 'declare', 'typeset', 'readonly'):
@@ -680,10 +731,18 @@ class Scanner:
         while self.queue:
             self.scan_file(self.queue.pop(0))
         out, failed = [], False
-        for kind, name, path, line, detail in self.records:
+        for helper in sorted(set(self.wrapped.values())):
+            sites = self.defined.get(helper, [])
+            if len(sites) > 1:
+                names = ', '.join(sorted(n for n, h in self.wrapped.items() if h == helper))
+                for path, line in sites:
+                    self.records.append(('fail', helper, path, line, MSG_WRAPPER_TWICE % (len(sites), names), None))
+        for kind, name, path, line, detail, inside in self.records:
             where = '%s:%d' % (path, line)
             if kind == 'name':
-                if name in self.functions:
+                if name in self.wrapped and inside != self.wrapped[name]:
+                    kind, detail = 'fail', '%s is %s' % (name, MSG_WRAPPED % self.wrapped[name])
+                elif name in self.functions:
                     kind = 'function'
                 elif name in BUILTINS:
                     kind = 'builtin'
@@ -709,7 +768,7 @@ class Scanner:
 
 
 def main(argv):
-    opts = {'--core': '', '--stubs': '', '--seams': '', '--roots': ''}
+    opts = {'--core': '', '--stubs': '', '--seams': '', '--wrapped': '', '--roots': ''}
     i = 0
     while i < len(argv) and argv[i] != '--':
         if argv[i] in opts and i + 1 < len(argv):
@@ -726,8 +785,15 @@ def main(argv):
     for pair in opts['--seams'].split():
         var, _, stub = pair.partition('=')
         seams[var] = stub
+    wrapped = {}
+    for pair in opts['--wrapped'].split():
+        name, eq, helper = pair.partition('=')
+        if not (name and eq and helper):
+            sys.stderr.write('disk-clean-commands.py: --wrapped takes name=function pairs, not %r\n' % pair)
+            return 2
+        wrapped[name] = helper
     roots = [r for r in opts['--roots'].split('\n') if r]
-    scanner = Scanner(set(opts['--core'].split()), set(opts['--stubs'].split()), seams, roots)
+    scanner = Scanner(set(opts['--core'].split()), set(opts['--stubs'].split()), seams, roots, wrapped)
     return scanner.run(files)
 
 

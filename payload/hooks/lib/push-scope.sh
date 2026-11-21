@@ -46,6 +46,9 @@
 #                      the remote has, a name that cannot be resolved, or one the command moves
 #                      first), which push-scope-notice.sh refuses, each kind with its own sentence
 #                      (claude-config#3112)
+#   ps_push_to_held_branch: does a push send this worktree's commits to the branch name another
+#                      worktree has checked out, without building on that branch's own commits,
+#                      which push-scope-notice.sh refuses (claude-config#3338)
 #
 # Each function is defined exactly once. test-push-scope.sh fails on a second
 # definition, because bash keeps the last one without a word (claude-config#440).
@@ -55,8 +58,8 @@
 # exception is the reading of a command (ps__read, claude-config#1040), kept per
 # command so one hook asking several questions reads it once; see its comment.
 
-# The exit with which the five questions push-scope-notice.sh asks (ps_pending_merge_of_default
-# and the four ps_unread_ ones) answer no (claude-config#3120). It was 1, which is also what bash
+# The exit with which the six questions push-scope-notice.sh asks (ps_pending_merge_of_default,
+# the four ps_unread_ ones and ps_push_to_held_branch) answer no (claude-config#3120). It was 1, which is also what bash
 # gives for a crash inside one (an unbound variable under set -u, a last command that fails where
 # no return follows; measured on bash 3.2.57), so the hook read a crashed question as no and let the
 # push through. This is a code no crash inside them gives: bash's own errors are 1, 2, 126, 127 and
@@ -716,6 +719,8 @@ ps__runs_tool() {   # $1 = one command, $2 = gh | git, $3 = the subcommand, $4 =
   [ "$tool$sub$act" = 111 ] || return 1
   PS_RUN_SUB="$3"; PS_RUN_ACT="${4:-}"
   [ "$last" -ge 0 ] && PS_RUN_ARGS=("${words[@]:$((last + 1))}")
+  # No redirection is among them, as none is among the reader's (ps__drop_redirections).
+  ps__drop_redirections
   return 0
 }
 
@@ -1401,8 +1406,17 @@ LOOP_INPUT
 # beyond the index, as for an add: a file staged beside a commit --only is still read from the
 # index though the commit leaves it out, which reads more and never less.
 #
-# Is this word one of the shell's redirections, which the reader hands over among a command's
-# words? Sets PS__REDIR_FILE to 1 when the file it names is the next word (`> out.txt`).
+# A redirection is none of the program's words, and PS_RUN_ARGS hold none (claude-config#3322). The
+# reader takes each out where it makes the words, from the command's text, where a quoted `'>'` is
+# still told from the operator (lib/shell-words.py tool_words). Until then each one was handed over
+# among the words, five readers here stepped over it themselves, and the ones that did not took it
+# for a word: the stacked branch delete gate read >/dev/null as the endpoint of a gh api and let the
+# delete of a branch with a pull request based on it run unasked. With nothing to read the command
+# the words are the crude cut's (ps__runs_tool), which knows no quotes, so there a word is taken for
+# a redirection by its look alone, here, once, for every reader: ps__redirection says whether a word
+# is one, and sets PS__REDIR_FILE to 1 when the file it names is the next word (`> out.txt`).
+# A reader that judges where a command's output goes reads the command's own words, PS__W, which
+# keep every redirection (ps__writes_out).
 PS__REDIR_FILE=0
 ps__redirection() {   # $1 = one word
   PS__REDIR_FILE=0
@@ -1412,6 +1426,16 @@ ps__redirection() {   # $1 = one word
       return 0 ;;
   esac
   return 1
+}
+ps__drop_redirections() {   # PS_RUN_ARGS, as the crude cut left them
+  local a file=0
+  local -a kept=()
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    if [ "$file" = 1 ]; then file=0; continue; fi
+    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
+    kept+=("$a")
+  done
+  PS_RUN_ARGS=(${kept[@]+"${kept[@]}"})
 }
 
 # What closes a subshell or ends the command comes off the end of a word, into PS__WORD: everything
@@ -1433,10 +1457,10 @@ ps__word_end() {   # $1 = one word
 }
 
 # The paths the git commit last read (PS_RUN_SUB, PS_RUN_ARGS) names, into PS__COMMIT_PATHS as
-# written, and PS__COMMIT_UNREAD set to 1 when it names them in a file. Every word that is no option,
-# no option's value and no redirection is a path, and so is everything after `--`. The value of an
-# option is consumed before anything else is asked of the word, so a message that looks like a
-# redirection (`-m "> quoted"`) never makes the word after it the value. An option this does not
+# written, and PS__COMMIT_UNREAD set to 1 when it names them in a file. Every word that is no option
+# and no option's value is a path, and so is everything after `--`; no word is a redirection
+# (ps__redirection above), so a message or a path that only looks like one (`-m "> quoted"`,
+# `'>odd'`) is read as the word it is. An option this does not
 # know is taken to have no value, so its value, if it has one, is read as a path: more read, never
 # less (L42). PS__COMMIT_ALL is set to 1 when the commit stages tracked changes itself: an a or a p
 # in a cluster of short options before any that takes a value (-a, -am, -qam, -p), or --all,
@@ -1444,13 +1468,11 @@ ps__word_end() {   # $1 = one word
 # nothing, are not taken for it.
 PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
 ps__commit_takes() {
-  local a c skip=0 rest=0 file=0
+  local a c skip=0 rest=0
   PS__COMMIT_PATHS=(); PS__COMMIT_UNREAD=0; PS__COMMIT_ALL=0
   [ "$PS_RUN_SUB" = commit ] || return 0
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
-    if [ "$file" = 1 ]; then file=0; continue; fi
-    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
     ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     if [ "$rest" = 1 ]; then PS__COMMIT_PATHS+=("$a"); continue; fi
@@ -2079,7 +2101,7 @@ ps__commits_here() {
 # returns 0; returns 1 for any other command and for a spelling measured to change neither.
 PS__ROUTE_KIND=""
 ps__move_or_stage() {
-  local a word="" kind="" first="" n=0 opts=0 dashes=0 before=0 after=0 creates=0 flag="" file=0
+  local a word="" kind="" first="" n=0 opts=0 dashes=0 before=0 after=0 creates=0 flag=""
   PS__ROUTE=""; PS__ROUTE_KIND=""
   case "$PS_RUN_SUB" in
     checkout|switch|reset|update-ref|symbolic-ref|bisect|filter-branch|rebase|cherry-pick|revert|am|merge) ;;
@@ -2091,10 +2113,6 @@ ps__move_or_stage() {
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
     ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
-    # A redirection is among the words read and is none of git's: `git checkout -b new 2>&1` names
-    # one word, new. Written apart from its file (`> out.txt`), the file is the next word.
-    if [ "$file" = 1 ]; then file=0; continue; fi
-    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
     if [ "$a" = -- ] && [ "$dashes" = 0 ]; then dashes=1; continue; fi
     if [ "$dashes" = 1 ]; then after=$((after + 1)); continue; fi
     case "$a" in
@@ -2340,7 +2358,7 @@ ps__writes_out() {   # $@ = one command's words
 # what the refusal names and returns 0.
 PS__WRITER=""
 ps__may_write() {   # $1 = the program as written
-  local prog="${1##*/}" sub="$PS_RUN_SUB" a n=0 creates=0 other=0 file=0
+  local prog="${1##*/}" sub="$PS_RUN_SUB" a n=0 creates=0 other=0
   PS__WRITER=""
   if [ -n "$sub" ]; then
     case "$sub" in
@@ -2348,8 +2366,6 @@ ps__may_write() {   # $1 = the program as written
       checkout|switch)
         # Only a branch made where HEAD already is: one create option, one name, nothing else.
         for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-          if [ "$file" = 1 ]; then file=0; continue; fi
-          if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
           ps__word_end "$a"; a="$PS__WORD"
           case "$a" in
             ''|-q|--quiet) ;;
@@ -2432,7 +2448,18 @@ ps__may_write() {   # $1 = the program as written
 # v9`, `other --all`) for the first refspec that cannot be judged, and returns 0; returns PS_NO otherwise.
 PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
 ps_unread_push_source() {   # $1 = the command  $2 = the repository directory the push runs in (default .)
-  local cmd="$1" dir="${2:-.}" rc i end seg sub loop_input
+  ps__walk_pushes "$1" "${2:-.}" ps__push_sources
+}
+
+# Every git push in the command, in order, handed to a judge: $3, a function given the repository
+# directory, which reads the push last read (PS_RUN_ARGS, as ps__push_words does) and returns 0 with
+# PS__SOURCE set for the first thing it refuses. Every other git command is handed to ps__ref_step on
+# the way, so a judge can see the names the command makes or moves before its push. Prints PS__SOURCE
+# and returns 0 for the first refusal; returns PS_NO when the judge refuses nothing. One walk for
+# every question about what a push names (claude-config#3112, #3338), so they cannot read the same
+# command differently.
+ps__walk_pushes() {   # $1 = the command  $2 = the repository directory  $3 = the judge
+  local cmd="$1" dir="$2" judge="$3" rc i end seg sub loop_input
   PS__SRC_MADE=" "; PS__SRC_MADE_CUR=" "; PS__SRC_MOVED=" "; PS__SRC_COMMITTED=0
   case "$cmd" in *push*) ;; *) return "$PS_NO" ;; esac
   ps__read "$cmd"; rc=$?
@@ -2441,7 +2468,7 @@ ps_unread_push_source() {   # $1 = the command  $2 = the repository directory th
     while [ "$i" -lt "$end" ]; do
       # ps_runs_at leaves the subcommand this record does run, and its words, for the readers below.
       if ps_runs_at git "$i" push; then
-        if ps__push_sources "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
+        if "$judge" "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
       else
         ps__ref_step
       fi
@@ -2453,7 +2480,7 @@ ps_unread_push_source() {   # $1 = the command  $2 = the repository directory th
   while IFS= read -r seg; do
     case "$seg" in
       *push*) if ps_runs_git "$seg" push; then
-          if ps__push_sources "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
+          if "$judge" "$dir"; then printf '%s' "$PS__SOURCE"; return 0; fi
           continue
         fi ;;
     esac
@@ -2482,7 +2509,7 @@ ps__short_ref() {   # $1 = a ref as written
 # a name made with a start point, forced, renamed, deleted, fetched into or made by git worktree add
 # goes into PS__SRC_MOVED. Where the words cannot say which, the name is taken as moved.
 ps__ref_step() {
-  local a n=0 opts=0 creates=0 skip=0 file=0 names=" " flag=""
+  local a n=0 opts=0 creates=0 skip=0 names=" " flag=""
   case "$PS_RUN_SUB" in
     commit) PS__SRC_COMMITTED=1; return 0 ;;
     merge) ps__commits_here && PS__SRC_COMMITTED=1; return 0 ;;
@@ -2491,8 +2518,6 @@ ps__ref_step() {
   esac
   for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
-    if [ "$file" = 1 ]; then file=0; continue; fi
-    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
     ps__word_end "$a"; a="$PS__WORD"
     [ -n "$a" ] || continue
     case "$PS_RUN_SUB" in
@@ -2554,58 +2579,12 @@ ps__bracket_open() {   # $1 = text
 # cannot be judged; returns 1 when the gates read everything the push sends.
 PS__SOURCE=""
 ps__push_sources() {   # $1 = the repository directory
-  local dir="$1" a c skip=0 file=0 n=0 dry=0 del=0 wide="" remote="" src ref short cur count rs="" tag=0 revs part=""
+  local dir="$1" a dry del wide remote src ref short cur count rs="" tag=0 revs
   local -a specs=()
   PS__SOURCE=""
-  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
-    # A substitution written with no quotes round it arrives cut at its spaces, `$(git`,
-    # `rev-parse`, `--abbrev-ref`, `HEAD)`, so it is put back together before anything is asked of
-    # a word: one of its pieces can look like an option, and the whole is what the push names. One
-    # that never closes is kept as it stands, and cannot be resolved.
-    if [ -n "$part" ]; then
-      part="$part $a"
-      if ps__bracket_open "$part"; then continue; fi
-      a="$part"; part=""
-    else
-      case "$a" in *'$('*) if ps__bracket_open "$a"; then part="$a"; continue; fi ;; esac
-    fi
-    if [ "$skip" = 1 ]; then skip=0; continue; fi
-    if [ "$file" = 1 ]; then file=0; continue; fi
-    if ps__redirection "$a"; then file="$PS__REDIR_FILE"; continue; fi
-    # What closes a subshell or ends the command is the crude cut's, never the word's; a
-    # substitution the reader handed over whole keeps its own bracket.
-    case "$a" in *'$('*|*'`'*) ;; *) ps__word_end "$a"; a="$PS__WORD" ;; esac
-    [ -n "$a" ] || continue
-    case "$a" in
-      --dry-run) dry=1 ;;
-      --delete) del=1 ;;
-      --all|--branches|--mirror) wide="$a" ;;
-      --tags) [ -n "$wide" ] || wide="$a" ;;
-      -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
-      --*) ;;
-      -?*)
-        # git push's short options are f, u, q, v, 4, 6, n (dry run), d (delete) and o, whose
-        # value is the rest of the word, or the next word when o ends the cluster. Only the letters
-        # before the o are options: an n or a d in its value (-onotify, -odeploy) is neither a dry
-        # run nor a deletion, and read as one it let the push through unjudged. The o ends the cluster
-        # only when it is the FIRST o and nothing follows it: a value glued on that itself ends in o
-        # (-oecho) is the value, and taking the next word for it as well read the remote as the
-        # value and the branch as the remote, so what the push sends went unread (claude-config#3133).
-        c="${a#-}"
-        case "$c" in
-          *o*)
-            # The letters before the first o, and whether anything follows that o, counted from them
-            # rather than by a second pattern removal.
-            c="${c%%o*}"
-            [ "${#a}" -eq $((${#c} + 2)) ] && skip=1 ;;
-        esac
-        case "$c" in *n*) dry=1 ;; esac
-        case "$c" in *d*) del=1 ;; esac ;;
-      *) if [ "$n" = 0 ]; then remote="$a"; else specs+=("$a"); fi; n=$((n + 1)) ;;
-    esac
-  done
-  # A substitution that never closed took every word after it: what the push names is in there.
-  [ -z "$part" ] || specs+=("$part")
+  ps__push_words
+  dry="$PS__PW_DRY"; del="$PS__PW_DEL"; wide="$PS__PW_WIDE"; remote="$PS__PW_REMOTE"
+  specs=(${PS__PW_SPECS[@]+"${PS__PW_SPECS[@]}"})
   # Nothing is sent by a dry run, and with --delete every refspec is a deletion.
   [ "$dry" = 1 ] && return 1
   [ "$del" = 1 ] && return 1
@@ -2640,10 +2619,7 @@ ps__push_sources() {   # $1 = the repository directory
     ref="$src"
     if [ "$tag" = 1 ]; then ref="refs/tags/$src"; tag=0
     else
-      case "$src" in
-        HEAD|@) continue ;;
-        '$(git branch --show-current)'|'$(git rev-parse --abbrev-ref HEAD)'|'$(git symbolic-ref --short HEAD)'|'$(git symbolic-ref --quiet --short HEAD)') continue ;;
-      esac
+      ps__names_head "$src" && continue
       if [ -n "$cur" ]; then
         case "$src" in "$cur"|"refs/heads/$cur"|"heads/$cur") continue ;; esac
       fi
@@ -2667,6 +2643,180 @@ ps__push_sources() {   # $1 = the repository directory
         *) PS__SOURCE="unresolved $src"; return 0 ;;
       esac
     fi
+  done
+  return 1
+}
+
+# Is a push's source, as written, the commit checked out? HEAD, @, and the four spellings of the
+# branch checked out that ask git for it (claude-config#3112).
+ps__names_head() {   # $1 = the source as written
+  case "$1" in
+    HEAD|@) return 0 ;;
+    '$(git branch --show-current)'|'$(git rev-parse --abbrev-ref HEAD)'|'$(git symbolic-ref --short HEAD)'|'$(git symbolic-ref --quiet --short HEAD)') return 0 ;;
+  esac
+  return 1
+}
+
+# The words of the git push last read (PS_RUN_ARGS), sorted once for every question that judges a
+# push's refspecs: PS__PW_REMOTE (the remote as written, or empty), PS__PW_SPECS (the refspecs as
+# written), PS__PW_DRY and PS__PW_DEL (1 for a dry run or --delete), PS__PW_WIDE (--all,
+# --branches, --mirror or --tags, or empty). One reading, so the questions cannot disagree about
+# which word is the remote and which a refspec (claude-config#3338).
+PS__PW_REMOTE=""; PS__PW_DRY=0; PS__PW_DEL=0; PS__PW_WIDE=""; PS__PW_SPECS=()
+ps__push_words() {
+  local a c skip=0 n=0 dry=0 del=0 wide="" remote="" part=""
+  local -a specs=()
+  for a in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    # A substitution written with no quotes round it arrives cut at its spaces, `$(git`,
+    # `rev-parse`, `--abbrev-ref`, `HEAD)`, so it is put back together before anything is asked of
+    # a word: one of its pieces can look like an option, and the whole is what the push names. One
+    # that never closes is kept as it stands, and cannot be resolved.
+    if [ -n "$part" ]; then
+      part="$part $a"
+      if ps__bracket_open "$part"; then continue; fi
+      a="$part"; part=""
+    else
+      case "$a" in *'$('*) if ps__bracket_open "$a"; then part="$a"; continue; fi ;; esac
+    fi
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
+    # What closes a subshell or ends the command is the crude cut's, never the word's; a
+    # substitution the reader handed over whole keeps its own bracket.
+    case "$a" in *'$('*|*'`'*) ;; *) ps__word_end "$a"; a="$PS__WORD" ;; esac
+    [ -n "$a" ] || continue
+    case "$a" in
+      --dry-run) dry=1 ;;
+      --delete) del=1 ;;
+      --all|--branches|--mirror) wide="$a" ;;
+      --tags) [ -n "$wide" ] || wide="$a" ;;
+      -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
+      --*) ;;
+      -?*)
+        # git push's short options are f, u, q, v, 4, 6, n (dry run), d (delete) and o, whose
+        # value is the rest of the word, or the next word when o ends the cluster. Only the letters
+        # before the o are options: an n or a d in its value (-onotify, -odeploy) is neither a dry
+        # run nor a deletion, and read as one it let the push through unjudged. The o ends the cluster
+        # only when it is the FIRST o and nothing follows it: a value glued on that itself ends in o
+        # (-oecho) is the value, and taking the next word for it as well read the remote as the
+        # value and the branch as the remote, so what the push sends went unread (claude-config#3133).
+        c="${a#-}"
+        case "$c" in
+          *o*)
+            # The letters before the first o, and whether anything follows that o, counted from them
+            # rather than by a second pattern removal.
+            c="${c%%o*}"
+            [ "${#a}" -eq $((${#c} + 2)) ] && skip=1 ;;
+        esac
+        case "$c" in *n*) dry=1 ;; esac
+        case "$c" in *d*) del=1 ;; esac ;;
+      *) if [ "$n" = 0 ]; then remote="$a"; else specs+=("$a"); fi; n=$((n + 1)) ;;
+    esac
+  done
+  # A substitution that never closed took every word after it: what the push names is in there.
+  [ -z "$part" ] || specs+=("$part")
+  PS__PW_REMOTE="$remote"; PS__PW_DRY="$dry"; PS__PW_DEL="$del"; PS__PW_WIDE="$wide"
+  PS__PW_SPECS=(${specs[@]+"${specs[@]}"})
+}
+
+# ---- a push that sends its commits to the branch name another worktree has checked out ----
+# On 2026-11-20 at 3:13 PM ET a builder ran `git push origin HEAD:fix/3279-git-moves-hidden-names`
+# with no -C. Its shell stood in the #3277 worktree, so GitHub's branch of that name was made at the
+# #3277 commit, while the worktree fix-3279-b had that name checked out with its own commits. The
+# push printed success and every gate passed it: HEAD is the branch checked out, which is what the
+# gates read (claude-config#3338).
+#
+# The rule: a refspec <src>:<dst> whose <dst> is a branch another worktree of the repository has
+# checked out is refused unless what it sends BUILDS ON that branch's own work, meaning the commit
+# sent contains that worktree's tip and the tip holds commits the remote's default branch lacks; or
+# unless the commit sent is that tip exactly. Let through without asking: <dst> the branch checked
+# out here, <src> the branch <dst> by its own name (ps_unread_push_source judges that), a tag or any
+# other namespace, a deletion, a dry run.
+#
+# Why not plain name equality (refuse HEAD:<name> unless <name> is the branch checked out here): on
+# this Mac's transcripts from 2026-10-23 to 2026-11-20 it would have refused 49 of 280 pushes
+# written <src>:<dst>, and 48 of those were deliberate: an agent resolving a conflict, applying a
+# review fix or finishing another agent's work in a worktree of its own, then pushing onto that
+# agent's branch, which the agent's worktree still had checked out. Each built on that branch. The
+# 49th was the incident. A fix up that does NOT build on the branch is a push git rejects as not a
+# fast forward anyway, unless it creates the name, which is the incident.
+#
+# Why the default branch: a worktree whose branch has no commits of its own yet stands on main's tip,
+# and every other worktree's HEAD contains main's tip, so containment alone would pass the incident
+# whenever the owner had not committed yet. With no default branch known, containment alone decides.
+#
+# When the worktree list cannot be read, the name is reported as unlisted and the push is refused:
+# a check that could not be made is not one that passed, a refused push is run again once the list
+# reads, and a pass here would be the silent fail open this exists to end.
+#
+# Prints `held <dst>` then, each after a unit separator, the worktree holding it, the source as
+# written and the remote as written (empty when none was), and returns 0; or `unlisted <dst>`, or
+# `unresolved <dst>` for a name that cannot be read before the command runs, and returns 0;
+# returns PS_NO when every refspec is let through.
+ps_push_to_held_branch() {   # $1 = the command  $2 = the repository directory the push runs in (default .)
+  ps__walk_pushes "$1" "${2:-.}" ps__push_dests
+}
+
+# The judge ps_push_to_held_branch hands each push to: 0 with PS__SOURCE set for the first refspec it
+# refuses, 1 when it refuses none.
+ps__push_dests() {   # $1 = the repository directory
+  local dir="$1" a src dst short cur list="" listed=0 holder sent tip def
+  PS__SOURCE=""
+  ps__push_words
+  [ "$PS__PW_DRY" = 1 ] && return 1
+  [ "$PS__PW_DEL" = 1 ] && return 1
+  cur="$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)" || cur=""
+  for a in ${PS__PW_SPECS[@]+"${PS__PW_SPECS[@]}"}; do
+    case "$a" in *:?*) ;; *) continue ;; esac
+    src="${a#+}"; dst="${src#*:}"; src="${src%%:*}"
+    [ -n "$src" ] || continue
+    # The branch checked out here, spelled as a question to git, is this worktree's own name. Any
+    # other name that cannot be read before the command runs (a variable, a substitution, a
+    # pattern) cannot be compared with the names the worktrees hold, so it is refused, never
+    # skipped: skipped, it would be the one spelling this check never judges.
+    if ps__names_head "$dst"; then continue; fi
+    case "$dst" in *'$'*|*'`'*|*'*'*|*'?'*|*'['*) PS__SOURCE="unresolved $dst"; return 0 ;; esac
+    # A branch by any spelling; a tag or another namespace is not a worktree's to hold.
+    case "$dst" in
+      refs/heads/*) short="${dst#refs/heads/}" ;;
+      heads/*) short="${dst#heads/}" ;;
+      refs/*) continue ;;
+      *) short="$dst" ;;
+    esac
+    [ -n "$short" ] || continue
+    [ "$short" = "$cur" ] && continue
+    case "$src" in "$short"|"refs/heads/$short"|"heads/$short") continue ;; esac
+    if [ "$listed" = 0 ]; then
+      list="$(git -C "$dir" worktree list --porcelain 2>/dev/null)" || { PS__SOURCE="unlisted $dst"; return 0; }
+      listed=1
+    fi
+    # A record git marks prunable is a worktree whose folder is gone: nobody works there, and the
+    # push the refusal would name cannot be run from it, so it holds nothing here.
+    holder="$(printf '%s\n\n' "$list" | awk -v b="refs/heads/$short" '
+      /^worktree / { w = substr($0, 10); has = 0; gone = 0 }
+      $1 == "branch" && $2 == b { has = 1 }
+      $1 == "prunable" { gone = 1 }
+      /^$/ { if (has && !gone && !found) { print w; found = 1 }; has = 0; gone = 0 }')"
+    [ -n "$holder" ] || continue
+    # What is sent. A name this command makes where HEAD is before the push (git branch new, git
+    # checkout -b new) does not resolve yet and holds what HEAD holds, as ps_unread_push_source
+    # reads it. Anything else that does not resolve sends what nobody can tell, so it is judged
+    # as not building on the branch: ps_unread_push_source refuses those first in any case.
+    ps__short_ref "$src"
+    if ps__names_head "$src"; then sent="$(git -C "$dir" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sent=""
+    else sent="$(git -C "$dir" rev-parse --verify --quiet "$src^{commit}" 2>/dev/null)" || sent=""; fi
+    if [ -z "$sent" ]; then
+      case "$PS__SRC_MADE$PS__SRC_MADE_CUR" in
+        *" $PS__SHORT "*) sent="$(git -C "$dir" rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)" || sent="" ;;
+      esac
+    fi
+    tip="$(git -C "$dir" rev-parse --verify --quiet "refs/heads/$short^{commit}" 2>/dev/null)" || tip=""
+    [ -n "$tip" ] && [ "$sent" = "$tip" ] && continue
+    if [ -n "$tip" ] && git -C "$dir" merge-base --is-ancestor "$tip" "$sent" 2>/dev/null; then
+      def="$(cd "$dir" 2>/dev/null && ps__default_ref)" || def=""
+      [ -z "$def" ] && continue
+      git -C "$dir" merge-base --is-ancestor "$tip" "$def" 2>/dev/null || continue
+    fi
+    PS__SOURCE="held $dst"$'\x1f'"$holder"$'\x1f'"$src"$'\x1f'"$PS__PW_REMOTE"
+    return 0
   done
   return 1
 }

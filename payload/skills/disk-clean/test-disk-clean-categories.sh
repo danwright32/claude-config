@@ -304,11 +304,11 @@ run_scan --only build-folders
 check "build folders: one iCloud syncs is not listed" "$(eq "$(item_of "$H/Documents/proj/node_modules")" "")"
 check "build folders: nor its neighbour" "$(eq "$(item_of "$H/Documents/proj2/node_modules")" "")"
 check "build folders: a project outside iCloud is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
-check "build folders: the kind's note counts what iCloud syncs and says why" "$(eq "$(note_of build-folders)" "2 build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device.")"
-check "build folders: the scan's summary says so too" "$(has "$OUT_TEXT" "2 build folders were left out because iCloud syncs them")"
+check "build folders: the kind's note counts what iCloud syncs and says why" "$(eq "$(note_of build-folders)" "2 build folders were left out because they are in Documents, which iCloud syncs: removing one would remove it on every device that syncs it.")"
+check "build folders: the scan's summary says so too" "$(has "$OUT_TEXT" "2 build folders were left out because they are in Documents, which iCloud syncs")"
 check "build folders: one iCloud syncs is never passed to du" "$(hasnt "$(dc_calls du)" "$H/Documents/proj/node_modules")"
 judge build-folders "$H/Documents/proj/node_modules"
-check "build folders judge: one iCloud syncs is not offerable" "$(eq "$JUDGED" "not offerable: iCloud syncs it, so removing it would remove it from iCloud on every device")"
+check "build folders judge: one iCloud syncs is not offerable" "$(eq "$JUDGED" "not offerable: it is in Documents, which iCloud syncs, so removing it would remove it on every device that syncs it")"
 # The control: the same folder once iCloud no longer syncs Documents is listed and offered.
 rm -rf "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
 run_scan --only build-folders
@@ -316,7 +316,54 @@ check "build folders: once iCloud does not sync Documents, the same folder is of
 check "build folders: and no note is written" "$(eq "$(note_of build-folders)" "")"
 mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"; rm -rf "$H/Documents/proj2"; old "$H/Documents"
 run_scan --only build-folders
-check "build folders: one left out is counted in the singular" "$(eq "$(note_of build-folders)" "1 build folder was left out because iCloud syncs it: removing it would remove it from iCloud on every device.")"
+check "build folders: one left out is counted in the singular" "$(eq "$(note_of build-folders)" "1 build folder was left out because it is in Documents, which iCloud syncs: removing it would remove it on every device that syncs it.")"
+
+# The same holds for every other sync service (#3233): removing a build folder Dropbox, Google Drive,
+# OneDrive or Box keeps removes it on every device that syncs it. One predicate decides it, scan-lib's
+# dcs_synced, which forgotten-worktrees.sh reads too, never a second list here. The walk never goes
+# into a sync client's folder or ~/Library, so those reach this kind only through its judge (a record
+# from before this rule, a path pasted in). The walk used to go into a Dropbox folder named for a
+# linked account, ~/Dropbox (Personal), and Box Sync's ~/Box Sync, and offered build folders there;
+# it now leaves them out like the rest, so the note counts only Desktop and Documents, which it does go
+# into: were it to go into those two again, the note would count four.
+fresh
+mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents" "$H/Library/Mobile Documents/com~apple~CloudDocs/Desktop"
+for d in "$H/Documents/proj" "$H/Desktop/proj" "$H/Dropbox (Personal)/proj" "$H/Box Sync/proj" "$H/Apps/local" \
+  "$H/Dropbox/proj" "$H/Library/CloudStorage/Dropbox/proj" "$H/Library/CloudStorage/GoogleDrive-dan/My Drive/proj" \
+  "$H/Google Drive/proj" "$H/Library/CloudStorage/OneDrive-Personal/proj" "$H/OneDrive/proj" \
+  "$H/OneDrive - Acme/proj" "$H/Library/CloudStorage/Box-Box/proj" "$H/Box/proj"; do
+  mkdir -p "$d/node_modules/x"; printf '{}\n' > "$d/package.json"
+done
+ln -s "$H/Dropbox/proj" "$H/Apps/linked"
+old "$H"
+run_scan --only build-folders
+check "build folders: one in a linked account's Dropbox folder is not listed" "$(eq "$(item_of "$H/Dropbox (Personal)/proj/node_modules")" "")"
+check "build folders: nor one in Box Sync's folder" "$(eq "$(item_of "$H/Box Sync/proj/node_modules")" "")"
+check "build folders: a project in no synced folder is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
+check "build folders: the note names each place and counts it, when there is more than one" "$(eq "$(note_of build-folders)" "2 build folders were left out because a sync service keeps them (1 in Desktop, which iCloud syncs; 1 in Documents, which iCloud syncs): removing one would remove it on every device that syncs it.")"
+# The stub log writes each argument shell quoted, so the spaces in these names are escaped there;
+# every synced fixture is a proj folder and the control is not.
+check "build folders: none of them is passed to du" "$(hasnt "$(dc_calls du)" "/proj/node_modules")"
+check "build folders: while the control is" "$(has "$(dc_calls du)" "/Apps/local/node_modules")"
+synced_judged() { # <target> <where>
+  judge build-folders "$1"
+  check "build folders judge: ~/${1#"$H"/} is not offerable, saying it is in $2" "$(eq "$JUDGED" "not offerable: it is in $2, so removing it would remove it on every device that syncs it")"
+}
+synced_judged "$H/Dropbox/proj/node_modules" Dropbox
+synced_judged "$H/Dropbox (Personal)/proj/node_modules" Dropbox
+synced_judged "$H/Google Drive/proj/node_modules" "Google Drive"
+synced_judged "$H/OneDrive/proj/node_modules" OneDrive
+synced_judged "$H/OneDrive - Acme/proj/node_modules" OneDrive
+synced_judged "$H/Box/proj/node_modules" Box
+synced_judged "$H/Box Sync/proj/node_modules" Box
+synced_judged "$H/Library/CloudStorage/Dropbox/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/GoogleDrive-dan/My Drive/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/OneDrive-Personal/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/Box-Box/proj/node_modules" "a cloud storage folder"
+# A path reaching a synced folder through a link is judged by where it really is.
+synced_judged "$H/Apps/linked/node_modules" Dropbox
+judge build-folders "$H/Apps/local/node_modules"
+check "build folders judge: a project in no synced folder is offerable (the control)" "$(eq "$JUDGED" offerable)"
 
 # A folder iCloud keeps only in the cloud (dataless) is never read, because listing one makes iCloud
 # fetch it, and du does not skip it (#1860: four Slate worktree build folders held 1,673). chflags
@@ -543,7 +590,7 @@ printf 'KEY=1\n' > "$R/.claude/worktrees/merged/.env"; old "$R/.claude/worktrees
 mkdir -p "$H/Apps/sub"; printf 'gitdir: ../.git/modules/sub\n' > "$H/Apps/sub/.git"
 mkdir -p "$H/.claude/sessions"
 printf '{"pid":1,"sessionId":"s1","cwd":"%s/src"}\n' "$R/.claude/worktrees/insession" > "$H/.claude/sessions/1.json"
-dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+dc_stub git "$DC_GIT_HELPER_STANDIN"'
 x="${d%/.claude/worktrees/*}/.fx/${d##*/}"
 case "$1 $2" in
   "--no-optional-locks status") cat "$x/status" ;;
@@ -601,6 +648,40 @@ check "worktrees: and git is never run in it" "$(hasnt "$(dc_calls git)" "$W/evi
 check "worktrees: the others are judged as before" "$(eq "$(state_of "$W/merged")" "not offerable: it has uncommitted or untracked files")"
 JUDGED="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" DISK_CLEAN_CATEGORY=worktrees bash "$CATS/worktrees.sh" judge "$W/evicted" 2>&1)"
 check "worktrees judge: one whose .git file is kept only in iCloud is unmeasured" "$(has "$JUDGED" "unmeasured: its .git file is kept only in iCloud")"
+
+# Real git, on a worktree whose repository names a program for each setting measured to start one
+# (#3328). Every case above stood in for git. Here the judge asks the git on this machine, inside
+# the harness's throwaway home, and none of those programs may run: a scan reads, it runs nothing
+# the folder it judges chose. The same fixture asked bare is the control in
+# hooks/test-disk-clean-git.sh, where each program is seen to run.
+REAL_GIT="$(command -v git 2>/dev/null)" || REAL_GIT=""
+RLOG="$DC_ROOT/markers.log"
+real_git_stub() { dc_stub git "GIT_CONFIG_NOSYSTEM=1 exec $(printf '%q' "$REAL_GIT") \"\$@\""; }
+if [ -n "$REAL_GIT" ]; then
+  fresh
+  RR="$H/Apps/real"; RW="$RR/.claude/worktrees/real-wt"
+  mkdir -p "$H/Apps" "$H/.claude/sessions"; : > "$RLOG"
+  dc_marker_repo "$REAL_GIT" "$RR" "$RLOG" || check "worktrees, real git: the marker repository was made" "dc_marker_repo failed"
+  _dc_rgit "$REAL_GIT" -C "$RR" worktree add "$RW" -b feat-wt >/dev/null
+  check "worktrees, real git: the fixture is a worktree of a repository whose own configuration names programs" \
+    "$([ -f "$RW/.git" ] && grep -q 'fsmonitor = ' "$RR/.git/config" && grep -q 'clean = ' "$RR/.git/config" && echo ok || echo "it was not made")"
+  old "$RR"; : > "$RLOG"
+  real_git_stub
+  dc_stub gh 'exit 0'
+  judge worktrees "$RW"
+  check "worktrees, real git: git answered every question, down to gh finding no merged pull request" \
+    "$(eq "$JUDGED" "not offerable: no merged pull request for its branch feat-wt")"
+  check "worktrees, real git: and no program the repository names ran" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "worktrees, real git: the status ran with the repository's programs turned off, its filter by name" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false -c filter.mark.clean= -c filter.mark.smudge= -c filter.mark.process= --no-optional-locks status ")" 1)"
+  printf 'unsaved\n' > "$RW/notes.md"; old "$RW"
+  judge worktrees "$RW"
+  check "worktrees, real git: an untracked file is still seen, so the worktree is not offerable" "$(eq "$JUDGED" "not offerable: it has uncommitted or untracked files")"
+  check "worktrees, real git: and nothing ran to see it" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  default_stubs
+else
+  check "worktrees, real git: git is on this machine, so the judge can be asked for real" "no git on the PATH"
+fi
 
 # ================================================================================================
 # Transcripts: .jsonl over 90 days, and any hit says Claude Code's own cleanup stopped
@@ -966,6 +1047,14 @@ check "gh cache: lsof saying anything on stderr makes the kind unmeasured" "$(ha
 check "gh cache: and offers nothing" "$(eq "$(items_in gh-cache)" 0)"
 check "gh cache: and the note counts them as not judged" "$(has "$(note_of gh-cache)" "could not be judged")"
 dc_stub lsof 'exit 1'
+# The cache folder is resolved once a scan, never once an entry (claude-config#3280): every entry
+# asked for it again in a subshell, about 2,100 times on the personal MacBook. Counted from the
+# shell's own trace of the module, which names each call as it runs.
+GH_TRACE="$DC_ROOT/gh-cache.trace"
+dc_run env SHELLOPTS=xtrace bash "$CATS/gh-cache.sh" scan > "$DC_ROOT/gh-cache.out" 2> "$GH_TRACE"
+check "gh cache: control: the traced scan judged each of its 4 entries" "$(eq "$(grep -c -E '^\+ gh_rules ' "$GH_TRACE")" 4)"
+check "gh cache: the scan resolves the cache folder once, however many entries it holds" \
+  "$(eq "$(grep -c -E '^\++ dcs_phys ' "$GH_TRACE")" 1)"
 
 # ================================================================================================
 # Claude Code's own records: measured and shown (state, file history, the finding spool and its
@@ -1356,7 +1445,7 @@ ck_home() {
   list_written readable-folders; list_written open-leftovers
   list_written kept-checkouts "$CT/safe" "$CSES/task-repo" "$CT/dirty" "$CT/stashed" "$CT/unpushed" "$CT/sidebranch" "$CT/nopr" "$CT/ghdown" \
     "$OSES/task-9/openck" "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks" "$CT/handoff.md" "$CT" "$CSES"
-  dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+  dc_stub git "$DC_GIT_HELPER_STANDIN"'
 x="'"$CKX"'/${d##*/}"
 case "$1 $2" in
   "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;;
@@ -1389,7 +1478,7 @@ check "checkouts: one whose .git is a file names a repository elsewhere, so it i
 check "checkouts: a listed task folder that is a worktree of a repository elsewhere is no row" "$(eq "$(item_of "$CSES/task-wt")" "")"
 check "checkouts: one whose .git folder holds no repository only looks like one, so it is not offerable" "$(has "$(state_of "$CT/looks")" "not offerable: git names no repository for it (git exit 128)")"
 check "checkouts: git was asked which repository it answers for before it was asked anything else of a checkout" \
-  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $4, $5 }')" "rev-parse --absolute-git-dir")"
+  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $(NF - 1), $NF }')" "rev-parse --absolute-git-dir")"
 check "checkouts: and git was asked nothing more of a worktree than that" "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/wt") " | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkouts: a listed folder that is no checkout now is not offerable" "$(has "$(state_of "$CT/plain")" "not offerable: ")"
 check "checkouts: a listed file, a listed task folder that is no checkout and a listed session are no rows" "$(eq "$(item_of "$CT/handoff.md")$(item_of "$CT")$(item_of "$CSES")" "")"
@@ -1473,6 +1562,42 @@ check "checkout refusals: a folder whose .git only looks like a repository is re
 check "checkout refusals: and both are still there" "$([ -e "$CSES/task-wt/a" ] && [ -e "$CT/looks/a" ] && echo ok || echo "one is gone")"
 check "checkout refusals: a checkout task folder asked for by deleting is refused by the remover" "$(has "$(oline "$CSES/task-repo:")" "never removed: it is Claude Code's own state")"
 default_stubs
+
+# Real git, on a checkout an ended session kept whose OWN configuration names a program for each
+# setting measured to start one, and which holds a stash whose commit carries a signature (#3328).
+# A repository copied into a session's notes is the case the issue names. The judge asks the git on
+# this machine every question it has, and none of those programs may run.
+if [ -n "$REAL_GIT" ]; then
+  ck_home
+  RK="$CT/real"; : > "$RLOG"
+  dc_marker_repo "$REAL_GIT" "$RK" "$RLOG" || check "checkouts, real git: the marker repository was made" "dc_marker_repo failed"
+  dc_marker_signed_stash "$REAL_GIT" "$RK" || check "checkouts, real git: its signed stash was made" "dc_marker_signed_stash failed"
+  RHEAD="$(_dc_rgit "$REAL_GIT" -C "$RK" rev-parse HEAD)"
+  check "checkouts, real git: the fixture is a clone holding one stash, its configuration naming programs" \
+    "$([ -n "$RHEAD" ] && [ -f "$RK/.git/refs/stash" ] && grep -q 'program = ' "$RK/.git/config" && echo ok || echo "it was not made")"
+  old "$CT"; list_written kept-checkouts "$RK"
+  real_git_stub
+  dc_stub gh "echo '41 $RHEAD'"
+  : > "$RLOG"
+  judge claude-records "$RK"
+  check "checkouts, real git: git answered every question down to its stash list" "$(eq "$JUDGED" "not offerable: it holds a stash")"
+  check "checkouts, real git: and no program the checkout names ran" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "checkouts, real git: the stash list ran with the checkout's programs turned off" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false stash list")" 1)"
+  # Without the stash the judge goes on to count the commits no remote has. Git reading the
+  # checkout just now can move a file's opened time, which the floor then reports, so either
+  # verdict means every question was asked and answered.
+  _dc_rgit "$REAL_GIT" -C "$RK" stash drop >/dev/null; old "$CT"; : > "$DC_CALLS"; : > "$RLOG"
+  judge claude-records "$RK"
+  check "checkouts, real git: with no stash the judge reaches its last question and the floor after it" \
+    "$(case "$JUDGED" in (offerable|"not offerable: asking git about it just now read files in it"*) echo ok ;; (*) echo "judged: $JUDGED" ;; esac)"
+  check "checkouts, real git: the count of commits no remote has was asked, with the programs off" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c log.showSignature=false rev-list --count --branches --tags --not --remotes HEAD")" 1)"
+  check "checkouts, real git: and nothing ran for any of it" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  default_stubs
+else
+  check "checkouts, real git: git is on this machine, so the judge can be asked for real" "no git on the PATH"
+fi
 
 # ================================================================================================
 # npm and pnpm caches: each npx copy not run or changed in 30 days is offered (Dan, 2026-11-18:
