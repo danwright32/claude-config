@@ -7235,8 +7235,10 @@ the collision guard and scope modes' overnight LESSONS.md check judge as a write
 build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
 (a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
 relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
-when it runs outside that folder, and given no path where that folder cannot be named or an earlier
-command on the line set `GIT_DIR` or `GIT_WORK_TREE`), which winding
+when it runs outside that folder, and left in the folder the command runs in, where it was placed
+before, when that folder cannot be known: a value the shell fills in, or `GIT_DIR` or
+`GIT_WORK_TREE` set by an earlier command on the line; that path is a guess, kept so the guards
+that skip an entry with no path judge the calls they always did), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
 log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in

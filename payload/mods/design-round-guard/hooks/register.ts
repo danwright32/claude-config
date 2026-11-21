@@ -716,13 +716,33 @@ const moveFiles = async ($: EngineInterface, tree: GitAt, ask: MoveAsk, merged: 
 // script), one git cannot answer for, and one bringing in more look changing files than
 // MOVE_FILES_MAX. A checkout's one name that is a path is a restore of it from the
 // index, given as mod-kit gives one. A move in a folder that is in no checkout is in no project.
+// #3337: which of GIT_DIR and GIT_WORK_TREE a call's text names anywhere but as a setting on a git
+// command itself, the one place mod-kit's git reader hands them on from: an export, a plain
+// assignment, a setting on another command, a value read from one. git reads such a variable only
+// if it was exported, which no reader here follows, so a git command that does not name that
+// repository or folder for itself may still be told one, and the guard cannot tell which.
+const namedElsewhere = (command: string, commands: readonly RunCommand[]): ('GIT_DIR' | 'GIT_WORK_TREE')[] => {
+  const onGit = commands.flatMap(c => ((c.words[0] ?? '').split('/').pop() === 'git' ? (c.env ?? []) : []))
+  return (['GIT_DIR', 'GIT_WORK_TREE'] as const).filter(name => (command.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length > onGit.filter(s => s.startsWith(`${name}=`)).length)
+}
+// Why a git command may be told its repository or working folder from elsewhere in the call
+// (namedElsewhere), where it names none for itself; undefined where it may not.
+const toldElsewhere = (g: { gitDir?: string; workTree?: string }, elsewhere: readonly ('GIT_DIR' | 'GIT_WORK_TREE')[]): string | undefined => {
+  const name = elsewhere.find(n => (n === 'GIT_DIR' ? g.gitDir : g.workTree) === undefined)
+  return name === undefined ? undefined : `the command names ${name} somewhere other than as a setting on a git command itself, so the guard cannot tell which working folder git writes in`
+}
+
 // `misplaced` (#3337) is why what git itself writes on the line (a checkout or restore of paths, git
 // rm, git mv, which mod-kit's reader places from the command's words alone, asking git nothing) may
 // land somewhere other than where the reader placed it: the command names its repository or working
 // folder apart and git, asked with that naming, cannot say where its files land, or says a folder
 // that is not the one the words give. A repository can keep its own working folder in its settings
 // (core.worktree, as a submodule's does), and named by --git-dir or GIT_DIR alone its files land
-// there, not in the folder the command runs in (measured with git 2.51.1).
+// there, not in the folder the command runs in (measured with git 2.51.1). So is a command that may
+// be told its repository or working folder from elsewhere in the call (toldElsewhere): for both,
+// and for a working folder named by a value it cannot follow, the reader hands on the path in the
+// folder the command runs in, as it did before #3337, so the guards that judge by that path judge
+// the calls they always did, and this guard holds rather than act on the guess.
 const movedTargets = async ($: EngineInterface, command: string, at: Where): Promise<{ targets: Target[]; restores: { word: string; path: string }[]; misplaced?: string }> => {
   const targets: Target[] = []
   const restores: { word: string; path: string }[] = []
@@ -733,15 +753,22 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
   // With the settings each command runs with (#3337), which may name its repository (GIT_DIR, GIT_WORK_TREE).
   for (const c of commands) gits.push((c.words[0] ?? '').split('/').pop() === 'git' ? await $.modkit.git({ words: [...c.words], ...(c.env ? { env: [...c.env] } : {}) }) : undefined)
   const look = (p: string) => shapeKind(p) !== null || isModHookTs(p)
+  const elsewhere = namedElsewhere(command, commands)
   for (const [i, c] of commands.entries()) {
     const g = gits[i]
-    if (g && misplaced === undefined && (g.gitDir !== undefined || g.workTree !== undefined) && ['checkout', 'restore', 'rm', 'mv'].includes(g.sub ?? '') && c.folder !== null) {
-      const ranIn = g.dir === undefined ? (c.folder ?? at.cwd) : resolvePath(g.dir, c.folder ?? at.cwd, at.home)
-      const named = await namedApart($, g, ranIn, at.home)
-      // The top of the working folder as the reader takes it from the words: the one named, else the folder it runs in.
-      const worded = plainPath(g.workTree === undefined ? ranIn : resolvePath(g.workTree, ranIn, at.home))
-      if (named !== undefined && 'why' in named) misplaced = named.why
-      else if (named !== undefined && named.tree !== worded) misplaced = `git says its files land in ${named.tree}, the working folder the repository it names keeps, not in ${worded}`
+    if (g && misplaced === undefined && ['checkout', 'restore', 'rm', 'mv'].includes(g.sub ?? '') && c.folder !== null) {
+      // Told its repository or working folder from elsewhere in the call, the reader's path is the
+      // folder the command runs in, a guess it keeps for the guards that judge by it.
+      const told = toldElsewhere(g, elsewhere)
+      if (told !== undefined) misplaced = told
+      else if (g.gitDir !== undefined || g.workTree !== undefined) {
+        const ranIn = g.dir === undefined ? (c.folder ?? at.cwd) : resolvePath(g.dir, c.folder ?? at.cwd, at.home)
+        const named = await namedApart($, g, ranIn, at.home)
+        // The top of the working folder as the reader takes it from the words: the one named, else the folder it runs in.
+        const worded = plainPath(g.workTree === undefined ? ranIn : resolvePath(g.workTree, ranIn, at.home))
+        if (named !== undefined && 'why' in named) misplaced = named.why
+        else if (named !== undefined && named.tree !== worded) misplaced = `git says its files land in ${named.tree}, the working folder the repository it names keeps, not in ${worded}`
+      }
     }
     const move = gitMove(g ?? undefined)
     if (!g || !move) continue
@@ -1161,10 +1188,7 @@ const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; i
     const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
     const runs = commands.filter(c => JSON.stringify(c.words) === JSON.stringify(u.words))
     if (!runs.length || runs.some(run => run.folder === null)) return undefined
-    // Each variable written anywhere but as a setting on a git command itself, which alone the
-    // reader hands on: an export, a setting on another command, a value read from it.
-    const onGit = commands.flatMap(c => ((c.words[0] ?? '').split('/').pop() === 'git' ? (c.env ?? []) : []))
-    const elsewhere = (['GIT_DIR', 'GIT_WORK_TREE'] as const).filter(name => (command.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length > onGit.filter(s => s.startsWith(`${name}=`)).length)
+    const elsewhere = namedElsewhere(command, commands)
     for (const run of runs) {
       const key = JSON.stringify([run.folder ?? at.cwd, run.env ?? []])
       if (lands.has(key)) continue
@@ -1178,9 +1202,9 @@ const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; i
       args = g.args
       const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
       if (g.sub === 'am') {
-        const unsaid = elsewhere.find(name => (name === 'GIT_DIR' ? g.gitDir : g.workTree) === undefined)
-        if (unsaid !== undefined) {
-          lands.set(key, { why: `the command names ${unsaid} somewhere other than as a setting on a git command itself, so the guard cannot tell which working folder git am lands the patch in` })
+        const told = toldElsewhere(g, elsewhere)
+        if (told !== undefined) {
+          lands.set(key, { why: told })
           continue
         }
         const apart = await namedApart($, g, dir, at.home)

@@ -1646,8 +1646,16 @@ test('#3337: a restore naming its working folder apart is judged for the file it
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     if (!why.includes(HELD) || !why.includes('issue #978 in slate')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
   }
-  // Set by an earlier command on the line, the working folder cannot be told: held as not followed.
-  for (const command of ['export GIT_WORK_TREE=/w/slate; cd /w/other; git restore app/globals.css', 'cd /w/other && git --work-tree="$W" restore app/globals.css']) {
+  // Set by an earlier command on the line, or named by a value the shell fills in, the working
+  // folder cannot be told: held as not followed. mod-kit's reader hands on the path in the folder
+  // the command runs in for these, as it did before #3337 (here the other project, whose issue is
+  // answered), so the hold is the guard's own.
+  for (const command of [
+    'export GIT_WORK_TREE=/w/slate; cd /w/other; git restore app/globals.css',
+    'GIT_WORK_TREE=/w/slate; cd /w/other; git checkout -- app/globals.css',
+    'cd /w/other && git --work-tree="$W" restore app/globals.css',
+    'cd /w/other && GIT_WORK_TREE="$W" git rm app/globals.css',
+  ]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     if (!why.includes('could not be followed')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
   }
@@ -1656,12 +1664,18 @@ test('#3337: a restore naming its working folder apart is judged for the file it
   // One step short: a file that changes no look, and a working folder in no project.
   w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
   const asked: string[] = []
-  for (const command of ['cd /w/other && git --work-tree=/w/slate restore docs/notes.md', 'cd /w/other && git --work-tree=/w/nowhere restore app/globals.css', 'cd /w/other && GIT_WORK_TREE=/w/nowhere git checkout -- app/globals.css']) {
+  for (const command of [
+    'cd /w/other && git --work-tree=/w/slate restore docs/notes.md',
+    'cd /w/other && git --work-tree=/w/nowhere restore app/globals.css',
+    'cd /w/other && GIT_WORK_TREE=/w/nowhere git checkout -- app/globals.css',
+    'export GIT_WORK_TREE=/w/slate; cd /w/other; git restore docs/notes.md',
+    'cd /w/other && git --work-tree="$W" restore docs/notes.md',
+  ]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
   }
   expect(asked).toEqual([])
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(5)
 })
 
 // #3337: a repository can keep its own working folder in its settings (core.worktree, as a
@@ -1688,7 +1702,7 @@ test('#3337: a restore whose named repository keeps its working folder elsewhere
     if (!said.includes('could not be followed') || !said.includes('/w/slate/ui')) notHeld.push(`${command}: ${said.slice(0, 300)}`)
   }
   // Set by an earlier command on the line, the guard is told of no repository to ask git about, and
-  // mod-kit's reader gives the file no path: held as one that cannot be followed.
+  // mod-kit's reader leaves the file in the folder the command runs in: held by the guard itself.
   const exported = await why('export GIT_DIR=/w/slate/.git/modules/ui && cd /w/other && git restore app/globals.css')
   if (!exported.includes('where the command writes app/globals.css could not be followed')) notHeld.push(`exported: ${exported.slice(0, 300)}`)
   // git cannot say where the files land: held, saying so.

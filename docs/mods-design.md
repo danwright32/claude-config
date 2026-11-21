@@ -4042,8 +4042,16 @@ whatever the number said.
   git cannot answer for, an answer that is no one folder, and either variable set by an earlier
   command on the line (git reads it only if it was exported, which no reader here follows). For a
   move that earlier command already holds it, as any command before a move does; for a restore
-  the write reader gives the file no path; for `git am` the guard looks for the variable's name
-  anywhere but in a git command's own settings.
+  and for `git am` the guard looks for the variable's name anywhere but in a git command's own
+  settings.
+- The write reader never drops a path it gave before. Where it cannot know the working folder (a
+  value the shell fills in, or either variable set by an earlier command on the line), it hands on
+  the path in the folder the command runs in, as it did before #3337. That path is a guess. It is
+  kept because the collision guard and winding down skip a git write with no path, so handing on
+  none would have had two guards judge fewer calls than before. The design round guard does not
+  act on the guess: it holds each such file that may change the look, from the git reader's
+  account of the command and the command's own text. The lasting fix is for those two guards to
+  hold what cannot be placed, which is its own issue.
 - What git puts back is still read in the checkout the file sits in (`git cat-file`). A move's
   source is a full commit id, so another repository either holds the same content or the read
   fails, and a failed read judges the whole file. A restore with any `GIT_` variable or any option

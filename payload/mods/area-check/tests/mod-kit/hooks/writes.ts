@@ -1376,18 +1376,21 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // with git 2.51.1); told only its repository, the folder it runs in is the working folder,
       // unless that repository keeps its own in its settings (core.worktree), which this reader
       // cannot see and a guard asks git for (`rev-parse --show-toplevel`).
-      // Undefined, so the path is placed nowhere, where the working folder cannot be named, and
-      // where an earlier command on the line set either variable without it standing on the git
-      // command itself: git reads it only if it was exported, which this reader does not follow,
-      // and a guard reading `git` for the command is told nothing of it, so it cannot ask git as it
-      // can for a repository the command itself names.
+      // Where the working folder cannot be known, the path stays in the folder the command runs in,
+      // where it was placed before #3337: a working folder named by a value this reader cannot
+      // follow, and either variable set by an earlier command on the line without standing on the
+      // git command itself, which git reads only if it was exported. That path is a guess, kept
+      // because the collision guard and winding down skip an entry with no path, so giving none
+      // would have them judge fewer calls than before. A guard that must not act on the guess
+      // holds for itself, from `git`'s reading of the command and the command's own text, as the
+      // design round guard does.
       const gitFolder = (): string | undefined => {
         const at = g?.dir === undefined ? dir : pathOf(g.dir, dir)
         if (g === undefined || at === undefined) return at
-        if ((g.gitDir === undefined && setBy.has('GIT_DIR')) || (g.workTree === undefined && setBy.has('GIT_WORK_TREE'))) return undefined
+        if ((g.gitDir === undefined && setBy.has('GIT_DIR')) || (g.workTree === undefined && setBy.has('GIT_WORK_TREE'))) return at
         if (g.workTree === undefined) return at
         const top = pathOf(g.workTree, at)
-        if (top === undefined) return undefined
+        if (top === undefined) return at
         return at === top || at.startsWith(top === '/' ? top : `${top}/`) ? at : top
       }
       if (g && (g.sub === 'apply' || g.sub === 'am')) {
