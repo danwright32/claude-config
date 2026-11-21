@@ -4345,8 +4345,17 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     *) own_ceiling=37 ;;
   esac
   several="$several own-suite"
-  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  own_warm="$(mktemp -d "$T/warm.XXXXXX")"
+  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
   check "the command that starts this suite is judged within $own_ceiling units of the yardstick on $(uname -s) (#3255)" "$cost"
+  # Judged a second time with nothing changed, it is answered from the judgement cache, as the
+  # claude-sync suite's command is above and inside the same 6 units (#3255). Until 2026-11-21 it
+  # never was: the first of the three cold judgements above, the one made in this cache, was not
+  # kept (the judgement cache part below says why), so every asking cost the whole judgement.
+  # Measured that day on the personal MacBook with a unit at 0.097 s, one cache for every reading:
+  # 19.4 to 20.1 units each time before (5 readings), and 20.2 then 1.8, 1.8, 1.8, 1.8 after.
+  cost="$(SLACK_GATE_COST_LABEL=own-suite-warm SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  check "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
   # Its readings are printed with every other cost case's, in the one note at the end of this part
   # (#3170), which took the place of a note of its own when the note cap was full.
   if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
@@ -5778,6 +5787,22 @@ sv_tool "$JSV/env/bin/fake" "#!$JSV/bare/bin/python"
 jc_run "$JSV/env/bin/fake sql"
 refused "once its first line names an environment without the package, it is refused"
 traced "the kept judgement is not used once the first line has changed" "miss: " "answers differently now"
+# A Python script that names an endpoint in a comment has its comments found with tokenize (#2913).
+# The gate imported that module where it used it, in the middle of the judgement, and a module's own
+# files read then are a read the cache's record never saw, so no such judgement was kept. The command
+# that starts this suite is one: it was judged whole, about 19 units, every time it was asked (#3255).
+printf '%s\n' '# chat.postMessage is named here only in a comment.' 'print(1)' > "$JC/prose.py"
+jc_run "python3 $JC/prose.py"
+allowed "a Python script naming an endpoint only in a comment is allowed"
+traced "its judgement is kept, comments and all (#3255)" "stored"
+jc_run "python3 $JC/prose.py"
+allowed "judged again with nothing changed, it is allowed"
+traced "and that second judgement is answered from the cache (#3255)" "hit"
+# Kept, it is still only as good as the file it read: once the script can send the name, it is refused.
+printf '%s\n' 'URL = "https://slack.com/api/chat.postMessage"' 'print(URL)' >> "$JC/prose.py"
+jc_run "python3 $JC/prose.py"
+refused "once that script names the endpoint in a string it can send, the same command is refused"
+traced "the kept judgement is not used once the script has changed (#3255)" "miss: read" "answers differently now"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.

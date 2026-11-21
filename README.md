@@ -4719,6 +4719,32 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
 
+Three things that pull request left were settled on 2026-11-21 (#3255), all measured that day on the
+personal MacBook with a unit at 0.097 s:
+
+- The judgement of the command that starts the gate's suite is now kept. The gate imported
+  `tokenize` where it used it, in the middle of a judgement; a module loaded there reads its own
+  files, the judgement cache sees a read nobody recorded, and nothing is kept. So that command cost
+  19.4 to 20.1 units every time it was asked (5 askings, one cache, 2026-11-21). With the import at the top of
+  the gate the first asking cost 20.2 units and the next four 1.8 each, answered from the cache.
+  Loading it at the start adds about 1.2 ms to every call (9 readings), which the gate's fixed cost
+  of 1.8 to 1.9 units does not show. No rule about what the cache keeps changed.
+- The refusal of the mods suite on 2026-11-19 was the work and not the load. The call was not
+  `bash tests/test-mods.sh` alone: it wrote a file first (`uptime > $S/load-before.txt; ...`). The
+  gate keeps a record of files already found clean, so a suite that runs one script hundreds of
+  times reads it once, and it keeps nothing once an earlier command of the call has written a file.
+  With that day's gate the whole call needed 122.4 to 123.3 units, 11.7 to 11.9 s of processor time
+  against the 11 s budget (3 readings, and refused 3 times of 3 on the real clock), and 14.4 to 14.8
+  with the first write taken out. Main's gate judges the same call in 58.2 to 60.2 units, the suite
+  alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
+  changing when it is kept is its own piece of work. Until then a call that starts a suite is
+  cheapest when it writes nothing before it.
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
+  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+  time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
+  already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
+  compiled once each for a shell name, about 3%. The limit was not moved.
+
 The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
 CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
 on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
