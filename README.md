@@ -8104,7 +8104,13 @@ for the save question and the lesson's picker alike. Asked from `tool.check` (#8
 `tool.call` hook, so a save another guard refuses is refused before Dan is asked. Just this
 session's rule rides `prompt.section`, which the security default also sends past every mod, so it
 does not reach the system prompt today (#876). Each save asks under its own id, so a press answers
-only the save it was drawn for; a second save waits behind the first. Each answer reaches Claude as
+only the save it was drawn for; a second save waits behind the first. That id is handed out only in
+the save's refusal, so since #3293 the memory section tells every session to send a save before
+asking about it, and a question with no save id that names lasting memory (a file or the word) and
+offers For good or Just this session is refused before Dan reads it, since his answer could approve
+nothing and he would be asked again. Another guard's picker, a subagent's and any other question
+about a memory file are left alone (counted 2026-11-21: 4 of 1,651 pickers with no id had that
+shape, each followed by the refused save and the same question). Each answer reaches Claude as
 a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you

@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, shownFault } from '../hooks/rules.ts'
+import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, sendFirstNote, shownFault } from '../hooks/rules.ts'
 import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
@@ -417,6 +417,63 @@ test('the dialog Claude opens shows the mod\'s own answers, and For good saves t
   // The approval was for that one save: the same call once more is refused again.
   expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(ASKS)
   expect(w.ran.length).toBe(1)
+})
+
+// #3293: a session asked "save this to memory?" before sending the save. That question carried no
+// save id, so Dan's answer approved nothing, the save was refused, and he was asked the identical
+// question again. A question offering the mod's own answers about memory with no save id is refused
+// before he is asked, and Claude is told to send the save first.
+const UNTIED = (question: string, labels: string[], more: Record<string, unknown> = {}) => ({
+  tool: 'AskUserQuestion',
+  questions: [{ question, header: 'Memory', options: labels.map(label => ({ label, description: label })), multiSelect: false }],
+  ...more,
+})
+const SEND_FIRST = 'send the save itself first'
+test('a question offering For good about memory with no save id is refused before Dan is asked, and the save sent first asks him once (#3293)', withKit, async ($, on) => {
+  const w = world($, on)
+  const file = '~/.claude/projects/p/memory/note.md'
+  w.dialog.answer = 'For good'
+  const early = await call($, UNTIED(`Save to ${file} for good: skip the screenshots?`, ['For good', 'Just this session', 'Not at all']))
+  expect(early.deny).toContain(SEND_FIRST)
+  expect(early.deny).toContain('metadata "source"')
+  // Memory named by the word alone, the answers in another case, a source with no id: refused too.
+  expect((await call($, UNTIED('Save this to memory: skip the screenshots?', ['for good ', 'Not at all']))).deny).toContain(SEND_FIRST)
+  expect((await call($, UNTIED(`Keep this in ${file}?`, ['Just this session'], { metadata: { source: 'ask-before-saving' } }))).deny).toContain(SEND_FIRST)
+  expect(w.asked).toEqual([])
+  // The control: the save sent first is refused with its id, and the question carrying that id is
+  // asked once and saves it, exactly as before.
+  const save = { tool: 'Write', file_path: `${HOME}/.claude/projects/p/memory/note.md`, content: 'Skip the screenshots.\n' }
+  const refused = refusalOf(await call($, save))
+  expect(refused).toContain(ASKS)
+  const answered = await askDan($, w, refused, 'For good', file, 'skip the screenshots')
+  expect(answered.deny).toBeUndefined()
+  expect(w.asked.length).toBe(1)
+  expect(contextOf(answered)).toContain(`Dan answered For good to saving this to ${file}`)
+  expect((await call($, save)).deny).toBeUndefined()
+  expect(w.ran.length).toBe(1)
+})
+
+test("a question that is not the mod's own about memory, another guard's or a subagent's goes to the dialog as before, and approves no save (#3293)", withKit, async ($, on) => {
+  const w = world($, on, { agents: ['agent-a1'] })
+  w.dialog.answer = 'For good'
+  // A choice of route about a memory file, For good about something that is not memory, another
+  // guard's picker, and a subagent's: none is the wasted question, so each is asked as before.
+  expect((await call($, UNTIED('Should this go in ~/Apps/slate/CLAUDE.md or in an issue?', ['Add it', 'File an issue']))).deny).toBeUndefined()
+  expect((await call($, UNTIED('Mute this check for good?', ['For good', 'Not now']))).deny).toBeUndefined()
+  expect((await call($, UNTIED('Save to ~/Apps/slate/CLAUDE.md for good: x?', ['For good'], { metadata: { source: 'area-check:t9' } }))).deny).toBeUndefined()
+  expect((await call($, UNTIED('Save to ~/Apps/slate/CLAUDE.md for good: x?', ['For good'], { agentId: 'agent-a1' }))).deny).toBeUndefined()
+  expect(w.asked.length).toBe(4)
+  // None of them approves a save: the save is still refused and asked about.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${CWD}/CLAUDE.md`, content: '- x\n' }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
+test('the memory section tells every session to send a save before asking Dan about it (#3293)', withKit, async ($, on) => {
+  world($, on)
+  const text = (await ($ as unknown as { prompt: { section: (x: never) => Promise<{ text: string | null }> } }).prompt.section({ name: 'memory', text: 'core memory' } as never)).text
+  expect(text).toContain('core memory')
+  expect(text).toContain(SEND_FIRST)
+  expect(text).not.toContain('# Rules for this session only')
 })
 
 // #777: a subagent's call raised the question in Dan's main session, and For good then asked the main
@@ -1493,7 +1550,7 @@ test('Just this session writes nothing and holds the rule, in Claude\'s plain wo
   await ($ as unknown as { session: { compact: (x: never) => Promise<unknown> } }).session.compact({ messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as never)
   expect(await section()).toContain('- skip the screenshots')
   await ($ as unknown as { session: { end: (x: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
-  expect(await section()).toBe('core memory')
+  expect(await section()).toBe(`core memory\n\n${sendFirstNote}`)
 })
 
 test('Not at all writes nothing and tells Claude not to save it', withKit, async ($, on) => {
@@ -2452,7 +2509,7 @@ test('the For good question is refused when Dan could not read it whole, and not
   expect(w.asked).toEqual([])
   expect(w.ran).toEqual([])
   const section = async () => (await ($ as unknown as { prompt: { section: (x: never) => Promise<{ text: string | null }> } }).prompt.section({ name: 'memory', text: 'core memory' } as never)).text
-  expect(await section()).toBe('core memory')
+  expect(await section()).toBe(`core memory\n\n${sendFirstNote}`)
   // The save still waits on the same question: asked in words he can read, his answer saves it.
   const ok = await askDan($, w, refused, 'For good', file, `always use pnpm at the ${QUOTED}`)
   expect(ok.deny).toBeUndefined()

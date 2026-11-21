@@ -2623,6 +2623,27 @@ and the band question is removed rather than kept beside it (L29). Three defects
   - What only a live session shows: whether the classifier allows the call Claude sends again, which
     it judges against the conversation as for any call (a For good cannot overrule it), and that a
     plugin's prompt starts Claude's turn while the session is idle.
+- **A question asked before the save is refused, never matched** (#3293, built 2026-11-21). The
+  save id that ties Dan's answer to a save is handed out only in the save's refusal, so a session
+  that asked "save this to memory?" first had an answer that approved nothing, and he was asked the
+  identical question again once the save was refused (twice in one session on 2026-11-19). Matching
+  an answer with no id to a later save that names the same file was not built: it could approve a
+  save he did not mean, and nothing here lets through a save refused before. Instead:
+  - The memory section of the system prompt tells every session, before it asks anything, to send
+    the save first and ask with the id its refusal gives (rules.ts `sendFirstNote`).
+  - A question with no save id that names lasting memory (a file, as `mentionsAny` reads one, or the
+    word) and offers For good or Just this session, in any case, is refused before Dan reads it,
+    saying to send the save first (rules.ts `asksBeforeTheSave`). It sits on the path a question
+    tied to no save took straight to the dialog; the shared check of what a picker shows (mod-kit
+    `askFault`) is unchanged, in the same place, and still judges every question tied to a save.
+  - Counted before it refused anything (#3321's rule), over the personal MacBook's session records
+    on 2026-11-21: of 1,651 pickers that reached the dialog with no save id, 4 took that shape, and
+    all 4 were followed by the refused save and the same question with the id; none was anything
+    else. Broader shapes were measured and not built: any question naming a memory file (35, of
+    which 18 were not followed by a save) or saying save and memory (10, of which 6 were not), since
+    those were as often a choice of route or a question about a file's contents. They are left to
+    the memory section's guidance, as are another guard's pickers (a source of its own) and a
+    subagent's. Of 16 questions repeated about the same file, the rule refuses 3 at ask time.
 - **An approved durable lesson is not asked about again** (#867, built 2026-10-06; Dan: "The
   confirmation that I want to add the durable lesson should be enough to indicate that I want to add
   it forever."). The durable lesson check (`hooks/durable-lesson-check.sh`) has Claude propose a
