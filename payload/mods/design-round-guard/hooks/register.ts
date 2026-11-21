@@ -85,6 +85,8 @@ import {
   MOVE_FILES_MAX,
   MOVE_ALONE_REMEDY,
   MOVE_FETCH_REMEDY,
+  commitsUnread,
+  unknownCommitSaid,
   moveUnread,
   moveUnreadCard,
   movedSaid,
@@ -568,12 +570,15 @@ const namedApart = async ($: EngineInterface, g: { gitDir?: string; workTree?: s
 // move, in the checkout it runs in. Never a command that changes anything: rev-parse, diff
 // --name-status, log --no-walk, rev-list --no-walk, for-each-ref, ls-tree and merge-base only. Why
 // not, in words, where git cannot say: it fails, cannot run, runs past its time, or prints more than
-// can be read whole. `at` is where the question is put (GitAt, #3337).
-const askGit = async ($: EngineInterface, at: GitAt, args: string[]): Promise<{ out: string } | { why: string; code?: number }> => {
+// can be read whole. `at` is where the question is put (GitAt, #3337). Where git fails, `asked` and
+// `stderr` carry the question and git's whole message, for a caller that must tell one failure from
+// another (#3333, picksUnread).
+type GitFailed = { why: string; code?: number; asked?: string; stderr?: string }
+const askGit = async ($: EngineInterface, at: GitAt, args: string[]): Promise<{ out: string } | GitFailed> => {
   const said = `git ${args.join(' ')}`
   try {
     const r = await $.process.run(['git', ...(typeof at === 'string' ? ['-C', at] : at), ...args], { timeoutMs: 5000 })
-    if (r.exitCode !== 0) return { why: `${said} exited ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'with no message'}`, code: r.exitCode }
+    if (r.exitCode !== 0) return { why: `${said} exited ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'with no message'}`, code: r.exitCode, asked: said, stderr: r.stderr }
     if (r.isStdoutTruncated) return { why: `${said} printed more than could be read whole` }
     return { out: r.stdout }
   } catch (err) {
@@ -627,6 +632,15 @@ const beyondDefaultBranch = async ($: EngineInterface, tree: string, commit: str
   return files.filter(f => !skip.has(f.rel))
 }
 
+// Why the commits a cherry-pick or revert names could not be read, from git's failed answer. The
+// fetch is named only where git's whole message is that it does not know one of them (#3333,
+// rules.ts unknownCommitSaid): any other exit 128 is a damaged object, a damaged pack or no
+// repository at all, and is said in git's own words with no remedy. The move is held either way.
+const picksUnread = (r: GitFailed): { why: string; remedy?: string } => {
+  if (r.code !== 128 || r.asked === undefined || r.stderr === undefined) return { why: r.why }
+  return unknownCommitSaid(r.stderr) ? { why: r.why, remedy: MOVE_FETCH_REMEDY } : { why: commitsUnread(r.asked, r.stderr) }
+}
+
 // The files one move brings into the working tree of `tree` (#3279), as git says before it runs, each
 // with the commit it is written from, or taken away; `restore` where a checkout's one name is a path
 // git puts back from the index. Why not, where git cannot say, with what to do instead where there
@@ -663,7 +677,7 @@ const moveFiles = async ($: EngineInterface, tree: GitAt, ask: MoveAsk, merged: 
     // as cherry-pick walks it) is read against that parent, turned round for a revert, which puts
     // back what the parent held. A commit with no such parent is one git cannot answer for: held.
     const listed = await askGit($, tree, ['rev-list', '--no-walk', ...ask.revs, '--'])
-    if ('why' in listed) return { why: listed.why, ...(listed.code === 128 ? { remedy: MOVE_FETCH_REMEDY } : {}) }
+    if ('why' in listed) return picksUnread(listed)
     const shas = listed.out.split('\n').filter(Boolean)
     if (shas.some(sha => !/^[0-9a-f]{40,64}$/.test(sha))) return { why: 'git rev-list printed what the guard could not read as a list of commits' }
     if (shas.length > MAINLINE_PICKS_MAX) return { why: `it names ${shas.length} commits with a mainline number, more than the ${MAINLINE_PICKS_MAX} the guard reads one by one` }
@@ -678,7 +692,7 @@ const moveFiles = async ($: EngineInterface, tree: GitAt, ask: MoveAsk, merged: 
   }
   if (ask.ask === 'picks') {
     const r = await askGit($, tree, ['log', '--no-walk', '--format=%x01%H', '--name-status', '-z', '--no-renames', '-m', '--first-parent', ...ask.revs, '--'])
-    if ('why' in r) return { why: r.why, ...(r.code === 128 ? { remedy: MOVE_FETCH_REMEDY } : {}) }
+    if ('why' in r) return picksUnread(r)
     const files = pickedFiles(r.out, ask.revert === true)
     return files ? { files } : { why: 'git log printed what the guard could not read as a list of files' }
   }
