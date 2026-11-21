@@ -310,7 +310,7 @@ i=1
 while [ "$i" -le 100 ]; do cp -R "$F/tiny" "$F/many/s$i"; printf '160000 %s\ts%s\n' "$tiny_head" "$i"; i=$((i + 1)); done > "$F/many.index"
 "$GIT" -C "$F/many" update-index --index-info < "$F/many.index"
 check "the fixture's index holds 100 submodules, each checked out" \
-  "$(eq "$(git -C "$F/many" ls-files --stage | grep -c '^160000 ')|$([ -d "$F/many/s100/.git" ] && echo there)" "100|there")"
+  "$(eq "$(git -C "$F/many" ls-files --stage | grep -c '^160000 ')|$([ -e "$F/many/s100/.git" ] && echo there)" "100|there")"
 out="$(dc_git "$F/many" --no-optional-locks status --porcelain --untracked-files=all 2>&1 </dev/null)"; rc=$?
 check "100 submodules: dc_git reads the settings of each and runs the status" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc: ${out%%$'\n'*}")"
 cp -R "$F/tiny" "$F/many/s101"
