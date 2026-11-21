@@ -89,6 +89,29 @@ printf '#!/bin/bash\nscreencapture -l 123 /tmp/w.png\n' > "$WORKDIR/window.sh"
 allowed "a script file capturing one window" "bash $WORKDIR/window.sh"
 printf '#!/bin/bash\necho hi\n' > "$WORKDIR/plain.sh"
 allowed "a script file capturing nothing" "bash $WORKDIR/plain.sh"
+# A compiled program is no script file (claude-config#3299). Its bytes were read as commands, so one
+# whose bytes spell a capture was refused for noise. It is judged as any program this guard does not
+# know: by its name. The fixture is a Mach-O header and a line of text, written here. A path with no
+# shell's name or script ending in it is written from the folder (./), which is what sends a call on
+# to the judge (SCRIPT_RUN in the hook).
+printf '\317\372\355\376\014\000\000\001\000\000\000\000\nscreencapture -x /tmp/shot.png\n' > "$WORKDIR/tool"
+allowed "#3299 a compiled program run by its path, whose bytes spell a capture" "./tool --front-window notes.txt"
+allowed "#3299 and one handed to bash, which refuses to run it" "bash $WORKDIR/tool"
+# The other direction: nothing a shell does run as commands may pass for looking like a program.
+refused "#3299 a capture typed beside a compiled program" "$WORKDIR/tool && screencapture -x /tmp/shot.png"
+cp "$WORKDIR/tool" "$WORKDIR/screencapture"
+refused "#3299 a compiled program named screencapture, judged by its name" "$WORKDIR/screencapture -x /tmp/shot.png"
+refused "#3299 a compiled program's lines run by zsh, which runs them" "zsh $WORKDIR/tool"
+refused "#3299 and sourced, which runs them too" "source $WORKDIR/tool"
+printf '#!/bin/bash\nscreencapture -x /tmp/shot.png\n\000\000\n' > "$WORKDIR/nul-later.sh"
+refused "#3299 a script with a NUL after its first line, which still runs, by its path" "$WORKDIR/nul-later.sh"
+refused "#3299 and run by bash" "bash $WORKDIR/nul-later.sh"
+printf 'screencapture -x /tmp/shot.png # caf\351\n' > "$WORKDIR/latin1.sh"
+refused "#3299 a script with bytes that are not UTF-8, which still runs" "$WORKDIR/latin1.sh"
+printf '\177ELF;screencapture -x /tmp/shot.png\n' > "$WORKDIR/magic-no-nul"
+refused "#3299 a file with the magic number and no NUL, which a shell runs as commands" "./magic-no-nul"
+printf '\177ELF;screencapture -x /tmp/shot.png;\000\n' > "$WORKDIR/magic-break-nul"
+refused "#3299 and one whose NUL comes after a word has ended, which ksh runs" "./magic-break-nul"
 # A quote never closed leaves only the crude cut at every separator, which still holds the capture.
 refused "after a quote never closed, read by the crude cut" "echo don't; screencapture -x /tmp/shot.png"
 

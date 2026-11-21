@@ -1821,6 +1821,26 @@ reads as an option (`git commit > -m --amend`) hides each from them. The same sw
 also change what the standard input reader refuses (`git commit -F - < /dev/stdin` is refused
 today because the spaced target is a word), so it was recorded for a change of its own.
 
+A compiled program read as a script file (#3299). A caller that asks the reader for the commands
+inside the script files a command runs was handed the bytes of a compiled program run by its path
+as commands, so a verdict could turn on noise. The fix is one test in `script_text`, the only place
+the reader opens a file, with the reader's answer exposed as `compiled_program`. What counts as
+compiled was decided by running the files, never by how they look. The issue's own wording (a NUL
+in the first block, or bytes that do not decode) was measured and rejected: `echo x`, a newline and
+a NUL runs under every shell tried, and so does a script with Latin-1 bytes, so calling either
+compiled would let a guard pass a script it refuses today. So was the magic number alone
+(`\x7fELF;cmd` runs cmd by its path under zsh, bash, dash and ksh) and a NUL anywhere on the first
+line (`\x7fELF;cmd;\0` is refused by zsh, bash and dash and run by ksh). What is left is the shape
+every real header has and no shell tried runs: the magic number, then a NUL among the first 16 bytes
+before anything that ends a shell word. It applies only to a file run by its path or handed to
+bash. zsh, dash and a sourcing shell run a compiled file's lines as commands; sh and ksh refused the
+fixtures on this Mac but are other shells on other machines, so they stay read. A file left read is
+the reading every guard had before, which can only add commands. Two guards ask for script files
+(the add scope guard through `lib/push-scope.sh`, and the screenshot gate) and both treat a
+compiled program as a program whose commands they cannot read, as they treat a python script.
+Treating a compiled program at a path a session could have written as a reason to refuse was left
+out: it is a new refusal, and a decision of its own.
+
 The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
 line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
 text `create` before reading a command, so `gh issue new` and `gh pr new` passed them unread. Their

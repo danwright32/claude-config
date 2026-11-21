@@ -21,6 +21,8 @@ Usage: loose-reader.py <hooks folder> <dest> <variant>
              hands >/dev/null over as the first of them, as the reader did before #3322.
   marks      shell_tokens marks no operator as a redirection, so none is taken out of words a caller
              cut with it: `gh pr merge 2>/dev/null 7` hands 2> over among them, as before #3322.
+  compiled   no file is called a compiled program, so the bytes of one run by its path are read as
+             the commands of a script file, as the reader read them before #3299.
 Each variant is one or more readings, every one of which must be found. Exits 1, naming the variant
 and leaving no copy, when a reading to undo is not found, and 64 on a bad call.
 """
@@ -40,6 +42,7 @@ UNDO = {
     "glue": ((r"glue = tok\.isdigit\(\) and [^\n]*", "glue = False"),),
     "among": (_AMONG,),
     "marks": (_MARKS, _MARKS_ALONE),
+    "compiled": ((r"(def compiled\(head\):\n    \"\"\".*?\"\"\"\n).*?\n\n\n", r"\1    return False\n\n\n"),),
 }
 
 

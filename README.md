@@ -1739,6 +1739,23 @@ output goes, or what is fed to its input, does not read these words: `ps__writes
 command's own words (`PS__R_WORDS`), and `gh_issue_scan.py` keeps each stage's redirections beside
 its words, and both still see every one.
 
+A caller can ask it for the commands inside each script file a command runs (`every_command` with a
+list, claude-config#2301), which the add scope guard and the screenshot gate do. A compiled program
+is no script file (claude-config#3299). Until #3299 one run by its path was decoded as text and cut
+into commands, 616 of them for BBEdit's command line helper, a Mach-O file (measured 2026-11-19),
+so a guard could refuse, or pass, on bytes that happened to spell a command. Now a file run by its
+path or handed to bash is left unread when it starts with a Mach-O or ELF magic number and a NUL
+byte follows among its first 16 bytes with nothing a shell ends a word at before it, which every
+real header does. The reader says so through `compiled_program`, for a guard that wants to judge a
+compiled program at a path its own way; those two guards treat it as they treat any program whose
+commands they cannot read. The test is that narrow on purpose. Measured 2026-11-21 on zsh 5.9, bash
+3.2, dash and ksh, each of these is still run as commands by some shell, so each is still read: a
+file with a NUL only after its first line, one with bytes that are not UTF-8, one with the magic
+number and no NUL (`\x7fELF;cmd` runs cmd), one whose NUL comes after a word has ended (ksh runs
+it by its path), and any file handed to zsh, sh, dash or ksh or sourced. Reading those can only add
+commands, so nothing refused before passes for it. The Slack drafts gate reads files with its own
+code and never read a compiled program run by its path as commands; its suite holds that too.
+
 It also reads through the programs that run a command for you (claude-config#1478), so each gate
 judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
 xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and

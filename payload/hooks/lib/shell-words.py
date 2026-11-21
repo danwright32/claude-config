@@ -2132,8 +2132,72 @@ def _env_split_string(words):
 # gate refused for an unreadable script it still refuses: reading only ever adds commands. A file that
 # is not there, cannot be read, is larger than SCRIPT_MAX_BYTES, is named through a variable, or is
 # run by its path with a #! line naming no shell (a python script) is left unread, as before.
+#
+# A compiled program is left unread too (claude-config#3299). One run by its path was decoded as text
+# and cut into commands: 616 of them for /Applications/BBEdit.app/Contents/Helpers/bbedit_tool, a
+# Mach-O file, measured 2026-11-19, so a guard's verdict could turn on bytes that happened to spell
+# a command. No shell reads such a file as commands: the kernel runs it, or the shell refuses it. A
+# file is called compiled (compiled) only where that was measured, on 2026-11-21 with zsh 5.9, bash
+# 3.2, dash and ksh on macOS: its first four bytes are a Mach-O or ELF magic number, and a NUL byte
+# follows among its first COMPILED_HEAD bytes with nothing a shell ends a word at before it, as every
+# real header has (the CPU type, or the ELF class, byte order and version, then a zero). And only
+# for a file run by its path or handed to bash (COMPILED_RUNNERS), which refuse it: zsh, dash and a
+# sourcing shell run its lines as commands, and sh and ksh are another shell on another machine, so
+# for those it is read as before. Every narrower look alike is still read, because a shell does run
+# it, each one measured the same day: a NUL only after the first line, bytes that are not UTF-8, the
+# magic number with no NUL (`\x7fELF;cmd` runs cmd under all four shells), and a NUL after a word
+# has ended (`\x7fELF;cmd;\0`, which ksh runs by its path). Reading those can only add commands, so
+# no guard passes anything for this that it refused before. compiled_program is the reader's answer
+# for a guard that wants to judge a compiled program at a path its own way; left alone, it is a
+# program whose commands nobody reads, as a python script is.
 SCRIPT_MAX_BYTES = 256 * 1024
+COMPILED_MAGIC = (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+                  b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf", b"\x7fELF")
+COMPILED_HEAD = 16
+COMPILED_RUNNERS = ("direct", "bash")
+_WORD_ENDS = frozenset(b" \t\r\n;&|()<>")
 _WHY_FILE_HEAD, _, _WHY_FILE_TAIL = WHY_FILE.partition("%s")
+
+
+def compiled(head):
+    """Whether a file's first bytes are a compiled program's header, one no shell reads as commands
+    when the file is run by its path or handed to bash (claude-config#3299)."""
+    head = bytes(head[:COMPILED_HEAD])
+    if head[:4] not in COMPILED_MAGIC:
+        return False
+    nul = head.find(b"\0", 4)
+    return nul != -1 and not any(b in _WORD_ENDS for b in head[4:nul])
+
+
+def _script_path(path, d):
+    """The full path a script file's name stands for, run in directory d, or None when it cannot be
+    told: a variable in its name, or a relative name with no absolute directory to resolve it against."""
+    if "$" in path or "`" in path:
+        return None
+    path = os.path.expanduser(path)
+    if not os.path.isabs(path):
+        if not os.path.isabs(d or ""):
+            return None
+        path = os.path.join(d, path)
+    return os.path.normpath(path)
+
+
+def compiled_program(path, d, wrapper):
+    """The full path of the file path names, run by wrapper in directory d, when it is a compiled
+    program that wrapper never reads as commands (compiled, COMPILED_RUNNERS), else None: no such
+    file, one that cannot be read, a script, or a file handed to a shell that runs its lines. It
+    reads only the file's first bytes, so a program too large to read as a script is still named."""
+    full = _script_path(path, d)
+    if full is None or wrapper not in COMPILED_RUNNERS:
+        return None
+    try:
+        if not os.path.isfile(full):
+            return None
+        with open(full, "rb") as f:
+            head = f.read(COMPILED_HEAD)
+    except OSError:
+        return None
+    return full if compiled(head) else None
 
 
 def script_file(why):
@@ -2147,15 +2211,11 @@ def script_file(why):
 def script_text(path, d, wrapper):
     """(full path, text) of the script file path names, run by wrapper in directory d, or None when it
     cannot be read: not there, unreadable, too large, a variable in its name, a relative name with no
-    absolute directory to resolve it against, or a file run by its path whose #! names no shell."""
-    if "$" in path or "`" in path:
+    absolute directory to resolve it against, a file run by its path whose #! names no shell, or a
+    compiled program its wrapper never reads as commands (compiled, claude-config#3299)."""
+    path = _script_path(path, d)
+    if path is None:
         return None
-    path = os.path.expanduser(path)
-    if not os.path.isabs(path):
-        if not os.path.isabs(d or ""):
-            return None
-        path = os.path.join(d, path)
-    path = os.path.normpath(path)
     try:
         if not os.path.isfile(path):
             return None
@@ -2164,6 +2224,8 @@ def script_text(path, d, wrapper):
     except OSError:
         return None
     if len(data) > SCRIPT_MAX_BYTES:
+        return None
+    if wrapper in COMPILED_RUNNERS and compiled(data):
         return None
     text = data.decode("utf-8", "replace")
     if wrapper == "direct" and text.startswith("#!"):
