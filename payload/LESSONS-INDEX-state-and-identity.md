@@ -52,6 +52,7 @@ which is NOT loaded into the session.
 - L261. Several behaviours a design treats as ONE condition, this run is not real or this tenant is internal, must all read ONE predicate.
 - L327. When a record's identifier is minted from whichever route it carries, any sort breaking ties on it orders by which KIND of route the record has.
 - L332. A repair wired to STARTUP is blind to everything the running system writes after it, so the state a person actually works in is the unrepaired one.
+- L1038. A dedupe keyed on fewer fields than tell its rows apart keeps one copy's other fields, so compare them before deleting.
 - L334. A deduplication breaking a tie by AGE keeps the copy holding the STALEST picture of the outside world, because age is what gave it time to go stale.
 - L335. A deduplication deleting the copy whose identity the UPSTREAM publishes gets it back next sync, so the merge repeats and destroys the fresher row.
 - L343. A collection read from a store carries no order unless the read declares one, so a list rendered straight from a query is in whatever order came back.
