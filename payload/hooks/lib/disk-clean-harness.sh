@@ -302,9 +302,10 @@ dc_marker_settings() { # <git> <git folder> <markers folder> <log> [<prefix>]
 }
 
 # Makes a real repository at <dir>: one commit on the branch feat-real holding a.txt, which its
-# attributes give filter=mark, an origin remote on GitHub that nothing here contacts, and
-# dc_marker_settings in its own configuration, the markers in <dir>.markers beside it so none is a
-# file in it. It sets no times: a case ages what its floor needs.
+# attributes give filter=mark, an origin remote on GitHub that the repository's own setting stops
+# git from contacting, and dc_marker_settings in its own configuration, the markers in
+# <dir>.markers beside it so none is a file in it. It sets no times: a case ages what its floor
+# needs.
 dc_marker_repo() { # <git> <dir> <log>
   local git="$1" d="$2" log="$3"
   _dc_rgit "$git" init "$d" >/dev/null || return 1
@@ -313,6 +314,10 @@ dc_marker_repo() { # <git> <dir> <log>
   printf 'one\n' > "$d/a.txt"
   _dc_rgit "$git" -C "$d" add -A >/dev/null && _dc_rgit "$git" -C "$d" commit -m seed >/dev/null || return 1
   _dc_rgit "$git" -C "$d" remote add origin https://github.com/dan/repo.git || return 1
+  # The scans read the origin's address and act on a GitHub one, so the address stays; the
+  # repository refuses https itself, so a git command that does reach the origin stops before it
+  # connects (#3333: three cases that broke a refusal on purpose had asked github.com for a login).
+  _dc_rgit "$git" -C "$d" config protocol.https.allow never || return 1
   dc_marker_settings "$git" "$d/.git" "$d.markers" "$log"
 }
 
