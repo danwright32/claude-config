@@ -3,6 +3,7 @@ import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/ind
 import { ghApiOf, judgeAdminMerge } from './adminmerge.ts'
 import { callKey, readsOnly, refusalNote, whatOf } from './refusals.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
+import { unreadMorningPicker } from './unread.ts'
 import type {
   ScopeModes,
   ScopeModesCleanup,
@@ -5871,6 +5872,10 @@ export const register: Register = on => {
     // recorded filed once gh made it. The words are a cheap first look; the reader decides.
     let filing: { dir: string } | null = null
     const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
+      // A picker whose answer is recorded below is asked only in words Dan can read (#3321, unread.ts);
+      // a refused one never reached him and counts neither way, as any other refusal.
+      const unreadPicker = tool === 'AskUserQuestion' ? unreadMorningPicker(input, new Set(askedByNumber.keys()), new Set(offeredByNumber.keys())) : undefined
+      if (unreadPicker !== undefined) return { deny: unreadPicker } as Awaited<ReturnType<typeof next>>
       // A stash a pop takes back is gone once it runs, so what it holds is read first (#1123).
       const stashed = raw ? await stashedFiles($, raw) : []
       let r: Awaited<ReturnType<typeof next>>

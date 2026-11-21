@@ -392,6 +392,23 @@ for d in "$dir"/*/; do
     failed=1
     echo "check-mod-shared-parts: $name keeps hooks/mod-kit/skew.ts but no hooks file imports it, so it reads nothing: read a failed call to another mod's noun with its missingOf(err) or errorText(err, '$name'), or delete the copy."
   fi
+  # picker answers (#3321): a mod whose hooks name Claude Code's question dialog and read the answers
+  # it hands back acts on what Dan chose there, and his answer covers only text he could read. Its
+  # dialog cuts a question at 2,000 characters and draws some characters and markup as nothing, so
+  # such a mod first judges the whole call with askFault from the copy of mod-kit's hooks/shown.ts,
+  # the one check of text a person approves in a picker, and does not act on a picker that fails.
+  # Told by the state reached, the read of `answers`, never by one layout of the hook (L247), and
+  # with comments taken out, so only code counts. What this does NOT cover, said here so a pass is
+  # not read as more than it is (L400): a question a mod asks itself through $.ui.ask, whose answer
+  # comes back as the call's own value, and a hook that is no mod; both are open on #3321.
+  if grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit 'AskUserQuestion' "$sd/hooks" 2>/dev/null \
+    && grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\.answers\b|\banswers\?\.' "$sd/hooks" 2>/dev/null; then
+    if ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "import \{[^}]*\baskFault\b[^}]*\} from [\"'\`]\./mod-kit/shown(\.ts)?[\"'\`]" "$sd/hooks" 2>/dev/null \
+      || ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\baskFault\(' "$sd/hooks" 2>/dev/null; then
+      failed=1
+      echo "check-mod-shared-parts: $name reads the answers of an AskUserQuestion picker and never judges the call with askFault, so Dan's answer can be acted on over text he could not read (cut by the dialog, or holding what is drawn as nothing): import askFault from the copy of hooks/shown.ts kept at hooks/mod-kit/shown.ts (cp \"$dir/mod-kit/hooks/shown.ts\" \"${d%/}/hooks/mod-kit/shown.ts\"), hand it the call as the dialog will get it, and refuse or leave unrecorded a picker it faults, before his answer is read."
+    fi
+  fi
   # catch (#2039): a hook's registration catch, `.catch(($, e, next) => ...)`, is the guard's last
   # word on a call, and one that throws leaves the call unheld. Each answers straight through
   # neverThrows from the copy of mod-kit's hooks/hold.ts, on the same line, so this line scan can hold

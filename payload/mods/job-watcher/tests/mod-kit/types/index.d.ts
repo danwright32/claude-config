@@ -97,8 +97,14 @@ export type ModKit = {
    * an operand is not guessed at, and each argument it is handed is given apart, in `runs` (#1586).
    */
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
-  /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
-  git: (input: { words: string[] }) => Promise<ModKitGit | undefined>
+  /**
+   * One command's words read as git: its subcommand after git's global options, and -C's folder.
+   * Undefined when not git. Since #3337 also the repository and the working folder the command
+   * names apart from that folder (`gitDir`, `workTree`), from its options and, where `env` is given
+   * (the `env` `pipeline` gives the command), from GIT_DIR and GIT_WORK_TREE. A reader that places a
+   * git command by `dir` alone reads one naming either as being about the wrong repository.
+   */
+  git: (input: { words: string[]; env?: readonly string[] }) => Promise<ModKitGit | undefined>
   /**
    * One command's words read as gh reads them (#961, the reader moved here from scope-modes): its
    * subcommand and action past gh's global flags, each flag with its value as pflag reads it
@@ -457,7 +463,17 @@ export type ModKitPythonText = { kind: 'comment' | 'string' | 'formatted'; from:
 /** What a program can do that only reading does not, and the words that showed it. */
 export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
-export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
+/**
+ * A git command as `git` reads it. `gitDir` is the repository it names with --git-dir or GIT_DIR and
+ * `workTree` the working folder it names with --work-tree or GIT_WORK_TREE (#3337), each as written
+ * and absent where it names none: a relative one is read from `dir`, or the folder the command runs
+ * in. With `gitDir` alone that folder is the working folder; with `workTree` alone the repository is
+ * the one found from that folder. A repository can keep its own working folder in its settings
+ * (core.worktree, as a submodule's does), and named by `gitDir` alone its files land there
+ * instead: only git can say so (`git rev-parse --show-toplevel` with the command's own naming), and
+ * the write reader, which asks git nothing, places a path in the folder the command runs in.
+ */
+export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
 
 /** The goal a session's transcript says is set now, as `goal` reads it. */
 export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none'; met?: ModKitGoalMet } | { state: 'unreadable'; why: string }

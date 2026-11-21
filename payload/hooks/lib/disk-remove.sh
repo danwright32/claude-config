@@ -30,7 +30,8 @@
 # identity cannot be read is refused at --propose.
 #
 # EACH ITEM, IN ORDER (the plan's design, #1804 comment; L514): the identity deny list on the path
-# as recorded, whatever the category; refuse a symbolic link and resolve the rest of the path
+# as recorded, whatever the category; refuse a path ending in a slash, which would have the link
+# test follow a link (#3332); refuse a symbolic link and resolve the rest of the path
 # physically; the deny list again on the physical path; the allowed root; already gone; measure its
 # size; the category's own judge, run again now; for every method but truncate, an lsof open check,
 # last of all, so nothing slow sits between it and the removal (#1872, L1034); write INTENT to the
@@ -403,6 +404,11 @@ path_checks() { # <target> [<category> <method>]
   case "$t/" in */../*|*/./*) WHY='its path holds a . or .. component'; return 1 ;; esac
   # The deny list first, on the path as recorded: /Applications/Safari.app is itself a link.
   if deny_reason "$t"; then WHY="never removed: $DENY"; return 1; fi
+  # A trailing slash has the link test below follow a link rather than see it, and dc_resolve then
+  # keeps the link itself as where it lies, so every method would act on the link or through it
+  # (#3332). No scan module records one, so it is refused, never trimmed: something wrote a target
+  # that is not what was measured. The path / alone is the deny list's, just above.
+  case "$t" in ?*/) WHY='its path ends in a slash, which no scan records, so it is not what was measured; name it without the slash'; return 1 ;; esac
   if [ -L "$t" ]; then
     WHY="it is a symbolic link (to $(readlink "$t" 2>/dev/null)), so what it names is not what was measured"; return 1
   fi

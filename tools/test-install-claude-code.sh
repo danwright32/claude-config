@@ -231,18 +231,65 @@ done
   || check "#3297 neither workflow installs Claude Code but through the installer, or writes its version" "$bad"
 # And the file is read by one place: every other code line naming it is a cache key, or the report's
 # text to a reader.
-named="$(cd "$ROOT" && git grep -l -F 'claude-code-version' -- '*.sh' '*.py' '*.yml' '*.yaml' '*.mjs' '*.ts' 2>/dev/null \
-  | grep -v -e '^tools/test-install-claude-code\.sh$' -e '^tools/install-claude-code\.sh$' -e '^tools/report-mods-on-newest-claude-code\.sh$')"
-bad=""
-for f in $named; do
-  case "$f" in
-    .github/workflows/*) [ -n "$(code_of "$ROOT/$f" | grep -F 'claude-code-version' | grep -vF "hashFiles('.github/claude-code-version')")" ] && bad="$bad $f" ;;
-    *) bad="$bad $f" ;;
-  esac
-done
-[ -n "$(grep -v '^[[:space:]]*#' "$REPORT" | grep -F 'claude-code-version' | grep -v '`')" ] && bad="$bad tools/report-mods-on-newest-claude-code.sh (outside its text)"
-[ -z "$bad" ] && check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" ok \
-  || check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" "also named, outside a cache key, in:$bad"
+other_readers(){   # $1 = a checkout -> every file there naming the version file outside a cache key or the report's text
+  # Every text file in the working tree, staged or not and of any type, in one process (#3325): a
+  # listing of tracked files of a few types missed a reader not yet added and a script with no
+  # extension. Markdown alone is left out, as prose that names the file without reading it. The
+  # installer is always among what it lists, so a listing that read nothing is refused, not passed.
+  local listed named f bad=""
+  listed="$(cd "$1" && git grep --untracked -I -l -F 'claude-code-version' -- ':!*.md' 2>/dev/null)"
+  grep -qx 'tools/install-claude-code\.sh' <<< "$listed" \
+    || { printf ' (nothing: the listing did not find tools/install-claude-code.sh itself, so it read nothing)'; return; }
+  named="$(grep -v -e '^tools/test-install-claude-code\.sh$' -e '^tools/install-claude-code\.sh$' -e '^tools/report-mods-on-newest-claude-code\.sh$' <<< "$listed")"
+  for f in $named; do
+    case "$f" in
+      .github/workflows/*) [ -n "$(code_of "$1/$f" | grep -F 'claude-code-version' | grep -vF "hashFiles('.github/claude-code-version')")" ] && bad="$bad $f" ;;
+      *) bad="$bad $f" ;;
+    esac
+  done
+  [ -n "$(grep -v '^[[:space:]]*#' "$1/tools/report-mods-on-newest-claude-code.sh" | grep -F 'claude-code-version' | grep -v '`')" ] && bad="$bad tools/report-mods-on-newest-claude-code.sh (outside its text)"
+  printf '%s' "$bad"
+}
+# A copy git cannot read (a worktree copied without its repository, or one owned by another user) is
+# said to be unmeasured rather than failed or passed: it is the machine, not the tree.
+if git -C "$ROOT" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  bad="$(other_readers "$ROOT")"
+  [ -z "$bad" ] && check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" ok \
+    || check "#3297 .github/claude-code-version is read by tools/install-claude-code.sh alone" "also named, outside a cache key, in:$bad"
+else
+  echo "SUITE-PART-UNMEASURED that .github/claude-code-version has one reader: git cannot read $ROOT as a checkout here, so its files cannot be listed"
+fi
+# The guard seen to fail (#3325), on a checkout holding the real readers, a cache key, prose naming the
+# file, and then one second reader at a time: one not yet staged, and ones of file types a listing by
+# type would skip (a script with no extension, as claude-sync itself is, and a JavaScript file).
+OR="$TMPROOT/one-reader"
+mkdir -p "$OR/tools" "$OR/.github/workflows"
+for f in install-claude-code.sh report-mods-on-newest-claude-code.sh test-install-claude-code.sh; do cp "$DIR/$f" "$OR/tools/$f"; done
+printf 'jobs:\n  a:\n    steps:\n      - with:\n          key: cc-${{ hashFiles('"'"'.github/claude-code-version'"'"') }}\n' > "$OR/.github/workflows/w.yml"
+printf 'The version is in .github/claude-code-version.\n' > "$OR/README.md"
+git -C "$OR" init -q && git -C "$OR" add -A && git -C "$OR" -c user.email=t@t -c user.name=t commit -q -m base
+bad="$(other_readers "$OR")"
+[ -z "$bad" ] && check "#3325 a checkout whose only reader is the installer passes, prose and a cache key included" ok \
+  || check "#3325 a checkout whose only reader is the installer passes, prose and a cache key included" "named:$bad"
+second_reader(){   # $1 = path in the fixture  $2 = staged or untracked -> did the guard name it
+  printf 'v=$(cat .github/claude-code-version)\n' > "$OR/$1"
+  [ "$2" = staged ] && git -C "$OR" add -- "$1"
+  bad="$(other_readers "$OR")"
+  case " $bad " in *" $1 "*) check "#3325 a second reader, $2, in $1, is named" ok ;;
+    *) check "#3325 a second reader, $2, in $1, is named" "named:${bad:- nothing}" ;; esac
+  git -C "$OR" rm -q --cached --ignore-unmatch -- "$1" > /dev/null; rm -f "$OR/$1"
+}
+second_reader tools/second-reader.py staged
+second_reader tools/second-reader.sh untracked
+second_reader tools/second-reader staged
+second_reader tools/second-reader.js staged
+# A folder that is no checkout at all lists nothing, which must never read as no second reader.
+mkdir -p "$TMPROOT/not-a-checkout/tools"
+cp "$DIR/install-claude-code.sh" "$DIR/report-mods-on-newest-claude-code.sh" "$TMPROOT/not-a-checkout/tools/"
+case "$(other_readers "$TMPROOT/not-a-checkout")" in
+  *"read nothing"*) check "#3325 a listing that read nothing is refused, not passed" ok ;;
+  *) check "#3325 a listing that read nothing is refused, not passed" "it passed or named something else" ;;
+esac
 # The daily run: on a schedule and by hand only, the newest release, and only the job running no
 # Claude Code may write.
 on="$(printf '%s\n' "$dw" | awk '/^on:/ { on = 1; next } on && /^[A-Za-z]/ { on = 0 } on')"

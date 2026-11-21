@@ -388,6 +388,37 @@ describe('git', () => {
     expect(git(['gh', 'pr', 'list'])).toBeUndefined()
     expect(git(['git'])).toEqual({ sub: undefined, args: [], dir: undefined })
   })
+  // #3337: a command can name its repository and its working folder apart from the folder it runs
+  // in, four ways. Until then each value was skipped and only -C's folder handed on, so a guard read
+  // the command as one about the folder it ran in. git reads the two variables exactly as the two
+  // options (measured with git 2.51.1): an option wins over the variable, and the last of each wins.
+  test('hands on the repository --git-dir or GIT_DIR names and the working folder --work-tree or GIT_WORK_TREE names (#3337)', () => {
+    expect(git(['git', '--git-dir=/other/.git', '--work-tree=/w/x', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    expect(git(['git', '--git-dir', '/other/.git', '--work-tree', '/w/x', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    expect(git(['git', 'merge', 'y'], ['GIT_DIR=/other/.git', 'GIT_WORK_TREE=/w/x'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' })
+    // One alone is handed on alone, beside -C's folder, which a relative value is read from.
+    expect(git(['git', '-C', '/w/a', '--git-dir=../other/.git', 'cherry-pick', 'abc'])).toEqual({ sub: 'cherry-pick', args: ['abc'], dir: '/w/a', gitDir: '../other/.git' })
+    expect(git(['git', '--work-tree=/w/x', 'restore', 'app.css'])).toEqual({ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' })
+    expect(git(['git', 'restore', 'app.css'], ['TMPDIR=/t', 'GIT_WORK_TREE=/w/x'])).toEqual({ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' })
+    // An option wins over the variable, and the last of each wins.
+    expect(git(['git', '--git-dir=/b/.git', 'merge', 'y'], ['GIT_DIR=/a/.git'])?.gitDir).toBe('/b/.git')
+    expect(git(['git', '--git-dir=/a/.git', '--git-dir', '/b/.git', 'merge', 'y'])?.gitDir).toBe('/b/.git')
+    expect(git(['git', 'merge', 'y'], ['GIT_WORK_TREE=/a', 'GIT_WORK_TREE=/b'])?.workTree).toBe('/b')
+    // A value written empty is handed on empty, never dropped: git reads it, and refuses it.
+    expect(git(['git', '--git-dir=', 'merge', 'y'])?.gitDir).toBe('')
+    // An option of the subcommand spelled the same is the subcommand's own, and names nothing.
+    expect(git(['git', 'merge', '--work-tree=/w/x', 'y'])).toEqual({ sub: 'merge', args: ['--work-tree=/w/x', 'y'], dir: undefined })
+  })
+  test('a command naming neither hands on neither, whatever else it is run with (#3337)', () => {
+    expect(git(['git', '-C', '/repo', 'merge', 'y'], ['GIT_AUTHOR_NAME=x', 'TMPDIR=/t'])).toEqual({ sub: 'merge', args: ['y'], dir: '/repo' })
+    expect(git(['git', '--namespace', 'ns', 'merge', 'y'])).toEqual({ sub: 'merge', args: ['y'], dir: undefined })
+  })
+  test('the settings the command reader gives a git command carry the two variables to it (#3337)', () => {
+    const read = (command: string) => pipeline(command).map(c => git(c.words, c.env))
+    expect(read('GIT_DIR=/other/.git git merge y')).toEqual([{ sub: 'merge', args: ['y'], dir: undefined, gitDir: '/other/.git' }])
+    expect(read('env GIT_WORK_TREE=/w/x git restore app.css')).toEqual([{ sub: 'restore', args: ['app.css'], dir: undefined, workTree: '/w/x' }])
+    expect(read('GIT_DIR=/other/.git GIT_WORK_TREE=/w/x git cherry-pick abc')).toEqual([{ sub: 'cherry-pick', args: ['abc'], dir: undefined, gitDir: '/other/.git', workTree: '/w/x' }])
+  })
 })
 
 describe('heredocs name the descriptor they feed (#760)', () => {

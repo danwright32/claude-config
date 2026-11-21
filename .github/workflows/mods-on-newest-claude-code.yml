@@ -6,8 +6,8 @@ name: mods on the newest Claude Code
 # request red; this run is what finds it, within a day, and raising the file is then the pull request
 # that shows the fix. Claude Code shipped twelve releases from 2026-11-02 to 2026-11-19.
 #
-# It never runs on a push or a pull request, so it cannot turn either red, and tests/test-ci-workflow.sh
-# holds that. A failing day opens one issue for Dan, or comments on the one already open; a passing day
+# It never runs on a push or a pull request, so it cannot turn either red, and
+# tools/test-install-claude-code.sh holds that (the exact list of its triggers). A failing day opens one issue for Dan, or comments on the one already open; a passing day
 # posts nothing (tools/report-mods-on-newest-claude-code.sh). A run that dies before reporting is red in
 # the Actions tab, and GitHub emails whoever last changed the schedule below.
 #

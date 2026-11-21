@@ -2,7 +2,7 @@
 """TypeScript and TSX source read the way the mod scans need it: which characters are code, which
 are a string, a regex literal, JSX text or a comment. One reader for every scan that has to tell a
 comment from code (tools/check-mod-shared-parts.sh, tools/check-mod-dependencies.sh,
-tools/check-mod-noun-waits.sh and the contract check in tests/test-mods.sh), rather than a stripper
+tools/check-mod-noun-waits.sh, tools/check-mod-tiers.sh and the contract check in tests/test-mods.sh), rather than a stripper
 per script that each misreads something of its own (L613). The one it replaces took a regex literal holding // or /* for a comment, and JSX
 text's // or apostrophe for a comment or a quote (#735); the shared parts scan dropped any line
 that merely started like a comment (#732).
@@ -330,16 +330,57 @@ def _sources(folder):
                 yield os.path.join(base, name)
 
 
+# Not a mod's own code: its tests (which stand in for other mods), its own contract, and what Claude
+# Code generates into its folder.
+NOT_MOD_CODE = {"tests", "types", ".claude-plugin", "node_modules"}
+
+
+def mod_code(folder, onerror=None):
+    """Each source file that is a mod's own code, wherever its hooks module imports it from: every
+    source file under the mod's folder less NOT_MOD_CODE's folders, its test files and any .d.ts.
+    A folder that cannot be listed is handed to onerror as the OSError, as os.walk does; a caller for
+    whom an unread file is not an absent one passes it (the tier check, #3298)."""
+    for base, dirs, files in os.walk(folder, onerror=onerror):
+        dirs[:] = sorted(d for d in dirs if d not in NOT_MOD_CODE)
+        for name in sorted(files):
+            if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
+                yield os.path.join(base, name)
+
+
+# A hook registration, however its on( is reached: on('tool.call', ...) and reg.on('tool.call', ...)
+# alike. One matcher for every reader of hooks, so no two of them disagree about what a hook is
+# (the lessons review of #3298: the tier check read a member call as no hook, and the screen scan
+# read it as one).
+ON_CALL = re.compile(r"\bon\s*\(")
+EVENT_NAME = re.compile(r"\s*(['\"`])([A-Za-z][\w.*]*)\1")
+
+
+def on_calls(text, code, raw_kinds):
+    """Each on( call that is code, never part of a comment, a string or a longer name: (its match in
+    the code view, the event it names), the event None where it is not a plain string."""
+    for m in ON_CALL.finditer(code):
+        if raw_kinds[m.start()] != CODE:
+            continue
+        # The event name is a string, so it is read from the text, not the code view that blanks it.
+        name = EVENT_NAME.match(text, m.end())
+        yield m, name.group(2) if name else None
+
+
+def hook_events(text, jsx=False):
+    """Every hook a module registers, in the order written: (line, event), the event None where the
+    on( call names it some other way than a plain string, which no reader here can follow."""
+    code = code_only(text, jsx)
+    return [(code.count("\n", 0, m.start()) + 1, event) for m, event in on_calls(text, code, kinds(text, jsx))]
+
+
 def tool_call_hooks(text, jsx=False):
     """Each tool.call hook a module registers: (line, the hook's code as code_only gives it), its body
     read where a named function is defined; None for the code where that definition is not found."""
     code = code_only(text, jsx)
     raw_kinds = kinds(text, jsx)
     hooks = []
-    for m in re.finditer(r"\bon\s*\(", code):
-        # The event name is a string, so it is read from the text, not the code view that blanks it.
-        name = re.match(r"\s*(['\"`])tool\.call\1", text[m.end() :])
-        if not name or raw_kinds[m.start()] != CODE:
+    for m, event in on_calls(text, code, raw_kinds):
+        if event != "tool.call":
             continue
         open_at = m.end() - 1
         end = closing(code, open_at)
