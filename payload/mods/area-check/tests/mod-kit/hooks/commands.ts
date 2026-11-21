@@ -1716,8 +1716,9 @@ export const commands = (cmd: string, opts: ReadOptions = {}): string[][] => pip
 // command reader gives them (Command.env). git reads each variable exactly as its option (measured
 // with git 2.51.1): an option wins over the variable, the last of each wins, and a relative value
 // is read from the folder the command runs in once every -C is followed. With only `gitDir`, that
-// folder is the working folder; with only `workTree`, the repository is the one found from that
-// folder. Until #3337 both values were skipped and only -C's folder handed on, so a reader placed
+// folder is the working folder, unless the repository keeps its own in its settings (core.worktree,
+// as a submodule's does), which only git can say; with only `workTree`, the repository is the one
+// found from that folder. Until #3337 both values were skipped and only -C's folder handed on, so a reader placed
 // `git --git-dir=/other/.git --work-tree=/w/x merge y` in the folder it ran in.
 const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace'])
 const GIT_NAMES_APART: Readonly<Record<string, 'gitDir' | 'workTree'>> = { '--git-dir': 'gitDir', '--work-tree': 'workTree', GIT_DIR: 'gitDir', GIT_WORK_TREE: 'workTree' }

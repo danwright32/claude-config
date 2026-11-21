@@ -529,10 +529,6 @@ describe('writes: what the words do not name', () => {
   test('with only the repository named, the folder the command runs in is the working folder, as before (#3337)', () => {
     expect(byGit('git --git-dir=/other/.git restore app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
     expect(byGit('GIT_DIR=/other/.git git checkout -- app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
-    // Set by an earlier command on the line, the repository alone moves no path either, whether or
-    // not git is handed it, so the guards reading a path here judge the file they always did.
-    expect(byGit('export GIT_DIR=/other/.git && git checkout -- app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
-    expect(byGit('GIT_DIR=/other/.git; git restore app/globals.css').map(g => g.path)).toEqual([`${CWD}/app/globals.css`])
   })
   test('a working folder or repository the reader cannot place names no relative path (#3337)', () => {
     const paths = (command: string) => byGit(command).map(g => [g.word, g.path ?? null])
@@ -542,6 +538,11 @@ describe('writes: what the words do not name', () => {
     expect(paths('export GIT_WORK_TREE=/w/x; git restore app/globals.css')).toEqual([['app/globals.css', null]])
     expect(paths('GIT_WORK_TREE=/w/x; git restore app/globals.css')).toEqual([['app/globals.css', null]])
     expect(paths('export GIT_DIR=/other/.git GIT_WORK_TREE=/w/x && git checkout -- app/globals.css')).toEqual([['app/globals.css', null]])
+    // The repository alone too: one that keeps its own working folder in its settings (core.worktree,
+    // as a submodule's does) lands its files there (measured with git 2.51.1), and a guard reading
+    // `git` for the command is told of no repository to ask git about.
+    expect(paths('export GIT_DIR=/other/.git && git checkout -- app/globals.css')).toEqual([['app/globals.css', null]])
+    expect(paths('GIT_DIR=/other/.git; git restore app/globals.css')).toEqual([['app/globals.css', null]])
     // A path written whole names the file it spells wherever git's folders are.
     expect(paths('export GIT_WORK_TREE=/w/x; git restore /w/x/app/globals.css')).toEqual([['/w/x/app/globals.css', '/w/x/app/globals.css']])
   })

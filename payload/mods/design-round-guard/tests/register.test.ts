@@ -1687,6 +1687,10 @@ test('#3337: a restore whose named repository keeps its working folder elsewhere
     const said = await why(command)
     if (!said.includes('could not be followed') || !said.includes('/w/slate/ui')) notHeld.push(`${command}: ${said.slice(0, 300)}`)
   }
+  // Set by an earlier command on the line, the guard is told of no repository to ask git about, and
+  // mod-kit's reader gives the file no path: held as one that cannot be followed.
+  const exported = await why('export GIT_DIR=/w/slate/.git/modules/ui && cd /w/other && git restore app/globals.css')
+  if (!exported.includes('where the command writes app/globals.css could not be followed')) notHeld.push(`exported: ${exported.slice(0, 300)}`)
   // git cannot say where the files land: held, saying so.
   delete w.gitSays[top]
   const unsaid = await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css')

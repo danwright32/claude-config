@@ -4005,6 +4005,63 @@ merge of any other branch, and a stash stay asked."
   another branch, of a branch holding main and one more commit, of one that had merged main in, of
   a local main ahead of the remote's, and of an unrelated history; the tests' answers are those.
 
+### What #3337 changed: the repository and the parent a git command names, 2026-11-21
+
+A git command can name its repository and its working folder apart from the folder it runs in, four
+ways: `--git-dir`, `--work-tree`, `GIT_DIR` and `GIT_WORK_TREE`. mod-kit's git reader skipped all
+four and handed on only the folder `-C` names, so the guard asked the checkout the command ran in
+which files a merge, a cherry-pick or a restore would change, and a look change brought out of
+another repository, or into another folder, ran with nothing asked. Separately, a cherry-pick or
+revert of a merge commit with a mainline number (`-m 2`) was read against the merge's first parent
+whatever the number said.
+
+- The reader hands the naming on and decides nothing. `$.modkit.git({ words, env })` gives `gitDir`
+  and `workTree` as written, from the options and from the two variables in the `env` that
+  `pipeline` gives the command. An option wins over its variable and the last of each wins, as git
+  reads them. What `dir` means is unchanged, since other mods resolve it themselves.
+- git is asked where the files land, the guard does not work it out. For a command naming either,
+  the guard's questions are put as `git -C <folder> --git-dir=<repository> --work-tree=<folder>`,
+  starting with `git rev-parse --show-toplevel`, and the files are judged in the project that
+  folder is in. Measured with git 2.51.1 in throwaway repositories: with only the repository named
+  the files land in the folder the command runs in; with only the working folder named the
+  repository is the one found from that folder; a relative value is read from the folder `-C`
+  names; each variable reads exactly as its option.
+- A repository can keep its own working folder in its settings (`core.worktree`, as a submodule's
+  repository does). Named by `--git-dir` or `GIT_DIR` alone, its files land there, not in the
+  folder the command runs in (measured). Asking git covers that for a move and for `git am`. What
+  git itself writes (a restore, a checkout of paths, `git rm`, `git mv`) is placed by mod-kit's
+  write reader, which asks git nothing, so the guard asks git for such a command too and holds each
+  file that may change the look where git's folder is not the one the words give.
+- Nothing is skipped as already on the default branch for a repository named apart. The default
+  branch is mod-kit's reading of the checkout on disk, which is not a reading of the repository
+  the command names.
+- `git am` lands its patch in the working folder the command names (measured), so it is placed
+  there. `git apply` is left alone: measured, it changes the folder it runs in whatever working
+  folder is named.
+- Where the guard cannot tell, it holds. A value the shell fills in, an empty one, a repository
+  git cannot answer for, an answer that is no one folder, and either variable set by an earlier
+  command on the line (git reads it only if it was exported, which no reader here follows). For a
+  move that earlier command already holds it, as any command before a move does; for a restore
+  the write reader gives the file no path; for `git am` the guard looks for the variable's name
+  anywhere but in a git command's own settings.
+- What git puts back is still read in the checkout the file sits in (`git cat-file`). A move's
+  source is a full commit id, so another repository either holds the same content or the read
+  fails, and a failed read judges the whole file. A restore with any `GIT_` variable or any option
+  but `-C` on its line was already judged whole.
+- The mainline number is read from `-m N`, `--mainline N`, `--mainline=N` and `-mN`, each of which
+  git was measured taking. Parent 1 is what was always read. Past it, the guard lists the commits
+  the command names (`git rev-list --no-walk`) and reads each against that parent
+  (`git diff --name-status <commit>^N <commit>`, turned round for a revert). Reading the Nth block
+  of `git log -m` was ruled out, because it names a parent by position in the output.
+- A mainline number that is no whole number from 1 to 99, two that differ, and an option that may
+  be the mainline one spelled another way (a shortened `--mainline`, `--no-mainline`, an `m` inside
+  a run of short options) hold the command, with how to write it. A commit with no such parent is
+  one git cannot answer for, and is held.
+- Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
+  any command is typed, which no reader sees. The collision guard and scope modes place a git
+  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
+  git reads each from the one before it.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
