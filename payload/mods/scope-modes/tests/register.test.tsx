@@ -4875,6 +4875,31 @@ test("Dan's answer to a question in this session's morning picker is recorded, s
   expect(JSON.parse(kept as string)).toMatchObject({ repo: 'o/r', issue: null, text: 'Keep the old export flag?', answer: 'Keep it', by: 's1' })
 })
 
+// #3321: an answer is recorded because Dan read the question, so a morning picker this session
+// would record is first held to the one check of text a person approves in a picker (mod-kit's
+// hooks/shown.ts). The refused character is made from its code point, never written here.
+test('a morning picker Dan could not read as written is refused before he is asked, and no answer is recorded (#3321)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ask: 'Keep it', files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${myQuestion}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const zw = String.fromCodePoint(0x200b)
+  const picker = (question: string, extra: Record<string, unknown> = {}) =>
+    call($ as never, { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question, header: 'Flag', multiSelect: false, options: [{ label: 'Keep it', description: 'x' }, { label: 'Drop it', description: 'y' }] }], ...extra } as never)
+  const at = answeredAt('o/r', null, 'Keep the old export flag?')
+  const inQuestion = await picker(`3.1 Keep the old${zw} export flag?`)
+  expect(inQuestion).toContain('The question would not reach Dan as written')
+  expect(inQuestion).toContain('is U+200B, a zero width space')
+  expect(await picker('3.1 Keep the old export flag?', { title: `Flag${zw}` })).toContain('Field "title" would not reach Dan as written')
+  expect(w.files[at]).toBeUndefined()
+  // A picker naming no number this session offered records nothing here, and is not this mod's to judge.
+  expect(await picker(`Keep the old${zw} export flag?`)).not.toContain('would not reach Dan')
+  expect(w.files[at]).toBeUndefined()
+  // Asked in words he can read, his answer is recorded.
+  expect(await picker('3.1 Keep the old export flag?')).not.toContain('would not reach Dan')
+  expect(JSON.parse(w.files[at] as string)).toMatchObject({ text: 'Keep the old export flag?', answer: 'Keep it' })
+})
+
 test("a morning leaves out this session's own question that was answered or whose issue has closed since (#3018)", withDeps, async ($, on) => {
   const own = (n: Record<string, unknown>) => proposal({ kind: 'question', by: 's1', ...n })
   const notes = [own({ cwd: '/repo', questions: ['Keep the old export flag?'] }), own({ repo: 'o/r', issue: 12, text: 'Which copy?', options: ['Short', 'Long'] }), own({ cwd: '/repo', questions: ['Rename the parser?'] })]

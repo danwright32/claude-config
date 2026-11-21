@@ -11,14 +11,22 @@
 # which holds a project's local D1, KV and R2 data and is never even listed; anything inside a home
 # dotfolder (~/.nvm's global packages, which carry Claude Code itself, ~/.npm's npx copies) unless its
 # project folder is a git worktree, whose .git is a file, as a verify checkout kept in a dotfolder is
-# (#3235); a node_modules no package.json claims; and one iCloud syncs (in Documents or
-# Desktop while iCloud syncs them, dcs_icloud), since removing it removes it from iCloud on every
-# device (#3215). Those are left out of the list, counted in the kind's note, and refused by the judge.
+# (#3235); a node_modules no package.json claims; and one a sync service keeps (scan-lib's
+# dcs_synced: Documents or Desktop while iCloud syncs them, iCloud Drive, ~/Library/CloudStorage,
+# Dropbox, Google Drive, OneDrive, Box and the rest), judged where it really is when a link leads
+# there, since removing it removes it on every device that syncs it (#3215 for iCloud, #3233 for the
+# rest). Those are left out of the list, counted in the kind's note by place, and refused by the judge.
 set -uo pipefail
 HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 . "$HERE/../scan-lib.sh" || { echo "unmeasured: scan-lib.sh is missing beside the categories folder"; exit 0; }
 
-ICLOUD_WHY="not offerable: iCloud syncs it, so removing it would remove it from iCloud on every device"
+# Succeeds, setting DCS_WHY to where, when <target> or the folder a link there leads to is one a sync
+# service keeps.
+synced() { # <target>
+  local p
+  dcs_synced "$1" && return 0
+  p="$(dcs_phys "$1" 2>/dev/null)" && [ -n "$p" ] && [ "$p" != "$1" ] && dcs_synced "$p"
+}
 
 # Sets PROJ to the project a build folder belongs to, or fails setting V to why it is not one.
 project_of() { # <target>
@@ -57,7 +65,7 @@ project_of() { # <target>
 build_rules() { # <target>
   local t="${1%/}" recent err="$DCS_WORK/build.find.err.$$"
   [ -d "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there"; return; }
-  dcs_icloud "$t" && { V="$ICLOUD_WHY"; return; }
+  synced "$t" && { V="not offerable: it is in $DCS_WHY, so removing it would remove it on every device that syncs it"; return; }
   recent="$(dcs_recent_file "$PROJ" "$DCS_BUILD_DAYS" "$err" node_modules .next .build .git .wrangler .claude)"
   if [ -n "$recent" ] && [ -d "$recent" ]; then
     V="unmeasured: part of the project is kept only in iCloud (${recent#"$PROJ"/}), so whether it is in use is not known"; rm -f "$err"; return
@@ -73,18 +81,26 @@ build_rules() { # <target>
 do_scan() {
   dcs_walk_ready
   : > "$DCS_WORK/build.paths"
-  local t synced=0
+  : > "$DCS_WORK/build.synced"
+  local t
   while IFS= read -r t; do
     case "$t" in */node_modules|*/.next|*/.build|*/.wrangler/tmp) ;; *) continue ;; esac
     [ -d "$t" ] || continue
     project_of "$t" || continue
-    dcs_icloud "$t" && { synced=$((synced + 1)); continue; }
+    synced "$t" && { printf '%s\n' "$DCS_WHY" >> "$DCS_WORK/build.synced"; continue; }
     printf '%s\n' "$t" >> "$DCS_WORK/build.paths"
   done < "$DCS_WALK"
-  if [ "$synced" -eq 1 ]; then
-    dcs_note "1 build folder was left out because iCloud syncs it: removing it would remove it from iCloud on every device."
-  elif [ "$synced" -gt 1 ]; then
-    dcs_note "$synced build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device."
+  # One sentence naming the place when every one left out is in the same place, else a count per
+  # place, in a fixed order so the note does not move with the order the walk met them.
+  if [ -s "$DCS_WORK/build.synced" ]; then
+    dcs_note "$(LC_ALL=C sort "$DCS_WORK/build.synced" | awk '
+      !($0 in c) { o[++k] = $0 } { c[$0]++ }
+      END {
+        tail = ": removing " (NR == 1 ? "it" : "one") " would remove it on every device that syncs it."
+        if (k == 1) { printf "%d build folder%s left out because %s in %s%s\n", NR, (NR == 1 ? " was" : "s were"), (NR == 1 ? "it is" : "they are"), o[1], tail; exit }
+        s = ""; for (i = 1; i <= k; i++) s = s (i > 1 ? "; " : "") c[o[i]] " in " o[i]
+        printf "%d build folders were left out because a sync service keeps them (%s)%s\n", NR, s, tail
+      }')"
   fi
   dcs_measure "$DCS_WORK/build.paths" > "$DCS_WORK/build.sized"
   local p kib size ident

@@ -4,6 +4,9 @@ import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { currentText, inputTexts, type Current } from './mod-kit/inputs.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
+// The one check of text Dan approves in a picker (#3321), read from mod-kit's copy by name, which
+// is how tools/check-mod-shared-parts.sh tells that a mod reading a picker's answers judges it.
+import { askFault } from './mod-kit/shown.ts'
 import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingIndexCover, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -25,7 +28,6 @@ import {
   readCheckLine,
   readShortLine,
   unindented,
-  askFault,
   shownFault,
   lessonAddition,
   lessonPlaced,

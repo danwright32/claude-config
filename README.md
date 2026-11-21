@@ -1720,6 +1720,25 @@ which fails on a hook that reads a gh or git subcommand by word position again; 
 allows carry `gh-reader:` with a reason, in the reader itself and in the crude readings a few callers
 keep for when it cannot be loaded, which see more commands than are there, never fewer.
 
+The words it hands a gate hold no redirection (claude-config#3322). The shell takes every redirection
+out of a command before the program gets its words, wherever it stands, so `gh api >/dev/null -X
+DELETE <ref>` deletes the ref and `gh pr merge 2>/dev/null 7` merges pull request 7. Until #3322 the
+reader handed each one on among the words and each gate had to step over it. Five readers in
+`lib/push-scope.sh` did; the stacked branch delete gate took `>/dev/null` for the endpoint and let
+the delete of a branch with a pull request based on it run unasked, and the merge selector took the
+2 of `2>/dev/null` for the pull request. Now each is taken out once, where the words are made:
+`unredirected` in `lib/shell-words.py` reads the command's text, where a quoted `'>'` is still told
+from the operator, so a message or a path that only looks like a redirection stays the word it is,
+and `tool_words` is what both the bash gates (`tool_field`, then `PS_RUN_ARGS`) and the python ones
+(`tool_command`) get a gh or git command's words from. Words a caller cut itself with
+`shell_tokens` (`gh_issue_scan.py`, `lib/merge-selector.py`) carry a mark on each operator written
+outside quotes, which is how `tool_command` tells one from a quoted word; a word a caller split any
+other way is never taken for a redirection. With no reader the crude cut's words lose theirs in one
+place too (`ps__drop_redirections`), by their look alone. A gate that judges where a command's
+output goes, or what is fed to its input, does not read these words: `ps__writes_out` reads the
+command's own words (`PS__R_WORDS`), and `gh_issue_scan.py` keeps each stage's redirections beside
+its words, and both still see every one.
+
 It also reads through the programs that run a command for you (claude-config#1478), so each gate
 judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
 xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and
@@ -2112,7 +2131,10 @@ delete written as a full `https://` URL (read as the path it names, on the host 
 `{branch}` or `:branch` in its path, read as the branch checked out where the command runs as gh
 fills it, and refused where none is, `git push <remote>
 --delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
-`-d`; a fork's pull request deletes no branch, as gh deletes none for one). `{owner}/{repo}` is
+`-d`; a fork's pull request deletes no branch, as gh deletes none for one). A redirection written
+among any of those words is none of them (claude-config#3322): until then `gh api >/dev/null -X
+DELETE <ref>` was a call to an endpoint named `>/dev/null` and passed unasked, and `git
+push >/dev/null origin --delete <branch>` was refused over a remote named `>/dev/null`. `{owner}/{repo}` is
 asked of gh where the command runs, since gh fills it with the first of the remotes `upstream`,
 `github` and `origin`: in a fork's checkout that is the parent, where reading origin had listed
 the fork and let the delete through (#1758). A pull request from a fork based on the branch counts
@@ -2683,7 +2705,7 @@ alone). With the lock free the whole gate took 38 to 43 seconds, three readings 
 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
 whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
-scan 7, so the 150 second budget stays
+scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run)
 
 </td></tr>
 <tr><td>
@@ -3253,7 +3275,7 @@ passed on its own tree. The merge is written beside the file and renamed over it
 push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
 removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
-The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
+The gate stops waiting at a budget of 140 seconds (150 until #3357), inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
@@ -3261,6 +3283,18 @@ on that day the gate was killed at 180 seconds on three of three readings at a l
 each scanner still running. The scanners that finished and passed are remembered, so a retry does
 not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
 its budget blocks the push rather than passing it.
+
+That budget bounds only the wait on the scanners. On 2026-11-20, at load averages of 110 to 160,
+four pushes were refused with nothing but Claude Code's `[command hook 23]: timed out` (hook 23 is
+this gate, counting the distinct command lines of the event as Claude Code 2.1.330 does), because
+every step before and after the wait ran with no bound: the commit message check and its live
+list, the listings of the repository, the key, and a 5 second lock per scanner that every worktree
+shares (#3357). So the gate now runs as two processes. The one Claude Code started supervises the
+other against a hard stop at the budget plus 20 seconds and never past 160; at the stop it ends the
+run, refuses in its own words, says what the run was doing and how many seconds its clock started
+after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
+left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
+counts and the gate cannot, and the stop itself, which is builtins only.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
@@ -3923,9 +3957,9 @@ sanctioned route past the gate:
 
     cd <the project> && <this Mac's home>/.claude/hooks/no-network-run.sh node --test test/notify.test.js
 
-`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
-network operation. Every process the command starts inherits that, a detached one included, and none
-can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox that denies every network
+operation, and since #3288 a hand off to something outside the sandbox as well (below). Every
+process the command starts inherits that, a detached one included, and none can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
 command's own exit code comes through unchanged. The gate passes a call that is that installed file
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
@@ -3973,10 +4007,41 @@ exactly as it was before:
   2, a closed one, a here string, a target with a variable or a pattern in it, one glued to a word,
   and any name holding `/dev/tcp` or `/dev/udp`.
 
+A hand off is refused too (#3288, decided 2026-11-20: denied, the stricter answer, recorded on the
+issue). A request to launchd or to another app is not a network operation, so under the network
+rule alone a command could have something outside the sandbox act for it: write an HTML page whose
+form submits itself, open it, and the browser posts. The profile now also refuses:
+
+- To start `open`, `osascript` and `launchctl`, each by its real path, and with them `crontab`
+  (cron runs what it is given, outside the sandbox) and `shortcuts` (a Shortcut is run by another
+  process). The list is `HANDOFFS` in the wrapper. A link to one is refused as the file is. A test
+  that puts a stand in of the same name on its `PATH` is not affected: the rule goes by the real
+  path.
+- The requests themselves, whoever makes them: to have something opened (`lsopen`), to send an Apple
+  event to another app (`appleevent-send`), and to have launchd make a job (`job-creation`, which
+  this sandbox already refused before the rule was written out).
+
+Measured 2026-11-20 on macOS 26.6.2, on the personal MacBook. The five programs start outside the
+wrapper and are refused under it, each started with `--help`, which prints its usage and ends. The
+three requests were asked of the sandbox (`sandbox_check`, the question the system's daemons put
+about a caller) and not made: allowed outside the wrapper, denied under it. Nothing was opened,
+scripted or loaded to find out, since a request that turned out not to be refused would have acted
+on a Mac in use.
+
+What it cost, counted before the rule was built (2026-11-20, the personal MacBook's session records
+only; the work MacBook's are not on this Mac). Of the 51 Bash calls that started the wrapper since
+its first on 2026-11-19, none names one of those programs, and none of the files those calls name
+that are still on disk (7 calls name one) starts one. Of the 279 calls the Slack drafts gate
+refused since 2026-11-08, the runs the wrapper exists for, none starts one either: 1 spells `open`
+and 25 name a file that does, and every one of those is the Python function, a word in a table or
+prose. This repository's own suites start none of them for real: the ones that concern `launchctl`
+or `osascript` put a stand in on the `PATH` or replace the call, and several refuse to run
+otherwise. So nothing was exempted.
+
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
-under the wrapper, which is what makes an accidental post from a test impossible. It does not
-contain code written to get out. The sandbox allows every file write, so such code can leave
-something behind for a later call, or ask another program to act for it:
+under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
+hand offs above. It does not contain code written to get out. The sandbox allows every file write,
+so such code can leave something behind for a later call, or reach something the rules do not name:
 
 - A file a later call reads without the gate reading it. Every Bash call starts a login shell, which
   reads `~/.zshenv`, `~/.zprofile` and `~/.zlogin`, and the gate reads none of them. The same holds
@@ -3984,14 +4049,27 @@ something behind for a later call, or ask another program to act for it:
   program in a folder on the `PATH` that the user can write, several of which stand ahead of
   `/usr/bin` on these Macs. A command under the wrapper can write any of them unread. The gate on
   main already passes some such writes when they only mention an address; under the wrapper the
-  writer is not read at all.
-- A command that asks something outside the sandbox to act for it without using the network. A
-  request to launchd or to another app is not a network operation, so what `launchctl`, `osascript`
-  or `open` has started runs outside the sandbox. `open` takes one line and no setup: a command
-  under the wrapper can write an HTML page whose form submits itself to an address and open it, and
-  the browser, which is not in the sandbox, posts. Read from the profile, which denies the network
-  and allows everything else; not run. The profile was left as it is: denying those requests too
-  would be a change of design, for Dan to decide.
+  writer is not read at all. A file left in a folder that something outside the sandbox watches is
+  the same thing and is not refused: a plist in `~/Library/LaunchAgents` is read by launchd at the
+  next login. A rule on that one folder would be a name on a list, and could not be seen to fail
+  without writing into the real folder.
+- A hand off the rules above do not name (measured 2026-11-20, macOS 26.6.2):
+  - A copy of one of the programs. A plain copy is ended by macOS itself before it runs, with or
+    without the wrapper (the crash record gives a launch constraint as the reason). A copy signed
+    again on this Mac is no longer Apple's program: it starts under the wrapper, and the rule on
+    its path does not see it. The suite holds that as measured. What stands in its way is the rule
+    on the request, which was asked and not exercised.
+  - Any program written to make one of those requests itself, for the same reason.
+  - A service found by its name (`mach-lookup`), which is how most requests to something outside a
+    process begin. It is still allowed, the clipboard's service in the suite's case. Denying every
+    such lookup was tried on 2026-11-20 against 31 ordinary things a test does: 21 answered as
+    before, and 10 did not (`id -un`, `whoami` and `ls -l` gave the number 501 for the name, Python's `pwd.getpwuid`
+    and Node's `os.userInfo()` failed, git could not name an author where none was set, Node's
+    `fs.watch` failed, and `defaults read`, `security list-keychains` and `pbpaste` read nothing).
+    Allowing the lookups those need would be a list of exemptions, which is Dan's to decide, so
+    the profile was left without the rule.
+  - Whether launchd acts on any other request from a copy of `launchctl` (start a job that is
+    already loaded, set a variable) was not tried, since trying changes what launchd holds.
 - A connection that was already open when the wrapper started. The sandbox refuses a new connection
   and does not stop a write to one handed down to the command (measured 2026-11-19). The rule above
   is what keeps a call from opening one first. A unix domain socket whose listener is outside the
@@ -4013,10 +4091,18 @@ something behind for a later call, or ask another program to act for it:
   and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
   which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
   is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
-  tool).
+  tool). The programs it refuses to start are proved the same way on every run (#3288): each is
+  started with `--help` outside the sandbox, where it must start, and inside it, where it must be
+  refused with a permission error, and if one starts inside, the command is not run (exit 70). A
+  listed program that is not on the machine at all is passed over. The requests (`lsopen`,
+  `appleevent-send`, `job-creation`) are in the same profile and are asked by the suite, not on
+  every run. One reading of what the added proof costs (2026-11-20, five runs of `/usr/bin/true`
+  each, other agents running on the Mac): about 0.35 s a run before and 0.73 s after. A second
+  reading was not taken, so this is the size of it and no more.
 
 Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
-their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+their tests with no network, and whether any of them starts one of the programs now refused (the
+count above is the personal MacBook's alone). Suites: `test-no-network-run.sh` (the wrapper, against a listener the
 suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
@@ -4603,7 +4689,8 @@ hands its functions a program's name as a plain label (`run_slow python`); a bod
 arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
-reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
+with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
 when the words after it happen to spell a command the gate refuses. Left open: a word that names
@@ -6347,10 +6434,12 @@ is not write free: it writes the scan record, and the review page writes itself 
 the folder it is given, which the skill names to Dan, and with `--clear-clipboard` empties the
 clipboard first. Inside the folders it judges it changes
 nothing, which is why the worktrees kind reads with `git --no-optional-locks status`: a plain
-`git status` refreshes the repository's index file as it reads (#3216). Project build folders that
-iCloud syncs (in Desktop or Documents while iCloud syncs them) are never offered, since removing one
-removes it from iCloud on every device: they are left out of the list, counted in the kind's note,
-and refused by its judge (#3215). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`git status` refreshes the repository's index file as it reads (#3216). Project build folders a sync
+service keeps (`dcs_synced` in `scan-lib.sh`, the predicate the forgotten worktrees kind reads too:
+Desktop or Documents while iCloud syncs them, iCloud Drive, `~/Library/CloudStorage`, Dropbox, Google
+Drive, OneDrive, Box and the rest) are never offered, since removing one removes it on every device
+that syncs it: they are left out of the list, counted by place in the kind's note, and refused by its
+judge, which follows a link to where the folder really is (#3215, #3233). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
@@ -7328,7 +7417,12 @@ zsh only a `bash -c` or `sh -c` script is split), which the design round guard, 
 the collision guard and scope modes' overnight LESSONS.md check judge as a write of each file
 (#1592), as winding down counts each among this session's uncommitted work (#1664), and which no
 build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
-(a checkout or restore carrying `from`, where git puts the file back from, #1158), which winding
+(a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
+relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
+when it runs outside that folder, and left in the folder the command runs in, where it was placed
+before, when that folder cannot be known: a value the shell fills in, or `GIT_DIR` or
+`GIT_WORK_TREE` set by an earlier command on the line; that path is a guess, kept so the guards
+that skip an entry with no path judge the calls they always did), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
 log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in
@@ -7342,7 +7436,11 @@ by every mod that needs it), of what Dan and Claude are told when he types an an
 question instead of choosing one (`$.modkit.typedAnswer({ guard, typed, still, again })`, #1145: a
 toast saying it was not recorded, and Claude told to say so, answer what he said and ask the same
 question again, used by the design round guard and ask before saving), of git commands
-(`$.modkit.git`), of gh commands (`$.modkit.gh({ words })`: the subcommand and action past gh's
+(`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
+#3337, the repository and the working folder the command names apart from that folder, by
+`--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
+from the `env` that `pipeline` gives the command), of gh commands
+(`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
 fields, the repository its endpoint names as gh reaches it and its GraphQL document; moved here from
@@ -7490,6 +7588,22 @@ event without the keys Claude Code carries beside them (`tool`, `tool_use_id`, `
 `hooks/mod-kit/toolargs.ts` (#3190: eight mods took the keys off by hand in twelve places, so a key
 the engine added had to be learned by every copy); a site wanting `tool_use_id` or `agentId` reads
 that one key from the event, and the scan fails a mod line naming both `agentId` and `consent`.
+Text Dan approves in a picker is judged by one check, `askFault` in `hooks/shown.ts`, kept by each
+mod that reads a picker's answer at `hooks/mod-kit/shown.ts` (#3321, built for the lesson picker in
+#3295 and moved here unchanged). Claude Code's dialog cuts a question at 2,000 characters and draws
+some characters and markup as nothing, so the whole call, every field beside the question
+included, is judged before he is asked: a character he cannot see, more than 1,500 UTF-16 code
+units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
+link definition, a character reference or a link to a file. There is one set of limits for every
+picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
+design round guard's two questions, the area check's restructure question and sleep mode's
+recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
+manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
+`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
+open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
+its leave open questions, the keystroke guard's), and the database apply and test project
+approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs
 no copy of `hooks/code.ts`. The file reader that move was made for, `hooks/reaches.ts`, was deleted
@@ -8212,10 +8326,24 @@ and `stash apply`; before one runs the guard asks git which files it would chang
 each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
 `git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
 this branch, or between the working tree and the commit for a reset,
-`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names, or, since #3337,
+where the command gives a mainline number past the first (`-m 2`, `--mainline 2`), the commits
+`git rev-list --no-walk` names, each read against the parent that number names, so a cherry-pick or
+revert of a merge commit is asked about what it brings in against that parent, and a number the
+guard cannot read, two that differ, or an option that may be the mainline one spelled another way
+holds the command,
 `git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
 untracked files, and `git merge-base` for the commit a merged one shares with the default branch
-(below); each look changing file is then judged
+(below); since #3337 a git command that names its repository or its working folder apart from the
+folder it runs in (by `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`) is read from that
+repository: every question is put to git with the command's own naming, first
+`git rev-parse --show-toplevel` for the folder its files land in, the files are judged in that
+folder's project, nothing is skipped as already on the default branch, `git am` places its patch
+there too, and a restore, `git rm` or `git mv` whose files git says land somewhere other than its
+words give (a repository that keeps its own working folder, as a submodule's does) is held; where
+the guard cannot tell which repository or folder is meant (a value the shell fills in, an empty
+one, `GIT_DIR` or `GIT_WORK_TREE` set by an earlier command on the line, git unable to answer) the
+command is held, saying why; each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
 a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
@@ -8920,7 +9048,9 @@ subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
 and deploy runs since sleep began, and notes each for the top of the report. It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
-passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
+that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
+(#3282), a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
 not run. A failed, cancelled or timed out run is listed. An issue filed overnight is read whole,
@@ -9830,6 +9960,30 @@ UNMEASURED with the same command, as the type check above does, rather than fail
 where the workflow installs it, a compiler that does not start fails instead. (It no
 longer checks ask before saving's waiting saves against the goal tracker: since #777 the question
 is Claude Code's own dialog, which the goal tracker reads like any other question.)
+
+Every guard must sit in the same tier as the mods it watches, and that is the user tier for all of
+them: `CLAUDE_CODE_PLUGIN_DIRS` loads every mod there. Claude Code's types, in the comment on `Tier`
+since 2.1.328 (read on 2026-11-20 in the copy 2.1.329 wrote, never run), say a person's hooks do not
+hear a call an organization's mod makes, or what is raised beneath it, and that the organization's
+mods are those it seats in `prepend` or `append` and those it requires in `user`. So a mod seated
+higher could call a tool with the secret guard, ask before saving and the Slack drafts gate's mod
+side never hearing it, and nothing would say so. `tools/check-mod-tiers.sh` fails when one is,
+naming the mod, the file that seats it and each user tier mod whose hook on a tool event would not
+hear it (#3298). It reads what Claude Code reads: the managed settings file with each
+`managed-settings.d` file beside it (`prependPlugins`, `appendPlugins`, and an `enabledPlugins` entry
+from a remote marketplace those settings declare), and `~/.claude/settings.json`, whose own two lists
+seat a person's mod wherever nothing sets them aside and are counted as unheard, since the types do
+not say otherwise. A hook is any `on(` call, a member call such as `reg.on(` included, found by the
+matcher the screen scan's reader shares (`on_calls` in `tools/lib/ts_source.py`). Whatever it cannot
+read is exit 4 with words naming it, never a pass and never the exit 1 that names a seat: a hook
+whose event is not a plain string, a settings file or the folder it is in, a mod's source, the mods
+folder, or its own helper failing. It keeps no list of mods allowed higher, and its last line names
+what is in no file it can open: managed settings from a device management profile or the
+organization's server, and a plugin the starting app marks as required. `tests/test-mod-tiers.sh` runs it in every full
+suite run and in the pull request checks, on fixtures for each of those seats and on `payload/mods`
+with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
+through every hook but the calling one", the organization's included), so the guards could be seated
+higher along with a mod; none has been moved, and moving one is Dan's decision.
 
 ## Sleep mode
 

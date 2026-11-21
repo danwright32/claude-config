@@ -255,6 +255,26 @@ test('an answer Dan did not choose records nothing: the dialog closing while he 
   expect(refusal(await edit($ as never, w, SLACK, {}, 'c2'))).toContain('The area check held this Edit')
 })
 
+// #3321: Dan decides on the words he reads, so the restructure question is held to the one check of
+// text a person approves in a picker (mod-kit's hooks/shown.ts), every field of the call included,
+// before he is asked. The refused character is made from its code point, never written here.
+test('#3321: a restructure question Dan could not read as written is refused before he is asked, and the file stays held', KIT, async ($, on) => {
+  const w = world($, on)
+  await edit($ as never, w, SLACK)
+  await decide($ as never, { call: 'c1', decision: 'restructure' })
+  w.ctl.answer = 'Proceed anyway'
+  const r = await askDan($ as never, 'c1', { title: `Area${String.fromCodePoint(0x200b)}` })
+  expect(refusal(r)).toContain('Field "title" would not reach Dan as written')
+  expect(refusal(r)).toContain('is U+200B, a zero width space')
+  expect(w.asked.length).toBe(0)
+  expect(w.store[QKEY]).toMatchObject({ state: 'pending' })
+  expect(refusal(await edit($ as never, w, SLACK, {}, 'c2'))).toContain('The area check held this Edit')
+  // Sent without that field, the same question is asked and his answer is recorded.
+  expect(said(await askDan($ as never, 'c1'))).toContain('Proceed anyway')
+  expect(w.asked.length).toBe(1)
+  expect(w.store[QKEY]).toMatchObject({ state: 'answered', answer: 'Proceed anyway' })
+})
+
 test('a question no edit is held under, or one a subagent tries to ask, is refused', KIT, async ($, on) => {
   const w = world($, on)
   expect(refusal(await askDan($ as never, 'zz'))).toContain('No edit is held under zz')
