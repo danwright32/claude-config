@@ -30,7 +30,7 @@ fail=0
 # from a copy with no checkout once made 3 fewer cases than one in a checkout and still ended with 0
 # failed. Change it only in the commit that adds or removes cases, to the total that commit's run
 # prints; a run that makes fewer says so in red rather than passing short.
-EXPECTED_CASES=680
+EXPECTED_CASES=690
 unmeasured=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 # not_measured <case> <why>: a case that cannot be driven where this copy sits, on the runner's one
@@ -66,7 +66,11 @@ bash_input() { python3 -c 'import json, sys; print(json.dumps({"command": sys.ar
 RC=0; OUT=""; ERR=""
 run_raw() { # run_raw <stdin text>
   local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
-  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf")"; RC=$?
+  # Descriptor 3 is closed for the gate, as a real hook call has none: `each` feeds its commands
+  # on 3, and judging `bash /dev/fd/3 3< posts.sh` the gate looked at /dev/fd/3 of its own process.
+  # On macOS that shared the heredoc's read position and ate the rest of it, 10 cases lost with 0
+  # failed; Linux reopens the file and lost none (claude-config#3311).
+  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf" 3<&-)"; RC=$?
   ERR="$(cat "$errf")"; rm -f "$errf"
 }
 
