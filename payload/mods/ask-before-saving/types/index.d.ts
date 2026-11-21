@@ -44,6 +44,12 @@ export type AskBeforeSavingApproval = {
    * an approval without it covers no check line at all.
    */
   check?: string
+  /**
+   * Set beside `lesson` when the picker showed Dan that lesson's SHORT line (#3320), as he read it
+   * (rules.ts shortLine): the entry that adds this rule carries this one line, equal to it, as its
+   * last line. An approval without it covers no SHORT line at all, so its entry carries none.
+   */
+  short?: string
 }
 
 /**
