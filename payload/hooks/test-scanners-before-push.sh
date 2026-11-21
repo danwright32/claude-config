@@ -1798,7 +1798,11 @@ fi
 : > "$TMPROOT/ownend.release"
 wait "$_bg3333" 2>/dev/null
 c3333o="$(cat "$TMPROOT/ownend.rc" 2>/dev/null)"; o3333o="$(cat "$TMPROOT/ownend.out" 2>/dev/null)"
-if grep -q 'did not reach it' <<< "$o3333o"; then _route3333o="refused in its own words, having lost the exit code of its run"
+if grep -q 'did not reach it' <<< "$o3333o"; then
+  # What bash gave the gate for its run, as the refusal says it: -1 under bash 3.2 on 2026-11-21,
+  # which is why the gate's test of it has an arm for below 0. Each machine's run prints its own.
+  _gave3333o="$(sed -n 's/.*(bash gave \(-\{0,1\}[0-9][0-9]*\) for the run).*/\1/p' <<< "$o3333o")"
+  _route3333o="refused in its own words, having lost the exit code of its run (bash gave ${_gave3333o:-an unread value} for it)"
 else _route3333o="passed on what its run said"; fi
 echo "SUITE-NOTE bash ${BASH_VERSION%%(*} on $(uname -s): a gate whose run ended by itself as its stop came ${_route3333o} (exit ${c3333o:-unread}) (#3333)"
 if [ "$_held3333o" = yes ] && [ "$c3333o" = 2 ] && grep -q 'the staged run refused this push' <<< "$o3333o" && ! grep -q 'Killed' <<< "$o3333o"; then

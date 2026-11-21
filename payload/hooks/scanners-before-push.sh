@@ -421,10 +421,14 @@ _sc_supervise(){
     # 5 (the gate held with SIGSTOP in the first wait, its run then ended with 2, the signal sent,
     # the gate let go on): bash left the first wait for the signal after it had been handed the
     # run's end and before it recorded it, the kill found nothing, this wait found no child and
-    # gave -1, and the gate exited 255 over a run that had refused. So an answer here is read as
-    # the run's own only from 0 to 126. 137 is the kill above, refused below as the stop. Anything
-    # else (below 0, 127 for a child bash no longer knows, an end by another signal) is no verdict,
-    # and a gate with no verdict refuses: it says what bash gave and shows what the run had printed.
+    # gave -1, and the gate exited 255 over a run that had refused. The -1 is what that bash puts
+    # in $? itself, not a 255: the refusal of the same staged call, once this was fixed, read
+    # "bash gave -1 for the run", and it is the exit with it that comes out as 255. So the test
+    # below needs both of its arms, the one below 0 for that bash and the one above 126 for a bash
+    # that hands over 255 or 127 instead. An answer here is read as the run's own only from 0 to
+    # 126. 137 is the kill above, refused below as the stop. Anything else (below 0, 127 for a
+    # child bash no longer knows, an end by another signal) is no verdict, and a gate with no
+    # verdict refuses: it says what bash gave and shows what the run had printed.
     if [ "$rc" -ne 137 ] && { [ "$rc" -lt 0 ] || [ "$rc" -gt 126 ]; }; then no_code="$rc"; fi
     # And on the timer it killed, standard error closed like the wait above, so that bash's report
     # of the timer's end is never in the refusal. Left unwaited, a timer slow to die was reported
