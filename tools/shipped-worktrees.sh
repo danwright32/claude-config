@@ -43,6 +43,16 @@
 #   unoccupied  no running process has its current directory in it. Another session's shell can
 #                 be standing there, and removing a directory out from under it is not safe.
 #
+# git is asked about a worktree with that worktree's programs off (claude-config#3355). A status,
+# a rev-list and the status inside worktree remove are answered with the worktree's own
+# configuration, and a setting there can name a program git then starts (core.fsmonitor, a filter,
+# a hook, a fetcher: measured for #3328). So each goes through dc_git or jw_remove
+# (payload/hooks/lib/judged-worktree.sh, the one way check-stale-worktrees.sh asks too), which turn
+# those settings off for the one call. Where they cannot, git is not run there: the worktree is
+# kept, or its removal is NOT DONE, with the reason. git run in the repository itself, about its
+# own records, stays plain. test-shipped-worktrees-git.sh sees each program run with the call
+# written bare and not run by this tool, and reads this file for a plain git call of any other kind.
+#
 # When GitHub cannot be read the whole run REFUSES, with exit 3, and nothing is removed.
 # Unreadable is neither merged nor unmerged: taking it as unmerged reports a quiet checkout that
 # is not quiet, and taking it as merged deletes live work (L98, L320).
@@ -93,6 +103,12 @@ agent_lock_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/l
 [ -f "$agent_lock_lib" ] || fail "its library is missing: $agent_lock_lib"
 # shellcheck source=../payload/hooks/lib/agent-lock.sh
 . "$agent_lock_lib"
+# git is asked about a worktree with that worktree's program running settings off (#3355): dc_git
+# and jw_remove, the one way check-stale-worktrees.sh asks too.
+judged_worktree_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/lib/judged-worktree.sh"
+[ -f "$judged_worktree_lib" ] || fail "its library is missing: $judged_worktree_lib"
+# shellcheck source=../payload/hooks/lib/judged-worktree.sh
+. "$judged_worktree_lib" || fail "its library could not be read: $judged_worktree_lib"
 
 refuse_gh() {  # refuse_gh <what gh said>
   printf 'shipped-worktrees: could not read GitHub, so nothing was judged and nothing was removed.\n' >&2
@@ -157,7 +173,7 @@ read_cwds || cwds_readable=0
 
 dirty_count() {  # dirty_count <worktree>: changed or untracked files, or fails when unreadable
   local s
-  s="$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" || return 1
+  s="$(dc_git "$1" status --porcelain --untracked-files=all 2>/dev/null)" || return 1
   [ -n "$s" ] || { echo 0; return 0; }
   printf '%s\n' "$s" | wc -l | tr -d ' '
 }
@@ -214,7 +230,8 @@ for ((n = 1; n <= i; n++)); do
   if d="$(dirty_count "$real")"; then
     [ "$d" = 0 ] || reasons+=("$d uncommitted or untracked file$([ "$d" = 1 ] || echo s)")
   else
-    reasons+=("its status could not be read")
+    why="$(jw_status_why "$real" --untracked-files=all)"
+    reasons+=("its status could not be read${why:+ ($why)}")
   fi
 
   # PUSHED: nothing reachable from its tip that is not on main, the remote branch, or a merged head.
@@ -228,7 +245,7 @@ for ((n = 1; n <= i; n++)); do
     git -C "$primary" cat-file -e "$oid^{commit}" 2>/dev/null && shipped_to+=("$oid")
   done <<< "$merged"
   [ -z "$merged_numbers" ] || shipped_names="$shipped_names or merged pull request $merged_numbers"
-  if u="$(git -C "$real" rev-list --count HEAD --not "${shipped_to[@]}" 2>/dev/null)"; then
+  if u="$(dc_git "$real" rev-list --count HEAD --not "${shipped_to[@]}" 2>/dev/null)"; then
     [ "$u" = 0 ] || reasons+=("$u commit$([ "$u" = 1 ] || echo s) not on $shipped_names")
   else
     reasons+=("which of its commits are pushed could not be read")
@@ -312,8 +329,14 @@ else
         printf '  %-9s  %-46s %s: git would not lift the lock its agent left: %s\n' KEPT "$rel" "$branch" "$err"; continue
       fi
     fi
-    if ! err="$(git -C "$primary" worktree remove "$real" 2>&1)"; then
-      printf '  %-9s  %-46s %s: git refused: %s\n' "NOT DONE" "$rel" "$branch" "$err"
+    err="$(jw_remove "$primary" "$real" 2>&1)"; rrc=$?
+    if [ "$rrc" -ne 0 ]; then
+      # 125 is jw_remove or dc_git refusing before git was asked to remove anything.
+      if [ "$rrc" -eq 125 ]; then
+        printf '  %-9s  %-46s %s: its removal was not tried: %s\n' "NOT DONE" "$rel" "$branch" "$err"
+      else
+        printf '  %-9s  %-46s %s: git refused: %s\n' "NOT DONE" "$rel" "$branch" "$err"
+      fi
       # Put a lifted lock back on a worktree git left whole, so a removal that did not happen leaves
       # it as it was found. One git left part deleted (still listed, files gone) stays unlocked, the
       # same rule as check-stale-worktrees.sh: finishing it takes one --force, which git refuses on
@@ -322,7 +345,7 @@ else
         still="$(git -C "$primary" worktree list --porcelain 2>/dev/null)"
         case $'\n'"$still"$'\n' in
           *$'\n'"worktree ${wt_path[n]}"$'\n'*)
-            gone_files="$(git -C "$real" status --porcelain 2>/dev/null | grep -c '^ D ' || true)"
+            gone_files="$(dc_git "$real" status --porcelain 2>/dev/null | grep -c '^ D ' || true)"
             if [ "${gone_files:-0}" -gt 0 ]; then
               printf '             its lock, left by a Claude agent that is gone, is not put back, so it can be finished with: git -C %s worktree remove --force %s\n' "$primary" "$real"
             else

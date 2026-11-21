@@ -14,6 +14,9 @@
 # and, for the two session notes shapes, by a fourth: skills/disk-clean/scan-lib.sh, through which
 # categories/claude-records.sh reads dc_notes_item, dc_notes_folder, dc_notes_checkout and
 # dc_git_own_repo as disk-remove.sh does.
+# dc_git alone has callers outside disk-clean (#3355): lib/judged-worktree.sh sources this file for
+# it, so the two worktree cleanups (hooks/check-stale-worktrees.sh, tools/shipped-worktrees.sh) run
+# git in a worktree they judge through the one helper, and no second copy of its settings exists.
 # They lived in the harness until disk-remove.sh needed them. The harness also holds dc_run and the
 # command check, which run commands no disk-clean script may (an `exec "$@"`, python3 through a
 # variable), so a script sourcing the whole harness would fail the command check it is held to.
@@ -185,6 +188,10 @@ dc_notes_checkout() { # <path> <home> <physical home>
 # setting MEASURED to start a program for a command disk-clean runs, and refuses any command that
 # has not been measured. Measured 2026-11-20 on git 2.51.1 (Homebrew) and 2.54.0 (Apple), alike, by
 # test-disk-clean-git.sh, which sees each program run with a bare call and not run through here.
+# Two forms only the worktree cleanups write were measured on 2026-11-21 by test-judged-worktree.sh
+# (#3355): a status without --no-optional-locks, which bare also ran the post-index-change hook and
+# through here ran nothing, and worktree remove --force, which asks for no status and ran nothing
+# even bare.
 #
 #   what ran, called bare                              what turns it off (man git, man git-config)
 #   core.fsmonitor: status, and the status inside      -c core.fsmonitor=false; a -c value "will

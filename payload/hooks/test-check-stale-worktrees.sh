@@ -374,7 +374,9 @@ case " \$* " in
     if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$LWT/agent-lhalf/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*agent-lrefused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
-  *agent-lrace" status --porcelain"*)
+  # The status is asked through dc_git (#3355), which writes its settings between the folder and
+  # the command, so the two are no longer side by side.
+  *agent-lrace" "*" status --porcelain"*)
     if [ -n "\${SHIM_RACE:-}" ]; then
       "$REAL_GIT" -C "$LREPO" worktree unlock "$LWT/agent-lrace"
       "$REAL_GIT" -C "$LREPO" worktree lock --reason "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$LWT/agent-lrace"

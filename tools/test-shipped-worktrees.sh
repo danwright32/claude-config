@@ -451,7 +451,9 @@ export AGENT_LOCK_BOOT_EPOCH=1791590400   # Sat Oct 10 00:00:00 2026 UTC
 printf '5002\tThu Oct 15 12:00:00 2026\n5003\tFri Oct 16 08:30:00 2026\n' > "$PS_TABLE"
 
 # A git that, when told to, refuses one removal (so a lifted lock has to go back), and has a new
-# agent take another worktree's lock part way through the run (so it must not be lifted).
+# agent take another worktree's lock part way through the run (so it must not be lifted). The
+# status it watches for is asked through dc_git (#3355), which writes its settings between the
+# folder and the command.
 REAL_GIT="$(command -v git)"
 mkdir -p "$WORK/lshim"
 cat > "$WORK/lshim/git" <<SHIM
@@ -461,7 +463,7 @@ case " \$* " in
     if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$WT/lk-half/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*lk-refused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
-  *lk-race" status "*)
+  *lk-race" "*" status "*)
     if [ -n "\${SHIM_RACE:-}" ]; then
       "$REAL_GIT" -C "$R" worktree unlock "$WT/lk-race" 2>/dev/null
       "$REAL_GIT" -C "$R" worktree lock --reason "claude agent lk-race (pid 5010 start Sat Oct 17 09:00:00 2026)" "$WT/lk-race" 2>/dev/null
