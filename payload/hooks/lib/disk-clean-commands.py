@@ -538,7 +538,7 @@ class Scanner:
     def command(self, raws, line, inside=False):
         """One simple command, its words as written, leading assignments already removed.
         <inside> is the function whose body it lies in, when a parser says; a command a runner
-        reads out of another's arguments (xargs git) keeps that command's."""
+        reads out of another's arguments, as xargs does, keeps that command's."""
         if not raws:
             return
         if inside is not False:
