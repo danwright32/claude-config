@@ -3302,14 +3302,17 @@ group fails while the run has not made the group yet; both were measured on 2026
 left the gate waiting on its run with no stop. So the timer goes on signalling once a second for as
 long as the supervisor is its parent, and never exits by itself; the supervisor, once stopped,
 ignores the signal, kills the timer, kills the run's group or else the run's own pid, and waits on
-the run alone; and the reader of the supervisor's age is not its child, so nothing but the run and
-the timer can hold a wait of its. That last part answers a failure on GitHub's Linux runner on
-2026-11-21 that has not been reproduced: the suite's case with a `ps` that never returns sat silent
-to its 50 second deadline, which fits bash dropping the exit of a timer that signalled it and
-exited at once and then waiting on that timer for as long as the hung reader lived. The suite now
-prints, on every run, how many of 40 such exits the machine's bash dropped, and a gate killed from
-outside leaves a `scanners-gate.*` folder in the temporary folder saying what the supervisor and
-the run were doing, which the suite prints when a call ends at its deadline.
+the run and then on the timer, each already killed and each with standard error closed, so that
+bash's report of neither end is in the refusal (a timer left unwaited was reported there once in 6
+runs of the suite on 2026-11-21, at a load average above 100); and the reader of the supervisor's
+age is not its child, so nothing but the run and the timer can hold a wait of its. That last part
+answers a failure on GitHub's Linux runner on 2026-11-21 that has not been reproduced: the suite's
+case with a `ps` that never returns sat silent to its 50 second deadline, which fits bash dropping
+the exit of a timer that signalled it and exited at once and then waiting on that timer for as long
+as the hung reader lived. The suite now prints, on every run, how many of 40 such exits the
+machine's bash dropped, and a gate killed from outside leaves a `scanners-gate.*` folder in the
+temporary folder saying what the supervisor and the run were doing, which the suite prints when a
+call ends at its deadline.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444

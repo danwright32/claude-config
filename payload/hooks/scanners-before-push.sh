@@ -370,9 +370,9 @@ _sc_supervise(){
   # it is killed, so its exit never arrives with its signal. Once stopped, this process ignores the
   # signal, so nothing cuts short what it does next, kills the timer first (a timer still going
   # would otherwise be a child this process could wait on for ever), kills the run's group or, when
-  # there is none yet, the run's own pid (_sc_kill_run), and waits on the run alone. The signal is
-  # never put back to its default, under which one already on its way would end this process
-  # before it had refused.
+  # there is none yet, the run's own pid (_sc_kill_run), and waits on the run and then on the
+  # timer, each already killed. The signal is never put back to its default, under which one
+  # already on its way would end this process before it had refused.
   perl -e 'my ($end, $pid) = @ARGV; my $d = $end - time; sleep $d if $d > 0;
     while (getppid() == $pid && kill("USR1", $pid)) { sleep 1 }' \
     "$(( _sc_t0 + _sc_stop_at ))" "$$" </dev/null >/dev/null 2>&1 &
@@ -388,6 +388,12 @@ _sc_supervise(){
     kill -9 "$timer" 2>/dev/null
     _sc_kill_run "$body"
     wait "$body" 2>/dev/null; rc=$?
+    # And on the timer it killed, standard error closed like the wait above, so that bash's report
+    # of the timer's end is never in the refusal. Left unwaited, a timer slow to die was reported
+    # at the next command this process waited for: seen on 2026-11-21 at a load average above 100,
+    # once in 6 runs of the suite. The timer has been killed and the signal is ignored, so nothing
+    # can hold or cut short this wait, and the run it could have been held by has gone.
+    wait "$timer" 2>/dev/null
   else
     _sc_sup_says "passing on what its run said"
     kill -9 "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
