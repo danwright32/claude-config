@@ -1720,7 +1720,10 @@ gate_in_background(){   # $1 = a name for its files  $2 = the log its deadline g
     echo $? > "$TMPROOT/$1.rc" ) &
   _bg3333=$!
   _name3333="$1"
-  hang_wait '[ -s "$TMPROOT/$_name3333.rc" ] || grep -q "waiting for its run" "$TMPROOT/$_name3333.tmp"/scanners-gate.*/supervisor 2>/dev/null'
+  # The gate says it is waiting as soon as it has started its run, which can be before the stand in
+  # has recorded the run's pid and the gate's, so the wait is for all three (seen on 2026-11-21 with
+  # the stand in held back 2 seconds: the gate was never told to end and ran to its call deadline).
+  hang_wait '[ -s "$TMPROOT/$_name3333.rc" ] || { [ -s "$TMPROOT/nogroup.gate" ] && [ -s "$TMPROOT/nogroup.pids" ] && grep -q "waiting for its run" "$TMPROOT/$_name3333.tmp"/scanners-gate.*/supervisor 2>/dev/null; }'
   _gate3333="$(cat "$TMPROOT/nogroup.gate" 2>/dev/null)"; _run3333="$(sed -n 1p "$TMPROOT/nogroup.pids" 2>/dev/null)"
 }
 gate_in_background nogroup-term "$TMPROOT/hardstop-deadlines"
