@@ -3296,6 +3296,21 @@ after its process did, and exits 2. The budget is 140 seconds (150 until #3357),
 left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
 counts and the gate cannot, and the stop itself, which is builtins only.
 
+The stop does not rest on one signal finding the supervisor at the right moment (#3333). A signal
+bash handles before its `wait` has begun does not end that wait, and a kill of the run's process
+group fails while the run has not made the group yet; both were measured on 2026-11-21, and either
+left the gate waiting on its run with no stop. So the timer goes on signalling once a second for as
+long as the supervisor is its parent, and never exits by itself; the supervisor, once stopped,
+ignores the signal, kills the timer, kills the run's group or else the run's own pid, and waits on
+the run alone; and the reader of the supervisor's age is not its child, so nothing but the run and
+the timer can hold a wait of its. That last part answers a failure on GitHub's Linux runner on
+2026-11-21 that has not been reproduced: the suite's case with a `ps` that never returns sat silent
+to its 50 second deadline, which fits bash dropping the exit of a timer that signalled it and
+exited at once and then waiting on that timer for as long as the hung reader lived. The suite now
+prints, on every run, how many of 40 such exits the machine's bash dropped, and a gate killed from
+outside leaves a `scanners-gate.*` folder in the temporary folder saying what the supervisor and
+the run were doing, which the suite prints when a call ends at its deadline.
+
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
 on a busy Mac on 2026-10-29, so stopping it meant it could never finish and every push needing it was refused for
