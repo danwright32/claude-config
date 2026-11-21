@@ -543,7 +543,7 @@ printf 'KEY=1\n' > "$R/.claude/worktrees/merged/.env"; old "$R/.claude/worktrees
 mkdir -p "$H/Apps/sub"; printf 'gitdir: ../.git/modules/sub\n' > "$H/Apps/sub/.git"
 mkdir -p "$H/.claude/sessions"
 printf '{"pid":1,"sessionId":"s1","cwd":"%s/src"}\n' "$R/.claude/worktrees/insession" > "$H/.claude/sessions/1.json"
-dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+dc_stub git "$DC_GIT_HELPER_STANDIN"'
 x="${d%/.claude/worktrees/*}/.fx/${d##*/}"
 case "$1 $2" in
   "--no-optional-locks status") cat "$x/status" ;;
@@ -601,6 +601,40 @@ check "worktrees: and git is never run in it" "$(hasnt "$(dc_calls git)" "$W/evi
 check "worktrees: the others are judged as before" "$(eq "$(state_of "$W/merged")" "not offerable: it has uncommitted or untracked files")"
 JUDGED="$(dc_run env DISK_CLEAN_DATALESS="$DC_ROOT/dataless" DISK_CLEAN_CATEGORY=worktrees bash "$CATS/worktrees.sh" judge "$W/evicted" 2>&1)"
 check "worktrees judge: one whose .git file is kept only in iCloud is unmeasured" "$(has "$JUDGED" "unmeasured: its .git file is kept only in iCloud")"
+
+# Real git, on a worktree whose repository names a program for each setting measured to start one
+# (#3328). Every case above stood in for git. Here the judge asks the git on this machine, inside
+# the harness's throwaway home, and none of those programs may run: a scan reads, it runs nothing
+# the folder it judges chose. The same fixture asked bare is the control in
+# hooks/test-disk-clean-git.sh, where each program is seen to run.
+REAL_GIT="$(command -v git 2>/dev/null)" || REAL_GIT=""
+RLOG="$DC_ROOT/markers.log"
+real_git_stub() { dc_stub git "GIT_CONFIG_NOSYSTEM=1 exec $(printf '%q' "$REAL_GIT") \"\$@\""; }
+if [ -n "$REAL_GIT" ]; then
+  fresh
+  RR="$H/Apps/real"; RW="$RR/.claude/worktrees/real-wt"
+  mkdir -p "$H/Apps" "$H/.claude/sessions"; : > "$RLOG"
+  dc_marker_repo "$REAL_GIT" "$RR" "$RLOG" || check "worktrees, real git: the marker repository was made" "dc_marker_repo failed"
+  _dc_rgit "$REAL_GIT" -C "$RR" worktree add "$RW" -b feat-wt >/dev/null
+  check "worktrees, real git: the fixture is a worktree of a repository whose own configuration names programs" \
+    "$([ -f "$RW/.git" ] && grep -q 'fsmonitor = ' "$RR/.git/config" && grep -q 'clean = ' "$RR/.git/config" && echo ok || echo "it was not made")"
+  old "$RR"; : > "$RLOG"
+  real_git_stub
+  dc_stub gh 'exit 0'
+  judge worktrees "$RW"
+  check "worktrees, real git: git answered every question, down to gh finding no merged pull request" \
+    "$(eq "$JUDGED" "not offerable: no merged pull request for its branch feat-wt")"
+  check "worktrees, real git: and no program the repository names ran" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "worktrees, real git: the status ran with the repository's programs turned off, its filter by name" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false -c filter.mark.clean= -c filter.mark.smudge= -c filter.mark.process= --no-optional-locks status ")" 1)"
+  printf 'unsaved\n' > "$RW/notes.md"; old "$RW"
+  judge worktrees "$RW"
+  check "worktrees, real git: an untracked file is still seen, so the worktree is not offerable" "$(eq "$JUDGED" "not offerable: it has uncommitted or untracked files")"
+  check "worktrees, real git: and nothing ran to see it" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  default_stubs
+else
+  check "worktrees, real git: git is on this machine, so the judge can be asked for real" "no git on the PATH"
+fi
 
 # ================================================================================================
 # Transcripts: .jsonl over 90 days, and any hit says Claude Code's own cleanup stopped
@@ -1356,7 +1390,7 @@ ck_home() {
   list_written readable-folders; list_written open-leftovers
   list_written kept-checkouts "$CT/safe" "$CSES/task-repo" "$CT/dirty" "$CT/stashed" "$CT/unpushed" "$CT/sidebranch" "$CT/nopr" "$CT/ghdown" \
     "$OSES/task-9/openck" "$CT/wt" "$CSES/task-wt" "$CT/plain" "$CT/looks" "$CT/handoff.md" "$CT" "$CSES"
-  dc_stub git 'd=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+  dc_stub git "$DC_GIT_HELPER_STANDIN"'
 x="'"$CKX"'/${d##*/}"
 case "$1 $2" in
   "rev-parse --absolute-git-dir") '"$DC_GIT_DIR_STANDIN"' ;;
@@ -1389,7 +1423,7 @@ check "checkouts: one whose .git is a file names a repository elsewhere, so it i
 check "checkouts: a listed task folder that is a worktree of a repository elsewhere is no row" "$(eq "$(item_of "$CSES/task-wt")" "")"
 check "checkouts: one whose .git folder holds no repository only looks like one, so it is not offerable" "$(has "$(state_of "$CT/looks")" "not offerable: git names no repository for it (git exit 128)")"
 check "checkouts: git was asked which repository it answers for before it was asked anything else of a checkout" \
-  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $4, $5 }')" "rev-parse --absolute-git-dir")"
+  "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/safe") " | awk 'NR == 1 { print $(NF - 1), $NF }')" "rev-parse --absolute-git-dir")"
 check "checkouts: and git was asked nothing more of a worktree than that" "$(eq "$(dc_calls git | grep -F -- " $(printf '%q' "$CT/wt") " | grep -vc ' rev-parse --absolute-git-dir$')" 0)"
 check "checkouts: a listed folder that is no checkout now is not offerable" "$(has "$(state_of "$CT/plain")" "not offerable: ")"
 check "checkouts: a listed file, a listed task folder that is no checkout and a listed session are no rows" "$(eq "$(item_of "$CT/handoff.md")$(item_of "$CT")$(item_of "$CSES")" "")"
@@ -1473,6 +1507,42 @@ check "checkout refusals: a folder whose .git only looks like a repository is re
 check "checkout refusals: and both are still there" "$([ -e "$CSES/task-wt/a" ] && [ -e "$CT/looks/a" ] && echo ok || echo "one is gone")"
 check "checkout refusals: a checkout task folder asked for by deleting is refused by the remover" "$(has "$(oline "$CSES/task-repo:")" "never removed: it is Claude Code's own state")"
 default_stubs
+
+# Real git, on a checkout an ended session kept whose OWN configuration names a program for each
+# setting measured to start one, and which holds a stash whose commit carries a signature (#3328).
+# A repository copied into a session's notes is the case the issue names. The judge asks the git on
+# this machine every question it has, and none of those programs may run.
+if [ -n "$REAL_GIT" ]; then
+  ck_home
+  RK="$CT/real"; : > "$RLOG"
+  dc_marker_repo "$REAL_GIT" "$RK" "$RLOG" || check "checkouts, real git: the marker repository was made" "dc_marker_repo failed"
+  dc_marker_signed_stash "$REAL_GIT" "$RK" || check "checkouts, real git: its signed stash was made" "dc_marker_signed_stash failed"
+  RHEAD="$(_dc_rgit "$REAL_GIT" -C "$RK" rev-parse HEAD)"
+  check "checkouts, real git: the fixture is a clone holding one stash, its configuration naming programs" \
+    "$([ -n "$RHEAD" ] && [ -f "$RK/.git/refs/stash" ] && grep -q 'program = ' "$RK/.git/config" && echo ok || echo "it was not made")"
+  old "$CT"; list_written kept-checkouts "$RK"
+  real_git_stub
+  dc_stub gh "echo '41 $RHEAD'"
+  : > "$RLOG"
+  judge claude-records "$RK"
+  check "checkouts, real git: git answered every question down to its stash list" "$(eq "$JUDGED" "not offerable: it holds a stash")"
+  check "checkouts, real git: and no program the checkout names ran" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  check "checkouts, real git: the stash list ran with the checkout's programs turned off" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c core.fsmonitor=false -c core.hooksPath=/dev/null -c safe.bareRepository=explicit -c log.showSignature=false stash list")" 1)"
+  # Without the stash the judge goes on to count the commits no remote has. Git reading the
+  # checkout just now can move a file's opened time, which the floor then reports, so either
+  # verdict means every question was asked and answered.
+  _dc_rgit "$REAL_GIT" -C "$RK" stash drop >/dev/null; old "$CT"; : > "$DC_CALLS"; : > "$RLOG"
+  judge claude-records "$RK"
+  check "checkouts, real git: with no stash the judge reaches its last question and the floor after it" \
+    "$(case "$JUDGED" in (offerable|"not offerable: asking git about it just now read files in it"*) echo ok ;; (*) echo "judged: $JUDGED" ;; esac)"
+  check "checkouts, real git: the count of commits no remote has was asked, with the programs off" \
+    "$(eq "$(dc_calls git | grep -cF -- " -c log.showSignature=false rev-list --count --branches --tags --not --remotes HEAD")" 1)"
+  check "checkouts, real git: and nothing ran for any of it" "$(eq "$(dc_markers_ran "$RLOG")" nothing)"
+  default_stubs
+else
+  check "checkouts, real git: git is on this machine, so the judge can be asked for real" "no git on the PATH"
+fi
 
 # ================================================================================================
 # npm and pnpm caches: each npx copy not run or changed in 30 days is offered (Dan, 2026-11-18:

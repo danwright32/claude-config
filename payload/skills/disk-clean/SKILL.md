@@ -28,7 +28,9 @@ when one is missing here). Judge each run by its exit code, never by its last li
   in `<folder>` the review page and its nonce, and step 2's `--clear-clipboard` empties the
   clipboard. They change nothing inside the
   folders they judge: a worktree's state is read with `git --no-optional-locks status`, since a
-  plain `git status` refreshes the repository's index file as it reads it (#3216).
+  plain `git status` refreshes the repository's index file as it reads it (#3216). And git is run
+  there with the folder's own program running settings turned off, so judging a folder never
+  starts a program that folder's configuration names (#3328).
 
 ## 1. Scan
 

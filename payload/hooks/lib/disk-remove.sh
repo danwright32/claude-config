@@ -727,7 +727,9 @@ do_path() { # <id> <category> <method> <target> <identity>
       if ! gone_now "$PHYS"; then measure "$PHYS"; finish_item "$id" failed "" "$t" "some of it could not be deleted ($SIZE_WORDS left; rm exit $rc: ${out%%$'\n'*})"; return; fi
       finish_item "$id" removed "${SIZE_KIB:-0}" "$t" "$SIZE_WORDS" ;;
     worktree)
-      out="$(git -C "$PHYS" worktree remove "$PHYS" </dev/null 2>&1)"; rc=$?
+      # Through dc_git (lib/disk-clean-predicates.sh): git runs this with the worktree's own
+      # configuration, and the status it runs first would start a program named there (#3328).
+      out="$(dc_git "$PHYS" worktree remove "$PHYS" </dev/null 2>&1)"; rc=$?
       if ! gone_now "$PHYS"; then
         if [ "$rc" -ne 0 ]; then finish_item "$id" skipped "" "$t" "git refused to remove the worktree: ${out%%$'\n'*}"
         else finish_item "$id" failed "" "$t" "git said it removed the worktree, but it is still there"; fi

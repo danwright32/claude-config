@@ -3689,6 +3689,17 @@ once for each lesson. For that the line is written in plain ASCII, at most 300 c
 just before the entry's `SHORT:` line, or last in an entry that has none: the place the approval
 covers, and one `claude-sync lesson-checks` reads.
 
+The `SHORT:` line is shown to him the same way (#3320), since it is the line the index carries into
+every session. The session writes it before it asks, states it on a line of its own in the proposal
+and carries it in the picker's metadata, and the entry written under his answer carries exactly that
+line. A rule of at most 151 characters needs none, and its entry takes none. The 151 is the index
+cap of 160 less `- L1234. `: the lesson has no number until he approves it, so the line is sized for
+the longest number in use. It is counted in bytes, as the cap is, so a letter with an accent counts
+two. An entry with no `SHORT:` line has its whole rule in bold and nothing else in bold, because
+the index renders the bold. Every entry is added whole at an entry boundary, never inside another
+entry, and a lesson entry is added or changed only under his answer in this picker: a For good
+does not cover one (the independent review of #3320, told in full where the mods are described).
+
 A lessons file held back takes everything rendered from it with it: every `LESSONS-INDEX-<section>.md`
 beside it, and `CLAUDE.md` when its generated list of imports would name one of them (#483). The
 refusal lists every file that waited. Publishing an index without its source would put a rule in
@@ -4513,9 +4524,10 @@ as a line, so `cat post.sh | xargs -0 bash -c` and `echo post.sh | xargs bash` a
 double quoted `-c` or `eval` string holding a `$` or a backquote behind a backslash is judged
 again as the inner shell gets it (`bash -c "echo \$(bash post.sh)"`), with any variable the outer
 shell fills in replaced by the value the gate works out for it; where it works none out, the typed
-string is read with that part as a word of unknown value and a script on disk is left as before
-(this repository's `test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string,
-until #3252 wrote those paths in double quotes).
+string is read with that part as a word of unknown value and a script on disk is left as before,
+unless the part stands inside single quotes of the string's own (#3316, below; this repository's
+`test-pr-review.sh` sourced two files by `'$DIR/lib/...'` in such a string, until #3252 wrote
+those paths in double quotes).
 Where one of these
 cannot be read the typed command is refused as unread: `/dev/stdin` fed by something the gate does
 not read, and `/dev/fd/N` not opened from a file in the same command; a line read, or a whole
@@ -4539,8 +4551,71 @@ by the value the gate works out for it, so the file is the one in the script's f
 posts is refused as posting. That reading stands in for the string's commands as written only where
 every value is worked out and the text it gives can be followed, and only for a command whose string
 no reading was given before #3252 (the reader's `headed_string`); the command itself is then judged
-as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
-command, a body over several lines, the same string at a script's top level, and anything typed.
+as it was before #3252. Anywhere else the string's commands as written still stand: a variable not
+worked out, a body's second command, a body over several lines, the same string at a script's top
+level, and anything typed.
+
+Since claude-config#3316 a `-c` or `eval` string is also read as the shell it is handed to gets it
+wherever it stands, where a variable or a substitution of the outer shell is written inside single
+quotes of the string's own (`string_as_handed`, the reading #3251 gave a string holding a
+backslash, by the same one fill in, `sh_inner_text`). A script whose top level line is `bash -c ".
+'$DIR/lib-posts.sh' && f"`, `DIR` set from `BASH_SOURCE` the line before, passed: the outer shell
+fills `$DIR` in before bash is handed the string, and the string's commands as written name a file
+called `$DIR/lib-posts.sh`, which was looked up, found missing and passed over. Every loader shared
+the fault, in a script on disk and typed (measured 2026-11-20): `.`, `source`, a shell or an
+interpreter handed the file (`bash '$DIR/post.sh'`, `python3 '$DIR/post.py'`), a pipe or a
+redirection from it, a `cd '$DIR'` in front of a relative path, `sh`, `zsh`, `env bash` and `eval`.
+Each is now refused where the file posts and passes where it does not. It is one more reading after
+the ones there were, so it can refuse a command those let through and never the reverse. Where the
+gate does not work the variable out, the file it names cannot be read, and the command is judged
+as the same one written outside a string is: a file sourced is refused as a path the gate cannot
+work out (#2538), in a script on disk too, and a file run stays behind the #2683 switch. The part
+is then read twice, as written and as a variable nothing in the string can set, so an assignment of
+the same name inside the string never stands in for the outer shell's value. A loop's name is one
+the fill in does not work out. This repository's `test-work-names-scripts.sh` sourced a file its
+hook writes while the suite runs by such a string, and passed only because the file was looked up
+under the variable's name; it now reads what that file puts on `PATH` without sourcing it.
+
+Since claude-config#3277 the words written after a program the gate does not know are read as the
+command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
+ones there were, so it can refuse a command those let through and never the reverse. Before it a
+program the gate had no rule for was a command that runs nothing: `node --test
+test/notify.test.js`, a test file whose imports reach code that posts, was refused, and the same
+words after `op run --`, `dotenv --` or `sandbox-exec -f <profile>` were allowed, as was a `curl`
+to the posting endpoint behind any of them (measured 2026-11-18 and 2026-11-19). Now, where a
+command's program is one the gate neither reads by its name nor knows to be unable to run the
+words it is handed, each later word that names a program the gate does read by name (a shell, an
+interpreter, `npx`, `npm`, `curl`, `pytest`), or a runner the shared reader reads past (`env`,
+`timeout`, `nice`), bare, by a path or in quotes, starts a command that is judged as if it were
+typed alone, fed what feeds the command it is written in. So `op run -- node --test
+test/notify.test.js`, `docker exec app env A=1 node --test test/notify.test.js`, `git bisect run
+bash post.sh` and `cat post.py | op run -- python3` are refused, with the runners in front too
+(`time op run -- ...`), typed, in a string a shell runs and in a script on disk. The refusal names
+the program, and names the no network wrapper where a file's imports are what reach the code that
+posts, in the same words as before. No list of programs that run their words is kept, since one
+missing from it would pass (L96). The question asked of the program is the one a shell script's
+own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
+`SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
+nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
+as it was, because the gate reads its body where it stands and this repository's own gate suite
+hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
+arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
+there, behind a script that runs its words as well; the same glued word after a program the gate
+reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+costs: a program that does
+not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
+when the words after it happen to spell a command the gate refuses. Left open: a word that names
+a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
+and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
+quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+is refused as unread and a script on disk is left alone: more than six words that could each
+start a command, and more than three of these readings inside one another, which only strings a
+shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
+such program), since the words of one command are read once however many programs stand among
+them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
+program's words were allowed unread. Suite: `test-slack-drafts-unknown-program.sh`.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
@@ -4573,6 +4648,32 @@ distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse 
 the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
+
+Repeated work was taken out of that budget on 2026-11-20 (#3255), with every verdict as it was. On
+the personal MacBook the installed gate had run out of its 11 seconds on the command that starts
+its own suite, `bash payload/hooks/test-slack-drafts-only-gate.sh`, so that suite could not be
+started from a session. Measured that day: the suite runs the gate's own source as a program some
+sixty times, and each run read those 457,000 characters afresh, 46 parses, 48 whole walks of its
+syntax tree and 12 cuts into tokens in one judgement. Now a Python text is parsed, walked and read
+for the endpoints it names once in a run (`py_read` and the readings through it: `py_tree`,
+`py_nodes`, `py_marker`, `py_imports`). Judging that command took 63.6 to 66.1 units of the suite's
+yardstick before and 18.7 to 19.0 after (5 readings each, a unit 0.095 s), and `bash
+tests/test-mods.sh` 13.6 to 13.8 before and 10.4 to 10.6 after (3 each). `bash
+tests/test-claude-sync.sh` reads no Python to speak of and did not move: 49.2 to 50.3 before, 50.1
+to 50.9 after (5 each); what it costs is two shell files of 1.8 and 1.0 million characters, each
+read once. The budget itself is
+unchanged, and running out of it still refuses the call. The gate's phase line
+(`SLACK_GATE_PHASE_LOG`) counts the real parses and readings (`py_parse`, `py_marker_read`), and the
+suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
+that holds nothing (`ONCE = False`).
+
+The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
+CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
+on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
+failed for the runner's speed. Where
+the seconds run out, the check now judges the same line again on the step clock and holds those
+units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
+does more work fails on any machine, and a slow machine fails nothing by itself.
 
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
@@ -5002,6 +5103,22 @@ check declaring it (`check "<the part> could not be measured here" ok` alone on 
 the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a
 case arm, is a check like any other (#1452). A pull's closing sentence names the suites that ran
 with parts unmeasured, from the runner's block, and never says "all N of its suites" for them.
+
+The pull request checks say the same where a reviewer looks, not only in a part's log (#3312). With
+`HOOK_TESTS_UNMEASURED_FILE` set, the runner also writes every unmeasured part, uncapped, as
+`<suite><TAB><why>` to that file, started empty each run and never handed to a suite. Each part job
+hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
+job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
+left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
+`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
+a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
+full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
+untested says so on the summary's first line and in a second notice,
+`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
+exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
+from each check's annotations before it merges and prints them, so a merge's log says what its green
+did not cover; a read that fails is said and the merge goes on.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
@@ -6403,6 +6520,69 @@ are `skills/disk-clean/test-disk-clean-scan.sh` and `test-disk-clean-categories.
 disk-clean harness. `test-disk-clean-stat-order.sh` reads every disk-clean script and test, derived
 from where they live, and fails on a `stat` that asks BSD's `-f` before GNU's `-c`, which is right
 on the Mac and wrong on the Linux runner (#1874).
+
+### git in a folder being judged
+
+The scan and the remover ask git about folders they did not make: a finished worktree, a checkout a
+session left in its notes. git answers with that repository's own configuration, and a setting
+there can name a program git then starts. So a repository copied into a session's notes, or a
+folder built to look like one, could make a scan that promises only to read run a program nobody
+chose (claude-config#3328; nothing shows it has happened). git's manual offers no switch for this
+(man git, SECURITY: "it is not safe to run Git commands in a .git directory (or the working tree
+that surrounds it) when that .git directory itself comes from an untrusted source"), only a clean
+copy made with `git clone --no-local`, which cannot be asked what a working tree holds. So every
+git call in a disk-clean script goes through one helper, `dc_git` in
+`hooks/lib/disk-clean-predicates.sh`, which turns off, for that one call, each setting measured to
+start a program, and refuses any git command nobody has measured. Measured on 2026-11-20 with git
+2.51.1 (Homebrew) and 2.54.0 (Apple), which agreed:
+
+| Called bare, git ran the repository's | During | Turned off with |
+| --- | --- | --- |
+| `core.fsmonitor` | status, and the status inside worktree remove | `-c core.fsmonitor=false` |
+| `hooks/post-index-change` | worktree remove | `-c core.hooksPath=/dev/null` |
+| `gpg.program` | stash list over a signed stash commit | `-c log.showSignature=false` |
+| `remote.<name>.uploadpack` | status and rev-list in a partial clone | `--no-lazy-fetch` |
+| `filter.<name>.clean` and `.process` | status and worktree remove | emptied by name, `.smudge` too |
+
+rev-parse, symbolic-ref, remote get-url, rev-list --count and a plain stash list ran nothing. Two
+more settings ride along at no cost: `--no-pager`, and `-c safe.bareRepository=explicit`, the one
+setting man git-config gives for a repository of unknown origin, under which git answers for no
+bare repository it merely finds at a folder.
+
+- **Filters have no single switch.** Each has a name, and a file's attributes say which it uses. So
+  before a status or a worktree remove, `dc_git` asks git which filters the repository's own
+  configuration names (the local and worktree scopes, files it includes among them) and empties
+  each for the call. It asks the same of every submodule checked out beneath, because status runs a
+  status in each with that submodule's own configuration. A filter from the user's own
+  configuration, where `git lfs install` puts its own, is the user's choice and stays on.
+- **What it changes in an answer.** With a repository's filter off git compares a file as it lies,
+  and one the repository marks required makes git fail; a partial clone missing an object fails
+  where it used to fetch. A failure is read as unmeasured by every caller, so none of these can turn
+  uncommitted work into a clean answer. A bare repository at a judged folder was refused before as
+  belonging elsewhere and is refused now as holding none. Nothing else moved: the suites compare
+  each answer with the bare call's.
+- **What it refuses, git never run.** A command other than status, rev-parse, symbolic-ref,
+  rev-list, remote get-url, stash list and worktree remove, since another command brings other
+  programs (fetch an ssh command and credential helpers, diff and log -p the diff drivers) and
+  none of those is turned off; an option before the command other than `--no-optional-locks`; a
+  stash list with anything after it, and a status with any option but `--porcelain` and
+  `--untracked-files=all`, since either can be asked to print a diff; a filter whose name holds an
+  equals sign, which `-c` cannot name; a submodule whose path git prints quoted; more than 100
+  submodules checked out beneath the folder, whose settings it will not read; a call with no
+  command; and an empty folder name, which git reads as the directory the caller stands in.
+  Adding a command or a status option means measuring it in `hooks/test-disk-clean-git.sh` first.
+- **The next call cannot forget.** The harness's command check refuses a `git` written anywhere in
+  a disk-clean script but inside `dc_git` (`DC_WRAPPED` in `hooks/lib/disk-clean-harness.sh`), by
+  every route a script can take to one, and refuses a second definition of the helper.
+- **Not covered.** A program the user's own configuration or environment names; `core.fsmonitor`
+  set to true, git's built in watcher, which the same setting turns off but which was never started
+  to see; and a setting a later git adds, which the suites would show only if it changed one of the
+  cases they hold.
+
+`hooks/test-disk-clean-git.sh` asks the git on the machine, never a stub: for each row above it
+builds a repository whose own settings name a marker program, sees the marker run with the call as
+the scripts used to write it, and sees nothing run through `dc_git`. `test-disk-remove.sh` and
+`test-disk-clean-categories.sh` then run the remover and two judges on such a repository.
 
 ## Removing anything: disk-remove.sh
 
@@ -7820,8 +8000,12 @@ refuses the write, and says why. It asks only after the settings hooks beneath i
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
 for word in the question) approves the one Edit or Write that only adds that rule to
-`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again; any other write
-still asks. Since #3295 the picker is refused, before he is asked and saying which character and
+`~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again. Since #3320 any
+other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
+under a For good and under his own "from now on" words alike; a write that touches no entry still
+asks. Since #3343 a shell command that writes that file is refused too, with Edit or Write named in
+its place (told in full below).
+Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
 width, bidirectional, the tag block, a soft hyphen, a byte order mark), private use, a code point
@@ -7839,8 +8023,76 @@ at 76 columns, since the dialog neither cuts nor scrolls a tall question (read i
 not fit a question into a 24 row window, which shows about the last 8 rows of one at the cap.
 Every text of the call is judged by the one function, a title, a description and a placeholder
 included (rules.ts `shownFault`, `askFault`). The entry written under his answer is held to the
-unseen class, its `SHORT:` line included, which the picker never shows, and the question asked
-before a For good is held as the lesson's is.
+unseen class, and the question asked before a For good is held as the lesson's is.
+Since #3320 the picker also shows the entry's `SHORT:` line, the one line of a lesson the index
+carries into every session, which it once never showed: under an approval for one rule an entry
+went through whose `SHORT:` line said something else. The line is carried in `metadata.short` as
+`SHORT: <text>` and stands on a line of its own in the question, and the one Edit his answer lets
+through carries exactly that line as its last: another line, one a word different, a second one, or
+none where he read one is refused. The picker is refused, before he is asked and with
+the reason, when the line is in no such shape, is more than one line, fails the one function every
+shown text is judged by (`shownFault`, so the unseen class and the markup class above, with no
+second copy of either), or has text over 151 bytes; when the rule is over 151 and no
+line is carried, since its entry would need one nobody was shown; and when the question holds any
+other line starting `SHORT:`. A rule of 151 or under is approved with no `SHORT:` line, and one
+added to its entry afterwards is refused (rules.ts `readShortLine`, `addsLesson`). The 151 is
+the index cap of 160 less `- L1234. `, because the picker is asked before the lesson has a number.
+Measured 2026-11-20 over the lessons file: of 895 entries 737 carry a `SHORT:` line; laid out with
+its rule and a check line each fits the 20 rows and 1,500 code units (the tallest takes 12 rows,
+and 16 beside a check line of 300 characters); `shownFault` refuses one of the 737 (L731's, which
+names two placeholders in angle brackets outside backticks); and 39 have text over 151, each
+written under a number of one or three digits. All 8 lesson pickers in the transcripts this Mac
+kept would be refused, each for a rule over 151 with no `SHORT:` line shown, which no picker had.
+An independent review of #3320 (2026-11-20) then tightened four things. With no `SHORT:` line the
+index renders an entry's bold span, and nothing held that span to the rule: under an approval for
+one sentence an entry went through whose bold closed after six words, and those six words were
+the lesson every session loaded. Such an entry is now taken only with the whole rule in bold and
+nothing else in bold, and no entry may hold a line of spaces (rules.ts `wholeRuleInBold`). The mod
+keeps no copy of the generator's reading: it requires a shape the generator reads one way, and
+`tests/test-lesson-index-line-shown.sh` runs the real generator over the entries listed in the
+mod's `tests/index-lines.ts` and holds each rendered line to the text Dan was shown, while the
+mod's own suite holds the mod to the same list. The approved Edit must add its entry whole at an
+entry boundary: after another entry's last line or under a section heading, with another entry's
+first line, a section heading or the end of the file as the next line that is not blank. Inside
+another entry it took that entry's `SHORT:` line as its own (`boundaryFault`). A For good no
+longer covers an Edit or Write that adds or changes a lesson entry in `~/.claude/LESSONS.md`: it
+is refused in words that send the session to the lesson picker, and no question waits on it
+(`entriesTouched`, `pickerOnly`). Dan's own words that make a save permanent do not cover one
+either, a route the lessons review at the push found still open.
+An entry is every line the file's reader gives it, down to the
+next entry or section heading. A write that touches no entry (a section heading, an entry taken
+out whole, text above the first section) is asked about as before, and so was a shell command
+until #3343, below. Changing
+an entry already in the file therefore takes the lesson picker for the entry as it should read,
+then the old one taken out and the new one added. Length is counted in bytes, as the index cap
+counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
+drawn, in bold, in a list or in a quote, is refused in the question and in the entry
+(`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits of the lessons
+file were ever approved For good, both adding a whole lesson entry.
+Since #3343 a shell command that writes `~/.claude/LESSONS.md` is refused, and no For good is
+offered. It was asked about through For good, whose question is of the session's own wording and
+shows Dan neither the rule nor its `SHORT:` line, so an entry could reach every session by `>>`
+where an Edit of the same text was refused. The mod reads which files a command writes, never what
+it writes to them, so such a command cannot be sent to the lesson picker and held to what he read.
+The refusal names Edit or Write instead, where an entry goes to the lesson picker and anything
+else is asked about as before. It is decided from the one judgement of the command, by mod-kit's
+reader of what a command writes (rules.ts `lessonsByShell`, `byShellOnly`), so every way that
+reader finds the file counts: a redirection, `tee`, `sed -i`, `perl -pi`, a `cp` or `mv` onto it
+or into its folder, a heredoc, a bare name after a `cd` there, a variable the command fixes to its
+folder, an inline program that opens it to write, a patch naming it, the file handed to a script
+as an argument, and the file named by its path beside a write the reader cannot follow (`eval`, a
+program whose target is an argument). The last two may only read it, and are refused all the same,
+since what cannot be read is not taken for a read. The refusal says which of the three it found,
+and how to send a read: the file fed on standard input, or a copy handed over. A For good already
+standing for the same command does not cover it, and neither do Dan's own "from now on" words. A
+command whose words show that it only reads the file runs unasked, as ever: `cat`, `grep`, `wc`,
+`sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
+program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
+Left as they were: a checkout's `payload/LESSONS.md` and a write that touches no entry, which are
+Dan's to decide on #3343; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+variable only a command's output sets), which is as likely a scratch copy and is asked about as
+before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
+with no word of the command naming it, which no reader of the words can see.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
@@ -7919,7 +8171,45 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why), a
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+since #3279 what a git command that moves committed work brings into the working tree (Dan,
+2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
+`switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
+and `stash apply`; before one runs the guard asks git which files it would change and the commit
+each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
+`git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
+this branch, or between the working tree and the commit for a reset,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
+untracked files, and `git merge-base` for the commit a merged one shares with the default branch
+(below); each look changing file is then judged
+as a checkout of that file from that commit is, by the lines it changes where that rule applies,
+against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
+file whose change is already on that branch (Dan, 2026-11-20, "Skip what is on main": it has
+shipped, so asking again under every branch that takes main in protects nothing): the default
+branch is the one the checkout records for its remote, read by mod-kit's branch reader, at the
+commit it last fetched (`git rev-parse --verify --quiet` of that ref under `refs/remotes/origin/`),
+never a name the command gives, and a file is skipped only where the commit being taken in holds it
+exactly as the newest commit it shares with that branch does (`git merge-base`, then
+`git diff --name-status` between the two), so a merge of another branch, or of a local main that is
+ahead of the remote's, is still asked about everything it holds beyond the default branch, and each
+skip is written to the guard's log; a cherry-pick, a revert, a switch, a checkout, a hard reset and
+a stash are asked as before whatever commit they name, and so is a merge where the checkout records
+no default branch, never fetched it, stands on a detached head, or git cannot answer;
+`--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
+the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
+the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:
+one with a command before it on its line that may change what it brings in (anything but `cd`, a
+command that only reads and a restore of named paths, so a `git fetch` first, a commit, another
+move), told to run on its own, a `git pull`, which fetches before it merges, told to fetch first and
+merge on its own, and a commit git does not know in this checkout, told to fetch it first; one with
+no other way to run it, a rebase onto another base, from the root, interactive or running commands,
+`git switch --orphan`, `git stash branch`, a commit named through a value the shell fills in, more
+than 300 look changing files, or a question git fails, cannot be run for or answers at more length
+than can be read, is held with a card for Dan; a move inside a script file, `git worktree add`,
+`git clone`, `git bisect`, `git submodule update` and `git stash` taking uncommitted work away are
+not read), a
 program whose text names the files it writes (since #2847 also a python or node script file the
 command runs, its own code read as inline code is, a name its code writes where the folder cannot be
 followed held as could not check; since #2855 also a shell script's own commands and the scripts it
@@ -7927,7 +8217,14 @@ runs, a script named through a variable the command sets, a script the command w
 heredoc, read as that text, and the local modules a script imports; since #3214 a script named
 through a variable the command never sets (`python3 $N/gen.py`, nothing setting N), which the guard
 cannot find and so cannot read, is held as could not check, while one named through a variable the
-command sets some other way (a loop, a command's output) is still not read; since #2991 a name
+command sets some other way (a loop, a command's output) is still not read; since #3279 a python or
+node script kept in a temporary folder or the session's scratchpad (under `/tmp`, `/var/folders` or
+Claude Code's own temporary folder), whose code does not name every file it writes and names a look
+changing file by a relative name, is held as could not check, since it may join that name onto any
+folder or open it after changing folder (Dan, 2026-11-19, "Hold the narrow case": 3 past commands in
+32 days), while a name that is a test by its own file name is left out, and the same script kept
+anywhere else is read as before, its relative names not judged (854 past commands, ruled out the
+same day); since #2991 a name
 such a
 script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
 that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and

@@ -73,7 +73,7 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, SLEEP_START, blockTold, overdueClaim, parkedWith, parkedWithUnsaved, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, unstartedSaid,
+  LIMITS, SLEEP_START, blockTold, endEvery, overdueClaim, parkedWith, parkedWithUnsaved, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted, type UnsavedPark,
 } from './driver.ts'
 import { busyNow } from './busy.ts'
@@ -3519,6 +3519,21 @@ const endClaim = async ($: EngineInterface, en: Enrolled, root: string | null, r
   return (r.stdout + r.stderr).trim().split('\n')[0] || `sleep-queue.sh release exited ${r.exitCode}`
 }
 
+// The finding for a claim the queue would not end, by its issue, with the queue's answer.
+const unendedNote = (slug: string | null, rel: Release, answer: string): Note =>
+  ({ kind: 'finding', repo: slug, issue: rel.issue, text: `the claim on #${rel.issue} could not be ended as ${rel.state}: ${answer}` })
+
+// Ends every claim a stop lets go of, in turn (#3342), and says each one the queue refused in a
+// finding of its own, by issue, so every refusal is said once and none is joined into another's words.
+const endEach = async ($: EngineInterface, en: Enrolled, where: { root: string | null; slug: string | null }, releases: readonly Release[]): Promise<Note[]> => {
+  const said: Note[] = []
+  for (const rel of releases) {
+    const ended = await endClaim($, en, where.root, rel)
+    if (ended) said.push(unendedNote(where.slug, rel, ended))
+  }
+  return said
+}
+
 // Every note the driver writes is marked as its own, so it is never read back as the session's progress.
 const writeNotes = async ($: EngineInterface, en: Enrolled, notes: Note[], extra: Record<string, unknown> = {}) => {
   for (const n of notes) {
@@ -3594,15 +3609,18 @@ const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ blo
       if (unsaved && (d.kind === 'block' || d.kind === 'rest')) {
         stoppedHere.add(stopKey(en))
         const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
-        // The claim in hand is ended too, never left held by a session that has stopped.
-        const ended = claim.state === 'held' ? await endClaim($, en, where.root, { issue: claim.claim.issue, state: 'failed', why }) : null
-        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended ? `${why}; the claim on #${claim.state === 'held' ? claim.claim.issue : ''} could not be ended: ${ended}` : why }])
+        // Every claim held is ended too, never left held by a session that has stopped (#3342): a
+        // park the block decided is kept as decided, every other claim failed with this reason.
+        const unended = await endEach($, en, where, endEvery(claim, 'failed', why, d.release))
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: why }, ...unended])
         return null
       }
     }
+    // A block ends at most the one claim it parks; a stop ends every claim held (#3342).
     const ended = d.release ? await endClaim($, en, where.root, d.release) : null
-    const notes = ended && d.release ? [...d.notes, { kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : d.notes
-    await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
+    const blockNotes = ended && d.release ? [unendedNote(where.slug, d.release, ended)] : []
+    const stopNotes = d.kind === 'stop' ? await endEach($, en, where, d.releases) : []
+    await writeNotes($, en, [...d.notes, ...blockNotes, ...stopNotes], u.usage ? { usage: u.usage } : {})
     // Said from what the queue answered, never before it (#925); its answer reaches the block only as data (#922).
     if (d.kind === 'block') return { block: blockTold(d, ended, { root: where.root, self: en.self }) }
     // #2511: a rest on the session's own background work loads nothing again; its report, or the tick, starts it.
@@ -3639,18 +3657,16 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
       const unsaved = await saveDriver($, en, d.record)
       if (unsaved) {
         // A wait that was not recorded would never be resumed: said, and the session stops, ending
-        // the claim in hand as the decision would have, or as failed, never leaving it held.
+        // every claim held as the decision would have, or as failed, never leaving one held (#3342).
         stoppedHere.add(stopKey(en))
         const why = `after the ${error} error the driver's counter could not be written (${unsaved}), so no retry was set`
-        const rel: Release | undefined = d.kind === 'stop' && d.release ? d.release : claim.state === 'held' ? { issue: claim.claim.issue, state: 'failed', why } : undefined
-        const ended = rel ? await endClaim($, en, where.root, rel) : null
-        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: ended && rel ? `${why}; the claim on #${rel.issue} could not be ended: ${ended}` : why }])
+        const unended = await endEach($, en, where, d.kind === 'stop' ? d.releases : endEvery(claim, 'failed', why))
+        await writeNotes($, en, [{ kind: 'stopped', ...(where.slug ? { repo: where.slug } : {}), text: why }, ...unended])
         return
       }
     }
-    const ended = d.kind === 'stop' && d.release ? await endClaim($, en, where.root, d.release) : null
-    const extra: Note[] = ended && d.kind === 'stop' && d.release ? [{ kind: 'finding', repo: where.slug, issue: d.release.issue, text: `the claim on #${d.release.issue} could not be ended as ${d.release.state}: ${ended}` }] : []
-    await writeNotes($, en, [...d.notes, ...extra])
+    const unended = d.kind === 'stop' ? await endEach($, en, where, d.releases) : []
+    await writeNotes($, en, [...d.notes, ...unended])
   })
 
 // Each minute: start a session again once its wait is over, and park a claim held past its active
