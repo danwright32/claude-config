@@ -1739,6 +1739,24 @@ output goes, or what is fed to its input, does not read these words: `ps__writes
 command's own words (`PS__R_WORDS`), and `gh_issue_scan.py` keeps each stage's redirections beside
 its words, and both still see every one.
 
+A caller can ask it for the commands inside each script file a command runs (`every_command` with a
+list, claude-config#2301), which the add scope guard and the screenshot gate do. A compiled program
+is no script file (claude-config#3299). Until #3299 one run by its path was decoded as text and cut
+into commands, 616 of them for BBEdit's command line helper, a Mach-O file (measured 2026-11-19),
+so a guard could refuse, or pass, on bytes that happened to spell a command. Now a file run by its
+path or handed to bash is left unread when it starts with a Mach-O or ELF magic number and a NUL
+byte follows among its first 16 bytes with nothing a shell ends a word at before it, which every
+real header does. The reader's answer is `compiled_program`: `script_text` asks it before reading
+any file as a script, and a guard that wants to judge a compiled program at a path its own way can
+ask it too. Those two guards do not, and treat one as they treat any program whose commands they
+cannot read. The test is that narrow on purpose. Measured 2026-11-21 on zsh 5.9, bash
+3.2, dash and ksh, each of these is still run as commands by some shell, so each is still read: a
+file with a NUL only after its first line, one with bytes that are not UTF-8, one with the magic
+number and no NUL (`\x7fELF;cmd` runs cmd), one whose NUL comes after a word has ended (ksh runs
+it by its path), and any file handed to zsh, sh, dash or ksh or sourced. Reading those can only add
+commands, so nothing refused before passes for it. The Slack drafts gate reads files with its own
+code and never read a compiled program run by its path as commands; its suite holds that too.
+
 It also reads through the programs that run a command for you (claude-config#1478), so each gate
 judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
 xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and
@@ -6575,7 +6593,8 @@ Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
   say, moves a file's access time only on the first read after each change, so it can delay an
   offer once and never bring one forward. The task folder's own modification time is left out,
   because moving one ticked leftover to the Trash moves it just before the next one in the same
-  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  folder is judged again. The row states its 7 days, since it is the one row whose time differs
+  from the 30 days the page's opening sentence gives for a row that states no time of its own.
   The remover lets no new path through for this: these are the same four level folders, and what
   changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
   files and are not offered.
@@ -9149,7 +9168,8 @@ refused for git only where it would run git, never for the word in prose (#1124)
 when every git call in it is a local read (show, cat-file, log, diff and the like) with its
 subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+and deploy runs since sleep began, and notes each one that needs Dan for the top of the report
+(a complete issue filed overnight is not one, and is said under Done, as below). It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
 passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
 that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
@@ -9995,9 +10015,12 @@ It also fails a mod test that times its subject (`performance.now`, `process.hrt
 arithmetic, in the test or in any helper it calls) without a `timeoutMs` in its own options, by
 file, line and test name, again from the files alone (#1016). `claude plugin test` gives every test
 5,000 ms, a fixed number, so such a test is judged by how busy the Mac is: session-registry's #911
-test, which compares a list against a yardstick measured in the same run, failed at that limit
+test, which then compared a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
-judgement, and the test's own limit is set where only a hang reaches it.
+judgement, and the test's own limit is set where only a hang reaches it. That test reads no clock
+since #3333: its ratio of two times still moved with load (it failed once at a load average of 164
+on 12 cores on 2026-11-20), so it counts what each list asks of the filesystem, 2,003 requests
+against 4, which no load changes.
 Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
 mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
 mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has
