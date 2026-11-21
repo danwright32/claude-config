@@ -153,8 +153,8 @@ def _spec_form(spec):
 
 
 # Every question a judgement can ask of the disk or the environment: (how to ask it, the form its
-# answer is recorded in). lookup() asks them again the same way. Arguments are strings, or a list of
-# strings for pathfinder.
+# answer is recorded in). lookup() asks them again the same way. Arguments are strings, a list of
+# strings for pathfinder, or a path and a whole number of bytes for head.
 OPS = {
     "isfile": (_os.path.isfile, None), "isdir": (_os.path.isdir, None), "exists": (_os.path.exists, None),
     "lexists": (_os.path.lexists, None), "islink": (_os.path.islink, None),
@@ -199,14 +199,20 @@ class _Start:
     def __init__(self, recorder, file, data):
         self._recorder, self._file, self._data = recorder, file, data
         self._at, self._real, self._shut = 0, None, False
+        # That it opened is an answer of its own, recorded now as a start of no bytes: a caller
+        # that closes it unread still learned the file is there to open.
+        self._note(b"")
+
+    def _note(self, got):
+        answer = ["ok", _sha(got)]
+        if self._recorder.reads.setdefault(("head", self._file, len(got)), answer) != answer:
+            self._recorder.taint(f"head {self._file!r} answered two ways in one judgement")
 
     def read(self, size=-1):
         if self._data is None or type(size) is not int or not 0 <= size <= MAX_READ:
             return self._itself().read(size)
         got, self._data, self._at = self._data[:size], None, size
-        answer = ["ok", _sha(got)]
-        if self._recorder.reads.setdefault(("head", self._file, size), answer) != answer:
-            self._recorder.taint(f"head {self._file!r} answered two ways in one judgement")
+        self._note(got)
         return got
 
     def _itself(self):

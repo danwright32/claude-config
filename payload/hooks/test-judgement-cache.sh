@@ -200,7 +200,21 @@ with gate.open(head_path, "rb") as f:
     expect("one read of a start of a file past MAX_READ gives that start", f.read(2) == b"he")
 expect("and the record holds that start and is not marked: %r, %r" % (rec7.tainted, sorted(rec7.reads)),
        rec7.tainted is None and ("head", head_path, 2) in rec7.reads and ("read", head_path) not in rec7.reads)
-kept_head = [[k[0], list(k[1:]), a] for k, a in rec7.reads.items() if k[0] == "head"]
+kept_head = [[k[0], list(k[1:]), a] for k, a in rec7.reads.items() if k[0] == "head" and k[2] == 2]
+# Opened and closed with nothing read, the judgement still learned that the file opens: that is in
+# the record too, so a kept judgement is not used once the file has gone (the lessons review of
+# pull request #3394).
+rec11 = jc.Recorder()
+jc.install(rec11, [vars(gate)])
+with gate.open(head_path, "rb") as f:
+    pass
+opened = [[k[0], list(k[1:]), a] for k, a in rec11.reads.items() if k[0] == "head"]
+expect("a file past MAX_READ opened and closed unread is in the record as opened: %r, %r" % (rec11.tainted, opened),
+       rec11.tainted is None and [o[1] for o in opened] == [[head_path, 0]])
+expect("and that is asked again as a file that opens and one that does not: %r, %r"
+       % (jc.changed(opened), jc.changed([[o[0], [o[1][0] + ".gone", 0], o[2]] for o in opened])),
+       bool(opened) and jc.changed(opened) is None
+       and "answers differently now" in (jc.changed([[o[0], [o[1][0] + ".gone", 0], o[2]] for o in opened]) or ""))
 rec8 = jc.Recorder()
 jc.install(rec8, [vars(gate)])
 with gate.open(head_path, "rb") as f:
