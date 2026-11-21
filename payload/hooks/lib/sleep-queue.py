@@ -16,6 +16,8 @@ is tested on fixtures alone.
   claims CLAIMS_DIR                    every claim of the night as JSON lines, for the report (phase 4)
   note   KIND SESSION AT REPO ISSUE [EXTRA]  the night's note of a claim (EXTRA its attempt) or of
                                        its end (EXTRA why), for sleep_note (#905)
+  noted  NOTE_JSON [SESSION]           REPO ISSUE SESSION of a done note naming an issue, the
+                                       claim it ends (#3330), or exit 5 for any other note
 
 A claim is a directory per issue holding numbered entries, 1, 2, 3, each one JSON object written
 whole beside it and hard linked into place, which fails if the number is taken. So of two sessions
@@ -47,6 +49,30 @@ from session_registry import Registry, num  # noqa: E402
 PRIORITIES = ["priority-p0", "priority-p1", "priority-p2", "priority-p3", "priority-p4"]
 # unstarted: given back because its worktree could not be made just now; free again, and no attempt.
 ENDS = ("free", "unstarted", "done", "parked", "failed")
+# A repository as a note names it, owner/name; a claim's folder is named by its lower case form.
+NOTE_REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def noted_done(line, fallback):
+    """(repo lower case, issue, session) of a done note naming an issue (#3330), else None.
+
+    The session is the note's own `by`, or FALLBACK (the writing session's id, as the note writer
+    stamps it) when the note names nobody. Any other note, or one that is not JSON, ends nothing."""
+    try:
+        n = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(n, dict) or n.get("kind") != "done":
+        return None
+    repo, issue = n.get("repo"), n.get("issue")
+    by = n["by"] if n.get("by") is not None else fallback
+    if not (isinstance(repo, str) and NOTE_REPO.match(repo)):
+        return None
+    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
+        return None
+    if not isinstance(by, str) or not by:
+        return None
+    return repo.lower(), issue, by
 
 
 # ---- one issue's claim ----
@@ -419,6 +445,14 @@ def main(argv):
         n["at"] = at
         print(json.dumps(n))
         return 0
+    if cmd == "noted" and len(argv) in (3, 4):
+        # Exit 5, never 1, for a note that names nothing to end: 1 is what an uncaught error
+        # exits, and a crash must not read as "nothing to end" (lessons review of feb6dd4).
+        got = noted_done(argv[2], argv[3] if len(argv) == 4 else "")
+        if got is None:
+            return 5
+        print("%s\t%d\t%s" % got)
+        return 0
     if cmd == "slug" and len(argv) == 3:
         # The one reading of an origin URL, for the shell too, so both sides agree on which count.
         s = slug_of(argv[2])
@@ -429,7 +463,7 @@ def main(argv):
     if cmd == "claims" and len(argv) == 3:
         all_claims(argv[2])
         return 0
-    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | slug ORIGIN_URL | claims CLAIMS_DIR | note KIND SESSION AT REPO ISSUE [EXTRA]", file=sys.stderr)
+    print("usage: sleep-queue.py state ISSUE_DIR SELF REGISTRY NOW | queue key=value... | entry KIND SESSION AT [WHY] | slug ORIGIN_URL | claims CLAIMS_DIR | note KIND SESSION AT REPO ISSUE [EXTRA] | noted NOTE_JSON [SESSION]", file=sys.stderr)
     return 2
 
 

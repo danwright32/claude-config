@@ -8517,7 +8517,9 @@ it kept has not stalled, or a Monitor is listed as running in the stop's own `ba
 (#2897) is no idle turn: the session rests, unblocked, until that work's report
 starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
 afresh from it (#2511, `hooks/busy.ts`); a claim is parked
-after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
+after 2 attempts or 2 active hours, each claim the session holds timed from its own start, and a
+`sleep_note` done note naming an issue ends the writer's own claim on it, so finished work is
+neither timed nor parked (#3330); a rate limit or server error is waited out at waits of five,
 ten, twenty and forty minutes, then hourly, each wait noted, and the session started again; `/sleep`
 refuses on battery and holds `caffeinate -i` for the night, and each refusal is also a notification
 (#1545): on battery it says to plug in and run `/sleep` again, a power reading pmset does not give
@@ -9557,7 +9559,8 @@ number, so the report credits that merge and the issues it closes. When the goal
 be done tonight, the session stops with a note. It approves its own permission prompts, except for anything
 banned below. It writes for you only into the report: a question it needs you to answer, a proposed
 issue or lesson, or anything it noticed. An issue that takes two attempts or two hours of work is
-parked for the morning. A session that makes no progress for three turn ends in a row, or for 20
+parked for the morning, each issue a session holds timed on its own; one it has noted done is never
+parked. A session that makes no progress for three turn ends in a row, or for 20
 minutes, is let go with a note. A usage limit or an overloaded server is waited out (5, 10, 20 and
 40 minutes, then hourly, all night, each wait in the report). These limits are chosen, not
 measurements. Work stops when the weekly usage

@@ -1391,11 +1391,19 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
   A claim entry with no time of its own is never judged stuck by time. Active time is wall time
   from the claim entry to now less those waits only, so waiting for checks, for a merge turn or on
-  subagents counts, and so does any time after the work was noted done while the claim stayed held;
-  the watchdog times only the session's newest held claim, so a session holding several reaches
-  the older ones only after the newest passes 2 hours (measured on the night of 18 Nov 2026,
-  #3276). The report reads a park of the driver's against the session's done note for the issue
-  and does not list a finished one.
+  subagents counts. Every claim the session holds is timed from its own start, and of several past
+  their 2 hours the one held longest is parked first, the next at the next minute (#3330: on the
+  night of 2026-11-18 the watchdog timed only the newest of five held claims, and parked the older
+  ones one a minute only once the newest passed 2 hours). A claim the session noted done is ended:
+  a `sleep_note` done note naming an issue ends its writer's own claim on it as done, in the same
+  step, through `sleep-queue.sh done-noted` (no second note, no GitHub read; another session's
+  claim, or one already ended, is left as it is). The driver also reads tonight's notes after the
+  claims and treats a claim with a done note by the same session (same repository in any case,
+  same issue, at or after the claim) as not held, so it is neither timed, parked, nor the claim in
+  hand. A done note landing between that read and a park races the park for the claim's next
+  entry, and the queue lets exactly one land; the report reads the done note either way. A claim
+  with no done note of its own is parked exactly as before. The report reads a park of the
+  driver's against the session's done note for the issue and does not list a finished one.
 - Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
   blocked on with the reason said: one failed read never stops the night. Three in a row stop it
   with a `failed` note. The rules carry the repository path shell quoted where it needs to be.

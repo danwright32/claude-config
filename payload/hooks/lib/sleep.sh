@@ -156,7 +156,9 @@ sleep_active() {
 # Downloads is rendered again. Exit 0 once the note is written, even when the report could not be
 # rendered after it (said on stderr: the note is the record, and the report is rendered again at
 # wake); 1 when the note was refused or not written, with why on stderr. The record, now, this
-# boot's start and its session may follow, as for sleep_state, for the tests.
+# boot's start and its session may follow, as for sleep_state, for the tests. A done note naming an
+# issue also ends, as done, the claim the writing session holds on it (sleep-queue.sh done-noted,
+# #3330), and says so on stderr.
 # The script beside this file when bash sourced it; under a shell with no BASH_SOURCE (zsh) this
 # file cannot know where it is, so the installed copy is used, never one in the caller's folder.
 # Found by parameter expansion, with only builtins after it (claude-config#1098): dirname is an
@@ -184,4 +186,29 @@ sleep_note() {
     return 1
   fi
   python3 "$script" note --record "$file" --line "$line" || return 1
+  # A done note naming an issue also ends the writer's own claim on it (#3330), in this same step,
+  # so the watchdog stops timing finished work. The queue's own done note follows an end it has
+  # already written, so it is not looked at again. Never changes what this returns: the note is
+  # written, and a claim left held is said on stderr with what to run.
+  case "$line" in *done*) [ -n "${_SQ_NOTING:-}" ] || _sleep_note_ends_claim "$line" ;; esac
+  return 0
+}
+
+_sleep_note_ends_claim() {
+  local queue out rc
+  queue="$HOME/.claude/hooks/lib/sleep-queue.sh"
+  [ -n "$_SLEEP_LIB_DIR" ] && [ -f "$_SLEEP_LIB_DIR/sleep-queue.sh" ] && queue="$_SLEEP_LIB_DIR/sleep-queue.sh"
+  if [ ! -f "$queue" ]; then
+    printf 'sleep_note: noted, but any claim it names is still held, since sleep-queue.sh is not there (%s); end it with sleep-queue.sh release\n' "$queue" >&2
+    return 0
+  fi
+  # The status is taken in a form `set -e` cannot act on. A caller that sourced this under set -e
+  # would otherwise be ended by the ordinary "nothing to end" answer (exit 1) before the case ran.
+  out="$(bash "$queue" done-noted "$1" 2>&1)" && rc=0 || rc=$?
+  case "$rc" in
+    0) printf 'sleep_note: noted, and the claim on #%s is ended as done\n' "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "released" { print $2 }')" >&2 ;;
+    1) ;; # nothing this session holds was named: nothing to end
+    *) printf 'sleep_note: noted, but the claim it names could not be ended (%s); end it with sleep-queue.sh release\n' "${out:-sleep-queue.sh gave no reason}" >&2 ;;
+  esac
+  return 0
 }

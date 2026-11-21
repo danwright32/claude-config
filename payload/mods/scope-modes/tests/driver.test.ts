@@ -4,6 +4,7 @@ import {
   LIMITS, REST_RESUME, RESUME, activeMs, blockTold, busyWords, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
+import { parkedWith, parkedWithUnsaved } from '../hooks/driver.ts'
 
 // The overnight driver's decisions (#844), on recorded state only. Every limit is read from LIMITS,
 // never written here as a literal at its edge (L401), so moving one moves its tests with it.
@@ -311,7 +312,7 @@ describe('the circuit breaker (H3)', () => {
   })
   test('a claim entry with no time is never judged stuck by time, and reads as undated', () => {
     const line = JSON.stringify({ repo: 'o/r', issue: 4, attempts: 1, entries: [{ kind: 'claim', session: 's1' }] })
-    expect(heldClaim(line, 's1')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null } })
+    expect(heldClaim(line, 's1', '')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null }, all: [{ repo: 'o/r', issue: 4, attempts: 1, since: null }] })
     const r = decideStop(input({ now: T0 + 10 * LIMITS.stuckMs, driver: ok(after({ progressAt: T0 + 10 * LIMITS.stuckMs, weeklyAt: T0 + 10 * LIMITS.stuckMs })), claim: { state: 'held', claim: { repo: 'o/r', issue: 4, attempts: 1, since: null } } }))
     expect('release' in r).toBe(false)
   })
@@ -465,9 +466,9 @@ describe('the readings', () => {
       line(2, [{ kind: 'claim', session: 's2', at: 7 }]),
       line(3, [{ kind: 'claim', session: 's1', at: 9 }]),
     ].join('\n')
-    expect(heldClaim(text, 's1')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 3, attempts: 2, since: 9 } })
-    expect(heldClaim(line(1, [{ kind: 'claim', session: 's2', at: 1 }]), 's1')).toEqual({ state: 'none' })
-    expect(heldClaim('{oops', 's1').state).toBe('unknown')
+    expect(heldClaim(text, 's1', '')).toEqual({ state: 'held', claim: { repo: 'o/r', issue: 3, attempts: 2, since: 9 }, all: [{ repo: 'o/r', issue: 3, attempts: 2, since: 9 }] })
+    expect(heldClaim(line(1, [{ kind: 'claim', session: 's2', at: 1 }]), 's1', '')).toEqual({ state: 'none' })
+    expect(heldClaim('{oops', 's1', '').state).toBe('unknown')
   })
 })
 
@@ -615,4 +616,100 @@ describe('a worker that was not told to start (#2062)', () => {
     expect(ask).toContain('Never deliver it any other way')
     expect(ask).toContain('type "start the night\'s work" in it before he sleeps')
   })
+})
+
+// #3330: on the night of 2026-11-18 one session held five claims at once and noted each finished
+// issue done without releasing it. Only the newest claim was timed, and finished work was parked.
+describe('every claim held is timed from its own start, and a done note ends one (#3330)', () => {
+  const claim = (issue: number, at: number, repo = 'o/r') => JSON.stringify({ repo, issue, attempts: 1, entries: [{ kind: 'claim', session: 's1', at }] })
+  // Claimed 130, 90 and 10 minutes before T0: only the oldest is past its 2 hours.
+  const three = [claim(1, T0 - LIMITS.stuckMs - 10 * MIN), claim(2, T0 - 90 * MIN), claim(3, T0 - 10 * MIN)].join('\n')
+  const done = (o: Record<string, unknown>) => JSON.stringify({ kind: 'done', by: 's1', repo: 'o/r', issue: 1, pr: 40, at: T0 - 5 * MIN, ...o })
+  const at = (now: number, reading: ClaimReading) =>
+    decideStop(input({ now, driver: ok(after({ progressAt: now, weeklyAt: now })), claim: reading }))
+
+  test('three claims of different ages: the one past its 2 hours is parked, though the newest is young', () => {
+    const r = at(T0, heldClaim(three, 's1', ''))
+    expect(r.kind === 'block' && r.release).toEqual({ issue: 1, state: 'parked', why: `130 minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` })
+    // The newest is still the claim in hand.
+    expect(heldClaim(three, 's1', '').state === 'held' && (heldClaim(three, 's1', '') as { claim: { issue: number } }).claim.issue).toBe(3)
+  })
+  test('each claim reaches its limit at its own time, the longest held first', () => {
+    // 30 minutes on, the second is past its 2 hours too; the first, held longer, goes first.
+    const later = at(T0 + 30 * MIN, heldClaim(three, 's1', ''))
+    expect(later.kind === 'block' && later.release?.issue).toBe(1)
+    const two = [claim(2, T0 - 90 * MIN), claim(3, T0 - 10 * MIN)].join('\n')
+    expect('release' in at(T0 + 30 * MIN - 1, heldClaim(two, 's1', ''))).toBe(false)
+    const r = at(T0 + 30 * MIN, heldClaim(two, 's1', ''))
+    expect(r.kind === 'block' && r.release?.issue).toBe(2)
+  })
+  test('a claim its session noted done is not timed and never parked, released or not', () => {
+    const noted = heldClaim(three, 's1', done({}))
+    expect('release' in at(T0, noted)).toBe(false)
+    expect('release' in at(T0 + 25 * MIN, noted)).toBe(false)
+    // The done claim is no longer the session's: the other two are, the newest in hand.
+    expect(noted).toMatchObject({ state: 'held', claim: { issue: 3 } })
+    expect(noted.state === 'held' && noted.all?.map(c => c.issue)).toEqual([2, 3])
+    // A done note naming the issue and no pull request ends it too.
+    expect('release' in at(T0, heldClaim(three, 's1', done({ pr: undefined })))).toBe(false)
+  })
+  test('a stuck claim with no done note of its own is still parked, exactly as before', () => {
+    // Another session's done, a done for another repository or issue, or one older than the claim
+    // (a claim made again after it) is no record that this claim's work finished.
+    for (const other of [done({ by: 's2' }), done({ repo: 'o/other' }), done({ issue: 2 }), done({ at: T0 - LIMITS.stuckMs - 20 * MIN }), done({ kind: 'progress' })]) {
+      const r = at(T0, heldClaim(three, 's1', other))
+      expect(r.kind === 'block' && r.release?.issue).toBe(1)
+    }
+    // Notes that cannot be read leave every claim timed, never one let off.
+    const r = at(T0, heldClaim(three, 's1', null))
+    expect(r.kind === 'block' && r.release?.issue).toBe(1)
+    // A note line that is not JSON is passed over, never read as a done note.
+    const s = at(T0, heldClaim(three, 's1', `not json\n${done({ by: 's2' })}`))
+    expect(s.kind === 'block' && s.release?.issue).toBe(1)
+  })
+  test('the overnight rules say a done note ends the claim, beside the release they name', () => {
+    expect(RULES).toContain('A done note you write yourself with sleep_note naming the issue ends your claim on it as done too')
+  })
+  test('a session whose only claim it noted done holds none', () => {
+    const one = claim(1, T0 - LIMITS.stuckMs - 10 * MIN)
+    expect(heldClaim(one, 's1', done({}))).toEqual({ state: 'none' })
+  })
+})
+
+// A park joined to the ones not yet said (#3330, lessons review of d137576).
+test('parkedWith: the first park is said as it is', () => {
+  expect(parkedWith(null, 'A.')).toBe('A.')
+})
+test('parkedWith: a park of another issue is added after the unsaid one', () => {
+  expect(parkedWith('A.', 'B.')).toBe('A. B.')
+})
+test("parkedWith: a refusal tried again takes the place of that issue's earlier refusal, wherever it sits", () => {
+  expect(parkedWith('A. old\ndata\nC.', 'new\ndata', 'old\ndata')).toBe('A. new\ndata\nC.')
+})
+test('parkedWith: an earlier refusal already said is not looked for, so the new one is added', () => {
+  expect(parkedWith('C.', 'new', 'old')).toBe('C. new')
+})
+test('parkedWith: a dollar sign in the new words is kept as written', () => {
+  expect(parkedWith('old', 'cost $& $1', 'old')).toBe('cost $& $1')
+})
+test('parkedWith: words already among the unsaid ones are not added a second time', () => {
+  expect(parkedWith('A. B.', 'B.')).toBe('A. B.')
+})
+// Parks whose record could not be saved, joined to the saved words at the next Stop (lessons review of defdc10).
+test('parkedWithUnsaved: nothing unsaved leaves the saved words as they are, and none at all is null', () => {
+  expect(parkedWithUnsaved('A.', [])).toBe('A.')
+  expect(parkedWithUnsaved(null, [])).toBe(null)
+})
+test('parkedWithUnsaved: an unsaved park is joined after the saved ones, which are said once', () => {
+  expect(parkedWithUnsaved('A.', [{ told: 'B.' }])).toBe('A. B.')
+  expect(parkedWithUnsaved(null, [{ told: 'B.' }])).toBe('B.')
+})
+test('parkedWithUnsaved: an unsaved refusal takes the place of the saved refusal it was a second try at', () => {
+  expect(parkedWithUnsaved('A. old\ndata\n', [{ told: 'new\ndata\n', earlier: 'old\ndata\n' }])).toBe('A. new\ndata\n')
+})
+test('parkedWithUnsaved: a park the record did take after all is not said twice', () => {
+  expect(parkedWithUnsaved('A. B.', [{ told: 'B.' }])).toBe('A. B.')
+})
+test('parkedWithUnsaved: parks of two issues that could not be saved are both joined, each once', () => {
+  expect(parkedWithUnsaved('A.', [{ told: 'B.' }, { told: 'C.' }])).toBe('A. B. C.')
 })
