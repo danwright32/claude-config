@@ -558,9 +558,13 @@ test('#3279: gitMove reads what to ask git for each move, nothing for a move tha
     'commit -m merge',
   ])
     expect({ line, move: g(line) }).toEqual({ line, move: undefined })
-  // An option that only shows is told by how it starts, and never where the command names a commit.
+  // The option that only shows the stopped patch is named in full, and is read as that only where
+  // the command names no commit. One that merely starts the same way is a move like any other.
+  expect(ask('rebase --show-anything')).toEqual({ ask: 'merge', commits: ['@{upstream}'] })
+  expect(ask('merge --show-anything')).toEqual({ ask: 'merge', commits: ['@{upstream}'] })
   expect(ask('merge --show-anything topic')).toEqual({ ask: 'merge', commits: ['topic'] })
   expect(ask('rebase --show-anything main')).toEqual({ ask: 'merge', commits: ['main'] })
+  expect(ask('rebase --show-current-patch main')).toEqual({ ask: 'merge', commits: ['main'] })
   expect(gitMove(undefined)).toBeUndefined()
   expect(gitMove({ sub: undefined, args: [] })).toBeUndefined()
   // A subcommand spelled like a member every object inherits is no move, and reading it never throws.
