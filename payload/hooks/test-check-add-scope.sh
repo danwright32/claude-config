@@ -678,6 +678,27 @@ for c in "git fetch && bash $S2301/missing.sh add -A" "git fetch && bash $S2301/
   refused "#2301 an add beside a script is still refused, whatever the script holds: $c"
 done
 chmod 600 "$S2301/locked.sh"
+# A compiled program is no script file (claude-config#3299). Its bytes were read as commands, so one
+# whose bytes spell an add of everything was refused for noise. It is judged as a program this guard
+# does not know, which is as a script nobody can read is judged. The fixture is a Mach-O header and
+# a line of text, written here.
+printf '\317\372\355\376\014\000\000\001\000\000\000\000\ngit add -A\n' > "$S2301/tool"; chmod +x "$S2301/tool"
+for c in "$S2301/tool" "$S2301/tool --front-window notes.txt" "bash $S2301/tool"; do
+  run "$c"
+  allowed "#3299 a compiled program whose bytes spell an add is no script staging everything: $c"
+done
+# The other direction: nothing a shell does run as commands may pass for looking like a program.
+printf '#!/bin/bash\ngit add -A\n\000\000\n' > "$S2301/nul-later.sh"
+printf 'git add -A # caf\351\n' > "$S2301/latin1.sh"
+printf '\177ELF;git add -A\n' > "$S2301/magic-no-nul"
+printf '\177ELF;git add -A;\000\n' > "$S2301/magic-break-nul"
+chmod +x "$S2301/nul-later.sh" "$S2301/latin1.sh" "$S2301/magic-no-nul" "$S2301/magic-break-nul"
+for c in "$S2301/tool && git add -A" "git fetch && $S2301/tool add -A" "zsh $S2301/tool" "source $S2301/tool" \
+         "$S2301/nul-later.sh" "bash $S2301/nul-later.sh" "$S2301/latin1.sh" "$S2301/magic-no-nul" \
+         "$S2301/magic-break-nul"; do
+  run "$c"
+  refused "#3299 what a shell runs as commands is still read, and an add beside a program still refused: $c"
+done
 # An add in a script runs where its own `git -C` sends it, not where the script starts
 # (claude-config#3234). A test suite's fixture stages its own throwaway repository with
 # `git -C "$T" add -A`; that add was judged in the session's directory, so a builder running a suite
