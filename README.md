@@ -6557,7 +6557,8 @@ Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
   say, moves a file's access time only on the first read after each change, so it can delay an
   offer once and never bring one forward. The task folder's own modification time is left out,
   because moving one ticked leftover to the Trash moves it just before the next one in the same
-  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  folder is judged again. The row states its 7 days, since it is the one row whose time differs
+  from the 30 days the page's opening sentence gives for a row that states no time of its own.
   The remover lets no new path through for this: these are the same four level folders, and what
   changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
   files and are not offered.
@@ -9131,7 +9132,8 @@ refused for git only where it would run git, never for the word in prose (#1124)
 when every git call in it is a local read (show, cat-file, log, diff and the like) with its
 subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+and deploy runs since sleep began, and notes each one that needs Dan for the top of the report
+(a complete issue filed overnight is not one, and is said under Done, as below). It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
 passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
 that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
@@ -9977,9 +9979,12 @@ It also fails a mod test that times its subject (`performance.now`, `process.hrt
 arithmetic, in the test or in any helper it calls) without a `timeoutMs` in its own options, by
 file, line and test name, again from the files alone (#1016). `claude plugin test` gives every test
 5,000 ms, a fixed number, so such a test is judged by how busy the Mac is: session-registry's #911
-test, which compares a list against a yardstick measured in the same run, failed at that limit
+test, which then compared a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
-judgement, and the test's own limit is set where only a hang reaches it.
+judgement, and the test's own limit is set where only a hang reaches it. That test reads no clock
+since #3333: its ratio of two times still moved with load (it failed once at a load average of 164
+on 12 cores on 2026-11-20), so it counts what each list asks of the filesystem, 2,003 requests
+against 4, which no load changes.
 Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
 mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
 mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has
