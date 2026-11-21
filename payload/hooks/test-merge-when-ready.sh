@@ -4287,12 +4287,17 @@ UT="$WORKDIR/ut"; UT_TMP="$WORKDIR/ut-tmp"; mkdir -p "$UT"
 # The stand in for the head's own run-all-tests.sh. Asked to deal (HOOK_TESTS_DEAL) it lists every
 # suite in the tree as part 1, as the real one prints a deal; asked for a part it keeps the deal it
 # was handed and answers as runner-mode says.
+# It lists them with a find over the fixture's clone, which it is run in, sorted as git orders a
+# tree's paths, and never by asking git for the tracked files. The push gate reads that spelling
+# anywhere in a suite as a scan of the whole repository, and took this suite for one, which the
+# repository's floor of named scanners then failed on (claude-config#3365). This suite scans no
+# repository: the clone holds a fixture's three suites.
 cat > "$STUBS/untested-runner.sh" <<'EOS'
 #!/usr/bin/env bash
 if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
   printf 'deal\n' >> "$ST/runner-calls"
   [ -e "$ST/runner-deal-fails" ] && { echo "run-all-tests: the deal could not be made" >&2; exit 1; }
-  git ls-files | grep -E '(^|/)test-[^/]*\.sh$' | awk '{ printf "1\t%s\t1\tmedian\n", $0 }'
+  find . -name 'test-*.sh' ! -type d ! -path './.git/*' | sed 's|^\./||' | LC_ALL=C sort | awk '{ printf "1\t%s\t1\tmedian\n", $0 }'
   exit 0
 fi
 printf 'part %s of %s, slot %s, record %s\n' "${HOOK_TESTS_PART:-}" "${HOOK_TESTS_PARTS:-}" "${HOOK_TESTS_SLOT:-}" "${HOOK_TESTS_UNMEASURED_FILE:+set}" >> "$ST/runner-calls"
