@@ -436,6 +436,8 @@ test('a question offering For good about memory with no save id is refused befor
   const early = await call($, UNTIED(`Save to ${file} for good: skip the screenshots?`, ['For good', 'Just this session', 'Not at all']))
   expect(early.deny).toContain(SEND_FIRST)
   expect(early.deny).toContain('metadata "source"')
+  // A lesson entry has its own picker, which the refusal names rather than the save's question.
+  expect(early.deny).toContain("durable lesson check's picker")
   // Memory named by the word alone, the answers in another case, a source with no id: refused too.
   expect((await call($, UNTIED('Save this to memory: skip the screenshots?', ['for good ', 'Not at all']))).deny).toContain(SEND_FIRST)
   expect((await call($, UNTIED(`Keep this in ${file}?`, ['Just this session'], { metadata: { source: 'ask-before-saving' } }))).deny).toContain(SEND_FIRST)

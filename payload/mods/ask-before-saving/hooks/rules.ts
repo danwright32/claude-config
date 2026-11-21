@@ -532,6 +532,7 @@ export const SEND_FIRST = 'send the save itself first'
 export const askedBeforeSave =
   `Not asked: this question is about saving to lasting memory and carries no save id in metadata "source", so Dan's answer could approve nothing, and he would be asked the same question again once the save was refused. ` +
   `Do not ask yet: ${SEND_FIRST} (the Write, Edit or Bash call that writes it). It is refused with the one question to ask him and the metadata "source" that ties his answer to it, and then you ask him once. ` +
+  `A lesson entry in LESSONS.md is the exception: it is approved only in the durable lesson check's picker, which its refusal names. ` +
   `A question that is not about saving to memory offers neither ${FOR_GOOD} nor ${THIS_SESSION}.`
 export const sendFirstNote =
   `A lesson entry in LESSONS.md is approved only in the durable lesson check's picker. ` +
