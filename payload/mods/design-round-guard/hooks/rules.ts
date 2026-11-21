@@ -4247,6 +4247,41 @@ export const moveUnreadCard = (said: string) => ({
 export const movedSaid = (said: string): string =>
   `\`${said}\` names no file: the design round guard asked git which files it brings into the working tree, and judged each one as a checkout of that file from the commit it comes from.`
 
+// #3279 (Dan, 2026-11-20, "Skip what is on main"): a look change already on the default branch has
+// shipped, so a merge that takes the default branch in, or a rebase onto it, is not asked about it
+// again under the merging branch's issue. The one exemption among the moves, and no wider than this.
+// The default branch is the one the checkout records for its remote (mod-kit's reading of it), at
+// the commit it last fetched (defaultBranchRef), never a name the command gives and never a local
+// branch, which may be ahead of what shipped.
+// A file is skipped only where the commit being taken in holds it exactly as the newest commit it
+// shares with the default branch does, so whatever that commit holds beyond the default branch is
+// asked about (beyondDefault): a merge of another branch, a local main that is ahead.
+// Only a merge and a rebase onto an upstream are read this way. A cherry-pick, a revert, a switch,
+// a checkout, a hard reset and a stash are asked as before, whatever commit they name.
+// Where the default branch cannot be found, or git cannot answer, every file is asked about.
+
+/**
+ * The ref a checkout keeps its remote's default branch under, as last fetched (#3279), from the
+ * branch name mod-kit's branch reader gives. None where it gives no name, or one that is not a plain
+ * branch name, so nothing but one branch of the remote is ever handed to git.
+ */
+export const defaultBranchRef = (defaultBranch: string | null | undefined): string | undefined =>
+  typeof defaultBranch === 'string' && /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/.test(defaultBranch) && !defaultBranch.includes('..') ? `refs/remotes/origin/${defaultBranch}` : undefined
+
+/**
+ * The files a merge brings in, apart (#3279): `asked`, each one the commit holds differently from the
+ * newest commit it shares with the default branch (`beyond`, what git lists between the two), and
+ * `shipped`, each one it holds exactly as that commit does. By the file's exact name.
+ */
+export const beyondDefault = (files: readonly MovedFile[], beyond: readonly MovedFile[]): { asked: MovedFile[]; shipped: MovedFile[] } => {
+  const names = new Set(beyond.map(f => f.rel))
+  return { asked: files.filter(f => names.has(f.rel)), shipped: files.filter(f => !names.has(f.rel)) }
+}
+
+/** What the guard's log says of look changing files a move was not asked about (#3279): the files, the command, and the commit of the default branch they were read against. */
+export const onDefaultSaid = (said: string, files: readonly string[], ref: string, sha: string): string =>
+  `design-round-guard: not asked about ${listed(files)}, which \`${said}\` brings in exactly as the default branch holds ${files.length === 1 ? 'it' : 'them'} (${ref} at ${sha.slice(0, 12)}): a look change already on the default branch has shipped (#3279).`
+
 /**
  * Whether a path inside its checkout is where a settled design is committed (#1524): an HTML page, the
  * only kind make-settled.py writes, under docs/design at the checkout's top, read in any case, as the

@@ -76,6 +76,9 @@ import {
   movedFiles,
   pickedFiles,
   moveUnread,
+  defaultBranchRef,
+  beyondDefault,
+  onDefaultSaid,
   ROUND_FILES,
   checked,
   unsure,
@@ -600,6 +603,33 @@ test('#3279: movedFiles and pickedFiles read what git lists, and give nothing ra
   expect(moveUnread('git pull', 'it fetches first', 'Run git fetch first.')).toContain('for `git pull` it could not: it fetches first. So it cannot tell whether a file that changes how the screen looks arrives. Run git fetch first. Nothing is asked of Dan for this.')
   expect(moveUnread('git rebase -i main', 'this form')).toContain('or ask Dan')
   expect(moveUnread('git rebase -i main', 'this form')).not.toContain('Nothing is asked of Dan')
+})
+
+// #3279, Dan, 2026-11-20, "Skip what is on main": the pure parts of telling which files a merge of
+// the default branch brings in exactly as that branch holds them.
+test('#3279: the default branch is read only from a plain branch name under the remote, and a merge is still asked about every file its commit holds beyond that branch', () => {
+  expect(defaultBranchRef('main')).toBe('refs/remotes/origin/main')
+  expect(defaultBranchRef('release/2026.11')).toBe('refs/remotes/origin/release/2026.11')
+  // No name, or one that would read as anything but one branch where git is handed it: none, so the merge is asked about.
+  for (const bad of [null, undefined, '', '-main', 'main..topic', 'a b', '$X', 'main^', 'main~1', 'x:y', 'HEAD@{1}', 'a*', '/main', 'main/', 'a//b', '.main', 'a/.b', 'main\n'])
+    expect({ bad, ref: defaultBranchRef(bad) }).toEqual({ bad, ref: undefined })
+  const sha = 'a'.repeat(40)
+  const css = { rel: 'app/globals.css', from: sha }
+  const theme = { rel: 'app/theme.css', from: sha }
+  const old = { rel: 'app/old.css', removes: true as const }
+  // The commit holds nothing beyond the default branch: nothing is asked.
+  expect(beyondDefault([css, theme, old], [])).toEqual({ asked: [], shipped: [css, theme, old] })
+  // It changed one file since leaving it: that file is asked about, by its exact name, and no other.
+  expect(beyondDefault([css, theme, old], [theme, { rel: 'docs/notes.md', from: sha }])).toEqual({ asked: [theme], shipped: [css, old] })
+  expect(beyondDefault([css, theme, old], [{ rel: 'app/old.css', removes: true }, { rel: 'app/Globals.css', from: sha }])).toEqual({ asked: [old], shipped: [css, theme] })
+  expect(beyondDefault([css], [css])).toEqual({ asked: [css], shipped: [] })
+  expect(beyondDefault([], [css])).toEqual({ asked: [], shipped: [] })
+  // What the guard's log says of a skip: the files, the command, and the commit of the default branch it was read against.
+  const said = onDefaultSaid('git merge origin/main', ['app/globals.css', 'app/old.css'], 'refs/remotes/origin/main', 'd'.repeat(40))
+  expect(said).toBe(
+    'design-round-guard: not asked about app/globals.css and app/old.css, which `git merge origin/main` brings in exactly as the default branch holds them (refs/remotes/origin/main at dddddddddddd): a look change already on the default branch has shipped (#3279).',
+  )
+  expect(onDefaultSaid('git rebase', ['app/globals.css'], 'refs/remotes/origin/main', 'd'.repeat(40))).toContain('brings in exactly as the default branch holds it (refs/remotes/origin/main at dddddddddddd)')
 })
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
