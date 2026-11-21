@@ -286,8 +286,12 @@ const awkInPlace = (args: string[]): InPlace => {
 // through pnpm, yarn or bunx (prettier --write, eslint --fix, sass, see TOOL_MODES for npx), inline
 // code in a language code.ts does not judge (php -r, lua -e, swift -e) and a program opening a
 // window (open -a, code). A program on no list here still writes unread: the lists are the reader.
-// A command's name is looked up as a list's own entry, never one every object carries (toString).
-const listed = (list: object, name: string): boolean => Object.prototype.hasOwnProperty.call(list, name)
+// A command's name is looked up as a list's own entry, never one every object carries (toString):
+// `own` is the one way a list keyed by a command's name is read, and gives undefined for a name not
+// on it. Read by bracket, VALUED gave `constructor a b` the reading of a copy, and gave the reader
+// a function for a set of options, so any option after such a name threw and nothing else on the
+// line was read (#3323).
+const own = <T>(list: Readonly<Record<string, T>>, name: string): T | undefined => (Object.prototype.hasOwnProperty.call(list, name) ? list[name] : undefined)
 
 // An editor run on files: ed, ex, vi and their kin write in place the files they are opened on when
 // a script tells them to (`ed -s f <<EOF`, `ex -sc '%s/a/b/|x' f`, `vim -es -c ... -c wq f`), and
@@ -395,7 +399,14 @@ const clustered = (args: readonly string[], valued: ReadonlySet<string>): { ops:
 // `words`: its options are whole words, never clusters (openssl -out, xxd -ps). `valued` are its
 // other options that take a value, so none is taken for an operand.
 type Named = { out?: readonly string[]; ops?: 'all' | 'second' | number; when?: readonly string[]; unless?: readonly string[]; edits?: true; words?: true; valued?: readonly string[] }
-const TO_DOS: Named = { ops: 'all', edits: true, valued: ['-c', '--convmode', '-C', '--codepage', '-e', '--display-enc'] }
+// dos2unix and its three kin: -c and --convmode take a value, and so does --display-enc where the
+// program has it (its manual: -D, --display-enc ENCODING, on Windows). -e is the flag --add-eol, so
+// the word after it is a file: listed here as taking a value, `dos2unix -e <file>` was read as
+// writing nothing (#3323). There is no -C and no --codepage (7.5.7's manual and help; it refuses
+// both and writes nothing), so neither is listed. -D is left unlisted on purpose: its value is then
+// read as one more file written, which asks about a file too many and hides none. All four programs
+// measured on macOS, 2026-11-21.
+const TO_DOS: Named = { ops: 'all', edits: true, valued: ['-c', '--convmode', '--display-enc'] }
 const NAMED_WRITERS: Readonly<Record<string, Named>> = {
   sponge: { ops: 'all' },
   sort: { out: ['-o', '--output'], valued: ['-k', '-t', '-S', '-T', '--key', '--field-separator', '--buffer-size', '--temporary-directory', '--parallel', '--batch-size', '--compress-program', '--random-source', '--files0-from', '--sort'] },
@@ -435,16 +446,19 @@ const namedWrites = (args: string[], n: Named): { files: [string, boolean][]; ta
 // takes a key path and values, and its file is the last word. -extract in the raw form prints the
 // value and changes nothing, where its other forms put the value in place of the whole file
 // (measured on macOS, 2026-11-19; the only two past commands this reading first caught were raw).
+// `takes` says it changes the files it is given as operands, for one xargs hands them to (#3323):
+// every changing verb does, -convert with -e by putting a new file beside each, and none does once
+// -o names the file written (measured through xargs on macOS 26.6.2, 2026-11-21).
 const PLUTIL_CHANGES = ['-convert', '-create', '-replace', '-insert', '-remove', '-extract']
-const plutilWrites = (args: string[]): [string, boolean][] => {
+const plutilWrites = (args: string[]): { files: [string, boolean][]; takes: boolean } => {
   const verb = args.find(a => PLUTIL_CHANGES.includes(a))
-  if (!verb || (verb === '-extract' && args[args.indexOf(verb) + 2] === 'raw')) return []
+  if (!verb || (verb === '-extract' && args[args.indexOf(verb) + 2] === 'raw')) return { files: [], takes: false }
   const { ops, opts } = operands(args, new Set(['-convert', '-create', '-o', '-e']))
   const out = opts.get('-o')
-  if (typeof out === 'string') return out === '-' || out === '' ? [] : [[out, false]]
-  if (verb === '-convert' || verb === '-create') return ops.map((f): [string, boolean] => [f, true])
+  if (typeof out === 'string') return { files: out === '-' || out === '' ? [] : [[out, false]], takes: false }
+  if (verb === '-convert' || verb === '-create') return { files: ops.map((f): [string, boolean] => [f, true]), takes: true }
   const last = args[args.length - 1]
-  return last === undefined || last.startsWith('-') ? [] : [[last, true]]
+  return { files: last === undefined || last.startsWith('-') ? [] : [[last, true]], takes: true }
 }
 
 // gzip and its kin put a packed or an unpacked twin beside each file and take the file away, unless
@@ -1235,6 +1249,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       dir = undefined
       continue
     }
+    // What each list keyed by a command's name holds for this one: nothing for a name not on it.
+    const editor = own(EDITORS, name)
+    const namedWriter = own(NAMED_WRITERS, name)
+    const packer = own(PACKERS, name)
+    const copier = own(VALUED, name)
+    const changer = own(CHANGERS, name)
     if (name === 'tee') for (const f of operands(rest, new Set()).ops) named(f)
     else if (kind === 'sed') {
       const e = sedInPlace(rest)
@@ -1249,12 +1269,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       for (const f of e.files) named(f, true)
     } else if (name === 'dd') {
       for (const a of rest) if (a.startsWith('of=')) named(a.slice(3))
-    } else if (listed(EDITORS, name)) {
+    } else if (editor) {
       // #3279: each file an editor is opened on is edited in place. A script it is given, in its own
       // options, on standard input or from a file, may write any other file, so it is a write the
       // words do not name: its text as `program` where the command holds all of it, for a guard to
       // read the names in, placed in the folder it runs in; the script files it reads otherwise.
-      const e = editorRun(name, rest, EDITORS[name] as Editor)
+      const e = editorRun(name, rest, editor)
       writer = true
       for (const f of e.files) named(f, true)
       for (const f of e.written) named(f)
@@ -1266,14 +1286,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         const whole = !e.scripts.length && !piped && !inputs.length
         unnamed.push({ what: `a script ${name} runs`, words: written, inputs: absAll([...e.scripts, ...inputs]), ...(whole ? { program: [...e.text, ...fed].join('\n'), ...(dir ? { folder: dir } : {}) } : {}) })
       }
-    } else if (listed(NAMED_WRITERS, name)) {
-      const n = namedWrites(rest, NAMED_WRITERS[name] as Named)
+    } else if (namedWriter) {
+      const n = namedWrites(rest, namedWriter)
       writer = n.takes
       for (const [f, edits] of n.files) named(f, edits || undefined)
     } else if (name === 'plutil') {
-      for (const [f, edits] of plutilWrites(rest)) named(f, edits || undefined)
-    } else if (listed(PACKERS, name)) {
-      const p = packerRun(rest, PACKERS[name] as Packer)
+      const n = plutilWrites(rest)
+      writer = n.takes
+      for (const [f, edits] of n.files) named(f, edits || undefined)
+    } else if (packer) {
+      const p = packerRun(rest, packer)
       writer = p.changes
       for (const f of p.writes) named(f)
       for (const f of p.removes) changed(f, 'remove')
@@ -1284,8 +1306,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         const into = u.into === undefined ? undefined : abs(u.into)
         unnamed.push({ what: u.what, words: written, inputs: absAll(u.inputs), ...(into ? { into } : {}) })
       }
-    } else if (VALUED[name]) {
-      const { ops, opts } = operands(rest, VALUED[name] as ReadonlySet<string>)
+    } else if (copier) {
+      const { ops, opts } = operands(rest, copier)
       const intoOpt = opts.get('-t') ?? opts.get('--target-directory')
       let into: string | undefined
       let sources = ops
@@ -1332,8 +1354,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // mv takes each source away whole: a folder with everything under it, as rm -r does (the
       // collision guard's reading, lessons review of #691).
       if (name === 'mv' && copied) for (const s of sources) changed(s, 'remove', true)
-    } else if (CHANGERS[name]) {
-      const ch = CHANGERS[name] as { does: ModKitChange['does']; valued: ReadonlySet<string> }
+    } else if (changer) {
+      const ch = changer
       const { ops, opts } = operands(rest, ch.valued)
       const flags = [...opts.keys()]
       // rm -r, -R or --recursive in any cluster, and chmod, chown or chgrp -R, reach a whole tree.
