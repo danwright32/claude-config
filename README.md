@@ -8208,10 +8208,19 @@ he said and ask the same question again, in mod-kit's one wording (`$.modkit.typ
 for the save question and the lesson's picker alike. Asked from `tool.check` (#875; before it, from
 `classic.PreToolUse`, which the security default sends past every mod), beneath every mod's
 `tool.call` hook, so a save another guard refuses is refused before Dan is asked. Just this
-session's rule rides `prompt.section`, which the security default also sends past every mod, so it
-does not reach the system prompt today (#876). Each save asks under its own id, so a press answers
-only the save it was drawn for; a second save waits behind the first. Each answer reaches Claude as
-a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
+session's rule rides `prompt.section`, which the security default sends past every mod unless the
+managed settings file keeps it out of first place, so it reaches the system prompt only while that
+file is in place, as it has been on both Macs since 2026-10-07 (#876; "Setting up a new Mac"; the
+hook is listed in `tools/sec-default-bypassed-hooks.tsv`). Each save asks under its own id, so a
+press answers only the save it was drawn for; a second save waits behind the first. That id is
+handed out only in the save's refusal, so since #3293 the memory section tells every session to
+send a save before asking about it, and a question with no save id that names lasting memory (a
+file or the word) and offers For good or Just this session is refused before Dan reads it, since
+his answer could approve nothing and he would be asked again. Another guard's picker, a subagent's
+and any other question about a memory file are left alone (counted 2026-11-21: 4 of 1,651 pickers
+with no id had that shape, each followed by the refused save and the same question). Each answer
+reaches Claude as a note. Claude Code's own auto-memory writer saves through tool calls, so it is
+asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you
 should" or "you must"; never "it ran and never finished"), and not when it limits it ("for now",
