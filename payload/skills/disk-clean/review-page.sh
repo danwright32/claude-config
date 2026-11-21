@@ -298,7 +298,7 @@ awk -v sep="$S" -v tab="$TAB" -v home="$HOME" -v sid="$SID" -v nonce="$NONCE" -v
     nw = split(whole, wl, " "); for (k = 1; k <= nw; k++) folded[wl[k]] = 1
     while ((getline line < wholefile) > 0) { split(line, c, tab); wtok[c[1]] = c[2] }
     while ((getline line < catfile) > 0) { split(line, c, tab); title[c[1]] = c[3]; total[c[1]] = c[4]; name[c[1]] = c[2]; can[c[1]] = c[5] + 0; why[c[1]] = c[6]; gnote[c[1]] = c[7]; nkinds++ }
-    printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back. Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.</p></header>\n", h(scanned)
+    printf "<header class=\"top\"><h1>Disk clean</h1><p class=\"scanline\">Scanned %s on this Mac. Nothing is removed until you copy your selection back. Apart from the Trash, and any row that states a shorter time of its own, everything offered here has gone at least 30 days without being changed or run.</p></header>\n", h(scanned)
     printf "<div class=\"grouped\" id=\"review\" data-scan-id=\"%s\" data-nonce=\"%s\">\n", h(sid), h(nonce)
     FS = tab
   }

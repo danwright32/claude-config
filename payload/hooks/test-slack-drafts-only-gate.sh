@@ -3942,6 +3942,15 @@ echo "slack drafts only: a claude-sync line is judged in about the time it took 
 # and 27.7 units on 2026-11-15. Each run's measurements are printed at the end of this part.
 # The checkout's own claude-sync, found by the one shared test (lib/checkout-root.sh, #1663); installed
 # in ~/.claude there is no checkout, and the clone the sync runs from is read instead.
+# The gate as it was before #3255, for the checks of that change to be seen to fail on (L1): a copy
+# that holds no reading (ONCE False in slack_drafts_only_gate.py), so it parses a Python text again
+# for each reading of it. The switch found and turned, or the copy is the gate itself and every
+# check that must fail on it would be a pass of nothing (L100).
+unheld_made="$T/unheld-gate"
+mkdir -p "$unheld_made" && cp "$HOOK" "$unheld_made/" && cp -R "$DIR/lib" "$unheld_made/lib" \
+  && sed 's/^ONCE = True$/ONCE = False/' "$DIR/slack_drafts_only_gate.py" > "$unheld_made/slack_drafts_only_gate.py"
+check "a copy of the gate that holds no reading is made for the checks of #3255 to be seen to fail on" \
+  "$(if grep -q '^ONCE = False$' "$unheld_made/slack_drafts_only_gate.py" 2>/dev/null && ! grep -q '^ONCE = True$' "$unheld_made/slack_drafts_only_gate.py"; then echo ok; else echo "slack_drafts_only_gate.py has no line 'ONCE = True' to turn, so the copy at $unheld_made is not a gate that holds nothing"; fi)"
 CS=""
 REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 for c in "${REPO:+$REPO/claude-sync}" "$HOME/claude-config-sync/claude-sync"; do
@@ -4093,7 +4102,7 @@ payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd
 # repeated from an empty cache each time, so no sample is answered from the one before.
 cache = os.environ.get("SLACK_GATE_CACHE_DIR", "")
 cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
-ratios = []
+ratios, ran_out = [], []
 for attempt in range(int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3"))):
     env = dict(os.environ)
     if cold and attempt:
@@ -4104,6 +4113,24 @@ for attempt in range(int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3"))):
     spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
     samples += [yard(), yard()]
     unit = min(samples)
+    if p.returncode != 0 and cold and env.get("HOOK_TESTS_RUNNING") != "1" and "ran out of time judging this call" in p.stderr:
+        # The gate's budget is seconds, and how many of them this machine needs for one unit of work
+        # is not the gate's doing: on CI's slowest runners (a unit of 0.16 to 0.22 s against 0.095 s on
+        # the personal MacBook) a gate inside its ceiling still ran out of its 11 seconds, and the
+        # check failed on the runner's speed (claude-config#3170, four runs to 2026-11-20). This
+        # check holds the gate's work, in units, so where the seconds ran out the same line is
+        # judged again from an empty cache on the step clock, which no speed can end, and those
+        # units are held to the same ceiling: a gate that does more work still fails here, on any
+        # machine (L411). That the seconds ran out is recorded beside the reading.
+        ran_out.append("%.1f s at %.3f s a unit" % (spent, unit))
+        env.update(HOOK_TESTS_RUNNING="1", SLACK_GATE_TICK_BUDGET="1000000000",
+                   SLACK_GATE_CACHE_DIR=tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/"))))
+        was = resource.getrusage(resource.RUSAGE_CHILDREN)
+        p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, env=env)
+        now = resource.getrusage(resource.RUSAGE_CHILDREN)
+        spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
+        samples += [yard(), yard()]
+        unit = min(samples)
     if p.returncode != 0:
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
@@ -4115,9 +4142,11 @@ ratio, spent, unit = min(ratios)
 log = os.environ.get("SLACK_GATE_COST_LOG")
 if log:
     with open(log, "a") as f:
-        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s)\n"
+        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s)\n"
                 % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
-                   ", ".join("%.1f" % r[0] for r in ratios)))
+                   ", ".join("%.1f" % r[0] for r in ratios),
+                   "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
+                   % " and ".join(ran_out) if ran_out else ""))
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
@@ -4152,7 +4181,10 @@ PY
   base="${base%%$'\n'*}"
   if [ -n "$base" ]; then
     over="$(awk -v b="$base" 'BEGIN { printf "%.1f", b * 1.25 }')"
-    cost="$(SLACK_GATE_COST_LABEL=slow-reader SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$slow/slack-drafts-only-gate.sh" "$CS" "$over" L174 2>&1)"
+    # On the step clock, as the slowed copy is measured for the suite line below: on CI's slowest
+    # runners its 3.4 to 4.2 s became 10.3 s, the gate's own 11 seconds refused it first, and this
+    # check failed for the runner's speed (run 44801153504, 2026-11-20, claude-config#3170).
+    cost="$(SLACK_GATE_COST_LABEL=slow-reader SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 python3 -B "$T/cost.py" "$slow/slack-drafts-only-gate.sh" "$CS" "$over" L174 2>&1)"
     case "$cost" in
       "judging it took"*) cost=ok ;;
       ok) cost="the slowed gate read as no dearer, so the yardstick moved with the gate: $(grep '^slow-reader' "$T/cost.log")" ;;
@@ -4243,6 +4275,63 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # and every disk test it answered is checked again, and nothing is walked.
   cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
   check "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
+  # A machine too slow for the gate's budget, stood in for by a copy of the gate whose budget is a
+  # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
+  # the same line on the step clock and holds those units to the ceiling it was given. So such a
+  # machine neither fails a gate inside its ceiling nor passes one past it: with the one lesson
+  # ceiling of 36 it is inside, and with a ceiling of 1 unit, which no gate meets, it must fail.
+  short="$T/short-gate"
+  mkdir -p "$short" && cp "$HOOK" "$short/" && cp -R "$DIR/lib" "$short/lib" \
+    && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.2/' "$DIR/slack_drafts_only_gate.py" > "$short/slack_drafts_only_gate.py"
+  if grep -q '^BUDGET_SECONDS = 0\.2$' "$short/slack_drafts_only_gate.py" 2>/dev/null; then
+    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
+    if [ "$cost" = ok ] && ! grep -q '^short-budget .*ran out on this machine' "$T/cost.log"; then
+      cost="the copy with a budget of 0.2 s did not run out of it, so the step clock reading was never taken: $(grep '^short-budget' "$T/cost.log")"
+    fi
+    check "where the gate's seconds run out, its work is read on the step clock and held to the same 36 units (#3170)" "$cost"
+    cost="$(SLACK_GATE_COST_LABEL=short-budget-over SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 1 L174 2>&1)"
+    case "$cost" in
+      "judging it took"*) cost=ok ;;
+      ok) cost="a ceiling of 1 unit passed, so a gate whose seconds run out is held to nothing: $(grep '^short-budget-over' "$T/cost.log")" ;;
+    esac
+    check "where the gate's seconds run out, a gate past its ceiling still fails (#3170)" "$cost"
+  else
+    check "a copy of the gate with a budget of 0.2 s is made, for a machine too slow for the budget (#3170)" "slack_drafts_only_gate.py has no line 'BUDGET_SECONDS = 11' to change, so $short holds the gate's own budget"
+  fi
+  # The command that starts this suite (#3255). On 2026-11-20 the installed gate ran out of its 11
+  # seconds on it on the personal MacBook, so this suite could not be started from a session: the
+  # suite runs the gate's own source as a program some sixty times, and each run read it afresh.
+  # Measured that day, the two gates back to back with a unit at 0.095 s: 63.6 to 66.1 units before
+  # and 18.7 to 19.0 after (5 samples each; earlier that afternoon, with a unit at 0.15 to 0.17 s, the
+  # gate before read 58.9 to 68.6, which is 10.2 to 10.7 of its 11 seconds). The limit is 1.41 times
+  # the middle reading after, 18.9, rounded up, as the limit for the claude-sync suite is set (this
+  # suite with the checks of #3255 in it read 19.2 to 19.6, 3 samples), and the copy of
+  # the gate that holds no reading (made above, the gate as it was) must be past it, on the step
+  # clock so its seconds cannot run out first. Off macOS the limit is wider by the same 77 to 57 the
+  # claude-sync suite's is (#3167): no Linux reading of this line existed when it was set, so each
+  # run prints its reading below, and the limit is set again from those. This suite's own text is
+  # what is judged, so the reading grows as the suite does (L323): a limit crossed by growth alone
+  # is raised with the readings that show it, never by guessing.
+  case "$(uname -s)" in
+    Darwin) own_ceiling=27 ;;
+    *) own_ceiling=37 ;;
+  esac
+  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  check "the command that starts this suite is judged within $own_ceiling units of the yardstick on $(uname -s) (#3255)" "$cost"
+  own_note="$(sed -n 's/^own-suite .*: \([0-9][0-9.]* (.*)\)$/at \1/p' "$T/cost.log" | sed -n 1p)"
+  if [ -n "$own_note" ]; then
+    printf 'SUITE-NOTE drafts gate on %s, the command that starts its own suite, from an empty cache: %s (#3255)\n' "$(uname -s)" "$own_note"
+  fi
+  if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
+    cost="$(SLACK_GATE_COST_LABEL=own-suite-unheld SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 python3 -B "$T/cost.py" "$unheld_made/slack-drafts-only-gate.sh" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+    case "$cost" in
+      "judging it took"*) cost=ok ;;
+      ok) cost="the gate that holds no reading read within $own_ceiling, so this limit passes the gate as it was before #3255: $(grep '^own-suite-unheld' "$T/cost.log")" ;;
+    esac
+    check "a gate that holds no reading is past the $own_ceiling unit limit for the command that starts this suite on $(uname -s) (#3255)" "$cost"
+  else
+    check "a gate that holds no reading is past the $own_ceiling unit limit for the command that starts this suite on $(uname -s) (#3255)" "the copy that holds no reading was not made at $unheld_made, so this limit was not seen to fail"
+  fi
 else
   # L411: installed in ~/.claude there is no checkout, so no suite to judge.
   echo "SUITE-PART-UNMEASURED #2918: no claude-config checkout with tests/test-claude-sync.sh beside this suite, so the time to judge it was not measured"
@@ -4251,6 +4340,67 @@ if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
 fi
 unset SLACK_GATE_COST_LOG
+
+echo "slack drafts only: one Python text is read once in a judgement (#3255)"
+# Counted, which no load can move (L290), from the line the gate writes to SLACK_GATE_PHASE_LOG: how
+# many times it parsed Python, and how many times it read a Python text for the endpoints it names.
+# Each judgement starts from an empty cache and counts its steps and not seconds, so a slow runner
+# cannot end it first.
+#
+# Each count is also taken on the copy of the gate that holds nothing (made above the cost checks),
+# the gate as it was before #3255, where it must come out the other way: a count that reads the same
+# on both would be measuring nothing (L1). On the gate before #3255 the script below was parsed 20
+# times and read for its endpoints 5 times (this suite's own run of 2026-11-20).
+mkdir -p "$T/held"
+# held_judged <the wrapper to ask> <name> <command>: judge it cold, leave its phases in
+# $T/held/<name>.log and what it said in <name>.out, and print the exit code.
+held_judged() {
+  rm -f "$T/held/$2.log"
+  payload Bash "$(bash_input "$3")" "$T/held" \
+    | SLACK_GATE_PHASE_LOG="$T/held/$2.log" SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/held/cold.XXXXXX")" \
+      HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 bash "$1" > "$T/held/$2.out" 2>&1
+  echo $?
+}
+# held_n <name> <phase>: how many times that phase ran in that judgement; nothing where it is not named.
+held_n() {
+  sed -n 's/^phases: //p' "$T/held/$1.log" 2>/dev/null | tr ';' '\n' | sed -n "s/^ *$2 self .* n \([0-9][0-9]*\)\$/\1/p" | sed -n 1p
+}
+# The gate's own source run as a program five ways by one script, as this suite runs it some sixty
+# times: before #3255 each run parsed its 457,000 characters again for each reading of it.
+{
+  printf 'python3 %s < /dev/null\n' "$DIR/slack_drafts_only_gate.py"
+  printf 'printf x | python3 %s\n' "$DIR/slack_drafts_only_gate.py"
+  printf 'out="$(python3 %s < /dev/null)"\n' "$DIR/slack_drafts_only_gate.py"
+  printf 'python3 %s < /dev/null > /dev/null 2>&1 || true\n' "$DIR/slack_drafts_only_gate.py"
+  printf 'if python3 %s < /dev/null; then :; fi\n' "$DIR/slack_drafts_only_gate.py"
+} > "$T/held/runs-gate.sh"
+for arm in held unheld; do
+  # unheld: the copy made above the cost checks, which holds nothing.
+  if [ "$arm" = held ]; then asked="$HOOK"; else asked="$unheld_made/slack-drafts-only-gate.sh"; fi
+  rc="$(held_judged "$asked" "$arm-runs" "bash $T/held/runs-gate.sh")"
+  parses="$(held_n "$arm-runs" py_parse)"; marks="$(held_n "$arm-runs" py_marker_read)"
+  once=ok
+  [ "$rc" = 0 ] || once="a script running the gate's own source five ways was refused (exit $rc): $(head -c 300 "$T/held/$arm-runs.out")"
+  if [ "$once" = ok ] && { [ -z "$parses" ] || [ -z "$marks" ]; }; then once="the gate's phases name no py_parse or no py_marker_read ('$parses', '$marks'), so nothing was counted: $(head -c 300 "$T/held/$arm-runs.log" 2>&1)"; fi
+  if [ "$arm" = held ]; then
+    check "a script running one Python file five ways is allowed, and its parses and readings are counted (#3255)" "$once"
+    [ "$once" = ok ] || continue
+    # One parse: the gate's source is the one Python text that script runs.
+    check "a Python file run five ways by one script is parsed once (#3255)" \
+      "$(if [ "$parses" = 1 ]; then echo ok; else echo "the gate's own source was parsed $parses times in one judgement"; fi)"
+    # Twice at most: as the program run, and as a module another file imports, whose docstrings
+    # are read too.
+    check "a Python file run five ways by one script is read for the endpoints it names twice at most (#3255)" \
+      "$(if [ "$marks" -le 2 ]; then echo ok; else echo "the gate's own source was read for the endpoints it names $marks times in one judgement"; fi)"
+  else
+    check "a gate that holds no reading is allowed the same script, and its parses and readings are counted (#3255)" "$once"
+    [ "$once" = ok ] || continue
+    check "a gate that holds no reading parses that file more than once, so the count of parses can fail (#3255)" \
+      "$(if [ "$parses" -gt 1 ]; then echo ok; else echo "it parsed the file $parses times, so that count reads the same whether or not a reading is held"; fi)"
+    check "a gate that holds no reading reads that file for endpoints more than twice, so that count can fail (#3255)" \
+      "$(if [ "$marks" -gt 2 ]; then echo ok; else echo "it read the file $marks times, so that count reads the same whether or not a reading is held"; fi)"
+  fi
+done
 
 echo "slack drafts only: timing the gate's phases changes no verdict (claude-config#3170)"
 

@@ -5,8 +5,9 @@ import { errorText } from './mod-kit/skew.ts'
 // Sleep mode phase 3 (#834): the wake check. The overnight rules (overnight.ts) judge the words of a
 // call, and a text match always has a way around it, so at wake the real state since sleep began is
 // read: issues created, milestones touched, LESSONS.md changed (on GitHub and the installed copy),
-// and deploy runs. Every hit goes at the top of the night's report; a read that fails is said as not
-// checked, never as nothing found (L460, L11).
+// and deploy runs. Every hit goes at the top of the night's report; an issue filed overnight that
+// needs nothing from Dan is no hit but `filed`, said in one line under Done (#3273). A read that
+// fails is said as not checked, never as nothing found (L460, L11).
 //
 // Which repositories: every one the gh login had an event in since sleep began (read page by page,
 // as far back as GitHub keeps them, its newest 300, and any window before that said, #1160), every
@@ -24,11 +25,44 @@ const READ_MS = 20_000
 const EVENTS_PER_PAGE = 100
 const EVENT_PAGES = 3
 /**
+ * A repository's workflow runs, a page of 100 at a time (GitHub's most). Filtered by `created`,
+ * GitHub lists at most 1,000 runs (its REST documentation, List workflow runs for a repository), so
+ * page 11 is never asked for (#3284).
+ */
+const RUNS_PER_PAGE = 100
+const RUN_PAGES = 10
+/**
  * `checked` is one line saying how many repositories were read and what was left out as healthy
  * (#2766): it is written every time the check runs, so a quiet night reads differently from a check
  * that never ran or stopped looking (Dan's alert rule: silence must still mean healthy).
  */
-export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: string; steps: Step[]; stopped: Stopped | null }
+export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: string; steps: Step[]; stopped: Stopped | null; filed: Filed[] }
+/**
+ * #3273: an issue filed overnight that needs nothing from Dan. It is already on his list by being an
+ * issue, so the report says it once, in one line under Done, and the morning puts no picker to him.
+ */
+export type Filed = { repo: string; issue: number; title: string }
+// The issue field gate's own rules (hooks/issue_field_gate.py: LEVEL, has_category, HEADING_LINE),
+// which test-sleep-report.sh holds these to: a priority level, any other label as a category, and
+// an Open questions heading on a line of its own.
+const LEVEL = /^priority-p[0-4]$/i
+const OPEN_QUESTIONS = /^[ \t]*#{1,6}[ \t]*Open questions[ \t]*\r?$/im
+type IssueJson = { labels?: ({ name?: unknown } | null)[] | null; milestone?: unknown; body?: unknown }
+/** The required fields an issue lacks, in the words the report uses; empty when it has them all. */
+export const missingFields = (i: IssueJson): string[] => {
+  const names = (Array.isArray(i.labels) ? i.labels : []).map(l => (l && typeof l.name === 'string' ? l.name : '')).filter(Boolean)
+  return [
+    i.milestone ? '' : 'a milestone',
+    names.some(n => LEVEL.test(n)) ? '' : 'a priority level',
+    names.some(n => !LEVEL.test(n)) ? '' : 'a category label',
+    typeof i.body === 'string' && OPEN_QUESTIONS.test(i.body) ? '' : 'an Open questions section',
+  ].filter(Boolean)
+}
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`)
+/** A title as two issues are compared by: case and spacing never make two titles different. */
+const sameTitle = (t: string) => t.toLowerCase().split(/\s+/).filter(Boolean).join(' ')
+/** How many of a repository's open issues are read to find a twin; a full page is said as not all read. */
+const OPEN_LIMIT = 1000
 /**
  * #3240: the parts the check reads GitHub in, in the order it reads them. A stop at the limit is said
  * by the part it was in, because the morning after 17 Nov 2026 said only that the check had stopped.
@@ -116,6 +150,7 @@ export const wakeCheck = async (
   o: { since: number; home: string; github: GithubOf; repos?: string[]; worked?: string[]; now: Clock; budgetMs?: number; mtimeOf: (path: string) => Promise<number> },
 ): Promise<WakeFindings> => {
   const hits: string[] = []
+  const filed: Filed[] = []
   const unmeasured: string[] = []
   // GitHub's reads together keep to one deadline (L110): wake and its reply wait on them, and then
   // on the report's own final render, which has its own 90 s, so this check takes 30 s at most.
@@ -192,12 +227,15 @@ export const wakeCheck = async (
     if (r && !repos.includes(r.toLowerCase())) repos.push(r.toLowerCase())
   }
   for (const r of o.repos ?? []) addRepo(r)
+  // The repositories the night's notes name, before the events add theirs: the ones worked tonight.
+  const noted = new Set(repos)
   const issueKeys = new Set<string>()
+  const created: Filed[] = []
   const issue = (repo: string, n: number, title: string) => {
     const key = `${repo.toLowerCase()}#${n}`
     if (issueKeys.has(key)) return
     issueKeys.add(key)
-    hits.push(`Issue created overnight: ${key} "${title}"`)
+    created.push({ repo: repo.toLowerCase(), issue: n, title })
   }
 
   const login = await run(['gh', 'api', 'user', '--jq', '.login'], 'the GitHub login')
@@ -267,6 +305,53 @@ export const wakeCheck = async (
       addRepo(repo)
       issue(repo, f.number, f.title ?? '')
     }
+    // #3273: each issue filed overnight is read whole, and its repository's open issues once, and
+    // only one that needs Dan stays a row. A read not made keeps it a row, saying so (L460).
+    const openOf = new Map<string, { titles: { number: number; title: string }[] } | { why: string }>()
+    const why = (r: Ran, tool: string) =>
+      r.exitCode === SKIPPED ? 'the check ran out of time first' : `${tool}: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`
+    for (const c of created) {
+      const key = `${c.repo}#${c.issue}`
+      const needs: string[] = []
+      if (!noted.has(c.repo)) needs.push('in a repository no session worked tonight')
+      const got = await run(['gh', 'api', `repos/${c.repo}/issues/${c.issue}`], `issue ${key}`)
+      let fields: IssueJson | null = null
+      if (got.exitCode === 0) {
+        try {
+          const j: unknown = JSON.parse(got.stdout)
+          if (j && typeof j === 'object') fields = j as IssueJson
+        } catch {
+          // said just below
+        }
+      }
+      if (!fields) needs.push(`its required fields were not checked: ${got.exitCode === 0 ? 'gh api: the answer was not JSON' : why(got, 'gh api')}`)
+      else {
+        const missing = missingFields(fields)
+        if (missing.length) needs.push(`filed without ${andList(missing)}`)
+      }
+      if (!openOf.has(c.repo)) {
+        const r = await run(['gh', 'issue', 'list', '-R', c.repo, '--state', 'open', '--limit', String(OPEN_LIMIT), '--json', 'number,title'], `the open issues in ${c.repo}`)
+        let list: { number: number; title: string }[] | null = null
+        if (r.exitCode === 0) {
+          try {
+            const j: unknown = JSON.parse(r.stdout)
+            if (Array.isArray(j)) list = j.filter(x => x && typeof x.number === 'number').map(x => ({ number: x.number as number, title: typeof x.title === 'string' ? x.title : '' }))
+          } catch {
+            // said just below
+          }
+        }
+        openOf.set(c.repo, list === null ? { why: r.exitCode === 0 ? 'gh issue list: the answer was not JSON' : why(r, 'gh issue list') }
+          : list.length >= OPEN_LIMIT ? { why: `only the first ${OPEN_LIMIT} open issues were read` } : { titles: list })
+      }
+      const open = openOf.get(c.repo)
+      if (open && 'why' in open) needs.push(`whether it repeats an open issue was not checked: ${open.why}`)
+      else if (open) {
+        const twin = open.titles.find(o => o.number !== c.issue && sameTitle(o.title) === sameTitle(c.title))
+        if (twin) needs.push(`with the same title as open issue #${twin.number}`)
+      }
+      if (needs.length) hits.push(`Issue created overnight: ${key} "${c.title}" (${needs.join('; ')})`)
+      else filed.push(c)
+    }
   }
 
   // LESSONS.md, on GitHub through the live sync clone's repository, and the installed copy.
@@ -306,8 +391,8 @@ export const wakeCheck = async (
   // #2393: updated_at says only that a milestone changed, so the night's own merges and filings
   // were put to Dan every morning. The repository's issue events for the night say what changed;
   // one the night's notes account for (an issue or pull request a session worked, or an issue
-  // created overnight, already its own line above) is left out, and only the rest is reported, by
-  // name. A change no issue event records is the milestone itself. What cannot be read is said as
+  // created overnight, already a line above or `filed` under Done) is left out, and only the
+  // rest is reported, by name. A change no issue event records is the milestone itself. What cannot be read is said as
   // not checked, never as explained (L460).
   const worked = new Set((o.worked ?? []).map(k => k.toLowerCase()))
   // #2766: a change made from one of Dan's own accounts (other sessions of his, filing and closing
@@ -498,20 +583,65 @@ export const wakeCheck = async (
       // one that failed, was cancelled or timed out is listed. A deploy that passed for a merge the
       // night's notes account for is counted too; every other deploy or dispatch is listed, as before.
       type Actor = { login?: string; type?: string } | null
-      type RunRow = { name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
-      const page = await json<{ total_count?: number; workflow_runs?: RunRow[] }>(['gh', 'api', `repos/${repo}/actions/runs?per_page=100&created=>=${since}`], `deploy runs in ${repo}`)
-      const runs = Array.isArray(page?.workflow_runs) ? page.workflow_runs : page ? null : []
-      if (runs === null) {
-        unmeasured.push(`deploy runs in ${repo} were not checked (gh api: the answer held no list of runs)`)
-        continue
+      type RunRow = { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
+      // #3284: GitHub lists runs newest first, so one page of 100 left a busy night's first hours
+      // unread (2026-11-19: 160 runs, 12:07 AM to 3:16 AM ET never checked for a failed deploy).
+      // Every page since sleep began is read, each through `run`, so the pages keep to the check's
+      // one deadline. Page 2 carries on where page 1 stopped and total_count stays the whole
+      // window's count (measured 2026-11-20). A run a newer one pushed onto the next page while the
+      // pages were read is judged once, by its id. A page not read (a failure, the deadline, GitHub's
+      // 1,000) says the window left by its two ends: sleep's start and the oldest run read.
+      type RunPage = { total_count?: unknown; workflow_runs?: unknown }
+      const runs: RunRow[] = []
+      const seen = new Set<number>()
+      let oldest: number | null = null
+      let total: number | null = null
+      const unread = (why: string) => {
+        const span = oldest === null ? `since ${etWhen(o.since)}` : `from ${etWhen(o.since)} to ${etWhen(oldest)}`
+        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (${why})`)
       }
-      // Newest first: more runs since sleep than were read leaves the oldest out (L24), and what is
-      // left out is said by its two ends, as the events are (#1160).
-      const total = typeof page?.total_count === 'number' ? page.total_count : runs.length
-      if (total > runs.length) {
-        const times = runs.map(r => at(r.created_at)).filter(t => !Number.isNaN(t))
-        const span = times.length ? `from ${etWhen(o.since)} to ${etWhen(Math.min(...times))}` : `since ${etWhen(o.since)}`
-        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (only the newest ${runs.length} of ${total} were asked for)`)
+      for (let p = 1; ; p++) {
+        if (p > RUN_PAGES) {
+          unread(`GitHub lists only the newest ${RUN_PAGES * RUNS_PER_PAGE} runs of a window${total === null ? '' : `, and this one held ${total}`}`)
+          break
+        }
+        const r = await run(['gh', 'api', `repos/${repo}/actions/runs?per_page=${RUNS_PER_PAGE}&created=>=${since}&page=${p}`], `page ${p} of the runs in ${repo}`)
+        // A first page past the deadline is said in the stop's own line, which names this repository
+        // as not finished; a later one says what the pages read did not reach.
+        if (r.exitCode === SKIPPED) {
+          if (p > 1) unread(`page ${p}: the check ran out of time first`)
+          break
+        }
+        let why = r.exitCode !== 0 ? firstLine(r.stderr) || `exit ${r.exitCode}` : ''
+        let got: RunPage | null = null
+        if (!why)
+          try {
+            const parsed: unknown = JSON.parse(r.stdout)
+            got = parsed && typeof parsed === 'object' ? (parsed as RunPage) : {}
+          } catch {
+            why = 'the answer was not JSON'
+          }
+        const list = Array.isArray(got?.workflow_runs) ? (got?.workflow_runs as RunRow[]) : null
+        if (!why && !list) why = 'the answer held no list of runs'
+        if (why || !list) {
+          if (p === 1) unmeasured.push(`deploy runs in ${repo} were not checked (gh api: ${why})`)
+          else unread(`page ${p}: ${why}`)
+          break
+        }
+        for (const x of list) {
+          if (!x || typeof x !== 'object') continue
+          if (typeof x.id === 'number') {
+            if (seen.has(x.id)) continue
+            seen.add(x.id)
+          }
+          runs.push(x)
+          const t = at(x.created_at)
+          if (!Number.isNaN(t) && (oldest === null || t < oldest)) oldest = t
+        }
+        if (typeof got?.total_count === 'number') total = got.total_count
+        // A page that is not full is the last there is; so is one that brings the runs read to
+        // every run GitHub counts in the window.
+        if (list.length < RUNS_PER_PAGE || (total !== null && runs.length >= total)) break
       }
       for (const r of runs) {
         const name = r.name ?? ''
@@ -596,5 +726,5 @@ export const wakeCheck = async (
     stopped = { ...s, ...(s.part === 2 ? { pages } : {}), slowest: slowestReads.map(x => ({ ...x })), text }
     unmeasured.splice(stopAt, 0, text)
   }
-  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked, steps, stopped }
+  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked, steps, stopped, filed }
 }

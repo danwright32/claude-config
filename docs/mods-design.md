@@ -1389,7 +1389,21 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
 - Stuck work: a claim past 2 attempts is parked at once, and one held for 2 hours of active time is
   parked, at Stop and by the minute's watchdog mid turn (said at the next Stop). Active time leaves
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
-  A claim entry with no time of its own is never judged stuck by time.
+  A claim entry with no time of its own is never judged stuck by time. Active time is wall time
+  from the claim entry to now less those waits only, so waiting for checks, for a merge turn or on
+  subagents counts. Every claim the session holds is timed from its own start, and of several past
+  their 2 hours the one held longest is parked first, the next at the next minute (#3330: on the
+  night of 2026-11-18 the watchdog timed only the newest of five held claims, and parked the older
+  ones one a minute only once the newest passed 2 hours). A claim the session noted done is ended:
+  a `sleep_note` done note naming an issue ends its writer's own claim on it as done, in the same
+  step, through `sleep-queue.sh done-noted` (no second note, no GitHub read; another session's
+  claim, or one already ended, is left as it is). The driver also reads tonight's notes after the
+  claims and treats a claim with a done note by the same session (same repository in any case,
+  same issue, at or after the claim) as not held, so it is neither timed, parked, nor the claim in
+  hand. A done note landing between that read and a park races the park for the claim's next
+  entry, and the queue lets exactly one land; the report reads the done note either way. A claim
+  with no done note of its own is parked exactly as before. The report reads a park of the
+  driver's against the session's done note for the issue and does not list a finished one.
 - Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
   blocked on with the reason said: one failed read never stops the night. Three in a row stop it
   with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
@@ -1534,7 +1548,20 @@ the ban list knowing that an action it does not name is approved.
   (page 4 answers HTTP 422, measured 2026-10-13), so three pages at most, each inside the same
   deadline on the engine's clock. A page that cannot be read, one past the deadline, or all 300
   still overnight is said by the window left unread, sleep's start to the oldest event read, never
-  as a count; a full page of deploy runs says its window the same way.
+  as a count.
+- The deploy runs are read the same way, page by page back to the moment sleep began (#3284): one
+  page of the newest 100 left 12:07 AM to 3:16 AM ET unread in one repository on 2026-11-19, 160
+  runs in the night, so a failed deploy in the early hours was never listed. Pages are asked for
+  with `per_page=100`, `created=>=` sleep's start and `page`; page 2 carries on where page 1
+  stopped and `total_count` stays the whole window's count (measured 2026-11-20), so the pages end
+  at a short page or once every run counted is read. Filtered by `created`, GitHub lists at most
+  1,000 runs (its REST documentation), so ten pages at most. A run a newer one pushed onto the next
+  page is judged once, by its id. A page that fails, is not a list, falls past the deadline or lies
+  beyond the 1,000 says the window left, sleep's start to the oldest run read; a first page that
+  fails is said as the repository's runs not checked, as before. A night takes one read per 100
+  runs: 2 for 160, 5 for 500. Two real pages took 2.75 s and 1.16 s on a loaded Mac (2026-11-20),
+  so a night of 160 fits the 30 s with room; `WAKE_CHECK_MS` was left as it is, and `steps` keeps
+  every page's time so the limit can be set from real nights.
 
 ### Sleep mode phase 6: the before bed questions about the queue's issues (#836), built
 

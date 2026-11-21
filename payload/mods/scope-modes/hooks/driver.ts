@@ -179,10 +179,44 @@ export const saidStopped = (notesText: string | null, self: string, since: numbe
 
 /** `since` is the claim entry's own time, null when it carries none: never judged stuck by time then. */
 export type Claim = { repo: string; issue: number; attempts: number; since: number | null }
-export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim } | { state: 'unknown'; why: string }
-/** The claim this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed tonight. */
-export const heldClaim = (claimsText: string, self: string): ClaimReading => {
-  let held: Claim | null = null
+/**
+ * `claim` is the newest claim held, the one being worked; `all` is every claim held, oldest first,
+ * each timed from its own start (#3330). A reading made by hand with no `all` holds `claim` alone.
+ */
+export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim; all?: Claim[] } | { state: 'unknown'; why: string }
+
+/**
+ * Whether this session noted the claim's issue done since it claimed it (#3330): a done note it
+ * wrote, naming the claim's repository (in any case, as GitHub and a claim folder may differ) and
+ * issue, at or after the claim's start. Such a claim is ended, released or not: the note is the
+ * session's word the work is finished, so it is neither timed nor parked, and never the claim in
+ * hand. Notes that cannot be read (null) let off nothing, so a stuck claim is still parked.
+ */
+const notedDone = (notesText: string | null, self: string, c: Claim): boolean => {
+  if (!notesText) return false
+  for (const line of notesText.split('\n')) {
+    if (!line.includes('"done"')) continue
+    let n: { kind?: unknown; by?: unknown; repo?: unknown; issue?: unknown; at?: unknown }
+    try {
+      n = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (n?.kind !== 'done' || n.by !== self || n.issue !== c.issue) continue
+    if (typeof n.repo !== 'string' || n.repo.toLowerCase() !== c.repo.toLowerCase()) continue
+    if (c.since === null || (isNum(n.at) && n.at >= c.since)) return true
+  }
+  return false
+}
+
+/**
+ * The claims this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed
+ * tonight. Read with tonight's notes, a claim this session noted done is not held (notedDone). The
+ * notes are a required argument, so no caller can leave them out and park finished work unawares;
+ * null is only for notes that could not be read.
+ */
+export const heldClaim = (claimsText: string, self: string, notesText: string | null): ClaimReading => {
+  const all: Claim[] = []
   for (const line of claimsText.split('\n')) {
     if (!line.trim()) continue
     let c: { repo?: unknown; issue?: unknown; attempts?: unknown; entries?: unknown }
@@ -194,13 +228,34 @@ export const heldClaim = (claimsText: string, self: string): ClaimReading => {
     const es = Array.isArray(c.entries) ? (c.entries as { kind?: unknown; session?: unknown; at?: unknown }[]) : []
     const last = es[es.length - 1]
     if (last?.kind === 'claim' && last.session === self && typeof c.repo === 'string' && isNum(c.issue)) {
-      // Two held at once would be a fault in the queue; the newest is the one being worked.
-      const since = isNum(last.at) ? last.at : null
-      if (!held || (since ?? -1) >= (held.since ?? -1)) held = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since }
+      const claim: Claim = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since: isNum(last.at) ? last.at : null }
+      if (!notedDone(notesText, self, claim)) all.push(claim)
     }
   }
-  return held ? { state: 'held', claim: held } : { state: 'none' }
+  if (!all.length) return { state: 'none' }
+  // Oldest first, a claim with no start of its own first of all; the newest is the one being worked.
+  all.sort((a, b) => (a.since ?? -1) - (b.since ?? -1))
+  return { state: 'held', claim: all[all.length - 1] as Claim, all }
 }
+
+/**
+ * The held claim past the active time an issue gets, if any (#3330): every claim timed from its own
+ * start, never only the newest, and of several past it the one held longest, so a minute's tick
+ * parks the oldest first and the next tick the one after. A claim with no start is never timed.
+ */
+export const overdueClaim = (reading: ClaimReading, waits: Wait[], now: number): { claim: Claim; active: number } | null => {
+  if (reading.state !== 'held') return null
+  let worst: { claim: Claim; active: number } | null = null
+  for (const claim of reading.all ?? [reading.claim]) {
+    if (claim.since === null) continue
+    const active = activeMs(waits, claim.since, now)
+    if (active >= LIMITS.stuckMs && (!worst || active > worst.active)) worst = { claim, active }
+  }
+  return worst
+}
+
+/** Why a claim held past its active time is parked, in the one form the Stop and the watchdog say. */
+export const stuckWhy = (active: number) => `${mins(active)} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
 
 /** A note for the night's report, as sleep_note writes it (the writer adds v, generation). */
 export type Note = Record<string, unknown> & { kind: string }
@@ -257,6 +312,33 @@ export const queueData = (answer: string) =>
 
 /** One piece of a block's reason followed by the next: a space after a sentence, nothing after a line break. */
 export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
+
+/**
+ * A park's words joined to the ones not yet said. A park the queue refused leaves the claim held
+ * and overdue, so the watchdog tries it again each minute: its new words take the place of that
+ * issue's earlier refusal (`earlier`), so one failure is said once, not once a minute (#3330).
+ */
+export const parkedWith = (unsaid: string | null | undefined, told: string, earlier?: string): string => {
+  if (!unsaid) return told
+  // Joining the same words twice changes nothing, so a join that runs again cannot double them.
+  if (unsaid.includes(told)) return unsaid
+  if (earlier && unsaid.includes(earlier)) return unsaid.replace(earlier, () => told)
+  return `${thenNext(unsaid)}${told}`
+}
+
+/** A park whose record could not be saved: its words, and the saved refusal they are a second try at. */
+export type UnsavedPark = { told: string; earlier?: string }
+
+/**
+ * The saved words not yet said, with every park the record could not take joined in, each once.
+ * What could not be saved is kept by issue, never as joined words, so this is the one place the
+ * two are put together, by the same rule the watchdog joins by (#3330).
+ */
+export const parkedWithUnsaved = (saved: string | null | undefined, unsaved: Iterable<UnsavedPark>): string | null => {
+  let all = saved ?? ''
+  for (const u of unsaved) all = parkedWith(all, u.told, u.earlier)
+  return all || null
+}
 
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const mins = (ms: number) => `${Math.round(ms / MIN)} minutes`
@@ -363,8 +445,9 @@ export const decideStop = (i: StopInput): StopDecision => {
   let told = ''
   if (claim && claim.attempts > LIMITS.attempts) {
     release = { issue: claim.issue, state: 'parked', why: `attempt ${claim.attempts}: an issue is parked after ${LIMITS.attempts} attempts in a night` }
-  } else if (claim && claim.since !== null && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
-    release = { issue: claim.issue, state: 'parked', why: `${mins(activeMs(d.waits, claim.since, now))} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` }
+  } else {
+    const over = overdueClaim(i.claim, d.waits, now)
+    if (over) release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
   }
   // #2511: with nothing to end, a session whose own work is still working rests until that work
   // reports (its report starts a turn) or busyRestMs passes, rather than being blocked into turns
@@ -604,7 +687,8 @@ export const overnightRules = (self: string, rootPath: string, goal: string) => 
     'If the goal names no issue, work the task itself in a worktree of its own (git worktree add under .claude/worktrees), never in the primary checkout, committing as you go and noting each step done with sleep_note (kind progress, with text), since only a claim\'s commits are read as progress; note each pull request you merge as done, as in `sleep_note \'{"kind":"done","repo":"owner/name","pr":<its number>,"text":"<what it did>"}\'` (an issue closed with no pull request: issue in place of pr), or the report calls it unaccounted for.',
     `If \`next\` prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
-    `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues.`,
+    // #3330: a done note ends its writer's claim (sleep-queue.sh done-noted), so the rules say so.
+    `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues. A done note you write yourself with sleep_note naming the issue ends your claim on it as done too, so a finished issue is never left held and timed.`,
     // #1771: a question is asked before bed in a dialog, so it carries the answers Dan picks from,
     // shown in an example (a rule an example breaks is the one copied, L270), and sleep_note
     // refuses one with fewer than two.
