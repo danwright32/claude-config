@@ -283,6 +283,18 @@ check "dc_git refuses an empty folder name, which git would read as the director
 check "dc_git refuses an empty folder name for a command that reads no settings too" "$(cd "$C" && refused "names no folder" "" rev-parse HEAD)"
 check "dc_git: no refused call ran git, so nothing ran" "$(eq "$(ran)" nothing)"
 check "dc_git: and the fixture kept its stash, which a stash pop would have taken" "$(eq "$(dc_git "$C" stash list | grep -c '^stash@')" 1)"
+# #3333: the cases above refuse a fetch, a remote update and a remote show of the fixture's origin,
+# and a run that broke the refusal on purpose reached github.com with all three. The fixture keeps
+# its GitHub address, which the scans read, and refuses https itself, so the same three called bare
+# stop before any connection. The proxy is a port nothing serves, so this case can fail without
+# reaching anything either.
+for q in "fetch origin" "remote update" "remote show origin"; do
+  # shellcheck disable=SC2086
+  o="$(GIT_TERMINAL_PROMPT=0 git -C "$C" -c http.proxy=http://127.0.0.1:9 $q 2>&1 </dev/null)"; rc=$?
+  check "#3333 'git $q' called bare on the fixture is stopped by the fixture's own setting, before it connects" \
+    "$(if [ "$rc" -ne 0 ]; then has "$o" "transport 'https' not allowed"; else echo "exit 0: $o"; fi)"
+done
+: > "$LOG"
 # A folder that is no repository, and one that is not there, fail as git fails.
 mkdir -p "$F/plain"
 check "dc_git in a folder that is no repository fails as git does" "$(eq "$(ans dc_git "$F/plain" rev-parse --absolute-git-dir)" "128|")"

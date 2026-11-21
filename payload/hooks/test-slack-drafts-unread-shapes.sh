@@ -25,7 +25,17 @@ unset SLACK_GATE_UNWORKED_PATHS
 
 pass=0
 fail=0
+# How many cases a run makes, wherever it runs (claude-config#3311, L288): every case either passes,
+# fails, or is named on a SUITE-PART-UNMEASURED line, and the three together must come to this. A run
+# from a copy with no checkout once made 3 fewer cases than one in a checkout and still ended with 0
+# failed. Change it only in the commit that adds or removes cases, to the total that commit's run
+# prints; a run that makes fewer says so in red rather than passing short.
+EXPECTED_CASES=690
+unmeasured=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+# not_measured <case> <why>: a case that cannot be driven where this copy sits, on the runner's one
+# line for that (run-all-tests.sh, #1444), counted apart from the passes.
+not_measured() { unmeasured=$((unmeasured + 1)); printf 'SUITE-PART-UNMEASURED %s: %s\n' "$1" "$2"; }
 
 if [ ! -f "$HOOK" ]; then
   echo "FAIL: there is no slack-drafts-only-gate.sh beside this suite at $DIR, so no Slack send is refused."
@@ -56,7 +66,11 @@ bash_input() { python3 -c 'import json, sys; print(json.dumps({"command": sys.ar
 RC=0; OUT=""; ERR=""
 run_raw() { # run_raw <stdin text>
   local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
-  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf")"; RC=$?
+  # Descriptor 3 is closed for the gate, as a real hook call has none: `each` feeds its commands
+  # on 3, and judging `bash /dev/fd/3 3< posts.sh` the gate looked at /dev/fd/3 of its own process.
+  # On macOS that shared the heredoc's read position and ate the rest of it, 10 cases lost with 0
+  # failed; Linux reopens the file and lost none (claude-config#3311).
+  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf" 3<&-)"; RC=$?
   ERR="$(cat "$errf")"; rm -f "$errf"
 }
 
@@ -888,11 +902,24 @@ else check "#3251 the same pattern written bare is judged as its matches written
 # command of 2026-11-19 running both was refused by the first build over the first, and judged
 # again after that fix the gate crashed on the second. A crash shows the end of what it printed,
 # where the error is.
-# The scans live in the checkout, found by the one shared test (lib/checkout-root.sh, #1663); the
-# installed copy of this suite has none beside it and judges nothing here.
+# The scans live in the checkout, found by the one shared test (lib/checkout-root.sh, #1663). A copy
+# of the payload, the installed one in ~/.claude among them, carries no tests/ folder and so has no
+# scan to judge: each case is then named as unmeasured, never dropped, so the count is the same
+# everywhere (claude-config#3311). In a checkout a scan that is not there is a failure, since the
+# case would otherwise vanish the day the scan is renamed.
+SCANS=(tests/test-undated-measurements.sh tests/test-hang-wait-suites-gate.sh)
 REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
-if [ -n "$REPO" ] && [ -f "$REPO/tests/test-undated-measurements.sh" ] && [ -f "$REPO/tests/test-hang-wait-suites-gate.sh" ]; then
-  for scan in tests/test-undated-measurements.sh tests/test-hang-wait-suites-gate.sh; do
+if [ -z "$REPO" ]; then
+  no_checkout="this suite is not in a claude-config checkout (lib/checkout-root.sh found none above $DIR), and a copy of the payload carries no tests/ folder"
+  for scan in "${SCANS[@]}"; do not_measured "#3251 a session running $scan is judged" "$no_checkout"; done
+  not_measured "#3251 a session running both scans in one command is judged" "$no_checkout"
+else
+  scans_there=1
+  for scan in "${SCANS[@]}"; do
+    if [ ! -f "$REPO/$scan" ]; then
+      check "#3251 a session running $scan is judged" "$REPO/$scan is not in the checkout: it was renamed or removed, so name the scan that replaced it here"
+      scans_there=0; continue
+    fi
     RUN_IN="$REPO"; run_here "bash $REPO/$scan"; RUN_IN="$S"
     case "$ERR" in
       *"could not judge"*|*Traceback*) check "#3251 a session running $scan is judged, not a crash" "the gate crashed: ...${ERR: -900}" ;;
@@ -901,14 +928,30 @@ if [ -n "$REPO" ] && [ -f "$REPO/tests/test-undated-measurements.sh" ] && [ -f "
   done
   # And both in one command from another folder, with what a session adds around them, as the
   # sweep's command was.
-  run_here "bash $REPO/tests/test-undated-measurements.sh > u.txt 2>&1; echo \"exit=\$?\"; tail -1 u.txt; bash $REPO/tests/test-hang-wait-suites-gate.sh > h.txt 2>&1; echo \"exit=\$?\"; grep \"^FAIL\" h.txt | cut -c1-500; tail -1 h.txt"
-  case "$ERR" in
-    *"could not judge"*|*Traceback*) check "#3251 a session running both scans in one command is judged, not a crash" "the gate crashed: ...${ERR: -900}" ;;
-    *) allowed "#3251 a session running both scans in one command is not refused" ;;
-  esac
+  if [ "$scans_there" -eq 0 ]; then
+    check "#3251 a session running both scans in one command is judged" "not judged, because a scan named above is not in the checkout"
+  else
+    run_here "bash $REPO/${SCANS[0]} > u.txt 2>&1; echo \"exit=\$?\"; tail -1 u.txt; bash $REPO/${SCANS[1]} > h.txt 2>&1; echo \"exit=\$?\"; grep \"^FAIL\" h.txt | cut -c1-500; tail -1 h.txt"
+    case "$ERR" in
+      *"could not judge"*|*Traceback*) check "#3251 a session running both scans in one command is judged, not a crash" "the gate crashed: ...${ERR: -900}" ;;
+      *) allowed "#3251 a session running both scans in one command is not refused" ;;
+    esac
+  fi
 fi
 
 echo
+
+# The count this run made against EXPECTED_CASES, read before the verdict (L288). Not a case itself,
+# so a short run adds a failure without adding a pass.
+made=$((pass + fail + unmeasured))
+if [ "$made" -lt "$EXPECTED_CASES" ]; then
+  echo "FAIL: this run made $made cases ($pass passed, $fail failed, $unmeasured unmeasured) and EXPECTED_CASES is $EXPECTED_CASES, so $((EXPECTED_CASES - made)) went missing without failing. Find the part that was skipped (a fixture not found, a loop over nothing, a block whose condition was false) and make it run or name it as unmeasured; lower EXPECTED_CASES only in the commit that deletes cases on purpose."
+  fail=$((fail + 1))
+elif [ "$made" -gt "$EXPECTED_CASES" ]; then
+  echo "FAIL: this run made $made cases and EXPECTED_CASES is $EXPECTED_CASES, $((made - EXPECTED_CASES)) more. If this change added them, set EXPECTED_CASES to $made in the same commit, so that losing them later is red."
+  fail=$((fail + 1))
+fi
+echo "cases: $made made, $EXPECTED_CASES expected ($unmeasured unmeasured here)"
 
 echo "passed: $pass, failed: $fail"
 
