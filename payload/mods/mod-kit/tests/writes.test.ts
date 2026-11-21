@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { pipeline } from '../hooks/commands.ts'
-import { callShell, commandWrites, pipelineIn } from '../hooks/writes.ts'
+import { callShell, commandWrites, pipelineIn, READ_ONLY } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
@@ -2052,6 +2052,16 @@ describe('writes: an editor run on files, and the other programs that write a fi
 // claude-config#3323, the three points the lessons review of #3324 left in the reader. Each was
 // measured first on macOS 26.6.2 (2026-11-21), dos2unix 7.5.7 from its Homebrew bottle unpacked in
 // a scratch folder and plutil as the system ships it.
+// A run of a program on none of the reader's lists (#3323, below), but for what it is handed: what
+// it is called, and the two sentences every guard says of it.
+const notKnown = (program: string) => ({
+  what: 'a program the write reader does not know',
+  script: program,
+  tool: true,
+  unknown: true,
+  why: `${program} is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs`,
+  remedy: `To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under "The programs that only read" in claude-config's docs/mods-design.md). If ${program} only reads too, ask Dan to add it to that list: only he may.`,
+})
 describe('writes: three writes the reader did not see (#3323)', () => {
   const F = `${CWD}/app/globals.css`
   const edited = (command: string) => read(command).files.filter(f => f.edits).map(f => f.path)
@@ -2102,9 +2112,12 @@ describe('writes: three writes the reader did not see (#3323)', () => {
     // `constructor a b` was read as cp is (b written), and with any option the reader threw, so
     // nothing on the line was read at all, the sed after it included.
     const NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', '__proto__', '__defineGetter__', '__lookupSetter__']
+    // Since the rule was turned round (Dan, 2026-11-21, below), a name on no list is a program the
+    // reader does not know, so what it is handed is a run: never the copy onto b it was read as.
+    const as = (name: string) => ({ files: [], changes: [], unnamed: [], runs: [{ ...notKnown(name), args: [{ word: 'a', path: `${CWD}/a` }, { word: 'b', path: `${CWD}/b` }] }] })
     for (const name of NAMES) {
-      expect([name, read(`${name} a b`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
-      expect([name, read(`${name} -n -x a b`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+      expect([name, read(`${name} a b`)]).toEqual([name, as(name)])
+      expect([name, read(`${name} -n -x a b`)]).toEqual([name, as(name)])
       expect([name, read(`ls | xargs ${name} -n`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
       expect([name, edited(`${name} -n x; sed -i '' s/a/b/ app/globals.css`)]).toEqual([name, [F]])
       expect([name, paths(`/usr/local/bin/${name} -r a > app/globals.css`)]).toEqual([name, [F]])
@@ -2112,5 +2125,196 @@ describe('writes: three writes the reader did not see (#3323)', () => {
     // The real ones beside them are read as before.
     expect(paths('cp -R a b')).toEqual([`${CWD}/b`])
     expect(read('rm -f a').changes.map(c => [c.does, c.path])).toEqual([['remove', `${CWD}/a`]])
+  })
+})
+
+// claude-config#3323, Dan's decisions of 2026-11-21, each from a picker. 1: "Turn it round, with the
+// list (Recommended)". 2: "Add them now". The list is the 32 programs he signed off by name and no
+// other, so a name added here without his sign off is a test that must not be made to pass.
+const SIGNED_OFF = [
+  'grep', 'cat', 'wc', 'cmp', 'rg', 'diff', 'tail', 'ls', 'head', 'cksum', '[', 'stat', 'echo',
+  'cut', 'df', 'du', 'shasum', 'jq', 'pgrep', 'file', 'strings', 'tr', 'comm', 'paste', 'test', 'lsof', 'mdls', 'which', 'readlink', 'mdfind', 'pdfinfo', 'ps',
+]
+describe('writes: a program the reader does not know is read as writing what it is handed (#3323)', () => {
+  const F = `${CWD}/app/globals.css`
+  const NOT_KNOWN = 'a program the write reader does not know'
+  // Each unknown program a command runs, with the paths it is handed.
+  const unknown = (command: string, cwd = CWD) => (read(command, cwd).runs ?? []).filter(r => r.unknown).map(r => [r.script, r.args.map(a => a.path)])
+  test('a program on none of the lists, handed a word that names a path, is a run marked unknown', () => {
+    expect(read('prettier --write app/globals.css')).toEqual({
+      files: [],
+      changes: [],
+      unnamed: [],
+      runs: [{ ...notKnown('prettier'), args: [{ word: 'app/globals.css', path: F }] }],
+    })
+    expect(notKnown('prettier').what).toBe(NOT_KNOWN)
+    // Named by its whole path, quoted, behind a runner, in a pipe, in a substitution and in a shell's script.
+    expect(unknown('/opt/homebrew/bin/swiftformat app/globals.css')).toEqual([['/opt/homebrew/bin/swiftformat', [F]]])
+    expect(unknown('"/Applications/Some App.app/Contents/MacOS/tool" app/globals.css')).toEqual([['/Applications/Some App.app/Contents/MacOS/tool', [F]]])
+    expect(unknown('time sudo prettier --write app/globals.css')).toEqual([['prettier', [F]]])
+    expect(unknown('cat list.txt | prettier --write app/globals.css | head -3')).toEqual([['prettier', [F]]])
+    expect(unknown('x=$(prettier app/globals.css)')).toEqual([['prettier', [F]]])
+    expect(unknown("bash -c 'prettier --write app/globals.css'")).toEqual([['prettier', [F]]])
+    // Every word that spells a path is handed, an option's value written with = too; an option, an
+    // address and standard input are none.
+    expect(unknown('swiftc -o build/out --module-cache=build/cache app/main.swift')).toEqual([['swiftc', [`${CWD}/build/out`, `${CWD}/build/cache`, `${CWD}/app/main.swift`]]])
+    expect(unknown('gh pr create --body-file notes/pr.md')).toEqual([['gh', [`${CWD}/pr`, `${CWD}/create`, `${CWD}/notes/pr.md`]]])
+    expect(unknown('open https://example.com/page.html')).toEqual([])
+    // A cd before it and a variable the command set are followed, as for every other write.
+    expect(unknown('cd app && prettier --write globals.css')).toEqual([['prettier', [F]]])
+    expect(unknown('F=app/globals.css; prettier --write "$F"')).toEqual([['prettier', [F]]])
+    // The settings it is given in front of it are kept, as a script run's are (#3093).
+    expect((read('NODE_ENV=x prettier --write app/globals.css').runs ?? []).map(r => r.env)).toEqual([['NODE_ENV=x']])
+  })
+  test('the shell words the reader takes for a program are read the same way, since none is on the list', () => {
+    // `[[` is the shell's own test, as `[` is, but Dan signed off `[` and `test` only.
+    expect(unknown('[[ -f app/globals.css ]] && echo yes')).toEqual([['[[', [F]]])
+    expect(unknown('set -euo pipefail')).toEqual([['set', [`${CWD}/pipefail`]]])
+    expect(unknown('basename app/globals.css .css')).toEqual([['basename', [F, `${CWD}/.css`]]])
+    expect(unknown('exit 1')).toEqual([['exit', [`${CWD}/1`]]])
+  })
+  test('handed no word that spells a path, it is read as writing nothing, as before', () => {
+    for (const command of [
+      'prettier --check',
+      'true',
+      'wait',
+      'set -e',
+      // A path held in a variable the command never sets, a pattern, a command's output, standard
+      // input and files handed over by xargs are not read (not measured before Dan decided).
+      'prettier --write "$TARGET"',
+      'prettier --write app/*.css',
+      'prettier --write $(git ls-files app)',
+      'prettier < app/globals.css',
+      'ls app | xargs prettier --write',
+    ])
+      expect([command, unknown(command)]).toEqual([command, []])
+  })
+  test('each of the 32 programs Dan signed off as only reading writes nothing it is handed', () => {
+    for (const name of SIGNED_OFF) {
+      const close = name === '[' ? ' ]' : ''
+      expect([name, read(`${name} app/globals.css${close}`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+      expect([name, read(`/usr/bin/${name} -n app/globals.css app/page.tsx${close}`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+    }
+    // A redirect beside one is still the write it always was.
+    expect(paths('grep -n color app/page.tsx > app/globals.css')).toEqual([F])
+  })
+  test('the list is exactly the 32 names, each with its reason', () => {
+    expect(Object.keys(READ_ONLY).sort()).toEqual([...SIGNED_OFF].sort())
+    expect(SIGNED_OFF.length).toBe(32)
+    for (const [name, entry] of Object.entries(READ_ONLY)) expect([name, entry.why.trim().length >= 10]).toEqual([name, true])
+  })
+  test('the forms of a listed program that write a file or run a program are read as a writer', () => {
+    const writer = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => [r.what, r.args.map(a => a.path)])
+    // Dan was told of these two.
+    expect(writer('rg --pre ./pre.sh color app/globals.css')).toEqual([['rg with --pre, which runs a program on each file', [`${CWD}/pre.sh`, `${CWD}/color`, F]]])
+    expect(writer('rg --pre=./pre.sh color app/globals.css').length).toBe(1)
+    expect(writer('file -C -m app/globals.css')).toEqual([['file with -C, which compiles a magic file', [F]]])
+    expect(writer('file --compile -m app/globals.css').length).toBe(1)
+    expect(writer('file -bCm app/globals.css').length).toBe(1)
+    // Found on this Mac on 2026-11-21 and not in what Dan was shown, so each is read the stricter way.
+    expect(writer('rg --hostname-bin ./host.sh color app/globals.css')).toEqual([['rg with --hostname-bin, which runs a program', [`${CWD}/host.sh`, `${CWD}/color`, F]]])
+    expect(writer('rg --hostname-bin=./host.sh color app/globals.css').length).toBe(1)
+    expect(writer('mdls -plist app/globals.css app/page.tsx')).toEqual([['mdls with -plist, which writes the file it names', [F, `${CWD}/app/page.tsx`]]])
+    expect(writer('mdls -p app/globals.css app/page.tsx').length).toBe(1)
+    expect(writer('lsof -D u/app/globals.css app/page.tsx').length).toBe(1)
+    expect(writer('lsof -D b app/globals.css')).toEqual([['lsof with -D, which builds or updates its device cache file', [`${CWD}/b`, F]]])
+    // What a guard says of such a form: why, and that the plain form only reads.
+    expect((read('rg --pre ./pre.sh color app/globals.css').runs ?? []).map(r => [r.script, r.why, r.remedy])).toEqual([['rg', 'rg with --pre runs a program on each file', 'Without --pre, rg only reads.']])
+    // The plain forms beside them stay read as only reading.
+    for (const command of ['rg --pretty color app/globals.css', 'rg -p color app/globals.css', 'file -b app/globals.css', 'mdls -name kMDItemKind app/globals.css', 'lsof +D app'])
+      expect([command, read(command).runs]).toEqual([command, undefined])
+  })
+  test('a program the reader reads by a rule of its own is not unknown', () => {
+    for (const command of [
+      "sed -n '1,5p' app/globals.css",
+      'sort app/globals.css',
+      'git diff -- app/globals.css',
+      'gzip -c app/globals.css',
+      "printf '%s\\n' app/globals.css",
+      'find app -name globals.css',
+      'cd app',
+      'export F=app/globals.css',
+      "python3 -c 'print(1)' app/globals.css",
+      'source app/globals.css',
+      // npx's own command line is not read, as before (#1682).
+      "npx -c 'prettier --write app/page.tsx'",
+    ])
+      expect([command, unknown(command)]).toEqual([command, []])
+    // A script file, a module and a tool run through npx stay the runs they were, never marked unknown.
+    expect((read('./tool.sh app/globals.css').runs ?? []).map(r => [r.what, r.unknown])).toEqual([['a script file run directly', undefined]])
+    expect((read('python3 gen.py app/globals.css').runs ?? []).map(r => [r.what, r.unknown])).toEqual([['a python3 script file', undefined]])
+    expect((read('npx prettier --write app/globals.css').runs ?? []).map(r => [r.what, r.unknown])).toEqual([['a tool run through npx', undefined]])
+    // A command whose effect cannot be read is already given as unread, which every guard holds.
+    expect(unknown('"$TOOL" app/globals.css')).toEqual([])
+    expect((read('"$TOOL" app/globals.css').unread ?? []).length).toBe(1)
+  })
+})
+
+// claude-config#3323, Dan's third decision of 2026-11-21: "Yes, in the same change (Recommended)".
+describe('writes: unpacking an archive is a write into the folder it unpacks into (#3323)', () => {
+  const APP = `${CWD}/app`
+  const unpack = (command: string, cwd = CWD) => read(command, cwd).unnamed.map(u => [u.what, u.inputs, u.into, u.folder])
+  test('tar -x in each of its spellings is a write the words do not name, into the folder it unpacks into', () => {
+    for (const command of [
+      'tar -xzf a.tgz -C app',
+      'tar -x -z -f a.tgz -C app',
+      'tar xzf a.tgz -C app',
+      'tar xzfC a.tgz app',
+      'tar -xzC app -f a.tgz',
+      'tar -xzfa.tgz -C app',
+      'tar --extract --file a.tgz --directory app',
+      'tar --extract --file=a.tgz --directory=app',
+      'tar --get -f a.tgz --cd app',
+      'bsdtar -xf a.tgz -C app',
+      'gtar -xf a.tgz -C app',
+      'cd app && tar -xzf ../a.tgz',
+    ])
+      expect([command, unpack(command)]).toEqual([command, [['an archive tar unpacks', [], APP, APP]]])
+    // With no folder named it unpacks where it runs.
+    expect(unpack('tar -xzf a.tgz')).toEqual([['an archive tar unpacks', [], CWD, CWD]])
+    // The archive is never a file to read to find out: it is not text. On standard input too.
+    expect(unpack('curl -sL https://example.com/a.tgz | tar -xz -C app')).toEqual([['an archive tar unpacks', [], APP, APP]])
+    expect(unpack('tar -xzf - -C app < a.tgz')).toEqual([['an archive tar unpacks', [], APP, APP]])
+  })
+  test('a folder the reader cannot work out takes the cautious reading: no folder is given', () => {
+    expect(unpack('tar -xzf a.tgz -C "$DEST"')).toEqual([['an archive tar unpacks', [], undefined, undefined]])
+    expect(unpack('cd "$DEST" && tar -xzf /tmp/a.tgz')).toEqual([['an archive tar unpacks', [], undefined, undefined]])
+    // Two folders, each read from the one before, are followed.
+    expect(unpack('tar -xzf a.tgz -C app -C sub')).toEqual([['an archive tar unpacks', [], `${APP}/sub`, `${APP}/sub`]])
+  })
+  test('a member named on the command line is a write of that file, where it lands', () => {
+    expect(paths('tar -xzf a.tgz -C app globals.css sub/page.tsx')).toEqual([`${APP}/globals.css`, `${APP}/sub/page.tsx`])
+    expect(paths('tar xzf a.tgz app/globals.css')).toEqual([`${APP}/globals.css`])
+    expect(paths('unzip -o a.zip app/globals.css -d /tmp/out')).toEqual(['/tmp/out/app/globals.css'])
+    expect(paths('cpio -id app/globals.css < a.cpio')).toEqual([`${APP}/globals.css`])
+    // A member matched by a pattern is a write the reader places in its folder, as any pattern is.
+    expect(read("tar -xzf a.tgz -C app '*.css'").files.map(f => [f.path, f.folder])).toEqual([[undefined, APP]])
+    // Under a folder that cannot be worked out it is named as written, with no path.
+    expect(read('tar -xzf a.tgz -C "$DEST" app/globals.css').files.map(f => [f.word, f.path])).toEqual([['$DEST/app/globals.css', undefined]])
+    // A value an option takes is no member.
+    expect(paths('tar -xzf a.tgz --strip-components 1 --exclude node_modules -C app')).toEqual([])
+  })
+  test('unzip is a write into the folder -d names, or where it runs', () => {
+    expect(unpack('unzip a.zip -d app')).toEqual([['an archive unzip unpacks', [], APP, APP]])
+    expect(unpack('unzip -oq a.zip -dapp')).toEqual([['an archive unzip unpacks', [], APP, APP]])
+    expect(unpack('unzip -o a.zip')).toEqual([['an archive unzip unpacks', [], CWD, CWD]])
+    expect(unpack('unzip a.zip -d "$DEST"')).toEqual([['an archive unzip unpacks', [], undefined, undefined]])
+    // A name after -x is left out of what it unpacks, so it is no write.
+    expect(paths('unzip a.zip app/globals.css -x app/page.tsx -d /tmp/out')).toEqual(['/tmp/out/app/globals.css'])
+  })
+  test('cpio -i is a write into the folder it runs in', () => {
+    expect(unpack('cpio -idmv < a.cpio')).toEqual([['an archive cpio unpacks', [], CWD, CWD]])
+    expect(unpack('cpio -i -I a.cpio')).toEqual([['an archive cpio unpacks', [], CWD, CWD]])
+    expect(unpack('cpio --extract -F a.cpio')).toEqual([['an archive cpio unpacks', [], CWD, CWD]])
+    expect(unpack('cd app && cpio -id < ../a.cpio')).toEqual([['an archive cpio unpacks', [], APP, APP]])
+  })
+  test('a form that unpacks nothing is no unpack, and is read as any program not on the list is', () => {
+    for (const command of ['tar -tzf a.tgz', 'tar -czf a.tgz app', 'unzip -l a.zip', 'unzip -t a.zip', 'unzip -p a.zip app/globals.css', 'unzip -Z a.zip', 'cpio -o', 'cpio -it < a.cpio', 'find app | cpio -pdm out']) {
+      const out = read(command)
+      expect([command, out.unnamed, out.files]).toEqual([command, [], []])
+    }
+    // Each is a program on no list, so what it is handed is read as a write of it.
+    expect((read('tar -czf a.tgz app').runs ?? []).map(r => [r.script, r.unknown, r.args.map(a => a.path)])).toEqual([['tar', true, [`${CWD}/a.tgz`, APP]]])
+    expect((read('find app | cpio -pdm out').runs ?? []).map(r => [r.script, r.unknown, r.args.map(a => a.path)])).toEqual([['cpio', true, [`${CWD}/out`]]])
   })
 })
