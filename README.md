@@ -4683,22 +4683,46 @@ missing from it would pass (L96). The question asked of the program is the one a
 own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
 `SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
 nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
-`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
-as it was, because the gate reads its body where it stands and this repository's own gate suite
-hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
-arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is asked
+that same question of its body since claude-config#3304 (`function_acts`): one whose body runs
+what it is handed (`"$@"`, `eval`, a shell's `-c`), or hands it to a program, a script or another
+function of the text not seen to be unable to act on it, is not known, so `run() { "$@"; }; run
+node --test test/notify.test.js` is refused, and the refusal says what the body does. One that
+only prints, tests or stores what it is handed is known, which is what this repository's own gate
+suite needs: it hands its functions a program's name as a plain label (`run_slow python`). Until
+#3304 every such function was left as it was, and that one line helper was a way round any
+refusal. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
 reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
 with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
-when the words after it happen to spell a command the gate refuses. Left open: a word that names
-a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
-and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
-quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+when the words after it happen to spell a command the gate refuses. Since #3304 a word that holds
+white space is read too, as a command line of its own, where one of its commands starts with a
+program the gate reads by name: `hyperfine 'node --test test/notify.test.js'` and `tmux send-keys
+'bash post.sh' Enter` are refused, and so is `git commit -m '<exactly a refused command>'`, git
+commit being a program the gate does not know to be unable to run its words. A sentence that
+only mentions such a program starts with another word and is not read, so an ordinary commit
+message passes. Behind a function the text defines, a quoted word is read only where the body
+does something with what it is handed as the words of a command; a body that only pipes it into
+a program's input is left as it was, which is what the gate's own suites do with every command
+they ask it about (`run_bash "<a refused command>"`). Left open, each for a stated reason:
+- a word that names a script file by its path (`op run -- ./post.sh`), since read that way `git
+  add scripts/post.sh` and `sed -n 1,5p scripts/post.sh` would each be a run of the script;
+- a posting address handed to a program the gate does not know as a plain argument, since no
+  command stands behind it to judge and the same shape stores a webhook as a secret;
+- a quoted word whose own command starts with a second program the gate does not know
+  (`hyperfine 'op run -- node x.js'`), since read that way every sentence that mentions a program
+  would be a command line;
+- a function that only pipes what it is handed into a program (`f() { echo "$1" | bash; }`), and
+  one whose body builds the command from a part of its words (`f() { $1 --test x.js; }; f node`).
+
+Every refusal of the rule opens with the same words about the program (`NOT_KNOWN`), which is how
+its suite tells this rule's refusals from another rule's.
+Two caps end the reading, and past either a typed command
 is refused as unread and a script on disk is left alone: more than six words that could each
-start a command, and more than three of these readings inside one another, which only strings a
+start a command or be a command line, and more than three of these readings inside one another, which only strings a
 shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
 such program), since the words of one command are read once however many programs stand among
 them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
