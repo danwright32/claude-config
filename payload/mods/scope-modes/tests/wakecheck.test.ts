@@ -114,7 +114,8 @@ describe('the wake check', () => {
       'LESSONS.md changed overnight on GitHub: abcdef1 "Add L999"',
       'The installed LESSONS.md changed overnight, at 11:01 PM ET on Wed Oct 7',
       'Deploy run overnight: o/r Deploy (https://github.com/o/r/actions/runs/1)',
-      'Deploy run overnight: o/r Nightly (https://github.com/o/r/actions/runs/3)',
+      // #3282: a run is said as a deploy only when its name says so, else by what started it.
+      'Dispatched run overnight: o/r Nightly (https://github.com/o/r/actions/runs/3)',
     ])
   })
   test('a read that fails is said as not checked, never as nothing found (L460)', async () => {
@@ -567,18 +568,20 @@ describe('what needs nobody is counted, never listed (#2766)', () => {
     expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 2 scheduled runs passed, 1 scheduled run skipped, 1 scheduled run still running.')
   })
 
-  test('a run dispatched by a cron (a bot started it) is judged as a scheduled one; one a person dispatched is still listed', async () => {
+  test('a run dispatched by a cron (a bot started it) is judged as a scheduled one; a deploy a person dispatched is still listed', async () => {
     const r = await check({
       [RUNS('o/r')]: runs([
         run(1, { event: 'workflow_dispatch', conclusion: 'success', triggering_actor: bot }),
         run(2, { event: 'workflow_dispatch', conclusion: 'failure', triggering_actor: bot }),
-        // Dispatched from the gh login, as a session would: an outward action, listed however it ended.
-        run(3, { event: 'workflow_dispatch', name: 'Canary', conclusion: 'success', triggering_actor: { login: 'dan', type: 'User' } }),
+        // A deploy dispatched from the gh login, as a session would, for no merge the night
+        // accounts for: listed however it ended. #3282 counts a person's passing canary instead,
+        // since a run whose name is not a deploy's changed nothing when it passed.
+        run(3, { event: 'workflow_dispatch', name: 'Deploy', conclusion: 'success', triggering_actor: { login: 'dan', type: 'User' } }),
       ]),
     })
     expect(r.hits).toEqual([
       `Scheduled run overnight: o/r Drift check, failed (${url(2)})`,
-      `Deploy run overnight: o/r Canary, passed (${url(3)})`,
+      `Deploy run overnight: o/r Deploy, passed (${url(3)})`,
     ])
     expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 scheduled run passed.')
   })
@@ -641,6 +644,93 @@ describe('what needs nobody is counted, never listed (#2766)', () => {
     expect(r.checked).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
     // Without the login nothing on GitHub was read, and the line says so.
     expect((await check({ 'gh api user --jq .login': fail('not logged in') })).checked).toBe('The overnight check read no repositories on GitHub and left nothing out.')
+  })
+})
+
+// #3282: on waking on 2026-11-19 the check listed 18 healthy runs as "Deploy run overnight", a week
+// after #2766 asked for them to be counted. That heading is written only for a run the rule did not
+// take for a cron's, and #2803's rule took for one only a schedule or a dispatch a bot started. The
+// night's runs were a smoke canary and drift checks dispatched on a timer with a person's token
+// (GitHub says the starter is a User), and a deploy failure alert started by another workflow
+// (workflow_run) that skipped because no deploy failed. #2803's own fixtures had the alert as a
+// schedule and listed a person's passing canary on purpose, so nothing failed. The shapes below are
+// that night's (its workflow names, events and conclusions), with made up repositories.
+describe('a healthy run that no change to the code started is counted, whoever started it (#3282)', () => {
+  const url = (n: number) => `https://github.com/o/r/actions/runs/${n}`
+  const person = { login: 'dan', type: 'User' }
+  const base = (n: number) => ({ id: n, status: 'completed', created_at: AFTER, html_url: url(n), triggering_actor: person, actor: person })
+  const canary = (n: number, o: Record<string, unknown> = {}) => ({ ...base(n), name: 'Smoke canary', event: 'workflow_dispatch', conclusion: 'success', ...o })
+  const alert = (n: number, o: Record<string, unknown> = {}) => ({ ...base(n), name: 'Deploy failure alert', event: 'workflow_run', conclusion: 'skipped', ...o })
+  const drift = (n: number, o: Record<string, unknown> = {}) => ({ ...base(n), name: 'Drift check', display_title: 'Drift check (cron)', event: 'workflow_dispatch', conclusion: 'success', ...o })
+  const PULLS = (sha: string) => `gh api repos/o/r/commits/${sha}/pulls`
+  // Every run the count line says it left out, summed from its numbers.
+  const countedRuns = (checked: string) => [...checked.matchAll(/(\d+) (?:scheduled|dispatched)? ?runs? /g)].reduce((s, m) => s + Number(m[1]), 0)
+
+  test('the night of 2026-11-19: 10 canary passes, 3 skipped alerts and 5 drift checks from a cron list nothing', async () => {
+    const list = [
+      ...Array.from({ length: 10 }, (_, i) => canary(100 + i)),
+      ...Array.from({ length: 3 }, (_, i) => alert(200 + i)),
+      ...Array.from({ length: 5 }, (_, i) => drift(300 + i)),
+    ]
+    const r = await check({ [RUNS('o/r')]: runs(list) })
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual([])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 15 dispatched runs passed, 3 runs started by another workflow skipped.')
+  })
+
+  test('the same kinds that failed, were cancelled or timed out are still listed, each under what started it', async () => {
+    const r = await check({
+      [RUNS('o/r')]: runs([
+        canary(1, { conclusion: 'failure' }),
+        drift(2, { conclusion: 'timed_out' }),
+        alert(3, { conclusion: 'failure' }),
+        alert(4, { conclusion: 'cancelled' }),
+        canary(5),
+        canary(6, { event: 'repository_dispatch', conclusion: 'failure' }),
+      ]),
+    })
+    expect(r.hits).toEqual([
+      `Dispatched run overnight: o/r Smoke canary, failed (${url(1)})`,
+      `Dispatched run overnight: o/r Drift check, timed out (${url(2)})`,
+      `Deploy run overnight: o/r Deploy failure alert, failed (${url(3)})`,
+      `Deploy run overnight: o/r Deploy failure alert, cancelled (${url(4)})`,
+      `Dispatched run overnight: o/r Smoke canary, failed (${url(6)})`,
+    ])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 dispatched run passed.')
+  })
+
+  test('a failed deploy of the night\'s own merge is listed, so is one whose every job skipped, and so is a deploy a person dispatched of a merge the night does not account for', async () => {
+    const deploy = (n: number, conclusion: string, o: Record<string, unknown> = {}) => ({ ...base(n), name: 'Deploy', event: 'push', conclusion, head_sha: 'aaaaaaa1', ...o })
+    const r = await check({
+      [RUNS('o/r')]: runs([deploy(1, 'failure'), deploy(2, 'skipped'), deploy(3, 'success', { event: 'workflow_dispatch', head_sha: 'bbbbbbb2' }), deploy(4, 'success')]),
+      // The night's notes name PR #20, whose merge commit started runs 1, 2 and 4; #31 is no session's.
+      [PULLS('aaaaaaa1')]: ok(JSON.stringify([{ number: 20 }])),
+      [PULLS('bbbbbbb2')]: ok(JSON.stringify([{ number: 31 }])),
+    }, github, ['o/r#20'])
+    expect(r.hits).toEqual([
+      `Deploy run overnight: o/r Deploy, failed (${url(1)})`,
+      `Deploy run overnight: o/r Deploy, skipped (${url(2)})`,
+      `Deploy run overnight: o/r Deploy, passed (${url(3)})`,
+    ])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 deploy run of a merge the night accounts for passed.')
+  })
+
+  test('no healthy run that no change to the code started is listed, under any heading, and each one is counted', async () => {
+    // Every way GitHub can say such a run was started, by every kind of starter, ending every
+    // healthy way; a name that says deploy only where the run did nothing (skipped). A run another
+    // workflow started is read only when its name says deploy, as before, so it has no canary here.
+    const list: object[] = []
+    let n = 1000
+    for (const event of ['schedule', 'workflow_dispatch', 'repository_dispatch', 'workflow_run'])
+      for (const starter of [person, { login: 'github-actions[bot]', type: 'Bot' }, { login: 'cron-app[bot]', type: 'Bot' }, null])
+        for (const end of [{ conclusion: 'success' }, { conclusion: 'skipped' }, { status: 'in_progress', conclusion: null }, { status: 'queued', conclusion: null }]) {
+          if (event !== 'workflow_run') list.push({ ...base(n++), name: 'Smoke canary', event, triggering_actor: starter, actor: starter, ...end })
+          if (end.conclusion === 'skipped') list.push({ ...base(n++), name: 'Deploy failure alert', event, triggering_actor: starter, actor: starter, ...end })
+        }
+    const r = await check({ [RUNS('o/r')]: runs(list) })
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual([])
+    expect(countedRuns(r.checked)).toBe(list.length)
   })
 })
 

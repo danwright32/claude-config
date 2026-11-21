@@ -1369,7 +1369,30 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const patches = [opts.get('-i'), opts.get('--input'), ops[1], ...inputs].filter((p): p is string => typeof p === 'string' && p !== '')
       unnamed.push({ what: 'a patch', words: written, inputs: absAll(patches) })
     } else {
-      const g = git(args)
+      const g = git(args, c.env)
+      // #3337: the folder git reads a relative path from. Told where its working folder is
+      // (--work-tree, GIT_WORK_TREE), git reads one from the folder the command runs in when that is
+      // inside the working folder, and from the top of the working folder when it is not (measured
+      // with git 2.51.1); told only its repository, the folder it runs in is the working folder,
+      // unless that repository keeps its own in its settings (core.worktree), which this reader
+      // cannot see and a guard asks git for (`rev-parse --show-toplevel`).
+      // Where the working folder cannot be known, the path stays in the folder the command runs in,
+      // where it was placed before #3337: a working folder named by a value this reader cannot
+      // follow, and either variable set by an earlier command on the line without standing on the
+      // git command itself, which git reads only if it was exported. That path is a guess, kept
+      // because the collision guard and winding down skip an entry with no path, so giving none
+      // would have them judge fewer calls than before. A guard that must not act on the guess
+      // holds for itself, from `git`'s reading of the command and the command's own text, as the
+      // design round guard does.
+      const gitFolder = (): string | undefined => {
+        const at = g?.dir === undefined ? dir : pathOf(g.dir, dir)
+        if (g === undefined || at === undefined) return at
+        if ((g.gitDir === undefined && setBy.has('GIT_DIR')) || (g.workTree === undefined && setBy.has('GIT_WORK_TREE'))) return at
+        if (g.workTree === undefined) return at
+        const top = pathOf(g.workTree, at)
+        if (top === undefined) return at
+        return at === top || at.startsWith(top === '/' ? top : `${top}/`) ? at : top
+      }
       if (g && (g.sub === 'apply' || g.sub === 'am')) {
         // Checked or summarised, a patch writes nothing.
         if (!g.args.some(a => ['--check', '--stat', '--numstat', '--summary'].includes(a))) {
@@ -1377,7 +1400,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
           unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => pathOf(p, at)).filter((p): p is string => !!p) })
         }
-      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : pathOf(g.dir, dir), does, tree, from)
+      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, gitFolder(), does, tree, from)
     }
     // A script file it runs (#1586): an interpreter's script operand (never one on standard input, nor
     // awk's or sed's program file, whose files are read above), or a script run by its own name. Every

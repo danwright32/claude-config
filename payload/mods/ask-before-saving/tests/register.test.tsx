@@ -2,7 +2,8 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, rowsAt, shownFault } from '../hooks/rules.ts'
+import { APPROVAL_MS, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT_TEXT, QUESTION_COLUMNS, askInstruction, pickerOnly, rowsAt, shownFault } from '../hooks/rules.ts'
+import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
@@ -1614,7 +1615,8 @@ const LESSONS_SHOWN = '~/.claude/LESSONS.md'
 // picker covers it (independent review of #3320): it was asked about through For good until then.
 // refusedAs is what a write in a list of them is told: every Edit or Write of the lessons file in
 // those lists adds or changes an entry unless the test says otherwise, and anything else (another
-// file, a shell command) is asked about as before.
+// file, a shell command that writes another file) is asked about as before. A shell command that
+// writes the lessons file is refused in words of its own (#3343, BY_SHELL below).
 const PICKER_ONLY = 'so he approves it only in the lesson picker'
 const refusedAs = (input: { tool?: unknown; file_path?: unknown }) => ((input.tool === 'Edit' || input.tool === 'Write') && input.file_path === LESSONS ? PICKER_ONLY : ASKS)
 // The rule and its why, as the durable lesson check has Claude propose it.
@@ -1680,10 +1682,12 @@ test('an approved lesson does not let any other write through: other text, a rem
     { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${ENTRY}- **L753. A rule nobody approved.**\n\n## Data safety` },
     // The rule, to another lasting memory file.
     { tool: 'Write', file_path: 'CLAUDE.md', content: `- ${RULE}\n` },
-    // The rule, by a shell append: asked about through For good as before.
-    { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` },
   ]
   for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
+  // The rule, by a shell append: refused with the Edit route named, and never asked For good (#3343).
+  const byShell = refusalOf(await call($, { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` }))
+  expect(byShell).toContain('What a shell command does to a lesson entry cannot be read before it runs')
+  expect(byShell).not.toContain(ASKS)
   expect(w.ran).toEqual([])
   // None of them used it up: the approved write still goes through.
   expect((await call($, addLesson)).deny).toBeUndefined()
@@ -2959,16 +2963,17 @@ const ISSUE_3082 = [
   'EOF',
   `R=${HOME}/Apps/claude-config; python3 -I $W/measure.py $W/claude-main.txt --md "$(git -C $R log -1 --format='%h, %cs' origin/main)" > $W/candidates.md; head -20 $W/candidates.md`,
 ].join('\n')
-test('a heredoc editing a script whose text names lasting memory in a quoted sentence goes straight through; one whose target is lasting memory is asked (#3082)', withKit, async ($, on) => {
+test('a heredoc editing a script whose text names lasting memory in a quoted sentence goes straight through; one whose target is lasting memory is held, asked about or, for the lessons file, refused (#3082, #3343)', withKit, async ($, on) => {
   const w = world($, on)
   expect(ISSUE_3082).toContain('LESSONS.md"}')
   expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_3082 }))).toBe('')
   expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_3082])
   quietOnMain(w)
-  // The same command whose write lands on lasting memory, each route still asked about (L1): the
+  // The same command whose write lands on lasting memory, each route still held (L1): the
   // program handed the lessons file, the program opening it by its own path, the output redirected
   // onto it, a copy and a move onto it, an in place edit, and a program whose target cannot be read
-  // naming it as a path.
+  // naming it as a path. One that lands on the lessons file is refused with the Edit route named
+  // (#3343); the move onto a project's CLAUDE.md is asked about.
   const real = [
     ISSUE_3082.replace('python3 - "$W/measure.py"', 'python3 - ~/.claude/LESSONS.md'),
     ISSUE_3082.replace('open(p, "w"', `open("${HOME}/.claude/LESSONS.md", "w"`),
@@ -2981,7 +2986,7 @@ test('a heredoc editing a script whose text names lasting memory in a quoted sen
   for (const command of real) {
     expect(command).not.toBe(ISSUE_3082)
     const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain(command.includes('CLAUDE.md') ? ASKS : 'What a shell command does to a lesson entry cannot be read before it runs')
   }
   // And a Write or Edit of the file itself.
   expect(refusalOf(await call($, { tool: 'Write', file_path: `${HOME}/.claude/LESSONS.md`, content: '- rule\n' }))).toContain(ASKS)
@@ -3033,9 +3038,10 @@ test('an Edit or Write that adds or changes a lesson entry is never asked For go
     { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons learned' },
   ]
   for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
-  // And his For good still saves one of those.
+  // And his For good still saves one of those. Since #3343 route 2 (Dan, 2026-11-20: "For good,
+  // held to facts") the question about a heading names it, old and new; the cases for that are below.
   const heading = others[0] ?? {}
-  await askDan($, w, refusalOf(await call($, heading)), 'For good', LESSONS_SHOWN)
+  await askDan($, w, refusalOf(await call($, heading)), 'For good', LESSONS_SHOWN, 'rename the section "Data safety" to "Data and safety"')
   expect((await call($, heading)).deny).toBeUndefined()
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
 })
@@ -3127,9 +3133,453 @@ test("Dan's own permanent words do not cover an Edit or Write that adds or chang
     expect(`${JSON.stringify(input)}: ${said}`).not.toContain(ASKS)
   }
   expect(w.ran).toEqual([])
-  // What is no entry's is saved under his words as it was, and Claude is told to say so.
-  const heading = await call($, { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and safety' })
-  expect(heading.deny).toBeUndefined()
-  expect(contextOf(heading)).toContain('say in one line what you saved')
+  // What is no entry's is saved under his words as it was, and Claude is told to say so. Since
+  // #3343 route 2 a heading changed or an entry taken out is saved under them only when they name
+  // it (the case for that is below), so this is the title, which is neither.
+  const title = await call($, { tool: 'Edit', file_path: LESSONS, old_string: '# Lessons', new_string: '# Lessons learned' })
+  expect(title.deny).toBeUndefined()
+  expect(contextOf(title)).toContain('say in one line what you saved')
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
+
+// #3343: a shell command that writes the installed lessons file was still asked about through For
+// good, whose question is of the session's own wording and shows Dan neither the rule nor its SHORT
+// line, so an entry could reach every session by `>>` where an Edit of the same text was refused.
+// What a command does to an entry cannot be read before it runs, so no such command is sent to the
+// lesson picker: it is refused, no question waits on it, and the Edit route is named, where the
+// write is read. Enumerated by the state reached (L247): every way mod-kit's one reader says a
+// command writes that file, by its words, by what it hands a script, or by what it mentions beside
+// a write the reader cannot follow.
+const BY_SHELL = 'What a shell command does to a lesson entry cannot be read before it runs'
+const outcomeOf = (why: string) => (why === '' ? 'runs' : why.includes(BY_SHELL) ? 'refused, Edit named' : why.includes(ASKS) ? 'asked For good' : `other: ${why.slice(0, 160)}`)
+const L753 = `- **L753. ${BRIEF}** (slate#9, 2026-11-19)`
+const SHELL_LESSON_WRITES: [string, string][] = [
+  ['an append by redirection', `printf '%s\\n' '${L753}' >> ~/.claude/LESSONS.md`],
+  ['an overwrite by redirection, the path whole', `echo '${L753}' > ${LESSONS}`],
+  ['a redirection under home by $HOME', `echo '${L753}' >> "$HOME/.claude/LESSONS.md"`],
+  ['tee', `echo '${L753}' | tee -a ~/.claude/LESSONS.md`],
+  ['a heredoc through cat', `cat >> ~/.claude/LESSONS.md <<'EOF'\n${L753}\nEOF`],
+  ['sed in place', `sed -i '' 's/good state/any state/' ~/.claude/LESSONS.md`],
+  ['perl in place', `perl -pi -e 's/good state/any state/' ~/.claude/LESSONS.md`],
+  ['a copy onto it', `cp ${CWD}/new-lessons.md ~/.claude/LESSONS.md`],
+  ['a copy into its folder', `cp ${CWD}/payload/LESSONS.md ~/.claude/`],
+  ['a move onto it', `mv ${CWD}/new-lessons.md ~/.claude/LESSONS.md`],
+  ['a relative name after a cd', `cd ~/.claude && echo '${L753}' >> LESSONS.md`],
+  ['python -c opening it to write', `python3 -c "open('${LESSONS}', 'a').write('x')"`],
+  ['a python heredoc opening it to write', `python3 - <<'EOF'\nopen('${LESSONS}', 'a').write('x')\nEOF`],
+  ['a python program whose target cannot be read, naming it', `python3 - "$(pick)" <<'EOF'\nimport sys\nopen(sys.argv[1], 'a').write(open('~/.claude/LESSONS.md').read())\nEOF`],
+  ['a python script handed it', 'python3 tools/add-lesson.py ~/.claude/LESSONS.md'],
+  ['a shell script handed it', 'bash tools/add-lesson.sh ~/.claude/LESSONS.md'],
+  ['eval', `eval "echo x >> ~/.claude/LESSONS.md"`],
+  ['a patch naming it', `git apply <<'EOF'\n--- ${LESSONS}\n+++ ${LESSONS}\n@@ -1 +1,2 @@\n # Lessons\n+${L753}\nEOF`],
+  ['a variable the command fixes to its folder', `D=~/.claude; echo '${L753}' >> $D/LESSONS.md`],
+]
+
+test('a shell command that writes the installed lessons file is refused with the Edit route named, never asked For good, by every way the reader says it writes it (#3343)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT } })
+  const got: string[] = []
+  for (const [what, command] of SHELL_LESSON_WRITES) got.push(`${what}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`)
+  expect(got).toEqual(SHELL_LESSON_WRITES.map(([what]) => `${what}: refused, Edit named`))
+  // Nothing ran, Dan was asked nothing, and nothing went to the main session.
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  quietOnMain(w)
+  // The refusal names the file and the way through, and no question waits that a For good could answer.
+  const said = refusalOf(await call($, { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }))
+  expect(said).toContain(`this writes lasting memory (${LESSONS_SHOWN})`)
+  expect(said).toContain(PICKER_ONLY)
+  expect(said).toContain(`Make the change to ${LESSONS_SHOWN} with Edit or Write instead`)
+  expect(said).toContain('"source": "durable-lesson"')
+  expect(said).not.toContain(ASKS)
+  expect(idIn(said)).toBeUndefined()
+  // A message claims only what was measured (L11): a file handed to a script, and one a command only
+  // mentions beside a write its words do not name, are said as that.
+  const handed = refusalOf(await call($, { tool: 'Bash', command: 'bash tools/add-lesson.sh ~/.claude/LESSONS.md' }))
+  expect(handed).toContain(`this hands lasting memory (${LESSONS_SHOWN}) to a script, which may write it`)
+  const guessed = refusalOf(await call($, { tool: 'Bash', command: `eval "echo x >> ~/.claude/LESSONS.md"` }))
+  expect(guessed).toContain(`this may write lasting memory (${LESSONS_SHOWN})`)
+  expect(guessed).toContain(`If this command only reads or quotes ${LESSONS_SHOWN}`)
+})
+
+// The other half of the open question on #3343: a command that only reads the lessons file is not
+// refused and not asked about, whatever it does with what it read.
+const LESSON_READS: [string, string][] = [
+  ['cat', 'cat ~/.claude/LESSONS.md'],
+  ['grep', `grep -n 'L174' ~/.claude/LESSONS.md`],
+  ['the sync tool reading one lesson', '~/claude-config-sync/claude-sync lesson L174'],
+  ['wc', 'wc -l ~/.claude/LESSONS.md'],
+  ['wc on standard input', 'wc -l < ~/.claude/LESSONS.md'],
+  ['sed printing lines', `sed -n '1,40p' ~/.claude/LESSONS.md`],
+  ['awk', `awk '/^## /' ~/.claude/LESSONS.md`],
+  ['a pipe', `grep 'SHORT:' ~/.claude/LESSONS.md | head -3`],
+  ['a count sent to another file', `grep -c '^- ' ~/.claude/LESSONS.md > ${CWD}/count.txt`],
+  ['a copy of it elsewhere', `cp ~/.claude/LESSONS.md ${CWD}/lessons-copy.md`],
+  ["a diff against a checkout's", 'diff ~/.claude/LESSONS.md payload/LESSONS.md'],
+  ['python reading it', `python3 -c "print(len(open('${LESSONS}').read()))"`],
+  // The two ways the refusal names for a script that only reads it.
+  ['a script fed it on standard input', 'python3 tools/count-lessons.py < ~/.claude/LESSONS.md'],
+  ['a script handed a copy of it', `cp ~/.claude/LESSONS.md ${CWD}/lessons-copy.md && python3 tools/count-lessons.py ${CWD}/lessons-copy.md`],
+  ['the sync tool minting a number', '~/claude-config-sync/claude-sync next-lesson'],
+  ['the sync tool checking the file', '~/claude-config-sync/claude-sync lesson-faults'],
+  ['the sync tool installing a pull', '~/claude-config-sync/claude-sync pull'],
+]
+
+test('a shell command that only reads the lessons file runs unasked: cat, grep, wc, the sync tool (#3343)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT } })
+  const got: string[] = []
+  for (const [what, command] of LESSON_READS) got.push(`${what}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`)
+  expect(got).toEqual(LESSON_READS.map(([what]) => `${what}: runs`))
+  expect(w.ran.map(r => r.input.command)).toEqual(LESSON_READS.map(([, command]) => command))
+  expect(w.asked).toEqual([])
+  quietOnMain(w)
+})
+
+// Nothing else covers such a command either: a For good already standing for the same command, read
+// again against what it would write now, and Dan's own permanent words, which skip the For good
+// question (L450: each control checked against the route the others push people onto). A shell write
+// of any other lasting memory, a checkout's lessons file among it, is asked about as it was.
+const PATCH_FILE = (file: string) => `--- ${file}\n+++ ${file}\n@@ -1 +1,2 @@\n x\n+- Ask before merging.\n`
+test("no For good and no words of Dan's cover a shell write of the lessons file, and a shell write of other lasting memory is asked about as before (#3343)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT, [`${CWD}/fix.patch`]: PATCH_FILE('a/CLAUDE.md') } })
+  const append = { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }
+  // A checkout's own lessons file, another memory file, and a LESSONS.md the reader can place
+  // nowhere (a folder only a command's output names, which may be a scratch copy): asked For good,
+  // as before.
+  const asBefore = [
+    `echo '${L753}' >> payload/LESSONS.md`,
+    `echo '- Ask before merging.' >> CLAUDE.md`,
+    `W=${HOME}/Apps/claude-config; sed -i '' 's/a/b/' $W/payload/LESSONS.md`,
+    `D="$(pick)"; echo '${L753}' >> "$D/LESSONS.md"`,
+  ]
+  for (const command of asBefore) expect(`${command}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`).toBe(`${command}: asked For good`)
+  // A For good given for a command while it wrote another file does not cover it once it would
+  // write the lessons file: the patch it applies comes to name that file.
+  const apply = { tool: 'Bash', command: 'git apply fix.patch' }
+  await askDan($, w, refusalOf(await call($, apply)), 'For good', 'CLAUDE.md')
+  w.files[`${CWD}/fix.patch`] = PATCH_FILE(LESSONS)
+  expect(outcomeOf(refusalOf(await call($, apply)))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+  // His words that make a save permanent cover no shell write of it.
+  await dan($, 'From now on, never ask before a save.')
+  expect(outcomeOf(refusalOf(await call($, append)))).toBe('refused, Edit named')
+  expect(outcomeOf(refusalOf(await call($, { tool: 'Bash', command: 'bash tools/add-lesson.sh ~/.claude/LESSONS.md' })))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+  // What writes other lasting memory is saved under his words as it was, and Claude is told to say so.
+  const other = await call($, { tool: 'Bash', command: `echo '- Ask before merging.' >> CLAUDE.md` })
+  expect(other.deny).toBeUndefined()
+  expect(contextOf(other)).toContain('say in one line what you saved')
+  expect(w.ran.map(x => x.tool)).toEqual(['Bash'])
+})
+
+// Asleep (#841), a shell write of the lessons file is noted for the morning report like any other
+// save, never run, and refused with the Edit route named once he is awake.
+test('while asleep a shell write of the lessons file is noted for the morning report, and refused with the Edit route named once awake (#3343)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '', [LESSONS]: LESSONS_TEXT } })
+  const append = { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }
+  expect(refusalOf(await call($, append))).toContain('Dan is asleep (sleep mode)')
+  expect(nightNotes(w).length).toBe(1)
+  expect(w.ran).toEqual([])
+  delete w.files['/night/asleep']
+  expect(outcomeOf(refusalOf(await call($, append)))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+})
+
+// #3343, route 2 (Dan, 2026-11-20: "For good, held to facts"): an Edit or Write of the installed
+// lessons file that touches no entry's words was asked For good in the session's own wording, so an
+// entry could leave every session, or change the file its index line loads from, under a question
+// that named nothing. The For good question stays, and it is refused unless it names each entry
+// taken out or moved to another section, by its number, and each section heading changed.
+// The file is shaped as the real one is (tests/lessons-shaped.ts).
+const takeOut = (...ns: string[]) => ({ tool: 'Write', file_path: LESSONS, content: without(SHAPED, ...ns) })
+const MUST_NAME = 'The question must name what this'
+// The question as Claude asks it, with `said` as its plain sentence.
+const askNaming = ($: Caller, w: W, refusal: string, said: string, answer: string | undefined = 'For good') => askDan($, w, refusal, answer, LESSONS_SHOWN, said)
+// One save through to the end: refused and told to ask, each question that names too little
+// refused before Dan is asked anything, the one that names it all asked, and the call sent again saved.
+const heldUntilNamed = async ($: Caller, w: W, input: Record<string, unknown>, tooLittle: string[], enough: string, missing: string[]) => {
+  const what = JSON.stringify(input).slice(0, 80)
+  const refusal = refusalOf(await call($, input))
+  expect(`${what}: ${refusal}`).toContain(ASKS)
+  for (const name of missing) expect(`${what}: ${refusal}`).toContain(name)
+  const before = w.asked.length
+  for (const said of tooLittle) {
+    const r = await askNaming($, w, refusal, said)
+    expect(`${what} asked "${said}": ${r.deny}`).toContain(MUST_NAME)
+  }
+  expect(w.asked.length).toBe(before)
+  expect(w.ran).toEqual([])
+  const asked = await askNaming($, w, refusal, enough)
+  expect(`${what} asked "${enough}": ${asked.deny}`).toBe(`${what} asked "${enough}": undefined`)
+  expect(w.asked.length).toBe(before + 1)
+  expect(contextOf(asked)).toContain('Dan answered For good')
+  const sent = await call($, input)
+  expect(`${what}: ${sent.deny}`).toBe(`${what}: undefined`)
+  expect(contextOf(sent)).toContain(`Saved to ${LESSONS_SHOWN}, as Dan answered For good.`)
+  expect(w.ran.length).toBe(1)
+}
+
+test('a For good question about taking a lesson entry out whole is refused until it names the entry by its number, and then asked as before (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  const refusal = refusalOf(await call($, edit))
+  // The first refusal already says what the question must name, so it can be asked right at once.
+  expect(refusal).toContain(ASKS)
+  expect(refusal).toContain('takes out L5 whole')
+  // The session's own wording, naming nothing: refused before Dan is asked, saying what is missing.
+  const unnamed = await askNaming($, w, refusal, 'tidy the lessons file')
+  expect(unnamed.deny).toContain(`${MUST_NAME} Edit does to ${LESSONS_SHOWN}`)
+  expect(unnamed.deny).toContain('it takes out L5 whole')
+  expect(unnamed.deny).toContain('It does not name L5.')
+  expect(w.asked).toEqual([])
+  // Named: asked with the mod's own answers, as any For good question is.
+  const named = await askNaming($, w, refusal, 'take out L5, which L7 now covers')
+  expect(named.deny).toBeUndefined()
+  expect(w.asked.length).toBe(1)
+  expect(w.asked[0]?.questions[0]?.options.map(o => o.label)).toEqual(['For good', 'Just this session', 'Not at all'])
+  expect(w.ran).toEqual([])
+  const sent = await call($, edit)
+  expect(sent.deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  quietOnMain(w)
+})
+
+test('every entry taken out must be named: two leaving under a question that names one is refused, saying which is missing (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const both = takeOut('L5', 'L10')
+  const refusal = refusalOf(await call($, both))
+  const one = await askNaming($, w, refusal, 'take out L5')
+  expect(one.deny).toContain('It does not name L10.')
+  const other = await askNaming($, w, refusal, 'take out L10')
+  expect(other.deny).toContain('It does not name L5.')
+  expect(w.asked).toEqual([])
+  await heldUntilNamed($, w, both, ['take out two entries nobody reads'], 'take out L5 and L10', ['L5', 'L10'])
+})
+
+test('an entry moved whole to another section must be named by its number (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const l7 = entryOf('L7')
+  const moved = { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(l7, '').replace('## Honest failure\n', `## Honest failure\n${l7}`) }
+  const refusal = refusalOf(await call($, moved))
+  expect(refusal).toContain('moves L7 from "Data safety" to "Honest failure"')
+  await heldUntilNamed($, w, moved, ['reorder the file', 'move an entry to "Honest failure"'], 'move L7 to Honest failure', ['L7'])
+})
+
+test('a section heading renamed must be named, old and new, each in double quotes exactly as written; the entries under it need not be (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const rename = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and its safety' }
+  const refusal = refusalOf(await call($, rename))
+  expect(refusal).toContain('renames the section heading "Data safety" to "Data and its safety"')
+  // The new name alone holds the old one's words, and names it no more than a longer number names a shorter.
+  const newOnly = await askNaming($, w, refusal, 'call the section "Data and its safety"')
+  expect(newOnly.deny).toContain('It does not name "Data safety".')
+  await heldUntilNamed($, w, rename, ['rename a section', 'rename Data safety to Data and its safety', 'rename "data safety" to "Data and its safety"'], 'rename the section "Data safety" to "Data and its safety"', ['"Data safety"', '"Data and its safety"'])
+})
+
+test('a section heading added must be named, and so must every entry it takes into its section (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  // At the end of the file it takes no entry with it: the heading alone is named.
+  const atEnd = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L10'), new_string: `${entryOf('L10')}\n## Test speed\n` }
+  await heldUntilNamed($, w, atEnd, ['add a section for the speed lessons', 'add the section Test speed'], 'add the section "Test speed"', ['"Test speed"'])
+  // In the middle of a section it moves every entry below it into another section's file.
+  const split = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L17'), new_string: `## Checks\n${entryOf('L17')}` }
+  const refusal = refusalOf(await call($, split))
+  expect(refusal).toContain('moves L17, L174 from "Proof over green" to "Checks"')
+  expect(refusal).toContain('adds the section heading "Checks"')
+  const before = w.asked.length
+  const headingOnly = await askNaming($, w, refusal, 'add the section "Checks"')
+  expect(headingOnly.deny).toContain('It does not name L17, L174.')
+  const entriesOnly = await askNaming($, w, refusal, 'move L17 and L174 to a new section')
+  expect(entriesOnly.deny).toContain('It does not name "Checks".')
+  expect(w.asked.length).toBe(before)
+  expect((await askNaming($, w, refusal, 'add the section "Checks" above L17, which takes L17 and L174 into it')).deny).toBeUndefined()
+  expect(w.asked.length).toBe(before + 1)
+})
+
+test('a section heading taken out must be named, and so must every entry that falls into the section above (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const merge = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety\n', new_string: '' }
+  const refusal = refusalOf(await call($, merge))
+  expect(refusal).toContain('moves L5, L7 from "Data safety" to "Proof over green"')
+  expect(refusal).toContain('takes out the section heading "Data safety"')
+  await heldUntilNamed($, w, merge, ['merge two sections', 'take out the heading "Data safety"', 'fold L5 and L7 into the section above'], 'take out the heading "Data safety", so L5 and L7 join the section above', ['"Data safety"', 'L5', 'L7'])
+})
+
+test('a number inside a longer number or a word does not name an entry (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const out = takeOut('L17')
+  let refusal = refusalOf(await call($, out))
+  for (const said of ['take out L174', 'take out L170 and L1', 'take out XL17', 'take out L17th', 'take out l17', 'take out L 17', 'take out 17', 'take out L17_old']) {
+    const r = await askNaming($, w, refusal, said)
+    expect(`${said}: ${r.deny}`).toContain('It does not name L17.')
+  }
+  expect(w.asked).toEqual([])
+  // Punctuation around the number is not part of it.
+  for (const said of ['take out L17.', 'take out (L17)', 'L17: take it out', 'take out L17, then L174 is next']) {
+    const r = await askNaming($, w, refusal, said, 'Not at all')
+    expect(`${said}: ${r.deny}`).toBe(`${said}: undefined`)
+    // Not at all took the waiting question out, so the save is refused afresh for the next wording.
+    refusal = refusalOf(await call($, out))
+    expect(refusal).toContain(ASKS)
+  }
+  expect(w.asked.length).toBe(4)
+  expect(w.ran).toEqual([])
+})
+
+// The controls: what the mod asked or refused before is asked or refused in the same words.
+test('an Edit or Write that only adds or changes an entry still goes to the lesson picker, in the words it did, and another memory file is asked about in the words it was (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const adding = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${BRIEF_ENTRY}## Data safety` }
+  expect(refusalOf(await call($, adding))).toBe(pickerOnly(LESSONS_SHOWN, 'Edit', ['L753'], undefined))
+  const changing = { tool: 'Edit', file_path: LESSONS, old_string: 'seen to fail', new_string: 'seen to pass' }
+  expect(refusalOf(await call($, changing))).toBe(pickerOnly(LESSONS_SHOWN, 'Edit', ['L1'], undefined))
+  // An entry taken out beside one changed is still the picker's: nothing is asked For good.
+  const both = { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(entryOf('L5'), '').replace('seen to fail', 'seen to pass') }
+  expect(refusalOf(await call($, both))).toBe(pickerOnly(LESSONS_SHOWN, 'Write', ['L1'], undefined))
+  expect(w.asked).toEqual([])
+  // Another memory file, by Edit and by Write: the same instruction as ever, and the session's own
+  // wording is asked.
+  w.files[`${CWD}/CLAUDE.md`] = '# Slate\n\n## Rules\n- **L5. Never destroy good state.**\n'
+  const other = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: '## Rules\n- **L5. Never destroy good state.**\n', new_string: '' }
+  const r = await call($, other)
+  expect(refusalOf(r)).toBe(askInstruction(idIn(refusalOf(r)) ?? '', ['~/Apps/slate/CLAUDE.md']))
+  expect((await askDan($, w, refusalOf(r), 'For good', '~/Apps/slate/CLAUDE.md')).deny).toBeUndefined()
+  expect((await call($, other)).deny).toBeUndefined()
+  // Text above the first section, a blank line, entries put in another order inside their section:
+  // nothing leaves, moves section or changes a heading, so the question names nothing more.
+  const loose = [
+    { tool: 'Edit', file_path: LESSONS, old_string: 'Numbering is stable for reference.', new_string: 'Numbering is stable.' },
+    { tool: 'Edit', file_path: LESSONS, old_string: '\n## Honest failure', new_string: '\n\n## Honest failure' },
+    { tool: 'Write', file_path: LESSONS, content: SHAPED.replace(entryOf('L5'), '').replace(entryOf('L7'), `${entryOf('L7')}${entryOf('L5')}`) },
+  ]
+  for (const input of loose) {
+    const said = await call($, input)
+    expect(`${JSON.stringify(input).slice(0, 90)}: ${refusalOf(said)}`).toBe(`${JSON.stringify(input).slice(0, 90)}: ${askInstruction(idIn(refusalOf(said)) ?? '', [LESSONS_SHOWN])}`)
+    expect((await askDan($, w, refusalOf(said), 'Not at all', LESSONS_SHOWN)).deny).toBeUndefined()
+  }
+})
+
+// A For good is judged again as the call is sent, against the lessons file as it then stands: one
+// whose question did not name what the call now takes out covers nothing, whichever code stored it.
+test('a For good already standing does not cover a removal its question did not name: one stored before this rule, and one given while the Edit took nothing out (#3343 route 2)', withKit, async ($, on) => {
+  // An approval as the code before this change stored it: no record of the question Dan answered.
+  let old = true
+  on('state.set', async ($$, e, next) => {
+    const x = e as unknown as { ref?: { key?: string }; key?: string; value?: unknown }
+    if (!old || (x.ref?.key ?? x.key) !== 'approvals' || !Array.isArray(x.value)) return next(e)
+    return next({ ...x, value: x.value.map(({ asked: _asked, ...rest }: Record<string, unknown>) => rest) } as never)
+  })
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED.replace(entryOf('L5'), '') } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  // Asked while the file held no such text, so the Edit took nothing out and the question named nothing.
+  expect((await askNaming($, w, refusalOf(await call($, edit)), 'take out L5')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  const stored = refusalOf(await call($, edit))
+  expect(stored).toContain(ASKS)
+  expect(stored).toContain("Dan's For good on this save does not cover it")
+  expect(stored).toContain('takes out L5 whole')
+  expect(w.ran).toEqual([])
+  // The same from the code as it is now: asked while the Edit took nothing out, in words that name nothing.
+  old = false
+  w.files[LESSONS] = SHAPED.replace(entryOf('L7'), '')
+  const edit7 = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L7'), new_string: '' }
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'tidy the file')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  const sent = refusalOf(await call($, edit7))
+  expect(sent).toContain(ASKS)
+  expect(sent).toContain("Dan's For good on this save does not cover it")
+  expect(sent).toContain('takes out L7 whole')
+  expect(w.ran).toEqual([])
+  // Asked again, naming it, and the same call is saved on that answer.
+  expect((await askNaming($, w, sent, 'take out L7')).deny).toBeUndefined()
+  expect((await call($, edit7)).deny).toBeUndefined()
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  // His second answer about L7 replaced the first, so only the one about L5, which was never
+  // asked again, is left to lapse: no toast says of a save that landed that it was not saved.
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.filter(t => t.includes('lapsed after 10 minutes')).length).toBe(1)
+})
+
+// His own words that make a save permanent skip the For good question (#618). They are held to the
+// same facts as that question is (L450): they cover a removal, a move or a heading they name.
+test("Dan's own permanent words cover an entry taken out or a heading changed only when they name it (#3343 route 2)", withKit, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  await dan($, 'From now on, never ask before a save.')
+  const out = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  const rename = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '## Data and its safety' }
+  for (const input of [out, rename]) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  await dan($, 'From now on L5 is gone: L7 says it better.')
+  const named = await call($, out)
+  expect(named.deny).toBeUndefined()
+  expect(contextOf(named)).toContain('say in one line what you saved')
+  // The words that named L5 name no heading.
+  expect(refusalOf(await call($, rename))).toContain(ASKS)
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
+
+// Asleep (#841) it is noted for the morning report like any other save, and the note says what
+// would leave, since the text an Edit adds says nothing of what it takes out.
+test('while asleep an entry taken out is noted for the morning report, saying which, and held to its number once awake (#3343 route 2)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '', [LESSONS]: SHAPED } })
+  const edit = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L5'), new_string: '' }
+  expect(refusalOf(await call($, edit))).toContain('Dan is asleep (sleep mode)')
+  expect(nightNotes(w)).toEqual([{ kind: 'save', files: [LESSONS_SHOWN], rule: `This Edit takes out L5 whole.` }])
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  delete w.files['/night/asleep']
+  const awake = refusalOf(await call($, edit))
+  expect(awake).toContain(ASKS)
+  expect((await askNaming($, w, awake, 'tidy the file')).deny).toContain('It does not name L5.')
+})
+
+// The noun (#1483) answers as the check does: a For good covers a removal only when the question
+// Dan answered named it, as the lessons file stands when it is asked.
+test('under no build, the noun answers for a removal only on a For good whose question named it (#3343 route 2)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: without(SHAPED, 'L7') } })
+  const edit7 = { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L7'), new_string: '' }
+  // Asked while the Edit took nothing out, in words that name nothing; then the file comes to hold L7.
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'tidy the file')).deny).toBeUndefined()
+  w.files[LESSONS] = SHAPED
+  w.files['/nobuild/on'] = ''
+  expect((await call($, edit7)).deny).toBe('NO BUILD: refused')
+  expect(w.ran).toEqual([])
+  // Asked again with no build off, naming it: the noun answers for that one call, once.
+  delete w.files['/nobuild/on']
+  expect((await askNaming($, w, refusalOf(await call($, edit7)), 'take out L7')).deny).toBeUndefined()
+  w.files['/nobuild/on'] = ''
+  expect((await call($, edit7)).deny).toBeUndefined()
+  expect((await call($, edit7)).deny).toBe('NO BUILD: refused')
+  expect(w.ran.length).toBe(1)
+})
+
+// A heading Dan could not read as it is written cannot be named in a question he could read, so
+// the save is refused once, saying so, and no question waits on a name no question may hold (L665).
+test('a heading that could not be shown to Dan as written is refused in words that say so, new or already in the file, and no question waits (#3343 route 2)', withKit, async ($, on) => {
+  const odd = `Test${pt(0xa0)}speed`
+  const w = world($, on, { auto: true, files: { [LESSONS]: SHAPED } })
+  const adding = refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: entryOf('L10'), new_string: `${entryOf('L10')}\n## ${odd}\n` }))
+  expect(adding).toContain(`the question would have to name the section heading "${odd}", and he could not read that name as it is written: character 6 of it is U+00A0`)
+  expect(adding).toContain('Give the new heading a name he can read, and send the save again.')
+  w.files[LESSONS] = `${SHAPED}\n## ${odd}\n`
+  const leaving = refusalOf(await call($, { tool: 'Edit', file_path: LESSONS, old_string: `\n## ${odd}\n`, new_string: '' }))
+  expect(leaving).toContain(`A heading already in ${LESSONS_SHOWN} that cannot be shown to him cannot be asked about here.`)
+  for (const said of [adding, leaving]) {
+    expect(said).not.toContain(ASKS)
+    expect(idIn(said)).toBeUndefined()
+  }
+  expect(w.asked).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+// What cannot be read cannot be held to (L345): a lessons file that is no ordinary file is never
+// opened, so what a write would take out of it cannot be told, and no For good is asked for it.
+test('a write to a lessons file that cannot be read is refused, never asked For good: what it takes out cannot be told (#3343 route 2)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true, fifos: [LESSONS] })
+  const r = settled(await settles(w, call($, { tool: 'Write', file_path: LESSONS, content: '# Build-time lessons\n' })), 'Write LESSONS.md fifo')
+  expect(refusalOf(r)).toContain(`${LESSONS_SHOWN} could not be read before this Write`)
+  expect(refusalOf(r)).toContain('which entries and headings it would take out cannot be told')
+  expect(refusalOf(r)).not.toContain(ASKS)
+  expect(idIn(refusalOf(r))).toBeUndefined()
+  expect(w.ran).toEqual([])
+  expect(w.opened).toEqual([])
 })

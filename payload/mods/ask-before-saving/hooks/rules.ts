@@ -1144,24 +1144,53 @@ export const boundaryFault = (file: string, at: number): string | undefined => {
  * heading, the blank lines at its end dropped. Its rule, its check line and its SHORT line are all
  * among them, and so is anything else written there, which that reader scans as the entry's.
  */
-export const lessonEntries = (file: string): string[] => {
-  const out: string[] = []
+export const lessonEntries = (file: string): string[] => lessonLayout(file).entries.map(e => e.text)
+
+/**
+ * A lessons file as its own reader walks it (claude-sync lesson_entries_render), in the one walk
+ * every reading here is made from (L370): its section headings in order, each as the text after
+ * "## ", which is what the reader names that section's index file from, and its entries, each with
+ * its number, its lines (lessonEntries) and the heading it stands under, undefined above the first
+ * one, where the reader files it under no section's name (its split rendering calls that
+ * "Unsectioned"). No suite yet runs that reader beside this walk over one fixture, as
+ * tests/test-lesson-index-line-shown.sh does for an entry's index line.
+ */
+export const lessonLayout = (file: string): { heads: string[]; entries: { n: string; text: string; under: string | undefined }[] } => {
+  const heads: string[] = []
+  const entries: { n: string; text: string; under: string | undefined }[] = []
   let cur: string[] | undefined
+  let under: string | undefined
   const close = () => {
     if (cur === undefined) return
     while (cur.length > 1 && INDEX_BLANK.test(cur[cur.length - 1] ?? '')) cur.pop()
-    out.push(cur.join('\n'))
+    entries.push({ n: /^- \*\*(L[0-9]+)\./.exec(cur[0] ?? '')?.[1] ?? 'L?', text: cur.join('\n'), under })
     cur = undefined
   }
   for (const l of file.split('\n')) {
     if (ENTRY_START.test(l)) {
       close()
       cur = [l]
-    } else if (SECTION_START.test(l)) close()
-    else cur?.push(l)
+    } else if (SECTION_START.test(l)) {
+      close()
+      under = l.slice(3)
+      heads.push(under)
+    } else cur?.push(l)
   }
   close()
-  return out
+  return { heads, entries }
+}
+
+/**
+ * What an Edit or Write leaves in a file that holds `file` now (undefined when it is not there or
+ * could not be read). A Write leaves its content. An Edit is read as replacing its old text
+ * wherever that stands, which is every place a replace_all reaches and the one place any other
+ * Edit can; with no old text, or no file, it is read as leaving its new text alone.
+ */
+export const leftBy = (tool: string, input: Record<string, unknown>, file: string | undefined): string => {
+  if (tool === 'Write') return String(input.content ?? '')
+  const from = String(input.old_string ?? '')
+  const to = String(input.new_string ?? '')
+  return file === undefined || !from ? to : file.split(from).join(to)
 }
 
 /**
@@ -1170,7 +1199,8 @@ export const lessonEntries = (file: string): string[] => {
  * line, a SHORT line or any other line that is the entry's. `file` is the lessons file as it is now,
  * undefined when it is not there or could not be read, and the write is then judged as if every
  * entry it holds were new. Nothing else a write does to the file counts here: taking an entry out,
- * moving one whole, a section heading, text above the first section.
+ * moving one whole, a section heading, text above the first section. The first three are read by
+ * lessonFacts, below, which the For good question about such a write is held to (#3343 route 2).
  *
  * The independent review of #3320: the For good picker approves a save by its key and holds
  * nothing of what the question says, so an entry could reach the index under a question of the
@@ -1179,21 +1209,222 @@ export const lessonEntries = (file: string): string[] => {
  */
 export const entriesTouched = (tool: string, input: Record<string, unknown>, file: string | undefined): string[] => {
   if (tool !== 'Edit' && tool !== 'Write') return []
-  const from = String(input.old_string ?? '')
-  const to = String(input.new_string ?? '')
-  // What the write leaves. An Edit is read as replacing its old text wherever that stands, which is
-  // every place a replace_all reaches and the one place any other Edit can.
-  const after = tool === 'Write' ? String(input.content ?? '') : file === undefined || !from ? to : file.split(from).join(to)
   const before = new Map<string, number>()
   for (const e of lessonEntries(file ?? '')) before.set(e, (before.get(e) ?? 0) + 1)
   const touched: string[] = []
-  for (const e of lessonEntries(after)) {
-    const left = before.get(e) ?? 0
-    if (left > 0) before.set(e, left - 1)
-    else touched.push(/^- \*\*(L[0-9]+)\./.exec(e)?.[1] ?? 'L?')
+  for (const e of lessonLayout(leftBy(tool, input, file)).entries) {
+    const left = before.get(e.text) ?? 0
+    if (left > 0) before.set(e.text, left - 1)
+    else touched.push(e.n)
   }
   return touched
 }
+
+/**
+ * What an Edit or Write does to the lessons file without changing one word of an entry (#3343 route
+ * 2), which entriesTouched does not count and the For good question is held to (Dan, 2026-11-20:
+ * "For good, held to facts"):
+ * - `removed`, the numbers of the entries it takes out whole. A rule leaves every session, and
+ *   `claude-sync lesson` fails for its number.
+ * - `moved`, the entries it leaves word for word under another section heading than they stood
+ *   under, with both headings (undefined above the first one, where an entry belongs to no
+ *   section). The index is one generated file a section, so the entry's line moves to another
+ *   file. A section is its heading's text, as its index file is: two headings of the same words
+ *   are one section here.
+ * - `gone` and `arrived`, the section headings it takes out and adds, a heading whose words
+ *   change being one of each. The index file is named from the heading and CLAUDE.md imports it by
+ *   that name.
+ * - `renamed`, those of `gone` and `arrived` that are one section under a new name: every entry
+ *   that stood under the old heading and is still in the file stands under the new one, and
+ *   nothing else does. Those entries are not `moved`: they stay together, in the one file the
+ *   rename renames. Any other entry whose heading changes is, an entry under a heading added above
+ *   it or left by a heading taken out among them.
+ * - `unread`, set by the caller when the file could not be read, with why: nothing else is known.
+ *
+ * Entries are paired by their whole text, as entriesTouched pairs them, so an entry changed in any
+ * word reads here as taken out, and there as added. A write that adds or changes an entry is the
+ * lesson picker's and is never asked For good, so these are read only for a write that touches none.
+ * Not counted, since nothing leaves an index, changes file or renames one: text that is no entry's
+ * and no heading (above the first section, or between a heading and its first entry), blank lines,
+ * entries or whole sections put in another order.
+ */
+export type LessonFacts = {
+  removed: string[]
+  moved: { entry: string; from: string | undefined; to: string | undefined }[]
+  gone: string[]
+  arrived: string[]
+  renamed: { from: string; to: string }[]
+  unread?: string
+}
+export const NO_FACTS: LessonFacts = { removed: [], moved: [], gone: [], arrived: [], renamed: [] }
+
+// `a` less `b`, each member as often as it is in `a` beyond `b`, in `a`'s order.
+const less = (a: readonly string[], b: readonly string[]): string[] => {
+  const left = new Map<string, number>()
+  for (const x of b) left.set(x, (left.get(x) ?? 0) + 1)
+  return a.filter(x => {
+    const n = left.get(x) ?? 0
+    if (n > 0) left.set(x, n - 1)
+    return n === 0
+  })
+}
+
+export const lessonFacts = (tool: string, input: Record<string, unknown>, file: string | undefined): LessonFacts => {
+  if (tool !== 'Edit' && tool !== 'Write') return NO_FACTS
+  const was = lessonLayout(file ?? '')
+  const is = lessonLayout(leftBy(tool, input, file))
+  // Each entry the write leaves, paired with one of the same words in the file as it is: the one
+  // under the same heading when there is one, so an entry that stays is never read as moved.
+  const pool = new Map<string, (string | undefined)[]>()
+  for (const e of was.entries) pool.set(e.text, [...(pool.get(e.text) ?? []), e.under])
+  const pairs: { entry: string; from: string | undefined; to: string | undefined }[] = []
+  for (const e of is.entries) {
+    const left = pool.get(e.text)
+    if (!left?.length) continue
+    const k = left.indexOf(e.under)
+    pairs.push({ entry: e.n, from: left.splice(k === -1 ? 0 : k, 1)[0], to: e.under })
+  }
+  // What is left unpaired was taken out, each number once.
+  const removed: string[] = []
+  for (const e of was.entries) {
+    const left = pool.get(e.text)
+    if (!left?.length) continue
+    left.pop()
+    if (!removed.includes(e.n)) removed.push(e.n)
+  }
+  const gone = less(was.heads, is.heads)
+  const arrived = less(is.heads, was.heads)
+  const renamed: { from: string; to: string }[] = []
+  for (const from of new Set(gone))
+    for (const to of new Set(arrived))
+      if (!is.heads.includes(from) && !was.heads.includes(to) && pairs.some(p => p.from === from) && pairs.every(p => (p.from === from) === (p.to === to))) renamed.push({ from, to })
+  const carried = (p: { from: string | undefined; to: string | undefined }) => renamed.some(r => r.from === p.from && r.to === p.to)
+  const moved: LessonFacts['moved'] = []
+  for (const p of pairs) if (p.from !== p.to && !carried(p) && !moved.some(m => m.entry === p.entry && m.from === p.from && m.to === p.to)) moved.push(p)
+  return { removed, moved, gone, arrived, renamed }
+}
+
+// A heading as it is named: the text after "## " less the white space at its ends, in double
+// quotes, so that one heading's words inside a longer heading's are not taken for it.
+const headingNamed = (h: string): string => `"${h.trim()}"`
+
+/**
+ * What a question must hold to name `facts`, each once: the number of each entry taken out or
+ * moved, as written (L174), and each heading taken out or added, in double quotes as it is written
+ * after "## ". A renamed heading is both its old name and its new one.
+ */
+export const factNames = (facts: LessonFacts): string[] => [...new Set([...facts.removed, ...facts.moved.map(m => m.entry), ...[...facts.gone, ...facts.arrived].map(headingNamed)])]
+
+/**
+ * Those of factNames that `text` does not hold. A number counts only as a whole token: not inside a
+ * longer number (L17 in L174) or a word (XL17, L17th, L17_old), and in its own case. A heading
+ * counts only between double quotes, in its own case, word for word. `text` is the question Dan
+ * read, or his own message; none names nothing.
+ */
+export const unnamed = (facts: LessonFacts, text: string | null | undefined): string[] => {
+  const t = text ?? ''
+  // The name is matched as it is written, never as a pattern (lessons review at c258904): the
+  // fallback number of an entry line that could not be numbered, "L?", read as a pattern makes its
+  // letter optional and is found in any text holding two marks side by side.
+  return factNames(facts).filter(name => (name.startsWith('"') ? !t.includes(name) : !new RegExp(`(?<![A-Za-z0-9_])${escapeRe(name)}(?![A-Za-z0-9_])`).test(t)))
+}
+
+/**
+ * Whether `text` covers a write that does `facts` to the lessons file: it names every one of them
+ * (unnamed), and what the write takes out could be read at all. A write that does none of them is
+ * covered by any text, and by none.
+ */
+export const coversFacts = (facts: LessonFacts, text: string | null | undefined): boolean => facts.unread === undefined && unnamed(facts, text).length === 0
+
+const sectionSaid = (h: string | undefined): string => (h === undefined ? 'no section (the place above the first section heading)' : headingNamed(h))
+
+/**
+ * `facts` in words, as what a write does, to follow "this Edit" or "it"; empty when it does none.
+ * Entries that move together are said together, and a renamed heading as renamed.
+ */
+export const factsSaid = (facts: LessonFacts): string => {
+  const parts: string[] = []
+  if (facts.removed.length) parts.push(`takes out ${facts.removed.join(', ')} whole`)
+  const ways: { from: string | undefined; to: string | undefined; entries: string[] }[] = []
+  for (const m of facts.moved) {
+    const way = ways.find(w => w.from === m.from && w.to === m.to)
+    if (way) way.entries.push(m.entry)
+    else ways.push({ from: m.from, to: m.to, entries: [m.entry] })
+  }
+  for (const w of ways) parts.push(`moves ${w.entries.join(', ')} from ${sectionSaid(w.from)} to ${sectionSaid(w.to)}`)
+  for (const r of facts.renamed) parts.push(`renames the section heading ${headingNamed(r.from)} to ${headingNamed(r.to)}`)
+  for (const h of less(facts.gone, facts.renamed.map(r => r.from))) parts.push(`takes out the section heading ${headingNamed(h)}`)
+  for (const h of less(facts.arrived, facts.renamed.map(r => r.to))) parts.push(`adds the section heading ${headingNamed(h)}`)
+  return parts.join('; ')
+}
+
+// How a fact is named, said in one wording where the save is refused (factsAsk) and where a
+// question that names too little is (heldToFacts).
+const HOW_NAMED = `Name each entry by its number as it is written here (a number inside a longer number or a word does not count) and each heading in double quotes, word for word as it is written here, in a plain sentence that says what happens to it. If they do not all fit one question, make the change in smaller Edits, each asked about by itself`
+
+/**
+ * What the refusal of a save adds to its instruction to ask Dan (askInstruction) when the save
+ * does `facts` to the lessons file: what it does, and that the question must name each, so the
+ * question can be asked right the first time. Empty when it does none.
+ */
+export const factsAsk = (tool: string, facts: LessonFacts): string => {
+  const said = factsSaid(facts)
+  return said ? `This ${tool} ${said}, and the question must name each of those (${factNames(facts).join(', ')}), or it is refused before he is asked. ${HOW_NAMED}. ` : ''
+}
+
+/**
+ * What Claude is told when its For good question about a write to the lessons file does not name
+ * everything the write takes out, moves or renames (#3343 route 2), in the shape of the lesson
+ * picker's refusal of a question that does not state the rule: what the question must hold, and
+ * why. `missing` are the names it lacks (unnamed).
+ */
+export const heldToFacts = (file: string, tool: string, facts: LessonFacts, missing: readonly string[]): string =>
+  `The question must name what this ${tool} does to ${file}, so Dan decides on the entries and headings themselves: it ${factsSaid(facts)}. ` +
+  `It does not name ${missing.join(', ')}. ${HOW_NAMED}. Ask again with the same metadata.`
+
+/**
+ * What Claude is told when a write to the lessons file that adds or changes no entry cannot be held
+ * to what it takes out, because the file could not be read (L345: what cannot be read is not taken
+ * for nothing removed). It is refused, and no question waits on it.
+ */
+export const cannotHold = (file: string, tool: string, why: string): string =>
+  `Not saved, and Dan is not asked For good about it: ${file} could not be read before this ${tool} (${why}), so which entries and headings it would take out cannot be told, ` +
+  `and a For good question about that file is asked only when it can be held to what the write takes out. Once ${file} is an ordinary file that can be read, send the save again.`
+
+/**
+ * The first heading a question would have to name that Dan could not read as it is written
+ * (shownFault, the one judgement of every text a picker shows him), with why, and whether the
+ * write adds it. The question naming it would be refused for holding it (askFault), and one that
+ * left it out for not naming it, so the save is refused once, in words that say so (L665).
+ */
+export const unshownName = (facts: LessonFacts): { name: string; fault: string; arriving: boolean } | undefined => {
+  for (const h of [...facts.arrived, ...facts.gone]) {
+    const name = headingNamed(h)
+    const fault = shownFault(name)
+    if (fault !== undefined) return { name, fault, arriving: facts.arrived.includes(h) }
+  }
+  return undefined
+}
+
+/** What Claude is told of a save whose question would have to name such a heading (unshownName). */
+export const cannotName = (file: string, unshown: { name: string; fault: string; arriving: boolean }): string =>
+  `Not saved, and Dan is not asked For good about it: the question would have to name the section heading ${unshown.name}, and he could not read that name as it is written: ${unshown.fault}. ` +
+  (unshown.arriving
+    ? `Give the new heading a name he can read, and send the save again.`
+    : `A heading already in ${file} that cannot be shown to him cannot be asked about here. Tell Dan in one line, naming where the heading stands: he can change it himself.`)
+
+/**
+ * What a refused save says first when a For good of Dan's stands for the same call and does not
+ * cover it: the question he answered did not name what the call does to the lessons file as it
+ * stands now. `missing` are the names that question lacks.
+ */
+export const notCovered = (file: string, missing: readonly string[]): string =>
+  `Dan's For good on this save does not cover it as ${file} stands now: the question he answered did not name ${missing.join(', ')}.`
+
+// Why an entry is approved in the lesson picker and nowhere else, and how Claude asks there: said in
+// one wording by the refusal of an Edit or Write (pickerOnly) and of a shell command (byShellOnly).
+const ENTRY_REACH = `an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word`
+const PICKER_ASK = `ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes`
 
 /**
  * What Claude is told when an Edit or Write would add or change a lesson entry with no answer of
@@ -1203,13 +1434,47 @@ export const entriesTouched = (tool: string, input: Record<string, unknown>, fil
  * is where a single added entry would land when that is no entry boundary (boundaryFault).
  */
 export const pickerOnly = (file: string, tool: string, touched: readonly string[], misplaced: string | undefined): string =>
-  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word. ` +
+  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and ${ENTRY_REACH}. ` +
   (misplaced !== undefined
     ? `It would put the entry ${misplaced}. Add it whole at an entry boundary: straight after another entry's last line or under a section heading, with another entry's first line, a section heading or the end of the file as the next line that is not blank. `
     : '') +
   `If he answered ${LESSON_ADD} for this lesson in the last ${APPROVAL_MS / 60_000} minutes, send one Edit that adds exactly the entry that answer described, at an entry boundary. ` +
-  `Otherwise ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes. ` +
+  `Otherwise ${PICKER_ASK}. ` +
   `To change an entry that is already there, ask him the same way for the entry as it should read, take the old one out (a removal is asked about as usual), and add the new one.`
+
+/**
+ * Whether the installed lessons file is among a shell command's lasting memory (register.ts
+ * lastingTargets, each file as Dan reads it), whichever way the command was found to write it
+ * (#3343): named by its words, handed to a script, or mentioned by its path beside a write the
+ * words do not name. Only that file by its path counts. A checkout's `payload/LESSONS.md` does not,
+ * nor does a LESSONS.md the reader could place nowhere (`$S/LESSONS.md` through a variable only a
+ * command's output or a condition sets, a bare name in a patch's prose): each may be a scratch copy
+ * or a checkout's, and is asked about as before.
+ */
+export const lessonsByShell = (files: readonly string[], home: string): boolean => files.includes(display(lessonsFile(home), home))
+
+/**
+ * What Claude is told when a shell command writes, or may write, the installed lessons file (#3343).
+ * It is refused, no question waits on it and no approval covers it: the mod reads which files a
+ * command writes, never what it writes to them, so it cannot hold an entry to what Dan read, and a
+ * For good there approved an entry under a question of the session's own wording. The Edit route is
+ * named, where a write is read: an entry goes to the lesson picker (pickerOnly) and anything else is
+ * asked about as before. `file` is the installed lessons file as Dan reads it; `how` says when it
+ * was found only by a mention (`guessed`) or only as a script's argument (`handed`), so the refusal
+ * claims only what was measured (L11) and says how a command that only reads the file is sent;
+ * `others` is the rest of the lasting memory the command writes. A command whose words show it only
+ * reads the file never gets here.
+ */
+export const byShellOnly = (file: string, how: { guessed?: boolean; handed?: boolean }, others: readonly string[]): string =>
+  `Not run, and Dan is not asked For good about it: ${writesWhat([file], how.guessed ? [file] : [], how.handed ? [file] : [])}. ` +
+  `What a shell command does to a lesson entry cannot be read before it runs, and ${ENTRY_REACH}. ` +
+  `Make the change to ${file} with Edit or Write instead, which are read before they run: one that adds or changes an entry is covered by his answer in the lesson picker and by nothing else, and one that touches no entry is asked about as usual. ` +
+  `For an entry, ${PICKER_ASK}. ` +
+  (how.guessed || how.handed
+    ? `If this command only reads or quotes ${file}, send it so that nothing it writes is left unread: feed a script the file on standard input (< ${file}) or hand it a copy, and keep every other write to a file the command's own words name. `
+    : '') +
+  (others.length ? `Its other lasting memory (${others.join(', ')}) is judged when sent in a command that leaves ${file} alone. ` : '') +
+  `A command whose words show that it only reads ${file} (cat, grep, wc, claude-sync lesson) is not refused.`
 
 /**
  * The file an Edit leaves: `file` with its old text replaced, when that text is found exactly once
@@ -1543,15 +1808,18 @@ export const writesWhat = (files: string[], guessed: string[] = [], handed: stri
 /**
  * What Claude is told when a save to lasting memory is refused: ask Dan in Claude Code's own dialog,
  * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's
- * asking"), and on For good send the same call again.
+ * asking"), and on For good send the same call again. `held` is what else the question must name,
+ * as a sentence of its own (factsAsk, for a write that takes an entry out of the lessons file,
+ * moves one or changes a heading); none for any other save.
  */
-export const askInstruction = (id: string, files: string[], guessed: string[] = [], handed: string[] = []): string => {
+export const askInstruction = (id: string, files: string[], guessed: string[] = [], handed: string[] = [], held: string = ''): string => {
   const where = files.join(', ')
   return (
     `Not saved yet: ${writesWhat(files, guessed, handed)}, so Dan decides first. ` +
     (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and writes another file, make the change with Edit or Write on that file instead. ` : '') +
     `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${where} and states the rule in one plain sentence, never the command or the raw text, ` +
     `such as "Save to ${files[0]} for good: <the rule>?", with the options ${FOR_GOOD}, ${THIS_SESSION} and ${NOT_AT_ALL}. ` +
+    held +
     `If he answers ${FOR_GOOD}, send this same call again unchanged and it is saved. Until he answers, do not write it any other way.`
   )
 }

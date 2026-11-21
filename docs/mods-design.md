@@ -2828,13 +2828,79 @@ and the band question is removed rather than kept beside it (L29). Three defects
   line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
   and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
   of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
-  route now closed. Left as they were and filed as #3343: a shell command that writes the lessons
-  file, a write that touches no entry (a section heading, an entry taken out whole, text above the
-  first section), and a checkout's `payload/LESSONS.md`, which the lesson picker does not cover.
+  route now closed. Left as they were and filed as #3343: a write that touches no entry (a section
+  heading, an entry taken out whole, text above the first section) and a checkout's
+  `payload/LESSONS.md`, which the lesson picker does not cover. A shell command that writes the
+  lessons file was filed there with them and has since been built, below.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
-  A shell append, and a write that touches no entry, are asked about as before. The approval is
+  The first of the three left on #3343 is built (2026-11-20): a shell command that writes
+  `~/.claude/LESSONS.md` is refused, with no For good offered and Edit or Write named in its
+  place. It cannot be sent to the lesson picker, which is what the issue asked first: the mod
+  reads which files a command writes, never what it writes to them, so nothing could hold the
+  entry to what Dan read. It is decided from the one judgement of the command (`lastingTargets`,
+  then `lessonsByShell`), never a second reading of it, so each way mod-kit's reader finds a
+  write of that file counts alike, a file handed to a script and one named by its path beside a
+  write the reader cannot follow included; those two may only read it, and the refusal
+  (`byShellOnly`) says which it found and how a read is sent. The issue's open question, whether
+  a write can be told from a read without refusing reads, is answered by that reader: 17 reading
+  commands run unasked in the suite and 19 writing ones are refused. A For good already standing
+  for the command is not taken, and `saveCall` keeps it out of the saves Dan's own words approve.
+  Deliberately not refused: a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md` through a
+  variable only a command's output or a condition sets, a bare name in a patch's prose). A first
+  build refused those too, and two cases already in the suite became refusals with no way through:
+  the copy of a checkout's lessons file into a scratch folder (#1241) and a patch whose message
+  says LESSONS.md (#1883). They are asked about as before. Also out of reach: a removal, which
+  the reader counts as no write, and a script that writes the file with no word of the command
+  naming it.
+  The second is built (2026-11-21), as Dan decided on the issue on 2026-11-20 ("For good, held to
+  facts": "The For good question stays, and the mod refuses it unless it names each entry removed
+  or moved, by number, and each heading changed. No new picker."). A write that touches no entry's
+  words is still asked For good, and the question is held to what the write does. `lessonFacts`
+  reads the file as it is and as the write leaves it, in the one walk `entriesTouched` uses
+  (`lessonLayout`), and gives the entries taken out whole, the entries left word for word under
+  another heading, and the headings taken out or added. Four things were left to the build, each
+  decided toward the stricter reading and recorded in the pull request:
+  - How a name is judged (`unnamed`). A number is a whole token in its own case, so `L17` is not
+    named by `L174`, `XL17`, `L17th` or `l17`, and a range names its two ends only. A heading is
+    its text after `## `, less the white space at its ends, between double quotes: without the
+    quotes "Data safety" was named by any question holding "Data safety net". The mod checks that
+    a name is in the question and cannot check what the question says about it.
+  - Which entries a heading change moves. A heading is read as renamed when every entry that stood
+    under the old one stands under the new one and nothing else does; both names are named and its
+    entries are not, since they stay together in the one file the rename renames. Every other
+    entry whose heading changes is named: under a heading added above it, left by a heading taken
+    out, or in a section whose entries did not stay together. Naming every entry under a renamed
+    heading was the stricter reading and was not taken, for two reasons. The issue's own account
+    (the comment of 2026-11-20 he chose from) sets the two apart: a rename "renames a file every session imports",
+    and an added heading "moves every entry below it into another file". And it would not last:
+    measured 2026-11-21, the numbers of the largest section's 208 entries take 1,227 of the 1,500
+    code units a question may hold, so they fit today with little room for the sentence, and stop
+    fitting as that section grows, after which its rename could be asked only by moving its
+    entries out a few at a time. It is one condition in `lessonFacts` (`carried`) if Dan wants
+    every entry named.
+  - Text that is no entry's and no heading (above the first section, or between a heading and its
+    first entry) needs no name. The file's reader gives it to no index and no session loads it,
+    Dan's decision names entries and headings, and it has no number or heading a question could
+    be held to; a fixed phrase would show only that the session typed the phrase. Blank lines and
+    a change of order inside a section, or of whole sections, are not held either.
+  - Asleep it is what any save is: noted for the morning report and refused, with nothing asked.
+    The note says what the write would take out, since an Edit's new text says nothing of it.
+  The answer is held to the same facts as the question, wherever an answer is taken. The approval
+  keeps the question Dan read (`asked`), and `takeApproval` takes it only when that question names
+  what the call does to the file as it stands when the call is sent, so a For good stored before
+  this rule, or given while the same Edit took nothing out, covers no removal; the refusal says
+  first that his For good does not cover it and what its question lacked, and his next answer
+  about the same save replaces it. The `isApproved` noun answers the same way. His own permanent
+  words cover such a write only when they name the same things (`saveCall`, L450): under "from now
+  on" an unnamed removal went on unasked, the route #3320's review found open for an entry added.
+  Two refusals have no question: a lessons file that could not be read, since what the write
+  would take out cannot be told (`cannotHold`, L345), and a heading that could not be shown to Dan
+  as it is written, which no question he could read can name (`cannotName`, L665). The second is a
+  dead end for a heading already in the file; setting such a name aside from the shown check, as
+  a file's own name is, would end it and is an exemption for Dan to decide.
+  Any other write that touches no entry is asked about as before. The approval is
   used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
@@ -3954,6 +4020,121 @@ on its default branch, held "for this session", and one file inside it held the 
   costly half, and a listing that fails holds the call.
 - **A write is judged as before.** A copy can be pushed, so what is written into one can reach the
   product. Only a removal passes: `rm`, `rm -rf`, a pattern matched in a folder there.
+
+### What #3279 changed for a merge of the default branch, 2026-11-20
+
+Since #3345 the guard asks git what a merge, rebase, cherry-pick, revert, switch, checkout of a
+branch, hard reset or stash pop would bring into the working tree, and judges each look changing
+file against the issue the branch names (Dan, 2026-11-19, "Ask only if a look file arrives"; the
+README's design round guard entry lists the commands). Built that way, every branch that took main
+in was asked again about a look change Dan had already answered on its own issue. Dan's answer on
+2026-11-20, asked whether the guard should ask about look changes already on main: "Skip what is on
+main (Recommended)". The comment on #3279 that records it that day gives the reason and the reach:
+"A look change already on main has shipped, so holding a branch that takes main in protects
+nothing", and it "covers only files whose change is already on the default branch. A cherry-pick, a
+merge of any other branch, and a stash stay asked."
+
+- **The one exemption among the moves, and it is an exemption.** Anything wider (another branch,
+  another kind of move, a name pattern, a switch that turns it off) is a new decision of Dan's.
+- **The default branch comes from the checkout, never from the command.** It is the branch
+  `$.modkit.branch` reads from the checkout's own record of its remote, at the commit last fetched
+  (the ref of that name under `refs/remotes/origin/`). mod-kit's fallback to a branch named main or
+  master is not used here: a local branch is not proof of anything having shipped. The remote is
+  never asked, so the answer is as old as the last fetch, which can only make the guard ask more.
+- **Shipped is decided by commits, per file.** For the commit being merged, or rebased onto, git
+  names the newest commit it shares with the default branch (`git merge-base`). Where that is the
+  commit itself, all of it is on the default branch and no look changing file is asked about.
+  Otherwise git lists what the commit holds differently from that shared commit
+  (`git diff --name-status`), and exactly those files are asked about. So a branch holding main and
+  one more commit is asked about that commit's files only, and a local main that is ahead of the
+  remote's is asked about what it is ahead by, whatever it is called.
+- **Only a merge and a rebase onto an upstream.** A cherry-pick, a revert, a switch, a checkout of a
+  branch, a hard reset and a stash go through no part of this, even naming a commit of the default
+  branch: none of them takes the default branch in, and a switch or a reset can also take the
+  branch's own look changes away.
+- **Where it cannot tell, it asks.** No default branch recorded for the remote, one never fetched,
+  a detached head (mod-kit's reader names no default branch there), no commit shared, git failing,
+  timing out or printing what cannot be read: every file is asked about as before.
+- **Each skip is written to the guard's log** (rules.ts `onDefaultSaid`): the files, the command,
+  and the commit of the default branch they were read against. It is the only trace, since nothing
+  is asked and nothing recorded for Dan.
+- **Costs three more reads of git, and only when a look changing file arrives**: the default
+  branch's commit, the shared commit, and, where the commit is not on the default branch, the list
+  of what it holds beyond it. Each was measured at 10 to 32 ms for #3345.
+- **Known limit.** The guard trusts the checkout's record of its remote. A command that rewrote
+  that record by hand (the remote's branch ref, or which branch it calls the default) in an earlier
+  call would make unshipped commits read as shipped. One on the same line as the merge is already
+  held, as any command before a move is. Checking against the remote itself needs the network,
+  which the guard does not use.
+- **Proven against real git, not only the tests' stand in.** The questions were run by hand on a
+  throwaway repository (git 2.51.1) for a merge of the default branch, of an older commit of it, of
+  another branch, of a branch holding main and one more commit, of one that had merged main in, of
+  a local main ahead of the remote's, and of an unrelated history; the tests' answers are those.
+
+### What #3337 changed: the repository and the parent a git command names, 2026-11-21
+
+A git command can name its repository and its working folder apart from the folder it runs in, four
+ways: `--git-dir`, `--work-tree`, `GIT_DIR` and `GIT_WORK_TREE`. mod-kit's git reader skipped all
+four and handed on only the folder `-C` names, so the guard asked the checkout the command ran in
+which files a merge, a cherry-pick or a restore would change, and a look change brought out of
+another repository, or into another folder, ran with nothing asked. Separately, a cherry-pick or
+revert of a merge commit with a mainline number (`-m 2`) was read against the merge's first parent
+whatever the number said.
+
+- The reader hands the naming on and decides nothing. `$.modkit.git({ words, env })` gives `gitDir`
+  and `workTree` as written, from the options and from the two variables in the `env` that
+  `pipeline` gives the command. An option wins over its variable and the last of each wins, as git
+  reads them. What `dir` means is unchanged, since other mods resolve it themselves.
+- git is asked where the files land, the guard does not work it out. For a command naming either,
+  the guard's questions are put as `git -C <folder> --git-dir=<repository> --work-tree=<folder>`,
+  starting with `git rev-parse --show-toplevel`, and the files are judged in the project that
+  folder is in. Measured with git 2.51.1 in throwaway repositories: with only the repository named
+  the files land in the folder the command runs in; with only the working folder named the
+  repository is the one found from that folder; a relative value is read from the folder `-C`
+  names; each variable reads exactly as its option.
+- A repository can keep its own working folder in its settings (`core.worktree`, as a submodule's
+  repository does). Named by `--git-dir` or `GIT_DIR` alone, its files land there, not in the
+  folder the command runs in (measured). Asking git covers that for a move and for `git am`. What
+  git itself writes (a restore, a checkout of paths, `git rm`, `git mv`) is placed by mod-kit's
+  write reader, which asks git nothing, so the guard asks git for such a command too and holds each
+  file that may change the look where git's folder is not the one the words give.
+- Nothing is skipped as already on the default branch for a repository named apart. The default
+  branch is mod-kit's reading of the checkout on disk, which is not a reading of the repository
+  the command names.
+- `git am` lands its patch in the working folder the command names (measured), so it is placed
+  there. `git apply` is left alone: measured, it changes the folder it runs in whatever working
+  folder is named.
+- Where the guard cannot tell, it holds. A value the shell fills in, an empty one, a repository
+  git cannot answer for, an answer that is no one folder, and either variable set by an earlier
+  command on the line (git reads it only if it was exported, which no reader here follows). For a
+  move that earlier command already holds it, as any command before a move does; for a restore
+  and for `git am` the guard looks for the variable's name anywhere but in a git command's own
+  settings.
+- The write reader never drops a path it gave before. Where it cannot know the working folder (a
+  value the shell fills in, or either variable set by an earlier command on the line), it hands on
+  the path in the folder the command runs in, as it did before #3337. That path is a guess. It is
+  kept because the collision guard and winding down skip a git write with no path, so handing on
+  none would have had two guards judge fewer calls than before. The design round guard does not
+  act on the guess: it holds each such file that may change the look, from the git reader's
+  account of the command and the command's own text. The lasting fix is for those two guards to
+  hold what cannot be placed, which is its own issue.
+- What git puts back is still read in the checkout the file sits in (`git cat-file`). A move's
+  source is a full commit id, so another repository either holds the same content or the read
+  fails, and a failed read judges the whole file. A restore with any `GIT_` variable or any option
+  but `-C` on its line was already judged whole.
+- The mainline number is read from `-m N`, `--mainline N`, `--mainline=N` and `-mN`, each of which
+  git was measured taking. Parent 1 is what was always read. Past it, the guard lists the commits
+  the command names (`git rev-list --no-walk`) and reads each against that parent
+  (`git diff --name-status <commit>^N <commit>`, turned round for a revert). Reading the Nth block
+  of `git log -m` was ruled out, because it names a parent by position in the output.
+- A mainline number that is no whole number from 1 to 99, two that differ, and an option that may
+  be the mainline one spelled another way (a shortened `--mainline`, `--no-mainline`, an `m` inside
+  a run of short options) hold the command, with how to write it. A commit with no such parent is
+  one git cannot answer for, and is held.
+- Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
+  any command is typed, which no reader sees. The collision guard and scope modes place a git
+  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
+  git reads each from the one before it.
 
 ## Picker manners (#615), built 2026-10-04
 

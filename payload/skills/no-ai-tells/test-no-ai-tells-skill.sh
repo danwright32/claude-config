@@ -13,6 +13,8 @@
 #   0. a message to another Claude session is not checked, said before the first step so no page is
 #      fetched for one (claude-config#3238);
 #   1. it reads on with the offset each result gives, until no part is left unread;
+#  1a. it reads the page's source one section at a time, from the section index (claude-config#3344);
+#  1b. a session without WebFetch reads the same parts through the web-fetch agent;
 #   2. it confirms the end of the list was reached, rather than trusting a missing note;
 #   3. a partial read is never reported as clean;
 #   4. on a session's own draft it writes the corrected draft in full, which is the text shown and saved;
@@ -88,13 +90,45 @@ check "the skill says one fetch is never the whole list" "$(holds "$text" "one c
 check "the skill reads on with the offset each result gives" "$(holds "$text" 'with the `offset` that result gives')"
 check "the skill repeats until no part is left unread" "$(holds "$text" "Repeat until a result has no such note")"
 
+# ---- 1a. the list is read one section of the page's source at a time (claude-config#3344) ----
+# On 2026-11-20 the web-fetch agent read the rendered page at offsets 0, 39932 and 139932, gave no
+# further offset and never reached "See also", so every check from such a session was partial. A
+# direct WebFetch reached it in three calls, but each answer summarised 100,000 characters at once.
+# Each section of the page's wikitext is under 40,000 characters and came back in one call with no
+# unread note (all 14 parts measured the same day), so the skill reads the source by section, with the
+# section index deciding which sections there are.
+INDEX_URL='https://en.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Signs_of_AI_writing&prop=sections&format=json&formatversion=2'
+PART_URL='https://en.wikipedia.org/w/index.php?title=Wikipedia:Signs_of_AI_writing&action=raw&section='
+check "the skill fetches the page's section index" "$(holds "$text" "$INDEX_URL")"
+check "the skill reads each section of the page's source by its index" "$(holds "$text" "$PART_URL")"
+check "the skill reads the page's opening, section 0" "$(holds "$text" "section 0")"
+check "the skill reads every top level section, by toclevel 1" "$(holds "$text" '"toclevel" is 1')"
+check "the index is checked for a gap in its numbers" "$(holds "$text" "run 1, 2, 3 and so on with no gap")"
+check "the skill no longer reads the rendered page by offset from the start" "$(lacks "$text" "Call WebFetch on the URL with a prompt asking for every sign in that part")"
+
+# ---- 1b. a session without WebFetch reads the same parts through the web-fetch agent ----
+check "the skill covers a session without a WebFetch tool" "$(holds "$text" "**Without a WebFetch tool.**")"
+check "the agent is asked for one call per URL" "$(holds "$text" "one call per URL")"
+check "the agent reports, per URL, whether part was unread" "$(holds "$text" "for each URL, whether its result said part of the text was not read")"
+check "the skill says the agent route was not measured" "$(holds "$text" "not measured when it was written")"
+
 # ---- 2. the end of the list is confirmed, not inferred from a missing note ----
 check "the skill confirms the read reached the page's See also heading" "$(holds "$text" 'reaches the page'"'"'s "See also" heading')"
+check "the one definition: the last section read is the one before See also" "$(holds "$text" 'the last section read is the one just before the "See also" entry')"
 check "the skill does not trust a missing note alone" "$(holds "$text" "rather than trusting the absence of a note")"
 
 # ---- 3. a partial read is never reported clean ----
 check "a partial read is never reported as clean" "$(holds "$text" "never report the text clean")"
 check "a partial read is named as partial" "$(holds "$text" "say the check was partial")"
+check "an unread section is named by its title" "$(holds "$text" "name each section that was not read")"
+check "a section with no offset to continue from counts as unread" "$(holds "$text" "If no offset is given, that section is unread")"
+
+# ---- 3a. a measured number carries its date in the same paragraph ----
+# awk paragraph mode: each block separated by a blank line is one record.
+undated="$(awk 'BEGIN { RS = "" } /38,913|252,524/ && !/2026-11-20/ { print }' "$SKILL" 2>/dev/null)"
+dated="$(awk 'BEGIN { RS = "" } /38,913/ && /2026-11-20/ { n++ } END { print n + 0 }' "$SKILL" 2>/dev/null)"
+check "the size of the largest section is in the skill with its date" "$([ "$dated" -gt 0 ] && echo ok || echo "no paragraph holds 38,913 with 2026-11-20")"
+check "every measured page size carries its date in the same paragraph" "$([ -z "$undated" ] && echo ok || echo "undated: $undated")"
 
 # ---- 4. a session's own draft comes back corrected, in full ----
 check "the skill has a mode for a session's own draft" "$(holds "$text" "**A session's own draft.**")"
@@ -157,6 +191,12 @@ check "control: a copy without the verdict rule is caught" \
 broken="$(grep -v -F 'offset' <<< "$text")"
 check "control: a copy without the offset instruction is caught" \
   "$([ "$(holds "$broken" 'with the `offset` that result gives')" != ok ] && echo ok || echo "the check passed a copy that lacks the phrase")"
+no_parts="$(grep -v -F 'action=raw&section=' <<< "$text")"
+check "control: a copy without the section by section read is caught" \
+  "$([ "$(holds "$no_parts" "$PART_URL")" != ok ] && echo ok || echo "the check passed a copy that lacks the part URL")"
+undated_copy="$(printf 'The largest section is 38,913 characters.\n\nOther text.\n' | awk 'BEGIN { RS = "" } /38,913|252,524/ && !/2026-11-20/ { print }')"
+check "control: a measured size with no date beside it is caught" \
+  "$([ -n "$undated_copy" ] && echo ok || echo "the date check passed an undated size")"
 check "control: a copy that still says suggestions only is caught" \
   "$([ "$(lacks "Do **not** output a rewritten version of the text. Suggestions only." "Do **not** output a rewritten version of the text. Suggestions only.")" != ok ] && echo ok || echo "the check passed a copy that holds the phrase")"
 
