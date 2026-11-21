@@ -4553,6 +4553,47 @@ no reading was given before #3252 (the reader's `headed_string`); the command it
 as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
 command, a body over several lines, the same string at a script's top level, and anything typed.
 
+Since claude-config#3277 the words written after a program the gate does not know are read as the
+command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
+ones there were, so it can refuse a command those let through and never the reverse. Before it a
+program the gate had no rule for was a command that runs nothing: `node --test
+test/notify.test.js`, a test file whose imports reach code that posts, was refused, and the same
+words after `op run --`, `dotenv --` or `sandbox-exec -f <profile>` were allowed, as was a `curl`
+to the posting endpoint behind any of them (measured 2026-11-18 and 2026-11-19). Now, where a
+command's program is one the gate neither reads by its name nor knows to be unable to run the
+words it is handed, each later word that names a program the gate does read by name (a shell, an
+interpreter, `npx`, `npm`, `curl`, `pytest`), or a runner the shared reader reads past (`env`,
+`timeout`, `nice`), bare, by a path or in quotes, starts a command that is judged as if it were
+typed alone, fed what feeds the command it is written in. So `op run -- node --test
+test/notify.test.js`, `docker exec app env A=1 node --test test/notify.test.js`, `git bisect run
+bash post.sh` and `cat post.py | op run -- python3` are refused, with the runners in front too
+(`time op run -- ...`), typed, in a string a shell runs and in a script on disk. The refusal names
+the program, and names the no network wrapper where a file's imports are what reach the code that
+posts, in the same words as before. No list of programs that run their words is kept, since one
+missing from it would pass (L96). The question asked of the program is the one a shell script's
+own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
+`SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
+nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
+as it was, because the gate reads its body where it stands and this repository's own gate suite
+hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
+arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
+there, behind a script that runs its words as well; the same glued word after a program the gate
+reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+costs: a program that does
+not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
+when the words after it happen to spell a command the gate refuses. Left open: a word that names
+a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
+and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
+quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+is refused as unread and a script on disk is left alone: more than six words that could each
+start a command, and more than three of these readings inside one another, which only strings a
+shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
+such program), since the words of one command are read once however many programs stand among
+them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
+program's words were allowed unread. Suite: `test-slack-drafts-unknown-program.sh`.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
