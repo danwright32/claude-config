@@ -8524,7 +8524,19 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why;
+since #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)") a look changing file of any kind
+that a checkout or restore puts back byte for byte as the default branch holds it is not asked
+about, since it changes no look that has not shipped: the guard decides that from git, never from
+the command's words, with `git rev-parse --verify --quiet` for the commit the checkout's record of
+its remote's default branch stands at and for the commit the command names, which must be the same
+commit, and `git ls-tree` for whether that commit holds the file; the command must be written as
+its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
+origin/main <file>`), with nothing before or beside it that may change what the name means, though
+on a line that groups nothing what runs once the restore has finished no longer counts, a test run
+piped to its last lines included; any other commit, a local branch that differs from what was
+fetched, the index, any option, a pattern, a file the default branch does not hold and every case
+git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
 2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
 `switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
