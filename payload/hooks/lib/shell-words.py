@@ -2169,6 +2169,12 @@ def compiled(head):
     return nul != -1 and not any(b in _WORD_ENDS for b in head[4:nul])
 
 
+def _compiled_run(wrapper, head):
+    """Whether wrapper, handed a file that starts with these bytes, reads none of it as commands:
+    the one test script_text and compiled_program both make, so neither can drift from the other."""
+    return wrapper in COMPILED_RUNNERS and compiled(head)
+
+
 def _script_path(path, d):
     """The full path a script file's name stands for, run in directory d, or None when it cannot be
     told: a variable in its name, or a relative name with no absolute directory to resolve it against."""
@@ -2197,7 +2203,7 @@ def compiled_program(path, d, wrapper):
             head = f.read(COMPILED_HEAD)
     except OSError:
         return None
-    return full if compiled(head) else None
+    return full if _compiled_run(wrapper, head) else None
 
 
 def script_file(why):
@@ -2225,7 +2231,7 @@ def script_text(path, d, wrapper):
         return None
     if len(data) > SCRIPT_MAX_BYTES:
         return None
-    if wrapper in COMPILED_RUNNERS and compiled(data):
+    if _compiled_run(wrapper, data):
         return None
     text = data.decode("utf-8", "replace")
     if wrapper == "direct" and text.startswith("#!"):
