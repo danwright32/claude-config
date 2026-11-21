@@ -163,6 +163,25 @@ eval "$(declare -f real_sleep_note | sed '1s/real_sleep_note/sleep_note/')"
 has "a silent failure of the writer is said as such" "sleep_note failed and gave no reason" "$out"
 lacks "and never as a note that could not be built" "could not be built" "$out"
 
+# ---- a stop ends every claim the session holds (#3342): each reads as failed with the stop's own
+# reason, never as ended unexpectedly (a claim never ended, #25 above, is still flagged) ----
+BREAKER='circuit breaker: 3 blocks in a row with no new commit, claim or note'
+sleep_claim "$ROOT" 40 s1 >/dev/null 2>&1
+sleep_claim "$ROOT" 41 s1 >/dev/null 2>&1
+sleep_claim "$ROOT" 42 s1 >/dev/null 2>&1
+# As the driver ends them at a stop: the claim in hand first, then the older ones, oldest first.
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 42 s1 failed "$BREAKER" >/dev/null 2>&1
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 40 s1 failed "$BREAKER" >/dev/null 2>&1
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 41 s1 failed "$BREAKER" >/dev/null 2>&1
+r="$(final)"
+has "the oldest claim a stop ended says the stop's reason" "Failed danwright32/demo#40: $BREAKER" "$r"
+has "the middle claim a stop ended says the stop's reason" "Failed danwright32/demo#41: $BREAKER" "$r"
+has "the claim in hand a stop ended says the stop's reason" "Failed danwright32/demo#42: $BREAKER" "$r"
+lacks "the oldest claim is never ended unexpectedly" "danwright32/demo#40, claimed" "$r"
+lacks "the middle claim is never ended unexpectedly" "danwright32/demo#41, claimed" "$r"
+lacks "the claim in hand is never ended unexpectedly" "danwright32/demo#42, claimed" "$r"
+has "a claim never ended is still flagged beside them" "danwright32/demo#25, claimed by s1" "$r"
+
 [ -s "$WORK/gh-called" ] || { fail=$((fail + 1)); echo "FAIL: the wake render never asked the gh stand-in, so the report was never checked as at wake"; }
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
