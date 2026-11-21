@@ -73,8 +73,8 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
-  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
+  LIMITS, SLEEP_START, blockTold, overdueClaim, parkedWith, parkedWithUnsaved, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, unstartedSaid,
+  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted, type UnsavedPark,
 } from './driver.ts'
 import { busyNow } from './busy.ts'
 import { overnightData } from './overnightdata.ts'
@@ -1289,7 +1289,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
     // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
     found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, worked, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
-    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null }
+    found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`], checked: '', steps: [], stopped: null, filed: [] }
   }
   found.unmeasured.unshift(...unread)
   const at = await $.clock.now()
@@ -1301,6 +1301,8 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   const limit = stopped ? (({ text: _said, ...facts }) => facts)(stopped) : null
   try {
     for (const text of found.hits) await sleepNote($, recordPath, { kind: 'outward', at, by, text })
+    // #3273: an issue filed overnight that needs nothing from Dan, said once under Done, never a row.
+    for (const f of found.filed) await sleepNote($, recordPath, { kind: 'filed', at, by, repo: f.repo, issue: f.issue, text: f.title })
     for (const text of found.unmeasured) await sleepNote($, recordPath, { kind: 'unmeasured', at, by, text, ...(limit && text === stopped?.text ? { limit } : {}) })
     // What it read and left out as healthy (#2766), every time it runs: the report says it under
     // Needs a look, and a final report with no note of the check at all says it did not run.
@@ -3486,7 +3488,9 @@ const notesNow = async ($: EngineInterface, en: Enrolled): Promise<string | null
 const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading> => {
   const r = await run($, ['bash', queueScript(en.home), 'claims'])
   if (r.exitCode !== 0) return { state: 'unknown', why: (r.stdout + r.stderr).trim().split('\n')[0]?.replace(/^refused\t-\t/, '') || `sleep-queue.sh claims exited ${r.exitCode}` }
-  return heldClaim(r.stdout, en.self)
+  // Tonight's notes read after the claims (#3330): a session writes its done note before its claim
+  // ends, so a claim read as held whose done note is already written is read as ended here.
+  return heldClaim(r.stdout, en.self, await notesNow($, en))
 }
 
 // The work on the issue this session holds, as the queue reads it (`sleep-queue.sh work`): the tip
@@ -3538,8 +3542,13 @@ const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
 // written is still a stop: the next Stop never blocks on the older count it would read back.
 const stoppedHere = new Set<string>()
 const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
-// A park the watchdog made but could not record on disk, said at the next Stop all the same.
-const parkedHere = new Map<string, string>()
+// Parks the watchdog made but could not record on disk, by issue, said at the next Stop all the
+// same. Each holds only its own words, never the saved ones joined in, so the Stop cannot say a
+// saved park twice.
+const parkedHere = new Map<string, Map<number, UnsavedPark>>()
+// Each refused park the saved record holds since the last Stop, by issue. The next minute's try
+// at the same issue takes the place of these words; the failure is never said a second time.
+const refusedHere = new Map<string, Map<number, string>>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
 // backgroundTasks is Claude Code's list of the session's work in flight sent with the stop, from which
@@ -3557,12 +3566,13 @@ const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ blo
       return null
     }
     let driver = await loadDriver($, en)
-    const unsavedPark = parkedHere.get(stopKey(en))
-    if (unsavedPark && driver.state !== 'unreadable') {
+    const unsavedParks = parkedHere.get(stopKey(en))
+    if (unsavedParks?.size && driver.state !== 'unreadable') {
       const base = driver.state === 'ok' ? driver.record : freshDriver(en.record.generation, en.self, en.now)
-      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${thenNext(base.parked)}${unsavedPark}` : unsavedPark } }
+      driver = { state: 'ok', record: { ...base, parked: parkedWithUnsaved(base.parked, unsavedParks.values()) } }
     }
     parkedHere.delete(stopKey(en))
+    refusedHere.delete(stopKey(en))
     const notesText = await notesNow($, en)
     const claim = await claimNow($, en)
     const u = await usageNow($)
@@ -3660,15 +3670,33 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
       return (await saveDriver($, en, d)) === null ? resumeWords(d) : null
     }
     if (d.stopped || d.resumeAt !== null) return null
-    const c = await claimNow($, en)
-    if (c.state !== 'held' || c.claim.since === null) return null
-    const active = activeMs(d.waits, c.claim.since, en.now)
-    if (active < LIMITS.stuckMs) return null
+    // Every claim held is timed from its own start, and one its session noted done is not held
+    // (#3330). A done note landing after this read races the park below for the claim's next
+    // entry, and the queue lets exactly one of the two land; either way the report reads the done.
+    const over = overdueClaim(await claimNow($, en), d.waits, en.now)
+    if (!over) return null
     const where = await repoOf($)
-    const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
-    const rel: Release = { issue: c.claim.issue, state: 'parked', why }
-    d.parked = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
-    if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
+    const rel: Release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
+    // Several claims can now be parked a minute apart before the next Stop says so: each park is
+    // added after any not yet said, never written over it (lessons review of feb6dd4).
+    // A park the queue refused is tried again next minute, and its words then take the place of
+    // that issue's saved refusal, so one failure is not said, and stored, once a minute until
+    // the next Stop. A park the record could not take is kept by issue with only its own words,
+    // and joined to the saved ones once, at the next Stop (lessons reviews of d137576, defdc10).
+    const failed = await endClaim($, en, where.root, rel)
+    const told = releaseTold('watchdog', rel, failed, { root: where.root, self: en.self })
+    const key = stopKey(en)
+    const saved = refusedHere.get(key) ?? new Map<number, string>()
+    const unsaved = parkedHere.get(key) ?? new Map<number, UnsavedPark>()
+    const earlier = saved.get(rel.issue)
+    d.parked = parkedWith(d.parked, told, earlier)
+    if ((await saveDriver($, en, d)) === null) {
+      unsaved.delete(rel.issue)
+      if (failed === null) saved.delete(rel.issue)
+      else saved.set(rel.issue, told)
+    } else unsaved.set(rel.issue, { told, earlier })
+    refusedHere.set(key, saved)
+    parkedHere.set(key, unsaved)
     return null
   })
   if (!resume) return

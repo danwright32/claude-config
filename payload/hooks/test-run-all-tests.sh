@@ -3397,6 +3397,42 @@ out_puc="$(bash "$RUNNER" "$PUC" 2>&1)"; code_puc=$?
   && check "#1444 a suite whose check names mention the word is not failed for it" ok \
   || check "#1444 a suite whose check names mention the word is not failed for it" "exit=$code_puc out=$out_puc"
 
+# THE RECORD THE PULL REQUEST CHECKS READ (claude-config#3312). On screen the parts are capped and
+# live only in a job log, so on 2026-11-19 a green check stood on 27 suites with parts nobody had
+# tested. With HOOK_TESTS_UNMEASURED_FILE set, the runner writes every part, uncapped, as
+# `<suite><TAB><why>`, for tools/ci-unmeasured-summary.sh to put on the run's summary. The file is
+# started empty, so a run that left nothing untested says so rather than leaving last run's list, and
+# no suite inherits the name, or a suite that runs this runner on fixtures would write its fixtures'
+# parts into the real record.
+PUR="$TMPROOT/part-record"
+mkdir -p "$PUR"
+printf 'stale\tleft by an earlier run\n' > "$PUR/pu1.tsv"
+HOOK_TESTS_UNMEASURED_FILE="$PUR/pu1.tsv" bash "$RUNNER" "$PU1" > /dev/null 2>&1
+want_pur="$(printf 'test-partial.sh\tthe SwiftUI adapter, because this is not macOS\ntest-partial.sh\ta settled email scored end to end, because there is no Chrome here')"
+[ "$(cat "$PUR/pu1.tsv" 2>/dev/null)" = "$want_pur" ] \
+  && check "#3312 the runner records each unmeasured part with its suite and reason, replacing an earlier record" ok \
+  || check "#3312 the runner records each unmeasured part with its suite and reason, replacing an earlier record" "record: $(cat "$PUR/pu1.tsv" 2>&1)"
+HOOK_TESTS_UNMEASURED_FILE="$PUR/pu3.tsv" bash "$RUNNER" "$PU3" > /dev/null 2>&1
+[ "$(grep -c "^test-partmany.sh	p[0-9]*$" "$PUR/pu3.tsv" 2>/dev/null)" = 12 ] \
+  && check "#3312 and records every part, past the cap on screen" ok \
+  || check "#3312 and records every part, past the cap on screen" "record: $(cat "$PUR/pu3.tsv" 2>&1)"
+PUW="$TMPROOT/dir-part-record-whole"
+mkdir -p "$PUW"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "saw [%%s]\\n" "${HOOK_TESTS_UNMEASURED_FILE:-}" > "%s"\n' "$PUR/saw.txt"
+  printf 'printf %s\\\\n "%s passed=1 failed=0"\n' "'%s'" "$MARK"
+} > "$PUW/test-looks.sh"
+chmod +x "$PUW/test-looks.sh"
+printf 'stale\tleft by an earlier run\n' > "$PUR/whole.tsv"
+HOOK_TESTS_UNMEASURED_FILE="$PUR/whole.tsv" bash "$RUNNER" "$PUW" > /dev/null 2>&1
+[ -f "$PUR/whole.tsv" ] && [ ! -s "$PUR/whole.tsv" ] \
+  && check "#3312 a run that left nothing unmeasured leaves the record empty, not missing or stale" ok \
+  || check "#3312 a run that left nothing unmeasured leaves the record empty, not missing or stale" "record: $(ls -l "$PUR/whole.tsv" 2>&1; cat "$PUR/whole.tsv" 2>&1)"
+[ "$(cat "$PUR/saw.txt" 2>/dev/null)" = "saw []" ] \
+  && check "#3312 and no suite is handed the record's name" ok \
+  || check "#3312 and no suite is handed the record's name" "the suite saw: $(cat "$PUR/saw.txt" 2>&1)"
+
 # THE GUARD, in the source (#1444), and the check that declares itself unmeasured (#1452), read
 # every suite in this repository rather than a fixture tree, so they live in
 # test-run-all-tests-real-tree.sh, which the gate before a push runs, and not in this file, which it

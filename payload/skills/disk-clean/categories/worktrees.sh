@@ -32,21 +32,9 @@ is_worktree() { # <dir>
   case "$line" in "gitdir: "*/.git/worktrees/?*) return 0 ;; esac
   return 1
 }
-# owner/name of a GitHub remote URL; fails for anything else.
-github_repo() { # <url>
-  local u="$1"
-  case "$u" in
-    https://github.com/*) u="${u#https://github.com/}" ;;
-    git@github.com:*) u="${u#git@github.com:}" ;;
-    ssh://git@github.com/*) u="${u#ssh://git@github.com/}" ;;
-    *) return 1 ;;
-  esac
-  u="${u%.git}"; u="${u%/}"
-  case "$u" in */*/*|/*|*/|'') return 1 ;; */*) printf '%s\n' "$u" ;; *) return 1 ;; esac
-}
 # Sets V and D for <worktree>.
 wt_rules() { # <worktree>
-  local t="${1%/}" cwd st br head url repo out err="$DCS_WORK/wt.err.$$" n oid
+  local t="${1%/}" cwd
   D=""
   # Reading a .git file iCloud keeps only in the cloud makes iCloud fetch it, and so would git.
   if [ -f "$t/.git" ] && dcs_dataless "$t/.git"; then
@@ -64,23 +52,9 @@ wt_rules() { # <worktree>
   V=offerable
   dcs_floor "$t" .git .gitignore .gitattributes
   [ "$V" = offerable ] || return
-  # Optional locks off: a plain git status refreshes the index file it reads, which is a write, and
-  # the scan writes nothing in the folders it judges (#3216).
-  st="$(git -C "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
-  [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
-  br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
-  [ -n "$br" ] || { V="not offerable: it is on no branch, so no pull request can be matched to it"; rm -f "$err"; return; }
-  head="$(git -C "$t" rev-parse HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-parse failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
-  url="$(git -C "$t" remote get-url origin 2>/dev/null </dev/null)" || { V="not offerable: it has no origin remote, so no pull request can say it merged"; rm -f "$err"; return; }
-  repo="$(github_repo "$url")" || { V="not offerable: its repository is not on GitHub ($url), so no pull request can say it merged"; rm -f "$err"; return; }
-  out="$(gh pr list --repo "$repo" --head "$br" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2> "$err" </dev/null)" || {
-    V="unmeasured: gh could not say whether its pull request merged ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
-  rm -f "$err"
-  [ -n "$out" ] || { V="not offerable: no merged pull request for its branch $br"; return; }
-  while read -r n oid; do
-    [ "$oid" = "$head" ] && { V=offerable; D="branch $br, merged in pull request #$n at its HEAD"; return; }
-  done <<< "$out"
-  V="not offerable: it has commits its merged pull request #$(printf '%s\n' "$out" | awk 'NR == 1 { print $1 }') does not"
+  # Clean, on a branch, and merged by gh at exactly its HEAD: the one test in scan-lib.sh, which
+  # the git checkouts in session notes are held to as well.
+  dcs_git_merged "$t"
 }
 
 do_scan() {
