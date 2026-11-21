@@ -4698,6 +4698,20 @@ compound statement after a semicolon that holds an import), it is read as it was
 that follows a semicolon on a line that does not start with one (`x = 1; import poster`) is not
 found in such text, as before. Suite: `test-slack-drafts-python-imports.sh`.
 
+The same issue's second refusal named a line no file has. A script that code earlier in the same
+call wrote is read as everything it may now hold: each file that code names, joined, then the
+script as it is on disk (#2721, #2772). One python3 heredoc edited `claude-sync` and
+`durable-lesson-check.sh` and the hook's suite ran after it, so the hook was read as possibly
+holding `claude-sync`, whose line 80 sources its library by a variable set from its own folder. In
+the hook's folder that library is not there, the path cannot be worked out, and the call was
+refused for "durable-lesson-check.sh, line 80", a line of the joined text. The refusal stands, since
+the gate cannot tell that the code did not copy one file into the other, and reading the copy in
+`claude-sync`'s own folder would pass a script copied next to a different library. What changed is
+what it names (`line_place`): "line 80 of claude-sync, which the script is made from earlier in
+this command", and "line 3 as it is on disk" for a line of the script's own that comes after what
+it is made from. Nothing is refused or allowed that was not before. Editing the two files in
+separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a

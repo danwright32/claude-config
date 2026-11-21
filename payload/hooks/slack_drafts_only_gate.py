@@ -2134,6 +2134,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         Raises OSError as open() does for a file nothing made. part "text" leaves out each of those
         that is binary (Judge.binary), and "binary" gives only those, for script_body to read the
         rest as commands and search these for an endpoint (claude-config#2892)."""
+        return b"".join(data for _, data in self.content_parts(path, limit, part))[:limit]
+
+    def content_parts(self, path, limit=MAX_FILE, part=None):
+        """content()'s bytes as the parts it joins, in order, each (what the part was made from as a
+        refusal names it, its bytes): the name is None for the file as it is on disk, read alone,
+        among what an earlier command made it from (code that names the file it writes) or after
+        that, and for the newline put before it then. For
+        line_place, which says which of them holds a line of the joined text (claude-config#3278)."""
 
         def wanted(data):
             return part is None or (part == "binary") == self.binary(data)
@@ -2142,16 +2150,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if not pieces:
             with open(path, "rb") as f:
                 data = f.read(limit)
-            return data if wanted(data) else b""
+            return [(None, data if wanted(data) else b"")]
         real = os.path.realpath(path)
         made = []
-        for kind, value, _ in pieces:
+        for kind, value, label in pieces:
             if kind in ("unknown", "maybe", "code"):
                 continue  # nothing to read: script() refuses a file holding one (unread, code_names)
             if kind == "text":
                 data = value.encode("utf-8", "replace")
                 if wanted(data):
-                    made.append(data)
+                    made.append((label, data))
                 continue
             try:
                 with open(value, "rb") as f:
@@ -2159,17 +2167,49 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             except OSError:
                 continue  # unreadable to us is unreadable to the copy that would read it
             if wanted(data):
-                made.append(data)
-        out = b"".join(made)
+                # None for the file itself, where the code that writes it names it.
+                made.append((None if os.path.realpath(value) == real else label, data))
         if os.path.isfile(real) and not any(p[0] == "file" and p[1] == real for p in pieces):
             try:
                 with open(real, "rb") as f:
                     data = f.read(limit)
                 if wanted(data):
-                    out += b"\n" + data
+                    made += [(None, b"\n"), (None, data)]
             except OSError:
                 pass
-        return out[:limit]
+        return made
+
+    def line_place(self, ctx, at):
+        """Where offset at of the script text in ctx is, as a refusal says it: "line N" of the file
+        as it is on disk, or, where an earlier command of this call made the script from other files
+        or text (content()), "line N of <what it is made from>, which the script is made from earlier
+        in this command" (claude-config#3278). The text of such a script is everything it may hold,
+        joined, so a line's number in the joined text is a line of no file: a call that edited a hook
+        and claude-sync by one python3 heredoc and then ran the hook's suite was refused for line 80
+        of the hook, which is line 80 of claude-sync. Only the words change, never what is refused.
+
+        Lines are counted in bytes, where a newline is the same count as in the text read. The plain
+        number in the joined text, as before, where the parts cannot be told apart: the script being
+        read is not the one ctx holds the text of, or the line runs over two parts."""
+        n = ctx["text"].count("\n", 0, at) + 1
+        try:
+            parts = self.content_parts(os.path.realpath(self.walking)) if ctx.get("script") and self.walking else []
+        except (OSError, ValueError):
+            parts = []
+        if len(parts) < 2 or b"".join(data for _, data in parts)[:MAX_FILE].decode("utf-8", "replace") != ctx["text"]:
+            return f"line {n}"
+        first, ended = 1, True  # the line the part starts on, and whether the part before it ended its line
+        for i, (label, data) in enumerate(parts):
+            last, ends = first + data.count(b"\n"), data.endswith(b"\n")
+            if data and first <= n <= last and (n < last or not ends):
+                if (n == first and not ended) or (n == last and i < len(parts) - 1):
+                    break  # a line that starts in one part and ends in another
+                k = n - first + 1
+                return f"line {k} of {label}, which the script is made from earlier in this command" if label \
+                    else f"line {k} as it is on disk"
+            if data:
+                first, ended = last, ends
+        return f"line {n}"
 
     def unread(self, path, with_maybe=True, skip=None):
         """For a file written earlier in this command with text that cannot be worked out
@@ -6324,7 +6364,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         at = ctx["at"]
         where = f"the script {ctx['script']}" if ctx["script"] else "this command"
         if at is not None and ctx["script"]:
-            where += f", line {ctx['text'].count(chr(10), 0, at) + 1},"
+            where += f", {self.line_place(ctx, at)},"
         names = [a or b for a, b in SH_PARAM.findall(raw)]
         unknown = sorted({n for n in (re.split(r"[^A-Za-z0-9_]", n)[0] for n in names)
                           if n and n != "BASH_SOURCE" and self.sh_source_var(n) is None})
@@ -6338,9 +6378,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             why = None
         known = self.sh_ctx_known() if at is not None else None
         if why and known and at >= known["top"] and known["top"] < len(ctx["text"]):
-            n = ctx["text"].count("\n", 0, known["top"]) + 1
             line = ctx["text"][ctx["text"].rfind("\n", 0, known["top"]) + 1:].split("\n", 1)[0].strip()[:120]
-            why += f", since the gate stops following the script's variables at line {n}: {line}"
+            why += f", since the gate stops following the script's variables at {self.line_place(ctx, known['top'])}: {line}"
         why = f" ({why})" if why else ""
         # Through unfollow, so main() says the check could not be made rather than claiming a post (L11).
         return self.unfollow(f"{where} {verb} {raw}, a path the gate cannot work out{why}, so the file it "
