@@ -6599,7 +6599,9 @@ Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
 under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
 session notes folder shapes described above, and the home folder's standard folders and listed
-dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+dotfolders themselves), whatever the category says; a path ending in a slash refused, since no scan
+records one and the slash would have the link test follow a link rather than see it (#3332); a
+symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it

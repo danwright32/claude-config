@@ -403,6 +403,11 @@ path_checks() { # <target> [<category> <method>]
   case "$t/" in */../*|*/./*) WHY='its path holds a . or .. component'; return 1 ;; esac
   # The deny list first, on the path as recorded: /Applications/Safari.app is itself a link.
   if deny_reason "$t"; then WHY="never removed: $DENY"; return 1; fi
+  # A trailing slash has the link test below follow a link rather than see it, and dc_resolve then
+  # keeps the link itself as where it lies, so every method would act on the link or through it
+  # (#3332). No scan module records one, so it is refused, never trimmed: something wrote a target
+  # that is not what was measured. The path / alone is the deny list's, just above.
+  case "$t" in ?*/) WHY='its path ends in a slash, which no scan records, so it is not what was measured; name it without the slash'; return 1 ;; esac
   if [ -L "$t" ]; then
     WHY="it is a symbolic link (to $(readlink "$t" 2>/dev/null)), so what it names is not what was measured"; return 1
   fi

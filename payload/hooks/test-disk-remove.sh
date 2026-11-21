@@ -371,10 +371,13 @@ check "notes: an INTENT was written for each of the two" "$(eq "$(intents "$(LOG
 check "notes: and for nothing that was refused" "$(eq "$(intents "$(LOGF s1)" '^r')" 0)"
 line_of() { grep -F -- "$1" <<< "$OUT_TEXT" | awk 'NR == 1'; }
 for pair in "the state folder itself|$H/.claude/state:" "session-notes itself|$NOTES:" "a project|$NP:" "a session|$NS:" "a task folder|$NT:" "a five level path|$NT/deep/inner:" \
-  "another folder of state|$H/.claude/state/ai-review:" "a task folder with a trailing slash|$NT/:" "a task folder whose name holds a space|$NS/my task:" \
+  "another folder of state|$H/.claude/state/ai-review:" "a task folder whose name holds a space|$NS/my task:" \
   "a file at four levels|$NT/loose.txt:"; do
   check "notes: ${pair%%|*} stays refused as Claude Code's own state" "$(has "$(line_of "${pair#*|}")" "never removed: it is Claude Code's own state")"
 done
+# The deny list reads it without its slash, as the task folder the second exception lets past, so
+# until #3332 only dc_notes_item, which refuses a trailing slash, stopped it; now the slash does.
+check "notes: a task folder with a trailing slash stays refused, for the slash" "$(has "$(line_of "$NT/:")" "its path ends in a slash")"
 check "notes: a .. at the end of a four level path is refused" "$(has "$(line_of "$NT/photos/..:")" ". or .. component")"
 check "notes: a .. inside a path that lands four levels down is refused" "$(has "$(line_of "$NT/deep/../other:")" ". or .. component")"
 check "notes: a link at the fourth level is refused as a link" "$(has "$(line_of "$NT/leaf-link:")" "symbolic link")"
@@ -590,6 +593,35 @@ check "a relative path is skipped" "$(has "$OUT_TEXT" "not absolute")"
 check "a path with a .. component is skipped" "$(has "$OUT_TEXT" ". or .. component")"
 check "and the file it named is still there" "$(there "$H/w/real")"
 check "no write was refused by the guard: disk-remove refused them itself" "$(eq "$(dc_refusals)" "")"
+
+# A recorded target ending in a slash (#3332). The link test on "link/" follows the link rather than
+# seeing it, so before this every such item passed the link refusal: delete removed the link as if
+# it were what was measured, the worktree and derived-data methods were handed it, and truncate
+# emptied the file it named, outside HOME. No scan module records a trailing slash, so it is refused.
+fresh
+mkdir -p "$H/w/realdir" "$H/w/plain" "$DC_ROOT/beside-home"; printf 'x\n' > "$H/w/realdir/f"; printf 'x\n' > "$H/w/plain/f"
+for n in 1 2 3 4 5; do ln -s "$H/w/realdir" "$H/w/dlink$n"; done
+printf 'keep\n' > "$DC_ROOT/beside-home/kept"; ln -s "$DC_ROOT/beside-home/kept" "$H/w/flink"
+item e1 fixture truncate "$H/w/flink/"; item e2 fixture worktree "$H/w/dlink1/"; item e3 fixture derived-data "$H/w/dlink2/"
+item e4 fixture trash "$H/w/dlink3/"; item e5 fixture delete "$H/w/dlink4/"; item e6 fixture delete "$H/w/dlink5//"
+item e7 fixture delete "$H/w/realdir/"; item e8 fixture delete "/"; item e9 fixture delete "$H/w/plain"
+record s1 10; plan "$H/plan" s1 e1 e2 e3 e4 e5 e6 e7 e8 e9
+run --plan "$H/plan"
+for pair in "truncate through a link to a file|$H/w/flink/:" "worktree|$H/w/dlink1/:" "derived-data|$H/w/dlink2/:" \
+  "trash|$H/w/dlink3/:" "delete|$H/w/dlink4/:" "two slashes|$H/w/dlink5//:" "a real folder, not a link|$H/w/realdir/:"; do
+  check "trailing slash: ${pair%%|*} is refused, saying its path ends in a slash" "$(has "$(line_of "${pair#*|}")" "its path ends in a slash")"
+done
+check "trailing slash: the file outside HOME that a link named was not emptied" "$(eq "$(cat "$DC_ROOT/beside-home/kept")" keep)"
+check "trailing slash: no link was removed, and the folder they name is whole" \
+  "$(n=0; for l in 1 2 3 4 5; do [ -L "$H/w/dlink$l" ] && n=$((n + 1)); done; [ "$n" -eq 5 ] && [ -L "$H/w/flink" ] && [ -f "$H/w/realdir/f" ] && echo ok || echo "$n of the 5 folder links are left")"
+check "trailing slash: neither git nor the Xcode build cache sweep was handed a link" "$(eq "$(calls_of git)$(calls_of derived-data-sweep)" "")"
+check "trailing slash: nothing was moved to the Trash" "$(eq "$(calls_of trash)" "")"
+check "trailing slash: no INTENT was written for any of them" "$(eq "$(intents "$(LOGF s1)" '^e[1-8]$')" 0)"
+check "trailing slash: the path / alone is still refused as the root of the disk" "$(has "$(line_of "skipped    /:")" "it is the root of the disk")"
+check "trailing slash: a folder named without one, in the same plan, is removed as before" "$(eq "$(intents "$(LOGF s1)" '^e9$')|$(gone "$H/w/plain")" "1|ok")"
+mkdir -p "$H/w/realdir"; ln -sfn "$H/w/realdir" "$H/w/plink"
+run --propose delete "$H/w/plink/"
+check "trailing slash: --propose refuses a path given with one too" "$(eq "$RC|$(has "$(line_of "$H/w/plink/:")" "its path ends in a slash")" "5|ok")"
 
 # The temp folder is an allowed root too.
 fresh
