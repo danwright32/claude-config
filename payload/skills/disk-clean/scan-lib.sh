@@ -470,8 +470,8 @@ EOF
   # A .git is printed before the dataless prune and never entered, so a worktree whose own .git
   # file iCloud keeps only in the cloud is still found, and worktrees.sh says so (#1860).
   find "$H" \( -path "$H/Library" -o -path "$H/.Trash" -o -path "$H/.ssh" -o -path "$H/.gnupg" -o -path "$H/.claude/projects" \
-      -o -path "$H/Dropbox" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
-      -o -path "$H/Box" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
+      -o -path "$H/Dropbox" -o -path "$H/Dropbox (*" -o -path "$H/.dropbox" -o -path "$H/Google Drive" -o -path "$H/OneDrive" -o -path "$H/OneDrive - *" \
+      -o -path "$H/Box" -o -path "$H/Box Sync" -o -path "$H/pCloud Drive" -o -path "$H/.pcloud" -o -path "$H/SynologyDrive" \
       -o -name '*.app' -o -name '*.photoslibrary' -o -name '*.musiclibrary' -o -name '*.tvlibrary' -o -name '*.imovielibrary' \
       -o -name '*.aplibrary' -o -name '*.fcpbundle' -o -name '*.lrdata' -o -name '*.lrlibrary' -o -name '*.lrcat-data' \
       -o -name '*.cocatalog' -o -name '*.cosessiondb' \) -prune \
@@ -572,7 +572,8 @@ dcs_icloud() { # <path>
 # looks missing there may only not have arrived yet (#2346). Dropbox names its folder for the account
 # when a personal and a team account are linked, ~/Dropbox (Personal) and ~/Dropbox (<team>), and Box
 # Sync, Box's older client, keeps ~/Box Sync (#3233, from Dropbox's and Box's help pages).
-# build-folders.sh and forgotten-worktrees.sh both leave out what this matches.
+# build-folders.sh and forgotten-worktrees.sh both leave out what this matches, and dcs_walk's prune
+# list names the same home folders, so a folder added here goes there too.
 dcs_synced() { # <path>
   local p="${1%/}" h
   for h in "$HOME" "$DCS_HOME"; do

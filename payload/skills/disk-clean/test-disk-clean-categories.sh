@@ -321,12 +321,14 @@ check "build folders: one left out is counted in the singular" "$(eq "$(note_of 
 # The same holds for every other sync service (#3233): removing a build folder Dropbox, Google Drive,
 # OneDrive or Box keeps removes it on every device that syncs it. One predicate decides it, scan-lib's
 # dcs_synced, which forgotten-worktrees.sh reads too, never a second list here. The walk never goes
-# into ~/Dropbox, ~/Google Drive, ~/OneDrive, ~/Box or ~/Library, so those reach this kind only
-# through its judge (a record from before this rule, a path pasted in); a Dropbox folder named for a
-# linked account, ~/Dropbox (Personal), and Box Sync's ~/Box Sync are walked, so the scan meets them.
+# into a sync client's folder or ~/Library, so those reach this kind only through its judge (a record
+# from before this rule, a path pasted in). The walk used to go into a Dropbox folder named for a
+# linked account, ~/Dropbox (Personal), and Box Sync's ~/Box Sync, and offered build folders there;
+# it now leaves them out like the rest, so the note counts only Desktop and Documents, which it does go
+# into: were it to go into those two again, the note would count four.
 fresh
-mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
-for d in "$H/Documents/proj" "$H/Dropbox (Personal)/proj" "$H/Box Sync/proj" "$H/Apps/local" \
+mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents" "$H/Library/Mobile Documents/com~apple~CloudDocs/Desktop"
+for d in "$H/Documents/proj" "$H/Desktop/proj" "$H/Dropbox (Personal)/proj" "$H/Box Sync/proj" "$H/Apps/local" \
   "$H/Dropbox/proj" "$H/Library/CloudStorage/Dropbox/proj" "$H/Library/CloudStorage/GoogleDrive-dan/My Drive/proj" \
   "$H/Google Drive/proj" "$H/Library/CloudStorage/OneDrive-Personal/proj" "$H/OneDrive/proj" \
   "$H/OneDrive - Acme/proj" "$H/Library/CloudStorage/Box-Box/proj" "$H/Box/proj"; do
@@ -338,7 +340,7 @@ run_scan --only build-folders
 check "build folders: one in a linked account's Dropbox folder is not listed" "$(eq "$(item_of "$H/Dropbox (Personal)/proj/node_modules")" "")"
 check "build folders: nor one in Box Sync's folder" "$(eq "$(item_of "$H/Box Sync/proj/node_modules")" "")"
 check "build folders: a project in no synced folder is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
-check "build folders: the note names each place and counts it, when there is more than one" "$(eq "$(note_of build-folders)" "3 build folders were left out because a sync service keeps them (1 in Box; 1 in Documents, which iCloud syncs; 1 in Dropbox): removing one would remove it on every device that syncs it.")"
+check "build folders: the note names each place and counts it, when there is more than one" "$(eq "$(note_of build-folders)" "2 build folders were left out because a sync service keeps them (1 in Desktop, which iCloud syncs; 1 in Documents, which iCloud syncs): removing one would remove it on every device that syncs it.")"
 # The stub log writes each argument shell quoted, so the spaces in these names are escaped there;
 # every synced fixture is a proj folder and the control is not.
 check "build folders: none of them is passed to du" "$(hasnt "$(dc_calls du)" "/proj/node_modules")"
