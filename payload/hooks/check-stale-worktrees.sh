@@ -44,7 +44,10 @@
 #      just before the removal; that covers the older form with no start time, "claude agent
 #      <name> (pid <pid>)", whose pid nothing has. If git then refuses and leaves the worktree
 #      whole, the lock is put back; if git stops part way and leaves it part deleted, the lock
-#      stays off, so the next run can finish the removal. A live agent's lock, a pid now held by a
+#      stays off, so the next run can finish the removal. Whole or part deleted is read from a
+#      status, and one git cannot give is neither: the marker stays, the lock stays off and the
+#      run says so (#3355). A removal never tried (exit 125) left it whole, and no status is asked
+#      for. A live agent's lock, a pid now held by a
 #      process whose start does not match the lock, an older lock whose pid is running, one whose
 #      agent cannot be read, and any lock that is not a Claude agent's are left exactly as they
 #      are. The same reading decides tools/shipped-worktrees.sh, so the two cleanups agree.
@@ -83,7 +86,20 @@
 # finished: it is finished when nothing but deletions is in the folder and nothing is running in
 # it, and otherwise kept and said loudly, because a change since the cut is somebody's work. A
 # removal git itself fails part way can leave a folder git no longer lists; that one is named on
-# every run with the command that deletes it, and never deleted here.
+# every run with the command that deletes it, and never deleted here. A marked worktree whose status
+# git cannot give is kept too, and said: until #3355 a failed status read as nothing changed, and
+# the forced removal that finishes a cut took a folder holding somebody's change with it.
+#
+# GIT IS ASKED ABOUT A WORKTREE WITH THAT WORKTREE'S PROGRAMS OFF (claude-config#3355). git answers
+# a status, and the status inside worktree remove, with the worktree's own configuration, and a
+# setting there can name a program git then starts (core.fsmonitor, a filter, a hook: measured for
+# #3328). This judges every worktree git lists, by itself, in every session, so each of those calls
+# goes through dc_git or jw_remove (lib/judged-worktree.sh), which turn the settings off for the one
+# call. Where they cannot (a filter whose name cannot be turned off, a folder that answers for
+# another repository) git is not run there at all and the worktree is kept, with the reason. git run
+# in the repository itself, about its own records, stays plain. test-judged-worktree.sh sees each
+# program run with the call written bare and not run through here, and reads this file for a plain
+# git call of any other kind.
 #
 # --just-merged <worktree> JUDGES THAT ONE WORKTREE, with rule 3 off (claude-config#1521). It is how
 # lib/merge-when-ready.sh removes the merged branch's agent worktree the moment the merge lands, so
@@ -172,6 +188,10 @@ _HD="$(cd "${_HD:-/}" && pwd)"
 }
 . "$_HD/lib/sleep.sh" || {
   echo "check-stale-worktrees: lib/sleep.sh is missing, so whether a session working overnight is using a worktree cannot be read." >&2
+  exit 2
+}
+. "$_HD/lib/judged-worktree.sh" || {
+  echo "check-stale-worktrees: lib/judged-worktree.sh or the library it sources is missing, so git cannot be asked about a worktree without running the programs that worktree's settings name." >&2
   exit 2
 }
 
@@ -418,7 +438,17 @@ for m in "$MARKS"/*; do
     continue
   fi
   # Anything in it but a deletion of a committed file is a change since the cut, which is somebody's.
-  others="$(git -C "$p" status --porcelain 2>/dev/null | grep -v '^ D ' | grep -c . || true)"
+  # A status git cannot give keeps it: read as nothing changed, it sent a folder holding somebody's
+  # change to the forced removal below (#3355). A folder already gone has no status to ask for.
+  others=0
+  if [ -d "$p" ]; then
+    if ! st="$(dc_git "$p" status --porcelain 2>/dev/null)"; then
+      why="$(jw_status_why "$p")"
+      echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and git could not read its status now${why:+ ($why)}, so whether anything in it has changed since cannot be told and it is left for a person. Its marker is $m"
+      continue
+    fi
+    others="$(printf '%s\n' "$st" | grep -v '^ D ' | grep -c . || true)"
+  fi
   real="$(cd "$p" 2>/dev/null && pwd -P)" || real="$p"
   if [ "${others:-0}" -gt 0 ] || { [ -d "$p" ] && in_use "$real"; }; then
     echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and something in it has changed since or is running in it, so it is left for a person. Its marker is $m"
@@ -427,9 +457,12 @@ for m in "$MARKS"/*; do
   # Only deletions, so everything still to go is in a commit on its branch. A folder already gone
   # takes the plain command, since --force refuses one that is not there.
   force="--force"; [ -d "$p" ] || force=""
-  if err="$(git -C "$top" worktree remove $force "$p" 2>&1)"; then
+  err="$(jw_remove "$top" "$p" $force 2>&1)"; rrc=$?
+  if [ "$rrc" -eq 0 ]; then
     rm -f "$m"; removed=$((removed + 1))
     echo "  finished removing $name [${b:-no branch}]: an earlier run started removing it and was cut off part way (its branch is kept)"
+  elif [ "$rrc" -eq 125 ]; then
+    echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and finishing it was not tried: $(printf '%s' "$err" | tr '\n' ' ')"
   else
     echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and git would not finish it: $(printf '%s' "$err" | tr '\n' ' ')"
   fi
@@ -559,8 +592,9 @@ for i in "${!paths[@]}"; do
   fi
   # Uncommitted work settles it on its own: somebody may be part way through a change, and nothing
   # below is worth risking that (L5).
-  if ! st="$(git -C "$p" status --porcelain --untracked-files=all 2>/dev/null)"; then
-    echo "  keeping $name [$bl]: git could not read its status, so whether anything in it is uncommitted cannot be told"
+  if ! st="$(dc_git "$p" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    why="$(jw_status_why "$p" --untracked-files=all)"
+    echo "  keeping $name [$bl]: git could not read its status, so whether anything in it is uncommitted cannot be told${why:+ ($why)}"
     continue
   fi
   dirty="$(printf '%s\n' "$st" | grep -c . || true)"
@@ -629,7 +663,8 @@ for i in "${!paths[@]}"; do
   fi
   # No --force: git refuses a worktree with anything untracked or modified, so a change made since
   # the check above is a refusal, never a loss.
-  if err="$(git -C "$top" worktree remove "$p" 2>&1)"; then
+  err="$(jw_remove "$top" "$p" 2>&1)"; rrc=$?
+  if [ "$rrc" -eq 0 ]; then
     removed=$((removed + 1))
     if [ -n "$stale_lock" ]; then
       echo "  removed $name [$bl]: $gone_why, and its lock was left by a Claude agent that is gone ($stale_lock); $kept_note"
@@ -638,7 +673,12 @@ for i in "${!paths[@]}"; do
     fi
     rm -f "$mk"
   else
-    echo "  keeping $name [$bl]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
+    # 125 is jw_remove or dc_git refusing before git was asked to remove anything (lib/judged-worktree.sh).
+    if [ "$rrc" -eq 125 ]; then
+      echo "  keeping $name [$bl]: its removal was not tried: $(printf '%s' "$err" | tr '\n' ' ')"
+    else
+      echo "  keeping $name [$bl]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
+    fi
     # A refusal before anything is deleted (a change made since the check above, say) leaves the
     # worktree listed, whole and as it was, so there is nothing to finish. A lock no longer gets
     # this far: every lock but a stale agent's keeps the worktree before any removal is tried, and
@@ -652,12 +692,30 @@ for i in "${!paths[@]}"; do
         # A lifted lock goes back only on a worktree left whole. One left part deleted keeps its
         # marker for the finisher above, whose single --force git refuses on a locked worktree, so
         # putting a dead agent's lock back there would keep it part deleted for ever.
-        if [ -d "$p" ] && [ -z "$(git -C "$p" status --porcelain 2>/dev/null | grep '^ D ')" ]; then
-          rm -f "$mk"
-          relock
-        elif [ -n "$stale_lock" ]; then
-          echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal"
-        fi ;;
+        # Which of the two it is comes from a status, and a status git cannot give is neither
+        # (#3355): read as "no deleted files" it cleared the marker and put the lock back on a
+        # worktree that could be part deleted. So it is whole only when git was never asked to
+        # remove anything (125), or a status that could be read shows no deleted file.
+        after=part
+        if [ "$rrc" -eq 125 ]; then
+          after=whole
+        elif [ -d "$p" ]; then
+          if st="$(dc_git "$p" status --porcelain 2>/dev/null)"; then
+            case $'\n'"$st" in *$'\n'" D "*) ;; *) after=whole ;; esac
+          else
+            after=unread
+          fi
+        fi
+        case "$after" in
+          whole)
+            rm -f "$mk"
+            relock ;;
+          unread)
+            why="$(jw_status_why "$p")"
+            echo "    git could not read its status after that${why:+ ($why)}, so whether it was left whole or part deleted cannot be told. Its marker stays, and a run that can read its status finishes the removal or keeps it${stale_lock:+; its lock, left by a Claude agent that is gone, is not put back}" ;;
+          part)
+            [ -z "$stale_lock" ] || echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal" ;;
+        esac ;;
     esac
   fi
 done
