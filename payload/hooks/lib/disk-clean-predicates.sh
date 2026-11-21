@@ -263,7 +263,6 @@ dc_git() { # <folder> <git arguments...>
       q=("$d")
       while [ "$qi" -lt "${#q[@]}" ]; do
         dir="${q[$qi]}"; qi=$((qi + 1))
-        [ "$qi" -le 100 ] || { echo "dc_git: refused: more than 100 submodules lie under $d, more than it reads the settings of" >&2; return 125; }
         out="$(git -C "$dir" "${DC_GIT_FIXED[@]}" config --show-scope --name-only --list </dev/null)" || return
         while IFS=$'\t' read -r scope key; do
           case "$scope" in system|global|command) continue ;; esac
@@ -285,6 +284,8 @@ dc_git() { # <folder> <git arguments...>
           esac
           [ -d "$dir/$path" ] && [ ! -L "$dir/$path" ] || continue
           [ -e "$dir/$path/.git" ] || [ -L "$dir/$path/.git" ] || continue
+          # The list holds the folder itself and then each submodule, so 101 entries is 100 of them.
+          [ "${#q[@]}" -le 100 ] || { echo "dc_git: refused: more than 100 submodules lie under $d, more than it reads the settings of" >&2; return 125; }
           q+=("$dir/$path")
         done <<< "$out"
       done ;;

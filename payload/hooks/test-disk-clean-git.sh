@@ -299,6 +299,23 @@ _dc_rgit "$GIT" -C "$F/odd" update-index --add --cacheinfo "160000,$(_dc_rgit "$
 check "the fixture's index holds a submodule at a path git prints quoted" \
   "$(eq "$(git -C "$F/odd" ls-files --stage | grep -c '^160000 .*"sub\\tx"$')" 1)"
 check "a submodule whose path git must quote: dc_git refuses the status" "$(refused "a submodule path it cannot read" "$F/odd" --no-optional-locks status --porcelain)"
+# The submodule limit is where its refusal says: 100 submodules are read, and one more is refused.
+# Each is a copy of one small repository, entered in the index as git enters a submodule.
+_dc_rgit "$GIT" init "$F/many" >/dev/null; printf 'x\n' > "$F/many/f"
+_dc_rgit "$GIT" -C "$F/many" add -A >/dev/null; _dc_rgit "$GIT" -C "$F/many" commit -m seed >/dev/null
+_dc_rgit "$GIT" init "$F/tiny" >/dev/null; printf 'y\n' > "$F/tiny/g"
+_dc_rgit "$GIT" -C "$F/tiny" add -A >/dev/null; _dc_rgit "$GIT" -C "$F/tiny" commit -m seed >/dev/null
+tiny_head="$(_dc_rgit "$GIT" -C "$F/tiny" rev-parse HEAD)"
+i=1
+while [ "$i" -le 100 ]; do cp -R "$F/tiny" "$F/many/s$i"; printf '160000 %s\ts%s\n' "$tiny_head" "$i"; i=$((i + 1)); done > "$F/many.index"
+"$GIT" -C "$F/many" update-index --index-info < "$F/many.index"
+check "the fixture's index holds 100 submodules, each checked out" \
+  "$(eq "$(git -C "$F/many" ls-files --stage | grep -c '^160000 ')|$([ -d "$F/many/s100/.git" ] && echo there)" "100|there")"
+out="$(dc_git "$F/many" --no-optional-locks status --porcelain --untracked-files=all 2>&1 </dev/null)"; rc=$?
+check "100 submodules: dc_git reads the settings of each and runs the status" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc: ${out%%$'\n'*}")"
+cp -R "$F/tiny" "$F/many/s101"
+printf '160000 %s\ts101\n' "$tiny_head" | "$GIT" -C "$F/many" update-index --index-info
+check "101 submodules: dc_git refuses, saying there are more than 100" "$(refused "more than 100 submodules lie under" "$F/many" --no-optional-locks status --porcelain --untracked-files=all)"
 
 # ================================================================================================
 # 8. The settings dc_git passes are the ones this suite measured, and they are passed as git reads them
