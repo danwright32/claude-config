@@ -2683,7 +2683,7 @@ alone). With the lock free the whole gate took 38 to 43 seconds, three readings 
 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
 whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
-scan 7, so the 150 second budget stays
+scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run)
 
 </td></tr>
 <tr><td>
@@ -3253,7 +3253,7 @@ passed on its own tree. The merge is written beside the file and renamed over it
 push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
 removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
-The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
+The gate stops waiting at a budget of 140 seconds (150 until #3357), inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
@@ -3261,6 +3261,18 @@ on that day the gate was killed at 180 seconds on three of three readings at a l
 each scanner still running. The scanners that finished and passed are remembered, so a retry does
 not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
 its budget blocks the push rather than passing it.
+
+That budget bounds only the wait on the scanners. On 2026-11-20, at load averages of 110 to 160,
+four pushes were refused with nothing but Claude Code's `[command hook 23]: timed out` (hook 23 is
+this gate, counting the distinct command lines of the event as Claude Code 2.1.330 does), because
+every step before and after the wait ran with no bound: the commit message check and its live
+list, the listings of the repository, the key, and a 5 second lock per scanner that every worktree
+shares (#3357). So the gate now runs as two processes. The one Claude Code started supervises the
+other against a hard stop at the budget plus 20 seconds and never past 160; at the stop it ends the
+run, refuses in its own words, says what the run was doing and how many seconds its clock started
+after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
+left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
+counts and the gate cannot, and the stop itself, which is builtins only.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
