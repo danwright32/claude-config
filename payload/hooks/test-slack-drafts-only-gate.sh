@@ -4112,16 +4112,38 @@ payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd
 # verdict is the same, the least of them against the ceiling, and the log then holds the spread.
 cache = os.environ.get("SLACK_GATE_CACHE_DIR", "")
 cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
-ratios, ran_out = [], []
+# What the judgement cache did for each judgement, in its own words (SLACK_GATE_CACHE_TRACE): "hit"
+# where it answered, "miss: ..." or "off: ..." where the gate judged afresh. A cold measurement holds
+# the gate's whole work only while the cache answers none of its samples (L102), and the least
+# sample is the one judged, so a single answered sample, at about 2 units, would pass any ceiling.
+# So every sample of a cold measurement must be one the cache says it did not answer, and the
+# measurement fails otherwise, whatever the units (#3255). The warm cases are held the other way:
+# handed a cache that already holds something, every sample must be one the cache says it answered.
+# One trace file for every run of this script: its name is part of the cache's key (KEY_ENV), and
+# a judgement asked a second time has to be asked under the key the first was kept under.
+trace = os.path.join(os.path.dirname(cache.rstrip("/")), "cost-cache-trace.log") if cache else ""
+def judge(env):
+    """One judgement: the finished process, its processor seconds, and what the cache traced for it."""
+    if trace:
+        env["SLACK_GATE_CACHE_TRACE"] = trace
+    at = os.path.getsize(trace) if trace and os.path.exists(trace) else 0
+    was = resource.getrusage(resource.RUSAGE_CHILDREN)
+    p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, env=env)
+    now = resource.getrusage(resource.RUSAGE_CHILDREN)
+    said = []
+    if trace and os.path.exists(trace):
+        with open(trace, errors="replace") as f:
+            f.seek(at)
+            said = [s for s in f.read().splitlines() if not s.startswith("parse ")]
+    return p, (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime), said
+warm = bool(cache) and os.path.isdir(cache) and not cold
+ratios, ran_out, unfit = [], [], []
 need = int(os.environ.get("SLACK_GATE_COST_SAMPLES", "1"))
 for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3")))):
     env = dict(os.environ)
     if cold and attempt:
         env["SLACK_GATE_CACHE_DIR"] = tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/")))
-    was = resource.getrusage(resource.RUSAGE_CHILDREN)
-    p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, env=env)
-    now = resource.getrusage(resource.RUSAGE_CHILDREN)
-    spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
+    p, spent, said = judge(env)
     samples += [yard(), yard()]
     unit = min(samples)
     if p.returncode != 0 and cold and env.get("HOOK_TESTS_RUNNING") != "1" and "ran out of time judging this call" in p.stderr:
@@ -4136,15 +4158,20 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
         ran_out.append("%.1f s at %.3f s a unit" % (spent, unit))
         env.update(HOOK_TESTS_RUNNING="1", SLACK_GATE_TICK_BUDGET="1000000000",
                    SLACK_GATE_CACHE_DIR=tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/"))))
-        was = resource.getrusage(resource.RUSAGE_CHILDREN)
-        p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, env=env)
-        now = resource.getrusage(resource.RUSAGE_CHILDREN)
-        spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
+        p, spent, said = judge(env)
         samples += [yard(), yard()]
         unit = min(samples)
     if p.returncode != 0:
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
+    # A trace that says neither is no evidence the sample was cold, so it fails too (L98). A
+    # measurement handed a cache that already holds something is one of the cache answering (the
+    # warm cases), and there every sample must be a "hit": the same reading of the trace, required
+    # to say the opposite, so each run of the suite shows it telling the two apart.
+    afresh = "hit" not in said and any(s.startswith(("miss: ", "off: ")) for s in said)
+    if (cold and not afresh) or (warm and "hit" not in said):
+        unfit.append("sample %d, %.1f units, where the cache traced %s"
+                     % (len(ratios), spent / unit, " | ".join(s[:80] for s in said) or "nothing"))
     if len(ratios) >= need and min(ratios)[0] <= ceiling:
         break
 ratio, spent, unit = min(ratios)
@@ -4158,6 +4185,12 @@ if log:
                    ", ".join("%.1f" % r[0] for r in ratios),
                    "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
                    % " and ".join(ran_out) if ran_out else ""))
+if unfit:
+    print("%d of the %d samples of this measurement from %s, so the least of them (%s) is not the cost this limit is for: %s"
+          % (len(unfit), len(ratios),
+             "an empty cache were not shown to be judged afresh" if cold else "a filled cache were not answered from it",
+             ", ".join("%.1f" % r[0] for r in ratios), "; ".join(unfit)))
+    sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
@@ -4345,8 +4378,22 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     *) own_ceiling=37 ;;
   esac
   several="$several own-suite"
-  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  # Only the first of the three cold judgements is made in this folder, empty until then, and it is
+  # the one the warm check below asks for again. cost.py gives each later sample an empty folder of
+  # its own, and fails the measurement when the cache says it answered any sample, so none of the
+  # three readings held to the limit is a reading of the cache. Measured 2026-11-21 on the personal
+  # MacBook: 20.0, 20.4 and 20.0 units, and then 1.9 for the warm check.
+  own_warm="$(mktemp -d "$T/warm.XXXXXX")"
+  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
   check "the command that starts this suite is judged within $own_ceiling units of the yardstick on $(uname -s) (#3255)" "$cost"
+  # Judged a second time with nothing changed, it is answered from the judgement cache, as the
+  # claude-sync suite's command is above and inside the same 6 units (#3255). Until 2026-11-21 it
+  # never was: the first of the three cold judgements above, the one made in this cache, was not
+  # kept (the judgement cache part below says why), so every asking cost the whole judgement.
+  # Measured that day on the personal MacBook with a unit at 0.097 s, one cache for every reading:
+  # 19.4 to 20.1 units each time before (5 readings), and 20.2 then 1.8, 1.8, 1.8, 1.8 after.
+  cost="$(SLACK_GATE_COST_LABEL=own-suite-warm SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  check "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
   # Its readings are printed with every other cost case's, in the one note at the end of this part
   # (#3170), which took the place of a note of its own when the note cap was full.
   if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
@@ -5778,6 +5825,22 @@ sv_tool "$JSV/env/bin/fake" "#!$JSV/bare/bin/python"
 jc_run "$JSV/env/bin/fake sql"
 refused "once its first line names an environment without the package, it is refused"
 traced "the kept judgement is not used once the first line has changed" "miss: " "answers differently now"
+# A Python script that names an endpoint in a comment has its comments found with tokenize (#2913).
+# The gate imported that module where it used it, in the middle of the judgement, and a module's own
+# files read then are a read the cache's record never saw, so no such judgement was kept. The command
+# that starts this suite is one: it was judged whole, about 19 units, every time it was asked (#3255).
+printf '%s\n' '# chat.postMessage is named here only in a comment.' 'print(1)' > "$JC/prose.py"
+jc_run "python3 $JC/prose.py"
+allowed "a Python script naming an endpoint only in a comment is allowed"
+traced "its judgement is kept, comments and all (#3255)" "stored"
+jc_run "python3 $JC/prose.py"
+allowed "judged again with nothing changed, it is allowed"
+traced "and that second judgement is answered from the cache (#3255)" "hit"
+# Kept, it is still only as good as the file it read: once the script can send the name, it is refused.
+printf '%s\n' 'URL = "https://slack.com/api/chat.postMessage"' 'print(URL)' >> "$JC/prose.py"
+jc_run "python3 $JC/prose.py"
+refused "once that script names the endpoint in a string it can send, the same command is refused"
+traced "the kept judgement is not used once the script has changed (#3255)" "miss: read" "answers differently now"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.
