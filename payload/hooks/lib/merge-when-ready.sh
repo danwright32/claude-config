@@ -777,8 +777,9 @@ rerun_failed_start(){
 # title equal to the one it writes). Just before the merge, each Actions check on the head is asked
 # for its annotations, the job id read from its details link in the rollup, and those carrying this
 # title are printed, so the log of a merge says what its green did not cover. The same reading
-# decides what untested_step runs before the merge, which refuses on a read that fails; only when
-# MWR_UNTESTED_SKIP skips that step is a failed read just said here and the merge goes on. A head
+# decides what untested_step runs before the merge, which refuses on a read that fails where the
+# head's tree holds that tool; in a tree without it, or when MWR_UNTESTED_SKIP skips that step, a
+# failed read is just said here and the merge goes on. A head
 # whose checks carry no such notice (another repository's, or a check that is not an Actions job)
 # prints nothing. Once per head; each read is asked again as every other read here is (with_retries).
 UNTESTED_TITLE_PREFIX="Not tested by the checks"
@@ -881,7 +882,7 @@ UT_TOOL="tools/ci-unmeasured-summary.sh"
 UT_MAX="$(num_or "${MWR_UNTESTED_MAX_SECONDS:-}" 2700)"; [ "$UT_MAX" -ge 1 ] || UT_MAX=1
 UT_RUNNER_SET="$(mwr_script "${MWR_UNTESTED_RUNNER:-}" "")"
 UT_RECORDS="${MWR_UNTESTED_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/merge-untested}"
-ut_done_for=""; ut_ran=""; ut_tool_there=""
+ut_done_for=""; ut_ran=""; ut_tool_there=""; ut_tool_for=""
 ut_hint(){ printf " To merge without running them, for this run only, say why: MWR_UNTESTED_SKIP='<why>' %s %s --repo %s%s" "$SELF" "$pr" "$slug" "${flags[*]:+ ${flags[*]}}"; }
 ut_refuse(){ stop 1 "Stopped: $1 Nothing was merged.$(ut_hint)"; }
 ut_plural(){ if [ "$1" -eq 1 ]; then printf '%s %s' "$1" "$2"; else printf '%s %ss' "$1" "$2"; fi; }
@@ -988,6 +989,19 @@ untested_step(){
     say "Did not run the suites the checks left untested, because MWR_UNTESTED_SKIP is set: $MWR_UNTESTED_SKIP."
     ut_done_for="$head"; return 0
   fi
+  # THE TOOL FIRST. A repository whose tree does not hold the tool is none of this step's business,
+  # and this helper merges in every project, most of which hold none. So whether the head's tree
+  # holds it is asked before anything below can refuse or print: there, a notice read that fails is
+  # said by say_untested and stops nothing, as before this step existed. Only this one read can
+  # refuse in such a repository, since until it answers nothing says which kind this is. Asked once
+  # per head, however many looks the step takes.
+  if [ "$ut_tool_for" != "$head" ]; then
+    with_retries "whether the tree at $h7 holds $UT_TOOL" ut_tool_read; rrc=$?
+    [ "$rrc" -eq 5 ] && return 1
+    [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "whether the tree at $h7 holds $UT_TOOL" "$rrc"), so whether its checks should have said what they did not test is not known."
+    ut_tool_for="$head"
+  fi
+  [ -n "$ut_tool_there" ] || { ut_done_for="$head"; return 0; }
   read_untested
   [ -z "$ut_paused" ] || return 1
   if [ -n "$ut_failed" ]; then
@@ -998,13 +1012,8 @@ untested_step(){
   n_mains="$(printf '%s' "$mains" | grep -c . || true)"
   ut_via=""
   if [ "${n_mains:-0}" -eq 0 ]; then
-    # No notice: a repository without the tool is none of this step's business; one with it ran
-    # checks that reused an earlier green run, which is followed, or did not say what they left
-    # untested, which refuses.
-    with_retries "whether the tree at $h7 holds $UT_TOOL" ut_tool_read; rrc=$?
-    [ "$rrc" -eq 5 ] && return 1
-    [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "whether the tree at $h7 holds $UT_TOOL" "$rrc"), so whether its checks should have said what they did not test is not known."
-    [ -n "$ut_tool_there" ] || { ut_done_for="$head"; return 0; }
+    # No notice in a tree that holds the tool: its checks reused an earlier green run, which is
+    # followed, or did not say what they left untested, which refuses.
     ut_follow_reuse || return 1
     mains="$ut_reused_mains"
     n_mains="$(printf '%s' "$mains" | grep -c . || true)"

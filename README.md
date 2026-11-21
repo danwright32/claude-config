@@ -5302,6 +5302,10 @@ over, and a part a suite still cannot test on this Mac is said and is not a fail
 have run the helper asks every gate again; a pass is recorded under `MWR_UNTESTED_DIR`
 (`~/.claude/state/merge-untested`) by repository, head and suites, so a restart at the same head does
 not run them again. `MWR_UNTESTED_SKIP=<why>` skips the step for one run, and the run says so and why.
+The step is for a head whose tree holds `tools/ci-unmeasured-summary.sh`, and the helper asks that
+first, once a head, before anything in the step can refuse. In any other repository it then reads
+nothing more, prints nothing and refuses nothing: a notice read that fails there is said by the
+report above and the merge goes on. Only that one read failing for good can stop a merge there.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`

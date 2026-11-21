@@ -4328,9 +4328,12 @@ chmod +x "$STUBS/untested-runner.sh"
 UT_NOTICE='3 parts in 3 suites were not tested on the runner, so these checks do not cover them:\ntest-a.sh: no Chrome\ntest-b.sh: no zsh\ntest-c.sh: not macOS'
 # ut_state [<notice's message>]: GitHub's side, for the head the fixture made: a green suite check
 # carrying the notice, and each part's record as the run's artifacts. This Mac's record of passes
-# goes too, so each case runs its suites, unless UT_KEEP_PASSES is set.
+# goes too, so each case runs its suites, unless UT_KEEP_PASSES is set. The head's tree holds the
+# tool that writes the notice, as any tree whose checks carry one does; a case about a repository
+# without it removes has-untested-tool.
 ut_state(){
   fresh "$UT_HEAD" 0 "$UT_ROLLUP"
+  : > "$ST/has-untested-tool"
   [ -n "${UT_KEEP_PASSES:-}" ] || rm -rf "$UT/records"
   jq -nc --arg m "$(printf "${1:-$UT_NOTICE}")" '[{path:".github",annotation_level:"notice",title:"Not tested by the checks",message:$m}]' > "$ST/annotations-501"
   mkdir -p "$ST/artifacts-900/part-unmeasured-1" "$ST/artifacts-900/part-unmeasured-2"
@@ -4468,6 +4471,7 @@ out="$(cd "$US" && TMPDIR="$UT_TMP" GIT_CONFIG_GLOBAL="$UT_CONF" MWR_UNTESTED_RU
 check_eq "#3312 a pull ref behind the head merges once it catches up" "0" "$rc"
 check "#3312 saying it waits for GitHub's ref" "GitHub's head of #7 is at" "$out"
 check_eq "#3312 after waiting a look, not going round at once" "1" "$(grep -c -x '30' "$ST/sleeps" 2>/dev/null || true)"
+check_eq "#3312 asking once whether the tree holds the tool, though the step took two looks" "1" "$(count gh-calls 'contents/tools/ci-unmeasured-summary.sh')"
 git --git-dir="$UB" update-ref refs/pull/7/head "$UT_HEAD"
 
 # A suite that could not run is not a pass.
@@ -4536,9 +4540,29 @@ check_eq "#3312 and runs nothing" "0" "$(count runner-calls 'part ')"
 # Every way of not knowing the list refuses, saying what could not be read.
 ut_state; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/annotations-down"
 out="$(ut_run 7 --squash)"; rc=$?
-check_eq "#3312 an annotations read that fails refuses the merge" "1" "$rc"
+check_eq "#3312 an annotations read that fails in a tree with the tool refuses the merge" "1" "$rc"
 check "#3312 saying what it could not read" "could not read what check suite said it did not test" "$out"
 check_eq "#3312 nothing merged on an unread notice" "0" "$(count gh-calls 'pr merge')"
+# A REPOSITORY WITHOUT THE TOOL IS NOT TOUCHED. This helper merges in every project, and most hold no
+# such tool, so whether the tree holds it is asked before anything here can refuse. The same failed
+# read there stops nothing: the merge goes on in the words of a run with the step skipped, the report
+# alone saying what it could not read. The lessons review at c502ecd found the step refusing it.
+ut_state; rm -f "$ST/has-untested-tool"; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/annotations-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 an annotations read that fails in a tree without the tool does not stop the merge" "0" "$rc"
+check_eq "#3312 and it merges" "1" "$(count gh-calls 'pr merge')"
+check "#3312 the report alone saying what it could not read" "so any part check suite left untested is not named here. Merging all the same: this is a report, not a gate." "$out"
+check_not "#3312 and the step saying nothing" "which suites to run here" "$out"
+ut_state; rm -f "$ST/has-untested-tool"; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/annotations-down"
+skipped="$(MWR_UNTESTED_SKIP='a run without the step' ut_run 7 --squash | grep -v 'MWR_UNTESTED_SKIP is set')"
+check_eq "#3312 in the very words of a run with the step skipped" "" "$(diff <(printf '%s\n' "$skipped") <(printf '%s\n' "$out") | sed -n '1,6p')"
+# Nor does a notice there start anything: one the step could not read, in a tree with no tool, is
+# printed by the report and no suite is dealt or run.
+ut_state 'Something else entirely.'; rm -f "$ST/has-untested-tool"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a notice it cannot read in a tree without the tool does not stop the merge" "0" "$rc"
+check_eq "#3312 and no runner is started" "0" "$(count runner-calls .)"
+check_eq "#3312 and no record is fetched" "0" "$(count gh-calls 'run download')"
 ut_state "Every suite measured every part on the runner."
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 checks that left nothing untested merge" "0" "$rc"
@@ -4603,7 +4627,7 @@ ut_state; printf '%s\n' "$SIGNIN" > "$ST/download-down"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a records download whose sign in is refused refuses the merge" "1" "$rc"
 check "#3312 said as a refused sign in, for the records" "GitHub refused the sign in 4 times reading the record of what each part did not test" "$out"
-ut_state; rm -f "$ST/annotations-501"; printf '%s\n' "$CONNECT" > "$ST/contents-down"; ut_net_back_at contents-down 1000300
+ut_state; rm -f "$ST/annotations-501" "$ST/has-untested-tool"; printf '%s\n' "$CONNECT" > "$ST/contents-down"; ut_net_back_at contents-down 1000300
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a read for the tool through a network outage merges" "0" "$rc"
 check "#3312 naming the tool read it waited on" "reading whether the tree at ${UT_HEAD:0:7} holds tools/ci-unmeasured-summary.sh" "$out"
@@ -4622,7 +4646,7 @@ check "#3312 naming it" "test-gone.sh" "$out"
 
 # No notice at all: a repository without the tool is none of this step's business; one with it is
 # a run that did not say what it left untested (a run reusing an earlier green run says nothing).
-ut_state; rm -f "$ST/annotations-501"
+ut_state; rm -f "$ST/annotations-501" "$ST/has-untested-tool"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 no notice and no tool in the tree merges" "0" "$rc"
 check_not "#3312 and says nothing about untested suites" "untested" "$out"
