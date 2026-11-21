@@ -5394,6 +5394,73 @@ test('#1682: a tool run through npx or a module run with python -m handed a scre
   expect(w.ran.length).toBe(2)
 })
 
+// #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): a program mod-kit's write
+// reader does not know was read as writing nothing, so the next writer nobody had listed (prettier
+// typed without npx, a formatter installed last week) changed a screen file unasked on an issue with
+// no answer. The reader now gives such a program as a run marked unknown wherever it is handed a
+// word that spells a path, and a screen file it is handed is judged as a write of it. The refusal
+// names the program, says why it was read so and what to do, in the reader's own words, so every
+// guard says the same.
+test('#3323: a program the write reader does not know, handed a screen file, is held on a branch with no answer, naming the program and what to do', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    'prettier --write /w/slate/app/page.tsx',
+    'cd /w/slate && mystery app/globals.css',
+    // The same test as `[`, and on no list Dan signed off, so it is held until he adds it.
+    '[[ -f /w/slate/app/page.tsx ]]',
+    // A program that only reads, in a form of it that runs a program or writes a file.
+    'rg --pre ./tool x /w/slate/app/page.tsx',
+    'cd /w/slate && file -C -m app/page.tsx',
+  ])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'prettier --write /w/slate/app/page.tsx' }))
+  BOTH_WAYS(why)
+  expect(why).toContain('The design round guard judged app/page.tsx, which prettier is handed, as a write of that file: prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs.')
+  expect(why).toContain('To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under "The programs that only read" in claude-config\'s docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.')
+  // Never the sentence for a script file, which names what nobody ran.
+  expect(why).not.toContain('which it is handed as an argument')
+  const pre = refusalOf(await call($, { tool: 'Bash', command: 'rg --pre ./tool x /w/slate/app/page.tsx' }))
+  expect(pre).toContain('as a write of that file: rg with --pre runs a program on each file. Without --pre, rg only reads.')
+  expect(w.ran).toEqual([])
+})
+
+test('#3323: a program on the list of those that only read, and an unknown one handed no screen file, run as before', withKit, async ($, on) => {
+  const w = world($, on)
+  const commands = [
+    'cat /w/slate/app/page.tsx',
+    'grep -n main /w/slate/app/page.tsx',
+    'rg main /w/slate/app/page.tsx',
+    '[ -f /w/slate/app/page.tsx ]',
+    'test -f /w/slate/app/page.tsx',
+    'wc -l /w/slate/app/globals.css',
+    'jq . /w/slate/data.json',
+    // Not on the list, and handed no look changing file: a test, a file of no look kind, no file.
+    'mystery /w/slate/app/page.test.tsx',
+    'mystery /w/slate/data.json',
+    'sleep 2',
+    'gh pr view 5',
+  ]
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+  // An answer for the issue lets the unknown one through, as it does an Edit.
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'prettier --write /w/slate/app/page.tsx' }))).toBe('')
+})
+
+// #3323 (Dan, 2026-11-21, "Yes, in the same change (Recommended)"): unpacking an archive was read as
+// writing nothing. A member named on the command line is now a write of that file where it lands.
+// An unpack naming no member is judged as a download a server names is: by the look changing files
+// the command's own words name, since the archive is not text the guard can read.
+test('#3323: an unpack that names a screen file as a member is held, and one naming none runs', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of ['cd /w/slate && tar -xzf /tmp/a.tgz app/page.tsx', 'tar -xf /tmp/a.tar -C /w/slate app/globals.css', 'unzip /tmp/a.zip app/page.tsx -d /w/slate', 'cd /w/slate && cpio -i app/page.tsx < /tmp/a.cpio'])
+    expect({ command, held: refusalOf(await call($, { tool: 'Bash', command })).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran).toEqual([])
+  for (const command of ['tar -xzf /tmp/a.tgz -C /tmp/out', 'cd /w/slate && tar -xzf /tmp/a.tgz data.json'])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(2)
+})
+
 // #1593: since #1586 a script run handed a settled page under docs/design was held on an issue with no
 // answer, read only scripts too (check-decision-map.py, capture-web.mjs --design), since what a script
 // writes cannot be read before it runs and so could not be seal checked. Now such a run runs, and the

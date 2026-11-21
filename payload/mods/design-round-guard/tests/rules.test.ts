@@ -3283,6 +3283,14 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
   expect(unreached(BASE_2924, false)).toBe('it sources /s/catch-all.sh, which could not be read whole')
   // `command -v` only looks a name up.
   expect(unreached(`${BASE_2924}command -v gh >/dev/null 2>&1\n`)).toBeUndefined()
+  // #3323: the reader gives a program it does not know as a run marked unknown wherever it is handed
+  // a word that spells a path (`exit 2` and `gh issue list` above are two). That rule covers a
+  // command as typed. A script's own text is read here as it was before it, so such a run is no
+  // route, or nearly every script would be held again and #2924 undone. A module or a tool handed
+  // the script's words is still one.
+  expect(commandWrites('mystery /s/app/page.tsx', '/s', '/h').runs?.map(r => r.unknown)).toEqual([true])
+  expect(unreached(`${BASE_2924}mystery /s/app/page.tsx\n`)).toBeUndefined()
+  expect(unreached(`${BASE_2924}python3 -m json.tool "$like"\n`)).toBe('it hands another script its words')
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were

@@ -58,6 +58,7 @@ import {
   sealCheck,
   RECORD_REMOVED,
   scriptUnread,
+  programUnknown,
   scriptNamesFile,
   scriptUnplaced,
   scriptHidesWrites,
@@ -496,7 +497,9 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `move`, on every target a git move gives (#3279), is the move as written: on a file it brings in,
 // so a refusal can name the command, and on a move the guard could not read (with `unread`), where
 // it also carries what to do instead where there is something.
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; inScript?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string; moved?: true; move?: { said: string; remedy?: string } }
+// `unknown`, on a file handed to a program mod-kit's write reader does not know (#3323), is the
+// reader's own words for why it was read as a writer and what to do, which the refusal says.
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; inScript?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string; moved?: true; move?: { said: string; remedy?: string }; unknown?: { why: string; remedy: string } }
 
 // A path without its `.` segments or a trailing slash (`lib/.` and `lib/` are lib), as git lists it.
 const plainPath = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/+$/, '$1')
@@ -1010,6 +1013,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         ...(a.folder ? { folder: a.folder } : {}),
         ...(r.tool ? { tool: true as const } : {}),
         ...(a.unexpanded ? { unexpanded: true as const } : {}),
+        // #3323: a program the reader does not know, with the reader's own words for it.
+        ...(r.unknown ? { unknown: { why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' } } : {}),
         run: r.path ?? r.script,
       })
     }
@@ -2277,8 +2282,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     } else if (t.run !== undefined && !isDesignRecord(relTo(t.path, tree))) {
       // A file a script is handed (#1586): the refusal says why it was judged as a write of it. A
       // settled design's own reason is said above, with the way that goes through.
+      // One handed to a program the write reader does not know (#3323) says which program, why it
+      // was read as a writer and what to do, in the reader's words.
       const notes = unreadIn.get(tree) ?? []
-      const said = scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
+      const said = t.unknown ? programUnknown(t.run, relTo(t.path, tree), t.unknown.why, t.unknown.remedy).trimEnd() : scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     } else if (t.inScript !== undefined && !isDesignRecord(relTo(t.path, tree))) {
