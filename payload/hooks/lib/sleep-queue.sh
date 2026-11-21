@@ -10,6 +10,10 @@
 #   bash ~/.claude/hooks/lib/sleep-queue.sh release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]
 #   bash ~/.claude/hooks/lib/sleep-queue.sh claims
 #   bash ~/.claude/hooks/lib/sleep-queue.sh work    REPO_ROOT ISSUE
+#   bash ~/.claude/hooks/lib/sleep-queue.sh done-noted NOTE_JSON
+#
+# `done-noted` is run by sleep_note once a done note naming an issue is written: it ends that
+# session's own claim on the issue as done, with no second note (sleep_done_noted, #3330).
 #
 # `work` is what the overnight driver reads as a claim's commits (sleep_work, #1119). A release of
 # done over an end the driver wrote (failed by its circuit breaker, or parked) lands when GitHub
@@ -74,7 +78,9 @@ _sq_note() {
     printf "sleep-queue: the night's note of this %s could not be built, so the report will not show it (%s)\n" "$what" "${line:-sleep-queue.py gave no reason}" >&2
     return 0
   fi
-  err="$(sleep_note "$line" "$(_sq_sleep_dir)/current.json" "$now" 2>&1 >/dev/null)" && return 0
+  # The queue's own done note follows the end it has just written, so it has no claim left to end
+  # (#3330): marked, sleep_note does not look.
+  err="$(_SQ_NOTING=1 sleep_note "$line" "$(_sq_sleep_dir)/current.json" "$now" 2>&1 >/dev/null)" && return 0
   printf "sleep-queue: the night's note of this %s could not be written, so the report will not show it (%s)\n" "$what" "${err:-sleep_note failed and gave no reason}" >&2
   return 0
 }
@@ -448,6 +454,52 @@ _sq_done_over_end() {
   printf 'released\t%s\tdone\n' "$issue"
 }
 
+# sleep_done_noted NOTE_JSON: a done note naming an issue ends, as done, the claim on it that the
+# note's own session holds (#3330), so noting an issue done and ending its claim are one step a
+# session cannot do by halves. On the night of 2026-11-18 a session noted seven finished issues
+# done and released none, and the watchdog timed and parked them all. sleep_note calls this once
+# its done note is written, so the note is the record and no second one is written here. The
+# session is the note's `by`, or the writing session's own id when it names nobody, as the note
+# writer stamps it. Only a claim this session holds is ended: another session's, one already ended
+# (a park the watchdog wrote stands, and the report reads the done note over it), or none at all is
+# left as it is, and GitHub is never asked. Two writers reaching for the claim's next entry (this
+# and a watchdog's park in the same minute) make exactly one, as every end does (_sq_link).
+# Prints `released ISSUE done` (exit 0), `not-released ISSUE WHY` (exit 1, nothing ended, which
+# includes any note that is not a done note naming an issue), or refused (exit 3).
+sleep_done_noted() {
+  local note="${1:-}" got slug issue self bad gen dir line st nxt attempts reason entry err
+  # 5 is the reader's answer that the note names nothing to end; any other failure (a crash exits
+  # 1, no python3 127) is a fault, refused, so the session is told its claim may still be held.
+  got="$(python3 "$_SQ_PY" noted "$note" "${CLAUDE_CODE_SESSION_ID:-}")"
+  case $? in
+    0) ;;
+    5) printf 'not-released\t-\tnot a done note naming an issue\n'; return 1 ;;
+    *) _sq_refuse "the done note could not be read for the claim it names"; return 3 ;;
+  esac
+  IFS=$'\t' read -r slug issue self <<< "$got"
+  bad="$(_sq_valid "$issue" "$self")" || { _sq_refuse "$bad"; return 3; }
+  gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  dir="$(_sq_issue_dir "$gen" "$slug" "$issue")"
+  if [ ! -d "$dir" ]; then
+    printf 'not-released\t%s\tno claim on it tonight\n' "$issue"
+    return 1
+  fi
+  line="$(python3 "$_SQ_PY" state "$dir" "$self" "$(_sq_registry)" "$(_sq_now)")" || { _sq_refuse "the claim on #$issue could not be judged"; return 3; }
+  IFS=$'\t' read -r st nxt attempts reason <<< "$line"
+  if [ "$st" != mine ]; then
+    printf 'not-released\t%s\tthis session does not hold it (%s: %s)\n' "$issue" "$st" "$reason"
+    return 1
+  fi
+  entry="$(python3 "$_SQ_PY" entry done "$self" "$(_sq_now)" "ended by its done note")" || { _sq_refuse "the release entry could not be written"; return 3; }
+  err="$(_sq_link "$dir" "$nxt" "$entry")"
+  case $? in
+    0) ;;
+    1) printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"; return 1 ;;
+    *) _sq_refuse "$err"; return 3 ;;
+  esac
+  printf 'released\t%s\tdone\n' "$issue"
+}
+
 # sleep_claims_json: every claim of tonight, one JSON line each (repo, issue, attempts, entries).
 # The seam the nightly report (phase 4, #835) reads claims through, so it never parses the folders.
 sleep_claims_json() {
@@ -620,7 +672,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     release) sleep_release "$@" ;;
     claims) sleep_claims_json ;;
     work) sleep_work "$@" ;;
-    *) echo "usage: sleep-queue.sh next|queue|claim|release|claims|work ... (see the header of $0)" >&2; exit 2 ;;
+    done-noted) sleep_done_noted "$@" ;;
+    *) echo "usage: sleep-queue.sh next|queue|claim|release|claims|work|done-noted ... (see the header of $0)" >&2; exit 2 ;;
   esac
   exit $?
 fi

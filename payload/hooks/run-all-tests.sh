@@ -195,6 +195,12 @@ SUITE_NOTE_MAX="${SUITE_NOTE_MAX:-3}"
 # owed the list; capped all the same, saying how many it hid, while the count on the suite's line
 # stays exact.
 SUITE_PART_UNMEASURED_MAX="${SUITE_PART_UNMEASURED_MAX:-8}"
+# Where every one of those parts is also written, uncapped, one `<suite><TAB><why>` line each, for the
+# pull request checks to put on the run's summary (claude-config#3312, tools/ci-unmeasured-summary.sh).
+# Unset, nothing is written. This run's alone: unset here, before any suite starts, so a suite that
+# runs this runner on a fixture tree cannot write its fixtures' parts into the real record.
+UNMEASURED_RECORD="${HOOK_TESTS_UNMEASURED_FILE:-}"
+unset HOOK_TESTS_UNMEASURED_FILE
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # Run a suite that FAILED once more, purely to find out whether it is a flake (claude-config#245).
 # On by default because the cost is paid only by a run that is already red, and off inside the
@@ -1876,6 +1882,12 @@ overload_count=0
 # And those that ran with parts they could not measure here (#1444): passes, but not whole ones.
 partial=0
 partial_names=""
+# Started empty, so a run that left nothing unmeasured says so rather than keeping a list from an
+# earlier run (#3312). One that cannot be written is said, never a reason to fail the run.
+if [ -n "$UNMEASURED_RECORD" ] && ! { : > "$UNMEASURED_RECORD"; } 2>/dev/null; then
+  echo "run-all-tests: the record of unmeasured parts, $UNMEASURED_RECORD, cannot be written, so no later step can list them." >&2
+  UNMEASURED_RECORD=""
+fi
 divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
@@ -2100,6 +2112,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       summary="$summary, $n_parts unmeasured"
       partial=$((partial + 1))
       partial_names="$partial_names $name"
+      [ -z "$UNMEASURED_RECORD" ] || printf '%s\n' "$parts" | awk -v s="$name" 'NF { print s "\t" $0 }' >> "$UNMEASURED_RECORD"
     fi
     # And any line saying so in a shape this runner does not read, which fails the suite: read past,
     # it is the silence this exists to end (#1444, L613).
