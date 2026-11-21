@@ -60,6 +60,25 @@ writes a record of an Apply, so there is no record file a command could forge or
 one; a transcript that cannot be read covers nothing. (The one record this file writes is of the
 test project lines Dan approved, under A LINE COUNTS ONLY WHEN DAN HIMSELF APPROVED IT, below.)
 
+HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ (claude-config#3321). An Apply, and a Trust
+below, covers what the picker said because Dan read it, and Claude Code's dialog cuts a long
+question and draws some characters and markup as nothing. So each picker he answered is first put
+through the one check of text a person approves in a picker, askFault in
+payload/mods/mod-kit/hooks/shown.ts, as the dialog got it (with the questions its result hands
+back). That check is TypeScript and this file is not, so it is run through its command line entry
+beside this file, lib/picker-check.mjs, under node (Dan, 2026-11-21: "One check, called"); none of
+its limits or character classes is written here.
+  - A picker the check refuses is not taken, and the question about the write says what in it he
+    could not have read and to ask it again in plain words.
+  - When the check cannot run (no node on PATH, a node too old for --experimental-strip-types, no
+    answer in PICKER_CHECK_SECONDS, an answer that cannot be read), no picker is taken and the
+    question says so. The write is then asked about, as one with no Apply is: never let through on
+    a picker nobody judged, and never refused, since Dan's yes to the hook's own question still
+    runs it.
+  - What it costs: nothing until the session holds a picker of the source he answered with the
+    word; then one run of node for each time his pickers are read, however many there are (15
+    runs on the personal MacBook under load, 2026-11-21, node 22.22.2: 57 to 115 ms, median 61).
+
 WHAT IT CANNOT SEE: the database itself. The pending list is what the dry run printed before the
 picker; a change on the database between that dry run and the push is not reflected in it. Nor a
 `supabase link` to another project between the dry run and the Apply in the same directory: the
@@ -183,6 +202,14 @@ GIT_SECONDS = 4
 # The edits of that list an Edit, Write or MultiEdit makes are held like a database write.
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit")
 SHA = re.compile(r"[0-9a-f]{64}")
+# The command line entry of the shared check of text a person approves in a picker, beside this
+# file, and how long one run of it may take (HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ).
+PICKER_CHECK = "picker-check.mjs"
+PICKER_CHECK_SECONDS = 3
+
+
+class PickerCheckFailed(Exception):
+    """The shared check could not be run, or gave no verdict that could be read; str() says why."""
 
 
 def _sha256(path):
@@ -221,15 +248,86 @@ def _stamp_ns(stamp):
     return int(t.timestamp()) * 1_000_000_000 + t.microsecond * 1000
 
 
-def applies(transcript_path, session_id):
+def _picker_faults(asks):
+    """For each picker's input in asks, None when Dan would read it as written, else the sentence
+    saying what in it he would not (the shared check's own words). Raises PickerCheckFailed, with
+    why, when the check could not be run or gave no verdict that could be read for every picker:
+    a verdict is never assumed (HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ, above)."""
+    import shutil
+    node = shutil.which("node")
+    if node is None:
+        raise PickerCheckFailed("node is not on PATH, and it runs the check")
+    entry = os.path.join(os.path.dirname(os.path.abspath(__file__)), PICKER_CHECK)
+    try:
+        r = subprocess.run([node, "--experimental-strip-types", "--no-warnings", entry],
+                           input=json.dumps({"asks": asks}).encode("utf-8"), capture_output=True,
+                           timeout=PICKER_CHECK_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise PickerCheckFailed("the check did not answer in " + ("%g" % PICKER_CHECK_SECONDS) + " seconds")
+    except OSError as e:
+        raise PickerCheckFailed("the check could not be started (" + type(e).__name__ + ")")
+    if r.returncode != 0:
+        # The line naming the error, where node prints a stack ahead of it (a module it could not
+        # find, say), else the first line.
+        lines = [l.strip() for l in r.stderr.decode("utf-8", "replace").split("\n") if l.strip()]
+        said = next((l for l in lines if "Error" in l or l.startswith("picker-check:")), lines[0] if lines else "")[:200]
+        raise PickerCheckFailed("the check exited " + str(r.returncode) + (": " + said if said else ""))
+    try:
+        faults = json.loads(r.stdout.decode("utf-8", "replace")).get("faults")
+    except (ValueError, AttributeError):
+        faults = None
+    if not isinstance(faults, list) or len(faults) != len(asks):
+        raise PickerCheckFailed("the check's answer could not be read")
+    out = []
+    for f in faults:
+        if f is None:
+            out.append(None)
+        elif isinstance(f, dict) and isinstance(f.get("what"), str) and isinstance(f.get("fault"), str):
+            out.append(f["what"] + ": " + f["fault"])
+        else:
+            raise PickerCheckFailed("the check's answer could not be read")
+    return out
+
+
+def _read_by_dan(answered, word, unread):
+    """Those of answered, [(a picker's input as the dialog got it, what to keep of it)], whose
+    picker Dan could read as written, as the kept halves in order. Each other is added to unread,
+    the caller's list, when it gave one, as (its kept half, why it is not taken), so a caller can
+    say the reason of the picker for the very thing it is asked about and of no other. When the
+    check cannot run, none is taken and each is given that reason: the caller then asks about the
+    write, as it does with no picker at all."""
+    if not answered:
+        return []
+    try:
+        faults = _picker_faults([ask for ask, _ in answered])
+    except PickerCheckFailed as e:
+        why = ("whether Dan could read the picker he answered " + word + " in could not be checked ("
+               + str(e) + "), so his answer is not taken until it can be")
+        if unread is not None:
+            unread.extend((keep, why) for _, keep in answered)
+        return []
+    kept = []
+    for (_, keep), fault in zip(answered, faults):
+        if fault is None:
+            kept.append(keep)
+        elif unread is not None:
+            unread.append((keep, "the picker Dan answered " + word + " in would not have reached him as written ("
+                           + fault + "), so that answer is not taken: ask it again in plain words without what "
+                           "is at fault"))
+    return kept
+
+
+def applies(transcript_path, session_id, unread=None):
     """(metadata, dry runs) for every /db-apply picker Dan answered Apply in this session, oldest
     first. The dry runs are every Bash call naming --dry-run that had finished without error before
     the picker was put, as (sent at, in ns; the session's directory then; its command), oldest
-    first; covered() decides which are dry runs of a push. Raises when the transcript cannot be read."""
-    return _pickers(transcript_path, session_id, SOURCE, APPLY)
+    first; covered() decides which are dry runs of a push. Raises when the transcript cannot be read.
+    unread, the caller's list, gets each Apply he gave that was not taken for want of a picker he
+    could read, as ((its metadata, its dry runs), why) (_read_by_dan)."""
+    return _pickers(transcript_path, session_id, SOURCE, APPLY, unread)
 
 
-def _pickers(transcript_path, session_id, source, word):
+def _pickers(transcript_path, session_id, source, word, unread=None):
     """applies(), for the pickers of one source that Dan answered with one word."""
     found, asked, dries, dry_sent = [], {}, [], {}
     with open(transcript_path, "rb") as f:
@@ -271,9 +369,14 @@ def _pickers(transcript_path, session_id, source, word):
                     if dry is not None and not item.get("is_error"):
                         dries.append(dry)
                     pair = asked.pop(key, None)
-                    if pair is not None and _answered(pair[0], e.get("toolUseResult"), item.get("is_error"), word):
-                        found.append((pair[0]["metadata"], pair[1]))
-    return found
+                    result = e.get("toolUseResult")
+                    if pair is not None and _answered(pair[0], result, item.get("is_error"), word):
+                        # Judged as the dialog got it: with the questions the result hands back,
+                        # when it hands any, since a hook can reword what the session sent.
+                        shown = result.get("questions")
+                        got = dict(pair[0], questions=shown) if isinstance(shown, list) and shown else pair[0]
+                        found.append((got, (pair[0]["metadata"], pair[1])))
+    return _read_by_dan(found, word, unread)
 
 
 def _pending_why_not(pending, name):
@@ -532,28 +635,42 @@ def _keep(keys, refs, unkept):
 
 
 def _trusted_by_dan(session_id, transcript_path):
-    """({(a list's resolved path, a ref)} for every picker of this session Dan answered TRUST, None),
-    or (nothing, why his pickers could not be looked for). Fails closed: no transcript, one that
-    cannot be read, or a picker naming no absolute list path or no ref gives nothing. The reason is
-    kept apart so no question says he approved a line in no picker when none was read (L11)."""
+    """({(a list's resolved path, a ref)} for every picker of this session Dan answered TRUST, None,
+    untaken), or (nothing, why his pickers could not be looked for, {}). Fails closed: no
+    transcript, one that cannot be read, or a picker naming no absolute list path or no ref gives
+    nothing. The reason is kept apart so no question says he approved a line in no picker when
+    none was read (L11). untaken is {(a list's resolved path, a ref): why} for each line he
+    answered TRUST for in a picker that was not taken, because he could not have read it as
+    written or the check of that could not run (#3321): the question about that line says so, and
+    the question about any other line does not."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
-        return set(), "the call named no session transcript"
+        return set(), "the call named no session transcript" + UNLOOKED, {}
+    unread = []
     try:
-        found = _pickers(transcript_path, session_id, TRUST_SOURCE, TRUST)
+        found = _pickers(transcript_path, session_id, TRUST_SOURCE, TRUST, unread)
     except (OSError, ValueError) as e:
-        return set(), "this session's transcript could not be read (" + type(e).__name__ + ")"
-    lines = set()
-    for meta, _ in found:
+        return set(), ("this session's transcript could not be read (" + type(e).__name__ + ")"
+                       + UNLOOKED), {}
+
+    def line_of(meta):
         listed, ref = meta.get("list"), meta.get("project_ref")
         if isinstance(listed, str) and listed.startswith("/") and isinstance(ref, str) and REF.fullmatch(ref):
-            lines.add((os.path.realpath(listed), ref))
-    return lines, None
+            return os.path.realpath(listed), ref
+        return None
+    lines = {line_of(meta) for meta, _ in found} - {None}
+    untaken = {line_of(meta): why for (meta, _), why in unread if line_of(meta) not in lines}
+    untaken.pop(None, None)
+    return lines, None, untaken
+
+
+# How a reason his pickers could not be looked for at all ends.
+UNLOOKED = ", so a picker of his in this session could not be looked for"
 
 
 def _unlooked(unread):
     """What a question adds, of lines the record does not hold, when Dan's pickers could not be
-    looked for (unread, from _trusted_by_dan)."""
-    return ", and " + unread + ", so a picker of his in this session could not be looked for"
+    looked for, or his picker for the line was not taken (unread, from _trusted_by_dan)."""
+    return ", and " + unread
 
 
 # How Dan approves a line, said by every question about one he has not.
@@ -579,11 +696,13 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
     key = _digest("1", clone, prefix + LIST_PATH, ref)
     if key in approved:
         return None
-    dan, unread = _trusted_by_dan(session_id, transcript_path)
-    if (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref) in dan:
+    dan, unread, untaken = _trusted_by_dan(session_id, transcript_path)
+    line = (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref)
+    if line in dan:
         if not agent:
             _keep([key], [ref], unkept)
         return None
+    unread = untaken.get(line, unread)
     if unread is not None:
         return ("that line is not on this Mac's record of the lines Dan approved" + _unlooked(unread)
                 + ". A line counts only once he has approved it, whatever "
@@ -607,7 +726,7 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent, u
         unread = why or record_why or top_why or "git rev-parse failed (exit " + str(r.returncode) + ")"
         return added, "could not be checked against the lines Dan approved: " + unread
     top_dir = r.stdout.decode("utf-8", "surrogateescape").rstrip("\n")
-    dan, unread, left, keys = None, None, [], []
+    dan, unread, untaken, left, keys = None, None, {}, [], []
     for p, line, top in added:
         # A list git does not track yet is named from folder; the record names every list from the top.
         rel = p if top else os.path.normpath(prefix + p).replace(os.sep, "/")
@@ -618,11 +737,14 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent, u
         if key in approved:
             continue
         if dan is None:
-            dan, unread = _trusted_by_dan(session_id, transcript_path)
-        if (os.path.realpath(os.path.join(top_dir, rel)), line) in dan:
+            dan, unread, untaken = _trusted_by_dan(session_id, transcript_path)
+        here = (os.path.realpath(os.path.join(top_dir, rel)), line)
+        if here in dan:
             keys.append((key, line))
         else:
             left.append((p, line, top))
+            # His picker for this very line was not taken (#3321): the question says why.
+            unread = unread or untaken.get(here)
     if keys and not agent:
         _keep([k for k, _ in keys], [line for _, line in keys], unkept)
     return left, ("Dan has approved in no picker" if unread is None
@@ -936,13 +1058,12 @@ def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None
             return False, "its supabase/migrations folder could not be read (" + type(e).__name__ + ")"
         if not names:
             return False, "its supabase/migrations folder holds no migration"
+    unread = []
     try:
-        given = applies(transcript_path, session_id)
+        given = applies(transcript_path, session_id, unread)
     except OSError as e:
         return False, ("the session's transcript, where Dan's Apply would be, could not be read ("
                        + type(e).__name__ + ")")
-    if not given:
-        return False, "Dan has answered no /db-apply Apply in this session"
     why = None
     for meta, dries in reversed(given):
         why = _why_not(meta, dries, ref, folder, names, file, workdir, dry_dir)
@@ -950,4 +1071,12 @@ def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None
             what = "migration " + names[-1] if file is None else os.path.basename(file)
             return True, ("Dan answered Apply for " + what + " on project " + ref
                           + " in this session, and the file is unchanged since")
-    return False, why
+    # An Apply that would have covered this run, given in a picker he could not read or one the
+    # check could not judge, is the reason said, ahead of any other (#3321, L11).
+    for (meta, dries), reason in reversed(unread):
+        if _why_not(meta, dries, ref, folder, names, file, workdir, dry_dir) is None:
+            return False, reason
+    if given:
+        return False, why
+    # Never reported as no Apply at all when he gave one that was not taken.
+    return False, unread[-1][1] if unread else "Dan has answered no /db-apply Apply in this session"
