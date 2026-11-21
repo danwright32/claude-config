@@ -4061,16 +4061,20 @@ const MOVE_VALUED: Readonly<Record<string, ReadonlySet<string>>> = {
   reset: new Set(['--pathspec-from-file']),
 }
 
-// A move's words apart: its operands, its options by name (`--onto=x` as `--onto`), and whether it
-// carries `--`, after which a checkout names paths.
-const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; flags: Set<string>; paths: boolean } => {
+// A move's words apart: its operands, its options by name (`--onto=x` as `--onto`), whether words
+// follow a `--`, which a checkout reads as paths, and whether it ends in a `--` with nothing
+// after it, which names no path and says the word before it is a branch or commit.
+const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; flags: Set<string>; paths: boolean; ended: boolean } => {
   const ops: string[] = []
   const flags = new Set<string>()
-  let paths = false
+  let dashes = false
+  let after = 0
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string
-    if (paths) ops.push(a)
-    else if (a === '--') paths = true
+    if (dashes) {
+      ops.push(a)
+      after++
+    } else if (a === '--') dashes = true
     else if (a.startsWith('--') && a.includes('=')) flags.add(a.slice(0, a.indexOf('=')))
     else if (valued.has(a)) {
       flags.add(a)
@@ -4078,7 +4082,7 @@ const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops:
     } else if (a.startsWith('-') && a !== '-') flags.add(a)
     else ops.push(a)
   }
-  return { ops, flags, paths }
+  return { ops, flags, paths: after > 0, ended: dashes && after === 0 }
 }
 
 // A commit as a command names it that the guard hands to git: no value the shell fills in, no
@@ -4111,7 +4115,7 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
   // Its own keys only: a subcommand spelled like a member every object inherits (`constructor`)
   // finds no set here, never that member, which would throw where its options are read.
   const valued: ReadonlySet<string> = Object.prototype.hasOwnProperty.call(MOVE_VALUED, sub) ? (MOVE_VALUED[sub] as ReadonlySet<string>) : new Set<string>()
-  const { ops, flags, paths } = moveWords(git.args, valued)
+  const { ops, flags, paths, ended } = moveWords(git.args, valued)
   const has = (...names: string[]) => names.some(n => flags.has(n))
   const asking = (ask: MoveAsk, refs: readonly string[]): GitMove => {
     const bad = refs.find(r => !namesCommit(r))
@@ -4148,11 +4152,13 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
   }
   if (sub === 'checkout') {
     // Paths after `--`, or after a source, are a restore of named files (mod-kit's gitOwn, #1136).
+    // A `--` with nothing after it names none: `git checkout main --` switches to main, and is
+    // read as that move.
     if (paths || has('-p', '--patch')) return undefined
     if (has('-b', '-B', '--orphan')) return ops.length ? asking({ ask: 'tree', commit: ops[0] as string }, [ops[0] as string]) : undefined
     if (ops.length !== 1) return undefined
     const to = ops[0] === '-' ? '@{-1}' : (ops[0] as string)
-    return asking({ ask: 'name', name: to, orPath: true }, [to])
+    return asking({ ask: 'name', name: to, orPath: !ended }, [to])
   }
   if (sub === 'reset') {
     if (!has('--hard', '--merge', '--keep')) return undefined

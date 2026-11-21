@@ -513,6 +513,13 @@ test('#3279: gitMove reads what to ask git for each move, nothing for a move tha
   expect(ask('switch -c new origin/main')).toEqual({ ask: 'tree', commit: 'origin/main' })
   expect(ask('checkout topic')).toEqual({ ask: 'name', name: 'topic', orPath: true })
   expect(ask('checkout --detach abc1234')).toEqual({ ask: 'name', name: 'abc1234', orPath: true })
+  // `--` with nothing after it names no path: it is git's own way to say the word before it is a
+  // branch or commit, so the checkout is a move, never a path put back (lessons review of 690e551).
+  expect(ask('checkout topic --')).toEqual({ ask: 'name', name: 'topic', orPath: false })
+  expect(ask('checkout --detach abc1234 --')).toEqual({ ask: 'name', name: 'abc1234', orPath: false })
+  expect(ask('checkout -B new origin/main --')).toEqual({ ask: 'tree', commit: 'origin/main' })
+  expect(g('checkout topic -- app/globals.css')).toBeUndefined()
+  expect(g('checkout --')).toBeUndefined()
   expect(ask('checkout -B new origin/main')).toEqual({ ask: 'tree', commit: 'origin/main' })
   expect(ask('reset --hard')).toEqual({ ask: 'tree', commit: 'HEAD', worktree: true })
   expect(ask('reset --keep origin/main')).toEqual({ ask: 'tree', commit: 'origin/main', worktree: true })

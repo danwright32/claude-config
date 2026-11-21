@@ -1128,6 +1128,8 @@ test('#3279: a rebase, cherry-pick, revert, switch, checkout of a branch, hard r
     'git checkout other-branch',
     'git checkout -b new-branch origin/main',
     'git checkout feature',
+    'git checkout other-branch --',
+    'git checkout feature --',
     'git reset --hard HEAD~2',
     'git reset --keep origin/main',
     'git stash pop',
