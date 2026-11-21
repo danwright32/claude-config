@@ -579,7 +579,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/measured"
           if [ -d "$HOME/.cache/claude-config" ]; then
             cd "$HOME/.cache/claude-config"
-            find . -type f -newer "$RUNNER_TEMP/before-suites" -exec cp --parents {} "$RUNNER_TEMP/measured/" \;
+            # Never mod-test-failures, where tools/check-mods.sh keeps a failing mod's whole output:
+            # it measures nothing, and what is kept here is restored into every later run (#3325).
+            find . -path ./mod-test-failures -prune -o -type f -newer "$RUNNER_TEMP/before-suites" -exec cp --parents {} "$RUNNER_TEMP/measured/" \;
           fi
           n="$(find "$RUNNER_TEMP/measured" -type f | wc -l)"
           echo "$n record(s) written by this part's suites."

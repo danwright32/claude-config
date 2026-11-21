@@ -759,6 +759,45 @@ else
     || check "#3312 a part with no record is named, and nothing is kept as main's baseline" "exit $say_rc, kept: $(ls "$US/home/.cache" 2>&1), summary: $(head -5 "$US/summary")"
 fi
 
+# ---------------------------------------------------------------------------
+# #3325: a failing mod's whole output never rides into the timings store.
+# ---------------------------------------------------------------------------
+# tools/check-mods.sh keeps a failing mod's output under the same cache folder the parts' collect
+# step copies from, and what that step keeps is merged into the store every later run restores. The
+# step is RUN here against a home holding one fresh timing record and one fresh kept failure: the
+# record must be handed on, so a step that keeps nothing cannot pass, and the failure must not be.
+# The folder's name is read from check-mods.sh itself, so renaming it there cannot leave this
+# checking a folder nothing writes.
+COLLECT_STEP="Collect what this part measured"
+kept_rel="$(sed -n 's|^KEPT_DIR=.*/claude-config/\([^}"]*\)}.*$|\1|p' "$DIR/../tools/check-mods.sh")"
+collect_body="$(step_run_body "$REAL" parts "$COLLECT_STEP")"
+if [ -z "$kept_rel" ] || [ -z "$collect_body" ]; then
+  check "#3325 the collect step and the folder check-mods.sh keeps failures in were both found" "folder: '$kept_rel', step body: $(wc -l <<< "$collect_body") line(s)"
+else
+  CS="$TMPROOT/collect-step"
+  mkdir -p "$CS/rt" "$CS/bin" "$CS/home/.cache/claude-config/suite-timings" "$CS/home/.cache/claude-config/$kept_rel" "$CS/probe/p"
+  # The runner's cp is GNU's, which has --parents; a Mac's has not. Stood in for only where the real
+  # one lacks it, so on the runner the step runs exactly as written.
+  : > "$CS/probe/p/f"
+  if ! (cd "$CS/probe" && cp --parents p/f "$CS/rt/" 2>/dev/null && [ -f "$CS/rt/p/f" ]); then
+    printf '#!/usr/bin/env bash\nif [ "$1" = --parents ]; then mkdir -p "$3/$(dirname "$2")" && exec /bin/cp "$2" "$3/$(dirname "$2")/"; fi\nexec /bin/cp "$@"\n' > "$CS/bin/cp"
+    chmod +x "$CS/bin/cp"
+  fi
+  rm -rf "$CS/rt/p"
+  touch -t 202001010000 "$CS/rt/before-suites"
+  printf 'tests/test-mods.sh\t715\n' > "$CS/home/.cache/claude-config/suite-timings/runner.tsv"
+  printf 'the whole output of a failing mod\n' > "$CS/home/.cache/claude-config/$kept_rel/some-mod.log"
+  (cd "$DIR/.." && PATH="$CS/bin:$PATH" RUNNER_TEMP="$CS/rt" HOME="$CS/home" bash -e -o pipefail -c "$collect_body" > "$CS/stdout" 2>&1)
+  collect_rc=$?
+  handed="$(tar -tf "$CS/rt/measured.tar" 2>/dev/null | sed 's|^\./||' | grep -v '/$')"
+  [ "$collect_rc" -eq 0 ] && grep -qx 'suite-timings/runner.tsv' <<< "$handed" \
+    && check "#3325 the collect step hands on a timing record its part wrote" ok \
+    || check "#3325 the collect step hands on a timing record its part wrote" "exit $collect_rc, handed on: $(tr '\n' ' ' <<< "$handed"), out: $(head -3 "$CS/stdout" | tr '\n' ' ')"
+  grep -q "^$kept_rel/" <<< "$handed" \
+    && check "#3325 a failing mod's kept output is not handed on to the timings store" "handed on: $(grep "^$kept_rel/" <<< "$handed" | tr '\n' ' ')" \
+    || check "#3325 a failing mod's kept output is not handed on to the timings store" ok
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
