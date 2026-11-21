@@ -395,6 +395,30 @@ test("one he did not answer is added open, and issue #N is read in the session's
   expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] How long should issue #12 keep a record? (choices: 1 day / 7 days)' }])
 })
 
+// #3321: a checked box on an issue reads as settled by Dan, and his answer covers a question only
+// because he read it. So a picker he could not read as written, judged by the one check of text a
+// person approves in a picker (mod-kit's hooks/shown.ts), is written onto no issue, answered or
+// open, and Claude is told. The refused character is made from its code point, never written here.
+test('a question Dan could not read as written is written onto no issue, and Claude is told why (#3321)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, '7 days', { 12: SECTION })
+  const zw = String.fromCodePoint(0x200b)
+  const ask = async (question: string, extra: Record<string, unknown> = {}) =>
+    (await $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q9', questions: [{ question, header: 'Keep', multiSelect: false, options: [{ label: '1 day', description: 'x' }, { label: '7 days', description: 'y' }] }], ...extra } as never)) as { context?: string[] }
+  const hidden = await ask(`How long should issue #12 keep${zw} a record?`)
+  await w.settle()
+  expect((hidden.context ?? []).join(' ')).toContain('The question would not reach Dan as written')
+  expect((hidden.context ?? []).join(' ')).toContain("was not added to issue #12's Open questions")
+  const beside = await ask('How long should issue #12 keep a record?', { title: `Keep${zw}` })
+  await w.settle()
+  expect((beside.context ?? []).join(' ')).toContain('Field "title" would not reach Dan as written')
+  expect(w.edits).toEqual([])
+  // Asked in words he can read, the same question is checked off with his answer.
+  const plain = await ask('How long should issue #12 keep a record?')
+  await w.settle()
+  expect((plain.context ?? []).join(' ')).not.toContain('would not reach Dan')
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] How long should issue #12 keep a record? (answered 1969-12-31 ET: 7 days)'])
+})
+
 // #1775: an item added open carries the answers its dialog offered, as mod-kit's reader reads them,
 // so /sleep offers Dan the same ones when it asks it again.
 test('one he did not answer is added with the choices its dialog offered, read back by the shared reader (#1775)', { plugins: [kitWithRepo] }, async ($, on) => {

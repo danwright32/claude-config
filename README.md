@@ -1720,6 +1720,25 @@ which fails on a hook that reads a gh or git subcommand by word position again; 
 allows carry `gh-reader:` with a reason, in the reader itself and in the crude readings a few callers
 keep for when it cannot be loaded, which see more commands than are there, never fewer.
 
+The words it hands a gate hold no redirection (claude-config#3322). The shell takes every redirection
+out of a command before the program gets its words, wherever it stands, so `gh api >/dev/null -X
+DELETE <ref>` deletes the ref and `gh pr merge 2>/dev/null 7` merges pull request 7. Until #3322 the
+reader handed each one on among the words and each gate had to step over it. Five readers in
+`lib/push-scope.sh` did; the stacked branch delete gate took `>/dev/null` for the endpoint and let
+the delete of a branch with a pull request based on it run unasked, and the merge selector took the
+2 of `2>/dev/null` for the pull request. Now each is taken out once, where the words are made:
+`unredirected` in `lib/shell-words.py` reads the command's text, where a quoted `'>'` is still told
+from the operator, so a message or a path that only looks like a redirection stays the word it is,
+and `tool_words` is what both the bash gates (`tool_field`, then `PS_RUN_ARGS`) and the python ones
+(`tool_command`) get a gh or git command's words from. Words a caller cut itself with
+`shell_tokens` (`gh_issue_scan.py`, `lib/merge-selector.py`) carry a mark on each operator written
+outside quotes, which is how `tool_command` tells one from a quoted word; a word a caller split any
+other way is never taken for a redirection. With no reader the crude cut's words lose theirs in one
+place too (`ps__drop_redirections`), by their look alone. A gate that judges where a command's
+output goes, or what is fed to its input, does not read these words: `ps__writes_out` reads the
+command's own words (`PS__R_WORDS`), and `gh_issue_scan.py` keeps each stage's redirections beside
+its words, and both still see every one.
+
 It also reads through the programs that run a command for you (claude-config#1478), so each gate
 judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
 xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and
@@ -2112,7 +2131,10 @@ delete written as a full `https://` URL (read as the path it names, on the host 
 `{branch}` or `:branch` in its path, read as the branch checked out where the command runs as gh
 fills it, and refused where none is, `git push <remote>
 --delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
-`-d`; a fork's pull request deletes no branch, as gh deletes none for one). `{owner}/{repo}` is
+`-d`; a fork's pull request deletes no branch, as gh deletes none for one). A redirection written
+among any of those words is none of them (claude-config#3322): until then `gh api >/dev/null -X
+DELETE <ref>` was a call to an endpoint named `>/dev/null` and passed unasked, and `git
+push >/dev/null origin --delete <branch>` was refused over a remote named `>/dev/null`. `{owner}/{repo}` is
 asked of gh where the command runs, since gh fills it with the first of the remotes `upstream`,
 `github` and `origin`: in a fork's checkout that is the parent, where reading origin had listed
 the fork and let the delete through (#1758). A pull request from a fork based on the branch counts
@@ -2683,7 +2705,7 @@ alone). With the lock free the whole gate took 38 to 43 seconds, three readings 
 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
 whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
-scan 7, so the 150 second budget stays
+scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run)
 
 </td></tr>
 <tr><td>
@@ -3253,7 +3275,7 @@ passed on its own tree. The merge is written beside the file and renamed over it
 push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
 removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
-The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
+The gate stops waiting at a budget of 140 seconds (150 until #3357), inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
@@ -3261,6 +3283,18 @@ on that day the gate was killed at 180 seconds on three of three readings at a l
 each scanner still running. The scanners that finished and passed are remembered, so a retry does
 not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
 its budget blocks the push rather than passing it.
+
+That budget bounds only the wait on the scanners. On 2026-11-20, at load averages of 110 to 160,
+four pushes were refused with nothing but Claude Code's `[command hook 23]: timed out` (hook 23 is
+this gate, counting the distinct command lines of the event as Claude Code 2.1.330 does), because
+every step before and after the wait ran with no bound: the commit message check and its live
+list, the listings of the repository, the key, and a 5 second lock per scanner that every worktree
+shares (#3357). So the gate now runs as two processes. The one Claude Code started supervises the
+other against a hard stop at the budget plus 20 seconds and never past 160; at the stop it ends the
+run, refuses in its own words, says what the run was doing and how many seconds its clock started
+after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
+left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
+counts and the gate cannot, and the stop itself, which is builtins only.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
@@ -4655,7 +4689,8 @@ hands its functions a program's name as a plain label (`run_slow python`); a bod
 arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
-reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
+with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
 when the words after it happen to spell a command the gate refuses. Left open: a word that names
@@ -6434,10 +6469,12 @@ is not write free: it writes the scan record, and the review page writes itself 
 the folder it is given, which the skill names to Dan, and with `--clear-clipboard` empties the
 clipboard first. Inside the folders it judges it changes
 nothing, which is why the worktrees kind reads with `git --no-optional-locks status`: a plain
-`git status` refreshes the repository's index file as it reads (#3216). Project build folders that
-iCloud syncs (in Desktop or Documents while iCloud syncs them) are never offered, since removing one
-removes it from iCloud on every device: they are left out of the list, counted in the kind's note,
-and refused by its judge (#3215). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`git status` refreshes the repository's index file as it reads (#3216). Project build folders a sync
+service keeps (`dcs_synced` in `scan-lib.sh`, the predicate the forgotten worktrees kind reads too:
+Desktop or Documents while iCloud syncs them, iCloud Drive, `~/Library/CloudStorage`, Dropbox, Google
+Drive, OneDrive, Box and the rest) are never offered, since removing one removes it on every device
+that syncs it: they are left out of the list, counted by place in the kind's note, and refused by its
+judge, which follows a link to where the folder really is (#3215, #3233). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
@@ -7584,6 +7621,22 @@ event without the keys Claude Code carries beside them (`tool`, `tool_use_id`, `
 `hooks/mod-kit/toolargs.ts` (#3190: eight mods took the keys off by hand in twelve places, so a key
 the engine added had to be learned by every copy); a site wanting `tool_use_id` or `agentId` reads
 that one key from the event, and the scan fails a mod line naming both `agentId` and `consent`.
+Text Dan approves in a picker is judged by one check, `askFault` in `hooks/shown.ts`, kept by each
+mod that reads a picker's answer at `hooks/mod-kit/shown.ts` (#3321, built for the lesson picker in
+#3295 and moved here unchanged). Claude Code's dialog cuts a question at 2,000 characters and draws
+some characters and markup as nothing, so the whole call, every field beside the question
+included, is judged before he is asked: a character he cannot see, more than 1,500 UTF-16 code
+units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
+link definition, a character reference or a link to a file. There is one set of limits for every
+picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
+design round guard's two questions, the area check's restructure question and sleep mode's
+recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
+manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
+`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
+open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
+its leave open questions, the keystroke guard's), and the database apply and test project
+approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs
 no copy of `hooks/code.ts`. The file reader that move was made for, `hooks/reaches.ts`, was deleted

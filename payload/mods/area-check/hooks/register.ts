@@ -88,6 +88,7 @@ import {
 import { currentText } from './mod-kit/inputs.ts'
 import { withoutOwnFolder } from './mod-kit/scriptvars.ts'
 import { toolArgs } from './mod-kit/toolargs.ts'
+import { askFault } from './mod-kit/shown.ts'
 import { declinedNote, engineFacts, namedReaders, type Named } from './named.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
@@ -1431,7 +1432,19 @@ export const register: Register = on => {
     const h = await heldOf($, id)
     if (!h) return { deny: `No edit is held under ${id}: it was decided already, or the session ended. Send the edit again, and if it is held you are told how to decide.` }
     const q = restructureQuestion(h)
-    const r = await next({ ...e, questions: [{ question: q.question, header: HEADER, options: q.options, multiSelect: false }] } as typeof e)
+    // He decides on the words he reads (#3321), so the call is judged as the dialog will get it,
+    // the hook's own question, header and answers in place and every field sent beside them, by
+    // the one check of text a person approves in a picker (mod-kit's hooks/shown.ts). One that
+    // fails is refused before he is asked, and nothing is recorded. The hook words the question,
+    // so what a session can change is a field it sent; a name the question shows that is itself
+    // at fault cannot be asked about, which is said and never hidden (L111).
+    const sent = { ...e, questions: [{ question: q.question, header: HEADER, options: q.options, multiSelect: false }] } as typeof e
+    const unread = askFault(sent as unknown as Record<string, unknown>)
+    if (unread !== undefined)
+      return {
+        deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so nothing was asked, nothing is recorded and ${heldNames(h)} ${h.more?.length ? 'stay' : 'stays'} held. The area check words this question and its answers, so send it with no field beside the questions that holds what is at fault. Where what is at fault is a name the question shows (a file's or an issue's), it cannot be asked as it stands: tell Dan in one line what is held and why.`,
+      }
+    const r = await next(sent)
     if (r.deny !== undefined || r.isError) return r
     const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
     const out = (r.result ?? {}) as AskResult

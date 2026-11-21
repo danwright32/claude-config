@@ -295,6 +295,22 @@ run "$R14" 'git push --all origin'; o14c="$OUT"
 run "$R14" 'git add x && git commit -qm y && git push -u origin feature'; o14d="$OUT"
 [ "$RC" -eq 0 ] && check "a feature branch push is let through" ok \
                 || check "a feature branch push is let through" "rc=$RC out=$o14d"
+# The shell takes a redirection out before git gets its words, so one written before the remote is
+# not the remote. Read as a word it was the remote, which is not the shared repository, and the push
+# to main went through; one after the refspec was a refspec, so output sent to a file named main was
+# a push to it (claude-config#3322).
+redirected() { # redirected <the exit it should have> <label> <command>
+  run "$R14" "$3"
+  if [ "$RC" -eq "$1" ]; then check "$2: $3" ok; else check "$2: $3" "rc=$RC out=${OUT:0:300}"; fi
+}
+redirected 2 "#3322: a redirection before the remote hides no push to the default branch" 'git push 2>&1 origin HEAD:main'
+redirected 2 "#3322: nor one that names a file" 'git push >/dev/null origin main'
+redirected 2 "#3322: nor one with its target apart" 'git push > push.log origin main'
+redirected 2 "#3322: nor one before a forced, fully spelled refspec" 'git push &>/dev/null origin +feature:refs/heads/main'
+redirected 2 "#3322 control: a redirection between the remote and the default branch" 'git push origin 2>/dev/null main'
+redirected 2 "#3322 control: a redirection after the default branch" 'git push origin main 2>&1'
+redirected 0 "#3322: output sent to a file named main is no push to it" 'git push origin feature > main'
+redirected 0 "#3322 control: a feature branch push behind a redirection is let through" 'git push 2>&1 -u origin feature'
 # A tag only push from the default branch updates no branch at all, so it is not a push to main.
 git -C "$R14" checkout -q main 2>/dev/null
 run "$R14" 'git push --tags origin'; o14g="$OUT"
