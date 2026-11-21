@@ -171,6 +171,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     readFailsAfterRun?: string
     unreadable?: string
     branchFails?: boolean
+    // #3279: the checkout holds no record of which branch is the remote's default.
+    noDefault?: boolean
     // design_file.py --sealed (#1524): the texts it reads as a settled design exactly as sealed, and
     // whether it cannot be run at all.
     sealed?: string[]
@@ -215,7 +217,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       return { exitCode: 0, stdout: `${branch}\n`, stderr: '' }
     }
     if (sub === 'worktree list --porcelain') return { exitCode: 0, stdout: `worktree ${tree === '/w/slate-wt' || tree === '/w/slate-wt2' ? '/w/slate' : tree}\nHEAD abc\nbranch refs/heads/main\n\n`, stderr: '' }
-    if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') return { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
+    // git's own words and exit code where a clone never recorded it, measured with git 2.51.1 for #3279.
+    if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') return ctl.noDefault ? { exitCode: 128, stdout: '', stderr: 'fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n' } : { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
     throw new Error(`unexpected git: ${argv.join(' ')}`)
   }
   on('process.run', async ($, e) => {
@@ -235,7 +238,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       }
       return { value: { exitCode: 0, stdout: text, stderr: '', isStdoutTruncated: ctl.gitBlob === 'truncated', isStderrTruncated: false } } as never
     }
-    if (cmd === 'git' && args[0] === '-C' && ['rev-parse', 'diff', 'log', 'for-each-ref', 'ls-tree'].includes(String(args[2]))) {
+    if (cmd === 'git' && args[0] === '-C' && ['rev-parse', 'diff', 'log', 'for-each-ref', 'ls-tree', 'merge-base'].includes(String(args[2]))) {
       gitRuns.push(e.argv.join(' '))
       const said = gitSays[`${args[1]} ${args.slice(2).join(' ')}`]
       if (said === 'throws') throw new Error('spawn git ENOENT')
@@ -1055,8 +1058,13 @@ test('#3279: a merge that brings a look changing file into the working tree is h
   expect(why).toContain(moved('git merge other-branch'))
   expect(why).not.toContain('docs/notes.md')
   expect(w.ran).toEqual([])
-  // Only questions that change nothing were asked of git.
-  expect(w.gitRuns.filter(g => / (rev-parse|diff) /.test(g))).toEqual([`git -C /w/slate rev-parse --verify --quiet other-branch^{commit}`, `git -C /w/slate ${DIFF} HEAD...${C1}`])
+  // Only questions that change nothing were asked of git. The last asks for the default branch's
+  // commit ("Skip what is on main", below), which this checkout never fetched, so nothing is skipped.
+  expect(w.gitRuns.filter(g => / (rev-parse|diff|merge-base) /.test(g))).toEqual([
+    `git -C /w/slate rev-parse --verify --quiet other-branch^{commit}`,
+    `git -C /w/slate ${DIFF} HEAD...${C1}`,
+    `git -C /w/slate rev-parse --verify --quiet refs/remotes/origin/main^{commit}`,
+  ])
   // A file the other branch deleted is a look changing file taken away.
   w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'D\0app/globals.css\0'
   expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge other-branch' }))).toContain('app/globals.css')
@@ -1255,6 +1263,216 @@ test('#3279: a move the guard cannot read before it runs is held, saying how to 
   // A subagent is told the same, and to nobody's question.
   w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'M\0docs/notes.md\0'
   expect(refusalOf(await call($, { tool: 'Bash', command: 'git fetch origin && git merge origin/main', agentId: 'a1' }))).toContain('Nothing is asked of Dan for this.')
+})
+
+// #3279, Dan, 2026-11-20, "Skip what is on main": a look change already on the default branch has
+// shipped, so a merge or rebase that takes the default branch in is not asked about it again. The
+// default branch is the one the checkout records for its remote, at the commit it last fetched,
+// never a name the command gives. A file is skipped only where the commit being taken in holds it
+// exactly as the newest commit it shares with the default branch does; anything it holds beyond that
+// commit, every other kind of move, and every case git cannot answer for is asked as before.
+const TIP = 'd'.repeat(40)
+const MAIN_REF = 'refs/remotes/origin/main'
+// The default branch as this checkout last fetched it, and for each commit named, the newest commit
+// it shares with that one (`git merge-base <commit> <tip>`).
+const shipped = (w: ReturnType<typeof world>, shares: Record<string, string>, tree = '/w/slate') => {
+  knows(w, MAIN_REF, TIP, tree)
+  for (const [commit, base] of Object.entries(shares)) w.gitSays[`${tree} merge-base ${commit} ${TIP}`] = `${base}\n`
+}
+// The guard's log lines saying a move was not asked about `file`, each naming the commit of the default branch it was read against.
+const skipped = (w: ReturnType<typeof world>, file: string) => w.logged.filter(l => l.text.includes('exactly as the default branch holds') && l.text.includes(file) && l.text.includes(`(${MAIN_REF} at ${TIP.slice(0, 12)})`))
+const HELD = 'app/globals.css changes how the screen looks'
+
+test('#3279: a merge or rebase that takes the default branch in runs unasked for a look changing file whose change is already on it', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  // origin/main and the branch's upstream are the default branch's own tip; C1 is an older commit of it.
+  for (const name of ['origin/main', '@{upstream}']) knows(w, name, TIP)
+  knows(w, 'origin/main~3', C1)
+  shipped(w, { [TIP]: TIP, [C1]: C1 })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${TIP}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = CSS
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge origin/main' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Only questions that change nothing were asked of git, and none that reaches the network.
+  expect(w.gitRuns.filter(g => / (rev-parse|diff|merge-base) /.test(g))).toEqual([
+    `git -C /w/slate rev-parse --verify --quiet origin/main^{commit}`,
+    `git -C /w/slate ${DIFF} HEAD...${TIP}`,
+    `git -C /w/slate rev-parse --verify --quiet ${MAIN_REF}^{commit}`,
+    `git -C /w/slate merge-base ${TIP} ${TIP}`,
+  ])
+  expect(w.gitRuns.filter(g => /\b(fetch|pull|push|ls-remote|remote)\b/.test(g))).toEqual([])
+  const commands = ['git rebase origin/main', 'git merge', 'git rebase', 'git merge --no-edit origin/main~3', 'git -C /w/slate merge origin/main', 'git status && git merge origin/main']
+  const asked: string[] = []
+  for (const command of commands) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(1 + commands.length)
+  expect(w.cards).toEqual([])
+  // Nothing of Dan's is recorded for it, and each skip is in the guard's log, naming the file, the
+  // command and the commit of the default branch it was read against.
+  expect(Object.keys(w.store).filter(k => k.startsWith('auto:') || k.includes('issue:'))).toEqual([])
+  expect(skipped(w, 'app/globals.css').length).toBe(1 + commands.length)
+  expect(skipped(w, 'app/globals.css')[0]?.text).toContain('`git merge origin/main`')
+  expect(w.logged.some(l => l.text.includes('docs/notes.md'))).toBe(false)
+})
+
+test('#3279: a look change that is on the default branch is still asked about when a cherry-pick, a revert, a switch, a checkout, a hard reset or a stash brings it in', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  knows(w, 'origin/main', TIP)
+  knows(w, 'stash@{0}', C2)
+  // The picked commit is the default branch's own tip, and the stash was made on it.
+  shipped(w, { [TIP]: TIP, [C2]: TIP })
+  w.gitSays[`/w/slate ${PICKS} origin/main --`] = `\u0001${TIP}\0\n${CSS}`
+  w.gitSays[`/w/slate ${PICKS} ${TIP} --`] = `\u0001${TIP}\0\n${CSS}`
+  w.gitSays[`/w/slate ${DIFF} HEAD ${TIP}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} -R ${TIP}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${C2}^1 ${C2}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${TIP} ${C2}`] = CSS
+  const notHeld: string[] = []
+  for (const command of [
+    'git cherry-pick origin/main',
+    `git cherry-pick ${TIP}`,
+    'git revert --no-edit origin/main',
+    'git switch --detach origin/main',
+    'git switch -c new-branch origin/main',
+    'git checkout origin/main',
+    'git checkout -b new-branch origin/main',
+    'git reset --hard origin/main',
+    'git stash pop',
+    'git stash apply',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes(HELD) || !why.includes('issue #978 in slate') || !why.includes('names no file')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  expect(skipped(w, 'app/globals.css')).toEqual([])
+})
+
+test('#3279: a merge of another branch is still asked about a look change that is not on the default branch, and about that file alone where the branch holds the default branch too', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  // other-branch left the default branch at C2 and changed the stylesheet since.
+  knows(w, 'other-branch', C1)
+  shipped(w, { [C1]: C2 })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${C2} ${C1}`] = 'M\0app/globals.css\0'
+  for (const command of ['git merge other-branch', 'git rebase other-branch']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(why).toContain(HELD)
+    expect(why).toContain('issue #978 in slate')
+    expect(why).toContain(moved(command))
+  }
+  // A stylesheet it deleted is one taken away, asked about the same.
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'D\0app/globals.css\0'
+  w.gitSays[`/w/slate ${DIFF} ${C2} ${C1}`] = 'D\0app/globals.css\0'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge other-branch' }))).toContain('app/globals.css')
+  expect(w.ran).toEqual([])
+  expect(skipped(w, 'app/globals.css')).toEqual([])
+  // main-plus holds the default branch's tip and one commit more, which adds a stylesheet: the
+  // merge brings in both, and only the one that is not on the default branch is asked about.
+  knows(w, 'main-plus', C2)
+  shipped(w, { [C2]: TIP })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C2}`] = 'M\0app/globals.css\0A\0app/theme.css\0M\0docs/notes.md\0'
+  w.gitSays[`/w/slate ${DIFF} ${TIP} ${C2}`] = 'A\0app/theme.css\0'
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'git merge main-plus' }))
+  expect(why).toContain('app/theme.css changes how the screen looks')
+  expect(why).toContain(moved('git merge main-plus'))
+  expect(why).not.toContain('app/globals.css')
+  expect(w.ran).toEqual([])
+  expect(skipped(w, 'app/globals.css').length).toBe(1)
+  expect(skipped(w, 'app/theme.css')).toEqual([])
+  // With the one more commit changing no look file, the merge runs.
+  w.gitSays[`/w/slate ${DIFF} ${TIP} ${C2}`] = 'M\0docs/notes.md\0'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge main-plus' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('#3279: a local branch named like the default one is judged by its commits, so one ahead of the remote has not shipped', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  // The local main holds the remote's and one commit more, which changes the stylesheet.
+  knows(w, 'main', C1)
+  shipped(w, { [C1]: TIP })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${TIP} ${C1}`] = 'M\0app/globals.css\0'
+  // What git would say were the local main itself taken for the default branch.
+  w.gitSays[`/w/slate merge-base ${C1} ${C1}`] = `${C1}\n`
+  w.gitSays[`/w/slate ${DIFF} ${C1} ${C1}`] = ''
+  for (const command of ['git merge main', 'git rebase main']) expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(HELD)
+  // So is a local branch somebody named origin/main, which git reads before the remote's.
+  knows(w, 'origin/main', C1)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge origin/main' }))).toContain(HELD)
+  expect(w.ran).toEqual([])
+  expect(skipped(w, 'app/globals.css')).toEqual([])
+  // A local main that holds nothing the remote's does not is the default branch, whatever it is called.
+  knows(w, 'main', C2)
+  shipped(w, { [C2]: C2 })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C2}`] = CSS
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge main' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('#3279: where the guard cannot find the default branch, or git cannot say what a commit holds beyond it, the merge is asked about as before', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  knows(w, 'origin/main', TIP)
+  knows(w, 'main-plus', C1)
+  shipped(w, { [TIP]: TIP, [C1]: TIP })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${TIP}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${TIP} ${C1}`] = 'M\0docs/notes.md\0'
+  const merge = async (command = 'git merge origin/main') => refusalOf(await call($, { tool: 'Bash', command }))
+  // The control: with every answer in place both merges run, so each case below changes one thing.
+  expect(await merge()).toBe('')
+  expect(await merge('git merge main-plus')).toBe('')
+  expect(w.ran.length).toBe(2)
+  const ran: string[] = []
+  const held = async (what: string, command?: string) => {
+    const why = await merge(command)
+    if (!why.includes(HELD) || !why.includes(SKIP_QUESTION)) ran.push(`${what}: ${why.slice(0, 200)}`)
+  }
+  // The checkout does not record which branch is its remote's default.
+  w.ctl.noDefault = true
+  await held('no default branch recorded')
+  w.ctl.noDefault = false
+  // The default branch is named, and its commit was never fetched, cannot be read, or is no commit.
+  const ref = `/w/slate rev-parse --verify --quiet ${MAIN_REF}^{commit}`
+  for (const said of [undefined, 'throws', 'truncated', 'not a commit\n', { fails: 'fatal: bad object' }] as const) {
+    if (said === undefined) delete w.gitSays[ref]
+    else w.gitSays[ref] = said
+    await held(`the default branch's commit: ${JSON.stringify(said)}`)
+  }
+  knows(w, MAIN_REF, TIP)
+  // git cannot name a commit the two share: they share none, it fails, or what it prints is no commit.
+  const base = `/w/slate merge-base ${TIP} ${TIP}`
+  for (const said of [undefined, '', 'throws', 'truncated', 'warning: something else\n', { fails: 'fatal: Not a valid object name' }] as const) {
+    if (said === undefined) delete w.gitSays[base]
+    else w.gitSays[base] = said
+    await held(`the shared commit: ${JSON.stringify(said)}`)
+  }
+  w.gitSays[base] = `${TIP}\n`
+  // git cannot list what the commit holds beyond the default branch.
+  const beyond = `/w/slate ${DIFF} ${TIP} ${C1}`
+  for (const said of [undefined, 'throws', 'truncated', 'warning: something else\n', { fails: 'fatal: bad object' }] as const) {
+    if (said === undefined) delete w.gitSays[beyond]
+    else w.gitSays[beyond] = said
+    await held(`what it holds beyond: ${JSON.stringify(said)}`, 'git merge main-plus')
+  }
+  w.gitSays[beyond] = 'M\0docs/notes.md\0'
+  expect(ran).toEqual([])
+  expect(w.ran.length).toBe(2)
+  expect(skipped(w, 'app/globals.css').length).toBe(2)
+  // Where the checkout stands cannot be read at all: the call is held, as it is for any look change there.
+  w.ctl.branchFails = true
+  expect(await merge()).not.toBe('')
+  w.ctl.branchFails = false
+  w.branches['/w/slate'] = 'UNREADABLE'
+  expect(await merge()).not.toBe('')
+  w.branches['/w/slate'] = '978-design-round-guard'
+  expect(w.ran.length).toBe(2)
+  // With everything put back, the merge runs again.
+  expect(await merge()).toBe('')
+  expect(w.ran.length).toBe(3)
 })
 
 // #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path or a restore

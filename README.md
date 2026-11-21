@@ -8065,6 +8065,18 @@ this branch, or between the working tree and the commit for a reset,
 untracked files; each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
+file whose change is already on that branch (Dan, 2026-11-20, "Skip what is on main": it has
+shipped, so asking again under every branch that takes main in protects nothing): the default
+branch is the one the checkout records for its remote, read by mod-kit's branch reader, at the
+commit it last fetched (`git rev-parse --verify --quiet` of that ref under `refs/remotes/origin/`),
+never a name the command gives, and a file is skipped only where the commit being taken in holds it
+exactly as the newest commit it shares with that branch does (`git merge-base`, then
+`git diff --name-status` between the two), so a merge of another branch, or of a local main that is
+ahead of the remote's, is still asked about everything it holds beyond the default branch, and each
+skip is written to the guard's log; a cherry-pick, a revert, a switch, a checkout, a hard reset and
+a stash are asked as before whatever commit they name, and so is a merge where the checkout records
+no default branch, never fetched it, stands on a detached head, or git cannot answer;
 `--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
 the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
 the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:

@@ -3955,6 +3955,56 @@ on its default branch, held "for this session", and one file inside it held the 
 - **A write is judged as before.** A copy can be pushed, so what is written into one can reach the
   product. Only a removal passes: `rm`, `rm -rf`, a pattern matched in a folder there.
 
+### What #3279 changed for a merge of the default branch, 2026-11-20
+
+Since #3345 the guard asks git what a merge, rebase, cherry-pick, revert, switch, checkout of a
+branch, hard reset or stash pop would bring into the working tree, and judges each look changing
+file against the issue the branch names (Dan, 2026-11-19, "Ask only if a look file arrives"; the
+README's design round guard entry lists the commands). Built that way, every branch that took main
+in was asked again about a look change Dan had already answered on its own issue. Dan's answer on
+2026-11-20, asked whether the guard should ask about look changes already on main: "Skip what is on
+main (Recommended)". The comment on #3279 that records it that day gives the reason and the reach:
+"A look change already on main has shipped, so holding a branch that takes main in protects
+nothing", and it "covers only files whose change is already on the default branch. A cherry-pick, a
+merge of any other branch, and a stash stay asked."
+
+- **The one exemption among the moves, and it is an exemption.** Anything wider (another branch,
+  another kind of move, a name pattern, a switch that turns it off) is a new decision of Dan's.
+- **The default branch comes from the checkout, never from the command.** It is the branch
+  `$.modkit.branch` reads from the checkout's own record of its remote, at the commit last fetched
+  (the ref of that name under `refs/remotes/origin/`). mod-kit's fallback to a branch named main or
+  master is not used here: a local branch is not proof of anything having shipped. The remote is
+  never asked, so the answer is as old as the last fetch, which can only make the guard ask more.
+- **Shipped is decided by commits, per file.** For the commit being merged, or rebased onto, git
+  names the newest commit it shares with the default branch (`git merge-base`). Where that is the
+  commit itself, all of it is on the default branch and no look changing file is asked about.
+  Otherwise git lists what the commit holds differently from that shared commit
+  (`git diff --name-status`), and exactly those files are asked about. So a branch holding main and
+  one more commit is asked about that commit's files only, and a local main that is ahead of the
+  remote's is asked about what it is ahead by, whatever it is called.
+- **Only a merge and a rebase onto an upstream.** A cherry-pick, a revert, a switch, a checkout of a
+  branch, a hard reset and a stash go through no part of this, even naming a commit of the default
+  branch: none of them takes the default branch in, and a switch or a reset can also take the
+  branch's own look changes away.
+- **Where it cannot tell, it asks.** No default branch recorded for the remote, one never fetched,
+  a detached head (mod-kit's reader names no default branch there), no commit shared, git failing,
+  timing out or printing what cannot be read: every file is asked about as before.
+- **Each skip is written to the guard's log** (rules.ts `onDefaultSaid`): the files, the command,
+  and the commit of the default branch they were read against. It is the only trace, since nothing
+  is asked and nothing recorded for Dan.
+- **Costs three more reads of git, and only when a look changing file arrives**: the default
+  branch's commit, the shared commit, and, where the commit is not on the default branch, the list
+  of what it holds beyond it. Each was measured at 10 to 32 ms for #3345.
+- **Known limit.** The guard trusts the checkout's record of its remote. A command that rewrote
+  that record by hand (the remote's branch ref, or which branch it calls the default) in an earlier
+  call would make unshipped commits read as shipped. One on the same line as the merge is already
+  held, as any command before a move is. Checking against the remote itself needs the network,
+  which the guard does not use.
+- **Proven against real git, not only the tests' stand in.** The questions were run by hand on a
+  throwaway repository (git 2.51.1) for a merge of the default branch, of an older commit of it, of
+  another branch, of a branch holding main and one more commit, of one that had merged main in, of
+  a local main ahead of the remote's, and of an unrelated history; the tests' answers are those.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
