@@ -3992,6 +3992,18 @@ retired the guard that once held it.
   read as it stands on disk (12); a module found
   only through a changed `sys.path` or an installed package; and a file run by its own name with no
   python, node or shell extension.
+- **The #2991 fixture is held to the suite it is taken from (#3231).** The guard's test of the
+  design rounds adapter suite runs on an excerpt of test-score-adapters.sh carried in
+  register.test.ts. It said it was lines 46 to 48 and 166 to 315 word for word, which it was, and
+  left out lines 41 to 45, which set `SKILL` and `ADAPTER`, so it ran make-settled.py and the
+  adapter through variables it never set where the real suite sets both. A mod's test cannot read
+  a repository file (measured: its runner refuses an import of node:fs, of a file outside the
+  mod's folder and of a file that is not code, gives no Bun, process, require or fetch, and answers
+  no `fs.read` beneath the plugins), so the fixture now carries lines 41 to 48 and 166 to 315 and
+  names them in a `SUITE_2991-LINES` comment, and `tests/test-design-guard-suite-fixture.sh`
+  compares the two on every run: each line word for word, and no line left out that sets a variable
+  the fixture runs a script through, or one such a line uses in turn. A missing file, comment or
+  line fails, saying so. With the five lines in, every verdict of the #2991 test is as it was.
 - **mod-kit's python reader stops rereading the program (folded in by Dan).** The #2855 sweep found
   make-switcher.py took 1.4 to 4.1 seconds to read, every other script under 0.4. code.ts found a
   `.replace(` call's receiver (`receiverBefore`), the call a literal sits in (`pathCall`) and the

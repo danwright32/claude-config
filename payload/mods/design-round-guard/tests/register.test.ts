@@ -5545,9 +5545,21 @@ test('#2948: a program holding a font inlined as base64 is read in time, and the
 // name onto a folder in a variable (`open(ch + "/app/index.html", "w")`). Such a name looks absolute
 // only to mentionedLookFiles; it is the variable's folder's, which the guard cannot read, so a script
 // whose writes are not all named is judged by the names it spells from the top of the disk or home,
-// as #2847 meant, and never by these. The suite below is lines 46 to 48 and 166 to 315 of the real
-// one, word for word.
+// as #2847 meant, and never by these. The suite below is lines 41 to 48 and 166 to 315 of the real
+// one, word for word, the lines the SUITE_2991-LINES comment names. A test here cannot read the real
+// file (its runner gives no way to), so tests/test-design-guard-suite-fixture.sh compares the two on
+// every run and fails when they differ (#3231). Until #3231 it left out lines 41 to 45, which set
+// SKILL and ADAPTER, so it ran make-settled.py and the adapter through variables it never set where
+// the real suite sets both; that suite also fails a fixture leaving out a line that sets a variable
+// it runs a script through. The one `${'$'}{` below is the template's spelling of a dollar sign
+// before a brace.
+// SUITE_2991-LINES payload/skills/design-rounds/score/test-score-adapters.sh 41-48 166-315
 const SUITE_2991 = String.raw`
+HERE="$(cd "$(dirname "${'$'}{BASH_SOURCE[0]}")" && pwd)"
+SKILL="$(cd "$HERE/.." && pwd)"
+SCORE="$HERE/design_score.py"
+ADAPTER="$HERE/capture-web.mjs"
+SWIFT_HELPER="$HERE/swiftui/DesignScoreTests/DesignScoreCapture.swift"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
