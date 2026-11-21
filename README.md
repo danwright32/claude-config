@@ -7586,6 +7586,22 @@ event without the keys Claude Code carries beside them (`tool`, `tool_use_id`, `
 `hooks/mod-kit/toolargs.ts` (#3190: eight mods took the keys off by hand in twelve places, so a key
 the engine added had to be learned by every copy); a site wanting `tool_use_id` or `agentId` reads
 that one key from the event, and the scan fails a mod line naming both `agentId` and `consent`.
+Text Dan approves in a picker is judged by one check, `askFault` in `hooks/shown.ts`, kept by each
+mod that reads a picker's answer at `hooks/mod-kit/shown.ts` (#3321, built for the lesson picker in
+#3295 and moved here unchanged). Claude Code's dialog cuts a question at 2,000 characters and draws
+some characters and markup as nothing, so the whole call, every field beside the question
+included, is judged before he is asked: a character he cannot see, more than 1,500 UTF-16 code
+units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
+link definition, a character reference or a link to a file. There is one set of limits for every
+picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
+design round guard's two questions, the area check's restructure question and sleep mode's
+recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
+manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
+`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
+open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
+its leave open questions, the keystroke guard's), and the database apply and test project
+approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs
 no copy of `hooks/code.ts`. The file reader that move was made for, `hooks/reaches.ts`, was deleted
