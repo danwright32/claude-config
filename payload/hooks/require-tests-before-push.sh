@@ -31,7 +31,9 @@
 # worse than allowing, but a push that was never gated must not look identical
 # to a push the gate approved. (#735)
 # Two exceptions refuse, as could not judge. A further call reading tests past the first call's
-# cut refuses when it still fails after READ_TRIES tries (#3327): the first call has already called a change untested by then, and
+# cut refuses when it fails: at once, with no second try, when it timed out, found no claude to run
+# or could not start, and after READ_TRIES tries (fewer when the time runs out) when its answer
+# could not be read (#3327). The first call has already called a change untested by then, and
 # before #1998 that alone refused the push, so failing open there would loosen the gate. And the
 # first call refuses when too little time is left to start it, or when it runs to a timeout the
 # deadline shortened (#2249): the hook used to be killed there, which refused with no reason.
@@ -891,11 +893,15 @@ MISSING_EOF
   # own subshell writing what it got to files in $dir, since a background call cannot set this
   # shell's variables. A wave is started only inside the cap and with PART_MIN_SECONDS left, and
   # every reading in it is given at most the time that is left, so the wave ends by the deadline.
-  # A reading that fails or answers in a form that cannot be read is asked again with the rest of
-  # its wave's failures, up to READ_TRIES times in all and only while PART_MIN_SECONDS are left
-  # (#3327); one still unreadable after that ends the judging, and its part counts as unseen. A
-  # reading that leaves no result file at all counts as failed. No change left untested, nothing is
-  # asked again.
+  # A reading whose answer could not be read (not JSON, an error envelope, nothing returned, no list
+  # of covered changes, or no result file left at all) is asked again with the rest of its wave's
+  # such readings, up to READ_TRIES times in all and only while PART_MIN_SECONDS are left (#3327);
+  # one still unreadable after that ends the judging as unreadable, or as notime when the clock
+  # stopped the asking, and its part counts as unseen. A reading that timed out, found no claude to
+  # run or could not start is not asked again, since it would only fail the same way: its part
+  # counts as unseen at once and the judging ends with its wave, as failed (RT_CAUSE) unless an
+  # unreadable reading of that wave also ran out of tries or time. No change left untested, nothing
+  # is asked again.
   local last j fj p pids failed covered_all meta todo again tries how why
   local -a part_err=()
   failed=""
@@ -1145,9 +1151,11 @@ reviewer read them in $RT_READINGS parts, every byte of them, and no part held a
 for the changes above."$'\n\n' ;;
         *)
       # Earlier tests are read whatever the push's size (#2153), so a smaller push does not make
-      # them fit, and the advice below would not work alone; say so.
+      # them fit, and the cap's advice below would not work alone; say so. Only for the cap
+      # (#3333): the other stops are the reviewer, the clock or the gate's own scratch work, which
+      # splitting the branch does not get past, and the same push sent again can.
       earlier_fit=""
-      [ "${#EARLIER_TESTS[@]}" -gt 0 ] && earlier_fit="The tests this branch pushed earlier are read with every push of it, so a smaller
+      [ "$RT_CAUSE" = cap ] && [ "${#EARLIER_TESTS[@]}" -gt 0 ] && earlier_fit="The tests this branch pushed earlier are read with every push of it, so a smaller
 push does not make them smaller; if they alone are too many, split the branch."$'\n'
       # What to do, by why the gate stopped (#3327). Only the cap is about the push's size; the rest
       # are the reviewer or the clock, which the same push sent again can get past.
