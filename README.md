@@ -4553,6 +4553,47 @@ no reading was given before #3252 (the reader's `headed_string`); the command it
 as it was before #3252. Anywhere else nothing changes: a variable not worked out, a body's second
 command, a body over several lines, the same string at a script's top level, and anything typed.
 
+Since claude-config#3277 the words written after a program the gate does not know are read as the
+command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
+ones there were, so it can refuse a command those let through and never the reverse. Before it a
+program the gate had no rule for was a command that runs nothing: `node --test
+test/notify.test.js`, a test file whose imports reach code that posts, was refused, and the same
+words after `op run --`, `dotenv --` or `sandbox-exec -f <profile>` were allowed, as was a `curl`
+to the posting endpoint behind any of them (measured 2026-11-18 and 2026-11-19). Now, where a
+command's program is one the gate neither reads by its name nor knows to be unable to run the
+words it is handed, each later word that names a program the gate does read by name (a shell, an
+interpreter, `npx`, `npm`, `curl`, `pytest`), or a runner the shared reader reads past (`env`,
+`timeout`, `nice`), bare, by a path or in quotes, starts a command that is judged as if it were
+typed alone, fed what feeds the command it is written in. So `op run -- node --test
+test/notify.test.js`, `docker exec app env A=1 node --test test/notify.test.js`, `git bisect run
+bash post.sh` and `cat post.py | op run -- python3` are refused, with the runners in front too
+(`time op run -- ...`), typed, in a string a shell runs and in a script on disk. The refusal names
+the program, and names the no network wrapper where a file's imports are what reach the code that
+posts, in the same words as before. No list of programs that run their words is kept, since one
+missing from it would pass (L96). The question asked of the program is the one a shell script's
+own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
+`SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
+nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
+as it was, because the gate reads its body where it stands and this repository's own gate suite
+hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
+arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
+there, behind a script that runs its words as well; the same glued word after a program the gate
+reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+costs: a program that does
+not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
+when the words after it happen to spell a command the gate refuses. Left open: a word that names
+a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
+and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
+quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+is refused as unread and a script on disk is left alone: more than six words that could each
+start a command, and more than three of these readings inside one another, which only strings a
+shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
+such program), since the words of one command are read once however many programs stand among
+them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
+program's words were allowed unread. Suite: `test-slack-drafts-unknown-program.sh`.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -8037,7 +8078,45 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why), a
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+since #3279 what a git command that moves committed work brings into the working tree (Dan,
+2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
+`switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
+and `stash apply`; before one runs the guard asks git which files it would change and the commit
+each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
+`git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
+this branch, or between the working tree and the commit for a reset,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
+untracked files, and `git merge-base` for the commit a merged one shares with the default branch
+(below); each look changing file is then judged
+as a checkout of that file from that commit is, by the lines it changes where that rule applies,
+against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
+file whose change is already on that branch (Dan, 2026-11-20, "Skip what is on main": it has
+shipped, so asking again under every branch that takes main in protects nothing): the default
+branch is the one the checkout records for its remote, read by mod-kit's branch reader, at the
+commit it last fetched (`git rev-parse --verify --quiet` of that ref under `refs/remotes/origin/`),
+never a name the command gives, and a file is skipped only where the commit being taken in holds it
+exactly as the newest commit it shares with that branch does (`git merge-base`, then
+`git diff --name-status` between the two), so a merge of another branch, or of a local main that is
+ahead of the remote's, is still asked about everything it holds beyond the default branch, and each
+skip is written to the guard's log; a cherry-pick, a revert, a switch, a checkout, a hard reset and
+a stash are asked as before whatever commit they name, and so is a merge where the checkout records
+no default branch, never fetched it, stands on a detached head, or git cannot answer;
+`--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
+the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
+the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:
+one with a command before it on its line that may change what it brings in (anything but `cd`, a
+command that only reads and a restore of named paths, so a `git fetch` first, a commit, another
+move), told to run on its own, a `git pull`, which fetches before it merges, told to fetch first and
+merge on its own, and a commit git does not know in this checkout, told to fetch it first; one with
+no other way to run it, a rebase onto another base, from the root, interactive or running commands,
+`git switch --orphan`, `git stash branch`, a commit named through a value the shell fills in, more
+than 300 look changing files, or a question git fails, cannot be run for or answers at more length
+than can be read, is held with a card for Dan; a move inside a script file, `git worktree add`,
+`git clone`, `git bisect`, `git submodule update` and `git stash` taking uncommitted work away are
+not read), a
 program whose text names the files it writes (since #2847 also a python or node script file the
 command runs, its own code read as inline code is, a name its code writes where the folder cannot be
 followed held as could not check; since #2855 also a shell script's own commands and the scripts it
@@ -8045,7 +8124,14 @@ runs, a script named through a variable the command sets, a script the command w
 heredoc, read as that text, and the local modules a script imports; since #3214 a script named
 through a variable the command never sets (`python3 $N/gen.py`, nothing setting N), which the guard
 cannot find and so cannot read, is held as could not check, while one named through a variable the
-command sets some other way (a loop, a command's output) is still not read; since #2991 a name
+command sets some other way (a loop, a command's output) is still not read; since #3279 a python or
+node script kept in a temporary folder or the session's scratchpad (under `/tmp`, `/var/folders` or
+Claude Code's own temporary folder), whose code does not name every file it writes and names a look
+changing file by a relative name, is held as could not check, since it may join that name onto any
+folder or open it after changing folder (Dan, 2026-11-19, "Hold the narrow case": 3 past commands in
+32 days), while a name that is a test by its own file name is left out, and the same script kept
+anywhere else is read as before, its relative names not judged (854 past commands, ruled out the
+same day); since #2991 a name
 such a
 script's python program only adds onto its own variable, `ch + "/app/index.html"`, passes only where
 that variable is its `sys.argv[N]` and is handed a folder the script made with `mktemp -d`, and
