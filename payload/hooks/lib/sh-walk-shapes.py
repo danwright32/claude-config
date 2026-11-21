@@ -40,6 +40,13 @@ Since claude-config#3229 it finds what a program that runs its input is handed b
 it, a pipe into the group, loop, subshell, substitution or string it is in or a file that is given
 (held_input, with the comment above it), using the Judge's parsed, sh_struct_of, redirections,
 written_redirs, input_redirs, stdin_of, sh_value, sh_prints and rest_of.
+
+Since claude-config#3251 it reads a shell, its code or its script named another way
+(judge_unread_shapes, with the comment above it), and since claude-config#3316 a string handed to a
+shell's -c or to eval as that shell gets it wherever the string as written misleads
+(string_as_handed). One fill in of what the outer shell fills in serves every such reading
+(sh_inner_text, through string_handed): string_as_handed and, for a function's string,
+headed_filled (claude-config#3252).
 """
 import os
 import re
@@ -91,6 +98,11 @@ XARGS_VALUED = "EIJLnPRSsad"
 XARGS_LONGS = ("--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars", "--process-slot-var",
                "--max-lines", "--eof")
 ESCAPED_SUBST = re.compile(r"\\[$`]")
+# The name a part of a string stands under while the string is read as the shell it is handed to
+# gets it, where that part is the outer shell's to fill in and its value is not worked out
+# (string_as_handed, claude-config#3316), by its place among such parts: a variable nothing in the
+# string can set, so no assignment inside the string stands in for the outer shell's value.
+HOLE = "__gate_outer_value_%d__"
 # Programs a package manager or a launcher is: run by xargs with nothing after them, the input
 # names the script or the package.
 XARGS_NAMED = {"npm", "pnpm", "yarn", "npx", "pnpx", "bunx"}
@@ -696,7 +708,9 @@ def make(sh_special, sh_param, unknown_dir=None):
         # and `bash -c "echo \$(bash posts.sh)"`. judge_unread_shapes is one more reading of a
         # command, after the Judge's own, so it can refuse a command those let through and never
         # the reverse. What it cannot read is refused where typed and left alone in a script on
-        # disk, as an unread feed is.
+        # disk, as an unread feed is. The one exception is a string whose commands as written
+        # mislead, the outer shell's variable inside single quotes of the string's own
+        # (claude-config#3316): string_as_handed says what stands of that in a script on disk.
 
         def judge_unread_shapes(self, d, text, wrapper, depth, whole):
             """The reason one command posts by one of those shapes, or None."""
@@ -709,20 +723,21 @@ def make(sh_special, sh_param, unknown_dir=None):
                 reason = (self.named_shell(d, text, rest, depth, whole)
                           or self.stdin_named(d, text, rest, depth, whole)
                           or self.line_run(d, text, rest, depth, whole)
-                          or self.xargs_built(d, text, rest, depth, whole)
-                          or self.escaped_string(d, text, rest, depth))
+                          or self.xargs_built(d, text, rest, depth, whole))
+                if reason and self.sh_in_script() and any(u in reason for u in self.unfollowed[noted:]):
+                    # In a script on disk only a finding that something posts stands. A reading
+                    # here puts a command together and reads it as a line of its own, which knows
+                    # none of the script's variables or of the words a -c string is handed, so
+                    # there it can fail to read what the script's own reading reads: this
+                    # repository's test-merge-target.sh runs `"$BASH" -c '. "$0/lib/merge-target.sh";
+                    # ...' "$HOOK_DIR"`, and read as a line the string's $0 is nobody's.
+                    del self.unfollowed[noted:]
+                    reason = None
+                # A string read as the shell it is handed to gets it says for itself what stands
+                # of it in a script on disk (string_as_handed).
+                return reason or self.string_as_handed(d, text, rest, depth)
             finally:
                 self.reshaping -= 1
-            if reason and self.sh_in_script() and any(u in reason for u in self.unfollowed[noted:]):
-                # In a script on disk only a finding that something posts stands. A reading here
-                # puts a command together and reads it as a line of its own, which knows none of
-                # the script's variables or of the words a -c string is handed, so there it can
-                # fail to read what the script's own reading reads: this repository's
-                # test-merge-target.sh runs `"$BASH" -c '. "$0/lib/merge-target.sh"; ...'
-                # "$HOOK_DIR"`, and read as a line the string's $0 is nobody's.
-                del self.unfollowed[noted:]
-                return None
-            return reason
 
         reshaping = 0  # how many of these readings are inside one another
         reads_memo = {}  # the read commands of each text, for read_feed (one Judge runs in a process)
@@ -732,8 +747,9 @@ def make(sh_special, sh_param, unknown_dir=None):
             on disk's own as the command it comes from is; the reason it posts, or None, or that it
             is too deep to read. strict says a text that is too deep or cannot be read is not
             followed in a script on disk too, for a caller that would take the silence there for a
-            text read and found to post nothing (headed_filled); cwd_known False reads it as run
-            from a folder nobody knows."""
+            text read and found to post nothing (headed_filled, and string_as_handed where the
+            string as written misleads); cwd_known False reads it as run from a folder nobody
+            knows."""
             unread = self.unfollow if strict else self.unread_typed
             if depth >= self.pkg_max_depth:
                 return unread(f"a command is put together more than {self.pkg_max_depth} texts deep, "
@@ -1020,16 +1036,23 @@ def make(sh_special, sh_param, unknown_dir=None):
                 return word
             return "'" + word.replace("'", "'\"'\"'") + "'"
 
-        def sh_inner_text(self, raw, d):
-            """(one word as written, as the shell hands it on; whether it holds something that shell
-            fills in whose value the gate does not work out). Quotes are taken off, and inside
+        def sh_inner_text(self, raw, d, opaque=None):
+            """(one word as written, as the shell hands it on; the parts of it that shell fills in
+            whose value the gate does not work out, as written; whether a part that shell fills in
+            stands inside single quotes of the text's own). Quotes are taken off, and inside
             double quotes or bare a backslash is taken off what it escapes, so `"echo \\$(x)"` is
             `echo $(x)`. A variable or a substitution with no backslash is the outer shell's: it is
             replaced by its value where the gate works that out (sh_value), and stays as written
             where it does not, a word of unknown value to whoever reads the text. Where the text
             has it inside single quotes of its own (`". '$DIR/lib.sh'"`) those are closed around
-            it, since the inner shell is handed the folder there and never the text $DIR."""
-            out, i, n, dq, unknown = [], 0, len(raw), False, False
+            it, since the inner shell is handed the folder there and never the text $DIR. That is
+            where the text as written misleads whoever reads it: there the part is a file of the
+            variable's own name (claude-config#3316).
+
+            Given a list as opaque, each part not worked out is written as a variable no text can
+            set (HOLE, by its place in the list, which gets the part as written), so nothing the
+            text itself assigns is taken for the outer shell's value."""
+            out, i, n, dq, unknown, quoted = [], 0, len(raw), False, [], False
             inner = {"sq": False, "dq": False, "esc": False}  # the quotes of the text being built
 
             def put(s):
@@ -1079,43 +1102,94 @@ def make(sh_special, sh_param, unknown_dir=None):
                         i += 1
                         continue
                     filled = self.sh_value('"' + raw[i:end] + '"', d)
+                    quoted = quoted or inner["sq"]
                     if filled is not None:
                         put(filled)
                     else:
                         # Its own quotes are its own, so the quotes of the text around it stay as
                         # they were.
-                        unknown = True
+                        part = raw[i:end]
+                        unknown.append(part)
+                        if opaque is not None:
+                            opaque.append(part)
+                            part = "${" + HOLE % (len(opaque) - 1) + "}"
                         inner["esc"] = False
-                        out.append("'\"" + raw[i:end] + "\"'" if inner["sq"] else raw[i:end])
+                        out.append("'\"" + part + "\"'" if inner["sq"] else part)
                     i = end
                 else:
                     put(c)
                     i += 1
-            return "".join(out), unknown
+            return "".join(out), unknown, quoted
 
-        def escaped_string(self, d, text, rest, depth):
-            """The reason a string handed to a shell's -c or to eval posts once the backslashes the
-            outer shell takes off are off, or None. In `bash -c "echo \\$(bash post.sh)"` the inner
-            shell is handed `echo $(bash post.sh)` and runs post.sh. The shared reader keeps the
-            backslash, so the substitution is text to every other reading. Only a string holding a
-            backslash in front of a $ or a backquote is read again. What the outer shell fills in
-            is filled in where the gate works it out (sh_inner_text). Where it does not, the text
-            the inner shell gets is not known: typed, the string is read with that part as a word of
-            unknown value, and in a script on disk it is left as before, as every reading there
-            leaves what cannot be worked out (this repository's own test-pr-review.sh sourced two
-            files by `'$DIR/lib/...'` in such a string, until claude-config#3252 wrote those paths
-            in double quotes)."""
-            if not ESCAPED_SUBST.search(text):
+        def string_as_handed(self, d, text, rest, depth):
+            """The reason a string handed to a shell's -c or to eval posts, read as that shell gets
+            it, or None. The shared reader gives a string's commands as the string is written, and
+            the shell it is handed to never sees that text: the outer shell has taken its
+            backslashes off and filled its variables and substitutions in first. Two things
+            written in a string are read wrongly as written, and only a string holding one of them
+            is read again:
+
+              * a backslash in front of a $ or a backquote (claude-config#3251). In `bash -c "echo
+                \\$(bash post.sh)"` the inner shell is handed `echo $(bash post.sh)` and runs
+                post.sh, where the reader keeps the backslash and the substitution is text.
+              * a variable or a substitution of the outer shell inside single quotes of the
+                string's own (claude-config#3316). In `bash -c ". '$DIR/lib.sh' && f"` the inner
+                shell is handed the folder, where as written '$DIR/lib.sh' is a file of that very
+                name: looked up, found missing and passed over, so a file that posts was sourced
+                unread, by `.`, source, a shell or an interpreter handed it, a pipe or a
+                redirection from it, a cd into the folder, in a script on disk and typed.
+
+            What the outer shell fills in is filled in where the gate works it out (sh_inner_text,
+            the one fill in, which headed_filled reads a function's string with too). Where it
+            does not, the text the inner shell gets is not known. The string is then read with
+            that part as a word of unknown value, as written first and then as a variable nothing
+            in the string can set, so an assignment of the same name inside the string never
+            stands in for the outer shell's value. A file named through such a part is one that
+            cannot be read, and is judged as the same command written outside a string is: one
+            sourced is refused (#2538), one run is refused behind the #2683 switch.
+
+            In a script on disk, a string of the second kind is read wrongly by the reader's
+            commands for it, so everything this reading says of it stands, what it cannot follow
+            included. A string of the first kind alone is as it was before #3316: only a finding
+            that it posts stands, since this reading knows none of the words the string is handed
+            (judge_unread_shapes), and one holding a part that is not worked out is left alone."""
+            if "$" not in text and "`" not in text:
+                return None
+            if "'" not in text and not ESCAPED_SUBST.search(text):
                 return None
             found, code = self.string_code(text, rest)
-            if not any(ESCAPED_SUBST.search(r) for r in code):
+            if not code:
                 return None
-            value, unknown = self.string_handed(code, d)
-            if value == found[1] or (unknown and self.sh_in_script()):
+            value, unknown, quoted = self.string_handed(code, d)
+            if value == found[1] or not (quoted or any(ESCAPED_SUBST.search(r) for r in code)):
                 return None
-            inner = self.inner_line(value, d, depth)
+            script = self.sh_in_script()
+            if unknown and script and not quoted:
+                return None
+            noted = len(self.unfollowed)
+            inner = self.inner_line(value, d, depth, strict=quoted)
+            if not inner and unknown:
+                parts = []
+                inner = self.inner_line(self.string_handed(code, d, parts)[0], d, depth, strict=quoted)
+
+                def said(s):
+                    for k, part in enumerate(parts):
+                        s = s.replace("${" + HOLE % k + "}", part).replace("$" + HOLE % k, part)
+                    return s
+
+                # Said in the words the string was written in, the causes main() keys on too.
+                inner = said(inner) if inner else inner
+                self.unfollowed[noted:] = [said(u) for u in self.unfollowed[noted:]]
+            if not inner:
+                return None
+            if script and not quoted and any(u in inner for u in self.unfollowed[noted:]):
+                del self.unfollowed[noted:]
+                return None
+            if quoted:
+                return (f"{found[0]} runs a string the shell around it fills in before handing it over, and "
+                        f"as handed over: {inner}")
             return (f"{found[0]} runs a string whose substitution is written with a backslash, which the shell "
-                    f"it is handed to runs: {inner}") if inner else None
+                    f"it is handed to runs: {inner}")
 
         def string_code(self, text, rest):
             """(what the reader's wrapped() says of the command rest, the words of text that are the
@@ -1132,12 +1206,13 @@ def make(sh_special, sh_param, unknown_dir=None):
                 return found, [inline[1]] if inline else []
             return found, []
 
-        def string_handed(self, code, d):
-            """(the text the words code hand on once the outer shell has read them, whether part of
-            it is something that shell fills in whose value the gate does not work out), each word
-            by sh_inner_text."""
-            texts = [self.sh_inner_text(r, d) for r in code]
-            return " ".join(t for t, _ in texts), any(u for _, u in texts)
+        def string_handed(self, code, d, opaque=None):
+            """(the text the words code hand on once the outer shell has read them, the parts of it
+            that shell fills in whose value the gate does not work out, whether a part that shell
+            fills in stands inside single quotes of the text's own), each word by sh_inner_text,
+            which says what opaque is."""
+            texts = [self.sh_inner_text(r, d, opaque) for r in code]
+            return " ".join(t[0] for t in texts), [u for t in texts for u in t[1]], any(t[2] for t in texts)
 
         def headed_filled(self, d, text, wrapper, why, depth):
             """For the first command of a function's body in a script on disk, where it hands a
@@ -1151,8 +1226,11 @@ def make(sh_special, sh_param, unknown_dir=None):
             knows, since a body runs wherever its function is called. That is refused as a path
             that cannot be worked out, and it refused this repository's own suites, where bash is
             handed the folder and never the text $DIR. Before #3252 nobody read that string, bar the
-            reading escaped_string gives one holding a backslash. So it is read here as the inner
+            reading string_as_handed gave one holding a backslash. So it is read here as the inner
             shell gets it, by that reading's own steps (string_code, string_handed, inner_line).
+            Since claude-config#3316 string_as_handed reads such a string wherever it stands, as
+            one more reading that only ever refuses; this one stands in for the reader's commands,
+            which is what lets a function's string pass.
 
             Only where nothing is lost by it. The command must be one whose string no reading was
             given before the header was passed over (the reader's headed_string), so the commands
@@ -1169,7 +1247,7 @@ def make(sh_special, sh_param, unknown_dir=None):
             found, code = self.string_code(body, self.sw.join_continuations(self.rest_of(body)[0]))
             if len(code) != 1 or self.words_of(code[0]) != [found[1]]:
                 return None
-            value, unknown = self.string_handed(code, d)
+            value, unknown, _ = self.string_handed(code, d)
             if unknown or value == found[1]:
                 return None
             noted = len(self.unfollowed)

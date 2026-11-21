@@ -14,20 +14,32 @@ A message to another Claude session is not checked: a SendMessage to an agent or
 
 ## MANDATORY FIRST STEP: read the whole list
 
-Before producing any output, read every part of the Wikipedia list of AI writing signs:
+Before producing any output, read every part of the Wikipedia list of AI writing signs, https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing. Read it from the page's own source, one section at a time, never as the whole rendered page.
 
-```
-https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing
-```
+The rendered page is about 250,000 characters and one WebFetch reads at most 100,000, so one call is never the whole list. Measured on 2026-11-16: the first call ended with a note that 151,549 characters were unread, and the unread part held the promotional vocabulary, the summary endings and the em dash section (claude-config#3060).
 
-The page is about 250,000 characters and one WebFetch reads at most 100,000, so one call is never the whole list. Measured on 2026-11-16: the first call ended with a note that 151,549 characters were unread, and the unread part held the promotional vocabulary, the summary endings and the em dash section (claude-config#3060).
+Read by offset, the page still fails. Measured on 2026-11-20: through the `web-fetch` agent the page (252,524 characters) was read at offsets 0, 39932 and 139932, no further offset came, and "See also" was never reached; through a direct WebFetch it took three calls, and each answer summarised 100,000 characters at once (claude-config#3344). Measured the same day, every section of the page's source came back from a direct WebFetch in one call with no note that part was unread; the largest, "Content", is 38,913 characters.
 
-1. Call WebFetch on the URL with a prompt asking for every sign in that part: each heading, with the words, phrases and habits it lists, quoted as the page gives them.
-2. When a result says part of the page was not read, call WebFetch again on the same URL with the `offset` that result gives. Repeat until a result has no such note.
-3. The list is read only once a part you read reaches the page's "See also" heading, which comes after the last sign. Check for it, rather than trusting the absence of a note.
-4. If this session has already read the whole list this way, use what it read rather than fetching it again.
+1. Fetch the section index, asking for every entry whose "toclevel" is 1, in order, with its "index", "number" and "line" values exactly as given:
 
-If any part could not be read (a fetch failed, or "See also" never arrived), check against what was read, say which part is missing, and never report the text clean: say the check was partial.
+   ```
+   https://en.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Signs_of_AI_writing&prop=sections&format=json&formatversion=2
+   ```
+
+2. Check the index: the "number" values run 1, 2, 3 and so on with no gap, and one entry's line is "See also". If either fails, fetch the index once more; if it fails again, the list cannot be read, and the check is partial, as the paragraph on a part that could not be read says below.
+3. Fetch section 0 (the page's opening) and every entry before "See also", one call each, putting the entry's "index" value at the end of this address. Ask for every sign in that section: each heading, with the words, phrases and habits it lists, quoted as the text gives them.
+
+   ```
+   https://en.wikipedia.org/w/index.php?title=Wikipedia:Signs_of_AI_writing&action=raw&section=
+   ```
+
+4. When a result says part of the text was not read, call again on the same address with the `offset` that result gives. Repeat until a result has no such note. If no offset is given, that section is unread.
+5. The list is read only once what you read reaches the page's "See also" heading: the last section read is the one just before the "See also" entry in the index, every entry before it and section 0 were read, and none of them is left unread under step 4. That is the one test of a whole read. Check it, rather than trusting the absence of a note.
+6. If this session has already read the whole list this way, use what it read rather than fetching it again.
+
+**Without a WebFetch tool.** A session that reads pages through the `web-fetch` agent gives it the index address from step 1 and then the section addresses from step 3. It asks the agent to make one call per URL, and to report the signs listed and, for each URL, whether its result said part of the text was not read, with any offset given. The session then applies steps 4 and 5 to that report. This route was not measured when it was written (2026-11-20); its parts were about 40,000 characters, close to the largest section's size.
+
+If any part could not be read (a fetch failed, the index failed its check, or a section stayed unread), check against what was read, name each section that was not read, and never report the text clean: say the check was partial.
 
 Every sign read is the list to check against for this session.
 

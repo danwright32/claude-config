@@ -46,6 +46,8 @@ finish() {
   [ "$fail" -eq 0 ]
   exit $?
 }
+eq() { [ "$1" = "$2" ] && echo ok || echo "expected '$2', got '$1'"; }
+has() { grep -qF -- "$2" <<< "$1" && echo ok || echo "'$2' not in: $1"; }
 
 if ! . "$HARNESS"; then
   check "the harness is there to source" "could not source $HARNESS"
@@ -492,6 +494,98 @@ case "$rc:$DIR" in
   2:*/payload/hooks) check "every command the disk-clean scripts call is stubbed or a core tool" "could not run: $out" ;;
   2:*) echo "SUITE-PART-UNMEASURED the command check of the real disk-clean scripts: this copy at $DIR is not inside a repository checkout, so there are no scripts to read" ;;
   *) check "every command the disk-clean scripts call is stubbed or a core tool" "exit $rc: $(grep '^fail' <<< "$out")" ;;
+esac
+REAL_LISTING="$out"; REAL_RC="$rc"
+
+# 4h. git runs only from inside dc_git (#3328). git runs with the judged repository's own
+# configuration, where a setting can name a program, so the one helper that turns those settings off
+# is the only place a disk-clean script may call it. Every route to a bare call is refused, and what
+# lies inside the helper's braces, however deep, is not.
+cat > "$FX/wrapped-lib.sh" <<'EOF'
+#!/usr/bin/env bash
+before() { printf '%s\n' "$1"; }
+dc_git() {
+  local d="$1" out
+  shift
+  case "$1" in
+    status) out="$(git -C "$d" config --list)" || return ;;
+  esac
+  if [ -n "$out" ]; then { git -C "$d" rev-parse --git-dir; }; fi
+  while read -r x; do y=`git -C "$d" rev-parse HEAD`; done <<< "$out"
+  eval "git -C \"\$d\" version"
+  git -C "$d" "$@"
+}
+after() { printf '%s\n' "$1"; }
+EOF
+cat > "$FX/wrapped-ok.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$LIB/wrapped-lib.sh"
+dc_git "$1" status
+st="$(dc_git "$1" rev-parse HEAD)"
+echo "git in a string is not a call"
+EOF
+out="$(cmd_check "$FX/wrapped-ok.sh")"; rc=$?
+check "a script whose every git call is inside dc_git passes" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc: $(grep '^fail' <<< "$out")")"
+check "and the calls inside it are listed, as the stub git is (so the pass is not an empty listing, L98)" \
+  "$(eq "$(awk -F '\t' '$1 == "stub" && $2 == "git"' <<< "$out" | wc -l | tr -d ' ')" 5)"
+cat > "$FX/wrapped-bare.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$LIB/wrapped-lib.sh"
+dc_git "$1" status
+git -C "$1" status   # FINDS
+st="$(git -C "$1" rev-parse HEAD)"   # FINDS
+st=`git -C "$1" rev-parse HEAD`   # FINDS
+printf '%s\n' "$1" | xargs git -C   # FINDS
+env A=1 git status   # FINDS
+command git status   # FINDS
+bash -c 'git status'   # FINDS
+eval "git status"   # FINDS
+other() { git status; }   # FINDS
+other2() {
+  dc_git "$1" status
+  git stash list   # FINDS
+}
+( git log )   # FINDS
+if git diff --quiet; then :; fi   # FINDS
+EOF
+out="$(cmd_check "$FX/wrapped-bare.sh")"; rc=$?
+want="$(grep -n 'FINDS' "$FX/wrapped-bare.sh" | cut -d: -f1 | tr '\n' ' ')"
+check "a bare git call fails the check by every route a script can take to one" \
+  "$([ "$rc" -eq 1 ] && [ "$(fail_lines "$out" "$FX/wrapped-bare.sh" git)" = "$want" ] && echo ok || echo "exit $rc, wanted lines $want, got $(fail_lines "$out" "$FX/wrapped-bare.sh" git)")"
+check "and the failure names the helper to go through" "$(has "$out" "git is called outside dc_git, the one function these scripts may run it from")"
+check "and nothing inside the helper is among them" "$(eq "$(fail_lines "$out" "$FX/wrapped-lib.sh" git)" "")"
+# The helper's braces end where they end: a call after them, in the same file, is bare.
+{ cat "$FX/wrapped-lib.sh"; printf 'git status   # FINDS\n'; } > "$FX/wrapped-after.sh"
+out="$(cmd_check "$FX/wrapped-after.sh")"; rc=$?
+check "a git call after the helper's closing brace is outside it" \
+  "$([ "$rc" -eq 1 ] && [ "$(fail_lines "$out" "$FX/wrapped-after.sh" git)" = "$(grep -n 'FINDS' "$FX/wrapped-after.sh" | cut -d: -f1 | tr '\n' ' ')" ] && echo ok || echo "exit $rc, got lines $(fail_lines "$out" "$FX/wrapped-after.sh" git): $(grep '^fail' <<< "$out")")"
+# A second definition would be a second helper, with whatever settings its writer remembered.
+cat > "$FX/wrapped-twice.sh" <<'EOF'
+#!/usr/bin/env bash
+. "$LIB/wrapped-lib.sh"
+dc_git() { git "$@"; }
+dc_git "$1" status
+EOF
+out="$(cmd_check "$FX/wrapped-twice.sh")"; rc=$?
+check "a second definition of the helper fails the check, at both definitions" \
+  "$([ "$rc" -eq 1 ] && [ "$(awk -F '\t' '$1 == "fail" && $2 == "dc_git" && $4 ~ /defined 2 times/' <<< "$out" | wc -l | tr -d ' ')" -eq 2 ] && echo ok || echo "exit $rc: $out")"
+# A function of another name that merely holds a helper shaped body is not the helper.
+printf '#!/usr/bin/env bash\ndc_git_too() { git -C "$1" status; }\n' > "$FX/wrapped-other.sh"
+out="$(cmd_check "$FX/wrapped-other.sh")"; rc=$?
+check "a function of another name is not the helper" "$([ "$rc" -eq 1 ] && [ "$(fail_lines "$out" "$FX/wrapped-other.sh" git)" = "2 " ] && echo ok || echo "exit $rc: $out")"
+out="$(python3 "$SCANNER" --stubs git --wrapped "git" -- "$FX/wrapped-ok.sh" 2>&1)"; rc=$?
+check "a --wrapped entry naming no function is a usage error, never a rule that refuses nothing" "$([ "$rc" -eq 2 ] && echo ok || echo "exit $rc: $out")"
+# The real scripts, today: every git call they make is one of dc_git's own, in the one file that
+# defines it, and there is at least one, so this is not the pass of a tree that never calls git.
+case "$REAL_RC" in
+  0|1)
+    check "the real disk-clean scripts call git nowhere but inside dc_git" \
+      "$(eq "$(awk -F '\t' '$2 == "git" && $1 != "stub"' <<< "$REAL_LISTING" | cut -f 1,3 | tr '\n\t' '| ')" "")"
+    check "and dc_git's own calls are in lib/disk-clean-predicates.sh and no other file" \
+      "$(eq "$(awk -F '\t' '$1 == "stub" && $2 == "git" { sub(/:[0-9]+$/, "", $3); n = split($3, a, "/"); print a[n] }' <<< "$REAL_LISTING" | sort -u | tr '\n' ' ')" "disk-clean-predicates.sh ")"
+    check "and the scripts do reach it: dc_git is called from the scan, a category and the remover" \
+      "$(eq "$(awk -F '\t' '$1 == "function" && $2 == "dc_git" { sub(/:[0-9]+$/, "", $3); n = split($3, a, "/"); print a[n] }' <<< "$REAL_LISTING" | sort -u | tr '\n' ' ')" "claude-records.sh disk-clean-predicates.sh disk-remove.sh scan-lib.sh ")" ;;
+  *) echo "SUITE-PART-UNMEASURED whether the real disk-clean scripts call git only inside dc_git: the command check could not read them here (exit $REAL_RC)" ;;
 esac
 
 # ================================================================================================
