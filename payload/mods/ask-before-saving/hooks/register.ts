@@ -31,6 +31,8 @@ import {
   lessonPlaced,
   entriesTouched,
   pickerOnly,
+  lessonsByShell,
+  byShellOnly,
   indexLength,
   readsAsShort,
   lessonOptions,
@@ -476,6 +478,15 @@ const lessonEditBy = async (tool: string, input: Record<string, unknown>, at: Wh
 }
 const lessonEdit = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<LessonEdit> => lessonEditBy(tool, input, at, file => textNow($, file))
 
+// Whether a shell command writes or may write the installed lessons file (#3343, rules.ts
+// lessonsByShell), read from the one judgement of the command (lastingTargets), so every way mod-kit's
+// reader finds a write of it counts: its words, a script it is handed to, a mention beside a write
+// the words do not name. Such a command is covered by nothing: what it does to an entry cannot be
+// read, so neither a For good nor words of Dan's let it through (an index cover never could: it
+// covers a call whose one file is a MEMORY.md). Never an Edit or a Write, which are read
+// (lessonEdit), nor a command that only reads the file.
+const shellLessons = (tool: string, targets: Targets, home: string): boolean => tool === 'Bash' && lessonsByShell(targets.files, home)
+
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
 const takeLesson = async ($: EngineInterface, added: string) => {
@@ -642,7 +653,10 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
     // covered by his answer in the lesson picker or by nothing, so it is left for the tool.check
     // hook to refuse, as it is under a For good. It went on unread here, SHORT line and all.
     const entry = (await lessonEdit($, tool, input, at)).touched.length > 0
-    files = entry ? [] : (await lastingTargets($, tool, input, at)).files
+    const targets = entry ? undefined : await lastingTargets($, tool, input, at)
+    // Nor a shell command that writes or may write the lessons file (#3343): left for the
+    // tool.check hook to refuse the same way, with the Edit route named.
+    files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -761,9 +775,12 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   // covered by Dan's answer in the lesson picker or by nothing (independent review of #3320): a For
   // good is neither taken for it here nor asked for below.
   const edit = await lessonEdit($, tool, input, at)
+  // A shell command that writes or may write the lessons file (#3343): what it does to an entry
+  // cannot be read, so no approval of any kind is taken for it and no question is asked below.
+  const byShell = shellLessons(tool, targets, at.home)
   // A save Dan answered For good, sent again: on to the settings hooks and the permission check
   // beneath (the auto mode classifier among them), never asked about again.
-  const { live, lapsed } = edit.touched.length ? { live: undefined, lapsed: undefined } : await takeApproval($, key)
+  const { live, lapsed } = edit.touched.length || byShell ? { live: undefined, lapsed: undefined } : await takeApproval($, key)
   if (live) {
     taken.set(String(raw.tool_use_id ?? ''), live)
     return next(e)
@@ -798,6 +815,13 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   if (edit.touched.length) {
     const only = pickerOnly(display(lessonsFile(at.home), at.home), tool, edit.touched, edit.misplaced)
     return { decision: 'deny', reason: lesson.lapsed ? `${lapsedNote(lesson.lapsed)} ${only}` : only }
+  }
+  // A shell command that writes or may write the lessons file (#3343): refused the same way, with
+  // the Edit route named, where the write is read. No question waits, so no For good can be given.
+  if (byShell) {
+    const file = display(lessonsFile(at.home), at.home)
+    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file) }
+    return { decision: 'deny', reason: byShellOnly(file, how, files.filter(f => f !== file)) }
   }
 
   const id = String(raw.tool_use_id ?? '') || `save-${++saves}`

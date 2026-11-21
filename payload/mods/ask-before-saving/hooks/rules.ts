@@ -1195,6 +1195,11 @@ export const entriesTouched = (tool: string, input: Record<string, unknown>, fil
   return touched
 }
 
+// Why an entry is approved in the lesson picker and nowhere else, and how Claude asks there: said in
+// one wording by the refusal of an Edit or Write (pickerOnly) and of a shell command (byShellOnly).
+const ENTRY_REACH = `an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word`
+const PICKER_ASK = `ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes`
+
 /**
  * What Claude is told when an Edit or Write would add or change a lesson entry with no answer of
  * Dan's in the lesson picker covering it (independent review of #3320). It is refused, and he is
@@ -1203,13 +1208,47 @@ export const entriesTouched = (tool: string, input: Record<string, unknown>, fil
  * is where a single added entry would land when that is no entry boundary (boundaryFault).
  */
 export const pickerOnly = (file: string, tool: string, touched: readonly string[], misplaced: string | undefined): string =>
-  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word. ` +
+  `Not saved, and Dan is not asked For good about it. This ${tool} adds or changes a lesson entry in ${file} (${touched.join(', ')}), and ${ENTRY_REACH}. ` +
   (misplaced !== undefined
     ? `It would put the entry ${misplaced}. Add it whole at an entry boundary: straight after another entry's last line or under a section heading, with another entry's first line, a section heading or the end of the file as the next line that is not blank. `
     : '') +
   `If he answered ${LESSON_ADD} for this lesson in the last ${APPROVAL_MS / 60_000} minutes, send one Edit that adds exactly the entry that answer described, at an entry boundary. ` +
-  `Otherwise ask him in the lesson picker, as the durable lesson check words it: one AskUserQuestion with metadata "source": "${LESSON_SOURCE}", the rule word for word in "rule", its check line in "${LESSON_CHECK_KEY}" and its SHORT line in "${LESSON_SHORT_KEY}", then add the entry with the one Edit his answer describes. ` +
+  `Otherwise ${PICKER_ASK}. ` +
   `To change an entry that is already there, ask him the same way for the entry as it should read, take the old one out (a removal is asked about as usual), and add the new one.`
+
+/**
+ * Whether the installed lessons file is among a shell command's lasting memory (register.ts
+ * lastingTargets, each file as Dan reads it), whichever way the command was found to write it
+ * (#3343): named by its words, handed to a script, or mentioned by its path beside a write the
+ * words do not name. Only that file by its path counts. A checkout's `payload/LESSONS.md` does not,
+ * nor does a LESSONS.md the reader could place nowhere (`$S/LESSONS.md` through a variable only a
+ * command's output or a condition sets, a bare name in a patch's prose): each may be a scratch copy
+ * or a checkout's, and is asked about as before.
+ */
+export const lessonsByShell = (files: readonly string[], home: string): boolean => files.includes(display(lessonsFile(home), home))
+
+/**
+ * What Claude is told when a shell command writes, or may write, the installed lessons file (#3343).
+ * It is refused, no question waits on it and no approval covers it: the mod reads which files a
+ * command writes, never what it writes to them, so it cannot hold an entry to what Dan read, and a
+ * For good there approved an entry under a question of the session's own wording. The Edit route is
+ * named, where a write is read: an entry goes to the lesson picker (pickerOnly) and anything else is
+ * asked about as before. `file` is the installed lessons file as Dan reads it; `how` says when it
+ * was found only by a mention (`guessed`) or only as a script's argument (`handed`), so the refusal
+ * claims only what was measured (L11) and says how a command that only reads the file is sent;
+ * `others` is the rest of the lasting memory the command writes. A command whose words show it only
+ * reads the file never gets here.
+ */
+export const byShellOnly = (file: string, how: { guessed?: boolean; handed?: boolean }, others: readonly string[]): string =>
+  `Not run, and Dan is not asked For good about it: ${writesWhat([file], how.guessed ? [file] : [], how.handed ? [file] : [])}. ` +
+  `What a shell command does to a lesson entry cannot be read before it runs, and ${ENTRY_REACH}. ` +
+  `Make the change to ${file} with Edit or Write instead, which are read before they run: one that adds or changes an entry is covered by his answer in the lesson picker and by nothing else, and one that touches no entry is asked about as usual. ` +
+  `For an entry, ${PICKER_ASK}. ` +
+  (how.guessed || how.handed
+    ? `If this command only reads or quotes ${file}, send it so that nothing it writes is left unread: feed a script the file on standard input (< ${file}) or hand it a copy, and keep every other write to a file the command's own words name. `
+    : '') +
+  (others.length ? `Its other lasting memory (${others.join(', ')}) is judged when sent in a command that leaves ${file} alone. ` : '') +
+  `A command whose words show that it only reads ${file} (cat, grep, wc, claude-sync lesson) is not refused.`
 
 /**
  * The file an Edit leaves: `file` with its old text replaced, when that text is found exactly once

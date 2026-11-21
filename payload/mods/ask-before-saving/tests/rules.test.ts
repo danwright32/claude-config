@@ -2,6 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
+import { byShellOnly, lessonsByShell, pickerOnly } from '../hooks/rules.ts'
 import { LESSON_SHORT_KEY, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT, MAX_SHORT_TEXT, QUESTION_COLUMNS, addsThis, askFault, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, readCheckLine, readShortLine, rowsAt, ruleText, shellAppended, shortLine, shownFault, unseenIn } from '../hooks/rules.ts'
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, lessonPlaced, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
@@ -422,6 +423,51 @@ test('a lasting memory file handed to a script counts, marked as handed, and is 
   expect(writesWhat(['~/b/AGENTS.md', '~/a/CLAUDE.md'], [], ['~/a/CLAUDE.md'])).toBe(
     'this writes lasting memory (~/b/AGENTS.md), and it hands lasting memory (~/a/CLAUDE.md) to a script, which may write it',
   )
+})
+
+// #3343: whether the installed lessons file is among a shell command's lasting memory. That file by
+// its path only: never a checkout's copy, another memory file, or a LESSONS.md the reader could
+// place nowhere, each of which is asked about as before.
+test('the installed lessons file among what a shell command writes is that file by its path, never a checkout copy or a name placed nowhere (#3343)', () => {
+  const installed = '~/.claude/LESSONS.md'
+  const not = ['~/Apps/claude-config/payload/LESSONS.md', '/tmp/checkout/payload/LESSONS.md', 'payload/LESSONS.md', '$R/payload/LESSONS.md', '$D/LESSONS.md', 'LESSONS.md', '~/LESSONS.md', '~/.claude/CLAUDE.md', '~/.claude/LESSONS.md.bak']
+  expect(lessonsByShell([installed], HOME)).toBe(true)
+  expect(lessonsByShell(['~/Apps/slate/CLAUDE.md', installed], HOME)).toBe(true)
+  for (const f of not) expect(`${f}: ${lessonsByShell([f], HOME)}`).toBe(`${f}: false`)
+  expect(lessonsByShell(not, HOME)).toBe(false)
+  expect(lessonsByShell([], HOME)).toBe(false)
+  // Another home's file, spelled whole, is not this one.
+  expect(lessonsByShell([`${'/Users'}/dan/.claude/LESSONS.md`], `${'/Users'}/someone-else`)).toBe(false)
+})
+
+test('the refusal of a shell write of the lessons file says what was measured, names the Edit route and the lesson picker, and offers no question (#3343)', () => {
+  const file = '~/.claude/LESSONS.md'
+  const named = byShellOnly(file, {}, [])
+  expect(named.startsWith(`Not run, and Dan is not asked For good about it: this writes lasting memory (${file}). `)).toBe(true)
+  expect(named).toContain('What a shell command does to a lesson entry cannot be read before it runs')
+  // The words the refusal of an Edit or Write uses for why and for how to ask, the same in both.
+  for (const shared of ["an entry's rule, check line and SHORT line reach every session, so he approves it only in the lesson picker, where he reads each of them word for word", 'one AskUserQuestion with metadata "source": "durable-lesson", the rule word for word in "rule", its check line in "check" and its SHORT line in "short"']) {
+    expect(named).toContain(shared)
+    expect(pickerOnly(file, 'Edit', ['L753'], undefined)).toContain(shared)
+  }
+  expect(named).toContain(`Make the change to ${file} with Edit or Write instead`)
+  expect(named).toContain('one that touches no entry is asked about as usual')
+  expect(named.endsWith(`A command whose words show that it only reads ${file} (cat, grep, wc, claude-sync lesson) is not refused.`)).toBe(true)
+  // No question waits on it: nothing For good could answer, and no instruction to ask that way.
+  expect(named).not.toContain('ask-before-saving:')
+  expect(named).not.toContain('Ask him now with AskUserQuestion')
+  expect(named).not.toContain('only reads or quotes')
+  expect(named).not.toContain('other lasting memory')
+  // Found by a mention, or as a script's argument: said as that, with the way to send a read.
+  const guessed = byShellOnly(file, { guessed: true }, [])
+  expect(guessed).toContain(`this may write lasting memory (${file}): its words do not name the file it writes, and they mention ${file}`)
+  expect(guessed).toContain(`If this command only reads or quotes ${file}, send it so that nothing it writes is left unread: feed a script the file on standard input (< ${file}) or hand it a copy`)
+  const handed = byShellOnly(file, { handed: true }, [])
+  expect(handed).toContain(`this hands lasting memory (${file}) to a script, which may write it`)
+  expect(handed).toContain(`If this command only reads or quotes ${file}, `)
+  // The rest of the lasting memory the command writes is named, and is not refused for good.
+  const mixed = byShellOnly(file, {}, ['~/Apps/slate/CLAUDE.md'])
+  expect(mixed).toContain(`Its other lasting memory (~/Apps/slate/CLAUDE.md) is judged when sent in a command that leaves ${file} alone. `)
 })
 
 // Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure

@@ -2834,7 +2834,26 @@ and the band question is removed rather than kept beside it (L29). Three defects
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
-  A shell append, and a write that touches no entry, are asked about as before. The approval is
+  The first of the three left on #3343 is built (2026-11-20): a shell command that writes
+  `~/.claude/LESSONS.md` is refused, with no For good offered and Edit or Write named in its
+  place. It cannot be sent to the lesson picker, which is what the issue asked first: the mod
+  reads which files a command writes, never what it writes to them, so nothing could hold the
+  entry to what Dan read. It is decided from the one judgement of the command (`lastingTargets`,
+  then `lessonsByShell`), never a second reading of it, so each way mod-kit's reader finds a
+  write of that file counts alike, a file handed to a script and one named by its path beside a
+  write the reader cannot follow included; those two may only read it, and the refusal
+  (`byShellOnly`) says which it found and how a read is sent. The issue's open question, whether
+  a write can be told from a read without refusing reads, is answered by that reader: 17 reading
+  commands run unasked in the suite and 19 writing ones are refused. A For good already standing
+  for the command is not taken, and `saveCall` keeps it out of the saves Dan's own words approve.
+  Deliberately not refused: a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md` through a
+  variable only a command's output or a condition sets, a bare name in a patch's prose). A first
+  build refused those too, and two cases already in the suite became refusals with no way through:
+  the copy of a checkout's lessons file into a scratch folder (#1241) and a patch whose message
+  says LESSONS.md (#1883). They are asked about as before. Also out of reach: a removal, which
+  the reader counts as no write, and a script that writes the file with no word of the command
+  naming it.
+  A write that touches no entry is asked about as before. The approval is
   used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same

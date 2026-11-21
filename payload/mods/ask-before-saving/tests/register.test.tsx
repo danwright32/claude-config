@@ -1680,10 +1680,12 @@ test('an approved lesson does not let any other write through: other text, a rem
     { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${ENTRY}- **L753. A rule nobody approved.**\n\n## Data safety` },
     // The rule, to another lasting memory file.
     { tool: 'Write', file_path: 'CLAUDE.md', content: `- ${RULE}\n` },
-    // The rule, by a shell append: asked about through For good as before.
-    { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` },
   ]
   for (const input of others) expect(`${JSON.stringify(input)}: ${refusalOf(await call($, input))}`).toContain(refusedAs(input))
+  // The rule, by a shell append: refused with the Edit route named, and never asked For good (#3343).
+  const byShell = refusalOf(await call($, { tool: 'Bash', command: `printf '%s\\n' '- ${RULE}' >> ~/.claude/LESSONS.md` }))
+  expect(byShell).toContain('What a shell command does to a lesson entry cannot be read before it runs')
+  expect(byShell).not.toContain(ASKS)
   expect(w.ran).toEqual([])
   // None of them used it up: the approved write still goes through.
   expect((await call($, addLesson)).deny).toBeUndefined()
@@ -2965,10 +2967,11 @@ test('a heredoc editing a script whose text names lasting memory in a quoted sen
   expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_3082 }))).toBe('')
   expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_3082])
   quietOnMain(w)
-  // The same command whose write lands on lasting memory, each route still asked about (L1): the
+  // The same command whose write lands on lasting memory, each route still held (L1): the
   // program handed the lessons file, the program opening it by its own path, the output redirected
   // onto it, a copy and a move onto it, an in place edit, and a program whose target cannot be read
-  // naming it as a path.
+  // naming it as a path. One that lands on the lessons file is refused with the Edit route named
+  // (#3343); the move onto a project's CLAUDE.md is asked about.
   const real = [
     ISSUE_3082.replace('python3 - "$W/measure.py"', 'python3 - ~/.claude/LESSONS.md'),
     ISSUE_3082.replace('open(p, "w"', `open("${HOME}/.claude/LESSONS.md", "w"`),
@@ -2981,7 +2984,7 @@ test('a heredoc editing a script whose text names lasting memory in a quoted sen
   for (const command of real) {
     expect(command).not.toBe(ISSUE_3082)
     const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(`${command}: ${why}`).toContain(command.includes('CLAUDE.md') ? ASKS : 'What a shell command does to a lesson entry cannot be read before it runs')
   }
   // And a Write or Edit of the file itself.
   expect(refusalOf(await call($, { tool: 'Write', file_path: `${HOME}/.claude/LESSONS.md`, content: '- rule\n' }))).toContain(ASKS)
@@ -3132,4 +3135,146 @@ test("Dan's own permanent words do not cover an Edit or Write that adds or chang
   expect(heading.deny).toBeUndefined()
   expect(contextOf(heading)).toContain('say in one line what you saved')
   expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+})
+
+// #3343: a shell command that writes the installed lessons file was still asked about through For
+// good, whose question is of the session's own wording and shows Dan neither the rule nor its SHORT
+// line, so an entry could reach every session by `>>` where an Edit of the same text was refused.
+// What a command does to an entry cannot be read before it runs, so no such command is sent to the
+// lesson picker: it is refused, no question waits on it, and the Edit route is named, where the
+// write is read. Enumerated by the state reached (L247): every way mod-kit's one reader says a
+// command writes that file, by its words, by what it hands a script, or by what it mentions beside
+// a write the reader cannot follow.
+const BY_SHELL = 'What a shell command does to a lesson entry cannot be read before it runs'
+const outcomeOf = (why: string) => (why === '' ? 'runs' : why.includes(BY_SHELL) ? 'refused, Edit named' : why.includes(ASKS) ? 'asked For good' : `other: ${why.slice(0, 160)}`)
+const L753 = `- **L753. ${BRIEF}** (slate#9, 2026-11-19)`
+const SHELL_LESSON_WRITES: [string, string][] = [
+  ['an append by redirection', `printf '%s\\n' '${L753}' >> ~/.claude/LESSONS.md`],
+  ['an overwrite by redirection, the path whole', `echo '${L753}' > ${LESSONS}`],
+  ['a redirection under home by $HOME', `echo '${L753}' >> "$HOME/.claude/LESSONS.md"`],
+  ['tee', `echo '${L753}' | tee -a ~/.claude/LESSONS.md`],
+  ['a heredoc through cat', `cat >> ~/.claude/LESSONS.md <<'EOF'\n${L753}\nEOF`],
+  ['sed in place', `sed -i '' 's/good state/any state/' ~/.claude/LESSONS.md`],
+  ['perl in place', `perl -pi -e 's/good state/any state/' ~/.claude/LESSONS.md`],
+  ['a copy onto it', `cp ${CWD}/new-lessons.md ~/.claude/LESSONS.md`],
+  ['a copy into its folder', `cp ${CWD}/payload/LESSONS.md ~/.claude/`],
+  ['a move onto it', `mv ${CWD}/new-lessons.md ~/.claude/LESSONS.md`],
+  ['a relative name after a cd', `cd ~/.claude && echo '${L753}' >> LESSONS.md`],
+  ['python -c opening it to write', `python3 -c "open('${LESSONS}', 'a').write('x')"`],
+  ['a python heredoc opening it to write', `python3 - <<'EOF'\nopen('${LESSONS}', 'a').write('x')\nEOF`],
+  ['a python program whose target cannot be read, naming it', `python3 - "$(pick)" <<'EOF'\nimport sys\nopen(sys.argv[1], 'a').write(open('~/.claude/LESSONS.md').read())\nEOF`],
+  ['a python script handed it', 'python3 tools/add-lesson.py ~/.claude/LESSONS.md'],
+  ['a shell script handed it', 'bash tools/add-lesson.sh ~/.claude/LESSONS.md'],
+  ['eval', `eval "echo x >> ~/.claude/LESSONS.md"`],
+  ['a patch naming it', `git apply <<'EOF'\n--- ${LESSONS}\n+++ ${LESSONS}\n@@ -1 +1,2 @@\n # Lessons\n+${L753}\nEOF`],
+  ['a variable the command fixes to its folder', `D=~/.claude; echo '${L753}' >> $D/LESSONS.md`],
+]
+
+test('a shell command that writes the installed lessons file is refused with the Edit route named, never asked For good, by every way the reader says it writes it (#3343)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT } })
+  const got: string[] = []
+  for (const [what, command] of SHELL_LESSON_WRITES) got.push(`${what}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`)
+  expect(got).toEqual(SHELL_LESSON_WRITES.map(([what]) => `${what}: refused, Edit named`))
+  // Nothing ran, Dan was asked nothing, and nothing went to the main session.
+  expect(w.ran).toEqual([])
+  expect(w.asked).toEqual([])
+  quietOnMain(w)
+  // The refusal names the file and the way through, and no question waits that a For good could answer.
+  const said = refusalOf(await call($, { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }))
+  expect(said).toContain(`this writes lasting memory (${LESSONS_SHOWN})`)
+  expect(said).toContain(PICKER_ONLY)
+  expect(said).toContain(`Make the change to ${LESSONS_SHOWN} with Edit or Write instead`)
+  expect(said).toContain('"source": "durable-lesson"')
+  expect(said).not.toContain(ASKS)
+  expect(idIn(said)).toBeUndefined()
+  // A message claims only what was measured (L11): a file handed to a script, and one a command only
+  // mentions beside a write its words do not name, are said as that.
+  const handed = refusalOf(await call($, { tool: 'Bash', command: 'bash tools/add-lesson.sh ~/.claude/LESSONS.md' }))
+  expect(handed).toContain(`this hands lasting memory (${LESSONS_SHOWN}) to a script, which may write it`)
+  const guessed = refusalOf(await call($, { tool: 'Bash', command: `eval "echo x >> ~/.claude/LESSONS.md"` }))
+  expect(guessed).toContain(`this may write lasting memory (${LESSONS_SHOWN})`)
+  expect(guessed).toContain(`If this command only reads or quotes ${LESSONS_SHOWN}`)
+})
+
+// The other half of the open question on #3343: a command that only reads the lessons file is not
+// refused and not asked about, whatever it does with what it read.
+const LESSON_READS: [string, string][] = [
+  ['cat', 'cat ~/.claude/LESSONS.md'],
+  ['grep', `grep -n 'L174' ~/.claude/LESSONS.md`],
+  ['the sync tool reading one lesson', '~/claude-config-sync/claude-sync lesson L174'],
+  ['wc', 'wc -l ~/.claude/LESSONS.md'],
+  ['wc on standard input', 'wc -l < ~/.claude/LESSONS.md'],
+  ['sed printing lines', `sed -n '1,40p' ~/.claude/LESSONS.md`],
+  ['awk', `awk '/^## /' ~/.claude/LESSONS.md`],
+  ['a pipe', `grep 'SHORT:' ~/.claude/LESSONS.md | head -3`],
+  ['a count sent to another file', `grep -c '^- ' ~/.claude/LESSONS.md > ${CWD}/count.txt`],
+  ['a copy of it elsewhere', `cp ~/.claude/LESSONS.md ${CWD}/lessons-copy.md`],
+  ["a diff against a checkout's", 'diff ~/.claude/LESSONS.md payload/LESSONS.md'],
+  ['python reading it', `python3 -c "print(len(open('${LESSONS}').read()))"`],
+  // The two ways the refusal names for a script that only reads it.
+  ['a script fed it on standard input', 'python3 tools/count-lessons.py < ~/.claude/LESSONS.md'],
+  ['a script handed a copy of it', `cp ~/.claude/LESSONS.md ${CWD}/lessons-copy.md && python3 tools/count-lessons.py ${CWD}/lessons-copy.md`],
+  ['the sync tool minting a number', '~/claude-config-sync/claude-sync next-lesson'],
+  ['the sync tool checking the file', '~/claude-config-sync/claude-sync lesson-faults'],
+  ['the sync tool installing a pull', '~/claude-config-sync/claude-sync pull'],
+]
+
+test('a shell command that only reads the lessons file runs unasked: cat, grep, wc, the sync tool (#3343)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT } })
+  const got: string[] = []
+  for (const [what, command] of LESSON_READS) got.push(`${what}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`)
+  expect(got).toEqual(LESSON_READS.map(([what]) => `${what}: runs`))
+  expect(w.ran.map(r => r.input.command)).toEqual(LESSON_READS.map(([, command]) => command))
+  expect(w.asked).toEqual([])
+  quietOnMain(w)
+})
+
+// Nothing else covers such a command either: a For good already standing for the same command, read
+// again against what it would write now, and Dan's own permanent words, which skip the For good
+// question (L450: each control checked against the route the others push people onto). A shell write
+// of any other lasting memory, a checkout's lessons file among it, is asked about as it was.
+const PATCH_FILE = (file: string) => `--- ${file}\n+++ ${file}\n@@ -1 +1,2 @@\n x\n+- Ask before merging.\n`
+test("no For good and no words of Dan's cover a shell write of the lessons file, and a shell write of other lasting memory is asked about as before (#3343)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [LESSONS]: LESSONS_TEXT, [`${CWD}/fix.patch`]: PATCH_FILE('a/CLAUDE.md') } })
+  const append = { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }
+  // A checkout's own lessons file, another memory file, and a LESSONS.md the reader can place
+  // nowhere (a folder only a command's output names, which may be a scratch copy): asked For good,
+  // as before.
+  const asBefore = [
+    `echo '${L753}' >> payload/LESSONS.md`,
+    `echo '- Ask before merging.' >> CLAUDE.md`,
+    `W=${HOME}/Apps/claude-config; sed -i '' 's/a/b/' $W/payload/LESSONS.md`,
+    `D="$(pick)"; echo '${L753}' >> "$D/LESSONS.md"`,
+  ]
+  for (const command of asBefore) expect(`${command}: ${outcomeOf(refusalOf(await call($, { tool: 'Bash', command })))}`).toBe(`${command}: asked For good`)
+  // A For good given for a command while it wrote another file does not cover it once it would
+  // write the lessons file: the patch it applies comes to name that file.
+  const apply = { tool: 'Bash', command: 'git apply fix.patch' }
+  await askDan($, w, refusalOf(await call($, apply)), 'For good', 'CLAUDE.md')
+  w.files[`${CWD}/fix.patch`] = PATCH_FILE(LESSONS)
+  expect(outcomeOf(refusalOf(await call($, apply)))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+  // His words that make a save permanent cover no shell write of it.
+  await dan($, 'From now on, never ask before a save.')
+  expect(outcomeOf(refusalOf(await call($, append)))).toBe('refused, Edit named')
+  expect(outcomeOf(refusalOf(await call($, { tool: 'Bash', command: 'bash tools/add-lesson.sh ~/.claude/LESSONS.md' })))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
+  // What writes other lasting memory is saved under his words as it was, and Claude is told to say so.
+  const other = await call($, { tool: 'Bash', command: `echo '- Ask before merging.' >> CLAUDE.md` })
+  expect(other.deny).toBeUndefined()
+  expect(contextOf(other)).toContain('say in one line what you saved')
+  expect(w.ran.map(x => x.tool)).toEqual(['Bash'])
+})
+
+// Asleep (#841), a shell write of the lessons file is noted for the morning report like any other
+// save, never run, and refused with the Edit route named once he is awake.
+test('while asleep a shell write of the lessons file is noted for the morning report, and refused with the Edit route named once awake (#3343)', withSleeper, async ($, on) => {
+  const w = world($, on, { files: { '/night/asleep': '', [LESSONS]: LESSONS_TEXT } })
+  const append = { tool: 'Bash', command: SHELL_LESSON_WRITES[0]?.[1] }
+  expect(refusalOf(await call($, append))).toContain('Dan is asleep (sleep mode)')
+  expect(nightNotes(w).length).toBe(1)
+  expect(w.ran).toEqual([])
+  delete w.files['/night/asleep']
+  expect(outcomeOf(refusalOf(await call($, append)))).toBe('refused, Edit named')
+  expect(w.ran).toEqual([])
 })

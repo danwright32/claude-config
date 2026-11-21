@@ -7868,8 +7868,9 @@ lesson check's picker (which carries `metadata.source` `durable-lesson` and the 
 for word in the question) approves the one Edit or Write that only adds that rule to
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again. Since #3320 any
 other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
-under a For good and under his own "from now on" words alike; a write that touches no entry, and a
-shell command, still ask.
+under a For good and under his own "from now on" words alike; a write that touches no entry still
+asks. Since #3343 a shell command that writes that file is refused too, with Edit or Write named in
+its place (told in full below).
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -7926,13 +7927,38 @@ is refused in words that send the session to the lesson picker, and no question 
 either, a route the lessons review at the push found still open.
 An entry is every line the file's reader gives it, down to the
 next entry or section heading. A write that touches no entry (a section heading, an entry taken
-out whole, text above the first section) and a shell command are asked about as before. Changing
+out whole, text above the first section) is asked about as before, and so was a shell command
+until #3343, below. Changing
 an entry already in the file therefore takes the lesson picker for the entry as it should read,
 then the old one taken out and the new one added. Length is counted in bytes, as the index cap
 counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
 drawn, in bold, in a list or in a quote, is refused in the question and in the entry
 (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits of the lessons
 file were ever approved For good, both adding a whole lesson entry.
+Since #3343 a shell command that writes `~/.claude/LESSONS.md` is refused, and no For good is
+offered. It was asked about through For good, whose question is of the session's own wording and
+shows Dan neither the rule nor its `SHORT:` line, so an entry could reach every session by `>>`
+where an Edit of the same text was refused. The mod reads which files a command writes, never what
+it writes to them, so such a command cannot be sent to the lesson picker and held to what he read.
+The refusal names Edit or Write instead, where an entry goes to the lesson picker and anything
+else is asked about as before. It is decided from the one judgement of the command, by mod-kit's
+reader of what a command writes (rules.ts `lessonsByShell`, `byShellOnly`), so every way that
+reader finds the file counts: a redirection, `tee`, `sed -i`, `perl -pi`, a `cp` or `mv` onto it
+or into its folder, a heredoc, a bare name after a `cd` there, a variable the command fixes to its
+folder, an inline program that opens it to write, a patch naming it, the file handed to a script
+as an argument, and the file named by its path beside a write the reader cannot follow (`eval`, a
+program whose target is an argument). The last two may only read it, and are refused all the same,
+since what cannot be read is not taken for a read. The refusal says which of the three it found,
+and how to send a read: the file fed on standard input, or a copy handed over. A For good already
+standing for the same command does not cover it, and neither do Dan's own "from now on" words. A
+command whose words show that it only reads the file runs unasked, as ever: `cat`, `grep`, `wc`,
+`sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
+program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
+Left as they were: a checkout's `payload/LESSONS.md` and a write that touches no entry, which are
+Dan's to decide on #3343; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+variable only a command's output sets), which is as likely a scratch copy and is asked about as
+before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
+with no word of the command naming it, which no reader of the words can see.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
