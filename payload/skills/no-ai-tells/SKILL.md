@@ -26,7 +26,7 @@ Read by offset, the page still fails. Measured on 2026-11-20: through the `web-f
    https://en.wikipedia.org/w/api.php?action=parse&page=Wikipedia:Signs_of_AI_writing&prop=sections&format=json&formatversion=2
    ```
 
-2. Check the index: the "number" values run 1, 2, 3 and so on with no gap, and one entry's line is "See also". If either fails, fetch the index once more; if it fails again, the list cannot be read, and the check is partial as the paragraph after step 6 says.
+2. Check the index: the "number" values run 1, 2, 3 and so on with no gap, and one entry's line is "See also". If either fails, fetch the index once more; if it fails again, the list cannot be read, and the check is partial, as the paragraph on a part that could not be read says below.
 3. Fetch section 0 (the page's opening) and every entry before "See also", one call each, putting the entry's "index" value at the end of this address. Ask for every sign in that section: each heading, with the words, phrases and habits it lists, quoted as the text gives them.
 
    ```
@@ -37,7 +37,7 @@ Read by offset, the page still fails. Measured on 2026-11-20: through the `web-f
 5. The list is read only once what you read reaches the page's "See also" heading: the last section read is the one just before the "See also" entry in the index, every entry before it and section 0 were read, and none of them is left unread under step 4. That is the one test of a whole read. Check it, rather than trusting the absence of a note.
 6. If this session has already read the whole list this way, use what it read rather than fetching it again.
 
-**Without a WebFetch tool.** A session that reads pages through the `web-fetch` agent gives it the index address from step 1 and then the section addresses from step 3. It asks for one call per URL, and a report that gives the signs listed and, for each URL, whether its result said part of the text was not read, with any offset given. The session then applies steps 4 and 5 to that report. This route was not measured when it was written (2026-11-20); its parts were about 40,000 characters, close to the largest section's size.
+**Without a WebFetch tool.** A session that reads pages through the `web-fetch` agent gives it the index address from step 1 and then the section addresses from step 3. It asks the agent to make one call per URL, and to report the signs listed and, for each URL, whether its result said part of the text was not read, with any offset given. The session then applies steps 4 and 5 to that report. This route was not measured when it was written (2026-11-20); its parts were about 40,000 characters, close to the largest section's size.
 
 If any part could not be read (a fetch failed, the index failed its check, or a section stayed unread), check against what was read, name each section that was not read, and never report the text clean: say the check was partial.
 
