@@ -1273,6 +1273,51 @@ test('#3279: a move the guard cannot read before it runs is held, saying how to 
   expect(refusalOf(await call($, { tool: 'Bash', command: 'git fetch origin && git merge origin/main', agentId: 'a1' }))).toContain('Nothing is asked of Dan for this.')
 })
 
+// #3333: a cherry-pick or revert whose commits git could not read exited 128 and was always told to
+// fetch first, nothing asked of Dan. 128 is git's code for any fatal error, so a corrupt object or a
+// folder that is no repository got a remedy that does not help. The fetch is named only where git's
+// whole message is that it does not know the revision; every other 128 says what git said, that the
+// guard could not read the commits, and offers no fetch. Each is held either way. The messages are
+// git 2.51.1's own, measured on 2026-11-21 in a scratch repository.
+test('#3333: a cherry-pick or revert git cannot read is told to fetch first only when git says it does not know the commit', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  const FETCH = 'Run git fetch as its own command first'
+  const CORRUPT = `error: inflate: data stream error (incorrect header check)\nerror: unable to unpack ${C1} header\nfatal: loose object ${C1} (stored in .git/objects/11/${C1.slice(2)}) is corrupt`
+  const wrong: string[] = []
+  const check = async (command: string, expected: { has: string[]; fetch: boolean }) => {
+    const said = refusalOf(await call($, { tool: 'Bash', command }))
+    const fault = [
+      ...(said.startsWith('Blocked:') ? [] : ['not held']),
+      ...expected.has.filter(s => !said.includes(s)).map(s => `lacks ${JSON.stringify(s)}`),
+      ...(said.includes(FETCH) === expected.fetch ? [] : [expected.fetch ? 'names no fetch' : 'names a fetch']),
+      ...(said.includes('Nothing is asked of Dan for this.') === expected.fetch ? [] : ['says the wrong thing of Dan']),
+    ]
+    if (fault.length) wrong.push(`${command}: ${fault.join(', ')}: ${said.slice(0, 400)}`)
+  }
+  // git does not know the commit: its only words are "bad revision" or "bad object", and the fetch is named.
+  w.gitSays[`/w/slate ${PICKS} nosuch --`] = { fails: "fatal: bad revision 'nosuch'" }
+  await check('git cherry-pick nosuch', { has: ["exited 128: fatal: bad revision 'nosuch'"], fetch: true })
+  w.gitSays[`/w/slate ${PICKS} ${C2} --`] = { fails: `fatal: bad object ${C2}` }
+  await check(`git revert ${C2}`, { has: [`exited 128: fatal: bad object ${C2}`], fetch: true })
+  w.gitSays['/w/slate rev-list --no-walk nosuch --'] = { fails: "fatal: bad revision 'nosuch'" }
+  await check('git cherry-pick -m 2 nosuch', { has: ["exited 128: fatal: bad revision 'nosuch'"], fetch: true })
+  // Any other 128: what git said, and that the guard could not read the commits, with no fetch.
+  for (const [message, gist] of [
+    [CORRUPT, `fatal: loose object ${C1}`],
+    ['fatal: not a git repository (or any of the parent directories): .git', 'fatal: not a git repository'],
+    // "bad object" behind an error line is a damaged repository speaking, not an unknown commit.
+    [`error: packfile .git/objects/pack/pack-1.pack does not match index\nfatal: bad object ${C1}`, 'does not match index'],
+  ] as const) {
+    w.gitSays[`/w/slate ${PICKS} abc1234 --`] = { fails: message }
+    await check('git cherry-pick abc1234', { has: ['exited 128', gist, 'could not read the commits it names'], fetch: false })
+    await check('git revert abc1234', { has: ['exited 128', gist, 'could not read the commits it names'], fetch: false })
+    w.gitSays['/w/slate rev-list --no-walk abc1234 --'] = { fails: message }
+    await check('git revert -m 2 abc1234', { has: ['exited 128', gist, 'could not read the commits it names'], fetch: false })
+  }
+  expect(wrong).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
 // #3279, Dan, 2026-11-20, "Skip what is on main": a look change already on the default branch has
 // shipped, so a merge or rebase that takes the default branch in is not asked about it again. The
 // default branch is the one the checkout records for its remote, at the commit it last fetched,
