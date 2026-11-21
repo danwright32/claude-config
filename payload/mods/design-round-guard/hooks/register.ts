@@ -1132,9 +1132,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 }
 
 // The files a patch command changes (#3022), read through mod-kit's patch reader and placed as the
-// command places them: git apply and git am from the top of the checkout they run in (its -C folder,
-// else the folder the command runs in), patch in the folder it runs in, each below the command's own
-// folder argument. Undefined, so every name the patch's text mentions is judged as before, wherever
+// command places them: git apply, and a git am naming neither its repository nor its working folder
+// apart, from the top of the checkout they run in (its -C folder, else the folder the command runs
+// in), a git am naming either from the folder git says its files land in (#3337, below), patch in
+// the folder it runs in, each below the command's own folder argument. Undefined, so every name the patch's text mentions is judged as before, wherever
 // that cannot be told whole: a patch on standard input (the heredoc, read in the command), a patch
 // file that is missing or no ordinary file, one the reader cannot read whole (a hunk that does not
 // add up, no file named), or a command whose folder cannot be followed.
@@ -1142,8 +1143,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 // GIT_WORK_TREE; measured with git 2.51.1), so its files are placed where git itself says they land
 // (namedApart), and where the guard cannot tell that folder each file the patch changes that may
 // change the look is held, saying why: a value it cannot follow, a repository git cannot answer for,
-// and GIT_DIR or GIT_WORK_TREE written elsewhere in the command than on the git am itself, which an
-// export hands to it and this reading does not follow. git apply is placed as before: measured, it
+// and GIT_DIR or GIT_WORK_TREE written anywhere in the command but as a setting on a git command
+// itself, which an export may hand to it and this reading does not follow. git apply is placed as before: measured, it
 // changes the folder it runs in whatever working folder is named. The words of a patch command can
 // stand twice in one call with different settings or folders, so every such run is placed and the
 // patch is judged in each place, never all by the first one's.
