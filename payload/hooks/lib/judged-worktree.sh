@@ -39,7 +39,7 @@
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) _JW_LIB="${BASH_SOURCE[0]%/*}" ;; *) _JW_LIB=. ;; esac
-. "${_JW_LIB:-/}/disk-clean-predicates.sh" || {
+. "$_JW_LIB/disk-clean-predicates.sh" || {
   echo "judged-worktree: lib/disk-clean-predicates.sh is missing beside it, so git cannot be run in a worktree with its program running settings off" >&2
   return 1
 }

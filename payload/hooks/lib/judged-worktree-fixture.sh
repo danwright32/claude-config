@@ -89,9 +89,12 @@ _jwf_read() { # <script>
 # every plain call is an allowed one. It says so instead when the reader could not read the script
 # or found fewer than five plain calls in it, which is a script it did not read.
 plain_git() { # <script> <forms>
-  local script="$1" forms="$2" out n k src
+  local script="$1" forms="$2" out n k src unread
   out="$(_jwf_read "$script")"
-  grep -q "could not be read" <<< "$out" && { echo "the reader could not read it: $(grep "could not be read" <<< "$out" | head -n 1)"; return; }
+  # The first such line, by grep itself: a grep piped into head can be cut off and read as failed
+  # (claude-config#132, test-pipefail-shortcircuit.sh).
+  unread="$(grep -m 1 "could not be read" <<< "$out")"
+  [ -z "$unread" ] || { echo "the reader could not read it: $unread"; return; }
   [ "$(grep -c "^fail${TAB}git${TAB}.*${script##*/}:[0-9]*${TAB}" <<< "$out")" -ge 5 ] || { echo "the reader found fewer than 5 plain git calls in it, so it did not read it"; return; }
   while read -r k n; do
     [ -n "$n" ] || continue
