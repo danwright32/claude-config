@@ -213,8 +213,8 @@ case "$got" in "taken=[] unread=["*"could not be checked"*) check "an answer wit
 fakenode allnull 'cat >/dev/null; echo "{\"faults\":[\"fine\"]}"'
 got="$(PATH="$WORK/allnull:$PATH" reader "$WORK/plain.jsonl" applies 2>&1)"
 case "$got" in "taken=[] unread=["*"could not be checked"*) check "a verdict in a shape the entry never gives takes no Apply" ok ;; *) check "a verdict in a shape the entry never gives takes no Apply" "got: ${got:0:400}" ;; esac
-# The check shares the hook's deadline with the git runs before it, so the hook's own limit of 10
-# seconds is never passed: with less time left than the check's own limit it waits only that long,
+# The check shares the hook's deadline with the git runs before it, so the hook's own limit (set in
+# settings, not measured) is never passed: with less time left than the check's own limit it waits only that long,
 # and with none left it is not started, and the Trust is not taken, with the reason.
 got="$(PATH="$WORK/hang:$PATH" reader "$WORK/trust-plain.jsonl" trusted "" 0.3 2>&1)"
 case "$got" in "trusted=[] why=None untaken=[('ref0', "*"could not be checked"*"took 0."*) check "with less of the hook's time left than the check's own limit, the check is given up on when that time runs out" ok ;; *) check "with less of the hook's time left than the check's own limit, the check is given up on when that time runs out" "got: ${got:0:400}" ;; esac

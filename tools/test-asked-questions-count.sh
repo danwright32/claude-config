@@ -77,8 +77,11 @@ out="$(node "$TOOL" --dir "$W/empty" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "a folder holding no record is counted as none, exit 0" ok || check "a folder holding no record is counted as none, exit 0" "exit=$code"
 has "and says none was recorded" "$out" "0 questions recorded"
 
-# The default folder is the one asked.ts writes to, read from its own askedDir, never a copy.
-grep -q "askedDir" "$TOOL" && check "the default folder comes from asked.ts's own askedDir" ok || check "the default folder comes from asked.ts's own askedDir" "askedDir is not used"
+# With no --dir it reads the folder asked.ts writes to under HOME.
+mkdir -p "$W/home/.claude/state/asked-questions"
+cp "$D/$((B + 3))-abc80.json" "$W/home/.claude/state/asked-questions/"
+out="$(HOME="$W/home" node "$TOOL" 2>&1)"
+has "with no --dir it reads the folder asked.ts writes to under HOME" "$out" "keystroke-guard confirm: 1 asked"
 
 echo
 echo "passed: $pass, failed: $fail"
