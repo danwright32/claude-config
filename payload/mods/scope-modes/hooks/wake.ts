@@ -404,9 +404,12 @@ export const morningPrompt = (o: {
     // offers the lesson asks the rungs itself, and Dan reads the line it arrives at in the question,
     // which is what lets his one answer cover it (the ask before saving mod). So the block below
     // still gives each lesson's source and rule only, and the check line is added here in words.
+    // The same holds for the entry's SHORT line (claude-config#3320): the line the index carries
+    // into every session is written by the session that offers the lesson and read by Dan in the
+    // question, and the lesson picker refuses a rule too long for the index line that brings none.
     // hooks/test-durable-lesson-check.sh holds the steps named to the hook's own numbering.
     out.push(
-      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe (its dedupe against LESSONS.md, its rungs and its Likely applies to line included). Ask the rungs of each lesson first. Then state the rule word for word in the question, say which rung it reached, and give its check line on a line of its own, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>"}${fromReport ? '' : ', the source and rule as given beside the lesson in the block below'}. Add one only on Dan's Add to LESSONS.md.`,
+      `Proposed lessons: after the issues, offer each in the durable lesson picker, one AskUserQuestion per lesson, as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe (its dedupe against LESSONS.md, its rungs and its Likely applies to line included). Ask the rungs of each lesson first. Then state the rule word for word in the question, say which rung it reached, and give its check line on a line of its own, then the entry's SHORT line on a line of its own, where step 5 says the entry needs one, with metadata {"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>","short":"<the SHORT line, word for word>"}${fromReport ? '' : ', the source and rule as given beside the lesson in the block below'} (leave "short" out where the rule needs no SHORT line). Add one only on Dan's Add to LESSONS.md.`,
     )
     data.push(...o.lessons.map((l, k) => `2.${k + 1} ${l} Metadata: ${JSON.stringify({ source: 'durable-lesson', rule: l })}`))
   }

@@ -296,6 +296,71 @@ else
   fi
 fi
 
+# AND THE PICKER CARRIES THE SHORT LINE AS ASK BEFORE SAVING READS IT (claude-config#3320). The SHORT
+# line is what the lessons index carries into every session, and it was the one part of a lesson Dan
+# never read: the picker did not show it, and an entry went through under his answer with a SHORT
+# line that said something else. The mod now refuses a lesson picker whose rule is too long for the
+# index line and brings no SHORT line, and holds the entry to the line he read. So the instruction
+# must have the session write the short form BEFORE it asks, state it on a line of its own, and carry
+# it under the mod's own key within the mod's own cap, each read from the mod (L41), and the mod's
+# telling to Claude and this hook's must name the same line. Without them the picker refuses the
+# lesson, or the entry's SHORT line is asked about a second time.
+shortkey="$(sed -n "s/^export const LESSON_SHORT_KEY = '\(.*\)'$/\1/p" "$rules" 2>/dev/null)"
+shortprefix="$(sed -n "s/^export const MAX_SHORT_TEXT = MAX_SHORT - '\(.*\)'\.length$/\1/p" "$rules" 2>/dev/null)"
+if [ -z "$shortkey" ] || [ -z "$shortprefix" ] || [ -z "$maxshort" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL: could not read LESSON_SHORT_KEY (${shortkey:-unread}), MAX_SHORT_TEXT's prefix (${shortprefix:-unread}) or MAX_SHORT (${maxshort:-unread}) from $rules, so the SHORT line's wording in the instruction was compared against nothing"
+else
+  shorttext=$(( maxshort - ${#shortprefix} ))
+  sh_missing=""
+  case "$reason" in *"\"$shortkey\": \"<the SHORT line, word for word>\""*) ;; *) sh_missing="$sh_missing metadata:$shortkey" ;; esac
+  case "$reason" in *'then the SHORT line word for word on a line of its own'*) ;; *) sh_missing="$sh_missing own-line" ;; esac
+  case "$reason" in *"its text after 'SHORT: ' at most $shorttext characters"*) ;; *) sh_missing="$sh_missing cap:$shorttext" ;; esac
+  case "$reason" in *"unless the rule you wrote is at most $shorttext characters"*) ;; *) sh_missing="$sh_missing needed-when:$shorttext" ;; esac
+  case "$reason" in *'its check line as approved and its SHORT line as approved'*) ;; *) sh_missing="$sh_missing entry" ;; esac
+  case "$reason" in *'a SHORT line added where he was shown none'*) ;; *) sh_missing="$sh_missing added-afterwards" ;; esac
+  # Written before he is asked: the short form's sentence stands before the one that appends the entry.
+  _w="${reason%%WRITE THE SHORT FORM BEFORE YOU ASK*}"; _a="${reason%%Only on Dan?s approval append it*}"
+  { [ "${#_w}" -lt "${#reason}" ] && [ "${#_a}" -lt "${#reason}" ] && [ "${#_w}" -lt "${#_a}" ]; } || sh_missing="$sh_missing written-before-asking"
+  grep -Fq 'its SHORT line exactly as he read it' "$register" 2>/dev/null || sh_missing="$sh_missing line-as-the-mod-tells-it"
+  if [ -z "$sh_missing" ]; then
+    PASS=$((PASS+1)); echo "PASS: the picker instruction carries the SHORT line as ask before saving reads it (key $shortkey, $shorttext characters, written before asking)"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL: the picker instruction lacks what ask before saving reads for the SHORT line (${sh_missing# }), so the picker refuses the lesson or Dan is asked about its SHORT line a second time"
+  fi
+fi
+
+# AND THE SESSION IS TOLD THE SHAPE AND THE PLACE THE MOD TAKES THE ENTRY IN (independent review of
+# claude-config#3320). The review found four ways an approved lesson reached the index as something
+# Dan had not read, and the mod now refuses each: an entry with no SHORT line whose bold is not the
+# whole rule (the index renders the bold); an entry put inside another entry (it takes that entry's
+# SHORT line); a line that fits the cap in characters and not in bytes (the send refuses it); and
+# any Edit or Write of an entry under a For good, which no longer covers one. A session that is not
+# told these writes an entry the mod refuses, so the instruction must say each, and the words the
+# mod itself tells Claude after the answer, and in its refusal, must say the same (L270: one telling
+# that breaks the rule outweighs the other). Each phrase is looked for in the mod's source as well,
+# so the check fails when either side stops saying it.
+rv_missing=""
+case "$reason" in *"set the whole rule in bold and nothing else, '- **L<number>. <the rule>**'"*) ;; *) rv_missing="$rv_missing hook:whole-rule-in-bold" ;; esac
+case "$reason" in *'Add it whole at an entry boundary, never inside another entry'*) ;; *) rv_missing="$rv_missing hook:entry-boundary" ;; esac
+case "$reason" in *"with another entry's first line, a section heading or the end of the file as the next line that is not blank"*) ;; *) rv_missing="$rv_missing hook:what-follows" ;; esac
+case "$reason" in *'Length is counted as the index counts it, in bytes'*) ;; *) rv_missing="$rv_missing hook:bytes" ;; esac
+case "$reason" in *'one set in bold, in a list or in a quote included'*) ;; *) rv_missing="$rv_missing hook:drawn-short-lines" ;; esac
+case "$reason" in *'any other Edit or Write that adds or changes an entry in that file is refused, with no For good offered, and sent back to this picker'*) ;; *) rv_missing="$rv_missing hook:picker-only" ;; esac
+# Nothing in the instruction still says the old route exists.
+case "$reason" in *'is asked about again'*|*'not asked For good about any of them a second time'*) rv_missing="$rv_missing hook:still-says-asked-again" ;; esac
+grep -Fq 'set the whole rule in bold and nothing else, "- **L<number>. <the rule>**"' "$register" 2>/dev/null || rv_missing="$rv_missing mod:whole-rule-in-bold"
+grep -Fq 'Put it at an entry boundary, never inside another entry' "$register" 2>/dev/null || rv_missing="$rv_missing mod:entry-boundary"
+grep -Fq 'export const wholeRuleInBold' "$rules" 2>/dev/null || rv_missing="$rv_missing mod:wholeRuleInBold"
+grep -Fq 'export const boundaryFault' "$rules" 2>/dev/null || rv_missing="$rv_missing mod:boundaryFault"
+grep -Fq 'export const indexLength' "$rules" 2>/dev/null || rv_missing="$rv_missing mod:indexLength"
+grep -Fq 'export const readsAsShort' "$rules" 2>/dev/null || rv_missing="$rv_missing mod:readsAsShort"
+grep -Fq 'so he approves it only in the lesson picker' "$rules" 2>/dev/null || rv_missing="$rv_missing mod:picker-only"
+if [ -z "$rv_missing" ]; then
+  PASS=$((PASS+1)); echo "PASS: the picker instruction names the entry's shape and place as ask before saving takes them (whole rule in bold, entry boundary, bytes, drawn SHORT lines, this picker only)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL: the picker instruction and ask before saving disagree about the entry (${rv_missing# }), so a session writes an entry the mod refuses, or is told a route that no longer exists"
+fi
+
 # AND THE SESSION IS TOLD WHAT THE PICKER REFUSES IN THE RULE AND THE QUESTION (security review of
 # claude-config#3295: the instruction said nothing of those limits, so the first refusal was how a
 # session learned them, and no test held the question's cap to it). The three numbers are read from
@@ -333,10 +398,13 @@ else
   case "$reason" in *'Step 3, dedupe'*'Step 4, ask the rungs'*'Step 5, propose'*) ;; *) wk_missing="$wk_missing steps-here" ;; esac
   case "$reason" in *'Step 6'*) wk_missing="$wk_missing a-sixth-step" ;; esac
   case "$wake_text" in *"\"${checkkey:-unread}\":\"<the check line, word for word>\""*) ;; *) wk_missing="$wk_missing metadata:${checkkey:-unread}" ;; esac
+  # And the SHORT line under the mod's key (claude-config#3320), or the lesson picker refuses every
+  # lesson offered in the morning whose rule is too long for the index line.
+  case "$wake_text" in *"\"${shortkey:-unread}\":\"<the SHORT line, word for word>\""*) ;; *) wk_missing="$wk_missing metadata:${shortkey:-unread}" ;; esac
   if [ -z "$wk_missing" ]; then
-    PASS=$((PASS+1)); echo "PASS: the morning lesson picker names this hook's dedupe, rungs and propose steps and carries the check line"
+    PASS=$((PASS+1)); echo "PASS: the morning lesson picker names this hook's dedupe, rungs and propose steps and carries the check line and the SHORT line"
   else
-    FAIL=$((FAIL+1)); echo "FAIL: the morning lesson picker in scope-modes/hooks/wake.ts and this hook disagree (${wk_missing# }), so a lesson proposed overnight is offered with no check line or by a step that moved"
+    FAIL=$((FAIL+1)); echo "FAIL: the morning lesson picker in scope-modes/hooks/wake.ts and this hook disagree (${wk_missing# }), so a lesson proposed overnight is offered with no check line, with no SHORT line or by a step that moved"
   fi
 fi
 
