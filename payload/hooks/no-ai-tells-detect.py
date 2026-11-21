@@ -81,6 +81,10 @@ try:
         "component", "method", "module", "program", "api",
         "endpoint", "query", "algorithm", "snippet", "implementation",
         "refactor", "sql", "regex", "command", "cli",
+        # Words the old letter match caught through one of the terms above and whole words do not:
+        # a compound, or an ending the matcher does not add (claude-config#3280).
+        "coding", "codebase", "programming", "programmer", "queries", "regexp",
+        "typescript", "javascript", "sqlite", "postgresql",
     ]
 
     is_writing = False
@@ -93,8 +97,8 @@ try:
         is_writing = True
 
     # Check write verb + no code signal. A pasted git diff is code whatever words sit around it:
-    # matched as words alone, the code terms newly pointed 14 of 5,888 distinct prompts in this
-    # Mac's transcripts (2026-11-21), and all 14 were the push judges' prompts carrying a diff.
+    # matched as words alone, the code terms newly pointed 13 of 5,909 distinct prompts in this
+    # Mac's transcripts (2026-11-21), and all 13 were the push judges' prompts carrying a diff.
     if not is_writing:
         has_write_verb = bool(word_pattern(write_verbs).search(prompt))
         has_code_signal = bool(word_pattern(code_terms).search(prompt)) or "diff --git" in prompt

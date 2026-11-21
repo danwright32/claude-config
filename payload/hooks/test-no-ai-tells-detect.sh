@@ -144,21 +144,30 @@ for p in \
 done
 
 # Matched as words, the code terms keep their forms, and the end of the prompt counts as the end
-# of a word ("test " needed a space after it, so a prompt ending in "test" read as prose).
+# of a word ("test " needed a space after it, so a prompt ending in "test" read as prose). The
+# compounds and endings the letter match caught by accident ("typescript", "coding", "queries") are
+# named in the list, or matching words would read them as prose.
 for p in \
   "write the tests for the parser" \
   "write a test" \
   "draft the scripts for the release" \
   "rewrite these classes" \
+  "write a typescript helper for dates" \
+  "draft the javascript for the menu" \
+  "write the sqlite migration" \
+  "rewrite the postgresql queries" \
+  "write some programming notes on the parser" \
+  "draft a coding plan" \
+  "rewrite the codebase layout" \
   ; do
   [ "$(fires "$p")" = "no" ] \
     && check "a code term in another form still reads as code: $p" ok \
     || check "a code term in another form still reads as code: $p" "it fired"
 done
 
-# A pasted diff is code whatever words surround it. Measured over 5,888 distinct prompts in this
-# Mac's transcripts on 2026-11-21: matching the code terms as words alone newly pointed 14, and all
-# 14 were the push judges' prompts carrying a git diff, whose only code terms had been letters
+# A pasted diff is code whatever words surround it. Measured over 5,909 distinct prompts in this
+# Mac's transcripts on 2026-11-21: matching the code terms as words alone newly pointed 13, and all
+# 13 were the push judges' prompts carrying a git diff, whose only code terms had been letters
 # inside other words. The same marker also stops the pointer on 35 such prompts it reached before.
 diff_prompt="$(printf 'COMMIT MESSAGES:\n- Reword the welcome notes\n\nSOURCE DIFF:\ndiff --git a/notes.txt b/notes.txt\n+Write a warmer welcome for new readers\n')"
 [ "$(fires "$diff_prompt")" = "no" ] \

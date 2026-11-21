@@ -641,9 +641,9 @@ def filed_line(notes):
 
 
 def held_at(notes, by, at):
-    """The issues session `by` held at moment `at`, in the order it claimed them. None for a note
-    naming no session: matched by its absence, it took every claim another unnamed note had made
-    (claude-config#3280)."""
+    """The issues session `by` held at moment `at`, in the order it claimed them. An empty list for
+    a note naming no session: matched by its absence, it took every claim another unnamed note had
+    made (claude-config#3280)."""
     if not isinstance(by, str) or not by:
         return []
     held = {}
