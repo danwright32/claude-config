@@ -525,8 +525,8 @@ const filesUnder = async ($: EngineInterface, folder: string): Promise<{ tree: s
 
 // #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): one read only question to git about a
 // move, in the checkout it runs in. Never a command that changes anything: rev-parse, diff
-// --name-status, log --no-walk, for-each-ref and ls-tree only. Why not, in words, where git cannot
-// say: it fails, cannot run, runs past its time, or prints more than can be read whole.
+// --name-status, log --no-walk, for-each-ref, ls-tree and merge-base only. Why not, in words, where
+// git cannot say: it fails, cannot run, runs past its time, or prints more than can be read whole.
 const askGit = async ($: EngineInterface, tree: string, args: string[]): Promise<{ out: string } | { why: string; code?: number }> => {
   const said = `git ${args.join(' ')}`
   try {

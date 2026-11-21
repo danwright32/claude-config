@@ -1316,6 +1316,11 @@ test('#3279: a merge or rebase that takes the default branch in runs unasked for
   expect(skipped(w, 'app/globals.css').length).toBe(1 + commands.length)
   expect(skipped(w, 'app/globals.css')[0]?.text).toContain('`git merge origin/main`')
   expect(w.logged.some(l => l.text.includes('docs/notes.md'))).toBe(false)
+  // Across every one of these merges and rebases, git was run for nothing but the questions the
+  // guard's own comment on askGit names and the three mod-kit's branch reader asks: all of them read.
+  const READS = ['rev-parse', 'diff', 'merge-base', 'branch', 'worktree', 'symbolic-ref']
+  expect([...new Set(w.gitRuns.map(g => String(g.split(' ')[3])))].filter(sub => !READS.includes(sub))).toEqual([])
+  expect(w.gitRuns.filter(g => / merge-base /.test(g)).length).toBe(1 + commands.length)
 })
 
 test('#3279: a look change that is on the default branch is still asked about when a cherry-pick, a revert, a switch, a checkout, a hard reset or a stash brings it in', withKit, async ($, on) => {
