@@ -163,6 +163,166 @@ cwd="${parsed#*$'\x1f'}"
 ps_is_git_push "$cmd" || exit 0
 ps_has_override "$cmd" SKIP_SCANNERS_CHECK && exit 0
 
+# THE GATE'S OWN BUDGET for the wait on its scanners (claude-config#1881); why it is what it is is
+# written where the wait is, further down.
+_sc_budget_default=140
+_sc_budget="${SCANNERS_BUDGET_SECONDS:-$_sc_budget_default}"
+if _wn_got="$(whole_above_zero "$_sc_budget")"; then _sc_budget="$_wn_got"; else
+  # Unreadable is the default, never zero (which would refuse every push) and never no budget
+  # (which is the defect), and it is said rather than swallowed (L50, L90).
+  echo "scanners-before-push: SCANNERS_BUDGET_SECONDS is '$_sc_budget', not a whole number of seconds, so the default of $_sc_budget_default is used." >&2
+  _sc_budget="$_sc_budget_default"
+fi
+
+# THE HARD STOP OVER THE WHOLE RUN (claude-config#3357). On 2026-11-20, at load averages of 110 to
+# 160 on 12 cores, four pushes were refused with only Claude Code's "[command hook 23]: timed out;
+# blocking because onFailure is "block"" (hook 23 is this gate, counted the way Claude Code 2.1.330
+# counts: the distinct command lines of the event, in order), and none of this gate's own words. The
+# budget above bounds only the WAIT on the scanners. Every step before it ran with no bound at all:
+# the commit message check (which reads the work repository list live through gh), three listings
+# of the repository, a grep over each of some 340 suites, the key, and the decision about each
+# scanner's run, which waits up to 5 seconds on a lock that every worktree of this repository
+# shares; and so did everything after it: the read back, and the record and each finished run's
+# folder, each under the same 5 second lock. Which of them ran long that night is not known,
+# because the gate recorded no timings and Claude Code discards a killed hook's output.
+#
+# So the run is split in two. This process, the one Claude Code started, only supervises: it runs
+# the rest of this script as a second process, in a process group of its own with its output going
+# to files, and waits for it against a timer. When the run finishes, its output and exit code are
+# passed on unchanged. When the timer fires first, the run's whole group is stopped (a scanner left
+# running in the background is in a session of its own and goes on, as at the budget), and this
+# process refuses in its own words, saying what the run was doing, and exits 2. The stop itself is
+# builtins only, so a machine too busy to start a process still gets the refusal out.
+#
+# WHERE IT STOPS. Claude Code's limit is 180 seconds (the registration), and its clock starts
+# before it has even started this hook's shell (2.1.330: the timeout signal is made before the hook
+# input is prepared and the shell spawned), while this gate's clock starts at its first line. So
+# the stop is at the budget plus 20 seconds for the run to write its own refusal, and never past
+# 160: the 20 seconds left of Claude Code's 180 are for whatever happened before the clock started,
+# which the stop measures and says (its clock started N seconds after its process did), and for the
+# stop itself: on 2026-11-20, at a load average of about 70, the suite's case for this returned in 4
+# seconds against a stop at 4, and in 7 with its start held 3, so the stop costs under a second. The
+# suite fails if the cap ever reaches the declared timeout.
+#
+# A push it could not finish scanning stays refused: the stop exits 2, and passes nothing on.
+_sc_stop_cap=160
+_sc_stop_grace=20
+# A test may shorten the grace, never lengthen it, and only under the hooks' test marker
+# (claude-config#2231): ending sooner can only refuse a push that would have been scanned.
+if [ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${SCANNERS_STOP_GRACE_SECONDS:-}" ] \
+   && _wn_got="$(whole_above_zero "$SCANNERS_STOP_GRACE_SECONDS")" && [ "$_wn_got" -lt "$_sc_stop_grace" ]; then
+  _sc_stop_grace="$_wn_got"
+fi
+_sc_stop_at=$(( _sc_budget + _sc_stop_grace ))
+[ "$_sc_stop_at" -gt "$_sc_stop_cap" ] && _sc_stop_at=$_sc_stop_cap
+
+# What the run is doing, written as it goes, for the stop to say. A builtin write, never a process.
+_sc_phase(){
+  [ -n "${_sc_phase_file:-}" ] && printf '%s\n' "$1" > "$_sc_phase_file" 2>/dev/null
+  return 0
+}
+
+# "[[dd-]hh:]mm:ss", as ps prints a process's age, in seconds; nothing when it cannot be read.
+_sc_etime_seconds(){
+  local e="${1// /}" d=0 a b c
+  case "$e" in *-*) d="${e%%-*}"; e="${e#*-}" ;; esac
+  IFS=: read -r a b c <<< "$e"
+  case "$d$a$b$c" in ''|*[!0-9]*) return 0 ;; esac
+  if [ -n "$c" ]; then printf '%s' $(( 10#$d * 86400 + 10#$a * 3600 + 10#$b * 60 + 10#$c ))
+  else printf '%s' $(( 10#$d * 86400 + 10#$a * 60 + 10#$b )); fi
+}
+
+# The refusal at the stop, from builtins only.
+_sc_stop_refuse(){   # $1 = the supervisor's folder
+  local phase="" before="" etime="" age lag
+  read -r phase < "$1/phase" 2>/dev/null
+  {
+    echo "PUSH BLOCKED: the whole tree scanners gate stopped itself after ${_sc_stop_at} seconds, before Claude Code's"
+    echo "own limit for it, so this push was not scanned and has not gone out."
+    echo ""
+    echo "When it stopped it was ${phase:-starting its run}."
+    if [ -f "$1/age" ] && { read -r before; read -r etime; } < "$1/age" 2>/dev/null \
+       && age="$(_sc_etime_seconds "$etime")" && [ -n "$age" ] && [ -n "$before" ]; then
+      lag=$(( age - (before - _sc_t0) )); [ "$lag" -lt 0 ] && lag=0
+      echo "Its clock started ${lag} seconds after its process did (time spent before this gate could count it,"
+      echo "which Claude Code's limit counts too)."
+    else
+      echo "How long its process took to start, before its clock, could not be read."
+    fi
+    echo ""
+    echo "Nothing here is a finding about your change: this Mac was too busy for the gate to finish."
+    echo "Send the same push again. A scanner it had started goes on in the background, and the next"
+    echo "push of the same tree counts its result rather than starting it again."
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+  } >&2
+}
+
+_sc_supervise(){
+  local body timer rc self
+  _sc_sup_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-gate.XXXXXXXX" 2>/dev/null)" || _sc_sup_dir=""
+  if [ -z "$_sc_sup_dir" ] || ! command -v perl >/dev/null 2>&1; then
+    # Said, never swallowed (L11): the run below is then bounded by its wait budget only, as
+    # before #3357, and the registration's onFailure "block" is what stands behind it.
+    echo "scanners-before-push: its hard stop could not be set up (no temporary folder, or no perl), so this run is bounded only by its ${_sc_budget} second wait (claude-config#3357)." >&2
+    return 0
+  fi
+  trap 'rm -rf "$_sc_sup_dir"' EXIT
+  printf '%s' "$payload" > "$_sc_sup_dir/payload"
+  printf '%s\n' "starting its run" > "$_sc_sup_dir/phase"
+  # How old this process was when its clock started, read in the background so the stop never waits
+  # on ps: the time before the clock is time Claude Code's limit counts (claude-config#3357).
+  ( _b="$(date +%s)"; _e="$(ps -o etime= -p "$$" 2>/dev/null)"
+    printf '%s\n%s\n' "$_b" "$_e" > "$_sc_sup_dir/age.tmp" && mv -f "$_sc_sup_dir/age.tmp" "$_sc_sup_dir/age" ) \
+    </dev/null >/dev/null 2>&1 &
+  self="$HOOK_DIR/${BASH_SOURCE[0]##*/}"
+  _sc_stopped=""
+  trap '_sc_stopped=1' USR1
+  # A polite stop of this process stops the run with it, so nothing it started outlives the hook.
+  trap 'kill -KILL -- "-$body" 2>/dev/null; exit 2' TERM HUP INT
+  _SC_SUPERVISED=1 _SC_T0="$_sc_t0" _SC_PHASE_FILE="$_sc_sup_dir/phase" _SC_WORK_PARENT="$_sc_sup_dir" \
+    perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' bash "$self" \
+    < "$_sc_sup_dir/payload" > "$_sc_sup_dir/out" 2> "$_sc_sup_dir/err" &
+  body=$!
+  # The timer is given the moment to stop at, not a length, so however late perl starts on a busy
+  # machine it does not stop late.
+  perl -e 'my ($end, $pid) = @ARGV; my $d = $end - time; sleep $d if $d > 0; kill "USR1", $pid' \
+    "$(( _sc_t0 + _sc_stop_at ))" "$$" </dev/null >/dev/null 2>&1 &
+  timer=$!
+  # Standard error closed on each wait, because bash reports a job it reaps after a kill ("Killed:
+  # 9", with this line's source) on its own standard error, which is this hook's refusal (#1881).
+  wait "$body" 2>/dev/null; rc=$?
+  if [ -n "$_sc_stopped" ]; then
+    kill -KILL -- "-$body" 2>/dev/null
+    wait "$body" 2>/dev/null; rc=$?
+  fi
+  # KILL, never a plain kill, for the reason the scanners' own watchdog gives (claude-config#1889).
+  kill -9 "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
+  trap - USR1 TERM HUP INT
+  # Stopped by the timer, and not merely finished at the same moment: refused in this gate's words.
+  if [ -n "$_sc_stopped" ] && [ "$rc" -eq 137 ]; then
+    _sc_stop_refuse "$_sc_sup_dir"
+    exit 2
+  fi
+  cat "$_sc_sup_dir/out" 2>/dev/null
+  cat "$_sc_sup_dir/err" >&2 2>/dev/null
+  exit "$rc"
+}
+
+_sc_phase_file=""
+if [ -z "${_SC_SUPERVISED:-}" ]; then
+  _sc_supervise
+else
+  # The run under the supervisor: its clock is the supervisor's, so the time spent starting this
+  # second process is counted against the budget too. Only a time no later than this one's own is
+  # taken. None of these is passed on to anything this run starts.
+  case "${_SC_T0:-}" in ''|*[!0-9]*) ;; *) [ "$_SC_T0" -le "$_sc_t0" ] && _sc_t0="$_SC_T0" ;; esac
+  _sc_phase_file="${_SC_PHASE_FILE:-}"
+  _sc_work_parent="${_SC_WORK_PARENT:-}"
+  unset _SC_SUPERVISED _SC_T0 _SC_PHASE_FILE _SC_WORK_PARENT
+fi
+
 # A push it lets through unscanned says so in a systemMessage, since Claude Code discards a
 # PreToolUse hook's stderr on exit 0 (#1906).
 # shellcheck source=lib/hook-notice.sh
@@ -204,6 +364,7 @@ cd "$repo_dir" 2>/dev/null || exit 0
 # and its remedy, rewording a commit nobody has pushed, is always open. SKIP_SCANNERS_CHECK above
 # still skips this with the rest of the gate, and check-work-names-merge.sh, which has no override,
 # reads the same messages again before the pull request merges.
+_sc_phase "checking the messages of the commits this push adds, which reads the work repository list through gh"
 wnm_push_messages "$cmd"; _wn_rc=$?
 case "$_wn_rc" in
   0) ;;
@@ -244,6 +405,7 @@ esac
 # out, refuses: a suite nobody read is not one that arms (L10, L98). So does a listing of the push
 # git failed (pc_resolve 3, #2349), which once read as a push carrying nothing and let an unarmed
 # suite through.
+_sc_phase "reading which files this push changes, and whether each test suite among them arms its own deadline"
 pc_resolve "$cmd"; _sc_pc_rc=$?
 if [ "$_sc_pc_rc" -eq 3 ]; then
   {
@@ -312,6 +474,7 @@ fi
 #
 # A scanner is recognised by how it lists the repository: through lib/repo-files.sh, the one way
 # the scanners here do it, or by asking git directly, which a scanner elsewhere may still do.
+_sc_phase "listing the repository's test suites and choosing the scanners among them"
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
 suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
@@ -545,7 +708,9 @@ fi
 #
 # Prints nothing on success: a gate that is happy should be quiet, and what it covered is printed
 # once at the end instead.
-_sc_work="$(mktemp -d "${TMPDIR:-/tmp}/scanners-before-push.XXXXXXXX")" || exit 0
+# Inside the supervisor's folder when there is one, so a run stopped at the hard stop, which never
+# reaches the line below that removes it, leaves nothing behind (claude-config#3357).
+_sc_work="$(mktemp -d "${_sc_work_parent:-${TMPDIR:-/tmp}}/scanners-before-push.XXXXXXXX")" || exit 0
 trap 'rm -rf "$_sc_work"' EXIT
 _sc_n=0
 
@@ -574,6 +739,7 @@ _sc_n=0
 # installed config, a machine setting, the clock) can change its verdict with the key unchanged, and
 # would be skipped. None of the scanners here does that today. The skip is announced with the number
 # skipped, so a run that scanned nothing never reads as a clean scan of everything.
+_sc_phase "working out what the scanners will read: the commit tree and a digest of every file that differs from it"
 _sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
 _sc_key=""
 _sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
@@ -928,11 +1094,12 @@ _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
 #
 # So the gate stops ITSELF first, at a budget below the declared timeout, stops waiting, and refuses
 # the push saying its scanners have not finished. Those still running are left running in the
-# background (above, where runs are started) and counted by the next push of the same input. 150
-# seconds by default, leaving 30 of the declared 180 for writing the refusal on a machine that busy;
-# the suite fails if this default ever reaches the declared timeout. The registration also carries
-# onFailure "block", so a gate that overruns even its own budget is a blocked push, never a passed
-# one; that is the backstop, and this is the reason, which Claude Code discards from a killed hook.
+# background (above, where runs are started) and counted by the next push of the same input. 140
+# seconds by default (150 until claude-config#3357); the suite fails if this default ever reaches
+# the declared timeout. The registration also carries onFailure "block", so a gate that overruns
+# even its own budget is a blocked push, never a passed one; but Claude Code then says only "timed
+# out", which on 2026-11-20 is all four refused pushes said. So this budget bounds the WAIT, and the
+# hard stop near the top bounds everything else (claude-config#3357).
 #
 # A scanner that FINISHED and passed inside the budget is remembered as usual, so a retry runs only
 # the ones that did not finish rather than starting again from nothing.
@@ -941,14 +1108,9 @@ _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
 # finish in two seconds waits about two seconds, not until the budget (L290); each run's own watcher
 # looks five times a second. The watchdog is one perl process with its output closed, so nothing it
 # leaves can hold this hook's output open after it exits (L235).
-_sc_budget_default=150
-_sc_budget="${SCANNERS_BUDGET_SECONDS:-$_sc_budget_default}"
-if _wn_got="$(whole_above_zero "$_sc_budget")"; then _sc_budget="$_wn_got"; else
-  # Unreadable is the default, never zero (which would refuse every push) and never no budget
-  # (which is the defect), and it is said rather than swallowed (L50, L90).
-  echo "scanners-before-push: SCANNERS_BUDGET_SECONDS is '$_sc_budget', not a whole number of seconds, so the default of $_sc_budget_default is used." >&2
-  _sc_budget="$_sc_budget_default"
-fi
+#
+# The budget itself, _sc_budget, is read near the top, beside the hard stop over the whole run that
+# it sits inside (claude-config#3357), because the stop has to be set before any of the steps above.
 # A TEST CAN END THE BUDGET SOONER, NEVER LATER (claude-config#2206, L290). The suite's cases about
 # a scanner still running at the budget used a budget of 2 seconds counted from this gate's start,
 # and on 2026-11-04, under load, it ran out before the scanner had even started, so a case checking
@@ -1001,6 +1163,14 @@ _sc_wait_bounded(){    # waits for this round's runs until the budget runs out, 
   # Nothing launched this round (every scanner skipped): a bare `wait` with no process ids would
   # wait for every child, the watchdog included, so there is nothing to wait for and it returns.
   case "$_sc_inflight" in *[![:space:]]*) ;; *) return 0 ;; esac
+  # Which scanners it is waiting on, for the hard stop to name (claude-config#3357), read with
+  # builtins from each run's own description.
+  local i s sec names=""
+  for i in $_sc_inflight_idx; do
+    { IFS= read -r s; IFS= read -r sec; } < "$_sc_work/$i.what" 2>/dev/null || continue
+    names="${names:+$names, }${s##*/}${sec:+ (section $sec)}"
+  done
+  _sc_phase "waiting on these scanners: ${names:-none it could name}"
   left=$(( _sc_t0 + _sc_budget - $(date +%s) ))
   if [ "$left" -le 0 ] || _sc_budget_spent; then
     _sc_budget_ended
@@ -1069,6 +1239,7 @@ $walkers
 EOF
 fi
 
+_sc_phase "deciding about each scanner's run, which waits up to 5 seconds for each scanner another push is deciding about at the same moment"
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
   _sc_claim "$_sc_i" "$_sc_n"
@@ -1110,6 +1281,7 @@ _sc_locked="$(_sc_locked_list)"
 # gone, and a run still refused then is reported as held on the lock, below.
 while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ] && [ -z "$_sc_out_of_time" ] \
       && ! _sc_budget_spent; do
+  _sc_phase "waiting to start again the scanners another suite run held the lock from"
   "$_sc_sleep" "$_sc_lock_poll"
   _sc_tries_left=$(( _sc_tries_left - 1 ))
   # Only the refused runs go again, so they are the runs in flight at once this time.
@@ -1134,6 +1306,7 @@ done
 # after it could each miss it, and a refusal would then reach the read back below as a failure. A
 # run with no exit code yet is judged by whether it is a retry; one with an exit code by whether it
 # refused on the lock.
+_sc_phase "reading back what the scanners found and writing its verdict, which takes the record's lock and each finished scanner's for up to 5 seconds each"
 _sc_locked=""
 _sc_lock_inflight=""
 _sc_i=1
@@ -1406,8 +1579,8 @@ _sc_unfinished_note(){
     [ -n "$_sc_detach_fix" ] && printf '%s\n' "$_sc_detach_fix"
     echo ""
   fi
-  echo "This gate stops itself at ${_sc_budget} seconds, inside the timeout its registration declares, because"
-  echo "Claude Code lets a push through when it kills a hook at that timeout, with nothing scanned."
+  echo "This gate stops waiting at ${_sc_budget} seconds, inside the timeout its registration declares, so that"
+  echo "what it found and what it did not finish is said here rather than lost when Claude Code kills it."
   # Said only as far as the write below the read back did it: passes are kept when there is a key
   # and nothing failed or went unmeasured, and the record could be written (#1910).
   if [ -n "$_sc_record_unwritten" ]; then
