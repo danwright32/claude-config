@@ -221,6 +221,8 @@ dc_notes_checkout() { # <path> <home> <physical home>
 #   a command not listed below, because another command brings other programs with it (fetch runs
 #   an ssh command and credential helpers, diff and log -p run diff drivers) and none of those is
 #   turned off here. Adding one means measuring it in test-disk-clean-git.sh first;
+#   an empty folder name, which git -C reads as the directory the caller stands in, so a judged
+#   folder whose name was lost would be answered for by whatever repository that is;
 #   an option before the command other than --no-optional-locks, which could turn a setting back on;
 #   stash list with anything after it, and status -v, which print a diff;
 #   a filter whose name holds an equals sign, which -c cannot name (measured: it still ran), and a
@@ -235,6 +237,7 @@ DC_GIT_FIXED=(--no-pager --no-lazy-fetch -c core.fsmonitor=false -c core.hooksPa
 dc_git() { # <folder> <git arguments...>
   local d="${1:-}" a kind="" rest=0 off=() q=() qi=0 dir out scope key name line path named=$'\n'
   [ $# -ge 2 ] || { echo "dc_git: refused: it takes a folder and a git command" >&2; return 125; }
+  [ -n "$d" ] || { echo "dc_git: refused: the call names no folder, and git reads an empty one as the directory the caller stands in" >&2; return 125; }
   shift
   for a in "$@"; do
     if [ -z "$kind" ]; then

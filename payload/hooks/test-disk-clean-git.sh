@@ -270,6 +270,10 @@ check "dc_git refuses stash list with anything after it, which would be log opti
 check "dc_git refuses a status asked to print a diff" "$(refused "prints a diff" "$C" status -v)"
 check "dc_git refuses a setting of the caller's before the command, which could turn one back on" "$(refused "is not an option it passes" "$C" -c core.fsmonitor=true status)"
 check "dc_git refuses a call with no command" "$(refused "dc_git: " "$C")"
+# An empty folder name: git -C "" stays where the caller stands, so a judged folder whose name was
+# lost would be answered for by whatever repository the caller happens to be in.
+check "dc_git refuses an empty folder name, which git would read as the directory the caller stands in" "$(cd "$C" && refused "names no folder" "" --no-optional-locks status --porcelain)"
+check "dc_git refuses an empty folder name for a command that reads no settings too" "$(cd "$C" && refused "names no folder" "" rev-parse HEAD)"
 check "dc_git: no refused call ran git, so nothing ran" "$(eq "$(ran)" nothing)"
 check "dc_git: and the fixture kept its stash, which a stash pop would have taken" "$(eq "$(dc_git "$C" stash list | grep -c '^stash@')" 1)"
 # A folder that is no repository, and one that is not there, fail as git fails.
