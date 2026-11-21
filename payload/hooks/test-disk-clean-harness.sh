@@ -510,7 +510,7 @@ dc_git() {
   case "$1" in
     status) out="$(git -C "$d" config --list)" || return ;;
   esac
-  if [ -n "$out" ]; then { git -C "$d" ls-files; }; fi
+  if [ -n "$out" ]; then { git -C "$d" rev-parse --git-dir; }; fi
   while read -r x; do y=`git -C "$d" rev-parse HEAD`; done <<< "$out"
   eval "git -C \"\$d\" version"
   git -C "$d" "$@"

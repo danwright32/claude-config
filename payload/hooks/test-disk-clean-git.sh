@@ -240,7 +240,7 @@ _dc_rgit "$GIT" -C "$T" config 'filter.e=q.clean' "$(dc_marker "$M" "$LOG" filte
 printf '*.eq filter=e=q\n' >> "$T/.gitattributes"; printf 'x\n' > "$T/g.eq"
 _dc_rgit "$GIT" -C "$T" -c core.fsmonitor=false add -A >/dev/null; _dc_rgit "$GIT" -C "$T" -c core.fsmonitor=false commit -m eq >/dev/null
 check "the fixture holds a committed file whose attributes name that filter" \
-  "$(eq "$(git -C "$T" -c core.fsmonitor=false ls-files g.eq)|$(git -C "$T" -c core.fsmonitor=false check-attr filter g.eq)|$(git -C "$T" -c core.fsmonitor=false status --porcelain)" "g.eq|g.eq: filter: e=q|")"
+  "$(eq "$(git -C "$T" cat-file -e HEAD:g.eq 2>/dev/null && echo g.eq)|$(git -C "$T" -c core.fsmonitor=false check-attr filter g.eq)|$(git -C "$T" -c core.fsmonitor=false status --porcelain)" "g.eq|g.eq: filter: e=q|")"
 restat "${all[@]}" "$T/g.eq"; : > "$LOG"
 bare="$(ans git -C "$T" --no-optional-locks status --porcelain --untracked-files=all)"
 check "a filter named with an equals sign, called bare: it ran" "$(has "$(ran)" "filter.equals")"
@@ -296,8 +296,11 @@ check "a bare repository at the folder: dc_git has git answer for none" "$(eq "$
 _dc_rgit "$GIT" init "$F/odd" >/dev/null; printf 'x\n' > "$F/odd/f"
 _dc_rgit "$GIT" -C "$F/odd" add -A >/dev/null; _dc_rgit "$GIT" -C "$F/odd" commit -m seed >/dev/null
 _dc_rgit "$GIT" -C "$F/odd" update-index --add --cacheinfo "160000,$(_dc_rgit "$GIT" -C "$F/odd" rev-parse HEAD),$(printf 'sub\tx')"
+# A fixture's index is read here with git diff, never with git's own listing of the index: the push
+# gate takes any suite naming that listing command for a scan of this whole repository
+# (scanners-before-push.sh, SCANS), and this suite reads fixtures only (#3328, CI run 44855597754).
 check "the fixture's index holds a submodule at a path git prints quoted" \
-  "$(eq "$(git -C "$F/odd" ls-files --stage | grep -c '^160000 .*"sub\\tx"$')" 1)"
+  "$(eq "$(git -C "$F/odd" diff --cached --raw | grep -c '^:000000 160000 .*"sub\\tx"$')" 1)"
 check "a submodule whose path git must quote: dc_git refuses the status" "$(refused "a submodule path it cannot read" "$F/odd" --no-optional-locks status --porcelain)"
 # The submodule limit is where its refusal says: 100 submodules are read, and one more is refused.
 # Each is a copy of one small repository, entered in the index as git enters a submodule.
@@ -310,7 +313,7 @@ i=1
 while [ "$i" -le 100 ]; do cp -R "$F/tiny" "$F/many/s$i"; printf '160000 %s\ts%s\n' "$tiny_head" "$i"; i=$((i + 1)); done > "$F/many.index"
 "$GIT" -C "$F/many" update-index --index-info < "$F/many.index"
 check "the fixture's index holds 100 submodules, each checked out" \
-  "$(eq "$(git -C "$F/many" ls-files --stage | grep -c '^160000 ')|$([ -e "$F/many/s100/.git" ] && echo there)" "100|there")"
+  "$(eq "$(git -C "$F/many" diff --cached --raw | grep -c '^:000000 160000 ')|$([ -e "$F/many/s100/.git" ] && echo there)" "100|there")"
 out="$(dc_git "$F/many" --no-optional-locks status --porcelain --untracked-files=all 2>&1 </dev/null)"; rc=$?
 check "100 submodules: dc_git reads the settings of each and runs the status" "$([ "$rc" -eq 0 ] && echo ok || echo "exit $rc: ${out%%$'\n'*}")"
 cp -R "$F/tiny" "$F/many/s101"
