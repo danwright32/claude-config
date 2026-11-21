@@ -14,17 +14,39 @@ import {
   LESSON_CHECK_KEY,
   LESSON_HEADER,
   LESSON_PROJECT,
+  LESSON_SHORT_KEY,
   LESSON_SKIP,
   LESSON_SOURCE,
   MAX_CHECK,
   MAX_SHORT,
+  MAX_SHORT_TEXT,
   MIN_RULE,
   addsThis,
   readCheckLine,
+  readShortLine,
   unindented,
   askFault,
   shownFault,
   lessonAddition,
+  lessonPlaced,
+  entriesTouched,
+  pickerOnly,
+  lessonsByShell,
+  byShellOnly,
+  type LessonFacts,
+  NO_FACTS,
+  lessonFacts,
+  coversFacts,
+  unnamed,
+  factsSaid,
+  factsAsk,
+  heldToFacts,
+  cannotHold,
+  unshownName,
+  cannotName,
+  notCovered,
+  indexLength,
+  readsAsShort,
   lessonOptions,
   lessonsFile,
   pressed,
@@ -405,24 +427,35 @@ const lapseAfter = ($: EngineInterface, ms: number, x: AskBeforeSavingApproval) 
 
 // The approval for this save, taken as the call that uses it arrives, refused on its age there too
 // (L567): a timer a reload dropped never said it lapsed. A lapsed one is taken out and said.
-const takeApproval = async ($: EngineInterface, key: string) => {
+// `facts` is what the call does to the lessons file as it stands now (#3343 route 2, NO_FACTS for
+// any other save): an approval whose question did not name every one of them does not cover the
+// call, whenever it was given, one stored before questions were kept among them. It is left
+// standing and handed back as `short`, with the names its question lacks, so the refusal says why
+// the call is asked about again.
+const takeApproval = async ($: EngineInterface, key: string, facts: LessonFacts) => {
   const now = await $.clock.now()
   let live: AskBeforeSavingApproval | undefined
+  let short: AskBeforeSavingApproval | undefined
   let lapsed: AskBeforeSavingApproval[] = []
   await update($, approvalsRef, a => {
     live = undefined
+    short = undefined
     lapsed = []
     const keep: AskBeforeSavingApproval[] = []
     for (const x of a ?? []) {
       const fits = savesThis(x, key)
       if (fits && !stands(x.until, now)) lapsed.push(x)
-      else if (fits && !live) live = x
+      else if (fits && !coversFacts(facts, x.asked)) {
+        short ??= x
+        keep.push(x)
+      } else if (fits && !live) live = x
       else keep.push(x)
     }
     return keep
   })
   for (const x of lapsed) $.ui.toast(lapsedFor(x), { timeoutMs: 10_000 })
-  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined }
+  const lacks = short as AskBeforeSavingApproval | undefined
+  return { live: live as AskBeforeSavingApproval | undefined, lapsed: lapsed[0] as AskBeforeSavingApproval | undefined, short: lacks === undefined ? undefined : unnamed(facts, lacks.asked) }
 }
 
 // The text a call adds to the lessons file, when it is an Edit or Write to that file and all it does
@@ -446,6 +479,47 @@ const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: W
 }
 const lessonAdded = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> =>
   lessonAddedBy(tool, input, at, file => textNow($, file))
+
+// What an Edit or Write does to the entries of the lessons file (independent review of #3320), from
+// one reading of the file: `added`, the one entry it adds at an entry boundary, as lessonAddedBy
+// gives it; `touched`, the numbers of the entries it adds or changes (rules.ts entriesTouched); and
+// `misplaced`, where a single added entry would land when that is no entry boundary. A write that
+// touches an entry is covered by Dan's answer in the lesson picker or by nothing: a For good never
+// covers it. A lessons file that cannot be read is judged as if every entry the write holds were
+// new, so nothing reaches it unseen behind a failed read.
+//
+// `facts` is what a write that touches no entry does to the file all the same (#3343 route 2, rules.ts
+// lessonFacts): the entries it takes out whole or moves to another section, and the headings it
+// changes. Such a write is asked For good as ever, and the question, a For good already standing and
+// Dan's own permanent words each cover it only by naming every one of them (coversFacts). They are
+// read only for a write that touches no entry, which is the only one ever asked For good; a lessons
+// file that cannot be read gives `unread`, which nothing covers.
+type LessonEdit = { added: string | undefined; touched: string[]; misplaced: string | undefined; facts: LessonFacts }
+const NO_LESSON_EDIT: LessonEdit = { added: undefined, touched: [], misplaced: undefined, facts: NO_FACTS }
+const lessonEditBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<Current>): Promise<LessonEdit> => {
+  if (tool !== 'Edit' && tool !== 'Write') return NO_LESSON_EDIT
+  const file = lessonsFile(at.home)
+  if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return NO_LESSON_EDIT
+  const old = await now(file)
+  if ('unreadable' in old) {
+    const touched = entriesTouched(tool, input, undefined)
+    return { added: undefined, touched, misplaced: undefined, facts: touched.length ? NO_FACTS : { ...NO_FACTS, unread: old.unreadable } }
+  }
+  const text = 'text' in old ? old.text : undefined
+  const placed = lessonPlaced(tool, input, text)
+  const touched = entriesTouched(tool, input, text)
+  return { added: placed !== undefined && placed.misplaced === undefined ? placed.entry : undefined, touched, misplaced: placed?.misplaced, facts: touched.length ? NO_FACTS : lessonFacts(tool, input, text) }
+}
+const lessonEdit = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<LessonEdit> => lessonEditBy(tool, input, at, file => textNow($, file))
+
+// Whether a shell command writes or may write the installed lessons file (#3343, rules.ts
+// lessonsByShell), read from the one judgement of the command (lastingTargets), so every way mod-kit's
+// reader finds a write of it counts: its words, a script it is handed to, a mention beside a write
+// the words do not name. Such a command is covered by nothing: what it does to an entry cannot be
+// read, so neither a For good nor words of Dan's let it through (an index cover never could: it
+// covers a call whose one file is a MEMORY.md). Never an Edit or a Write, which are read
+// (lessonEdit), nor a command that only reads the file.
+const shellLessons = (tool: string, targets: Targets, home: string): boolean => tool === 'Bash' && lessonsByShell(targets.files, home)
 
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
@@ -547,7 +621,7 @@ const agentRefusal = ({ files, guessed, handed }: Targets) =>
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
-type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown } }
+type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown; short?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -609,7 +683,18 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   let files: string[] = []
   if (madePermanent((await $.state.get(promptRef)).value)) {
     const at = await whereOf($)
-    files = (await lastingTargets($, tool, input, at)).files
+    // His words cover no lesson entry (lessons review of #3320, L450): one added or changed is
+    // covered by his answer in the lesson picker or by nothing, so it is left for the tool.check
+    // hook to refuse, as it is under a For good. It went on unread here, SHORT line and all.
+    // Nor do they cover an entry taken out or moved, or a heading changed, that they do not name
+    // (#3343 route 2): they are held to the same facts as the For good question, and what they
+    // leave unnamed is left for the tool.check hook to ask about, held to those facts.
+    const edit = await lessonEdit($, tool, input, at)
+    const entry = edit.touched.length > 0 || !coversFacts(edit.facts, (await $.state.get(promptRef)).value)
+    const targets = entry ? undefined : await lastingTargets($, tool, input, at)
+    // Nor a shell command that writes or may write the lessons file (#3343): left for the
+    // tool.check hook to refuse the same way, with the Edit route named.
+    files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -671,7 +756,10 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   // approval (#764): by another guard's tool.call hook (a deny), or by a settings hook, which since
   // #875 decides before tool.check (an errored result). Dan is told now that it did not go through,
   // and the approval, which still stands for a later send, records why, so its lapse never calls it
-  // unused. A call that reached tool.check took its approval, so one still standing was not reached.
+  // unused. A call that reached tool.check took its approval, so one still standing was not reached,
+  // or was reached and does not cover the call: one that adds or changes a lesson entry (#3320), or
+  // takes out, moves or renames what the question Dan answered did not name (#3343 route 2). Either
+  // way he answered and nothing was saved, and the refusal he is shown says which.
   const refusedWhy = r.deny ?? (r.isError ? (r.text ?? 'the call was refused') : undefined)
   if (refusedWhy !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
     const at = await whereOf($)
@@ -724,16 +812,25 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const targets = await lastingTargets($, tool, input, at)
   const { files } = targets
   if (!files.length) return next(e)
+  // What the call does to the entries of the lessons file. One that adds or changes an entry is
+  // covered by Dan's answer in the lesson picker or by nothing (independent review of #3320): a For
+  // good is neither taken for it here nor asked for below.
+  const edit = await lessonEdit($, tool, input, at)
+  // A shell command that writes or may write the lessons file (#3343): what it does to an entry
+  // cannot be read, so no approval of any kind is taken for it and no question is asked below.
+  const byShell = shellLessons(tool, targets, at.home)
   // A save Dan answered For good, sent again: on to the settings hooks and the permission check
   // beneath (the auto mode classifier among them), never asked about again.
-  const { live, lapsed } = await takeApproval($, key)
+  // Nor is one taken whose question did not name what the call takes out of that file, moves or
+  // renames, as the file stands now (#3343 route 2): `short` is what that question lacks.
+  const { live, lapsed, short } = edit.touched.length || byShell ? { live: undefined, lapsed: undefined, short: undefined } : await takeApproval($, key, edit.facts)
   if (live) {
     taken.set(String(raw.tool_use_id ?? ''), live)
     return next(e)
   }
   // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
   // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
-  const added = await lessonAdded($, tool, input, at)
+  const added = edit.added
   const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
   if (lesson.live) {
     taken.set(String(raw.tool_use_id ?? ''), lesson.live)
@@ -753,19 +850,49 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
 
   // Dan is asleep (#841): he is not asked tonight. The save goes to his morning report instead,
   // and nothing waits on an answer.
-  const asleep = await whileAsleep($, targets, await savedText($, tool, input, at))
+  // What the write takes out of the lessons file, moves or renames is said first in the note (#3343
+  // route 2): the text an Edit adds says nothing of what it removes.
+  const does = factsSaid(edit.facts)
+  const saved = await savedText($, tool, input, at)
+  const asleep = await whileAsleep($, targets, does ? `This ${tool} ${does}.${saved ? ` ${saved}` : ''}` : saved)
   if (asleep !== null) return { decision: 'deny', reason: asleep }
+
+  // An entry of the lessons file added or changed with no answer in the lesson picker covering it:
+  // refused in words that send Claude there, and no question waits, so no For good can be given.
+  if (edit.touched.length) {
+    const only = pickerOnly(display(lessonsFile(at.home), at.home), tool, edit.touched, edit.misplaced)
+    return { decision: 'deny', reason: lesson.lapsed ? `${lapsedNote(lesson.lapsed)} ${only}` : only }
+  }
+  // A shell command that writes or may write the lessons file (#3343): refused the same way, with
+  // the Edit route named, where the write is read. No question waits, so no For good can be given.
+  if (byShell) {
+    const file = display(lessonsFile(at.home), at.home)
+    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file) }
+    return { decision: 'deny', reason: byShellOnly(file, how, files.filter(f => f !== file)) }
+  }
+  // A write to a lessons file that could not be read (#3343 route 2): what it takes out cannot be
+  // told, so no question can be held to it. Refused, and no question waits.
+  if (edit.facts.unread !== undefined) return { decision: 'deny', reason: cannotHold(display(lessonsFile(at.home), at.home), tool, edit.facts.unread) }
+  // Nor can a question name a heading Dan could not read as it is written: refused the same way,
+  // saying which, before any question waits on a name no question may hold.
+  const unshown = unshownName(edit.facts)
+  if (unshown !== undefined) return { decision: 'deny', reason: cannotName(display(lessonsFile(at.home), at.home), unshown) }
 
   const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
   const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
   // One waiting question per save: the same save refused again replaces the one before.
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-  const asked = askInstruction(id, files, targets.guessed, targets.handed)
+  // What the write takes out of the lessons file, moves or renames (#3343 route 2): the question
+  // must name each, and is refused where it is asked until it does, so the instruction says which.
+  const asked = askInstruction(id, files, targets.guessed, targets.handed, factsAsk(tool, edit.facts))
   // A shell command to an index a cover stands for, not read as a plain append (#2181): said first.
   const unread = byCover && 'unread' in byCover ? byCover.unread : []
   const ask = unread.length ? `${notAnAppendNote(unread.map(c => ({ name: c.name, files: c.files })), files[0] ?? '')} ${asked}` : asked
+  // A For good that stands for this call and does not cover it: said first, so the question asked
+  // again is not read as his answer gone missing.
+  const held = short?.length ? `${notCovered(display(lessonsFile(at.home), at.home), short)} ${ask}` : ask
   const late = lapsed ?? lesson.lapsed
-  return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
+  return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${held}` : held }
 }
 
 export const register: Register = on => {
@@ -782,12 +909,19 @@ export const register: Register = on => {
         const home = (await built.env.get('HOME')) ?? ''
         const at: Where = { home, cwd: await built.session.cwd() }
         const key = saveKey(tool, input, at.cwd, at.home)
-        const added = await lessonAddedBy(tool, input, at, file =>
+        const edit = await lessonEditBy(tool, input, at, file =>
           currentText({ exists: p => built.fs.exists(p), stat: (p, o) => built.fs.stat(p, o), read: p => built.fs.read(p) }, file),
         )
         const now = await built.clock.now()
         const approvals = (await built.state.get(approvalsRef)).value ?? []
-        return { isApproved: approvals.some(x => stands(x.until, now) && (savesThis(x, key) || addsThis(x, added))) }
+        // A For good covers no call that adds or changes a lesson entry (independent review of #3320).
+        // A Bash call is answered by its For good alone: what the command writes is not read here,
+        // so one that writes the lessons file, which tool.check refuses whatever stands for it
+        // (#3343), can be answered true. Nobody asks about a Bash call today (no build asks for the
+        // one Edit of the lessons file), and the types say so for whoever does.
+        // Nor one that takes an entry out, moves one or changes a heading under a question that did
+        // not name it (#3343 route 2).
+        return { isApproved: approvals.some(x => stands(x.until, now) && ((edit.touched.length === 0 && savesThis(x, key) && coversFacts(edit.facts, x.asked)) || addsThis(x, edit.added))) }
       },
     }
     return { ...built, askBeforeSaving }
@@ -879,6 +1013,41 @@ export const register: Register = on => {
         }
       if (check !== undefined && !question.split('\n').some(l => unindented(l) === check))
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
+      // The entry's SHORT line (#3320): the one line the index carries into every session, which the
+      // picker once never showed, so an entry went through under his answer with a SHORT line that
+      // said something else. It is carried and shown as the check line is, and judged by the one
+      // function every shown text is (readShortLine). Each fault stops the picker and says why,
+      // before he is asked anything: a line in no shape or one he could not read as written; a rule
+      // too long for the index line that brings no SHORT line, whose entry would need one nobody
+      // was shown; a line the question does not state on a line of its own; and any other line
+      // starting SHORT: in the question, which he would read as the entry's and the entry could not carry.
+      const givenShort = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_SHORT_KEY]
+      const readShort = givenShort === undefined ? undefined : readShortLine(givenShort)
+      const short = readShort !== undefined && 'line' in readShort ? readShort.line : undefined
+      const shortShape = `"SHORT: <the rule in one line>", its text at most ${MAX_SHORT_TEXT} bytes (a character outside ASCII counts two to four), on one line he can read as written`
+      if (readShort !== undefined && 'fault' in readShort)
+        return {
+          deny: `Metadata "${LESSON_SHORT_KEY}" reads as no SHORT line: ${readShort.fault}. Put the entry's SHORT line there, word for word as it will be added to ${file}: ${shortShape}. Leave "${LESSON_SHORT_KEY}" out only when the rule itself is at most ${MAX_SHORT_TEXT} bytes, so the lessons index can hold it as it is.`,
+        }
+      // Counted as the index cap counts a line, in bytes (independent review of #3320): a rule of
+      // accented text within the cap in characters was asked with no SHORT line, and its entry was
+      // then refused by the send.
+      if (short === undefined && indexLength(rule) > MAX_SHORT_TEXT)
+        return {
+          deny: `The rule is ${indexLength(rule)} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and the index holds one line a lesson, at most ${MAX_SHORT_TEXT} after its number, so this entry needs a SHORT line, and that line is what every session loads. Dan approves it only by reading it: put it in metadata "${LESSON_SHORT_KEY}" as ${shortShape}, and state it word for word on a line of its own in the question.`,
+        }
+      // Every line that reads as a SHORT line once drawn, in bold, in a list or in a quote too
+      // (readsAsShort): he would read each as the entry's, and the entry carries the one.
+      const shortLines = question.split('\n').map(unindented).filter(readsAsShort)
+      if (short !== undefined && !shortLines.includes(short))
+        return { deny: `The question must state the SHORT line word for word on a line of its own, as metadata "${LESSON_SHORT_KEY}" carries it, so Dan approves the line that is added to ${file} and loaded into every session.` }
+      if (shortLines.some(l => l !== short))
+        return {
+          deny:
+            short !== undefined
+              ? `The question holds another line starting "SHORT:" beside the one metadata "${LESSON_SHORT_KEY}" carries, and the entry takes one SHORT line, the one Dan approves. State that one line and no other.`
+              : `The question holds a line starting "SHORT:", and metadata "${LESSON_SHORT_KEY}" carries none, so Dan would read a SHORT line his answer does not cover. Put the line in metadata "${LESSON_SHORT_KEY}" too, as ${shortShape}, or take it out of the question when the rule needs none.`,
+        }
       // The whole question is what he reads (#3295): one holding what he cannot see, or longer than
       // the dialog shows, where the rule or the check line could stand past the cut, is not asked.
       // Every text of the call is judged as the dialog will get it, the mod's own header and answers
@@ -901,14 +1070,22 @@ export const register: Register = on => {
       if (typeof chosen === 'string' && chosen.trim() && chosen !== LESSON_ADD)
         return say(await typedSaid($, chosen, { still: 'the lesson is not approved', again: 'ask him the same question again, with the same metadata and the rule as it then stands' }))
       if (chosen !== LESSON_ADD) return say(`Dan did not choose ${LESSON_ADD}, and gave no answer, so the lesson is not approved. Ask him again, or leave it.`)
-      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}) }
+      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}), ...(short !== undefined ? { short } : {}) }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
       const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line (last, when the entry has none),` : ''
+      // The SHORT line is the one he read, or none (#3320): Claude is told which, so the one Edit
+      // his answer covers is not sent with a line of its own wording and asked about again.
+      const shortened =
+        short !== undefined
+          ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
+          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which renders what is in bold, so set the whole rule in bold and nothing else, "- **L<number>. <the rule>**" with the bold closed after the rule's last word and before the provenance, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
-          `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked} and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `new_string that text, a newline and the entry, or the entry, a newline and that text. Put it at an entry boundary, never inside another entry: straight after another entry's last line or under a section heading, ` +
+          `with another entry's first line, a section heading or the end of the file as the next line that is not blank. The entry is "- **L<number>." then the rule word for word as he approved it (line wrapping is fine), ` +
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked}${shortened}, with no blank line inside it. That is saved without asking him again. Any other Edit or Write that adds or changes a lesson entry in that file, by a SHORT line he did not read or one word of a rule, ` +
+          `is refused, and he is not asked For good about it: an entry is approved only in this picker. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {
@@ -933,6 +1110,19 @@ export const register: Register = on => {
       const question = questions[0].question as string
       const missing = q.files.filter(f => !question.includes(f))
       if (missing.length) return { deny: `The question must name the file the rule would go to (${missing.join(', ')}) and state the rule in one plain sentence, such as "Save to ${q.files[0]} for good: <the rule>?".` }
+      // A write that takes an entry out of the lessons file, moves one to another section or
+      // changes a heading (#3343 route 2; Dan, 2026-11-20: "For good, held to facts"): he decides
+      // on the entries and headings themselves, so a question that does not name each is refused
+      // before he is asked, as the lesson picker refuses one that does not state the rule. Read
+      // from the file as it stands now; the call is held to the same once more as it is sent.
+      const at = await whereOf($)
+      const { facts } = await lessonEdit($, q.tool, q.input, at)
+      const lessons = display(lessonsFile(at.home), at.home)
+      if (facts.unread !== undefined) return { deny: cannotHold(lessons, q.tool, facts.unread) }
+      const unshown = unshownName(facts)
+      if (unshown !== undefined) return { deny: cannotName(lessons, unshown) }
+      const lacks = unnamed(facts, question)
+      if (lacks.length) return { deny: heldToFacts(lessons, q.tool, facts, lacks) }
       // He decides on the words he reads (#3295), and Just this session puts them in the system
       // prompt, so a question holding what he cannot see, or longer than the dialog shows, is not
       // asked. A file's own name is the mod's to show, in the answers too, so one that holds such a
@@ -973,9 +1163,13 @@ export const register: Register = on => {
       // since a compaction may take the call out of its context.
       const now = await $.clock.now()
       // Typed, or `??` gives the then q.key's own type, possibly undefined, to infer from.
-      const key: string = q.key ?? (await whereOf($).then(at => saveKey(q.tool, q.input, at.cwd, at.home)))
-      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS }
-      await update($, approvalsRef, a => [...(a ?? []), made])
+      const key: string = q.key ?? (await whereOf($).then(w => saveKey(q.tool, q.input, w.cwd, w.home)))
+      // The question he answered is kept with the approval (#3343 route 2): the call sent again is
+      // held to what that question named, as the lessons file stands then. His later answer about
+      // the same save replaces an earlier one that did not cover it, which would otherwise lapse
+      // as though he had answered and nothing was saved.
+      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: now + APPROVAL_MS, asked: question }
+      await update($, approvalsRef, a => [...(a ?? []).filter(x => x.key !== key), made])
       lapseAfter($, APPROVAL_MS, made)
       return say(
         `Dan answered For good to saving this to ${where}. Send the same ${q.tool} call again now, unchanged, and it is saved without asking him again: ` +

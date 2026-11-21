@@ -55,7 +55,16 @@
 # full path, through a variable that is not a seam, setting PATH, `command -p`, `env -i`, and a
 # shell reading code from standard input. A new external command in a disk-clean script therefore
 # fails the harness suite until its name is added to DC_STUB_NAMES (or, read only and harmless,
-# DC_CORE_TOOLS) here, which is a reviewed change to this one file (L96).
+# DC_CORE_TOOLS) here, which is a reviewed change to this one file (L96). And one command is held
+# to more than being a stub: git, which the check refuses anywhere but inside dc_git (DC_WRAPPED
+# below, #3328), because git runs with the judged repository's own configuration and only that one
+# helper turns the repository's program running settings off.
+#
+# REAL GIT. git is a stub in every dc_run, which says nothing of what a setting does. The suites
+# that must know ask the git on this machine, on a repository dc_marker_repo builds whose own
+# settings name marker programs: hooks/test-disk-clean-git.sh holds dc_git to each, and the "real
+# git" cases of test-disk-remove.sh and skills/disk-clean/test-disk-clean-categories.sh run the
+# remover and two judges on one, with a git stub that execs the real git.
 #
 # REAL TOOLS. No suite may run /usr/bin/trash for real except test-disk-clean-harness.sh: measured
 # 2026-10-27, it moves into the REAL ~/.Trash whatever HOME says. lsof exits 1 for not open,
@@ -110,6 +119,27 @@ if [ -n "$g" ] && [ -f "$g/HEAD" ] && { [ -f "$g/commondir" ] || { [ -d "$g/obje
   (CDPATH= cd -P "$g" && pwd -P); exit $?
 fi
 echo "fatal: not a git repository (or any of the parent directories): .git" >&2; exit 128'
+# What every suite's git stub runs FIRST (#3328). A disk-clean script reaches git only through
+# dc_git (lib/disk-clean-predicates.sh), which writes its call as
+#   git -C <folder> <the settings that turn the repository's programs off> <the command>
+# and, before a status or a worktree remove, asks git two questions of its own: which filter
+# programs the repository's configuration names, and which submodules it holds. This fragment sets d
+# to the -C folder, drops the settings dc_git adds, so a stub's own case reads the command as the
+# script wrote it, and answers those two questions as a fixture with no filter and no submodule
+# does (nothing, exit 0). It drops the two bare options by name, so a bare option dc_git gains
+# later reaches the stub's own case and fails there, loudly. A `-c name=value` pair it drops
+# whatever it names, so a `-c` setting dc_git gains later is not seen here: what catches that one
+# is test-disk-clean-git.sh, which holds DC_GIT_FIXED to the exact list measured.
+# Whether the settings do turn the programs off is never a stub's to say: test-disk-clean-git.sh
+# and the "real git" cases of the other suites ask the git on this machine.
+DC_GIT_HELPER_STANDIN='d=""; if [ "$1" = -C ]; then d="$2"; shift 2; fi
+while [ $# -gt 0 ]; do case "$1" in -c) shift 2 ;; --no-pager|--no-lazy-fetch) shift ;; *) break ;; esac; done
+case "${1:-} ${2:-}" in "config --show-scope"|"ls-files --stage") exit 0 ;; esac'
+# name=function pairs: a command the scripts may run only from inside that one function, which the
+# command check refuses anywhere else (#3328). git runs with the judged repository's own
+# configuration, and a setting there can name a program, so every call goes through dc_git, which
+# turns those settings off; a bare git call in a script is how the next one would forget.
+DC_WRAPPED="git=dc_git"
 
 # This file's own folder by parameter expansion, never dirname, which a PATH without it breaks
 # (claude-config#1104).
@@ -227,6 +257,88 @@ dc_run() { # <command> [<args>...]
   )
 }
 
+# ---- real repositories whose own settings name a program (#3328) ----
+# For the suites that ask the git on this machine whether a disk-clean git call runs a program the
+# judged repository names. Every program is a marker: it appends its name to a log and exits, so a
+# case that sees one run has harmed nothing. A suite gives <git> as the real git's full path, since
+# on a dc_run PATH git is a stub.
+
+# Writes the marker <name> into <folder> and prints its path. It appends <name> to <log>, runs
+# <then> when one is given (cat, for a filter, which must hand its input back) and exits 0.
+dc_marker() { # <folder> <log> <name> [<then>]
+  mkdir -p "$1" || return 1
+  printf '#!/bin/sh\necho %s >> %q\n%s\nexit 0\n' "$3" "$2" "${4:-:}" > "$1/$3" || return 1
+  chmod +x "$1/$3" || return 1
+  printf '%s\n' "$1/$3"
+}
+
+# git for BUILDING a fixture: it reads no configuration but the fixture's own, and says nothing on
+# stderr. Building runs the fixture's markers too, so a case empties the log before it measures.
+_dc_rgit() { # <git> <git arguments...>
+  local git="$1"
+  shift
+  HOME="$DC_HOME" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$git" -c user.email=t@example.invalid -c user.name=t \
+    -c commit.gpgsign=false -c init.defaultBranch=main -c protocol.file.allow=always "$@" </dev/null 2>/dev/null
+}
+
+# Writes into the configuration of the repository whose git folder is <git folder> every setting
+# measured to make a git command disk-clean runs start a program (2026-11-20, git 2.51.1 from
+# Homebrew and Apple's 2.54.0, alike), each naming a marker in <markers folder>, its name led by
+# <prefix> when one is given:
+#   core.fsmonitor                 status runs it, and so does the status inside worktree remove
+#   filter.mark.clean and .smudge  run when git must compare the contents of a file whose
+#                                  attributes say filter=mark, which a changed time is enough for
+#   hooks/post-index-change        run when a status rewrites the index, as worktree remove's does
+#   gpg.program, log.showSignature stash list runs it over a stash commit that carries a signature
+dc_marker_settings() { # <git> <git folder> <markers folder> <log> [<prefix>]
+  local git="$1" gd="$2" m="$3" log="$4" p="${5:-}" hook
+  _dc_rgit "$git" config -f "$gd/config" core.fsmonitor "$(dc_marker "$m" "$log" "${p}fsmonitor")" || return 1
+  _dc_rgit "$git" config -f "$gd/config" filter.mark.clean "$(dc_marker "$m" "$log" "${p}filter.clean" cat)" || return 1
+  _dc_rgit "$git" config -f "$gd/config" filter.mark.smudge "$(dc_marker "$m" "$log" "${p}filter.smudge" cat)" || return 1
+  _dc_rgit "$git" config -f "$gd/config" gpg.program "$(dc_marker "$m" "$log" "${p}gpg.program")" || return 1
+  _dc_rgit "$git" config -f "$gd/config" log.showSignature true || return 1
+  hook="$(dc_marker "$m" "$log" "${p}hook.post-index-change")" || return 1
+  mkdir -p "$gd/hooks" && cp "$hook" "$gd/hooks/post-index-change"
+}
+
+# Makes a real repository at <dir>: one commit on the branch feat-real holding a.txt, which its
+# attributes give filter=mark, an origin remote on GitHub that nothing here contacts, and
+# dc_marker_settings in its own configuration, the markers in <dir>.markers beside it so none is a
+# file in it. It sets no times: a case ages what its floor needs.
+dc_marker_repo() { # <git> <dir> <log>
+  local git="$1" d="$2" log="$3"
+  _dc_rgit "$git" init "$d" >/dev/null || return 1
+  _dc_rgit "$git" -C "$d" checkout -b feat-real >/dev/null
+  printf '*.txt filter=mark\n' > "$d/.gitattributes" || return 1
+  printf 'one\n' > "$d/a.txt"
+  _dc_rgit "$git" -C "$d" add -A >/dev/null && _dc_rgit "$git" -C "$d" commit -m seed >/dev/null || return 1
+  _dc_rgit "$git" -C "$d" remote add origin https://github.com/dan/repo.git || return 1
+  dc_marker_settings "$git" "$d/.git" "$d.markers" "$log"
+}
+
+# Leaves the repository at <dir> holding one stash whose commit carries a signature header, with
+# its working tree as it was. That header is what makes stash list reach gpg.program.
+dc_marker_signed_stash() { # <git> <dir>
+  local git="$1" d="$2" s n
+  printf 'changed\n' >> "$d/a.txt" || return 1
+  _dc_rgit "$git" -C "$d" stash >/dev/null || return 1
+  s="$(_dc_rgit "$git" -C "$d" rev-parse refs/stash)" || return 1
+  mkdir -p "$d.markers" || return 1
+  _dc_rgit "$git" -C "$d" cat-file commit "$s" | awk '!x && /^$/ { print "gpgsig -----BEGIN PGP SIGNATURE-----"; print " "; print " abc"; print " -----END PGP SIGNATURE-----"; x = 1 } { print }' > "$d.markers/stash.commit"
+  n="$(_dc_rgit "$git" -C "$d" hash-object -t commit -w "$d.markers/stash.commit")" || return 1
+  _dc_rgit "$git" -C "$d" stash drop >/dev/null || return 1
+  _dc_rgit "$git" -C "$d" stash store -m signed "$n"
+}
+
+# The names of the markers that ran, sorted, one line, and "nothing" when none did; then the log is
+# emptied, so the next reading is of the next command alone.
+dc_markers_ran() { # <log>
+  local out=""
+  [ -s "$1" ] && out="$(sort -u "$1" | tr '\n' ' ')"
+  : > "$1"
+  printf '%s\n' "${out:-nothing}"
+}
+
 # ---- the command check ----
 
 # The repository the default scope is read from: three folders above this one in a checkout.
@@ -283,5 +395,5 @@ dc_check_commands() { # [<file>...]
 }$d"; done <<< "$(find "$repo/payload/skills/disk-clean" -type d)"
   fi
   "$py" "$DC_LIB/disk-clean-commands.py" --core "$DC_CORE_TOOLS" --stubs "$DC_STUB_NAMES" \
-    --seams "$DC_SEAMS" --roots "$roots" -- "$@"
+    --seams "$DC_SEAMS" --wrapped "$DC_WRAPPED" --roots "$roots" -- "$@"
 }
