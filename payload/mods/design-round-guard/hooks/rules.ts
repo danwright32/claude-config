@@ -4123,6 +4123,15 @@ export const holdsAsFile = (listed: string, rel: string): boolean => {
 export const restoredSaid = (file: string, from: string, ref: string, sha: string): string =>
   `design-round-guard: not asked about ${file}, which a git checkout or restore from ${from} puts back byte for byte as the default branch holds it (${ref} at ${sha.slice(0, 12)}): a file put back as it shipped changes no look that has not (#3280).`
 
+/**
+ * What a refusal adds for a look changing file a restore would have put back exactly as the default
+ * branch holds it, held only because a command runs before the restore on its line (#3280; Dan,
+ * 2026-11-21, "Keep it held, say how (Recommended)"): how to get the same result, the copy a builder
+ * sets aside first included, which stays held in the same call.
+ */
+export const exactRestoreWay = (file: string): string =>
+  `To put ${file} back as the default branch holds it, run what comes before the git checkout or restore in an earlier call (a copy of the file set aside in a folder outside the repository, such as the scratchpad, included), then run the git checkout or restore by itself or followed by a test run: it then goes through unasked.`
+
 // #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): a git command that moves committed
 // work into the working tree (merge, rebase, cherry-pick, revert, switch, a checkout of a branch, a
 // hard reset, stash pop and apply, pull) names no file, so it ran with nothing asked whatever it

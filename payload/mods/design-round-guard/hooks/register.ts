@@ -90,6 +90,7 @@ import {
   moveUnread,
   moveUnreadCard,
   movedSaid,
+  exactRestoreWay,
   pathRestore,
   indexSource,
   wholeRestoreSource,
@@ -1507,8 +1508,9 @@ const BACKGROUND = /(^|[^&>|<])&(?![&>])/
 // in it runs before the restore is done. Only on a plain line (rules.ts plainLine): a command piped
 // from the restore or from anything the guard cannot place after it, and every command on a line
 // that groups commands or puts one in the background, is still read as beside. The reading of a
-// restore by its lines is unchanged.
-const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = [], sequenced = false): Promise<string | undefined> => {
+// restore by its lines is unchanged. `found.before` says whether the command it names runs before the
+// last restore, for the refusal's way out (#3280, exactRestoreWay); it changes no answer.
+const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = [], sequenced = false, found: { before?: boolean } = {}): Promise<string | undefined> => {
   const notAlone = 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
   try {
     const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
@@ -1531,6 +1533,7 @@ const restoreAlone = async ($: EngineInterface, command: string, named = false, 
     const later = sequenced && plainLine(command) && !BACKGROUND.test(command) ? runsAfter(all, last) : undefined
     for (const [i, c] of all.entries()) {
       if (restoring[i] || (later ? later.has(i) : !beside && i > last) || leavesGitAlone(c.words, gits[i])) continue
+      found.before = i < last
       return `\`${c.words.join(' ')}\` runs ${beside ? 'beside' : 'before'} the git checkout or restore and may change what it puts back`
     }
     if (restoring.filter(Boolean).length > 1 && sources.some(indexSource))
@@ -2016,6 +2019,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // (null until then).
   let whole: Set<string> | null | undefined
   let notBeside: string | undefined | null = null
+  // Whether the command notBeside names runs before the restore, and the look changing files such a
+  // restore would have put back exactly but for it, whose refusal says how (exactRestoreWay).
+  const besideFound: { before?: boolean } = {}
+  const sayHow = new Map<string, string>()
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
@@ -2239,12 +2246,16 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const command = String(input.command ?? '')
       if (whole === undefined) whole = await wholeSources($, command)
       if (whole?.has(t.from)) {
-        if (notBeside === null) notBeside = await restoreAlone($, command, true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])), true)
+        if (notBeside === null) notBeside = await restoreAlone($, command, true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])), true, besideFound)
         const exact = await exactRestore($, { path: t.path, from: t.from }, tree, whole, notBeside ?? undefined)
         if (exact) {
           await $.ui.log(restoredSaid(relTo(t.path, tree), t.from, exact.ref, exact.sha), { to: 'debug' })
           continue
         }
+        // Held only for a command before it (Dan, 2026-11-21, "Keep it held, say how (Recommended)"):
+        // still judged as before below, and its refusal says how, where the restore on its own would
+        // go through.
+        if (notBeside !== undefined && besideFound.before && (await exactRestore($, { path: t.path, from: t.from }, tree, whole, undefined))) sayHow.set(t.path, relTo(t.path, tree))
       }
     }
     // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
@@ -2432,7 +2443,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   if (missing.length && !unread.length && missingPaths.every(p => logicOnly.has(p))) return passing(await withWords({ files: missingFiles, subjects: missing, trees: missingTrees, worded: [] }))
   // A file held because a git move brings it in (#3279) says so: the command itself names no file.
   const moved = [...new Set(targets.flatMap(t => (t.move && t.path !== undefined && missingPaths.includes(t.path) ? [movedSaid(t.move.said)] : [])))]
-  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread: [...unread, ...moved] } }
+  // A restore held only for what runs before it says how to put the file back in its own call (#3280).
+  const how = [...sayHow].flatMap(([p, rel]) => (missingPaths.includes(p) ? [exactRestoreWay(rel)] : []))
+  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread: [...unread, ...moved, ...how] } }
   return passing(await withWords())
 }
 

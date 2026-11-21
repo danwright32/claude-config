@@ -4241,6 +4241,13 @@ for byte what origin/main holds, which changes no look that has not already ship
   its lines has (`restoreAlone`): only commands that read, or other restores of named paths. A
   fetch, a copy, a script, a `GIT_` variable, an option before the subcommand and a write inside
   `.git` leave it judged as before.
+- **A copy set aside before the restore stays held, and the refusal says how.** Dan's answer on
+  2026-11-21, asked whether a `cp` of the file may run before an exact restore in the same call:
+  "Keep it held, say how (Recommended)". Where a restore would have gone through but for a command
+  before it on its line, and the guard finds from git that the restore on its own would, the refusal
+  gains one sentence (rules.ts `exactRestoreWay`): run what comes before it in an earlier call, a
+  copy set aside outside the repository included, then the restore by itself or followed by a test
+  run. No verdict moves, and no other refusal's text changes.
 - **What runs once the restore has finished does not count, on a plain line.** Before this, any
   pipe on the line made every command on it count as beside the restore, so the ordinary
   `restore && test | tail` was judged whole. For this rule alone, on a line that groups nothing
@@ -4270,9 +4277,10 @@ for byte what origin/main holds, which changes no look that has not already ship
   checkout. Over 30 days of this Mac's session records the guard held six restores, three of them
   written this way from origin/main; none of the three would pass as built, two because a `cp` of
   the file ran before the restore in the same call (the builder's own shape) and one because its
-  line, a test run piped through three commands after the restore, is not a plain one. Reading
-  either needs a decision of Dan's (a copy before a restore) or mod-kit's reader saying which
-  commands a line groups, so a parenthesis in a quoted pattern need not count.
+  line, a test run piped through three commands after the restore, is not a plain one. The two
+  with a copy stay held by Dan's answer above, and their refusal now says how. Reading the third
+  needs mod-kit's reader saying which commands a line groups, so a parenthesis in a quoted pattern
+  need not count.
 
 ## Picker manners (#615), built 2026-10-04
 

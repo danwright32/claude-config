@@ -4432,6 +4432,49 @@ test('#3280: where the guard cannot tell from git that the file ends up as the d
   expect(w.ran.length).toBe(1)
 })
 
+// #3280 (Dan, 2026-11-21, "Keep it held, say how (Recommended)"): a copy of the file set aside before
+// an exact restore in the same call stays held, and the refusal says how to get the same result. Only
+// where the restore would have gone through but for what runs before it: no other refusal changes.
+test('#3280: a restore held only for what runs before it says how to put the file back in its own call', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main', 'HEAD']) })
+  knows(w, 'origin/main', TIP)
+  knows(w, 'HEAD', C1)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const WAY = 'in an earlier call (a copy of the file set aside in a folder outside the repository, such as the scratchpad, included), then run the git checkout or restore by itself or followed by a test run'
+  const judged = async (command: string) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    return { command, held: why.includes(SKIP_QUESTION), way: why.includes(WAY), names: why.includes(`To put ${command.includes('globals') ? 'app/globals.css' : MOD_REL} back as the default branch holds it`) }
+  }
+  // The builder's shapes of 2026-11-19: a copy set aside, then the restore, alone or followed by the
+  // test; a stylesheet the same; and any other command before it.
+  for (const command of [
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL} && claude plugin test payload/mods/demo 2>&1 | tail -5`,
+    'cp app/globals.css /tmp/aside/globals.css && git restore --source origin/main app/globals.css',
+    `git fetch origin && git checkout origin/main -- ${MOD_REL}`,
+  ])
+    expect(await judged(command)).toEqual({ command, held: true, way: true, names: true })
+  // Held for anything else, it says nothing of the kind: another source, a command beside or after it
+  // in a pipe, how git reads its repository, an option, the index.
+  for (const command of [
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout HEAD -- ${MOD_REL}`,
+    `git checkout origin/main -- ${MOD_REL} | git fetch`,
+    `git checkout origin/main -- ${MOD_REL} & git fetch`,
+    `{ git checkout origin/main -- ${MOD_REL}; } | git fetch`,
+    `git -c core.autocrlf=true checkout origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout -p origin/main -- ${MOD_REL}`,
+    `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout -- ${MOD_REL}`,
+  ])
+    expect(await judged(command)).toEqual({ command, held: true, way: false, names: false })
+  // Nor where the restore on its own would not go through either: here the default branch does not
+  // hold the file.
+  w.gitSays[`/w/slate ls-tree -z ${TIP} -- ${MOD_REL}`] = ''
+  const command = `cp ${MOD_REL} /tmp/aside/register.tsx && git checkout origin/main -- ${MOD_REL}`
+  expect(await judged(command)).toEqual({ command, held: true, way: false, names: false })
+  expect(w.ran).toEqual([])
+  expect(restored(w, MOD_REL)).toEqual([])
+})
+
 // #3280: the way back is not loosened. Once main's copy has served its purpose, putting the changed
 // file back over it is a write like any other: one that changes what the file draws is judged as it
 // was before, whichever way it is put back, and only a change that draws nothing new goes back unasked.
