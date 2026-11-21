@@ -5320,7 +5320,36 @@ untested says so on the summary's first line and in a second notice,
 such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
 exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
 from each check's annotations before it merges and prints them, so a merge's log says what its green
-did not cover; a read that fails is said and the merge goes on.
+did not cover.
+
+It also runs, on the merging Mac, what the checks did not test where the pull request touches it
+(Dan's decision of 2026-11-20, "Only suites the change touches"). Once every gate allows the merge,
+the helper fetches each part's `part-unmeasured-<part>` record from the run the notice is on (the
+notice itself is cut by GitHub at 4096 characters, so it is not the list), believes them only when
+their lines number what the notice's first line counts, and chooses the suites the pull request
+changed, or that name a file it changed as a path: a slash, then the shortest end of the file's path
+no other file in the head's tree has. It runs those in a throwaway clone of the head through the
+head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
+they started, every two minutes that they are still running with how many have finished, and how
+they ended. A suite that fails, could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
+(2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
+being read: a notice or record that cannot be fetched or does not add up (the records are kept a
+day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
+whose checks carry no notice. A run that reused an earlier green run of the same tree carries none,
+so the helper follows the run its checks' logs name ("NOT RUN AGAIN. Tree ... already passed in run
+..."), and takes that run's notice and records only when its own artifacts hold `green-tree-<tree>`
+for exactly that tree; a log, run, notice or record it cannot find or read there refuses, naming the
+run it looked for. A pull request from a fork refuses too: its code is never run on this Mac. A
+changed file no suite
+can name alone (its path ends the same way as another's all the way up) is said, never passed
+over, and a part a suite still cannot test on this Mac is said and is not a failure. After suites
+have run the helper asks every gate again; a pass is recorded under `MWR_UNTESTED_DIR`
+(`~/.claude/state/merge-untested`) by repository, head and suites, so a restart at the same head does
+not run them again. `MWR_UNTESTED_SKIP=<why>` skips the step for one run, and the run says so and why.
+The step is for a head whose tree holds `tools/ci-unmeasured-summary.sh`, and the helper asks that
+first, once a head, before anything in the step can refuse. In any other repository it then reads
+nothing more, prints nothing and refuses nothing: a notice read that fails there is said by the
+report above and the merge goes on. Only that one read failing for good can stop a merge there.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
