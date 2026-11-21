@@ -2723,16 +2723,41 @@ and the band question is removed rather than kept beside it (L29). Three defects
   #3321 (`hooks/shown.ts`, `shownFault` and `askFault`, copied into each mod that reads a picker's
   answer), so every guard that acts on Dan's answer to a picker holds the call to the same
   character classes, limits and hidden markup: this mod's two pickers, the design round guard's
-  two questions, the area check's restructure question and sleep mode's recorded morning pickers
-  refuse a picker that fails, and picker manners writes it onto no issue. One set of limits serves
+  two questions, the area check's restructure question, sleep mode's recorded morning pickers and
+  picker manners, for a picker whose answer it would write onto an issue, refuse a picker that
+  fails (picker manners since #3321, Dan, 2026-11-21: "Refuse outright"). One set of limits serves
   every picker (decided 2026-11-21 while building #3321: the dialog cuts every question at the same
   place whichever guard asks, so a looser limit for one guard would be an exemption), and a picker
   too long for one is asked in parts. Counted first on the personal MacBook's session records
   (`tools/picker-check-count.ts`, 2026-11-21): of the pickers that reached the dialog the check
   refuses 0 of 10 lesson, 0 of 180 memory save, 0 of 1 restructure, 3 of 103 design round (each a
   placeholder in angle brackets in the session's own sentence), 0 of 462 in the shape sleep mode
-  records and 0 of 32 picker manners would write to an issue. Still open on #3321: questions a mod
-  asks itself through `$.ui.ask`, and the database approvals, which are hooks.
+  records and 0 of 32 picker manners would write to an issue.
+  The database apply and test project approvals are hooks and cannot call a mod's function, so
+  they run the same `askFault` through `payload/hooks/lib/picker-check.mjs`, one small entry both
+  call (Dan, 2026-11-21: "One check, called"). What they approve is unchanged: a picker that fails
+  is not taken as approval, and when the entry cannot run (no node, past its time) the write is
+  asked about again with the reason, never passed and never refused. It costs a node start, 57 to
+  115 ms (median 61, 15 runs), paid only when a picker of the source was answered with the word.
+  Questions a mod asks itself through `$.ui.ask` (scope modes' before bed round and its leave open
+  questions, the keystroke guard's) are not held to the check (Dan, 2026-11-21: "Record, then
+  decide"): none is in any session record, so how many it would refuse could not be counted.
+  `recordedAsk` in mod-kit's `hooks/asked.ts` asks each one and records its sizes, never its
+  text: units, rows, answers, chip and whether `askFault` would refuse it, one file a question
+  under `~/.claude/state/asked-questions`, at most 2,000 kept. `tools/asked-questions-count.ts`
+  reads them, for the reading two weeks from 2026-11-21 that decides whether to hold them.
+  Those two answers meet at picker manners: a mod's question naming an issue would be refused like
+  a session's. The coordinating session's rule (2026-11-21, until Dan settles it) is that a mod's
+  own dialog is asked and its answer written onto no issue, as every such picker was before. It is
+  told apart by the asking mod's own `$.state` (key `asking`), which holds the whole dialog while
+  it is open: the engine lets only the owner write a state ("scope-modes owns that value and only
+  its owner writes it", measured in picker manners' suite) and a session has only tools. The call
+  must be that very dialog with nothing beside it, so a session's picker asked while one is open is
+  refused as before. Ruled out: `metadata.source` (set by the session), the engine's `toolu_` id
+  (not the mod's, undocumented), a file under `~/.claude/state` (a session writes files), and new
+  nouns on mod-kit (every mod whose tests stand in the whole kit would fail its type check). The
+  engine puts its own chip, `Plugin`, over a dialog whose mod gives none (Claude Code 2.1.330), so
+  the record's verdict judges the call with that chip.
   The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
   question stated the rule and compared the entry with it through `ruleText`, which drops bold
   marks and folds white space, and neither read a character: a rule holding a zero width
@@ -4256,6 +4281,10 @@ What picker manners does:
   Picker manners also gives `$.designRound` a no-op default in `engine.create`, because a hook on a
   noun no loaded mod provides stops the mod loading (measured: "registered designRound.answered,
   but no loaded plugin provides $.designRound"); with the guard loaded too, both chain fine.
+- A picker whose answer would be written onto an issue and which fails mod-kit's check of text a
+  person approves (`askFault`) is refused before Dan sees it (#3321; Dan, 2026-11-21: "Refuse
+  outright"), unless it is a mod's own dialog, which is asked and written onto no issue (the
+  shared check of shown text, above, says how the two are told apart).
 
 ## Handoff (#613), built 2026-10-04
 
