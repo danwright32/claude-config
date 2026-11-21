@@ -51,6 +51,7 @@ import {
   SPOOL_KEY_COMMANDS,
   scriptProgram,
   scriptReach,
+  unknownNote,
   argsMove,
   placedCost,
   FOLDER_JUDGE_MAX,
@@ -798,6 +799,40 @@ test("a trap's text is read as what it runs: none for a trap that lists, resets 
   // A trap whose text the shell expands as it is set runs text nobody reads, and one running eval is unread too.
   expect(unreadIn('trap "rm -f $1/big.ts" EXIT\n')).toContain('trap')
   expect(unreadIn(`trap 'eval "$FIX"' EXIT\n`)).toContain('eval')
+})
+
+// #3323: mod-kit's reader gives a program it does not know as a run marked unknown wherever it is
+// handed a word that spells a path. That rule covers a command as typed. A script's own text is read
+// as it was before it: nearly every script holds such a program (`exit 1`, `sleep 2`), so counting
+// one as a script it runs in turn, or as a write of what it is handed, would have every script
+// reach the whole folder, and every script handed a folder be held again (#2407, #2565).
+test("a program the write reader does not know, in a script's own text, is no script it runs and no write of its own (#3323)", () => {
+  const F = '/w/app/src'
+  const unknown = (script: string, word: string) => ({ what: 'a program the write reader does not know', script, tool: true as const, unknown: true as const, why: `${script} is not known`, remedy: 'Use cat.', args: [{ word, path: `${SCRIPT_RUN_FROM}/${word}` }] })
+  const read = commandWrites('exit 1\nsleep 2\nmystery "$1"\necho done', '/s', '/h')
+  expect(read.runs?.map(r => [r.script, r.unknown])).toEqual([['exit', true], ['sleep', true]])
+  expect(scriptReach({ ...NONE, runs: [unknown('exit', '1'), unknown('sleep', '2')] }, F)).toEqual({ placed: [] })
+  // Its own writes are still placed, and a script or a tool it runs in turn still reaches the folder.
+  expect(scriptReach({ ...NONE, files: [{ word: '$1/gen.ts' }], runs: [unknown('exit', '1')] }, F)).toEqual({ placed: [{ word: '$1/gen.ts', path: '/w/app/src/gen.ts', handed: true }] })
+  expect(scriptReach({ ...NONE, runs: [unknown('exit', '1'), { what: 'a tool run through npx', script: 'prettier', tool: true, args: [{ word: '$1' }] }] }, F)).toEqual({ reaches: 'it runs a tool run through npx (prettier), whose writes are not read' })
+})
+
+// #3323: in a command as typed, each path such a program is handed is a target, its run carrying
+// the program and the reader's words for it, so a hold can say which program and what to do.
+test('a path handed to a program the write reader does not know is a target whose run names the program, with why and what to do (#3323)', () => {
+  const targets = shellTargets(commandWrites('prettier --write src/big.ts && mystery src/big.ts', '/w/app', '/h'), '/h')
+  expect(targets.map(t => ('path' in t ? t.path : t.word))).toEqual(['/w/app/src/big.ts'])
+  const runs = targets[0]?.runs ?? []
+  expect(runs.map(r => r.unknown?.program)).toEqual(['prettier', 'mystery'])
+  expect(runs[0]?.unknown?.why).toBe('prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs')
+  expect(runs[0]?.unknown?.remedy).toContain('If prettier only reads too, ask Dan to add it to that list: only he may.')
+  expect(unknownNote(runs)).toBe(
+    `It was judged as a write because ${runs[0]?.unknown?.why}. ${runs[0]?.unknown?.remedy} It was judged as a write because ${runs[1]?.unknown?.why}. ${runs[1]?.unknown?.remedy}`,
+  )
+  // One the command also writes itself is that write, and says nothing of a program.
+  const both = shellTargets(commandWrites('prettier --check src/big.ts > src/big.ts', '/w/app', '/h'), '/h')
+  expect(both.map(t => t.runs)).toEqual([undefined])
+  expect(unknownNote(undefined)).toBeUndefined()
 })
 
 // #2565: where a script's writes land, read with the folder it is handed. A write whose place is

@@ -145,8 +145,24 @@ const mayBeSource = (word: string) => {
 
 type ModKitRun = NonNullable<ModKitWrites['runs']>[number]
 
-/** The script a path was handed to, as mod-kit named the run (#2407). */
-export type ShellRun = { what: string; path?: string; tool?: true }
+/**
+ * The script a path was handed to, as mod-kit named the run (#2407). `unknown`, on a program
+ * mod-kit's write reader does not know or a form of a listed one that writes (#3323), is the program
+ * as written with the reader's own words for why it was read as a writer and what to do, which a
+ * hold says (unknownNote).
+ */
+export type ShellRun = { what: string; path?: string; tool?: true; unknown?: { program: string; why: string; remedy: string } }
+
+/**
+ * What a hold says of the programs mod-kit's write reader does not know among the runs a held path
+ * was handed to (#3323; Dan, 2026-11-21: "Turn it round, with the list (Recommended)"): for each,
+ * why it was judged as a write and what to do, in the reader's own words, the same in every guard
+ * (L111, L118). Undefined where none is.
+ */
+export const unknownNote = (runs: readonly ShellRun[] | undefined): string | undefined => {
+  const lines = (runs ?? []).flatMap(r => (r.unknown ? [`It was judged as a write because ${r.unknown.why}.${r.unknown.remedy ? ` ${r.unknown.remedy}` : ''}`] : []))
+  return lines.length ? [...new Set(lines)].join(' ') : undefined
+}
 
 const PLAIN_NAME = /^[A-Za-z0-9._+-]+$/
 
@@ -289,7 +305,14 @@ const handedPlace = (word: string, folder: string): { path: string; tree?: true 
  * where the name is built is argsMove's question.
  */
 export const scriptReach = (w: ModKitWrites, folder: string, home?: string, script?: string): { reaches: string } | { placed: ScriptPlaced[] } => {
-  const run = w.runs?.[0]
+  // #3323: mod-kit gives a program it does not know as a run marked `unknown` wherever it is handed a
+  // word that spells a path. That rule covers a command as typed. A script's own text is read as it
+  // was before it, so such a run is no script it runs in turn and no write of its own: nearly every
+  // script holds one (`exit 1`, `sleep 2`), so counting them would have every script reach the whole
+  // folder it is handed, which #2407 and #2565 ended. So a script that hands its folder to a program
+  // nobody has listed is not caught here.
+  const known = w.runs?.filter(r => !r.unknown)
+  const run = known?.[0]
   if (run) return { reaches: `it runs ${run.what} (${run.script}), whose writes are not read` }
   const placed: ScriptPlaced[] = []
   const nowhere = (p: string) => p === SCRIPT_ROOT || p.startsWith(`${SCRIPT_ROOT}/`)
@@ -297,7 +320,7 @@ export const scriptReach = (w: ModKitWrites, folder: string, home?: string, scri
   // `onlyLoads`) writes nothing in its own text, as one importing a local module by a fixed name
   // reads: the folder it is handed is read, not written. Only here, for a script's own text; the same
   // program typed in a command is judged as before.
-  const own = { ...w, unnamed: w.unnamed.filter(u => !u.onlyLoads) }
+  const own = { ...w, unnamed: w.unnamed.filter(u => !u.onlyLoads), ...(w.runs ? { runs: known ?? [] } : {}) }
   for (const t of shellTargets(own, home)) {
     if ('path' in t) {
       if (nowhere(t.path)) return { reaches: `it writes ${t.word}, which lands wherever it is run from` }
@@ -445,7 +468,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     if (had) {
       if ('path' in had && 'path' in t && t.tree) had.tree = true
       if (!had.runs || !t.runs) delete had.runs
-      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
+      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool && h.unknown?.program === r.unknown?.program)) had.runs.push(r)
       return
     }
     seen.set(k, t)
@@ -466,7 +489,13 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   }
   for (const r of w.runs ?? []) {
     if (spoolNote(r, home)) continue
-    const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
+    const run: ShellRun = {
+      what: r.what,
+      ...(r.path ? { path: r.path } : {}),
+      ...(r.tool ? { tool: true as const } : {}),
+      // #3323: a program the reader does not know, with the reader's words for it.
+      ...(r.unknown ? { unknown: { program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' } } : {}),
+    }
     const keyOnly = spoolKeyOnly(r, home)
     for (const [i, a] of r.args.entries()) {
       if (keyOnly && i === 1) continue
@@ -868,8 +897,9 @@ export type Held = {
   under?: string
   /**
    * Why a script the area check knows by name, run in the held command, was not let through (#3162,
-   * named.ts declinedNote), said beside the files so the session can tell what to change. It changes
-   * nothing about what is held.
+   * named.ts declinedNote), said beside the files so the session can tell what to change. Since #3323
+   * it also holds why a file handed to a program mod-kit's write reader does not know was judged as
+   * a write, and what to do (unknownNote). It changes nothing about what is held.
    */
   declined?: string
 }
