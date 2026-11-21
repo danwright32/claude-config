@@ -43,7 +43,7 @@ import {
   type NightRepos,
   type Scripts,
 } from './mergedeploy.ts'
-import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
+import { NEVER_ASKED, overnightRefusal, primaryFrom, readableWay, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
 import { committedHosts, groupAfter, tabsAfter, type Browser, type BrowserTabs, type TabsAcross, type TestHosts } from './browser.ts'
 import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
@@ -1461,8 +1461,9 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
   )
 }
 // `kept`: the call is kept in this session's state and put to Dan when sleep mode ends (#1665).
+// Code the reader could not read is told how to be written so that it can be (#3287, readableWay).
 const overnightDeny = (what: string, kept = false) =>
-  `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}.${kept ? ' This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else.' : ''} Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.`
+  `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}.${kept ? ' This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else.' : ''} ${readableWay(what) ?? 'Do not look for another way to do it; it waits for the morning.'} Carry on with work that does not need it, or skip this issue.`
 
 // Puts every session back where Dan was before sleep (#840: wake restores placeBefore). Waking, and
 // the limit ending the /sleep Dan himself started, record it for the others (#2099).

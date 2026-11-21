@@ -7264,7 +7264,14 @@ command substitution, `derived` (#2141): what its substitutions run and, where e
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
 else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
-`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`, and since #3272 never
+the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, which is read once for each word as if typed with it, and only where every word of the list
+is plain characters as typed and nothing else in the line could have given the variable another
+value: a list from a variable, a substitution, a pattern, braces or a file, a quoted word, the name
+handed to a builtin or set in a sum, any other value the shell fills in, a pattern character or a
+brace the shell may act on, `eval`, `source`, a trap, an alias or a heredoc each leave it unread),
+setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
 every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
@@ -8839,8 +8846,17 @@ write whose repository cannot be resolved, whatever `rtk proxy` runs judged as t
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
 expands, which rtk splits into a command, is refused as unread), since #3021 every other command
 mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
-`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
-which was cut off before the write check and ran, and a line running gh that way
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands; since #3272 a program that
+is the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, is read as each of those programs running that string and judged as if typed so, after a
+loop of that shape that merged nothing was held on 2026-11-19 as one that may run the merge helper,
+and where a value still names the program the hold names the word, `$sh`, and says to write the
+command out where it stands and send it again), code the reader cannot read (inline code that uses
+exec, eval or the like, or a program piped in), which since #3287 is refused saying what was seen
+("inline python that uses exec") and the one way to write it so that it is read, the code in the
+command itself with nothing built or loaded as it runs, never a file run by name, which no reader
+opens, while everything else on the list keeps "Do not look for another way", and a write through
+`&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
