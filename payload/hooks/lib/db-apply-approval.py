@@ -71,7 +71,8 @@ its limits or character classes is written here.
   - A picker the check refuses is not taken, and the question about the write says what in it he
     could not have read and to ask it again in plain words.
   - When the check cannot run (no node on PATH, a node too old for --experimental-strip-types, no
-    answer in PICKER_CHECK_SECONDS, an answer that cannot be read), no picker is taken and the
+    answer in PICKER_CHECK_SECONDS or in what is left of the hook's shared deadline, no time left
+    of it at all, an answer that cannot be read), no picker is taken and the
     question says so. The write is then asked about, as one with no Apply is: never let through on
     a picker nobody judged, and never refused, since Dan's yes to the hook's own question still
     runs it.

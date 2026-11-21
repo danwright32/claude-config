@@ -38,7 +38,8 @@ export const sizesOf = (text: string): Sizes | undefined => {
   if (typeof v !== 'object' || v === null) return undefined
   const r = v as Record<string, unknown>
   const whole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0
-  if (!whole(r.at) || !whole(r.units) || !whole(r.rows)) return undefined
+  // A moment past the last one a Date can hold would make the day it is printed as throw.
+  if (!whole(r.at) || r.at > 8.64e15 || !whole(r.units) || !whole(r.rows)) return undefined
   if (typeof r.mod !== 'string' || !r.mod || typeof r.which !== 'string' || !r.which || typeof r.refused !== 'boolean') return undefined
   return { at: r.at, mod: r.mod, which: r.which, units: r.units, rows: r.rows, refused: r.refused }
 }

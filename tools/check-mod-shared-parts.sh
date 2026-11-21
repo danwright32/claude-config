@@ -423,7 +423,7 @@ for d in "$dir"/*/; do
   # copy, so a comment naming the dialog asks nothing.
   asklines="$(grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\.ui\.ask\(' "$sd/hooks" 2>/dev/null)"
   if [ -n "$asklines" ]; then
-    if printf '%s\n' "$asklines" | grep -qvE '\bask: \([^()]*\) => \$\.ui\.ask\(' \
+    if printf '%s\n' "$asklines" | command grep -qvE '\bask: \([^()]*\) => \$\.ui\.ask\(' \
       || ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "import \{[^}]*\brecordedAsk\b[^}]*\} from [\"'\`]\./mod-kit/asked(\.ts)?[\"'\`]" "$sd/hooks" 2>/dev/null \
       || ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit '\brecordedAsk\(' "$sd/hooks" 2>/dev/null; then
       failed=1

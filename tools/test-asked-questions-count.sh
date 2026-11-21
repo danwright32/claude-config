@@ -39,10 +39,11 @@ rec "$((B + 3))" keystroke-guard confirm 80 3 false
 printf 'notes\n' > "$D/README.txt"
 printf 'not json\n' > "$D/$((B + 4))-bad.json"
 printf '{"at":1,"mod":"scope-modes","which":"before-bed","units":"many","rows":2,"options":2,"longest":9,"header":0,"refused":false}\n' > "$D/$((B + 5))-odd.json"
+printf '{"at":9000000000000000,"mod":"scope-modes","which":"before-bed","units":5,"rows":1,"options":2,"longest":9,"header":0,"refused":false}\n' > "$D/$((B + 6))-late.json"
 
 out="$(node "$TOOL" --dir "$D" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "the reader runs and exits 0" ok || check "the reader runs and exits 0" "exit=$code out=$out"
-has "it says how many records it read, over which days, and how many it could not read" "$out" "23 questions recorded from 2026-11-21 to 2026-11-22 (2 records could not be read and are left out)."
+has "it says how many records it read, over which days, and how many it could not read" "$out" "23 questions recorded from 2026-11-21 to 2026-11-22 (3 records could not be read and are left out)."
 has "one line a mod's question: count, units longest and at the 95th percentile, rows likewise, how many refused" "$out" "scope-modes before-bed: 20 asked; units longest 200, 95th percentile 190; rows longest 20, 95th percentile 19; the check would refuse 0."
 has "a question the check would refuse is counted as refused" "$out" "scope-modes leave-branch: 2 asked; units longest 300, 95th percentile 300; rows longest 7, 95th percentile 7; the check would refuse 1."
 has "each mod is counted apart" "$out" "keystroke-guard confirm: 1 asked; units longest 80, 95th percentile 80; rows longest 3, 95th percentile 3; the check would refuse 0."
