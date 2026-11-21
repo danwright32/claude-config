@@ -2866,6 +2866,35 @@ test('#1138: with no plain sentence, or one that only names the file, nothing is
   expect(refusalOf(await call($, PAGE))).toBe('')
 })
 
+// #3321: his answer covers the words he read, so the guard's two pickers are held to the one check
+// of text a person approves in a picker (mod-kit's hooks/shown.ts), every field of the call
+// included, before he is asked anything. No refused character is written here: it is made from
+// its code point.
+test('#3321: a question Dan could not read as written is refused before he is asked, and nothing is recorded', withKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  const zw = String.fromCodePoint(0x200b)
+  const faults: [string, Record<string, unknown>, Record<string, unknown>, string][] = [
+    ['a zero width space in the sentence', {}, { onScreen: `The heading gets more${zw} space above it.` }, 'is U+200B, a zero width space'],
+    ['a placeholder in angle brackets', {}, { onScreen: 'The heading on <page> gets more space above it.' }, 'it holds "<page>"'],
+    ['a field sent beside the questions', { title: `Design${zw}` }, {}, 'Field "title" would not reach Dan as written'],
+  ]
+  for (const [name, extra, metadata, said] of faults) {
+    const r = await askSkip($, w, why, SKIP_YES, extra, metadata)
+    expect(`${name}: ${refusalOf(r)}`).toContain(said)
+    expect(`${name}: ${refusalOf(r)}`).toContain('would not reach Dan as written')
+    expect(`${name}: ${refusalOf(r)}`).toContain('"onScreen"')
+  }
+  // The closing question is asked through the same check.
+  expect(refusalOf(await askSettled($, w, SETTLED_YES, { title: `Design${zw}` }))).toContain('Field "title" would not reach Dan as written')
+  expect(w.asked.length).toBe(0)
+  expect(Object.keys(w.store)).toEqual([])
+  // Asked in words he can read, the same refused call is asked about and answered.
+  expect(contextOf(await askSkip($, w, why, SKIP_YES))).toContain(`Dan answered ${SKIP_YES}`)
+  expect(w.asked.length).toBe(1)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
 test("#1138: a subagent is told to report what on screen its change alters, for the main session's question", withKit, async ($, on) => {
   const w = world($, on, { agents: ['agent-a1'] })
   const why = refusalOf(await call($, { ...PAGE, agentId: 'agent-a1' }))

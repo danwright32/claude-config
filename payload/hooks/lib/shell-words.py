@@ -1192,9 +1192,28 @@ def spaced(text):
 
 @functools.lru_cache(maxsize=4096)
 def _spaced(s):
-    if TEST_OPENS.match(s):
+    cuts = [p for p, _, _ in _redirections(s) if p > 0 and s[p - 1] not in OPERATOR_START]
+    if not cuts:
         return s
-    n, i, floor, cuts = len(s), 0, 0, []
+    out, at = [], 0
+    for p in cuts:
+        out.append(s[at:p])
+        at = p
+    out.append(s[at:])
+    return " ".join(out)
+
+
+@functools.lru_cache(maxsize=4096)
+def _redirections(s):
+    """Every redirection one command's text s holds outside quotes, in order, each as (where it
+    starts, its descriptor included; where its operator ends, past the descriptor it copies when it
+    names one, `2>&1`; whether that descriptor was its whole target). The one reading of where a
+    redirection stands, for spaced(), which writes a space before one, and unredirected(), which
+    takes each out with its target. An empty tuple for a command that opens on a test or an
+    arithmetic."""
+    if TEST_OPENS.match(s):
+        return ()
+    n, i, floor, found = len(s), 0, 0, []
     while i < n:
         m = GLUED_STOP.search(s, i)
         if not m:
@@ -1231,24 +1250,69 @@ def _spaced(s):
                 k = s.rfind("{", floor, i)
                 if k >= 0 and NAMED_DESCRIPTOR.fullmatch(s, k, i) and (k == 0 or s[k - 1] in OPERATOR_START):
                     p = k
-        if p > 0 and s[p - 1] not in OPERATOR_START:
-            cuts.append(p)
         op = LEADING_REDIRECT.match(s, i)
         i = op.end()
+        whole = False
         if s[i - 1] == "&":
             # A descriptor it is copied from or to, `2>&1`, is its target and no word before the next.
             t = DESCRIPTOR_TARGET.match(s, i)
             if t:
-                i = t.end()
+                i, whole = t.end(), True
+        found.append((p, i, whole))
         floor = i
-    if not cuts:
-        return s
-    out, at = [], 0
-    for p in cuts:
+    return tuple(found)
+
+
+# ---- a redirection among a command's words (claude-config#3322) ----------------------------------
+# The shell takes every redirection out of a command before the program sees its words, wherever it
+# stands: `gh api >/dev/null -X DELETE <ref>` deletes the ref and `gh pr merge 2>/dev/null 7` merges
+# pull request 7. The words were handed to each gate with the redirection among them, so a gate that
+# took the first word that is no option for the endpoint read an endpoint named >/dev/null (the
+# stacked branch delete gate let that delete run unasked), and one that took the first number for
+# the pull request read pull request 2. Each reader stepped over a redirection itself or did not.
+# unredirected() takes them out once, from the text, where a quoted `'>'` is still told from the
+# operator, and tool_words() is the one place the words a gate reads of a gh or git command are made.
+# A reader that judges where a command's output goes, or what its input is, reads the command's own
+# words or text, which keep every redirection (lib/push-scope.sh ps__writes_out reads PS__R_WORDS;
+# gh_issue_scan.py's pipelines() keeps each stage's redirections beside its words).
+def unredirected(text):
+    """(one command's text with every redirection taken out, those redirections as written).
+
+    A redirection is its operator, the descriptor written against it, and its target: the descriptor
+    it copies (`2>&1`, `<&-`), or else the next word, glued on or after blanks, read to its end as an
+    assignment's value is, so `2>"a b"` and `>$(mktemp)/x` are each one. A heredoc's opener and a
+    here string go with their word. Quotes, an escaped operator, a substitution, <( ) and >( ) are
+    text and stay (_redirections). Most commands hold no < and no >, and are answered by looking for
+    those two characters alone."""
+    if "<" not in text and ">" not in text:
+        return text, []
+    s = join_continuations(text)
+    spans = _redirections(s)
+    if not spans:
+        return text, []
+    out, taken, at = [], [], 0
+    for p, end, whole in spans:
+        if p < at:
+            continue  # written inside the target of the one before it, `>a<b`, and taken with it
+        if not whole:
+            tail = s[end:].lstrip(" \t")
+            rest = split("_=" + tail, 1)[1] if tail else ""
+            if not s.endswith(rest):
+                return text, []  # not read to a place in the text: left as written, as it always was
+            end = len(s) - len(rest)
         out.append(s[at:p])
-        at = p
+        taken.append(s[p:end].strip())
+        at = end
     out.append(s[at:])
-    return " ".join(out)
+    return " ".join(out), taken
+
+
+def tool_words(rest):
+    """The words of one command, from its text from its own name on (command_rest), as the program
+    gets them: its redirections taken out (unredirected). What tool_read is given wherever the text
+    is known, so the words a gate reads of a gh or git command hold no redirection
+    (claude-config#3322)."""
+    return command_words(unredirected(rest)[0])
 
 
 # ---- a function's header in front of its body's first command (claude-config#3252) ---------------
@@ -1581,12 +1645,15 @@ def tool_command(words):
     """tool_read for one command's words as a caller split them, from its first word: past reserved
     words, leading assignments and any rtk, env or sudo in front, read by command_rest, so a caller
     with words of its own (gh_issue_scan.py, merge-selector.py, push-scope.sh's add reader) sees
-    `rtk gh issue create` and `env GH_TOKEN=x gh pr merge` exactly as the bash gates do."""
+    `rtk gh issue create` and `env GH_TOKEN=x gh pr merge` exactly as the bash gates do. A
+    redirection shell_tokens marked (Redirection) is written back as one, so it is taken out with
+    its target as the bash gates' is (tool_words, claude-config#3322); any other word that only
+    looks like one is a word, as it always was."""
     text = rejoin(words)
     if not text:
         return None
     rest, _ = command_rest(text)
-    return tool_read(command_words(rest))
+    return tool_read(tool_words(rest))
 
 
 def rejoin(words):
@@ -1599,7 +1666,12 @@ def rejoin(words):
         return ""
     first = words[0].lstrip("({")
     words = ([first] if first else []) + list(words[1:])
-    pieces = [w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
+    # A redirection's operator shell_tokens read outside quotes (Redirection) is written bare
+    # wherever it stands, so the reading takes it out with its target (claude-config#3322). Any
+    # other word is quoted, a `>` a caller's own split left among them included, since nothing says
+    # whether that one was quoted as written.
+    pieces = [str(w) if isinstance(w, Redirection) else
+              w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
               for w, m in ((w, ASSIGNMENT.match(w)) for w in words)]
     # A redirection in front of the command's name (claude-config#2235) is written as one, its
     # operator bare, so command_rest passes over it: quoted, `2>/dev/null gh issue create` read as a
@@ -1640,7 +1712,7 @@ def _redirect_bare(word):
     return word[:m.end()] + (shlex.quote(word[m.end():]) if m.end() < len(word) else "")
 
 
-def shell_tokens(text):
+def shell_tokens(text, commenters="", partial=False):
     """text's words and operators as shlex's punctuation lexer cuts them, quotes removed, except that
     a descriptor number written against its redirection stays one token with it: `2>/dev/null` is
     `2>` and `/dev/null`, where `2 >/dev/null` is `2`, `>` and `/dev/null` (claude-config#2235).
@@ -1649,21 +1721,57 @@ def shell_tokens(text):
     issue create`, a create, from `2 >/dev/null gh`, a command named 2. Whether the number ended at
     the operator or at a space is what the lexer holds back after it: the operator it read and pushed
     back, or nothing. A lexer keeping no such record reads every number before an operator as its
-    descriptor, the reading that sees the command after it. Raises ValueError as shlex does."""
+    descriptor, the reading that sees the command after it. Raises ValueError as shlex does.
+
+    A redirection's operator written outside quotes is given as a Redirection (claude-config#3322),
+    which is the same text and compares as it always did: the lexer cuts `>` and `'>'` into the same
+    token, so a reader of the tokens could not tell the shell's redirection from a word, and
+    tool_command could not take one out without taking a quoted message with it. Told apart by the
+    text the lexer read for the token, which is the token itself only when nothing in it was quoted
+    or escaped. A lexer that does not say how far it has read marks none, and every token is then
+    the word it always was.
+
+    commenters and partial are lib/merge-selector.py's, which read its tokens with a lexer of its own
+    until #3322: a # starts a comment for it, and its walk stops at the first token the lexer cannot
+    read and keeps the ones before it, where every other caller is given the ValueError."""
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
-    lexer.commenters = ""
-    out, glue = [], False
+    lexer.commenters = commenters
+    out, glue, at, bare_before = [], False, 0, False
     while True:
-        tok = lexer.get_token()
+        try:
+            tok = lexer.get_token()
+        except ValueError:
+            if partial:
+                return out
+            raise
         if tok is None:
             return out
-        if glue and tok[:1] in ("<", ">"):
-            out[-1] += tok
-        else:
-            out.append(tok)
         held = getattr(lexer, "_pushback_chars", None)
+        bare = False
+        if held is not None:
+            try:
+                end = lexer.instream.tell() - len(held)
+            except (AttributeError, OSError, ValueError):
+                end = None
+            if end is not None:
+                bare = text[at:end].strip() == tok
+                at = end
+        if glue and tok[:1] in ("<", ">"):
+            joined = out[-1] + tok
+            out[-1] = Redirection(joined) if bare and bare_before and LEADING_REDIRECT.fullmatch(joined) else joined
+        else:
+            out.append(Redirection(tok) if bare and LEADING_REDIRECT.fullmatch(tok) else tok)
+        bare_before = bare
         glue = tok.isdigit() and (held is None or any(c in "<>" for c in held))
+
+
+class Redirection(str):
+    """A redirection's operator as shell_tokens read it outside quotes, the descriptor number
+    written against it included (`>`, `2>`, `&>`, `<<<`). Its target is the token after it. The same
+    text as the plain token, so a caller comparing or matching tokens reads what it always did; only
+    rejoin asks which kind it is (claude-config#3322)."""
+    __slots__ = ()
 
 
 def wrapped_words(words):
@@ -1685,8 +1793,9 @@ def tool_field(rest):
     tool 0x1d sub 0x1d act 0x1d its words joined by 0x1f, or "" when it runs neither gh nor git. A gh
     command's words are the flags written in front then the words after the action, all the
     subcommand's own; a git command's are the words after its subcommand, git's own options in front
-    being read by git_dir."""
-    found = tool_read(command_words(rest))
+    being read by git_dir. No word is a redirection, wherever one was written (tool_words,
+    claude-config#3322)."""
+    found = tool_read(tool_words(rest))
     if found is None:
         return ""
     tool, sub, act, front, after = found

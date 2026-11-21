@@ -138,9 +138,8 @@ check "#1723 control: and the list was asked, so the allow is a reading, not a s
 # 2a. A redirection glued to a word, and a function's body (claude-config#3252). The reader split on
 #     spaces only, so the gate saw a program named gh>/dev/null, or a subcommand named 2>/dev/null or
 #     api>/dev/null, and the first command of a function's body as a program named f(), and the delete
-#     of a branch with a pull request stacked on it ran unasked. Two shapes have no case here, each
-#     recorded for an issue of its own (measured 2026-11-19): a redirection glued to api, which is
-#     still allowed, and one glued to push, which is refused for a remote it takes the redirection for.
+#     of a branch with a pull request stacked on it ran unasked. A redirection glued to api or to
+#     push, or standing among the words after either, is 2b below (claude-config#3322).
 for glued in "gh>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
              "gh 2>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
              "f() { gh api -X DELETE repos/acme/widget/git/refs/heads/2337-http-service; }; f" \
@@ -157,6 +156,50 @@ echo '[]' > "$ST/stacked"
 judge "gh>/dev/null api -X DELETE repos/acme/widget/git/refs/heads/feat/x"
 check_eq "#3252 control: with nothing based on the branch the glued delete is allowed in silence" "0|" "$rc|$out"
 check "#3252 and the list was asked, so the allow is a reading, not the skip it was before the fix" "--base feat/x" "$calls"
+
+# 2b. A redirection among the words after api or push (claude-config#3322). The shell takes it out
+#     wherever it stands, so each of these deletes the branch. The reader handed it over among the
+#     words, and this gate took the first word that is no option for the endpoint (so the endpoint was
+#     >/dev/null and the delete of a branch with a pull request stacked on it ran unasked), and for
+#     the push's remote (so the push was refused over a remote named >/dev/null, never by the rule
+#     about the pull request stacked on the branch).
+for among in "gh api>/dev/null -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "gh api > /dev/null -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "gh api -X DELETE 2>/dev/null repos/acme/widget/git/refs/heads/2337-http-service" \
+             "gh api 2>&1 -X DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "gh api --silent &>/dev/null --method DELETE repos/acme/widget/git/refs/heads/2337-http-service" \
+             "git push>/dev/null origin --delete 2337-http-service" \
+             "git push > /dev/null origin --delete 2337-http-service" \
+             "git push 2>&1 origin --delete 2337-http-service" \
+             "git push origin 2>/dev/null :2337-http-service"; do
+  fresh
+  echo '[{"number":2763}]' > "$ST/stacked"
+  echo '[{"number":2760,"baseRefName":"main"}]' > "$ST/merged"
+  judge "$among"
+  check_eq "#3322 the delete is refused: $among" "2" "$rc"
+  check "#3322 and its refusal names the stacked pull request: $among" "#2763" "$out"
+  check "#3322 and the list was asked of the repository and the branch the command names: $among" "pr list --repo acme/widget --base 2337-http-service --state open" "$calls"
+done
+# Controls: with nothing based on the branch each is allowed in silence, by a reading (the list was
+# asked for the branch the command names), exactly as the same delete with no redirection is.
+for among in "gh api>/dev/null -X DELETE repos/acme/widget/git/refs/heads/feat/x" \
+             "git push>/dev/null origin --delete feat/x" \
+             "git push origin 2>/dev/null --delete feat/x"; do
+  fresh
+  echo '[]' > "$ST/stacked"
+  judge "$among"
+  check_eq "#3322 control: with nothing based on the branch the delete is allowed in silence: $among" "0|" "$rc|$out"
+  check "#3322 control: and the list was asked, so the allow is a reading: $among" "--base feat/x" "$calls"
+done
+# Control: a quoted word that only looks like a redirection is a word (the method here), and is not
+# taken out with the word after it: read as a redirection it would take DELETE for its target and
+# leave no method, so no delete to ask about.
+fresh
+echo '[{"number":2763}]' > "$ST/stacked"
+echo '[{"number":2760,"baseRefName":"main"}]' > "$ST/merged"
+judge "gh api -H '>' -X DELETE repos/acme/widget/git/refs/heads/2337-http-service"
+check_eq "#3322 control: a quoted > that is an option's value stays a word, and the delete is refused" "2" "$rc"
+check "#3322 control: and its refusal names the stacked pull request" "#2763" "$out"
 
 # 3. THE FAILURE PATH: a list GitHub will not give is never read as "nothing stacked".
 fresh
