@@ -3340,7 +3340,9 @@ kill found no child and gave -1, and the gate exited 255 over a run that had ref
 kill the supervisor reads an answer as the run's own only from 0 to 126, and 137 as its own kill.
 Given anything else it refuses with exit 2, says the run's exit code did not reach it and what bash
 gave, and shows what the run had printed, so a refusal the run had written still reaches the
-reader and a run that had passed costs one more push.
+reader and a run that had passed costs one more push. It also stops any scanner the run had started
+without a key and not finished, as the refusal at the stop does, since it cannot know the run
+stopped them itself.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444

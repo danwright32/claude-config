@@ -1767,11 +1767,23 @@ grep -q -F '[supervisor: waiting for its run to finish' <<< "$_left3333d" && gre
 #     (Linux, as recalled and not measured here) may leave bash knowing its exit code. On either,
 #     the gate must exit 2 and the run's own words must reach the reader. Which of its two routes
 #     the gate took is printed as a note. A gate never seen held fails the check by name.
+#
+#     The staged run also leaves what a run without a key leaves in its work folder: a scanner in a
+#     process group of its own, its pid recorded and no exit code beside it. A gate that refuses for
+#     want of its run's exit code cannot know the run stopped that scanner itself, and no later
+#     push could count it, so the gate must stop it and say so, as its refusal at the stop does
+#     (from the lessons review of this case's own change, 2026-11-21).
 OWNBIN="$TMPROOT/ownendbin"; mkdir -p "$OWNBIN"
 cat > "$OWNBIN/perl" <<EOF
 #!/usr/bin/env bash
 if [ "\$1" = -e ] && [ "\$2" = 'setpgrp(0, 0); exec @ARGV or exit 127' ]; then
   echo "PUSH BLOCKED: the staged run refused this push." >&2
+  mkdir -p "\$_SC_WORK_PARENT/scanners-before-push.staged/runs/one"
+  "$REALPERL" -e 'setpgrp(0, 0); open(my \$f, ">", \$ARGV[0]) or exit 1; print \$f \$\$; close \$f; rename \$ARGV[0], \$ARGV[1]; exec "sleep", \$ARGV[2]' \\
+    "$TMPROOT/ownend.keyless.tmp" "$TMPROOT/ownend.keyless" $(( HANG_S * 2 )) </dev/null >/dev/null 2>&1 &
+  n=0
+  while [ ! -s "$TMPROOT/ownend.keyless" ] && [ "\$n" -lt $(( HANG_S * 10 )) ]; do sleep 0.1; n=\$((n + 1)); done
+  cp "$TMPROOT/ownend.keyless" "\$_SC_WORK_PARENT/scanners-before-push.staged/runs/one/pid"
   echo \$\$ >> "$TMPROOT/nogroup.pids"
   echo \$PPID > "$TMPROOT/nogroup.gate"
   n=0
@@ -1810,6 +1822,17 @@ if [ "$_held3333o" = yes ] && [ "$c3333o" = 2 ] && grep -q 'the staged run refus
 else
   check "#3333 a run that ends by itself as the stop comes is refused with exit 2 and its own words, never passed on under a code bash made up" "exit=${c3333o:-unread} the gate was held: $_held3333o left behind:$(gate_left "$TMPROOT/ownend.tmp") out=$o3333o"
 fi
+# Judged only where the gate refused for want of the exit code; where bash still knew it, the gate
+# passed on what its run said, as it does for any run that ends by itself, and that is said.
+_keyless3333o="$(cat "$TMPROOT/ownend.keyless" 2>/dev/null)"
+if ! grep -q 'did not reach it' <<< "$o3333o"; then
+  printf 'SUITE-PART-UNMEASURED the check that a gate refusing for want of its run exit code stops the scanners that run started without a key: on this machine bash still knew the exit code, so the gate never refused that way (#3333)\n'
+elif [ -n "$_keyless3333o" ] && hang_wait '! kill -0 "$_keyless3333o" 2>/dev/null' && grep -q 'were stopped too' <<< "$o3333o"; then
+  check "#3333 and a gate refusing for want of its run's exit code stops the scanners that run started without a key, and says so" ok
+else
+  check "#3333 and a gate refusing for want of its run's exit code stops the scanners that run started without a key, and says so" "scanner pid=${_keyless3333o:-none recorded, so the staged run never started one} still there: $(kill -0 "$_keyless3333o" 2>/dev/null && echo yes || echo no) out=$o3333o"
+fi
+[ -n "$_keyless3333o" ] && kill -9 "$_keyless3333o" 2>/dev/null
 [ -n "$_run3333" ] && kill -9 "$_run3333" 2>/dev/null
 
 # How the gate names a repository in its state folder: its origin, or its path when it has none. The

@@ -282,6 +282,10 @@ _sc_stop_refuse_no_code(){   # $1 = what bash gave for the run  $2 = the supervi
       echo "The run had printed nothing on its standard error, where a refusal goes, so nothing here is a"
       echo "finding about your change: send the same push again."
     fi
+    if [ -n "$_sc_keyless_stopped" ]; then
+      echo "The scanners the run had started were stopped too, because without a key for what they read no"
+      echo "later push could count their result, so the next push starts them again."
+    fi
     echo ""
     echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
     echo "Explain to the user first why skipping is legitimate. Never override silently."
@@ -449,7 +453,10 @@ _sc_supervise(){
     exit 2
   fi
   # Stopped as its run ended, with no exit code of the run's to go by: refused, never passed on.
+  # The gate cannot know the run stopped its own runs without a key, so it stops any still going,
+  # as the stop above does; one that has written its exit code has finished and is left.
   if [ -n "$no_code" ]; then
+    _sc_stop_keyless_runs
     _sc_stop_refuse_no_code "$no_code" "$_sc_sup_dir"
     exit 2
   fi
