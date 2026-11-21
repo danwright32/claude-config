@@ -904,6 +904,31 @@ const pullRefusal = (script: string, dir: string | null, call: OvernightCall): s
   return at === `${call.home}/claude-config-sync/claude-sync` ? undefined : 'run claude-sync pull from a copy other than the live sync clone, ~/claude-config-sync'
 }
 
+// Code the reader cannot read (#834 review of 46f07ff) is refused for that alone: it may do anything
+// on the list. Since #3287 the refusal says what was seen and how the same work is written so that
+// it is read, because a builder refused a read only measurement on 2026-11-19 (inline python running
+// part of a file through exec) was told only to look for no other way, and dropped the measurement.
+// What it names: the language and the call the code reader saw (`inline python that uses exec`), or
+// why a program's text could not be had (`a program fed by what curl pipes into it`).
+const UNREAD_CODE = 'run code this reader cannot read'
+const unreadCode = (c: Cmd): string | undefined => {
+  if (c.program && 'unreadable' in c.program) return `${UNREAD_CODE}: a program ${c.program.unreadable}`
+  if (c.verdict?.does === 'unreadable') return `${UNREAD_CODE}: inline ${c.language ?? 'code'} that uses ${c.verdict.seen}`
+  return undefined
+}
+/**
+ * For a refusal of code the reader could not read, how to write it so that it can be (#3287), said
+ * in the refusal itself, since a refused call is otherwise done no other way. Undefined for every
+ * other refusal: what Dan bans waits for the morning however it is written. It names one way only,
+ * the code written out in the command, where the code reader reads it and the call is judged by
+ * what it does. It never names a file run by name: no reader opens a script file, so sending
+ * refused code there would turn "could not be read" into "ran unread".
+ */
+export const readableWay = (what: string): string | undefined =>
+  what.startsWith(UNREAD_CODE)
+    ? 'It was refused because it could not be read, not for what it does. Written so that it can be read, you may send it again, and it is then judged by what it does: put the code in the command itself, with nothing built or loaded as it runs (no exec, eval or compile, no module loaded by a name worked out as it runs). Do it no other way.'
+    : undefined
+
 /**
  * What the call would have done, when it is on the overnight list ("run gh issue create", "force
  * push"), or undefined when it is not. A question only the disk can answer that comes back null
@@ -968,8 +993,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // Code whose effects the reader cannot see fails closed (#834 review of 46f07ff): a program it
     // cannot read at all, and one that runs a process naming gh, git, a database client or
     // claude-sync, which would reach what the list bans past every rule above.
-    if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
-    if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
+    const unreadable = unreadCode(c)
+    if (unreadable) return unreadable
     // Code whose every git call is a local read is judged by that reading and goes ahead (#2939).
     if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || (runsGit(c.program.text) && !(await gitReadsOnly(c.program.text, call.read))) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
