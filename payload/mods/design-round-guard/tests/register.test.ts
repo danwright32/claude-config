@@ -61,7 +61,7 @@ const modKit: { name: string; register: Register } = {
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
-        git: async (input: { words: string[] }) => ask('git', input),
+        git: async (input: { words: string[]; env?: readonly string[] }) => ask('git', input),
         gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
         mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
         goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
@@ -238,15 +238,19 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       }
       return { value: { exitCode: 0, stdout: text, stderr: '', isStdoutTruncated: ctl.gitBlob === 'truncated', isStderrTruncated: false } } as never
     }
-    if (cmd === 'git' && args[0] === '-C' && ['rev-parse', 'diff', 'log', 'for-each-ref', 'ls-tree', 'merge-base'].includes(String(args[2]))) {
+    // #3337: asked with a repository or working folder named apart, those options stand between the
+    // folder and the question (`git -C <folder> --git-dir=<repository> --work-tree=<folder> <question>`),
+    // and the answer is kept under the same words.
+    const question = cmd === 'git' && args[0] === '-C' ? String(args.slice(2).find(a => !/^--(?:git-dir|work-tree)=/.test(a))) : ''
+    if (['rev-parse', 'diff', 'log', 'for-each-ref', 'ls-tree', 'merge-base', 'rev-list'].includes(question)) {
       gitRuns.push(e.argv.join(' '))
       const said = gitSays[`${args[1]} ${args.slice(2).join(' ')}`]
       if (said === 'throws') throw new Error('spawn git ENOENT')
       if (said === 'truncated') return { value: { exitCode: 0, stdout: 'M\0', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
       if (typeof said === 'string') return ok(said)
       if (said !== undefined) return { value: { exitCode: 128, stdout: '', stderr: `${said.fails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
-      if (args[2] === 'for-each-ref') return ok('')
-      return { value: { exitCode: args[2] === 'rev-parse' ? 1 : 128, stdout: '', stderr: args[2] === 'rev-parse' ? '' : 'fatal: bad revision\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (question === 'for-each-ref') return ok('')
+      return { value: { exitCode: question === 'rev-parse' ? 1 : 128, stdout: '', stderr: question === 'rev-parse' ? '' : 'fatal: bad revision\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (cmd === '__modkit' && args[0] === 'writes') {
       const input = JSON.parse(String(args[1])) as { command: string; cwd: string; home: string }
@@ -258,7 +262,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       return ok(JSON.stringify(input.cwd === undefined ? pipeline(input.command) : pipelineIn(input.command, input.cwd, input.home ?? '')))
     }
     // mod-kit's git reader (#1158), read here with its copy; JSON has no undefined, so none is null.
-    if (cmd === '__modkit' && args[0] === 'git') return ok(JSON.stringify(gitCommand(JSON.parse(String(args[1])).words) ?? null))
+    // The settings the command runs with go with its words (#3337), as mod-kit's own member takes them.
+    if (cmd === '__modkit' && args[0] === 'git') {
+      const input = JSON.parse(String(args[1])) as { words: string[]; env?: string[] }
+      return ok(JSON.stringify(gitCommand(input.words, input.env) ?? null))
+    }
     // mod-kit's typed answer wording (#1145), read here with its copy.
     if (cmd === '__modkit' && args[0] === 'typedAnswer') {
       const input = JSON.parse(String(args[1])) as TypedAnswer
@@ -1478,6 +1486,397 @@ test('#3279: where the guard cannot find the default branch, or git cannot say w
   // With everything put back, the merge runs again.
   expect(await merge()).toBe('')
   expect(w.ran.length).toBe(3)
+})
+
+// #3337: a git command can name its repository and its working folder apart from the folder it runs
+// in, four ways: --git-dir, --work-tree, GIT_DIR and GIT_WORK_TREE. Until then mod-kit's reader
+// skipped each one and the guard asked the checkout the command ran in, so a move bringing a look
+// change out of another repository, or into another folder, ran with nothing asked. The guard now
+// puts its questions to git with the command's own naming, first asking which folder the files land
+// in (`rev-parse --show-toplevel`). Measured with git 2.51.1 in a throwaway repository: with only
+// the repository named the files land in the folder the command runs in; with only the working
+// folder named the repository is the one found from that folder; a relative value is read from the
+// folder -C names; and each variable reads exactly as its option.
+// In this world slate's own `y` and `abc1234` bring in notes alone, the other repository's bring in
+// a stylesheet, and Dan has answered for the other project's issue, so a look change there runs.
+const NOTES_ONLY = 'M\0docs/notes.md\0'
+// The words after `git -C` the guard's questions are put with, for each way of naming.
+const FROM_OTHER = '/w/slate --git-dir=/w/other/.git'
+const INTO_SLATE = '/w/other --work-tree=/w/slate'
+const BOTH_NAMED = '/w/other --git-dir=/w/other/.git --work-tree=/w/slate'
+const twoRepositories = (w: ReturnType<typeof world>, brings = CSS) => {
+  knows(w, 'y', C1)
+  w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = NOTES_ONLY
+  w.gitSays[`/w/slate ${PICKS} abc1234 --`] = `\u0001${C1}\0\n${NOTES_ONLY}`
+  for (const asked of ['/w/other', FROM_OTHER, INTO_SLATE, BOTH_NAMED]) {
+    if (asked !== '/w/other') w.gitSays[`${asked} rev-parse --show-toplevel`] = '/w/slate\n'
+    w.gitSays[`${asked} rev-parse --verify --quiet y^{commit}`] = `${C2}\n`
+    w.gitSays[`${asked} ${DIFF} HEAD...${C2}`] = brings
+    w.gitSays[`${asked} ${PICKS} abc1234 --`] = `\u0001${C2}\0\n${brings}`
+  }
+  w.store['record:/w/other|issue:55'] = { kind: 'skipped', at: 1, label: 'issue #55 in other', reading: ISSUE_READING }
+}
+const APART_MOVES = [
+  // --git-dir: the other repository's commits, into the folder the command runs in.
+  'git --git-dir=/w/other/.git merge y',
+  'git --git-dir /w/other/.git cherry-pick abc1234',
+  'git --git-dir=../other/.git merge y',
+  // GIT_DIR reads the same.
+  'GIT_DIR=/w/other/.git git merge y',
+  'env GIT_DIR=/w/other/.git git cherry-pick abc1234',
+  // --work-tree: the repository found from the folder it runs in, into this project.
+  'cd /w/other && git --work-tree=/w/slate merge y',
+  'cd /w/other && git --work-tree ../slate cherry-pick abc1234',
+  // GIT_WORK_TREE reads the same.
+  'cd /w/other && GIT_WORK_TREE=/w/slate git merge y',
+  'cd /w/other && GIT_WORK_TREE=/w/slate git cherry-pick abc1234',
+  // Both, by option, by variable, and read from the folder -C names.
+  'cd /w/other && git --git-dir=/w/other/.git --work-tree=/w/slate merge y',
+  'cd /w/other && GIT_DIR=/w/other/.git GIT_WORK_TREE=/w/slate git cherry-pick abc1234',
+  'git -C /w/other --git-dir=.git --work-tree=../slate merge y',
+]
+
+test('#3337: a merge or cherry-pick naming its repository or working folder apart is read from that repository, and held for the look changing file it brings into this project', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  twoRepositories(w)
+  const notHeld: string[] = []
+  for (const command of APART_MOVES) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes(HELD) || !why.includes('issue #978 in slate') || !why.includes('names no file')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // Every question went to git with the command's own naming, and none was about the default branch.
+  w.gitRuns.length = 0
+  await call($, { tool: 'Bash', command: 'git --git-dir=/w/other/.git merge y' })
+  expect(w.gitRuns.filter(g => / (rev-parse|diff|merge-base) /.test(g))).toEqual([
+    'git -C /w/slate --git-dir=/w/other/.git rev-parse --show-toplevel',
+    'git -C /w/slate --git-dir=/w/other/.git rev-parse --verify --quiet y^{commit}',
+    `git -C /w/slate --git-dir=/w/other/.git ${DIFF} HEAD...${C2}`,
+  ])
+  w.gitRuns.length = 0
+  await call($, { tool: 'Bash', command: 'cd /w/other && GIT_WORK_TREE=/w/slate git cherry-pick abc1234' })
+  expect(w.gitRuns.filter(g => / (rev-parse|log) /.test(g))).toEqual(['git -C /w/other --work-tree=/w/slate rev-parse --show-toplevel', `git -C /w/other --work-tree=/w/slate ${PICKS} abc1234 --`])
+})
+
+test('#3337: a move naming its repository apart that brings no look changing file, or lands in no project, runs', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  twoRepositories(w, NOTES_ONLY)
+  const asked: string[] = []
+  for (const command of APART_MOVES) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  // The stylesheet lands in a folder that is in no checkout, so in no project.
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --verify --quiet y^{commit}'] = `${C2}\n`
+  w.gitSays[`/w/other --work-tree=/w/nowhere ${DIFF} HEAD...${C2}`] = CSS
+  const nowhere = refusalOf(await call($, { tool: 'Bash', command: 'cd /w/other && git --work-tree=/w/nowhere merge y' }))
+  if (nowhere) asked.push(`nowhere: ${nowhere.slice(0, 200)}`)
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(APART_MOVES.length + 1)
+})
+
+test('#3337: where the guard cannot tell which repository or folder a move means, it is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  twoRepositories(w)
+  const wrong: string[] = []
+  const held = async (command: string, ...says: string[]) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('could not') || says.some(s => !why.includes(s))) wrong.push(`${command}: ${why.slice(0, 300)}`)
+  }
+  // git cannot say which folder the files land in: no such repository (its own words, git 2.51.1), a
+  // repository with no working folder, git not run, and an answer that is no folder.
+  const top = '/w/slate --git-dir=/w/nowhere/.git rev-parse --show-toplevel'
+  for (const said of [{ fails: "fatal: not a git repository: '/w/nowhere/.git'" }, { fails: 'fatal: this operation must be run in a work tree' }, undefined, 'throws', 'truncated', '', 'nowhere\n', '/w/a\n/w/b\n'] as const) {
+    if (said === undefined) delete w.gitSays[top]
+    else w.gitSays[top] = said
+    await held('git --git-dir=/w/nowhere/.git merge y', 'which repository and working folder')
+  }
+  // A value the shell fills in, or none at all.
+  await held('git --git-dir="$G" merge y', 'names its repository as $G')
+  await held('GIT_WORK_TREE="$W" git merge y', 'names its working folder as $W')
+  await held('git --work-tree= merge y', 'names its working folder as nothing')
+  // Set by an earlier command on the line, it is a command before the move, held as any is.
+  await held('export GIT_DIR=/w/other/.git; git merge y', 'runs before it in the same command')
+  await held('export GIT_WORK_TREE=/w/slate && cd /w/other && git merge y', 'runs before it in the same command')
+  // A pull is held whatever it names.
+  await held('git --git-dir=/w/other/.git pull', 'git pull fetches before it merges')
+  await held('GIT_DIR=/w/other/.git GIT_WORK_TREE=/w/slate git pull --ff-only', 'git pull fetches before it merges')
+  expect(wrong).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+test('#3337: a merge naming its repository apart is asked about a look change even where it is on the default branch of the checkout it lands in', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  knows(w, 'origin/main', TIP)
+  shipped(w, { [TIP]: TIP })
+  w.gitSays[`/w/slate ${DIFF} HEAD...${TIP}`] = CSS
+  // The control: named plainly, the merge of the default branch runs unasked.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git merge origin/main' }))).toBe('')
+  // Named apart, even as this checkout's own repository: what mod-kit reads of the checkout on disk
+  // is not asked of the repository the command names, so nothing is skipped.
+  const own = '/w/slate --git-dir=/w/slate/.git'
+  w.gitSays[`${own} rev-parse --show-toplevel`] = '/w/slate\n'
+  w.gitSays[`${own} rev-parse --verify --quiet origin/main^{commit}`] = `${TIP}\n`
+  w.gitSays[`${own} ${DIFF} HEAD...${TIP}`] = CSS
+  w.gitRuns.length = 0
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git --git-dir=/w/slate/.git merge origin/main' }))).toContain(HELD)
+  expect(w.gitRuns.filter(g => / merge-base /.test(g))).toEqual([])
+  expect(w.ran.length).toBe(1)
+})
+
+test('#3337: a restore naming its working folder apart is judged for the file it puts back there, by each of the four ways', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n', '/w/slate/docs/notes.md': 'x\n' } })
+  twoRepositories(w)
+  const notHeld: string[] = []
+  for (const command of [
+    'cd /w/other && git --git-dir=/w/other/.git --work-tree=/w/slate restore app/globals.css',
+    'cd /w/other && git --work-tree=/w/slate checkout -- app/globals.css',
+    'cd /w/other && git --work-tree ../slate restore --source=HEAD app/globals.css',
+    'cd /w/other && GIT_WORK_TREE=/w/slate git restore app/globals.css',
+    'cd /w/other && GIT_DIR=/w/other/.git GIT_WORK_TREE=/w/slate git checkout HEAD -- app/globals.css',
+    // A checkout of one name git knows as no commit is the path, put back from the index.
+    'cd /w/other && git --work-tree=/w/slate checkout app/globals.css',
+    // With only the repository named, the folder it runs in is the working folder.
+    'git --git-dir=/w/other/.git restore app/globals.css',
+    'GIT_DIR=/w/other/.git git checkout -- app/globals.css',
+    'git --git-dir=/w/other/.git checkout app/globals.css',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes(HELD) || !why.includes('issue #978 in slate')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  // Set by an earlier command on the line, or named by a value the shell fills in, the working
+  // folder cannot be told: held as not followed. mod-kit's reader hands on the path in the folder
+  // the command runs in for these, as it did before #3337 (here the other project, whose issue is
+  // answered), so the hold is the guard's own.
+  for (const command of [
+    'export GIT_WORK_TREE=/w/slate; cd /w/other; git restore app/globals.css',
+    'GIT_WORK_TREE=/w/slate; cd /w/other; git checkout -- app/globals.css',
+    'cd /w/other && git --work-tree="$W" restore app/globals.css',
+    'cd /w/other && GIT_WORK_TREE="$W" git rm app/globals.css',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('could not be followed')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // One step short: a file that changes no look, and a working folder in no project.
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
+  const asked: string[] = []
+  for (const command of [
+    'cd /w/other && git --work-tree=/w/slate restore docs/notes.md',
+    'cd /w/other && git --work-tree=/w/nowhere restore app/globals.css',
+    'cd /w/other && GIT_WORK_TREE=/w/nowhere git checkout -- app/globals.css',
+    'export GIT_WORK_TREE=/w/slate; cd /w/other; git restore docs/notes.md',
+    'cd /w/other && git --work-tree="$W" restore docs/notes.md',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(5)
+})
+
+// #3337: a repository can keep its own working folder in its settings (core.worktree, as a
+// submodule's repository under .git/modules does). Measured with git 2.51.1: named by --git-dir or
+// GIT_DIR alone and run from another project, `git restore app/page.tsx` put the file back in that
+// folder and left the folder it ran in alone. mod-kit's reader asks git nothing, so it places the
+// file in the folder the command runs in, and the guard judged a file git never touched. The guard
+// now asks git where such a command's files land, and holds what git itself writes where that is
+// not where the reader placed it. Here the other project's issue is answered and slate's is not.
+test('#3337: a restore whose named repository keeps its working folder elsewhere is held, since its file lands there', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/ui/app/globals.css': 'a{}\n', '/w/other/app/globals.css': 'a{}\n' } })
+  twoRepositories(w)
+  const top = '/w/other --git-dir=/w/slate/.git/modules/ui rev-parse --show-toplevel'
+  w.gitSays[top] = '/w/slate/ui\n'
+  const why = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  const notHeld: string[] = []
+  for (const command of [
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css',
+    'cd /w/other && GIT_DIR=/w/slate/.git/modules/ui git checkout -- app/globals.css',
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui rm app/globals.css',
+    'cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore .',
+  ]) {
+    const said = await why(command)
+    if (!said.includes('could not be followed') || !said.includes('/w/slate/ui')) notHeld.push(`${command}: ${said.slice(0, 300)}`)
+  }
+  // Set by an earlier command on the line, the guard is told of no repository to ask git about, and
+  // mod-kit's reader leaves the file in the folder the command runs in: held by the guard itself.
+  const exported = await why('export GIT_DIR=/w/slate/.git/modules/ui && cd /w/other && git restore app/globals.css')
+  if (!exported.includes('where the command writes app/globals.css could not be followed')) notHeld.push(`exported: ${exported.slice(0, 300)}`)
+  // git cannot say where the files land: held, saying so.
+  delete w.gitSays[top]
+  const unsaid = await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css')
+  if (!unsaid.includes('which repository and working folder')) notHeld.push(`unsaid: ${unsaid.slice(0, 300)}`)
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // One step short: a file that changes no look, and a repository whose files land where the
+  // command runs, in the project whose issue is answered.
+  w.gitSays[top] = '/w/slate/ui\n'
+  expect(await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore docs/notes.md')).toBe('')
+  w.gitSays[top] = '/w/other\n'
+  expect(await why('cd /w/other && git --git-dir=/w/slate/.git/modules/ui restore app/globals.css')).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// #3337: git am lands its patch in the working folder the command names (measured with git 2.51.1:
+// named by --work-tree, with or without --git-dir, the file changed there and neither the folder the
+// command ran in nor the repository's own folder was touched), while the guard placed it in the
+// checkout the command ran in. Here the other project's issue is answered and slate's is not, so a
+// patch read as landing in the other project ran with nothing asked. git apply is left as it was:
+// measured, it changes the folder it runs in whatever working folder is named.
+test('#3337: git am naming its working folder apart is judged for the file its patch changes there, and held where the guard cannot tell the folder', withKit, async ($, on) => {
+  const changes = '--- a/app/globals.css\n+++ b/app/globals.css\n@@ -1 +1 @@\n-a{}\n+b{}\n'
+  const notes = '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-x\n+y\n'
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n', '/w/patches/changes.patch': changes, '/w/patches/notes.patch': notes } })
+  twoRepositories(w)
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
+  const why = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  const notHeld: string[] = []
+  for (const command of [
+    'cd /w/other && git --work-tree=/w/slate am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree ../slate am /w/patches/changes.patch',
+    'cd /w/other && GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'cd /w/other && git --git-dir=/w/other/.git --work-tree=/w/slate am /w/patches/changes.patch',
+    'cd /w/other && GIT_DIR=/w/other/.git GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'git -C /w/other --git-dir=.git --work-tree=../slate am /w/patches/changes.patch',
+    // With only the repository named, the folder it runs in is the working folder, as before.
+    'git --git-dir=/w/other/.git am /w/patches/changes.patch',
+    // The same words twice with different settings: each is judged, never both by the first one's.
+    'cd /w/other && git am /w/patches/changes.patch; GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'cd /w/other && GIT_WORK_TREE=/w/nowhere git am /w/patches/changes.patch; cd /w/slate && git am /w/patches/changes.patch',
+  ]) {
+    const said = await why(command)
+    if (!said.includes(HELD) || !said.includes('issue #978 in slate')) notHeld.push(`${command}: ${said.slice(0, 200)}`)
+  }
+  // Where the guard cannot tell the working folder, a patch changing a look file is held, saying why.
+  for (const [command, says] of [
+    ['cd /w/other && git --work-tree="$W" am /w/patches/changes.patch', 'names its working folder as $W'],
+    ['cd /w/other && git --work-tree=/w/gone am /w/patches/changes.patch', 'which repository and working folder'],
+    ['export GIT_WORK_TREE=/w/slate; cd /w/other; git am /w/patches/changes.patch', 'GIT_WORK_TREE'],
+    ['export GIT_DIR=/w/slate/.git && cd /w/other && git am /w/patches/changes.patch', 'GIT_DIR'],
+  ] as const) {
+    const said = await why(command)
+    if (!said.includes('app/globals.css') || !said.includes(says)) notHeld.push(`${command}: ${said.slice(0, 300)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // One step short: run where its issue is answered, a patch changing no look file wherever it lands,
+  // a working folder in no project, and git apply, which changes the folder it runs in.
+  const asked: string[] = []
+  for (const command of [
+    'cd /w/other && git am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree=/w/slate am /w/patches/notes.patch',
+    'cd /w/other && git --work-tree="$W" am /w/patches/notes.patch',
+    'cd /w/other && git --work-tree=/w/nowhere am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree=/w/slate apply /w/patches/changes.patch',
+  ]) {
+    const said = await why(command)
+    if (said) asked.push(`${command}: ${said.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(5)
+})
+
+// #3337 (Dan, 2026-11-20, added to the issue): a cherry-pick or revert of a merge commit with a
+// mainline number brings in what the merge holds against the parent it names. The guard asked
+// `git log -m --first-parent` and dropped the number, so a look changing file that differs only
+// against the second parent arrived unasked. Measured with git 2.51.1 on a merge whose stylesheet
+// differs only against its second parent: `git cherry-pick -m 2`, `--mainline 2`, `--mainline=2` and
+// `-m2` each changed the stylesheet alone, `-m 1` the notes alone, and `git diff <merge>^2 <merge>`
+// named the stylesheet where the first parent's list named only the notes.
+test('#3337: a cherry-pick or revert of a merge with a mainline number is read against the parent it names', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  // The merge abc1234 (C1): against its first parent it changes the notes, against its second the stylesheet.
+  w.gitSays[`/w/slate ${PICKS} abc1234 --`] = `\u0001${C1}\0\n${NOTES_ONLY}`
+  w.gitSays['/w/slate rev-list --no-walk abc1234 --'] = `${C1}\n`
+  w.gitSays[`/w/slate ${DIFF} ${C1}^2 ${C1}`] = CSS
+  w.gitSays[`/w/slate ${DIFF} ${C1} ${C1}^2`] = CSS
+  const notHeld: string[] = []
+  for (const command of [
+    'git cherry-pick -m 2 abc1234',
+    'git cherry-pick --mainline 2 abc1234',
+    'git cherry-pick --mainline=2 abc1234',
+    'git cherry-pick -x -m2 abc1234',
+    'git revert -m 2 abc1234',
+    'git revert --no-edit --mainline 2 abc1234',
+    'git revert --mainline=2 abc1234',
+    'git revert -m2 abc1234',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes(HELD) || !why.includes('issue #978 in slate') || !why.includes('names no file')) notHeld.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // The questions put to git: each commit named, then its files against that parent, turned round for a revert.
+  w.gitRuns.length = 0
+  await call($, { tool: 'Bash', command: 'git cherry-pick -m 2 abc1234' })
+  await call($, { tool: 'Bash', command: 'git revert -m 2 abc1234' })
+  expect(w.gitRuns.filter(g => / (rev-list|diff|log) /.test(g))).toEqual([
+    'git -C /w/slate rev-list --no-walk abc1234 --',
+    `git -C /w/slate ${DIFF} ${C1}^2 ${C1}`,
+    'git -C /w/slate rev-list --no-walk abc1234 --',
+    `git -C /w/slate ${DIFF} ${C1} ${C1}^2`,
+  ])
+  // A revert takes away the file the merge added against that parent.
+  w.files['/w/slate/app/page.html'] = '<main/>\n'
+  w.gitSays[`/w/slate ${DIFF} ${C1} ${C1}^2`] = 'D\0app/page.html\0'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git revert -m 2 abc1234' }))).toContain('app/page.html')
+  // A range is read commit by commit, each against that parent.
+  w.gitSays['/w/slate rev-list --no-walk main..other-branch --'] = `${C2}\n${C1}\n`
+  w.gitSays[`/w/slate ${DIFF} ${C2}^2 ${C2}`] = NOTES_ONLY
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git cherry-pick -m 2 main..other-branch' }))).toContain(HELD)
+  expect(w.ran).toEqual([])
+  // One step short: the first parent reads as before, and a second parent that brings no look file runs.
+  w.gitSays[`/w/slate ${DIFF} ${C1}^2 ${C1}`] = NOTES_ONLY
+  w.gitSays[`/w/slate ${DIFF} ${C1} ${C1}^2`] = NOTES_ONLY
+  const asked: string[] = []
+  for (const command of ['git cherry-pick -m 1 abc1234', 'git revert --mainline 1 abc1234', 'git cherry-pick -m1 abc1234', 'git cherry-pick -m 2 abc1234', 'git revert --mainline=2 abc1234', 'git cherry-pick -m 2 main..other-branch']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (why) asked.push(`${command}: ${why.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(6)
+})
+
+test('#3337: a mainline number the guard cannot read, or a commit with no such parent, holds the cherry-pick or revert', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n' } })
+  // Read against the first parent, as before, each would run: the merge brings in notes alone there.
+  w.gitSays[`/w/slate ${PICKS} abc1234 --`] = `\u0001${C1}\0\n${NOTES_ONLY}`
+  w.gitSays['/w/slate rev-list --no-walk abc1234 --'] = `${C1}\n`
+  const wrong: string[] = []
+  const held = async (command: string, ...says: string[]) => {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    if (!why.includes('could not') || says.some(s => !why.includes(s))) wrong.push(`${command}: ${why.slice(0, 300)}`)
+  }
+  const WRITE_IT = 'Write the mainline number as -m and a whole number'
+  for (const command of [
+    'git cherry-pick -m "$N" abc1234',
+    'git cherry-pick --mainline=two abc1234',
+    'git cherry-pick -m 0 abc1234',
+    'git cherry-pick --mainl=2 abc1234',
+    'git cherry-pick -xm2 abc1234',
+    'git cherry-pick -m 1 -m 2 abc1234',
+    'git cherry-pick -m 2 --no-mainline abc1234',
+    'git revert -m "$N" abc1234',
+    'git revert --main=2 abc1234',
+    'git revert -nm 2 abc1234',
+  ])
+    await held(command, 'mainline number', WRITE_IT, 'Nothing is asked of Dan for this.')
+  // The commit has no second parent (git's own words, 2.51.1): git cannot list its files against one.
+  w.gitSays[`/w/slate ${DIFF} ${C1}^2 ${C1}`] = { fails: `fatal: ambiguous argument '${C1}^2': unknown revision or path not in the working tree.` }
+  await held('git cherry-pick -m 2 abc1234', `against its parent 2`, 'unknown revision')
+  // git cannot name the commits, or names what is no commit.
+  delete w.gitSays['/w/slate rev-list --no-walk abc1234 --']
+  await held('git cherry-pick -m 2 abc1234', 'git rev-list --no-walk abc1234 -- exited 128')
+  w.gitSays['/w/slate rev-list --no-walk abc1234 --'] = 'warning: something else\n'
+  await held('git revert -m 2 abc1234', 'could not read as a list of commits')
+  // More commits than the guard reads one by one.
+  w.gitSays['/w/slate rev-list --no-walk main..other-branch --'] = Array.from({ length: 51 }, (_, i) => `${String(i).padStart(2, '0')}${'a'.repeat(38)}\n`).join('')
+  await held('git cherry-pick -m 2 main..other-branch', '51 commits')
+  expect(wrong).toEqual([])
+  expect(w.ran).toEqual([])
 })
 
 // #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path or a restore
@@ -3631,7 +4030,10 @@ test('#1158: a restore beside a command that may change its source is judged who
   w.gitSays[`/w/slate ${DIFF} HEAD ${C1}`] = ''
   const chained = [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git fetch | git checkout HEAD -- ${MOD_REL}`]
   // So does git told to read another index, repository or setting, by the environment or its own
-  // options before the subcommand (lessons review).
+  // options before the subcommand (lessons review). Since #3337 git is first asked where such a
+  // command's files land: here in this checkout, as the words say.
+  w.gitSays['/w/slate --git-dir=/other rev-parse --show-toplevel'] = '/w/slate\n'
+  w.gitSays['/w/slate --work-tree=/w/slate rev-parse --show-toplevel'] = '/w/slate\n'
   const elsewhere = [`GIT_INDEX_FILE=/tmp/idx git restore ${MOD_REL}`, `GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `env GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `git -c core.autocrlf=true checkout HEAD -- ${MOD_REL}`, `git --git-dir=/other checkout HEAD -- ${MOD_REL}`, `git --work-tree=/w/slate checkout HEAD -- ${MOD_REL}`]
   for (const [commands, said] of [[chained, 'the git checkout or restore and may change what it puts back'], [elsewhere, 'the command sets how git reads its repository']] as const)
     for (const command of commands) {

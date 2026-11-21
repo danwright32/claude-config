@@ -583,6 +583,59 @@ test('#3279: gitMove reads what to ask git for each move, nothing for a move tha
   expect(g(`merge -m ${'x'.repeat(200)} topic`)?.said.length).toBe(120)
 })
 
+// #3337: the mainline number of a cherry-pick or revert names the parent each commit is read
+// against. gitMove took it as an option's value and dropped it, so every one was read against the
+// first parent.
+test('#3337: gitMove hands on the mainline number of a cherry-pick or revert, and says why where it cannot read one', () => {
+  const g = (line: string) => {
+    const [sub, ...args] = line.split(' ')
+    return gitMove({ sub, args })
+  }
+  const ask = (line: string) => {
+    const m = g(line)
+    return m && 'ask' in m ? m.ask : m
+  }
+  for (const line of ['cherry-pick -m 2 abc1234', 'cherry-pick --mainline 2 abc1234', 'cherry-pick --mainline=2 abc1234', 'cherry-pick -m2 abc1234', 'cherry-pick abc1234 -m 2', 'cherry-pick -m 2 -m 2 abc1234'])
+    expect({ line, ask: ask(line) }).toEqual({ line, ask: { ask: 'picks', revs: ['abc1234'], mainline: 2 } })
+  expect(ask('revert --no-edit -m 3 abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'], revert: true, mainline: 3 })
+  expect(ask('cherry-pick -m 12 a..b')).toEqual({ ask: 'picks', revs: ['a..b'], mainline: 12 })
+  // The first parent is what was always read, so it is handed on as no number at all.
+  for (const line of ['cherry-pick -m 1 abc1234', 'cherry-pick --mainline=1 abc1234', 'cherry-pick -m1 abc1234', 'cherry-pick abc1234']) expect({ line, ask: ask(line) }).toEqual({ line, ask: { ask: 'picks', revs: ['abc1234'] } })
+  expect(ask('revert -m 1 abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'], revert: true })
+  // A number it cannot read, an option that may be the mainline one spelled another way, and two that differ.
+  const unreadOf = (line: string) => {
+    const m = g(line)
+    return m && 'unread' in m ? `${m.unread} ${m.remedy ?? ''}` : ''
+  }
+  for (const line of [
+    'cherry-pick -m $N abc1234',
+    'cherry-pick -m two abc1234',
+    'cherry-pick -m 0 abc1234',
+    'cherry-pick -m 02 abc1234',
+    'cherry-pick -m 2x abc1234',
+    'cherry-pick --mainline= abc1234',
+    'cherry-pick --main 2 abc1234',
+    'cherry-pick --mainl=2 abc1234',
+    'cherry-pick --m=2 abc1234',
+    'cherry-pick --no-mainline abc1234',
+    'cherry-pick -xm2 abc1234',
+    'cherry-pick -em 2 abc1234',
+    'cherry-pick -m 1 -m 2 abc1234',
+    'cherry-pick -m 2 --mainline=3 abc1234',
+    'revert -m $N abc1234',
+    'revert -nm 2 abc1234',
+  ])
+    expect({ line, said: unreadOf(line).includes('mainline number') && unreadOf(line).includes('Write the mainline number as -m and a whole number') }).toEqual({ line, said: true })
+  // A sequence carried on, or no commit named, brings nothing in whatever its options.
+  for (const line of ['cherry-pick --continue', 'cherry-pick -m 2', 'revert --abort']) expect({ line, move: g(line) }).toEqual({ line, move: undefined })
+  // Every other option of the two is read as before.
+  expect(ask('cherry-pick -x --strategy recursive -X theirs abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  expect(ask('cherry-pick --no-commit --ff abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  // A letter m inside the value joined onto -X or -S is that option's value, never the mainline one.
+  expect(ask('cherry-pick -Xrenormalize -Smykey abc1234')).toEqual({ ask: 'picks', revs: ['abc1234'] })
+  expect(ask('merge -m 2 topic')).toEqual({ ask: 'merge', commits: ['topic'] })
+})
+
 test('#3279: movedFiles and pickedFiles read what git lists, and give nothing rather than no files for anything else', () => {
   const sha = 'a'.repeat(40)
   const other = 'b'.repeat(40)
