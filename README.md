@@ -1746,9 +1746,10 @@ into commands, 616 of them for BBEdit's command line helper, a Mach-O file (meas
 so a guard could refuse, or pass, on bytes that happened to spell a command. Now a file run by its
 path or handed to bash is left unread when it starts with a Mach-O or ELF magic number and a NUL
 byte follows among its first 16 bytes with nothing a shell ends a word at before it, which every
-real header does. The reader says so through `compiled_program`, for a guard that wants to judge a
-compiled program at a path its own way; those two guards treat it as they treat any program whose
-commands they cannot read. The test is that narrow on purpose. Measured 2026-11-21 on zsh 5.9, bash
+real header does. The reader's answer is `compiled_program`: `script_text` asks it before reading
+any file as a script, and a guard that wants to judge a compiled program at a path its own way can
+ask it too. Those two guards do not, and treat one as they treat any program whose commands they
+cannot read. The test is that narrow on purpose. Measured 2026-11-21 on zsh 5.9, bash
 3.2, dash and ksh, each of these is still run as commands by some shell, so each is still read: a
 file with a NUL only after its first line, one with bytes that are not UTF-8, one with the magic
 number and no NUL (`\x7fELF;cmd` runs cmd), one whose NUL comes after a word has ended (ksh runs

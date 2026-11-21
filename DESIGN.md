@@ -1823,8 +1823,9 @@ today because the spaced target is a word), so it was recorded for a change of i
 
 A compiled program read as a script file (#3299). A caller that asks the reader for the commands
 inside the script files a command runs was handed the bytes of a compiled program run by its path
-as commands, so a verdict could turn on noise. The fix is one test in `script_text`, the only place
-the reader opens a file, with the reader's answer exposed as `compiled_program`. What counts as
+as commands, so a verdict could turn on noise. The fix is one question, `compiled_program`, which
+looks at a file's first 16 bytes. `script_text` asks it before reading any file as a script, and a
+guard that wants to judge a compiled program its own way can ask it the same way. What counts as
 compiled was decided by running the files, never by how they look. The issue's own wording (a NUL
 in the first block, or bytes that do not decode) was measured and rejected: `echo x`, a newline and
 a NUL runs under every shell tried, and so does a script with Latin-1 bytes, so calling either
