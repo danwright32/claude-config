@@ -265,6 +265,38 @@ _sc_stop_refuse(){   # $1 = the supervisor's folder
   } >&2
 }
 
+# The refusal when the stop came just as the run ended and bash has no exit code of the run's to
+# give (claude-config#3333; the measurement is at the stop, in _sc_supervise). It claims only that:
+# the run may have passed or refused, so what the run had printed is shown under the gate's own
+# words, and a refusal there stands. Builtins only, but for the cat of what the run printed.
+_sc_stop_refuse_no_code(){   # $1 = what bash gave for the run  $2 = the supervisor's folder
+  {
+    echo "PUSH BLOCKED: the whole tree scanners gate reached its stop at ${_sc_stop_at} seconds just as its run ended,"
+    echo "and the run's exit code did not reach it (bash gave $1 for the run). It cannot say this push passed,"
+    echo "so the push has not gone out."
+    echo ""
+    if [ -s "$2/err" ]; then
+      echo "What the run had printed is at the end of this message. If that is a refusal of its own, it stands."
+      echo "If it is not, nothing here is a finding about your change: send the same push again."
+    else
+      echo "The run had printed nothing on its standard error, where a refusal goes, so nothing here is a"
+      echo "finding about your change: send the same push again."
+    fi
+    if [ -n "$_sc_keyless_stopped" ]; then
+      echo "The scanners the run had started were stopped too, because without a key for what they read no"
+      echo "later push could count their result, so the next push starts them again."
+    fi
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+    if [ -s "$2/err" ]; then
+      echo ""
+      echo "What the run had printed:"
+      cat "$2/err" 2>/dev/null
+    fi
+  } >&2
+}
+
 # Runs WITHOUT a key are the run's to stop at the budget (#1910: no later push could count them),
 # and each leads a session of its own, so stopping the run's group does not reach them. They are the
 # only runs kept inside the run's work folder, so they are found there by the pid each recorded
@@ -308,7 +340,7 @@ _sc_sup_says(){
 }
 
 _sc_supervise(){
-  local body timer rc self
+  local body timer rc self no_code=""
   _sc_sup_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-gate.XXXXXXXX" 2>/dev/null)" || _sc_sup_dir=""
   if [ -z "$_sc_sup_dir" ] || ! command -v perl >/dev/null 2>&1; then
     # Said, never swallowed (L11): the run below is then bounded by its wait budget only, as
@@ -388,6 +420,20 @@ _sc_supervise(){
     kill -9 "$timer" 2>/dev/null
     _sc_kill_run "$body"
     wait "$body" 2>/dev/null; rc=$?
+    # WHAT THAT SECOND WAIT GIVES IS NOT ALWAYS A VERDICT (claude-config#3333). A run can end by
+    # itself just as the stop comes. Measured on 2026-11-21 on a Mac, bash 3.2, in 5 staged calls of
+    # 5 (the gate held with SIGSTOP in the first wait, its run then ended with 2, the signal sent,
+    # the gate let go on): bash left the first wait for the signal after it had been handed the
+    # run's end and before it recorded it, the kill found nothing, this wait found no child and
+    # gave -1, and the gate exited 255 over a run that had refused. The -1 is what that bash puts
+    # in $? itself, not a 255: the refusal of the same staged call, once this was fixed, read
+    # "bash gave -1 for the run", and it is the exit with it that comes out as 255. So the test
+    # below needs both of its arms, the one below 0 for that bash and the one above 126 for a bash
+    # that hands over 255 or 127 instead. An answer here is read as the run's own only from 0 to
+    # 126. 137 is the kill above, refused below as the stop. Anything else (below 0, 127 for a
+    # child bash no longer knows, an end by another signal) is no verdict, and a gate with no
+    # verdict refuses: it says what bash gave and shows what the run had printed.
+    if [ "$rc" -ne 137 ] && { [ "$rc" -lt 0 ] || [ "$rc" -gt 126 ]; }; then no_code="$rc"; fi
     # And on the timer it killed, standard error closed like the wait above, so that bash's report
     # of the timer's end is never in the refusal. Left unwaited, a timer slow to die was reported
     # at the next command this process waited for: seen on 2026-11-21 at a load average above 100,
@@ -404,6 +450,14 @@ _sc_supervise(){
   if [ -n "$_sc_stopped" ] && [ "$rc" -eq 137 ]; then
     _sc_stop_keyless_runs
     _sc_stop_refuse "$_sc_sup_dir"
+    exit 2
+  fi
+  # Stopped as its run ended, with no exit code of the run's to go by: refused, never passed on.
+  # The gate cannot know the run stopped its own runs without a key, so it stops any still going,
+  # as the stop above does; one that has written its exit code has finished and is left.
+  if [ -n "$no_code" ]; then
+    _sc_stop_keyless_runs
+    _sc_stop_refuse_no_code "$no_code" "$_sc_sup_dir"
     exit 2
   fi
   cat "$_sc_sup_dir/out" 2>/dev/null
