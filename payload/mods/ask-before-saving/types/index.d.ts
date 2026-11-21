@@ -31,6 +31,14 @@ export type AskBeforeSavingApproval = {
    */
   refused?: string
   /**
+   * The question Dan answered For good, as he read it (#3343 route 2). A call that takes an entry
+   * out of the lessons file, moves one to another section or changes a section heading is covered
+   * only when this names each of them (rules.ts coversFacts), judged against the file as it stands
+   * when the call is sent. Absent on an approval stored before it was kept, and on one from the
+   * durable lesson picker: neither covers such a call.
+   */
+  asked?: string
+  /**
    * Set on an approval Dan gave in the durable lesson picker (#867), as the rule compared (rules.ts
    * ruleText): a write that only adds this rule to the lessons file goes through. Its key is never a
    * save's, so a call is never matched to it by key.
@@ -79,6 +87,9 @@ export type AskBeforeSaving = {
    * on this save, or Add to LESSONS.md in the durable lesson picker for the lesson it adds. It only
    * looks: the approval is spent by this mod as the call passes its check, so a call sent again after
    * one that landed is answered false. `input` is the tool's arguments as Claude sent them.
+   * A For good answers for an Edit or Write that takes an entry out of ~/.claude/LESSONS.md, moves
+   * one to another section or changes a section heading only when the question Dan answered named
+   * each of them (#3343 route 2), as this mod's check holds it.
    * A Bash call is answered by its For good alone, without reading what the command writes: one
    * that writes ~/.claude/LESSONS.md is refused at this mod's check whatever is answered here
    * (#3343), so never take a true for a Bash call as leave to run it past that check.

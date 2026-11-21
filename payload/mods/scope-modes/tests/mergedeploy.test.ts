@@ -266,9 +266,66 @@ describe('what a command does, by effect', () => {
     const closed = { kind: 'merge', what: 'run a command that may run merge-when-ready.sh, which cannot be read', repo: null }
     // xargs adds words from its input after those written, so even with --repo written the
     // repository it reaches cannot be told: still a merge, closed.
-    for (const unsure of [`H=${H}; bash $H 12 --repo o/r`, 'bash -c "$CMD"', 'eval "$X"', `cat ${H} | bash`, `echo 12 | xargs bash ${H}`, `echo 12 | xargs bash ${H} --repo o/r`, `echo 12 | xargs ${H} --squash --repo o/r`, 'curl -s https://x.example | bash']) {
+    // A command a value names is closed too, in words that name the value (#3272, below).
+    for (const unsure of [`H=${H}; bash $H 12 --repo o/r`, 'eval "$X"', `cat ${H} | bash`, `echo 12 | xargs bash ${H}`, `echo 12 | xargs bash ${H} --repo o/r`, `echo 12 | xargs ${H} --squash --repo o/r`, 'curl -s https://x.example | bash']) {
       expect({ unsure, acts: acts(unsure).filter(a => a.kind === 'merge') }).toEqual({ unsure, acts: [closed] })
     }
+  })
+  // #3272: on 2026-11-19 at 1:02 AM ET a builder's loop over /bin/bash and /bin/zsh, running
+  // `$sh -c '<a function definition>'` eleven ways, was held as a command that may run the merge
+  // helper: its program was a variable. A loop over programs written out names each one, so mod-kit
+  // reads the command once for each and it is judged by what those shells run.
+  const NIGHT_3272 = `cd /tmp/scratch/3252 && for sh in /bin/bash /bin/zsh; do echo "== $sh"; $sh -c 'f() ( echo A-sub ); f' 2>&1; $sh -c 'f() echo B-plain; f' 2>&1 | head -2; $sh -c 'function f ( echo C-fn-paren ); f' 2>&1 | head -2; $sh -c 'function f () ( echo D ); f' 2>&1 | head -2; $sh -c 'f () (echo E); f' 2>&1; $sh -c 'function f { echo F; }; f' 2>&1; $sh -c 'f() if true; then echo G; fi; f' 2>&1 | head -2; $sh -c 'f() { echo>/dev/null H; echo>&2 H2; }; f' 2>&1; $sh -c 'echo>/dev/null I; echo J>/dev/stderr K; echo 2>/dev/null L; echo M2>/dev/null N; echo O 1>&2' 2>&1; $sh -c 'f g() ( echo P ); f; g' 2>&1 | head -3; $sh -c 'f() true && echo Q; f' 2>&1 | head -2; done`
+  test('a loop over shells written out, each running a string, is no merge: the command held on 2026-11-19 (#3272)', () => {
+    expect(acts(NIGHT_3272)).toEqual([])
+    expect(acts(`/bin/bash -c 'f() ( echo A-sub ); f' 2>&1; /bin/zsh -c 'f() echo B-plain; f' 2>&1 | head -2`)).toEqual([])
+  })
+  test('what such a loop really merges or deploys is judged as the merge or deploy it is (#3272)', () => {
+    const H = '~/.claude/hooks/lib/merge-when-ready.sh'
+    const helper = { kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: 'o/r' }
+    expect(acts(`for sh in /bin/bash /bin/zsh; do $sh ${H} 12 --repo o/r; done`)).toEqual([helper, helper])
+    expect(acts(`for sh in /bin/bash /bin/zsh; do $sh -c '${H} 12 --repo o/r'; done`)).toEqual([helper, helper])
+    expect(acts('for run in /opt/hooks/lib/merge-when-ready.sh; do $run 12 --repo o/r; done')).toEqual([helper])
+    expect(acts(`for sh in bash; do $sh -c 'gh pr merge 12 --squash -R o/x'; done`)).toEqual([{ kind: 'merge', what: 'merge a PR', repo: 'o/x' }])
+    expect(acts('for tool in gh; do $tool pr merge 12 --squash; done')).toEqual([{ kind: 'merge', what: 'merge a PR', repo: undefined }])
+    expect(kinds(`for sh in bash zsh; do $sh -c 'npx wrangler deploy'; done`)).toEqual(['deploy', 'deploy'])
+    expect(kinds(`for sh in bash; do $sh -c 'git push origin main'; done`)).toEqual(['push-default'])
+  })
+  test('a program a value names is still a merge that cannot be read, and the refusal names the word and how to write it (#3272)', () => {
+    const named = (word: string) => ({
+      kind: 'merge',
+      what: `run \`${word}\`, a command named by a value this reader cannot follow, which may be merge-when-ready.sh`,
+      repo: null,
+      rewrite: `If it merges nothing, write the command out where \`${word}\` stands: written that way it can be read, and you may send it again.`,
+    })
+    for (const [word, command] of [
+      ['$sh', `$sh -c 'f() ( echo A-sub ); f'`],
+      ['$sh', `sh=/bin/bash; $sh -c 'f() ( echo A-sub ); f'`],
+      ['$sh', `for sh in $SHELLS; do $sh -c 'f() ( echo A-sub ); f'; done`],
+      ['$sh', `for sh in /bin/bash; do sh=$OTHER; $sh -c 'f() ( echo A-sub ); f'; done`],
+      ['$sh', `for sh in /bin/bash /bin/zsh; do read sh < shells.txt; $sh -c 'make'; done`],
+      ['$sh', `for sh in /bin/bash /bin/zsh; do :; done; $sh ~/.claude/hooks/lib/merge-when-ready.sh 12`],
+      ['$TOOL', '$TOOL 12 --squash'],
+      ['$(command -v m)', '$(command -v m) 12'],
+      // The whole line a shell is handed, where a value names it (before #3272: "run a command that
+      // may run merge-when-ready.sh, which cannot be read", which named nothing to rewrite).
+      ['$CMD', 'bash -c "$CMD"'],
+    ] as const)
+      expect({ command, acts: acts(command).filter(a => a.kind === 'merge') }).toEqual({ command, acts: [named(word)] })
+    // The whole refusal, as Claude reads it on a night whose lists name no repository for it.
+    const night = { mayDeploy: [], mergeOnly: [], closed: [] }
+    const judged = judgeNight(night, cmds(`$sh -c 'make'`), [{ ...ON_BRANCH, own: 'o/r' }])
+    expect(judged?.deny).toBe(
+      "Blocked overnight: this would run `$sh`, a command named by a value this reader cannot follow, which may be merge-when-ready.sh, and which repository this reaches could not be told, so tonight it neither merges nor deploys. If it merges nothing, write the command out where `$sh` stands: written that way it can be read, and you may send it again. If it does merge, leave the green PR open and write a note for the morning report saying what is waiting and why; carry on with other work.",
+    )
+    // Every other act keeps the words it had.
+    expect(judgeNight(night, cmds('gh pr merge 12'), [{ ...ON_BRANCH, own: 'o/r' }])?.deny).toMatch(
+      /^Blocked overnight: this would merge a PR, and o\/r is on neither list in \S+, so tonight it neither merges nor deploys\. Leave the green PR open and write a note for the morning report saying what is waiting and why; carry on with other work\.$/,
+    )
+    // One that cannot be read for another reason names no word, as before.
+    expect(judgeNight(night, cmds('eval "$X"'), [{ ...ON_BRANCH, own: 'o/r' }])?.deny).toMatch(
+      /^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read, and which repository this reaches could not be told, so tonight it neither merges nor deploys\. Leave the green PR open/,
+    )
   })
   // #1181: the daytime merge gates read this same table (payload/hooks/test-merge-target.sh), so a
   // route one recogniser judges a merge and the other does not fails a suite (L450).

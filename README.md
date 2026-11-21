@@ -2683,7 +2683,7 @@ alone). With the lock free the whole gate took 38 to 43 seconds, three readings 
 to 35 on 2026-11-01, the slowest scanner `test-suite-scratch-isolation.sh` at 35 to 41 seconds, and
 41 again during another builder's full run at 44 to 51. After the move, with the lock held for the
 whole run, it passed in 60 seconds at load average 160, the slowest scanner 51 seconds and the moved
-scan 7, so the 150 second budget stays
+scan 7, so the 150 second budget stayed (140 since #3357, which put a hard stop over the whole run)
 
 </td></tr>
 <tr><td>
@@ -3253,7 +3253,7 @@ passed on its own tree. The merge is written beside the file and renamed over it
 push writing at the same moment never loses a pass. A tree's file nobody has added to for a day is
 removed by the next write. A pass that could not be written is said, and the next push runs it again.
 
-The gate stops itself at a budget of 150 seconds, inside the 180 its registration declares (#1881).
+The gate stops waiting at a budget of 140 seconds (150 until #3357), inside the 180 its registration declares (#1881).
 Claude Code lets a tool call through when it kills a PreToolUse hook at its timeout (its hooks
 documentation says so, and a headless probe on Claude Code 2.1.312 confirmed it on 2026-10-28), and
 on that day the gate was killed at 180 seconds on three of three readings at a load average of about
@@ -3261,6 +3261,18 @@ on that day the gate was killed at 180 seconds on three of three readings at a l
 each scanner still running. The scanners that finished and passed are remembered, so a retry does
 not run them again. The registration also carries `onFailure: "block"`, so a gate killed despite
 its budget blocks the push rather than passing it.
+
+That budget bounds only the wait on the scanners. On 2026-11-20, at load averages of 110 to 160,
+four pushes were refused with nothing but Claude Code's `[command hook 23]: timed out` (hook 23 is
+this gate, counting the distinct command lines of the event as Claude Code 2.1.330 does), because
+every step before and after the wait ran with no bound: the commit message check and its live
+list, the listings of the repository, the key, and a 5 second lock per scanner that every worktree
+shares (#3357). So the gate now runs as two processes. The one Claude Code started supervises the
+other against a hard stop at the budget plus 20 seconds and never past 160; at the stop it ends the
+run, refuses in its own words, says what the run was doing and how many seconds its clock started
+after its process did, and exits 2. The budget is 140 seconds (150 until #3357), so the 20 seconds
+left of Claude Code's 180 cover the time before the gate's clock starts, which Claude Code's limit
+counts and the gate cannot, and the stop itself, which is builtins only.
 
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
@@ -3923,9 +3935,9 @@ sanctioned route past the gate:
 
     cd <the project> && <this Mac's home>/.claude/hooks/no-network-run.sh node --test test/notify.test.js
 
-`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
-network operation. Every process the command starts inherits that, a detached one included, and none
-can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox that denies every network
+operation, and since #3288 a hand off to something outside the sandbox as well (below). Every
+process the command starts inherits that, a detached one included, and none can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
 command's own exit code comes through unchanged. The gate passes a call that is that installed file
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
@@ -3973,10 +3985,41 @@ exactly as it was before:
   2, a closed one, a here string, a target with a variable or a pattern in it, one glued to a word,
   and any name holding `/dev/tcp` or `/dev/udp`.
 
+A hand off is refused too (#3288, decided 2026-11-20: denied, the stricter answer, recorded on the
+issue). A request to launchd or to another app is not a network operation, so under the network
+rule alone a command could have something outside the sandbox act for it: write an HTML page whose
+form submits itself, open it, and the browser posts. The profile now also refuses:
+
+- To start `open`, `osascript` and `launchctl`, each by its real path, and with them `crontab`
+  (cron runs what it is given, outside the sandbox) and `shortcuts` (a Shortcut is run by another
+  process). The list is `HANDOFFS` in the wrapper. A link to one is refused as the file is. A test
+  that puts a stand in of the same name on its `PATH` is not affected: the rule goes by the real
+  path.
+- The requests themselves, whoever makes them: to have something opened (`lsopen`), to send an Apple
+  event to another app (`appleevent-send`), and to have launchd make a job (`job-creation`, which
+  this sandbox already refused before the rule was written out).
+
+Measured 2026-11-20 on macOS 26.6.2, on the personal MacBook. The five programs start outside the
+wrapper and are refused under it, each started with `--help`, which prints its usage and ends. The
+three requests were asked of the sandbox (`sandbox_check`, the question the system's daemons put
+about a caller) and not made: allowed outside the wrapper, denied under it. Nothing was opened,
+scripted or loaded to find out, since a request that turned out not to be refused would have acted
+on a Mac in use.
+
+What it cost, counted before the rule was built (2026-11-20, the personal MacBook's session records
+only; the work MacBook's are not on this Mac). Of the 51 Bash calls that started the wrapper since
+its first on 2026-11-19, none names one of those programs, and none of the files those calls name
+that are still on disk (7 calls name one) starts one. Of the 279 calls the Slack drafts gate
+refused since 2026-11-08, the runs the wrapper exists for, none starts one either: 1 spells `open`
+and 25 name a file that does, and every one of those is the Python function, a word in a table or
+prose. This repository's own suites start none of them for real: the ones that concern `launchctl`
+or `osascript` put a stand in on the `PATH` or replace the call, and several refuse to run
+otherwise. So nothing was exempted.
+
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
-under the wrapper, which is what makes an accidental post from a test impossible. It does not
-contain code written to get out. The sandbox allows every file write, so such code can leave
-something behind for a later call, or ask another program to act for it:
+under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
+hand offs above. It does not contain code written to get out. The sandbox allows every file write,
+so such code can leave something behind for a later call, or reach something the rules do not name:
 
 - A file a later call reads without the gate reading it. Every Bash call starts a login shell, which
   reads `~/.zshenv`, `~/.zprofile` and `~/.zlogin`, and the gate reads none of them. The same holds
@@ -3984,14 +4027,27 @@ something behind for a later call, or ask another program to act for it:
   program in a folder on the `PATH` that the user can write, several of which stand ahead of
   `/usr/bin` on these Macs. A command under the wrapper can write any of them unread. The gate on
   main already passes some such writes when they only mention an address; under the wrapper the
-  writer is not read at all.
-- A command that asks something outside the sandbox to act for it without using the network. A
-  request to launchd or to another app is not a network operation, so what `launchctl`, `osascript`
-  or `open` has started runs outside the sandbox. `open` takes one line and no setup: a command
-  under the wrapper can write an HTML page whose form submits itself to an address and open it, and
-  the browser, which is not in the sandbox, posts. Read from the profile, which denies the network
-  and allows everything else; not run. The profile was left as it is: denying those requests too
-  would be a change of design, for Dan to decide.
+  writer is not read at all. A file left in a folder that something outside the sandbox watches is
+  the same thing and is not refused: a plist in `~/Library/LaunchAgents` is read by launchd at the
+  next login. A rule on that one folder would be a name on a list, and could not be seen to fail
+  without writing into the real folder.
+- A hand off the rules above do not name (measured 2026-11-20, macOS 26.6.2):
+  - A copy of one of the programs. A plain copy is ended by macOS itself before it runs, with or
+    without the wrapper (the crash record gives a launch constraint as the reason). A copy signed
+    again on this Mac is no longer Apple's program: it starts under the wrapper, and the rule on
+    its path does not see it. The suite holds that as measured. What stands in its way is the rule
+    on the request, which was asked and not exercised.
+  - Any program written to make one of those requests itself, for the same reason.
+  - A service found by its name (`mach-lookup`), which is how most requests to something outside a
+    process begin. It is still allowed, the clipboard's service in the suite's case. Denying every
+    such lookup was tried on 2026-11-20 against 31 ordinary things a test does: 21 answered as
+    before, and 10 did not (`id -un`, `whoami` and `ls -l` gave the number 501 for the name, Python's `pwd.getpwuid`
+    and Node's `os.userInfo()` failed, git could not name an author where none was set, Node's
+    `fs.watch` failed, and `defaults read`, `security list-keychains` and `pbpaste` read nothing).
+    Allowing the lookups those need would be a list of exemptions, which is Dan's to decide, so
+    the profile was left without the rule.
+  - Whether launchd acts on any other request from a copy of `launchctl` (start a job that is
+    already loaded, set a variable) was not tried, since trying changes what launchd holds.
 - A connection that was already open when the wrapper started. The sandbox refuses a new connection
   and does not stop a write to one handed down to the command (measured 2026-11-19). The rule above
   is what keeps a call from opening one first. A unix domain socket whose listener is outside the
@@ -4013,10 +4069,18 @@ something behind for a later call, or ask another program to act for it:
   and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
   which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
   is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
-  tool).
+  tool). The programs it refuses to start are proved the same way on every run (#3288): each is
+  started with `--help` outside the sandbox, where it must start, and inside it, where it must be
+  refused with a permission error, and if one starts inside, the command is not run (exit 70). A
+  listed program that is not on the machine at all is passed over. The requests (`lsopen`,
+  `appleevent-send`, `job-creation`) are in the same profile and are asked by the suite, not on
+  every run. One reading of what the added proof costs (2026-11-20, five runs of `/usr/bin/true`
+  each, other agents running on the Mac): about 0.35 s a run before and 0.73 s after. A second
+  reading was not taken, so this is the size of it and no more.
 
 Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
-their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+their tests with no network, and whether any of them starts one of the programs now refused (the
+count above is the personal MacBook's alone). Suites: `test-no-network-run.sh` (the wrapper, against a listener the
 suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
@@ -7266,7 +7330,14 @@ command substitution, `derived` (#2141): what its substitutions run and, where e
 of a heredoc or a here string, the text it puts in the word, kept apart from the word as typed, or
 else `unresolved` with why, never empty and never safe; and `unread` (#2983, #3021), why what a
 command runs cannot be read from its words: `eval`, a command a value names (`"$@"`, `$cmd`,
-`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`), setting an alias,
+`$(command -v x)`, never a path spelled after one such as `"$HOME/bin/tool"`, and since #3272 never
+the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, which is read once for each word as if typed with it, and only where every word of the list
+is plain characters as typed and nothing else in the line could have given the variable another
+value: a list from a variable, a substitution, a pattern, braces or a file, a quoted word, the name
+handed to a builtin or set in a sum, any other value the shell fills in, a pattern character or a
+brace the shell may act on, `eval`, `source`, a trap, an alias or a heredoc each leave it unread),
+setting an alias,
 `ssh`, a trap whose text the shell expands, and a single word `rtk proxy` splits into a command, so
 every guard holds or refuses it rather than judging its words alone), and `env` (#3093), the
 settings a command is run with, each `NAME=value` written in front of it or given to a runner before
@@ -7321,7 +7392,12 @@ zsh only a `bash -c` or `sh -c` script is split), which the design round guard, 
 the collision guard and scope modes' overnight LESSONS.md check judge as a write of each file
 (#1592), as winding down counts each among this session's uncommitted work (#1664), and which no
 build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
-(a checkout or restore carrying `from`, where git puts the file back from, #1158), which winding
+(a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
+relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
+when it runs outside that folder, and left in the folder the command runs in, where it was placed
+before, when that folder cannot be known: a value the shell fills in, or `GIT_DIR` or
+`GIT_WORK_TREE` set by an earlier command on the line; that path is a guess, kept so the guards
+that skip an entry with no path judge the calls they always did), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
 log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in
@@ -7335,7 +7411,11 @@ by every mod that needs it), of what Dan and Claude are told when he types an an
 question instead of choosing one (`$.modkit.typedAnswer({ guard, typed, still, again })`, #1145: a
 toast saying it was not recorded, and Claude told to say so, answer what he said and ask the same
 question again, used by the design round guard and ask before saving), of git commands
-(`$.modkit.git`), of gh commands (`$.modkit.gh({ words })`: the subcommand and action past gh's
+(`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
+#3337, the repository and the working folder the command names apart from that folder, by
+`--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
+from the `env` that `pipeline` gives the command), of gh commands
+(`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
 fields, the repository its endpoint names as gh reaches it and its GraphQL document; moved here from
@@ -7999,7 +8079,9 @@ for word in the question) approves the one Edit or Write that only adds that rul
 other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
 under a For good and under his own "from now on" words alike; a write that touches no entry still
 asks. Since #3343 a shell command that writes that file is refused too, with Edit or Write named in
-its place (told in full below).
+its place, and the For good question about a write that takes an entry out, moves one to another
+section or changes a section heading is refused until it names each of them (both told in full
+below).
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -8056,8 +8138,8 @@ is refused in words that send the session to the lesson picker, and no question 
 either, a route the lessons review at the push found still open.
 An entry is every line the file's reader gives it, down to the
 next entry or section heading. A write that touches no entry (a section heading, an entry taken
-out whole, text above the first section) is asked about as before, and so was a shell command
-until #3343, below. Changing
+out whole, text above the first section) is still asked about For good, held since #3343 to what
+it does, and a shell command was asked about until #3343 (both below). Changing
 an entry already in the file therefore takes the lesson picker for the entry as it should read,
 then the old one taken out and the new one added. Length is counted in bytes, as the index cap
 counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
@@ -8083,11 +8165,40 @@ standing for the same command does not cover it, and neither do Dan's own "from 
 command whose words show that it only reads the file runs unasked, as ever: `cat`, `grep`, `wc`,
 `sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
 program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
-Left as they were: a checkout's `payload/LESSONS.md` and a write that touches no entry, which are
-Dan's to decide on #3343; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+Left as they were: a checkout's `payload/LESSONS.md`, which Dan decided on #3343 to guard at the
+merge and is not built yet; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
 variable only a command's output sets), which is as likely a scratch copy and is asked about as
 before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
 with no word of the command naming it, which no reader of the words can see.
+Since #3343 (Dan, 2026-11-20: "For good, held to facts") the For good question about an Edit or
+Write of `~/.claude/LESSONS.md` that touches no entry's words is held to what the write does. It
+was asked in the session's own wording, so an entry could leave every session, or its index line
+move to another file, under a question that named nothing. The mod reads the file as it is and as
+the write would leave it (rules.ts `lessonFacts`, from the one walk `entriesTouched` uses) and
+finds three things: the entries taken out whole; the entries left word for word under another
+section heading, one put above the first heading among them, in no section; and the section
+headings taken out or added, a renamed heading being one of each. The question is refused, before
+Dan is asked, unless it names every one: each entry by its number as a whole token (`L17` is not
+named by `L174`, `XL17` or `l17`, and a range names only its two ends) and each heading in double
+quotes, word for word as it is written after `## ` (`unnamed`). The refusal says what the write
+does and which names are missing, and the refusal of the save says so first, so the question can
+be asked right at once. A renamed heading is named old and new, and the entries under it are not:
+a heading counts as renamed when every entry that stood under the old one stands under the new one
+and nothing else does. Any other entry whose heading changes is named, those under a heading added
+above them and those left by a heading taken out included, since their index lines change file.
+His answer is held to the same facts when the call is sent: the approval keeps the question he
+read, and covers the call only if that question names what the call does to the file as it then
+stands, so a For good given before this rule, or while the same Edit took nothing out, does not
+let a removal through. His own "from now on" words cover such a write only when they name the
+same things. Asleep it is noted for the morning report as any save is, and the note says what it
+would take out. A lessons file that cannot be read is not written under any For good, since what
+would leave it cannot be told, and a heading that could not be shown to him as it is written
+cannot be named, so its save is refused in words that say so. Not held: text that is no entry's and
+no heading (above the first section, or between a heading and its first entry), blank lines,
+entries put in another order inside their section, and whole sections put in another order, none
+of which takes a rule out of an index, moves it to another file or renames one. The mod checks
+that a name is in the question, never what the question says about it. When the names do not fit
+the 20 rows a question may take, the change is made in smaller Edits.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
@@ -8174,10 +8285,24 @@ and `stash apply`; before one runs the guard asks git which files it would chang
 each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
 `git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
 this branch, or between the working tree and the commit for a reset,
-`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names, or, since #3337,
+where the command gives a mainline number past the first (`-m 2`, `--mainline 2`), the commits
+`git rev-list --no-walk` names, each read against the parent that number names, so a cherry-pick or
+revert of a merge commit is asked about what it brings in against that parent, and a number the
+guard cannot read, two that differ, or an option that may be the mainline one spelled another way
+holds the command,
 `git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
 untracked files, and `git merge-base` for the commit a merged one shares with the default branch
-(below); each look changing file is then judged
+(below); since #3337 a git command that names its repository or its working folder apart from the
+folder it runs in (by `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`) is read from that
+repository: every question is put to git with the command's own naming, first
+`git rev-parse --show-toplevel` for the folder its files land in, the files are judged in that
+folder's project, nothing is skipped as already on the default branch, `git am` places its patch
+there too, and a restore, `git rm` or `git mv` whose files git says land somewhere other than its
+words give (a repository that keeps its own working folder, as a submodule's does) is held; where
+the guard cannot tell which repository or folder is meant (a value the shell fills in, an empty
+one, `GIT_DIR` or `GIT_WORK_TREE` set by an earlier command on the line, git unable to answer) the
+command is held, saying why; each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
 a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
@@ -8841,8 +8966,17 @@ write whose repository cannot be resolved, whatever `rtk proxy` runs judged as t
 written plainly (mod-kit's reader reads it so for every mod since #2983, and a single word the shell
 expands, which rtk splits into a command, is refused as unread), since #3021 every other command
 mod-kit marks unread, refused with its reason (`eval`, a command a value names such as `"$@"` or
-`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands), and a write through `&>`,
-which was cut off before the write check and ran, and a line running gh that way
+`$cmd`, an alias being set, `ssh`, a trap whose text the shell expands; since #3272 a program that
+is the variable of a loop over words written out, `for sh in /bin/bash /bin/zsh; do $sh -c '...';
+done`, is read as each of those programs running that string and judged as if typed so, after a
+loop of that shape that merged nothing was held on 2026-11-19 as one that may run the merge helper,
+and where a value still names the program the hold names the word, `$sh`, and says to write the
+command out where it stands and send it again), code the reader cannot read (inline code that uses
+exec, eval or the like, or a program piped in), which since #3287 is refused saying what was seen
+("inline python that uses exec") and the one way to write it so that it is read, the code in the
+command itself with nothing built or loaded as it runs, never a file run by name, which no reader
+opens, while everything else on the list keeps "Do not look for another way", and a write through
+`&>`, which was cut off before the write check and ran, and a line running gh that way
 writing files only into the session notes folder or the scratchpad (#2937), LESSONS.md (a script
 file handed it as its argument included, #1592), write tools under claude.ai and PostHog, any
 Chrome call outside a tab the session created (recorded from its tabs_create_mcp result; since
@@ -8873,7 +9007,9 @@ subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
 and deploy runs since sleep began, and notes each for the top of the report. It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
-passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
+that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
+(#3282), a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
 not run. A failed, cancelled or timed out run is listed. An issue filed overnight is read whole,
@@ -9783,6 +9919,30 @@ UNMEASURED with the same command, as the type check above does, rather than fail
 where the workflow installs it, a compiler that does not start fails instead. (It no
 longer checks ask before saving's waiting saves against the goal tracker: since #777 the question
 is Claude Code's own dialog, which the goal tracker reads like any other question.)
+
+Every guard must sit in the same tier as the mods it watches, and that is the user tier for all of
+them: `CLAUDE_CODE_PLUGIN_DIRS` loads every mod there. Claude Code's types, in the comment on `Tier`
+since 2.1.328 (read on 2026-11-20 in the copy 2.1.329 wrote, never run), say a person's hooks do not
+hear a call an organization's mod makes, or what is raised beneath it, and that the organization's
+mods are those it seats in `prepend` or `append` and those it requires in `user`. So a mod seated
+higher could call a tool with the secret guard, ask before saving and the Slack drafts gate's mod
+side never hearing it, and nothing would say so. `tools/check-mod-tiers.sh` fails when one is,
+naming the mod, the file that seats it and each user tier mod whose hook on a tool event would not
+hear it (#3298). It reads what Claude Code reads: the managed settings file with each
+`managed-settings.d` file beside it (`prependPlugins`, `appendPlugins`, and an `enabledPlugins` entry
+from a remote marketplace those settings declare), and `~/.claude/settings.json`, whose own two lists
+seat a person's mod wherever nothing sets them aside and are counted as unheard, since the types do
+not say otherwise. A hook is any `on(` call, a member call such as `reg.on(` included, found by the
+matcher the screen scan's reader shares (`on_calls` in `tools/lib/ts_source.py`). Whatever it cannot
+read is exit 4 with words naming it, never a pass and never the exit 1 that names a seat: a hook
+whose event is not a plain string, a settings file or the folder it is in, a mod's source, the mods
+folder, or its own helper failing. It keeps no list of mods allowed higher, and its last line names
+what is in no file it can open: managed settings from a device management profile or the
+organization's server, and a plugin the starting app marks as required. `tests/test-mod-tiers.sh` runs it in every full
+suite run and in the pull request checks, on fixtures for each of those seats and on `payload/mods`
+with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
+through every hook but the calling one", the organization's included), so the guards could be seated
+higher along with a mod; none has been moved, and moving one is Dan's decision.
 
 ## Sleep mode
 

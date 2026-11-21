@@ -1815,6 +1815,8 @@ export type RunCommand = {
   folder?: string | null
   /** Why what it runs cannot be read from its words, as mod-kit says it (#3021); absent where it can. */
   unread?: string
+  /** The settings written in front of it, as mod-kit gives them: where a git command names its repository by GIT_DIR or GIT_WORK_TREE (#3337). */
+  env?: string[]
 }
 
 // The words the shell reads as its own grammar where a command begins, which no expansion ever is,
@@ -4037,7 +4039,9 @@ export const indexSource = (from: string): boolean => from === '' || from.starts
  * - `tree`: the files that differ between HEAD and the commit (a branch made from a start point,
  *   by `switch -c` or `checkout -b`), or with `worktree` between the working tree and it (a hard reset);
  * - `picks`: each commit's own files (`git log --no-walk`, which walks a range as cherry-pick does),
- *   with `revert` taken back to what its parent held;
+ *   with `revert` taken back to what its parent held; with `mainline` (#3337), the parent each
+ *   commit is read against where the command's mainline number names one past the first (each
+ *   commit `git rev-list --no-walk` names, then `git diff <commit>^<mainline> <commit>`);
  * - `stash`: the files a stash entry holds, its untracked ones included;
  * - `name`: a checkout or switch of one name (a branch, a commit), which git reads as a commit,
  *   else as the one remote branch of that name, each then read as the files that differ between
@@ -4046,7 +4050,7 @@ export const indexSource = (from: string): boolean => from === '' || from.starts
 export type MoveAsk =
   | { ask: 'merge'; commits: string[] }
   | { ask: 'tree'; commit: string; worktree?: true }
-  | { ask: 'picks'; revs: string[]; revert?: true }
+  | { ask: 'picks'; revs: string[]; revert?: true; mainline?: number }
   | { ask: 'stash'; entry: string }
   | { ask: 'name'; name: string; orPath: boolean }
 
@@ -4067,10 +4071,13 @@ const MOVE_VALUED: Readonly<Record<string, ReadonlySet<string>>> = {
 
 // A move's words apart: its operands, its options by name (`--onto=x` as `--onto`), whether words
 // follow a `--`, which a checkout reads as paths, and whether it ends in a `--` with nothing
-// after it, which names no path and says the word before it is a branch or commit.
-const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; flags: Set<string>; paths: boolean; ended: boolean } => {
+// after it, which names no path and says the word before it is a branch or commit. `values` is
+// each option written with a value, in order, with that value (#3337): one joined on with `=`, or
+// the next word of an option that takes one, undefined where the command ends before it.
+const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops: string[]; flags: Set<string>; values: [string, string | undefined][]; paths: boolean; ended: boolean } => {
   const ops: string[] = []
   const flags = new Set<string>()
+  const values: [string, string | undefined][] = []
   let dashes = false
   let after = 0
   for (let i = 0; i < args.length; i++) {
@@ -4079,14 +4086,43 @@ const moveWords = (args: readonly string[], valued: ReadonlySet<string>): { ops:
       ops.push(a)
       after++
     } else if (a === '--') dashes = true
-    else if (a.startsWith('--') && a.includes('=')) flags.add(a.slice(0, a.indexOf('=')))
-    else if (valued.has(a)) {
+    else if (a.startsWith('--') && a.includes('=')) {
+      flags.add(a.slice(0, a.indexOf('=')))
+      values.push([a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)])
+    } else if (valued.has(a)) {
       flags.add(a)
+      values.push([a, args[i + 1]])
       i++
     } else if (a.startsWith('-') && a !== '-') flags.add(a)
     else ops.push(a)
   }
-  return { ops, flags, paths: after > 0, ended: dashes && after === 0 }
+  return { ops, flags, values, paths: after > 0, ended: dashes && after === 0 }
+}
+
+// #3337 (Dan, 2026-11-20, added to the issue): the mainline number of a cherry-pick or revert, which
+// names the parent each commit is read against (`git cherry-pick -m 2 <merge>` brings in what the
+// merge holds against its second parent). Until then its value was taken as an option's and dropped,
+// so every commit was read against its first parent. Read from `-m N`, `--mainline N`,
+// `--mainline=N` and `-mN`, each of which git 2.51.1 was measured taking. Why not, where the number
+// cannot be read: no whole number from 1 to 99, two that differ, and any option that may be the
+// mainline one spelled another way, which is held rather than read as no number: a shortened
+// `--mainline`, `--no-mainline`, and `m` inside a run of short options, before any letter whose
+// value is joined on (`-X`, `-S`). Undefined where the command gives none.
+const MAINLINE = '--mainline'
+export const MOVE_MAINLINE_REMEDY = 'Write the mainline number as -m and a whole number (git cherry-pick -m 2 <commit>), on the command itself, and the guard reads it then.'
+const mainlineOf = (values: readonly [string, string | undefined][], flags: ReadonlySet<string>): { parent: number } | { unread: string } | undefined => {
+  const given = values.filter(([name]) => name === '-m' || name === MAINLINE).map(([, value]) => value ?? '')
+  for (const f of flags) {
+    if (f === '-m' || f === MAINLINE) continue
+    if (!f.startsWith('--') && f.startsWith('-m')) given.push(f.slice(2))
+    else if (f.startsWith('--') ? MAINLINE.startsWith(f) || f === '--no-mainline' : /^-[A-RT-WYZa-z]+m/.test(f))
+      return { unread: `it may give its mainline number, the parent each commit is read against, as ${f}, which the guard does not read` }
+  }
+  if (!given.length) return undefined
+  const bad = given.find(v => !/^[1-9]\d?$/.test(v))
+  if (bad !== undefined) return { unread: `it gives its mainline number, the parent each commit is read against, as ${bad === '' ? 'nothing' : bad}, which the guard cannot read as a whole number` }
+  if (new Set(given).size > 1) return { unread: `it gives more than one mainline number (${given.join(' and ')}), and the guard does not choose between them` }
+  return { parent: Number(given[0]) }
 }
 
 // A commit as a command names it that the guard hands to git: no value the shell fills in, no
@@ -4119,7 +4155,7 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
   // Its own keys only: a subcommand spelled like a member every object inherits (`constructor`)
   // finds no set here, never that member, which would throw where its options are read.
   const valued: ReadonlySet<string> = Object.prototype.hasOwnProperty.call(MOVE_VALUED, sub) ? (MOVE_VALUED[sub] as ReadonlySet<string>) : new Set<string>()
-  const { ops, flags, paths, ended } = moveWords(git.args, valued)
+  const { ops, flags, values, paths, ended } = moveWords(git.args, valued)
   const has = (...names: string[]) => names.some(n => flags.has(n))
   const asking = (ask: MoveAsk, refs: readonly string[]): GitMove => {
     const bad = refs.find(r => !namesCommit(r))
@@ -4145,7 +4181,10 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
   }
   if (sub === 'cherry-pick' || sub === 'revert') {
     if (resuming || !ops.length) return undefined
-    return asking({ ask: 'picks', revs: ops, ...(sub === 'revert' ? { revert: true as const } : {}) }, ops)
+    // The first parent is what `picks` always read, so only a later one is handed on (#3337).
+    const mainline = mainlineOf(values, flags)
+    if (mainline !== undefined && 'unread' in mainline) return { said, unread: mainline.unread, remedy: MOVE_MAINLINE_REMEDY }
+    return asking({ ask: 'picks', revs: ops, ...(sub === 'revert' ? { revert: true as const } : {}), ...(mainline !== undefined && mainline.parent > 1 ? { mainline: mainline.parent } : {}) }, ops)
   }
   if (sub === 'switch') {
     if (has('--orphan')) return { said, unread: 'git switch --orphan takes every tracked file out of the working tree, which the guard does not read' }
@@ -4227,6 +4266,9 @@ export const pickedFiles = (stdout: string, revert = false): MovedFile[] | undef
 
 /** The most look changing files one move may bring in and still be read one by one (#3279): each costs a read of git, about 15 ms measured on 2026-11-20. */
 export const MOVE_FILES_MAX = 300
+
+/** The most commits one cherry-pick or revert with a mainline number may name and still be read one by one (#3337): each costs one read of git, as a file above does. */
+export const MAINLINE_PICKS_MAX = 50
 
 /**
  * What a call is told when a git move in it could not be read (#3279): what it brings into the
