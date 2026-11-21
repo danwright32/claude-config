@@ -871,24 +871,24 @@ const listed = async ($: Parameters<typeof call>[0]) => {
   return JSON.parse(text) as Listed
 }
 const ids = (rs: SessionLike[]) => rs.map(r => r.sessionId).sort()
-const timed = async (f: () => Promise<unknown>) => {
-  const t = performance.now()
-  await f()
-  return performance.now() - t
-}
-const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] as number
-// A test that times its subject against a yardstick taken in the same run is judged by that
-// comparison alone, so its own time limit is set where only a hang reaches it (#1016, L224, L743).
-// The runner's 5,000 ms default is a fixed number, and it measured the machine instead: on
-// 2026-10-09 the #911 test ran in 600 ms on a quiet Mac, and failed three times out of three at
-// 6,500 to 8,200 ms with 96 processes burning the CPU beside it, with nothing broken. Under that
-// load, given room, it passed five times out of five in 7,200 to 14,200 ms, every list after the
-// archive still over fifty times faster than the yardstick. Two minutes is over eight times the
-// slowest of those, and a list that never answers still fails. Since #1577 that two minutes is every
-// mod test's, held once in mod-kit's tests/hang-ceiling.ts, which `test` above comes from.
+// What a list costs is what it asks of the filesystem: every record it reads and every folder it
+// lists. On 2026-10-07 those requests, under load, were the ten seconds, so they are what the #911
+// test counts, from the record the world above keeps of them. Until #3333 it read a clock. First
+// the runner's 5,000 ms judged it, a fixed number that measured the machine: on 2026-10-09 it ran
+// in 600 ms on a quiet Mac and failed three times out of three beside 96 processes burning the CPU,
+// with nothing broken (#1016). Then it timed each list against a yardstick list timed in the same
+// run, the median of five against the median of three (L224, L656), and that ratio still moved
+// with load: on 2026-11-20 it failed once at a load average of 164 on 12 cores and passed alone at
+// about 60, again with nothing broken. Measured on 2026-11-21 over five runs at load averages of
+// 130 to 216: the yardstick list took 160 to 471 ms and the list after the archive 0.9 to 7.3 ms,
+// while the first made 2,003 requests and the second 4 in every run. The count is the thing the
+// time stood in for, and it does not move with load (L290). A list that never answers still fails,
+// at the two minutes every mod test has from mod-kit's tests/hang-ceiling.ts (#1577), which `test`
+// above comes from.
+const asked = (w: { reads: string[]; lists: string[] }) => w.reads.length + w.lists.length
 const job = { id: 'b1', command: 'npm run dev', outputPath: '/tmp/b1.output', pgid: 4242, startedAt: NOW - 3 * HOUR }
 
-test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', withConsumer, async ($, on) => {
+test('2,000 closed records and 2 open ones are listed with under a tenth of the requests a list of every record makes (#911)', withConsumer, async ($, on) => {
   const ended = NOW - 2 * HOUR
   const open = { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/o2.json`]: recOf('o2', { lastSeen: NOW - MIN }) }
   const w = world(on, { files: { ...open } })
@@ -896,19 +896,27 @@ test('2,000 closed records and 2 open ones are listed in a tenth of what reading
     for (const p of Object.keys(w.files)) if (p.startsWith(`${DIR}/`) && !(p in open)) delete w.files[p]
     for (let i = 0; i < 2000; i++) w.files[`${DIR}/${tag}${i}.json`] = recOf(`${tag}${i}`, { closedAt: ended, lastSeen: ended })
   }
-  // The yardstick, taken in this run on this machine as loaded as it is (L224): a list that must read
-  // all 2,002 records, the work every list did before #911. Three piles under names never seen, so
-  // nothing one list remembers can serve the next, and the median of the three (L656).
+  const requests = async (f: () => Promise<unknown>) => {
+    const before = asked(w)
+    await f()
+    return asked(w) - before
+  }
+  // The yardstick: a list that must read all 2,002 records, the work every list did before #911.
+  // Three piles under names never seen, so nothing one list remembers can serve the next.
   const yard: number[] = []
   for (const tag of ['a', 'b', 'c']) {
     pile(tag)
-    yard.push(await timed(() => listed($)))
+    yard.push(await requests(() => listed($)))
   }
+  // The yardstick is what it is named for, a read of every record each time, or a tenth of it
+  // would be a tenth of nothing much (L1).
+  for (const n of yard) expect(n).toBeGreaterThanOrEqual(2002)
   // Pile c, closed two hours ago, is what a session finds when it starts, as on 2026-10-07.
   await start($)
   const after: number[] = []
-  for (let i = 0; i < 5; i++) after.push(await timed(() => listed($)))
-  expect(median(after) * 10).toBeLessThan(median(yard))
+  for (let i = 0; i < 5; i++) after.push(await requests(() => listed($)))
+  // Every list after the start, against the cheapest yardstick list.
+  expect(Math.max(...after) * 10).toBeLessThan(Math.min(...yard))
   const l = await listed($)
   expect(ids(l.open)).toEqual(['o1', 'o2', 's1'])
   expect(l.unreadable).toEqual([])

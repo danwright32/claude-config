@@ -9853,9 +9853,12 @@ It also fails a mod test that times its subject (`performance.now`, `process.hrt
 arithmetic, in the test or in any helper it calls) without a `timeoutMs` in its own options, by
 file, line and test name, again from the files alone (#1016). `claude plugin test` gives every test
 5,000 ms, a fixed number, so such a test is judged by how busy the Mac is: session-registry's #911
-test, which compares a list against a yardstick measured in the same run, failed at that limit
+test, which then compared a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
-judgement, and the test's own limit is set where only a hang reaches it.
+judgement, and the test's own limit is set where only a hang reaches it. That test reads no clock
+since #3333: its ratio of two times still moved with load (it failed once at a load average of 164
+on 12 cores on 2026-11-20), so it counts what each list asks of the filesystem, 2,003 requests
+against 4, which no load changes.
 Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
 mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
 mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has
