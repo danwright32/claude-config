@@ -359,11 +359,12 @@ _sc_supervise(){
   #   returned and before it records the child it was handed (bash 5.2.37 jobs.c, CHECK_WAIT_INTR),
   #   and the timer signalled and exited in the same breath. A gate woken late could be handed
   #   both at once, never learn its timer had gone, and then wait on that timer for as long as it
-  #   had any other child. Linux hands a waiter a finished child ahead of a pending signal; macOS
-  #   does not, and 300 such exits on this Mac lost none. It fits the one failure there is: on
-  #   2026-11-21, on GitHub's Linux runner, the suite's case with a ps that never returns sat silent
-  #   until its 50 second deadline, and that case alone gave this process a third child that
-  #   outlived the stop.
+  #   had any other child. That Linux hands a waiter a finished child ahead of a pending signal,
+  #   and macOS does not, is recalled and was not read or measured; what was measured is that 300
+  #   such exits on this Mac lost none. The reading fits the one failure there is: on 2026-11-21,
+  #   on GitHub's Linux runner, the suite's case with a ps that never returns sat silent until its
+  #   50 second deadline, and that case alone gave this process a third child that outlived the
+  #   stop. The suite prints what each machine's bash does, as a note, on every run.
   # So: the timer goes on signalling, once a second, for as long as this process is still its
   # parent (a pid that has become another process is never signalled), and it does not exit until
   # it is killed, so its exit never arrives with its signal. Once stopped, this process ignores the

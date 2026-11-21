@@ -1593,9 +1593,9 @@ gate_left(){   # $1 = the TMPDIR the call was given -> what the gate's leftover 
   [ -n "$any" ] || printf ' [the gate left no folder, so it ended by itself and removed it]'
 }
 # Seen to print (L1, L322: the folder is where the call's TMPDIR says only if the gate honours it).
-# The same hung run as above with its stop far off, killed at a 5 second call deadline of its own.
-# Only that the run's step was there to print is asked, never which step, since how far a run gets
-# in 5 seconds is the machine's load (L290).
+# The same hung run as above with its stop far off, killed at a 5 second call deadline of its own
+# (a setting, not measured). Only that the run's step was there to print is asked, never which
+# step, since how far a run gets in that time is the machine's load (L290).
 TMP3333d="$TMPROOT/tmp3333d"; mkdir -p "$TMP3333d"
 : > "$TMPROOT/slowshim.pids"
 o3333d="$(TMPDIR="$TMP3333d" PATH="$SLOWBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" SCANNERS_BUDGET_SECONDS=100 \
@@ -1681,13 +1681,19 @@ else
 fi
 [ -n "$_pid3333g" ] && kill -9 "$_pid3333g" 2>/dev/null
 # The same before a polite stop of the gate itself, which ends the run with it: the gate is fired
-# in the background, told to end once its run has started, and the run must be gone.
+# in the background, told to end once its run has started, and the run must be gone. It is told
+# only once it says it is waiting for its run (the record it leaves in a temporary folder of its
+# own), since a gate told to end in the instant between starting its run and noting the run's pid
+# has no pid to end; a gate that never says so is told after 20 seconds anyway (a setting, not
+# measured, like the 20 second windows for the run to be gone).
 : > "$TMPROOT/nogroup.pids"; rm -f "$TMPROOT/nogroup.gate"
-( PATH="$PERLBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" SCANNERS_BUDGET_SECONDS=100 FIRE_DEADLINE=40 \
+TMP3333t="$TMPROOT/tmp3333t"; mkdir -p "$TMP3333t"
+( TMPDIR="$TMP3333t" PATH="$PERLBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" SCANNERS_BUDGET_SECONDS=100 FIRE_DEADLINE=40 \
     FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" fire "$R3357" "git push" > "$TMPROOT/nogroup-term.out" 2>&1
   echo $? > "$TMPROOT/nogroup-term.rc" ) &
 _bg3333t=$!
 hang_wait '[ -s "$TMPROOT/nogroup.gate" ] && [ -s "$TMPROOT/nogroup.pids" ]'
+window_wait 20 'grep -q "waiting for its run" "$TMP3333t"/scanners-gate.*/supervisor 2>/dev/null'
 _gate3333t="$(cat "$TMPROOT/nogroup.gate" 2>/dev/null)"; _pid3333t="$(sed -n 1p "$TMPROOT/nogroup.pids" 2>/dev/null)"
 [ -n "$_gate3333t" ] && kill -TERM "$_gate3333t" 2>/dev/null
 wait "$_bg3333t" 2>/dev/null
@@ -1985,15 +1991,15 @@ PIDS
 #     signals it and exits in the same breath (claude-config#3333, L177). That is the reading of
 #     the failure of 2026-11-21 that fits what was seen and could not be reproduced on a Mac: the
 #     timer signalled the gate and exited at once, bash 5.2's waitchld leaves for a trapped signal
-#     after waitpid has returned and before it records the child it was handed, and Linux hands a
-#     waiter a finished child even when a signal is waiting too, so on a busy runner the gate could
-#     lose its timer's exit and then wait on a timer that had gone for as long as any other child
-#     lived. Forty children each signal a bash that is waiting on them and exit with 7. The first
-#     wait is cut short by the signal; the second gives 7 when bash still knows the child and 127
-#     when it dropped it. On this Mac, bash 3.2, 2026-11-21: 0 of 300 dropped. The count goes in
-#     a note, so each run on GitHub's runner says what its bash does. No check reads it: the gate
-#     no longer depends on the answer, since its timer no longer exits after signalling and the
-#     gate has no third child.
+#     after waitpid has returned and before it records the child it was handed, and Linux (as
+#     recalled, not read) hands a waiter a finished child even when a signal is waiting too, so on
+#     a busy runner the gate could lose its timer's exit and then wait on a timer that had gone for
+#     as long as any other child lived. Forty children each signal a bash that is waiting on them
+#     and exit with 7. The first wait is cut short by the signal; the second gives 7 when bash
+#     still knows the child and 127 when it dropped it. On this Mac, bash 3.2, 2026-11-21: 0 of
+#     300 dropped. The count goes in a note, so each run on GitHub's runner says what its bash
+#     does. No check reads it: the gate no longer depends on the answer, since its timer no longer
+#     exits after signalling and the gate has no third child.
 _lost3333="$(bash -c '
   trap ":" USR1; lost=0; cut=0; i=0
   while [ "$i" -lt 40 ]; do
