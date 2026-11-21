@@ -2048,3 +2048,69 @@ describe('writes: an editor run on files, and the other programs that write a fi
     expect(read(`find . -name '*.json' | xargs yq '.a'`).unnamed).toEqual([])
   })
 })
+
+// claude-config#3323, the three points the lessons review of #3324 left in the reader. Each was
+// measured first on macOS 26.6.2 (2026-11-21), dos2unix 7.5.7 from its Homebrew bottle unpacked in
+// a scratch folder and plutil as the system ships it.
+describe('writes: three writes the reader did not see (#3323)', () => {
+  const F = `${CWD}/app/globals.css`
+  const edited = (command: string) => read(command).files.filter(f => f.edits).map(f => f.path)
+  const unnamed = (command: string) => read(command).unnamed.map(u => u.what)
+  test("dos2unix -e is a flag (--add-eol), so the word after it is a file it rewrites, for each of its kin", () => {
+    // Measured: `-e f` rewrote f, and `-e g f` rewrote both. The reader took the word after -e for
+    // the option's value, so the one file was read as nothing written.
+    for (const program of ['dos2unix', 'unix2dos', 'mac2unix', 'unix2mac']) {
+      expect([program, edited(`${program} -e app/globals.css`)]).toEqual([program, [F]])
+      expect([program, edited(`${program} -e app/page.tsx app/globals.css`)]).toEqual([program, [`${CWD}/app/page.tsx`, F]])
+      expect([program, edited(`${program} --add-eol app/globals.css`)]).toEqual([program, [F]])
+      expect([program, edited(`${program} -k -e -c mac app/globals.css`)]).toEqual([program, [F]])
+    }
+    // -c and --convmode do take a value (measured), so the mode is never read as a file.
+    expect(edited('dos2unix -c mac app/globals.css')).toEqual([F])
+    expect(edited('unix2dos --convmode mac app/globals.css')).toEqual([F])
+    // 7.5.7 has no -C and no --codepage, in its manual or its help; it refuses both and writes
+    // nothing. Neither hides the word after it from the reader.
+    expect(edited('dos2unix -C app/globals.css')).toEqual([F])
+    expect(edited('dos2unix --codepage app/globals.css')).toEqual([F])
+  })
+  test('plutil given its files by xargs is a write the words do not name, for each form that changes them', () => {
+    // Measured through xargs: every one of these rewrote each file it was handed, or, with -e, put
+    // a new file beside each.
+    for (const form of [
+      'plutil -convert xml1',
+      'plutil -convert binary1',
+      'plutil -convert xml1 -e plist',
+      'plutil -create xml1',
+      'plutil -replace color -string red',
+      'plutil -insert shade -string red',
+      'plutil -remove color',
+      'plutil -extract color xml1',
+    ])
+      expect([form, unnamed(`find . -name '*.json' | xargs ${form}`).includes('plutil given its files by xargs')]).toEqual([form, true])
+    expect(unnamed(`find . -name '*.json' -print0 | xargs -0 -n 1 plutil -remove color`)).toEqual(['plutil given its files by xargs'])
+    expect(unnamed(`find . -name '*.json' | xargs -I {} plutil -convert xml1 {}`)).toEqual(['plutil given its files by xargs'])
+  })
+  test('plutil given its files by xargs writes none of them when it only prints, checks, or writes the file -o names', () => {
+    // Measured through xargs: each of these left every file it was handed as it was.
+    for (const form of ['plutil -lint', 'plutil -p', 'plutil -type color', 'plutil -extract color raw', 'plutil -convert xml1 -o -'])
+      expect([form, read(`find . -name '*.json' | xargs ${form}`)]).toEqual([form, { files: [], changes: [], unnamed: [] }])
+    // -o names the one file written, which the words do name.
+    const out = read(`find . -name '*.json' | xargs plutil -convert xml1 -o /tmp/out.plist`)
+    expect([out.files.map(f => f.path), out.unnamed]).toEqual([['/tmp/out.plist'], []])
+  })
+  test('a command named after something every object carries is on no list, and stops no other command being read', () => {
+    // `constructor a b` was read as cp is (b written), and with any option the reader threw, so
+    // nothing on the line was read at all, the sed after it included.
+    const NAMES = ['constructor', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', '__proto__', '__defineGetter__', '__lookupSetter__']
+    for (const name of NAMES) {
+      expect([name, read(`${name} a b`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+      expect([name, read(`${name} -n -x a b`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+      expect([name, read(`ls | xargs ${name} -n`)]).toEqual([name, { files: [], changes: [], unnamed: [] }])
+      expect([name, edited(`${name} -n x; sed -i '' s/a/b/ app/globals.css`)]).toEqual([name, [F]])
+      expect([name, paths(`/usr/local/bin/${name} -r a > app/globals.css`)]).toEqual([name, [F]])
+    }
+    // The real ones beside them are read as before.
+    expect(paths('cp -R a b')).toEqual([`${CWD}/b`])
+    expect(read('rm -f a').changes.map(c => [c.does, c.path])).toEqual([['remove', `${CWD}/a`]])
+  })
+})

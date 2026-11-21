@@ -224,10 +224,15 @@
 # runners, the Free plan's figure, claude-config#2714, see pool_note), MWR_POOL_WAIT_SECONDS (60: how
 # long a job must have waited for a runner before it is said) and MWR_POOL_LOOKBACK_SECONDS (7200: how
 # far before a waiting job the runs counted as holding runners may have been created; settings, not
-# measurements), and the commands and scripts it runs, each honoured only with
+# measurements), MWR_UNTESTED_MAX_SECONDS (2700: how long the suites the checks left untested may run
+# here before they are stopped and the merge refused, a setting, not a measurement, claude-config#3312,
+# see untested_step), MWR_UNTESTED_DIR (~/.claude/state/merge-untested: where their passes are kept by
+# repository and head), MWR_UNTESTED_SKIP (<why>: skip running them for this one run, which says so
+# and why), and the commands and scripts it runs, each honoured only with
 # HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
 # MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
-# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree),
+# MWR_UNTESTED_RUNNER (the runner the untested suites are run by, the head's own run-all-tests.sh).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
 # check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
@@ -416,7 +421,22 @@ fi
 # goes the same way, however this run ends.
 rr_dir=""
 rr_cleanup(){ [ -z "$rr_dir" ] || rm -rf "$rr_dir"; rr_dir=""; return 0; }
-trap 'mwr_rc=$?; turn_leave; mp_clear; rr_cleanup; log_result "$mwr_rc"' EXIT
+# And the suites the checks left untested, run before the merge (claude-config#3312, see
+# untested_step): its runner's whole process group is stopped, and its throwaway clone removed.
+ut_dir=""; ut_pid=""
+# The group exists only once perl has run setpgrp, so the runner's own pid is signalled too: a stop
+# in its first moments, or a setpgrp that did not happen, still stops it rather than waiting it out.
+ut_stop_runner(){
+  local i=0
+  [ -n "$ut_pid" ] || return 0
+  kill -TERM -- "-$ut_pid" 2>/dev/null; kill -TERM "$ut_pid" 2>/dev/null
+  while kill -0 "$ut_pid" 2>/dev/null && [ "$i" -lt 5 ]; do "$SLEEP" 1; i=$((i + 1)); done
+  kill -KILL -- "-$ut_pid" 2>/dev/null; kill -KILL "$ut_pid" 2>/dev/null
+  wait "$ut_pid" 2>/dev/null
+  ut_pid=""; return 0
+}
+ut_cleanup(){ ut_stop_runner; [ -z "$ut_dir" ] || rm -rf "$ut_dir"; ut_dir=""; return 0; }
+trap 'mwr_rc=$?; turn_leave; mp_clear; rr_cleanup; ut_cleanup; log_result "$mwr_rc"' EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 for t in gh jq git; do
   command -v "$t" >/dev/null 2>&1 || early "$t is not on PATH. Nothing was merged."
@@ -756,34 +776,446 @@ rerun_failed_start(){
 # cover (tools/ci-unmeasured-summary.sh writes them; tools/test-ci-unmeasured-summary.sh holds this
 # title equal to the one it writes). Just before the merge, each Actions check on the head is asked
 # for its annotations, the job id read from its details link in the rollup, and those carrying this
-# title are printed, so the log of a merge says what its green did not cover. It only reads and
-# prints: a read that fails is said and the merge goes on, and a head whose checks carry no such
-# notice (another repository's, or a check that is not an Actions job) prints nothing. Once per head.
+# title are printed, so the log of a merge says what its green did not cover. The same reading
+# decides what untested_step runs before the merge, which refuses on a read that fails where the
+# head's tree holds that tool; in a tree without it, or when MWR_UNTESTED_SKIP skips that step, a
+# failed read is just said here and the merge goes on. A head
+# whose checks carry no such notice (another repository's, or a check that is not an Actions job)
+# prints nothing. Once per head; each read is asked again as every other read here is (with_retries).
 UNTESTED_TITLE_PREFIX="Not tested by the checks"
-untested_said_for=""
-say_untested(){
-  local rows id name out rc found jrc n t m first rest l
-  [ "$untested_said_for" = "$head" ] && return 0
-  untested_said_for="$head"
-  rows="$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | select((.detailsUrl // "") | test("/actions/runs/[0-9]+/job/[0-9]+"))
-    | "\(.detailsUrl | capture("/job/(?<id>[0-9]+)").id)\t\(.name // "a check")"] | unique | .[]' 2>/dev/null)"
+# Read once per head, for this report and for untested_step below, which acts on it: ut_found holds
+# each notice as {name, run, t, m} (the check's name, its workflow run, the title and the message),
+# one per line, and ut_failed each check whose annotations could not be read, as <name><TAB><why>.
+# ut_paused is set when GitHub paused this session's reads for its rate limit, so nothing was
+# decided and the head is read again on the next look.
+ut_read_for=""; ut_found=""; ut_failed=""; ut_paused=""
+# The head's Actions checks, one per line as <job id><TAB><workflow run><TAB><name>.
+ut_rows(){
+  printf '%s' "$view" | jq -r '[.statusCheckRollup[]? | select((.detailsUrl // "") | test("/actions/runs/[0-9]+/job/[0-9]+"))
+    | "\(.detailsUrl | capture("/job/(?<id>[0-9]+)").id)\t\(.detailsUrl | capture("/runs/(?<r>[0-9]+)/").r)\t\(.name // "a check")"] | unique | .[]' 2>/dev/null
+}
+read_untested(){
+  local rows id run name out rc found jrc
+  [ "$ut_read_for" = "$head" ] && return 0
+  ut_read_for="$head"; ut_found=""; ut_failed=""; ut_paused=""
+  rows="$(ut_rows)"
   [ -n "$rows" ] || return 0
-  while IFS=$'\t' read -r id name; do
+  while IFS=$'\t' read -r id run name; do
     [ -n "$id" ] || continue
-    out="$(gh_as api "repos/$slug/check-runs/$id/annotations?per_page=100" 2>&1 </dev/null)"; rc=$?
-    found="$(printf '%s' "$out" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" '.[] | select((.title // "") | startswith($p)) | {t: .title, m: (.message // "")}' 2>/dev/null)"; jrc=$?
-    if [ "$rc" -ne 0 ] || [ "$jrc" -ne 0 ]; then
-      say "Could not read what check $name said it did not test (${out:0:200}, exit $rc), so any part it left untested is not named here. Merging all the same: this is a report, not a gate."
+    ut_q="repos/$slug/check-runs/$id/annotations?per_page=100"
+    with_retries "what check $name said it did not test" ut_api_read; rc=$?
+    if [ "$rc" -eq 5 ]; then ut_paused=1; ut_read_for=""; return 0; fi
+    out="$ut_ans"
+    found="$(printf '%s' "$out" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" --arg n "$name" --arg r "$run" '.[] | select((.title // "") | startswith($p)) | {name: $n, run: $r, t: .title, m: (.message // "")}' 2>/dev/null)"; jrc=$?
+    if [ "$rc" -ne 0 ]; then
+      # Said as every read here is: the network, a refused sign in, or GitHub's own error (L11).
+      ut_failed="$ut_failed$name"$'\t'"$(signin_or_unread "what check $name said it did not test" "$rc")"$'\n'
       continue
     fi
-    while IFS= read -r n; do
-      [ -n "$n" ] || continue
-      t="$(printf '%s' "$n" | jq -r '.t')"; m="$(printf '%s' "$n" | jq -r '.m')"
-      first="$(printf '%s\n' "$m" | sed -n 1p)"; rest="$(printf '%s\n' "$m" | sed -n '2,61p')"
-      say "Check $name, $t: $first"
-      [ -z "$rest" ] || while IFS= read -r l; do emit "    $l"; done <<< "$rest"
-    done <<< "$found"
+    if [ "$jrc" -ne 0 ]; then
+      ut_failed="$ut_failed$name"$'\t'"could not read what check $name said it did not test (GitHub's answer would not parse: ${out:0:200})"$'\n'
+      continue
+    fi
+    [ -z "$found" ] || ut_found="$ut_found$found"$'\n'
   done <<< "$rows"
+}
+untested_said_for=""
+say_untested(){
+  local n t m name first rest l why
+  [ "$untested_said_for" = "$head" ] && return 0
+  untested_said_for="$head"
+  read_untested
+  if [ -n "$ut_paused" ]; then
+    say "GitHub paused this session's reads for its rate limit while reading what the checks did not test, so any part they left untested is not named here."
+    return 0
+  fi
+  while IFS=$'\t' read -r name why; do
+    [ -n "$name" ] || continue
+    say "$(printf '%s' "${why:0:1}" | tr '[:lower:]' '[:upper:]')${why:1}, so any part check $name left untested is not named here. Merging all the same: this is a report, not a gate."
+  done <<< "$ut_failed"
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    name="$(printf '%s' "$n" | jq -r '.name')"; t="$(printf '%s' "$n" | jq -r '.t')"; m="$(printf '%s' "$n" | jq -r '.m')"
+    first="$(printf '%s\n' "$m" | sed -n 1p)"; rest="$(printf '%s\n' "$m" | sed -n '2,61p')"
+    say "Check $name, $t: $first"
+    [ -z "$rest" ] || while IFS= read -r l; do emit "    $l"; done <<< "$rest"
+  done <<< "$ut_found"
+}
+# WHAT THE CHECKS DID NOT TEST, RUN HERE WHERE THE CHANGE TOUCHES IT (claude-config#3312). Dan, on
+# 2026-11-20 at 6:45 PM ET, asked whether a part the runner did not test must pass on the merging Mac,
+# picked "Only suites the change touches". So once every gate allows the merge, the suites the checks
+# left a part of untested that this pull request changed, or whose code it changed, are run on this
+# Mac in the head's own tree, by the head's own run-all-tests.sh, and one that does not pass refuses
+# the merge.
+#
+# THE LIST is each part's own record, never the notice say_untested prints: GitHub cuts an
+# annotation at 4096 characters, and on run 44826519963 (#3336) the notice held 25 of its 50 parts.
+# Its first line still counts them ("50 parts in 44 suites were not tested"), so the records (the
+# artifacts part-unmeasured-<n> the tests workflow keeps for a day) are fetched from the run the
+# notice is on and believed only when their lines number what it counts.
+#
+# WHICH SUITES THE CHANGE TOUCHES: one whose own file the pull request changed, and one that names a
+# changed file as a path, a slash and then the shortest end of the file's path no other file in the
+# head's tree has (b-code.sh for hooks/lib/b-code.sh, one/register.ts for mods/one/register.ts),
+# followed by no further name character. Measured over the 80 pull requests merged 2026-11-17 to
+# 11-20 against the 44 suites run 44826519963 left a part of untested: a median of 3 suites a pull
+# request, 10 at the 90th percentile, 44 for the one that changed lib/suite-deadline.sh, which every
+# suite sources, and none for 20 of the 80. A mention in a fixture counts as well (README.md is named
+# by two of the 44 that way), which runs more, never less. What it cannot see is a suite that reaches
+# code without naming it (a glob, a scan of every file), and a file whose path ends the same way as
+# another's all the way up (DESIGN.md beside payload/DESIGN.md), which no suite can name alone: each
+# such file is said, never passed over.
+#
+# NEVER A PASS BY DEFAULT (L98): a notice that cannot be read, a record that cannot be fetched or does
+# not add up to it, a tree that holds the summary tool while no check carries its notice and none
+# names an earlier green run of the same tree it reused (ut_follow_reuse follows one that does), a
+# runner that cannot start, a suite that fails, cannot
+# run or is stopped, and the suites outlasting MWR_UNTESTED_MAX_SECONDS each refuse the merge, saying
+# which and why. MWR_UNTESTED_SKIP=<why> skips the step for one run, and the run says so and why.
+# A part the suite still could not test on this Mac is said, and is not a failure.
+#
+# RUN TWICE SAFELY: once per head in a run, and after suites have run the loop goes round, so every
+# gate is asked again after what can be a long wait. A pass is recorded under MWR_UNTESTED_DIR by the
+# repository, the head and the exact suites, so a restart at the same head does not run them again;
+# any other head runs its own.
+UT_TOOL="tools/ci-unmeasured-summary.sh"
+UT_MAX="$(num_or "${MWR_UNTESTED_MAX_SECONDS:-}" 2700)"; [ "$UT_MAX" -ge 1 ] || UT_MAX=1
+UT_RUNNER_SET="$(mwr_script "${MWR_UNTESTED_RUNNER:-}" "")"
+UT_RECORDS="${MWR_UNTESTED_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/merge-untested}"
+ut_done_for=""; ut_ran=""; ut_tool_there=""; ut_tool_for=""
+ut_hint(){ printf " To merge without running them, for this run only, say why: MWR_UNTESTED_SKIP='<why>' %s %s --repo %s%s" "$SELF" "$pr" "$slug" "${flags[*]:+ ${flags[*]}}"; }
+ut_refuse(){ stop 1 "Stopped: $1 Nothing was merged.$(ut_hint)"; }
+ut_plural(){ if [ "$1" -eq 1 ]; then printf '%s %s' "$1" "$2"; else printf '%s %ss' "$1" "$2"; fi; }
+# ut_published <clone>: tells the clone what is published, once its base is fetched (see THE CLONE
+# KNOWS WHAT IS PUBLISHED in untested_step). Fails, in git's words, on the first thing it cannot record.
+ut_published(){
+  git -C "$1" remote add origin "$origin_url" \
+    && git -C "$1" update-ref "refs/remotes/origin/$base" refs/mwr/base \
+    && git -C "$1" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$base"
+}
+ut_tool_read(){
+  local out rc
+  ut_tool_there=""
+  out="$(gh_as api "repos/$slug/contents/$UT_TOOL?ref=$head" --jq .path 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] && { ut_tool_there=1; return 0; }
+  case "$out" in *"(HTTP 404)"*) return 0 ;; esac
+  read_err="${out:0:300}"
+  ghp_rate_limited "$read_err" && return 5
+  mt_gh_read_class "$out" "$account"
+}
+# A RUN THAT REUSED AN EARLIER GREEN RUN of exactly the same tree (claude-config#2690) skips the steps
+# that write the notice, so its checks carry none. Each of its jobs says in its log, as tests.yml
+# writes it, "NOT RUN AGAIN. Tree <tree> already passed in run <url> on commit <sha>". That earlier
+# run is followed, and its notice and records are used only when its own artifacts hold
+# green-tree-<tree>, which tests.yml uploads only at the end of a full green run of exactly that tree
+# (tools/ci-reuse-green-tree.sh), so what it left untested is what these checks left untested. A log,
+# a run or a notice that cannot be found or read refuses the merge, saying which run was looked for.
+ut_q=""; ut_ans=""; ut_via=""; ut_reused_mains=""
+UT_REUSED_RE='NOT RUN AGAIN\. Tree ([0-9a-f]{40}) already passed in run https://github\.com/([^[:space:]/]+/[^[:space:]/]+)/actions/runs/([0-9]+) on commit ([0-9a-f]{40})'
+# Reads GitHub's answer to ut_q into ut_ans; 0 answered, 5 rate limited, and any other failure classed
+# by mt_gh_read_class, as ut_tool_read and ut_dl_read are.
+ut_api_read(){
+  local rc
+  ut_ans="$(gh_as api "$ut_q" 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  read_err="${ut_ans:0:300}"
+  ghp_rate_limited "$read_err" && return 5
+  mt_gh_read_class "$ut_ans" "$account"
+}
+# ut_read <what is read, for the stop> <API path>: 0 with GitHub's answer in ut_ans, 1 to look again
+# (GitHub paused this session's reads); a read that fails refuses the merge.
+ut_read(){
+  local rrc
+  ut_q="$2"
+  with_retries "$1" ut_api_read; rrc=$?
+  [ "$rrc" -eq 5 ] && return 1
+  [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "$1" "$rrc"), so which suites to run here before merging #$pr at ${head:0:7} is not known."
+  return 0
+}
+# The records, fetched from workflow run ut_q into ut_dir/parts: 0 fetched, 3 GitHub has none to
+# give (expired, or never uploaded), 5 rate limited, and any other failure classed as every read here
+# is (mt_gh_read_class: the network, which is waited through, a refused sign in, 2 to ask again, or 1
+# believed).
+ut_dl_read(){
+  local rc
+  rm -rf "$ut_dir/parts"
+  ut_ans="$(gh_as run download "$ut_q" --repo "$slug" --pattern 'part-unmeasured-*' --dir "$ut_dir/parts" 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  read_err="${ut_ans:0:300}"
+  case "$read_err" in *"no valid artifacts found"*|*"no artifact matches"*) return 3 ;; esac
+  ghp_rate_limited "$read_err" && return 5
+  mt_gh_read_class "$ut_ans" "$account"
+}
+# Sets ut_reused_mains to the notice of the run the checks at the head reused, as read_untested sets
+# ut_found, and ut_via to say which run it came from. 0 when found, 1 to look again; any other
+# outcome refuses the merge.
+ut_follow_reuse(){
+  local h7="${head:0:7}" rows id jrun jname tree from_repo from="" sha names jobs out found=""
+  ut_via=""; ut_reused_mains=""
+  rows="$(ut_rows)"
+  while IFS=$'\t' read -r id jrun jname; do
+    [ -n "$id" ] || continue
+    ut_read "the log of check $jname at $h7" "repos/$slug/actions/jobs/$id/logs" || return 1
+    if [[ "$ut_ans" =~ $UT_REUSED_RE ]]; then
+      tree="${BASH_REMATCH[1]}"; from_repo="${BASH_REMATCH[2]}"; from="${BASH_REMATCH[3]}"; sha="${BASH_REMATCH[4]}"
+      break
+    fi
+  done <<< "$rows"
+  [ -n "$from" ] || ut_refuse "No check at $h7 says what it did not test, though its tree holds $UT_TOOL, which makes the checks say it, and none says in its log that it reused an earlier green run of the same tree. A check whose step that says it failed says nothing either, so which suites to run here is not known."
+  [ "$from_repo" = "$slug" ] || ut_refuse "check $jname at $h7 says it reused workflow run $from of $from_repo, not of $slug, so what it did not test cannot be read here."
+  ut_read "the artifacts of workflow run $from, which the checks at $h7 reused" "repos/$slug/actions/runs/$from/artifacts?per_page=100" || return 1
+  names="$(printf '%s' "$ut_ans" | jq -r '.artifacts[]?.name' 2>/dev/null)" \
+    || ut_refuse "could not read GitHub's list of the artifacts of workflow run $from, which the checks at $h7 reused (${ut_ans:0:200})."
+  case $'\n'"$names"$'\n' in
+    *$'\n'"green-tree-$tree"$'\n'*) ;;
+    *) ut_refuse "workflow run $from, which check $jname at $h7 says it reused for tree ${tree:0:12}, records no green run of that tree (it records: $(printf '%s\n' "$names" | awk '/^green-tree-/ { printf "%s%s", s, $0; s = ", " } END { if (!s) printf "none" }')), so what it left untested is not known to be what these checks left untested." ;;
+  esac
+  ut_read "the jobs of workflow run $from, which the checks at $h7 reused" "repos/$slug/actions/runs/$from/jobs?per_page=100" || return 1
+  jobs="$(printf '%s' "$ut_ans" | jq -r '.jobs[]? | "\(.id)\t\(.name // "a check")"' 2>/dev/null)" \
+    || ut_refuse "could not read GitHub's list of the jobs of workflow run $from, which the checks at $h7 reused (${ut_ans:0:200})."
+  while IFS=$'\t' read -r id jname; do
+    [ -n "$id" ] || continue
+    ut_read "what check $jname of workflow run $from said it did not test" "repos/$slug/check-runs/$id/annotations?per_page=100" || return 1
+    out="$(printf '%s' "$ut_ans" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" --arg n "$jname" --arg r "$from" '.[] | select((.title // "") == $p) | {name: $n, run: $r, t: .title, m: (.message // "")}' 2>/dev/null)" \
+      || ut_refuse "could not read what check $jname of workflow run $from, which the checks at $h7 reused, said it did not test (${ut_ans:0:200})."
+    [ -z "$out" ] || found="$found$out"$'\n'
+  done <<< "$jobs"
+  [ -n "$found" ] || ut_refuse "No check of workflow run $from, which the checks at $h7 reused, says what it did not test, so which suites to run here is not known."
+  say "The checks at $h7 reused workflow run $from, which tested the same tree (${tree:0:12}, on commit ${sha:0:7}), so its list of what it did not test is used."
+  ut_reused_mains="$found"; ut_via=", the run the checks at $h7 reused"
+  return 0
+}
+# Returns 0 when the merge may go on, 1 to look again (the head moved, or GitHub paused this session's
+# reads); every refusal stops here. Sets ut_ran when suites ran, so the caller asks every gate again.
+untested_step(){
+  local h7="${head:0:7}" mains n_mains name run msg first count rrc out tip mb runner k rc s n_fail
+  local paths missing chosen_list said_list cannot started said t finished still rec slugdir lines
+  ut_ran=""
+  [ "$ut_done_for" = "$head" ] && return 0
+  if [ -n "${MWR_UNTESTED_SKIP:-}" ]; then
+    say "Did not run the suites the checks left untested, because MWR_UNTESTED_SKIP is set: $MWR_UNTESTED_SKIP."
+    ut_done_for="$head"; return 0
+  fi
+  # THE TOOL FIRST. A repository whose tree does not hold the tool is none of this step's business,
+  # and this helper merges in every project, most of which hold none. So whether the head's tree
+  # holds it is asked before anything below can refuse or print: there, a notice read that fails is
+  # said by say_untested and stops nothing, as before this step existed. Only this one read can
+  # refuse in such a repository, since until it answers nothing says which kind this is. Asked once
+  # per head, however many looks the step takes.
+  if [ "$ut_tool_for" != "$head" ]; then
+    with_retries "whether the tree at $h7 holds $UT_TOOL" ut_tool_read; rrc=$?
+    [ "$rrc" -eq 5 ] && return 1
+    [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "whether the tree at $h7 holds $UT_TOOL" "$rrc"), so whether its checks should have said what they did not test is not known."
+    ut_tool_for="$head"
+  fi
+  [ -n "$ut_tool_there" ] || { ut_done_for="$head"; return 0; }
+  read_untested
+  [ -z "$ut_paused" ] || return 1
+  if [ -n "$ut_failed" ]; then
+    IFS=$'\t' read -r name first <<< "$(printf '%s' "$ut_failed" | sed -n 1p)"
+    ut_refuse "$first, so which suites to run here before merging #$pr at $h7 is not known."
+  fi
+  mains="$(printf '%s' "$ut_found" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" 'select(.t == $p)' 2>/dev/null)"
+  n_mains="$(printf '%s' "$mains" | grep -c . || true)"
+  ut_via=""
+  if [ "${n_mains:-0}" -eq 0 ]; then
+    # No notice in a tree that holds the tool: its checks reused an earlier green run, which is
+    # followed, or did not say what they left untested, which refuses.
+    ut_follow_reuse || return 1
+    mains="$ut_reused_mains"
+    n_mains="$(printf '%s' "$mains" | grep -c . || true)"
+  fi
+  [ "$n_mains" -eq 1 ] || ut_refuse "$n_mains checks at $h7 carry the notice titled $UNTESTED_TITLE_PREFIX, so which one's list to run here is not known."
+  name="$(printf '%s' "$mains" | jq -r '.name')"; run="$(printf '%s' "$mains" | jq -r '.run')"
+  msg="$(printf '%s' "$mains" | jq -r '.m')"; first="${msg%%$'\n'*}"
+  if [ "$first" = "Every suite measured every part on the runner." ]; then
+    say "The checks at $h7 left no part of any suite untested, so no suite was run here."
+    ut_done_for="$head"; return 0
+  fi
+  case "$msg" in
+    *'handed back no record'*)
+      ut_refuse "not every part of the checks handed back its record of what it did not test (check $name says: $(awk '/handed back no record/ { print; exit }' <<< "$msg")), so the list of suites to run here is not whole." ;;
+  esac
+  if [[ "$first" =~ ^([0-9]+)\ parts?\ in\ [0-9]+\ suites?\ (was|were)\ not\ tested ]]; then count="${BASH_REMATCH[1]}"
+  else ut_refuse "could not read how many parts the notice on check $name counts ($first), so the list of suites to run here cannot be checked."
+  fi
+
+  # The records, from the run the notice is on.
+  ut_cleanup
+  ut_dir="$(mktemp -d "${TMPDIR:-/tmp}/mwr-untested.XXXXXX" 2>/dev/null)" || { ut_dir=""; ut_refuse "no folder could be made to run the suites the checks left untested."; }
+  ut_q="$run"
+  with_retries "the record of what each part did not test from workflow run $run$ut_via" ut_dl_read; rrc=$?
+  [ "$rrc" -eq 5 ] && { ut_cleanup; return 1; }
+  if [ "$rrc" -eq 3 ]; then
+    ut_refuse "could not fetch the record of what each part did not test from workflow run $run$ut_via: GitHub has none to give (${read_err:0:300}). The tests workflow keeps them for a day; to make them again, run the checks again (gh run rerun $run --repo $slug), then this."
+  fi
+  [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "the record of what each part did not test from workflow run $run$ut_via" "$rrc"), so the list of suites to run here is not known."
+  find "$ut_dir/parts" -type f -name unmeasured.tsv -exec cat {} + 2>/dev/null | awk 'NF' > "$ut_dir/records"
+  lines="$(grep -c . "$ut_dir/records" || true)"
+  [ "${lines:-0}" -eq "$count" ] || ut_refuse "the records of what each part did not test, from workflow run $run, do not add up to its notice: the records hold ${lines:-0} parts and the notice counts $count, so the list of suites to run here is not whole."
+  cut -f1 "$ut_dir/records" | LC_ALL=C sort -u > "$ut_dir/names"
+  s="$(grep -v -E '^test-[A-Za-z0-9._-]+\.sh$' "$ut_dir/names" | sed -n 1p)"
+  [ -z "$s" ] || ut_refuse "the records from workflow run $run name '$s', which is not a suite's name, so they cannot be read."
+
+  # A fork's head is code nobody with write access to $slug wrote, so it is never run on this Mac.
+  if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
+    ut_refuse "#$pr comes from a fork ($(printf '%s' "$view" | jq -r '"\(.headRepositoryOwner.login // "an unknown owner")/\(.headRepository.name // "an unknown repository")"')), so its code is not run on this Mac to test what the checks left untested."
+  fi
+
+  # The head's own tree, in a clone of its own that borrows this checkout's objects.
+  origin_is_slug || ut_refuse "this checkout's origin is not $slug, so the head cannot be fetched here to run the suites."
+  borrow_clone "$ut_dir/wt" || ut_refuse "no clone could be made to run the suites in."
+  if ! out="$(git_as "$ut_dir/wt" fetch -q --no-tags "$origin_url" "+refs/pull/$pr/head:refs/mwr/head" "+refs/heads/$base:refs/mwr/base" 2>&1)"; then
+    ut_refuse "fetching #$pr's head and $base to run the suites here failed (${out:0:300})."
+  fi
+  tip="$(git -C "$ut_dir/wt" rev-parse refs/mwr/head 2>/dev/null)"
+  if [ "$tip" != "$head" ]; then
+    # Waited a look, bounded as every wait is (out_of_time), rather than going round at once: each
+    # round asks every gate again and fetches the records again.
+    ut_cleanup
+    out_of_time "has not been fetched at that head (GitHub's refs/pull/$pr/head is at ${tip:0:7})"
+    wait_a_look "ut-pull-ref" "GitHub's head of #$pr is at ${tip:0:7}, not ${h7}, which this run judged; waiting a look before running anything."
+    return 1
+  fi
+  # THE CLONE KNOWS WHAT IS PUBLISHED, as the checkouts suites are written for do: a builder's
+  # worktree and a runner's checkout both have origin, and the first knows its default branch. An
+  # empty repository fetched into refs of its own knows no remote at all, and to anything that asks
+  # git there what a push would add, nothing of it has been published. On 2026-11-21 the step's
+  # first real merge, of #3392, stopped on that: test-scanners-before-push.sh asks the push gate
+  # about the checkout it sits in, the gate took all 3347 commits of the history for new ones, and
+  # refused on the message of one from 2026-10-29, so nine checks failed on a pull request that
+  # had touched none of what they read. So the clone is told: where origin is, the base as origin's
+  # branch, and that branch as origin's default, which it is by here (the round goes no further
+  # than wait_for_base while the base is any other branch). A clone that cannot be told is not run
+  # in: its reds would be about the clone.
+  out="$(ut_published "$ut_dir/wt" 2>&1)" || ut_refuse "the clone the suites run in could not be told which branch of $slug is published (${out:0:300}), and suites run where nothing is known to be published take the whole history for new work."
+  git -C "$ut_dir/wt" checkout -q --detach refs/mwr/head >/dev/null 2>&1 || ut_refuse "the head $h7 could not be checked out to run the suites in."
+  mb="$(git -C "$ut_dir/wt" merge-base refs/mwr/base refs/mwr/head 2>/dev/null)" || ut_refuse "the point where #$pr's head left $base could not be found, so what it changed is not known."
+  git -C "$ut_dir/wt" ls-files > "$ut_dir/tree" 2>/dev/null || ut_refuse "the tree at $h7 could not be listed."
+  git -C "$ut_dir/wt" diff --name-only --no-renames --diff-filter=d "$mb" refs/mwr/head > "$ut_dir/changed" 2>/dev/null || ut_refuse "what #$pr changed could not be listed."
+
+  # Each suite's path in the head's tree: exactly one each.
+  paths="$(awk -F/ 'FILENAME == ARGV[1] { want[$0] = 1; next } ($NF in want) { n[$NF]++; p[$NF] = $0 }
+    END { for (s in want) print s "\t" (n[s] == 1 ? p[s] : "") }' "$ut_dir/names" "$ut_dir/tree")"
+  missing="$(printf '%s\n' "$paths" | awk -F'\t' '$2 == "" { print $1 }' | sed -n 1p)"
+  [ -z "$missing" ] || ut_refuse "the checks' record names $missing, which the tree at $h7 does not hold once, so it cannot be run here."
+  printf '%s\n' "$paths" | cut -f2 > "$ut_dir/paths"
+
+  # Which of them the change touches (see above): <suite path><TAB><why>, and the files no suite can
+  # name alone.
+  awk -F/ '
+    FILENAME == ARGV[1] { tree[++nt] = $0; next }
+    { ch = $0; n = split(ch, c, "/"); key = ""
+      for (k = 1; k <= n && key == ""; k++) {
+        suf = c[n - k + 1]; for (j = n - k + 2; j <= n; j++) suf = suf "/" c[j]
+        hits = 0; for (i = 1; i <= nt; i++) if (tree[i] == suf || substr(tree[i], length(tree[i]) - length(suf)) == "/" suf) hits++
+        if (hits == 1) key = suf
+      }
+      print ch "\t" key }' "$ut_dir/tree" "$ut_dir/changed" > "$ut_dir/keys"
+  cannot="$(awk -F'\t' '$2 == "" { print $1 }' "$ut_dir/keys")"
+  awk 'FILENAME == ARGV[1] { own[$0] = 1; next } ($0 in own) { print $0 "\tchanged by this pull request" }' "$ut_dir/changed" "$ut_dir/paths" > "$ut_dir/chosen"
+  : > "$ut_dir/scan"
+  while IFS= read -r s; do
+    grep -qxF -- "$s" "$ut_dir/changed" || printf '%s\n' "$ut_dir/wt/$s" >> "$ut_dir/scan"
+  done < "$ut_dir/paths"
+  if [ -s "$ut_dir/scan" ]; then
+    # One awk over every suite still to judge: its first line naming a key, as /<key> followed by no
+    # name character, chooses it, naming the file.
+    tr '\n' '\0' < "$ut_dir/scan" | xargs -0 awk -F'\t' -v root="$ut_dir/wt/" '
+      FILENAME == ARGV[1] { if ($2 != "") { key[++nk] = "/" $2; file[nk] = $1 }; next }
+      FNR == 1 { done = 0 }
+      done { next }
+      { for (i = 1; i <= nk && !done; i++) {
+          line = $0
+          while ((at = index(line, key[i])) > 0) {
+            nx = substr(line, at + length(key[i]), 1)
+            if (nx !~ /[A-Za-z0-9_.-]/) { print substr(FILENAME, length(root) + 1) "\tnames " file[i]; done = 1; break }
+            line = substr(line, at + 1)
+          }
+        } }' "$ut_dir/keys" >> "$ut_dir/chosen"
+  fi
+  while IFS= read -r s; do
+    [ -n "$s" ] && say "Could not tell which suites test $s: another file in the tree has a path ending the same way, so no suite can name it alone."
+  done <<< "$cannot"
+  k="$(grep -c . "$ut_dir/chosen" || true)"; k="${k:-0}"
+  if [ "$k" -eq 0 ]; then
+    say "None of the $(ut_plural "$(grep -c . "$ut_dir/names")" suite) the checks left a part of untested is changed by this pull request or names a file it changed, so none was run here."
+    ut_cleanup; ut_done_for="$head"; return 0
+  fi
+  LC_ALL=C sort -o "$ut_dir/chosen" "$ut_dir/chosen"
+  chosen_list="$(cut -f1 "$ut_dir/chosen")"
+  said_list="$(awk -F'\t' '{ n = split($1, p, "/"); printf "%s%s (%s)", (NR > 1 ? ", " : ""), p[n], $2 }' "$ut_dir/chosen")"
+
+  # Already passed here at this head, with these suites: believed, and nothing runs again.
+  slugdir="$UT_RECORDS/$(printf '%s' "$slug" | tr '/' '_')"; rec="$slugdir/$head"
+  if [ -f "$rec" ] && [ "$(cat "$rec" 2>/dev/null)" = "$chosen_list" ]; then
+    say "The $(ut_plural "$k" suite) the checks left a part of untested that this change touches already passed on this Mac at $h7 (recorded in $rec), so they are not run again: $said_list."
+    ut_cleanup; ut_done_for="$head"; return 0
+  fi
+
+  # The head's own runner deals every suite of its tree, the chosen ones to part 1 and the rest to
+  # part 2, and runs part 1, so each suite is judged exactly as a run of the checks judges it.
+  runner="${UT_RUNNER_SET:-$ut_dir/wt/payload/hooks/run-all-tests.sh}"
+  [ -f "$runner" ] || ut_refuse "the suites could not be started on this Mac: $runner, the runner that judges them, is not there."
+  # Both runs name the clone as the tree they read (HOOK_TESTS_ROOT), so neither is taken for a whole
+  # run of some other repository: not queued for this Mac's full run slot, and not refused as one run
+  # of the whole repository inside another.
+  if ! (cd "$ut_dir/wt" && HOOK_TESTS_ROOT="$ut_dir/wt" HOOK_TESTS_DEAL=1 HOOK_TESTS_SLOT=0 bash "$runner") > "$ut_dir/deal.all" 2> "$ut_dir/deal.err" </dev/null; then
+    ut_refuse "the suites could not be started on this Mac: $runner could not deal them ($(tail -n 3 "$ut_dir/deal.err" | tr '\n' ' ' | cut -c1-300))."
+  fi
+  awk -F'\t' 'FILENAME == ARGV[1] { mine[$1] = 1; next } NF >= 2 && $1 ~ /^[0-9]+$/ { print (($2 in mine) ? 1 : 2) "\t" $2; if ($2 in mine) got++ }
+    END { exit (got == length(mine)) ? 0 : 3 }' "$ut_dir/chosen" "$ut_dir/deal.all" > "$ut_dir/deal" \
+    || ut_refuse "the suites could not be started on this Mac: $runner's deal does not hold every suite chosen ($(printf '%s' "$chosen_list" | tr '\n' ' '))."
+  phase_local "running the suites the checks left untested at $h7"
+  say "Running on this Mac the $(ut_plural "$k" suite) the checks left a part of untested that this change touches, at $h7: $said_list. They may take up to $(span "$UT_MAX") (MWR_UNTESTED_MAX_SECONDS); nothing merges until they pass."
+  # In a process group of its own (L321), so a stop takes every suite it started with it.
+  (cd "$ut_dir/wt" && exec perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' env -u HOOK_TESTS_DEAL \
+    HOOK_TESTS_ROOT="$ut_dir/wt" HOOK_TESTS_DEALT="$ut_dir/deal" HOOK_TESTS_PART=1 HOOK_TESTS_PARTS=2 HOOK_TESTS_SLOT=0 \
+    HOOK_TESTS_UNMEASURED_FILE="$ut_dir/still.tsv" bash "$runner") > "$ut_dir/run.out" 2>&1 </dev/null &
+  ut_pid=$!
+  started="$(now)"; said="$started"; ut_ran=1
+  while kill -0 "$ut_pid" 2>/dev/null; do
+    t="$(now)"
+    if [ $(( t - started )) -ge "$UT_MAX" ]; then
+      ut_stop_runner
+      ut_refuse "the suites the checks left untested ($said_list) were still running after $(dur $(( t - started ))), the bound MWR_UNTESTED_MAX_SECONDS sets, so they were stopped, and not one is counted as passed."
+    fi
+    if [ $(( t - said )) -ge "$HEARTBEAT" ]; then
+      finished="$(grep -c -E '^  (ok|FAIL|NOT RUN|UNMEASURED) ' "$ut_dir/run.out" 2>/dev/null || true)"
+      say "Still running the suites the checks left untested at $h7: $(dur $(( t - started ))) so far, ${finished:-0} of $k finished."
+      said="$t"
+    fi
+    "$SLEEP" "$(( HEARTBEAT < 5 ? HEARTBEAT : 5 ))"
+  done
+  wait "$ut_pid"; rc=$?; ut_pid=""
+  if [ "$rc" -eq 0 ] && grep -qxF "ALL $k SUITES PASSED" "$ut_dir/run.out"; then
+    lines="$(cat "$ut_dir/still.tsv" 2>/dev/null || true)"
+    while IFS=$'\t' read -r s still; do
+      [ -n "$s" ] && say "Not tested on this Mac either: $s: $still"
+    done <<STILL
+$lines
+STILL
+    mkdir -p "$slugdir" 2>/dev/null && printf '%s' "$chosen_list" > "$rec.$$" 2>/dev/null && mv -f "$rec.$$" "$rec" 2>/dev/null \
+      || say "The pass could not be recorded in $rec, so a run started again at $h7 runs these suites again."
+    say "All $(ut_plural "$k" suite) passed on this Mac at $h7: $said_list. Asking every gate again before the merge, since they took $(dur $(( $(now) - started )))."
+    ut_cleanup; ut_done_for="$head"; return 0
+  fi
+  # All of it when short; else the status line of each suite that failed, could not run or was
+  # unmeasured, the first 100 of them, then the end, where the runner's verdict is, so the lines the
+  # refusal points at are always shown.
+  lines="$(wc -l < "$ut_dir/run.out" | tr -d ' ')"
+  if [ "${lines:-0}" -le 200 ]; then
+    while IFS= read -r l; do emit "    $l"; done < "$ut_dir/run.out"
+  else
+    emit "    (the runner printed $lines lines: the status line of each suite that failed, could not run or was unmeasured, the first 100 of them, then its last 150)"
+    grep -E '^  (FAIL|NOT RUN|UNMEASURED) ' "$ut_dir/run.out" | sed -n '1,100p' | while IFS= read -r l; do emit "    $l"; done
+    tail -n 150 "$ut_dir/run.out" | while IFS= read -r l; do emit "    $l"; done
+  fi
+  n_fail="$(grep -c -E '^  FAIL ' "$ut_dir/run.out" || true)"
+  if [ "${n_fail:-0}" -gt 0 ]; then
+    ut_refuse "${n_fail} of the suites the checks left a part of untested failed on this Mac at $h7, as the runner's lines above say."
+  fi
+  ut_refuse "the runner did not report all $k passed on this Mac at $h7 (exit $rc; its last line: $(tail -n 1 "$ut_dir/run.out" | cut -c1-200)), and a suite that could not run is not a pass."
 }
 # A HEAD GITHUB HAS NOT CAUGHT UP WITH (claude-config#3254). On 2026-11-18 this helper updated #3242
 # at 14:36:13 ET and stopped at 14:40:28 on block-red-merge.sh's "PR has NO checks at all": GitHub
@@ -1905,29 +2337,44 @@ RR_RESOLVER="$MWR_LIB/readme-rows-merge.py"
 rr_why=""; rr_new=""; rr_report=""
 # A fetch or push from the clone, as the account this run merges as (resolve_merger,
 # claude-config#2629) when it is not the active one, which gh's credential helper honours.
-rr_net(){
+git_as(){   # git_as <folder> <git arguments>: git run there as that account, when one was chosen
+  local d="$1"; shift
   if [ -n "$account" ]; then
     local tok; tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
-    [ -n "$tok" ] && { GH_TOKEN="$tok" git -C "$rr_dir/wt" "$@"; return; }
+    [ -n "$tok" ] && { GH_TOKEN="$tok" git -C "$d" "$@"; return; }
   fi
-  git -C "$rr_dir/wt" "$@"
+  git -C "$d" "$@"
+}
+rr_net(){ git_as "$rr_dir/wt" "$@"; }
+# Shared with untested_step (claude-config#3312): whether this checkout's origin is the repository
+# this run merges in (setting origin_url), and an empty repository at <folder> that borrows this
+# checkout's objects, read only, so a fetch into it brings only what is missing.
+origin_url=""
+origin_is_slug(){
+  origin_url="$(git config --get remote.origin.url 2>/dev/null)"
+  [ -n "$origin_url" ] && [ "$(mt_remote_slug | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')" ]
+}
+borrow_clone(){   # borrow_clone <folder>
+  local common
+  git init -q "$1" >/dev/null 2>&1 || return 1
+  common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  [ -n "$common" ] && [ -d "$common/objects" ] && printf '%s\n' "$common/objects" > "$1/.git/objects/info/alternates"
+  return 0
 }
 rr_refuse(){ rr_why="$1"; rr_cleanup; return 1; }
 readme_rows_merge(){
   rr_why=""; rr_new=""; rr_report=""
-  local url wt common tip files rc out rows line name email ident=()
+  local url wt tip files rc out rows line name email ident=()
   if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
     rr_refuse "Its branch is in a fork, which this never pushes to, so no conflict was resolved here."; return 1
   fi
-  url="$(git config --get remote.origin.url 2>/dev/null)"
-  if [ -z "$url" ] || [ "$(mt_remote_slug | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')" ]; then
+  if ! origin_is_slug; then
     rr_refuse "This checkout's origin is not $slug, so no conflict was resolved here."; return 1
   fi
+  url="$origin_url"
   rr_dir="$(mktemp -d "${TMPDIR:-/tmp}/mwr-readme.XXXXXX" 2>/dev/null)" || { rr_dir=""; rr_refuse "No folder could be made to merge it in, so no conflict was resolved here."; return 1; }
   wt="$rr_dir/wt"
-  git init -q "$wt" >/dev/null 2>&1 || { rr_refuse "No clone could be made to merge it in, so no conflict was resolved here."; return 1; }
-  common="$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-  [ -n "$common" ] && [ -d "$common/objects" ] && printf '%s\n' "$common/objects" > "$wt/.git/objects/info/alternates"
+  borrow_clone "$wt" || { rr_refuse "No clone could be made to merge it in, so no conflict was resolved here."; return 1; }
   if ! out="$(rr_net fetch -q --no-tags "$url" "+refs/heads/$base:refs/mwr/base" "+refs/heads/$branch:refs/mwr/head" 2>&1)"; then
     rr_refuse "Fetching $base and $branch to merge them here failed (${out:0:300}), so no conflict was resolved here."; return 1
   fi
@@ -2269,6 +2716,11 @@ EOF_VIEW
   if ! why="$(ask_gate "$VERIFY_GATE" "$cmd")"; then
     stop 1 "Stopped: require-verification-run.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
+  # What the checks left untested, run here where this change touches it, once the gates allow the
+  # merge (claude-config#3312, see untested_step). After suites have run, round again, so every gate
+  # and the head are judged afresh after what can be a long wait; the step is then done for this head.
+  untested_step || continue
+  [ -z "$ut_ran" ] || continue
   say_untested
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
