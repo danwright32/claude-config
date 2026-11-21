@@ -4263,7 +4263,7 @@ check_eq "#3312 and the other check's once" "1" "$(count gh-calls 'check-runs/50
 
 # A read that keeps failing is said, and the merge goes on: this reports, it never gates.
 ut_fresh
-printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-down"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/annotations-down"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#3312 an annotations read that fails does not stop the merge" "0" "$rc"
 check "#3312 and says what it could not read" "Could not read what check suite said it did not test" "$out"
@@ -4303,6 +4303,8 @@ mode="$(cat "$ST/runner-mode" 2>/dev/null)"
 case "$mode" in
   sleep) printf '%s\n' "$$" > "$ST/runner-pid"; sleep 30; echo woke > "$ST/runner-woke"; exit 0 ;;
   slow) sleep 2 ;;
+  # A failing suite whose own output runs long, so the verdict is far down the runner's lines.
+  longfail) for i in $(seq 1 250); do echo "    noise line $i"; done; mode=fail ;;
 esac
 for s in $mine; do
   name="${s##*/}"
@@ -4442,6 +4444,26 @@ check "#3312 with the runner's own lines" "expected 1, got 2" "$out"
 check_eq "#3312 nothing merged on a failure" "0" "$(count gh-calls 'pr merge')"
 check_eq "#3312 and nothing recorded as passed" "0" "$(find "$UT/records" -type f -name "$UT_HEAD" 2>/dev/null | wc -l | tr -d ' ')"
 check_eq "#3312 the clone is removed after a refusal too" "0" "$(ut_left)"
+# A failure far down a long output is still shown: the status lines, then the end, never only the
+# first lines.
+ut_state; printf longfail > "$ST/runner-mode"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a failure after a long output refuses the merge" "1" "$rc"
+check "#3312 showing the failed suite's status line" "FAIL  test-a.sh" "$out"
+check "#3312 and the runner's verdict at the end" "1 of 1 SUITES FAILED: test-a.sh" "$out"
+check "#3312 saying lines were left out" "the runner printed 253 lines" "$out"
+
+# GitHub's refs/pull/<n>/head behind the head this run judged: the step waits a look before trying
+# again, bounded as every other wait is, rather than going round at once. The ref catches up at the
+# first wait. The run is bounded by an alarm, so a step that never waits fails rather than hangs.
+ut_state; printf '' > "$ST/runner-mode"
+git --git-dir="$UB" update-ref refs/pull/7/head "$(git --git-dir="$UB" rev-parse main)"
+printf 'git --git-dir=%q update-ref refs/pull/7/head %s\n' "$UB" "$UT_HEAD" > "$ST/on-sleep"
+out="$(cd "$US" && TMPDIR="$UT_TMP" GIT_CONFIG_GLOBAL="$UT_CONF" MWR_UNTESTED_RUNNER="$STUBS/untested-runner.sh" MWR_UNTESTED_DIR="$UT/records" perl -e 'alarm 120; exec @ARGV' bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#3312 a pull ref behind the head merges once it catches up" "0" "$rc"
+check "#3312 saying it waits for GitHub's ref" "GitHub's head of #7 is at" "$out"
+check_eq "#3312 after waiting a look, not going round at once" "1" "$(grep -c -x '30' "$ST/sleeps" 2>/dev/null || true)"
+git --git-dir="$UB" update-ref refs/pull/7/head "$UT_HEAD"
 
 # A suite that could not run is not a pass.
 ut_state; printf notrun > "$ST/runner-mode"
@@ -4507,7 +4529,7 @@ check "#3312 saying it skipped them and why" "Did not run the suites the checks 
 check_eq "#3312 and runs nothing" "0" "$(count runner-calls 'part ')"
 
 # Every way of not knowing the list refuses, saying what could not be read.
-ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-down"
+ut_state; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/annotations-down"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 an annotations read that fails refuses the merge" "1" "$rc"
 check "#3312 saying what it could not read" "could not read what check suite said it did not test" "$out"
@@ -4539,7 +4561,7 @@ ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/actions/r
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a records download that fails once is asked again, and it merges" "0" "$rc"
 check_eq "#3312 fetched twice" "2" "$(count gh-calls 'run download 900')"
-ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/actions/runs/900/artifacts": net/http: TLS handshake timeout' > "$ST/download-down"
+ut_state; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/download-down"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a records download that keeps failing refuses the merge" "1" "$rc"
 check "#3312 saying it could not be read" "could not read the record of what each part did not test from workflow run 900" "$out"
@@ -4551,6 +4573,39 @@ out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a fork's pull request with suites to run refuses the merge" "1" "$rc"
 check "#3312 saying its code is not run here" "#7 comes from a fork (someone/widget), so its code is not run on this Mac" "$out"
 check_eq "#3312 and nothing is dealt or run" "0" "$(count runner-calls .)"
+
+# Every read the step makes is classed as the helper's other reads are (mt_gh_read_class): a network
+# outage is waited through, and a refused sign in is said as one (claude-config#2303, #1615). The
+# outage here lasts 5 minutes of the injected clock (a length this case sets, not a measurement), past
+# the four tries, and costs no real time.
+ut_net_back_at(){ # ut_net_back_at <state file> <clock>: the file is removed once the clock reaches it
+  local i; for i in $(seq 1 600); do printf '[ "$(cat "$ST/clock")" -lt %s ] || rm -f "$ST/%s"\n' "$2" "$1" >> "$ST/on-sleep"; done
+}
+ut_state; printf '%s\n' "$CONNECT" > "$ST/annotations-down"; ut_net_back_at annotations-down 1000300
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a notice read through a network outage merges" "0" "$rc"
+check "#3312 saying it waited on the network for that read" "Waiting on the network: GitHub has not been reachable for" "$out"
+check "#3312 naming the notice read" "reading what check suite said it did not test" "$out"
+ut_state; printf '%s\n' "$SIGNIN" > "$ST/annotations-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a notice read whose sign in is refused refuses the merge" "1" "$rc"
+check "#3312 said as a refused sign in" "GitHub refused the sign in 4 times reading what check suite said it did not test" "$out"
+ut_state; printf '%s\n' "$CONNECT" > "$ST/download-down"; ut_net_back_at download-down 1000300
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a records download through a network outage merges" "0" "$rc"
+check "#3312 naming the records it waited on" "reading the record of what each part did not test from workflow run 900" "$out"
+ut_state; printf '%s\n' "$SIGNIN" > "$ST/download-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a records download whose sign in is refused refuses the merge" "1" "$rc"
+check "#3312 said as a refused sign in, for the records" "GitHub refused the sign in 4 times reading the record of what each part did not test" "$out"
+ut_state; rm -f "$ST/annotations-501"; printf '%s\n' "$CONNECT" > "$ST/contents-down"; ut_net_back_at contents-down 1000300
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a read for the tool through a network outage merges" "0" "$rc"
+check "#3312 naming the tool read it waited on" "reading whether the tree at ${UT_HEAD:0:7} holds tools/ci-unmeasured-summary.sh" "$out"
+ut_state; rm -f "$ST/annotations-501"; printf '%s\n' "$SIGNIN" > "$ST/contents-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a read for the tool whose sign in is refused refuses the merge" "1" "$rc"
+check "#3312 said as a refused sign in, for the tool" "GitHub refused the sign in 4 times reading whether the tree at ${UT_HEAD:0:7} holds tools/ci-unmeasured-summary.sh" "$out"
 ut_state; printf 'test-c.sh\tnot macOS\n' > "$ST/artifacts-900/part-unmeasured-1/unmeasured.tsv"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 records that do not add up to the notice refuse the merge" "1" "$rc"
@@ -4612,6 +4667,14 @@ ut_reused "$UT_TREE"; printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/runarti
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 a reused run whose artifacts cannot be listed refuses the merge" "1" "$rc"
 check "#3312 saying which run" "could not read the artifacts of workflow run 800, which the checks at ${UT_HEAD:0:7} reused" "$out"
+ut_reused "$UT_TREE"; printf '%s\n' "$CONNECT" > "$ST/joblog-down"; ut_net_back_at joblog-down 1000300
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a check's log read through a network outage merges" "0" "$rc"
+check "#3312 naming the log it waited on" "reading the log of check suite at ${UT_HEAD:0:7}" "$out"
+ut_reused "$UT_TREE"; printf '%s\n' "$SIGNIN" > "$ST/joblog-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a check's log read whose sign in is refused refuses the merge" "1" "$rc"
+check "#3312 said as a refused sign in, for the log" "GitHub refused the sign in 4 times reading the log of check suite" "$out"
 
 ut_state; rm -f "$ST/annotations-501"; printf 'gh: Server Error (HTTP 502)\n' > "$ST/contents-down"
 out="$(ut_run 7 --squash)"; rc=$?

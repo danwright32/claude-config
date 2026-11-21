@@ -806,8 +806,13 @@ read_untested(){
     if [ "$rc" -eq 5 ]; then ut_paused=1; ut_read_for=""; return 0; fi
     out="$ut_ans"
     found="$(printf '%s' "$out" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" --arg n "$name" --arg r "$run" '.[] | select((.title // "") | startswith($p)) | {name: $n, run: $r, t: .title, m: (.message // "")}' 2>/dev/null)"; jrc=$?
-    if [ "$rc" -ne 0 ] || [ "$jrc" -ne 0 ]; then
-      ut_failed="$ut_failed$name"$'\t'"${out:0:200}, exit $rc"$'\n'
+    if [ "$rc" -ne 0 ]; then
+      # Said as every read here is: the network, a refused sign in, or GitHub's own error (L11).
+      ut_failed="$ut_failed$name"$'\t'"$(signin_or_unread "what check $name said it did not test" "$rc")"$'\n'
+      continue
+    fi
+    if [ "$jrc" -ne 0 ]; then
+      ut_failed="$ut_failed$name"$'\t'"could not read what check $name said it did not test (GitHub's answer would not parse: ${out:0:200})"$'\n'
       continue
     fi
     [ -z "$found" ] || ut_found="$ut_found$found"$'\n'
@@ -825,7 +830,7 @@ say_untested(){
   fi
   while IFS=$'\t' read -r name why; do
     [ -n "$name" ] || continue
-    say "Could not read what check $name said it did not test ($why), so any part it left untested is not named here. Merging all the same: this is a report, not a gate."
+    say "$(printf '%s' "${why:0:1}" | tr '[:lower:]' '[:upper:]')${why:1}, so any part check $name left untested is not named here. Merging all the same: this is a report, not a gate."
   done <<< "$ut_failed"
   while IFS= read -r n; do
     [ -n "$n" ] || continue
@@ -888,7 +893,7 @@ ut_tool_read(){
   case "$out" in *"(HTTP 404)"*) return 0 ;; esac
   read_err="${out:0:300}"
   ghp_rate_limited "$read_err" && return 5
-  return 2
+  mt_gh_read_class "$out" "$account"
 }
 # A RUN THAT REUSED AN EARLIER GREEN RUN of exactly the same tree (claude-config#2690) skips the steps
 # that write the notice, so its checks carry none. Each of its jobs says in its log, as tests.yml
@@ -899,13 +904,15 @@ ut_tool_read(){
 # a run or a notice that cannot be found or read refuses the merge, saying which run was looked for.
 ut_q=""; ut_ans=""; ut_via=""; ut_reused_mains=""
 UT_REUSED_RE='NOT RUN AGAIN\. Tree ([0-9a-f]{40}) already passed in run https://github\.com/([^[:space:]/]+/[^[:space:]/]+)/actions/runs/([0-9]+) on commit ([0-9a-f]{40})'
+# Reads GitHub's answer to ut_q into ut_ans; 0 answered, 5 rate limited, and any other failure classed
+# by mt_gh_read_class, as ut_tool_read and ut_dl_read are.
 ut_api_read(){
   local rc
   ut_ans="$(gh_as api "$ut_q" 2>&1 </dev/null)"; rc=$?
   [ "$rc" -eq 0 ] && return 0
   read_err="${ut_ans:0:300}"
   ghp_rate_limited "$read_err" && return 5
-  return 2
+  mt_gh_read_class "$ut_ans" "$account"
 }
 # ut_read <what is read, for the stop> <API path>: 0 with GitHub's answer in ut_ans, 1 to look again
 # (GitHub paused this session's reads); a read that fails refuses the merge.
@@ -917,17 +924,19 @@ ut_read(){
   [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "$1" "$rrc"), so which suites to run here before merging #$pr at ${head:0:7} is not known."
   return 0
 }
-# The records, fetched from workflow run ut_q into ut_dir/parts: 0 fetched, 1 GitHub has none to
-# give (expired, or never uploaded), 2 to ask again, 5 rate limited.
+# The records, fetched from workflow run ut_q into ut_dir/parts: 0 fetched, 3 GitHub has none to
+# give (expired, or never uploaded), 5 rate limited, and any other failure classed as every read here
+# is (mt_gh_read_class: the network, which is waited through, a refused sign in, 2 to ask again, or 1
+# believed).
 ut_dl_read(){
   local rc
   rm -rf "$ut_dir/parts"
   ut_ans="$(gh_as run download "$ut_q" --repo "$slug" --pattern 'part-unmeasured-*' --dir "$ut_dir/parts" 2>&1 </dev/null)"; rc=$?
   [ "$rc" -eq 0 ] && return 0
   read_err="${ut_ans:0:300}"
-  case "$read_err" in *"no valid artifacts found"*|*"no artifact matches"*) return 1 ;; esac
+  case "$read_err" in *"no valid artifacts found"*|*"no artifact matches"*) return 3 ;; esac
   ghp_rate_limited "$read_err" && return 5
-  return 2
+  mt_gh_read_class "$ut_ans" "$account"
 }
 # Sets ut_reused_mains to the notice of the run the checks at the head reused, as read_untested sets
 # ut_found, and ut_via to say which run it came from. 0 when found, 1 to look again; any other
@@ -983,7 +992,7 @@ untested_step(){
   [ -z "$ut_paused" ] || return 1
   if [ -n "$ut_failed" ]; then
     IFS=$'\t' read -r name first <<< "$(printf '%s' "$ut_failed" | sed -n 1p)"
-    ut_refuse "could not read what check $name said it did not test ($first), so which suites to run here before merging #$pr at $h7 is not known."
+    ut_refuse "$first, so which suites to run here before merging #$pr at $h7 is not known."
   fi
   mains="$(printf '%s' "$ut_found" | jq -c --arg p "$UNTESTED_TITLE_PREFIX" 'select(.t == $p)' 2>/dev/null)"
   n_mains="$(printf '%s' "$mains" | grep -c . || true)"
@@ -1021,7 +1030,7 @@ untested_step(){
   ut_q="$run"
   with_retries "the record of what each part did not test from workflow run $run$ut_via" ut_dl_read; rrc=$?
   [ "$rrc" -eq 5 ] && { ut_cleanup; return 1; }
-  if [ "$rrc" -eq 1 ]; then
+  if [ "$rrc" -eq 3 ]; then
     ut_refuse "could not fetch the record of what each part did not test from workflow run $run$ut_via: GitHub has none to give (${read_err:0:300}). The tests workflow keeps them for a day; to make them again, run the checks again (gh run rerun $run --repo $slug), then this."
   fi
   [ "$rrc" -eq 0 ] || ut_refuse "$(signin_or_unread "the record of what each part did not test from workflow run $run$ut_via" "$rrc"), so the list of suites to run here is not known."
@@ -1045,8 +1054,12 @@ untested_step(){
   fi
   tip="$(git -C "$ut_dir/wt" rev-parse refs/mwr/head 2>/dev/null)"
   if [ "$tip" != "$head" ]; then
-    say "GitHub's head of #$pr is at ${tip:0:7}, not ${h7}, which this run judged; looking again before running anything."
-    ut_cleanup; return 1
+    # Waited a look, bounded as every wait is (out_of_time), rather than going round at once: each
+    # round asks every gate again and fetches the records again.
+    ut_cleanup
+    out_of_time "has not been fetched at that head (GitHub's refs/pull/$pr/head is at ${tip:0:7})"
+    wait_a_look "ut-pull-ref" "GitHub's head of #$pr is at ${tip:0:7}, not ${h7}, which this run judged; waiting a look before running anything."
+    return 1
   fi
   git -C "$ut_dir/wt" checkout -q --detach refs/mwr/head >/dev/null 2>&1 || ut_refuse "the head $h7 could not be checked out to run the suites in."
   mb="$(git -C "$ut_dir/wt" merge-base refs/mwr/base refs/mwr/head 2>/dev/null)" || ut_refuse "the point where #$pr's head left $base could not be found, so what it changed is not known."
@@ -1159,7 +1172,16 @@ STILL
     say "All $(ut_plural "$k" suite) passed on this Mac at $h7: $said_list. Asking every gate again before the merge, since they took $(dur $(( $(now) - started )))."
     ut_cleanup; ut_done_for="$head"; return 0
   fi
-  head -n 200 "$ut_dir/run.out" | while IFS= read -r l; do emit "    $l"; done
+  # All of it when short; else every status line, then the end, where the runner's verdict is, so
+  # the lines the refusal points at are always shown.
+  lines="$(wc -l < "$ut_dir/run.out" | tr -d ' ')"
+  if [ "${lines:-0}" -le 200 ]; then
+    while IFS= read -r l; do emit "    $l"; done < "$ut_dir/run.out"
+  else
+    emit "    (the runner printed $lines lines: each suite's status line, then its last 150)"
+    grep -E '^  (FAIL|NOT RUN|UNMEASURED) ' "$ut_dir/run.out" | sed -n '1,100p' | while IFS= read -r l; do emit "    $l"; done
+    tail -n 150 "$ut_dir/run.out" | while IFS= read -r l; do emit "    $l"; done
+  fi
   n_fail="$(grep -c -E '^  FAIL ' "$ut_dir/run.out" || true)"
   if [ "${n_fail:-0}" -gt 0 ]; then
     ut_refuse "${n_fail} of the suites the checks left a part of untested failed on this Mac at $h7, as the runner's lines above say."
