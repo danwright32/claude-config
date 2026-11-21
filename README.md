@@ -3923,9 +3923,9 @@ sanctioned route past the gate:
 
     cd <the project> && <this Mac's home>/.claude/hooks/no-network-run.sh node --test test/notify.test.js
 
-`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox whose one rule denies every
-network operation. Every process the command starts inherits that, a detached one included, and none
-can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
+`hooks/no-network-run.sh` runs the command after it inside a macOS sandbox that denies every network
+operation, and since #3288 a hand off to something outside the sandbox as well (below). Every
+process the command starts inherits that, a detached one included, and none can take it off. It takes no option and reads no setting, there is no "this Mac only" mode, and the
 command's own exit code comes through unchanged. The gate passes a call that is that installed file
 and its command and nothing else, without reading what runs under it. The refusal of a file whose
 imports reach code
@@ -3973,10 +3973,41 @@ exactly as it was before:
   2, a closed one, a here string, a target with a variable or a pattern in it, one glued to a word,
   and any name holding `/dev/tcp` or `/dev/udp`.
 
+A hand off is refused too (#3288, decided 2026-11-20: denied, the stricter answer, recorded on the
+issue). A request to launchd or to another app is not a network operation, so under the network
+rule alone a command could have something outside the sandbox act for it: write an HTML page whose
+form submits itself, open it, and the browser posts. The profile now also refuses:
+
+- To start `open`, `osascript` and `launchctl`, each by its real path, and with them `crontab`
+  (cron runs what it is given, outside the sandbox) and `shortcuts` (a Shortcut is run by another
+  process). The list is `HANDOFFS` in the wrapper. A link to one is refused as the file is. A test
+  that puts a stand in of the same name on its `PATH` is not affected: the rule goes by the real
+  path.
+- The requests themselves, whoever makes them: to have something opened (`lsopen`), to send an Apple
+  event to another app (`appleevent-send`), and to have launchd make a job (`job-creation`, which
+  this sandbox already refused before the rule was written out).
+
+Measured 2026-11-20 on macOS 26.6.2, on the personal MacBook. The five programs start outside the
+wrapper and are refused under it, each started with `--help`, which prints its usage and ends. The
+three requests were asked of the sandbox (`sandbox_check`, the question the system's daemons put
+about a caller) and not made: allowed outside the wrapper, denied under it. Nothing was opened,
+scripted or loaded to find out, since a request that turned out not to be refused would have acted
+on a Mac in use.
+
+What it cost, counted before the rule was built (2026-11-20, the personal MacBook's session records
+only; the work MacBook's are not on this Mac). Of the 51 Bash calls that started the wrapper since
+its first on 2026-11-19, none names one of those programs, and none of the files those calls name
+that are still on disk (7 calls name one) starts one. Of the 279 calls the Slack drafts gate
+refused since 2026-11-08, the runs the wrapper exists for, none starts one either: 1 spells `open`
+and 25 name a file that does, and every one of those is the Python function, a word in a table or
+prose. This repository's own suites start none of them for real: the ones that concern `launchctl`
+or `osascript` put a stand in on the `PATH` or replace the call, and several refuse to run
+otherwise. So nothing was exempted.
+
 What the route is, so nobody reads more into it. It stops code from using the network while it runs
-under the wrapper, which is what makes an accidental post from a test impossible. It does not
-contain code written to get out. The sandbox allows every file write, so such code can leave
-something behind for a later call, or ask another program to act for it:
+under the wrapper, which is what makes an accidental post from a test impossible, and it refuses the
+hand offs above. It does not contain code written to get out. The sandbox allows every file write,
+so such code can leave something behind for a later call, or reach something the rules do not name:
 
 - A file a later call reads without the gate reading it. Every Bash call starts a login shell, which
   reads `~/.zshenv`, `~/.zprofile` and `~/.zlogin`, and the gate reads none of them. The same holds
@@ -3984,14 +4015,27 @@ something behind for a later call, or ask another program to act for it:
   program in a folder on the `PATH` that the user can write, several of which stand ahead of
   `/usr/bin` on these Macs. A command under the wrapper can write any of them unread. The gate on
   main already passes some such writes when they only mention an address; under the wrapper the
-  writer is not read at all.
-- A command that asks something outside the sandbox to act for it without using the network. A
-  request to launchd or to another app is not a network operation, so what `launchctl`, `osascript`
-  or `open` has started runs outside the sandbox. `open` takes one line and no setup: a command
-  under the wrapper can write an HTML page whose form submits itself to an address and open it, and
-  the browser, which is not in the sandbox, posts. Read from the profile, which denies the network
-  and allows everything else; not run. The profile was left as it is: denying those requests too
-  would be a change of design, for Dan to decide.
+  writer is not read at all. A file left in a folder that something outside the sandbox watches is
+  the same thing and is not refused: a plist in `~/Library/LaunchAgents` is read by launchd at the
+  next login. A rule on that one folder would be a name on a list, and could not be seen to fail
+  without writing into the real folder.
+- A hand off the rules above do not name (measured 2026-11-20, macOS 26.6.2):
+  - A copy of one of the programs. A plain copy is ended by macOS itself before it runs, with or
+    without the wrapper (the crash record gives a launch constraint as the reason). A copy signed
+    again on this Mac is no longer Apple's program: it starts under the wrapper, and the rule on
+    its path does not see it. The suite holds that as measured. What stands in its way is the rule
+    on the request, which was asked and not exercised.
+  - Any program written to make one of those requests itself, for the same reason.
+  - A service found by its name (`mach-lookup`), which is how most requests to something outside a
+    process begin. It is still allowed, the clipboard's service in the suite's case. Denying every
+    such lookup was tried on 2026-11-20 against 31 ordinary things a test does: 21 answered as
+    before, and 10 did not (`id -un`, `whoami` and `ls -l` gave the number 501 for the name, Python's `pwd.getpwuid`
+    and Node's `os.userInfo()` failed, git could not name an author where none was set, Node's
+    `fs.watch` failed, and `defaults read`, `security list-keychains` and `pbpaste` read nothing).
+    Allowing the lookups those need would be a list of exemptions, which is Dan's to decide, so
+    the profile was left without the rule.
+  - Whether launchd acts on any other request from a copy of `launchctl` (start a job that is
+    already loaded, set a variable) was not tried, since trying changes what launchd holds.
 - A connection that was already open when the wrapper started. The sandbox refuses a new connection
   and does not stop a write to one handed down to the command (measured 2026-11-19). The rule above
   is what keeps a call from opening one first. A unix domain socket whose listener is outside the
@@ -4013,10 +4057,18 @@ something behind for a later call, or ask another program to act for it:
   and connects to it once outside the sandbox, which must arrive, and once inside the same profile,
   which must be refused. If the connection inside arrives, the profile cannot be applied, the tool
   is missing or the check gets no answer, the command is not run (exit 70, or 69 for a missing
-  tool).
+  tool). The programs it refuses to start are proved the same way on every run (#3288): each is
+  started with `--help` outside the sandbox, where it must start, and inside it, where it must be
+  refused with a permission error, and if one starts inside, the command is not run (exit 70). A
+  listed program that is not on the machine at all is passed over. The requests (`lsopen`,
+  `appleevent-send`, `job-creation`) are in the same profile and are asked by the suite, not on
+  every run. One reading of what the added proof costs (2026-11-20, five runs of `/usr/bin/true`
+  each, other agents running on the Mac): about 0.35 s a run before and 0.73 s after. A second
+  reading was not taken, so this is the size of it and no more.
 
 Still to measure, on the work MacBook: how many of the 95 runs the #3143 count found refused pass
-their tests with no network. Suites: `test-no-network-run.sh` (the wrapper, against a listener the
+their tests with no network, and whether any of them starts one of the programs now refused (the
+count above is the personal MacBook's alone). Suites: `test-no-network-run.sh` (the wrapper, against a listener the
 suite opens on this Mac) and `test-slack-drafts-no-network-route.sh` (the gate's rule).
 
 A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
