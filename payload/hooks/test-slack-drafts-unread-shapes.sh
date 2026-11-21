@@ -613,7 +613,8 @@ echo "slack drafts only: a string a one line function hands a shell is read as t
 # outer shell's variables filled in (sh_inner_text, the reading #3251 wrote), where the gate works
 # every one of them out and can follow the text that gives. Anywhere else the reader's commands
 # stand, as they did before this: a variable not worked out, a body's second command, a body over
-# several lines, the same string at a script's top level or typed.
+# several lines, the same string at a script's top level or typed. (Since #3316 the string is read
+# as handed there too, beside the reader's commands and never in their place: the section below.)
 printf '%s\n' "f() { $POST; }" > "$S/lib-posts.sh"
 cat > "$S/fn-plain-ok.sh" <<'EOF'
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -687,6 +688,154 @@ EOF
 each read_refused "#3252 where a variable is not worked out, or the text the shell gets cannot be followed, the reader's commands stand" "a path the gate cannot work out" 3<<'EOF'
 bash fn-unknown.sh
 bash fn-handed.sh
+EOF
+
+echo
+echo "slack drafts only: a string a shell is handed is read as that shell gets it wherever it stands (claude-config#3316)"
+
+# Measured 2026-11-20 on main at a3ffbde735: a script whose top level line is `bash -c ".
+# '$DIR/lib-posts.sh' && f"`, DIR set from BASH_SOURCE the line before, passed. The outer shell
+# fills $DIR in before bash is handed the string, so bash sources that file. The reader gives the
+# string's commands as written, where '$DIR/lib-posts.sh' is a file of that very name: there is
+# none, so nothing was read. source, a script or an interpreter handed the file, eval, a pipe or a
+# redirection from it and a cd into the folder all passed the same way, in a script and typed.
+# Wherever a variable or a substitution of the outer shell stands inside single quotes of the
+# string's own, the string is now also read as the shell gets it (string_as_handed, by the fill in
+# #3251 wrote and #3252 reads a function's string with).
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"text=hi")' > "$S/posts.py"
+printf '%s\n' 'print("ok")' > "$S/ok.py"
+# One script for each line of the heredoc, `name|its second line`, under a first line that sets DIR.
+while IFS='|' read -r name body <&3; do
+  [ -n "$name" ] || continue
+  printf '%s\n' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' "$body" > "$S/$name"
+done 3<<'EOF'
+h-dot-posts.sh|bash -c ". '$DIR/lib-posts.sh' && f"
+h-source-posts.sh|bash -c "source '$DIR/lib-posts.sh' && f"
+h-bash-posts.sh|bash -c "bash '$DIR/posts.sh'"
+h-py-posts.sh|bash -c "python3 '$DIR/posts.py'"
+h-sh-posts.sh|sh -c ". '$DIR/lib-posts.sh'; f"
+h-zsh-posts.sh|zsh -c ". '$DIR/lib-posts.sh'; f"
+h-env-posts.sh|env bash -c ". '$DIR/lib-posts.sh' && f"
+h-eval-posts.sh|eval ". '$DIR/lib-posts.sh' && f"
+h-cat-posts.sh|bash -c "cat '$DIR/posts.sh' | bash"
+h-redir-posts.sh|bash -c "bash < '$DIR/posts.sh'"
+h-nested-posts.sh|bash -c "bash -c \". '$DIR/lib-posts.sh' && f\""
+h-subst-posts.sh|out="$(bash -c ". '$DIR/lib-posts.sh' && f")"
+h-if-posts.sh|if true; then bash -c ". '$DIR/lib-posts.sh' && f"; fi
+h-second-posts.sh|true; bash -c ". '$DIR/lib-posts.sh' && f"
+h-cd-posts.sh|bash -c "cd '$DIR' && bash posts.sh"
+h-dot-ok.sh|bash -c ". '$DIR/lib-ok.sh' && f"
+h-source-ok.sh|bash -c "source '$DIR/lib-ok.sh' && f"
+h-bash-ok.sh|bash -c "bash '$DIR/ok.sh'"
+h-py-ok.sh|bash -c "python3 '$DIR/ok.py'"
+h-eval-ok.sh|eval ". '$DIR/lib-ok.sh' && f"
+h-cat-ok.sh|bash -c "cat '$DIR/ok.sh' | bash"
+h-nested-ok.sh|bash -c "bash -c \". '$DIR/lib-ok.sh' && f\""
+h-cd-ok.sh|bash -c "cd '$DIR' && bash ok.sh"
+h-echo.sh|bash -c "echo '$DIR/posts.sh'"
+h-echo-unknown.sh|bash -c "echo '$NOWHERE/posts.sh' '$1'"
+h-args.sh|bash -c "echo '$DIR' \"\$1\"" _ "$1"
+h-grep.sh|bash -c "grep -c 'a$' '$DIR/ok.sh'"
+h-unknown-posts.sh|bash -c ". '$NOWHERE/lib-posts.sh' && f"
+h-unknown-ok.sh|bash -c ". '$NOWHERE/lib-ok.sh' && f"
+h-unknown-source.sh|sh -c "source '$NOWHERE/lib-ok.sh'; f"
+h-unknown-eval.sh|eval ". '$NOWHERE/lib-ok.sh' && f"
+h-loop-name.sh|for n in ok; do bash -c ". '$DIR/lib-$n.sh' && f"; done
+EOF
+run_here 'bash h-dot-posts.sh'
+read_refused "#3316 the issue's script: a top level string that sources a file that posts by the outer shell's variable is refused"
+says "#3316 and the refusal is a finding that it posts, from the file the variable names" "sends a request to chat.postMessage"
+says "#3316 and it names the file" "lib-posts.sh"
+each read_refused "#3316 every loader in such a string reads the file the variable names, in a script on disk" 3<<'EOF'
+bash h-source-posts.sh
+bash h-bash-posts.sh
+bash h-py-posts.sh
+bash h-sh-posts.sh
+bash h-zsh-posts.sh
+bash h-env-posts.sh
+bash h-eval-posts.sh
+bash h-cat-posts.sh
+bash h-redir-posts.sh
+bash h-nested-posts.sh
+bash h-subst-posts.sh
+bash h-if-posts.sh
+bash h-second-posts.sh
+bash h-cd-posts.sh
+EOF
+each read_refused "#3316 and typed" 3<<'EOF'
+D=.; bash -c ". '$D/lib-posts.sh' && f"
+D=.; bash -c "source '$D/lib-posts.sh' && f"
+D=.; bash -c "bash '$D/posts.sh'"
+D=.; bash -c "python3 '$D/posts.py'"
+D=.; eval ". '$D/lib-posts.sh' && f"
+D=.; bash -c "cat '$D/posts.sh' | bash"
+D=.; bash -c "cd '$D' && bash posts.sh"
+EOF
+# A variable the gate does not work out: the file it names is not read, so the command is refused,
+# whatever the file holds, as the same source written outside a string is (#2538). Before this the
+# file was looked up under the variable's own name, found missing, and passed over. A loop's name is
+# one the fill in does not work out.
+each read_refused "#3316 a file sourced through a variable that is not worked out is refused as not read" "a path the gate cannot work out" 3<<'EOF'
+bash h-unknown-posts.sh
+bash h-unknown-ok.sh
+bash h-unknown-source.sh
+bash h-unknown-eval.sh
+bash h-loop-name.sh
+bash -c ". '$NOWHERE/lib-posts.sh' && f"
+bash -c ". '$NOWHERE/lib-ok.sh' && f"
+sh -c "source '$NOWHERE/lib-ok.sh'; f"
+eval ". '$NOWHERE/lib-ok.sh' && f"
+EOF
+# The outer shell's value is not one the string can set: a variable of the same name set inside the
+# string does not stand in for it, so the file is still not read. The folder named here is not
+# there, so reading the path the inner assignment gives found no file and passed.
+run_here "bash -c \"NOWHERE=$S/none; . '\$NOWHERE/lib-posts.sh' && f\""
+read_refused "#3316 a variable the string sets itself does not stand in for the outer shell's of that name"
+says "#3316 and the refusal says the path is not worked out" "a path the gate cannot work out"
+# A file RUN by a path that is not worked out is refused only behind the #2683 switch, off until Dan
+# decides. Inside such a string it is judged as the same command written outside one is, under
+# either setting, and with the switch on that is a refusal.
+for sw in off refuse; do
+  if [ "$sw" = refuse ]; then export SLACK_GATE_UNWORKED_PATHS=refuse; fi
+  for pair in 'bash "$NOWHERE/posts.sh"|bash -c "bash '"'"'$NOWHERE/posts.sh'"'"'"' \
+              'python3 "$NOWHERE/posts.py"|bash -c "python3 '"'"'$NOWHERE/posts.py'"'"'"' \
+              'bash "$NOWHERE/posts.sh"|sh -c "true; bash '"'"'$NOWHERE/posts.sh'"'"'"'; do
+    run_here "${pair%%|*}"; WRITTEN_OUT="$RC"
+    run_here "${pair#*|}"
+    if [ "$RC" -eq "$WRITTEN_OUT" ]; then check "#3316 a file run by a path not worked out is judged in a string as outside one, switch $sw (exit $WRITTEN_OUT): ${pair#*|}" ok
+    else check "#3316 a file run by a path not worked out is judged in a string as outside one, switch $sw: ${pair#*|}" "outside a string exit $WRITTEN_OUT, in one exit $RC"; fi
+    if [ "$sw" = refuse ]; then read_refused "#3316 and with the switch on that is a refusal: ${pair#*|}"; fi
+  done
+done
+unset SLACK_GATE_UNWORKED_PATHS
+each allowed "#3316 the same strings loading a file that posts nothing, or loading none, still pass in a script on disk" 3<<'EOF'
+bash h-dot-ok.sh
+bash h-source-ok.sh
+bash h-bash-ok.sh
+bash h-py-ok.sh
+bash h-eval-ok.sh
+bash h-cat-ok.sh
+bash h-nested-ok.sh
+bash h-cd-ok.sh
+bash h-echo.sh
+bash h-echo-unknown.sh
+bash h-args.sh
+bash h-grep.sh
+EOF
+each allowed "#3316 and typed" 3<<'EOF'
+D=.; bash -c ". '$D/lib-ok.sh' && f"
+D=.; bash -c "bash '$D/ok.sh'"
+D=.; bash -c "python3 '$D/ok.py'"
+D=.; eval ". '$D/lib-ok.sh' && f"
+D=.; bash -c "cd '$D' && bash ok.sh"
+bash -c "echo '$NOWHERE/posts.sh'"
+bash -c "echo '$HOME'"
+bash -c "cd '$NOWHERE' && ls"
+bash -c "git -C '$NOWHERE' status"
+bash -c "grep -rn 'foo' '$NOWHERE/src' | head"
+bash -c "awk '{print $1}' ok.sh"
+bash -c "for f in a b; do echo '$f'; done"
+ssh host "cd '$NOWHERE' && ls"
 EOF
 
 echo
