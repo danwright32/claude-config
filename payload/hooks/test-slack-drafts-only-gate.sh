@@ -4365,8 +4365,10 @@ else
 fi
 if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
-  # The cases whose limits are 36 and 37 units take several readings whether or not the first passes
-  # (#3170), so one run's log gives the spread a limit is placed from, not a lone reading (L172).
+  # The one lesson case (36 units) and the command that starts this suite (27 on macOS, 37 off it)
+  # take several readings whether or not the first passes (#3170), so one run's log gives the spread
+  # a limit is placed from, not a lone reading (L172). The fallback case, also held to 36, takes them
+  # too and is checked above, where it also has to show each reading was taken on the step clock.
   for lbl in $several; do
     l="$(grep "^$lbl " "$T/cost.log" | sed -n 1p)"
     n="$(printf '%s\n' "$l" | sed -n 's/.*, samples \([0-9][0-9., ]*\)[;)].*/\1/p' | tr ',' '\n' | grep -c . || true)"
