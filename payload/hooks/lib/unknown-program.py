@@ -23,11 +23,17 @@ it can refuse a command those let through and never the reverse:
     act on what it is handed are known. Every other program is not: op, dotenv, sandbox-exec,
     docker, a program named by a variable, a script that runs its arguments. No list of programs
     that run their words is kept, because a program missing from one would pass.
-  * A function the text being read defines is that text's own code, as that same question has
-    it: the gate reads its body where it stands. Read as commands, the words this repository's
-    gate suite hands its own functions as plain labels (`run_slow python`, `f2854 curl "<a
-    write>"`) refused that suite (measured 2026-11-19). A body that runs its arguments ("$@")
-    is the program named by a variable that claude-config#2683 left as it was, and stays open.
+  * A function the text being read defines is asked the question a script on disk is asked
+    (shell_acts), of its body (function_acts, claude-config#3304): one whose body runs what it
+    is handed ("$@", eval, a shell's -c), or hands it to a program or to another function of
+    the text not seen to be unable to act on it, is not known, and one that only prints, tests
+    or stores it is. Until #3304 every such function was known, because the words this
+    repository's gate suite hands its own functions as plain labels (`run_slow python`, `f2854
+    curl "<a write>"`), read as commands, refused that suite (measured 2026-11-19); that left
+    `run() { "$@"; }; run <a refused command>` allowed. A body the gate cannot find or read
+    (`f() ( ... )`, a text whose blocks do not pair up) is not known. Only the words after the
+    function are read: a body that builds the command from a part of them (`$1 --test x`) is
+    read where it stands, with its arguments unknown, as before.
   * A word after it is the name of a program the gate reads by its name (judged_by_name), or of a
     runner the reader reads past, bare, by a path or in quotes. From that word on, the words are
     judged as the command they would be if the program ran them (Judge.judge, and a string a
@@ -74,6 +80,8 @@ MAX_STARTS = 6
 MAX_NESTED = 3
 # A pattern nothing matches: no word of a typed command is "what the script was handed".
 NOTHING = re.compile(r"(?!)")
+# A redirection that writes the file named after it.
+WRITES_TO = re.compile(r"\d*(?:>>|>\||&>>|&>|>)")
 
 
 def make(judged_by_name, sh_redirect):
@@ -85,6 +93,8 @@ def make(judged_by_name, sh_redirect):
         suffix = None  # the words the reading around this one is judging as a command (judge_as_run)
         starts_memo = {}  # {a word: whether it can start a command the gate reads}, one Judge a process
         funcs_memo = {}  # {a text: the names of the functions it defines}
+        bodies_memo = {}  # {(a text, its folder): function_bodies's answer}
+        acts_memo = {}  # {(a text, its folder, a function's name): function_acts's answer}
 
         def starts_command(self, word):
             """Whether a word, as the program gets it, names a program the gate reads by its name
@@ -99,17 +109,82 @@ def make(judged_by_name, sh_redirect):
             """Whether the program of a command is one the gate does not know to be unable to run
             the words it is handed: sh_command_acts's answer for a command handed something in its
             words, which is how a shell script's own commands are asked. A function the text being
-            read defines is that text's own code, as it is there: its body's commands are read
-            where they stand."""
+            read defines is asked through its body (function_acts), and the answer is then how
+            the body acts, as a phrase, for the refusal to say."""
             text = self.shell.get("text") or ""
             defined = self.funcs_memo.get(text)
             if defined is None:
                 if len(self.funcs_memo) > 64:
                     self.funcs_memo.clear()
                 defined = self.funcs_memo[text] = frozenset(self.sh_funcs(text))
-            cmd = {"words": words, "docs": None, "fed": False, "takes": True, "expands": False, "block": False,
+            if "/" not in words[0] and words[0] in defined:
+                return self.function_acts(words[0], text, d, depth, ())
+            cmd ={"words": words, "docs": None, "fed": False, "takes": True, "expands": False, "block": False,
                    "env": lambda: None}
             return bool(self.sh_command_acts(cmd, NOTHING, defined, d, depth))
+
+        def function_bodies(self, text, d):
+            """{a function's name: the text of each body text gives it}, or None where the gate's
+            reading of text's blocks (sh_struct) finds no structure: keywords that do not pair up, or
+            a body that is not a { } group (`f() ( ... )`)."""
+            key = (text, d)
+            if key not in self.bodies_memo:
+                if len(self.bodies_memo) > 64:
+                    self.bodies_memo.clear()
+                out = None
+                try:
+                    cmds, parts = self.parsed(text, d)
+                except self.sw.Unreadable:
+                    cmds = None
+                if cmds is not None:
+                    items = list(zip(cmds, parts))
+                    struct = self.sh_struct_of(text, d, items)
+                    if struct:
+                        out = {}
+                        for blk in struct[1]:
+                            if blk["kind"] == "func" and blk["close"] is not None and blk.get("name"):
+                                a, b = items[blk["open"]][1]["start"], items[blk["close"]][1]["end"]
+                                out.setdefault(blk["name"], []).append(text[a:b])
+                self.bodies_memo[key] = out
+            return self.bodies_memo[key]
+
+        @staticmethod
+        def handed_names_outputs(words, handed):
+            """Whether what a function was handed stands, in the words that close a loop or block
+            of its body, only in the name of a file the block writes: `} > "$dir/$1.sh"` feeds the
+            block nothing, where `done < "$1"` feeds it the file. Asked only of a function's body
+            (shell_acts's around), so a script on disk is read as it was."""
+            return all(WRITES_TO.fullmatch(words[k - 1]) for k in range(1, len(words)) if handed.search(words[k]))
+
+        def function_acts(self, name, text, d, depth, seen):
+            """How a function text defines acts on the words it is handed, as a phrase, or None where
+            the gate reads its body and sees it unable to: the question a script on disk is asked
+            (shell_acts), asked of the body, with a function of text the body hands them to asked
+            the same (claude-config#3304). A body the gate cannot find or read is not known to be
+            unable, as a script it cannot read is not."""
+            if name in seen:
+                return None  # a function that hands them back to itself runs nothing by that alone
+            if len(seen) >= MAX_NESTED:
+                return f"hands them through more than {MAX_NESTED} functions, more than the gate reads"
+            key = (text, d, name)
+            if not seen and key in self.acts_memo:
+                return self.acts_memo[key]
+            bodies = self.function_bodies(text, d)
+            if bodies is None or not bodies.get(name):
+                why = "is a function whose body the gate could not read"
+            else:
+                names = frozenset(bodies)
+                asked = (names, lambda other: self.function_acts(other, text, d, depth, seen + (name,)))
+                why = None
+                for body in bodies[name]:
+                    why = self.shell_acts(body, d, False, depth + 1, asked)
+                    if why:
+                        break
+            if not seen:
+                if len(self.acts_memo) > 256:
+                    self.acts_memo.clear()
+                self.acts_memo[key] = why
+            return why
 
         def word_value(self, raw):
             """One raw word as the program gets it, quotes removed, or None where it is not one word."""
@@ -137,8 +212,11 @@ def make(judged_by_name, sh_redirect):
             if len(words) < 2 or not any(self.starts_command(w) for w in words[1:]):
                 return None
             name = os.path.basename(words[0])
-            if judged_by_name(name) or not self.may_run_its_words(words, d, depth):
+            runs = None if judged_by_name(name) else self.may_run_its_words(words, d, depth)
+            if not runs:
                 return None
+            # A function's refusal says what its body does with the words, which is why they are read.
+            unknown = f"{words[0]} is a function that {runs}, so it" if isinstance(runs, str) else words[0]
             joined = self.sw.join_continuations(rest)
             toks = self.sh_tokens(joined)
             places, at, end = [], 0, len(toks)
@@ -182,7 +260,7 @@ def make(judged_by_name, sh_redirect):
                             # the script's own reading of its variables around them.
                             del self.unfollowed[noted:]
                             continue
-                        return (f"{words[0]} is not a program the gate knows to be unable to run the words after "
+                        return (f"{unknown} is not a program the gate knows to be unable to run the words after "
                                 f"it, so they are read as a command it runs: {inner}")
             finally:
                 self.behind -= 1

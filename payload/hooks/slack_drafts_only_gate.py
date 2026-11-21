@@ -7039,7 +7039,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return f"can write a file ({owner}.{node.attr}, passed on rather than called, with a mode the gate cannot read)"
         return None
 
-    def shell_acts(self, body, d, zero=False, depth=0):
+    def shell_acts(self, body, d, zero=False, depth=0, around=None):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what
         the script was handed, or hands it to a program not seen to be unable to act, as a phrase, or
         None.
@@ -7060,11 +7060,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         pass is not read as more than it measured: what the script writes with a redirection or by
         moving a file (SH_INERT says why), a variable set by read from a pipe or a file, a pipe or a
         heredoc inside a string a wrapper runs (eval, bash -c with no arguments handed), and a file
-        the script sources that sets again a variable holding Python it runs (sh_env_code)."""
+        the script sources that sets again a variable holding Python it runs (sh_env_code).
+
+        around is given where body is one function's body out of a longer text (lib/unknown-program.py,
+        claude-config#3304): (the names of that text's functions, a question that gives how one of
+        them acts on what it is handed). A command of body that hands what body was handed to one of
+        them is then answered by that function's own body (sh_command_acts)."""
         if depth > MAX_DEPTH:
             return "nests code deeper than the gate reads"
         defined = set(re.findall(r"(?:^|[\s;&|(){}])(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", body))
         defined |= set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", body))
+        if around:
+            defined |= around[0]
         names = {"OPTARG"} if "getopts" in body else set()
         while True:
             given = (POSITIONAL_ZERO if zero else POSITIONAL) + \
@@ -7107,7 +7114,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                    "block": bool(flow and idx in flow["part"] and SH_BLOCK.match(
                        body[flow["part"][idx]["start"]:flow["part"][idx]["end"]])),
                    "env": lambda assigns=assigns: self.sh_env_code(assigns, body, names)}
-            why = self.sh_command_acts(cmd, handed, defined, d, depth)
+            why = self.sh_command_acts(cmd, handed, defined, d, depth, around)
             if why:
                 return why
             if not (takes or expands):
@@ -7204,7 +7211,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         kind = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else None
         return self.acts_inline(code, d, kind, False, env())
 
-    def sh_command_acts(self, cmd, handed, defined, d, depth):
+    def sh_command_acts(self, cmd, handed, defined, d, depth, around=None):
         """How one command of a shell script acts on what the script was handed, as a phrase, or None.
 
         cmd is the command as shell_acts read it: its words, the heredocs it opens (docs, None where
@@ -7235,6 +7242,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         if "/" not in words[0] and (name[:-2] if name.endswith("()") else name) in defined:
             if fed:
                 return f"pipes what it is handed into {name}, a function whose reads the gate does not follow"
+            if around and name in around[0]:
+                # A function of the text around this body, handed what the body was handed: its own
+                # body answers (shell_acts's around).
+                inner = around[1](name)
+                return f"hands its arguments to {name}, a function that {inner}" if inner else None
             return None  # a definition, `show() { cat "$1"; }`, reads as a command named show()
         # A program is the tool its name says only by bare name or from a system folder: a local
         # ./grep or bin/cat is a script of its own, judged below by what it does.
@@ -7281,6 +7293,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                         f"input the gate does not follow")
             return None
         if name in ("done", "}", ")", "fi", "esac"):
+            if around and not fed and self.handed_names_outputs(words, handed):
+                return None  # `{ ...; } > "$dir/$1.sh"`: what was handed only names the file written
             return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
                     f"({name} {' '.join(words[1:3])})")
         if not system and not re.search(r"[$`]", words[0]):

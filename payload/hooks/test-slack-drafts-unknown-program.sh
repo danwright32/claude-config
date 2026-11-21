@@ -125,6 +125,10 @@ printf '%s\n' '(version 1)' '(allow default)' '(deny network*)' > "$P/strict.sb"
 printf '%s\n' 'op run -- node --test test/notify.test.js' > "$P/behind.sh"
 printf '%s\n' 'op run -- node --test test/plain.test.js' > "$P/behind-plain.sh"
 printf '%s\n' '{ "scripts": { "test:one": "node --test" } }' > "$P/package.json"
+# A script on disk whose helper runs the words it is handed, and one whose helper only prints them
+# (claude-config#3304).
+printf '%s\n' 'run() { "$@"; }' 'run node --test test/notify.test.js' > "$P/helper-runs.sh"
+printf '%s\n' 'label() { echo "case: $1"; }' 'label node --test test/notify.test.js' > "$P/helper-labels.sh"
 # A function handed a program's name as a plain word, in a script whose other lines name the
 # endpoint, as this repository's own gate suite has (`run_slow python`), and code that posts for a
 # pipe to feed.
@@ -248,14 +252,44 @@ op run -- node --test test/notify.test.js>out.txt
 op run -- node --test test/notify.test.js>out.txt 2>&1
 EOF
 
-# A function the text itself defines is that text's own code, whose body the gate reads where it
-# stands, so the words it is handed are left as they were: this repository's gate suite hands its
-# own functions a program's name as a plain label (`run_slow python`, `f2854 curl "<a write>"`),
-# and read as commands those refused the suite. A body that runs its arguments ("\$@") is the
-# program named by a variable that claude-config#2683 left as it was, and stays open here.
-gate_says allowed "#3277 a function the text defines, handed the refused command's words, is left as it was" 3<<EOF
+# A function the text itself defines is asked what a script on disk is asked: whether its body
+# runs what it is handed, or hands it to something not seen to be unable to (claude-config#3304).
+# Until then every such function was left as it was, because this repository's gate suite hands
+# its own functions a program's name as a plain label (`run_slow python`, `f2854 curl "<a
+# write>"`), so `run() { "\$@"; }; run <the refused command>` was allowed (measured on main's
+# gate through this suite, 2026-11-21). A helper that only takes a label is still left alone.
+gate_says refused "#3304 a function whose body runs the words it is handed, in front of the refused command" "$KNOWS" 3<<EOF
 run() { "\$@"; }; run node --test test/notify.test.js
+run() { "\$@"; }; run $POST
+run() { eval "\$1"; }; run node --test test/notify.test.js
+run() { command "\$@"; }; run node --test test/notify.test.js
+run() { exec "\$@"; }; run node --test test/notify.test.js
+run() { echo "\$1"; "\$@"; }; run node --test test/notify.test.js
+run() { local tool="\$1"; shift; "\$tool" "\$@"; }; run node --test test/notify.test.js
+function run { "\$@"; }; run node --test test/notify.test.js
+run() { op run -- "\$@"; }; run node --test test/notify.test.js
+run() { inner "\$@"; }; inner() { "\$@"; }; run node --test test/notify.test.js
+run() { $T/runner.sh "\$@"; }; run node --test test/notify.test.js
+run() ( "\$@" ); run node --test test/notify.test.js
+bash helper-runs.sh
+EOF
+gate_says refused "#3304 and the refusal says what the function's body does with the words" "run is a function that runs a command named by its arguments" 3<<EOF
+run() { "\$@"; }; run node --test test/notify.test.js
+EOF
+gate_says allowed "#3304 a function that only takes a label, handed the refused command's words, is left as it was" 3<<EOF
 label() { echo "\$1"; }; label curl "$POST"
+label() { echo "\$1"; }; label node --test test/notify.test.js
+pick() { MODE="\$1"; }; pick node --test test/notify.test.js
+note() { printf '%s\n' "\$*" >> notes.txt; }; note node --test test/notify.test.js
+save() { { echo "\$2"; } > "out-\$1.txt"; }; save node --test test/notify.test.js
+count() { $T/quiet.sh "\$@"; }; count node --test test/notify.test.js
+outer() { label "\$@"; }; label() { echo "\$1"; }; outer node --test test/notify.test.js
+again() { again "\$@"; }; again node --test test/notify.test.js
+bash helper-labels.sh
+EOF
+gate_says allowed "#3304 a function whose body runs its words, in front of a command that is not refused" 3<<EOF
+run() { "\$@"; }; run node --test test/plain.test.js
+run() { "\$@"; }; run echo hello
 EOF
 
 gate_says refused "#3277 any other program the gate does not know, and a program named by a variable" "$KNOWS" 3<<EOF
