@@ -1663,6 +1663,65 @@ test('#3337: a restore naming its working folder apart is judged for the file it
   expect(w.ran.length).toBe(3)
 })
 
+// #3337: git am lands its patch in the working folder the command names (measured with git 2.51.1:
+// named by --work-tree, with or without --git-dir, the file changed there and neither the folder the
+// command ran in nor the repository's own folder was touched), while the guard placed it in the
+// checkout the command ran in. Here the other project's issue is answered and slate's is not, so a
+// patch read as landing in the other project ran with nothing asked. git apply is left as it was:
+// measured, it changes the folder it runs in whatever working folder is named.
+test('#3337: git am naming its working folder apart is judged for the file its patch changes there, and held where the guard cannot tell the folder', withKit, async ($, on) => {
+  const changes = '--- a/app/globals.css\n+++ b/app/globals.css\n@@ -1 +1 @@\n-a{}\n+b{}\n'
+  const notes = '--- a/docs/notes.md\n+++ b/docs/notes.md\n@@ -1 +1 @@\n-x\n+y\n'
+  const w = world($, on, { files: { '/w/slate/app/globals.css': 'a{}\n', '/w/patches/changes.patch': changes, '/w/patches/notes.patch': notes } })
+  twoRepositories(w)
+  w.gitSays['/w/other --work-tree=/w/nowhere rev-parse --show-toplevel'] = '/w/nowhere\n'
+  const why = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  const notHeld: string[] = []
+  for (const command of [
+    'cd /w/other && git --work-tree=/w/slate am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree ../slate am /w/patches/changes.patch',
+    'cd /w/other && GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'cd /w/other && git --git-dir=/w/other/.git --work-tree=/w/slate am /w/patches/changes.patch',
+    'cd /w/other && GIT_DIR=/w/other/.git GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'git -C /w/other --git-dir=.git --work-tree=../slate am /w/patches/changes.patch',
+    // With only the repository named, the folder it runs in is the working folder, as before.
+    'git --git-dir=/w/other/.git am /w/patches/changes.patch',
+    // The same words twice with different settings: each is judged, never both by the first one's.
+    'cd /w/other && git am /w/patches/changes.patch; GIT_WORK_TREE=/w/slate git am /w/patches/changes.patch',
+    'cd /w/other && GIT_WORK_TREE=/w/nowhere git am /w/patches/changes.patch; cd /w/slate && git am /w/patches/changes.patch',
+  ]) {
+    const said = await why(command)
+    if (!said.includes(HELD) || !said.includes('issue #978 in slate')) notHeld.push(`${command}: ${said.slice(0, 200)}`)
+  }
+  // Where the guard cannot tell the working folder, a patch changing a look file is held, saying why.
+  for (const [command, says] of [
+    ['cd /w/other && git --work-tree="$W" am /w/patches/changes.patch', 'names its working folder as $W'],
+    ['cd /w/other && git --work-tree=/w/gone am /w/patches/changes.patch', 'which repository and working folder'],
+    ['export GIT_WORK_TREE=/w/slate; cd /w/other; git am /w/patches/changes.patch', 'GIT_WORK_TREE'],
+    ['export GIT_DIR=/w/slate/.git && cd /w/other && git am /w/patches/changes.patch', 'GIT_DIR'],
+  ] as const) {
+    const said = await why(command)
+    if (!said.includes('app/globals.css') || !said.includes(says)) notHeld.push(`${command}: ${said.slice(0, 300)}`)
+  }
+  expect(notHeld).toEqual([])
+  expect(w.ran).toEqual([])
+  // One step short: run where its issue is answered, a patch changing no look file wherever it lands,
+  // a working folder in no project, and git apply, which changes the folder it runs in.
+  const asked: string[] = []
+  for (const command of [
+    'cd /w/other && git am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree=/w/slate am /w/patches/notes.patch',
+    'cd /w/other && git --work-tree="$W" am /w/patches/notes.patch',
+    'cd /w/other && git --work-tree=/w/nowhere am /w/patches/changes.patch',
+    'cd /w/other && git --work-tree=/w/slate apply /w/patches/changes.patch',
+  ]) {
+    const said = await why(command)
+    if (said) asked.push(`${command}: ${said.slice(0, 200)}`)
+  }
+  expect(asked).toEqual([])
+  expect(w.ran.length).toBe(5)
+})
+
 // #3337 (Dan, 2026-11-20, added to the issue): a cherry-pick or revert of a merge commit with a
 // mainline number brings in what the merge holds against the parent it names. The guard asked
 // `git log -m --first-parent` and dropped the number, so a look changing file that differs only

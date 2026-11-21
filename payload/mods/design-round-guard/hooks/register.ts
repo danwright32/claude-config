@@ -1114,35 +1114,71 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
 // that cannot be told whole: a patch on standard input (the heredoc, read in the command), a patch
 // file that is missing or no ordinary file, one the reader cannot read whole (a hunk that does not
 // add up, no file named), or a command whose folder cannot be followed.
+// #3337: git am lands its patch in the working folder the command names (--work-tree,
+// GIT_WORK_TREE; measured with git 2.51.1), so its files are placed where git itself says they land
+// (namedApart), and where the guard cannot tell that folder each file the patch changes that may
+// change the look is held, saying why: a value it cannot follow, a repository git cannot answer for,
+// and GIT_DIR or GIT_WORK_TREE written elsewhere in the command than on the git am itself, which an
+// export hands to it and this reading does not follow. git apply is placed as before: measured, it
+// changes the folder it runs in whatever working folder is named. The words of a patch command can
+// stand twice in one call with different settings or folders, so every such run is placed and the
+// patch is judged in each place, never all by the first one's.
 const patchTargets = async ($: EngineInterface, u: { words: readonly string[]; inputs: readonly string[] }, command: string, at: Where): Promise<Target[] | undefined> => {
   if (!u.inputs.length) return undefined
   const texts = await inputTexts({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, u.inputs)
   if (texts.length !== u.inputs.length) return undefined
   let git = false
   let args: readonly string[] = u.words.slice(1)
-  let base = at.cwd
+  // Where each run of these words lands its files, or why the guard cannot tell.
+  const lands = new Map<string, { base: string } | { why: string }>()
   // A folder or checkout mod-kit or the disk cannot answer for is judged as before (lessons review).
   try {
     const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
-    const run = commands.find(c => JSON.stringify(c.words) === JSON.stringify(u.words))
-    if (!run || run.folder === null) return undefined
-    const folder = run.folder ?? at.cwd
-    const g = await $.modkit.git({ words: [...u.words] })
-    base = folder
-    if (g?.sub === 'apply' || g?.sub === 'am') {
+    const runs = commands.filter(c => JSON.stringify(c.words) === JSON.stringify(u.words))
+    if (!runs.length || runs.some(run => run.folder === null)) return undefined
+    // Each variable written anywhere but as a setting on a git command itself, which alone the
+    // reader hands on: an export, a setting on another command, a value read from it.
+    const onGit = commands.flatMap(c => ((c.words[0] ?? '').split('/').pop() === 'git' ? (c.env ?? []) : []))
+    const elsewhere = (['GIT_DIR', 'GIT_WORK_TREE'] as const).filter(name => (command.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length > onGit.filter(s => s.startsWith(`${name}=`)).length)
+    for (const run of runs) {
+      const key = JSON.stringify([run.folder ?? at.cwd, run.env ?? []])
+      if (lands.has(key)) continue
+      const folder = run.folder ?? at.cwd
+      const g = await $.modkit.git({ words: [...u.words], ...(run.env ? { env: [...run.env] } : {}) })
+      if (g?.sub !== 'apply' && g?.sub !== 'am') {
+        lands.set(key, { base: folder })
+        continue
+      }
       git = true
       args = g.args
       const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
-      base = (await $.modkit.workingTree({ path: dir })) ?? dir
+      if (g.sub === 'am') {
+        const unsaid = elsewhere.find(name => (name === 'GIT_DIR' ? g.gitDir : g.workTree) === undefined)
+        if (unsaid !== undefined) {
+          lands.set(key, { why: `the command names ${unsaid} somewhere other than as a setting on a git command itself, so the guard cannot tell which working folder git am lands the patch in` })
+          continue
+        }
+        const apart = await namedApart($, g, dir, at.home)
+        if (apart !== undefined) {
+          lands.set(key, 'why' in apart ? { why: apart.why } : { base: apart.tree })
+          continue
+        }
+      }
+      lands.set(key, { base: (await $.modkit.workingTree({ path: dir })) ?? dir })
     }
   } catch {
     return undefined
   }
+  const look = (p: string) => shapeKind(p) !== null || isModHookTs(p)
   const out: Target[] = []
   for (const text of texts) {
     const read = readPatch(text)
     if (read.unreadable || !read.files.length) return undefined
-    for (const p of patchedPaths(args, git, text)) out.push({ path: resolvePath(p, base, at.home), word: p })
+    for (const p of patchedPaths(args, git, text))
+      for (const land of lands.values()) {
+        if ('base' in land) out.push({ path: resolvePath(p, land.base, at.home), word: p })
+        else if (look(p) && !out.some(t => t.word === p && t.unread?.endsWith(land.why))) out.push({ word: p, unread: `where the command writes ${p} could not be followed: ${land.why}` })
+      }
   }
   return out
 }
