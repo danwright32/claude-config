@@ -78,7 +78,7 @@ export HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 #     fixture, so SCANNERS_SUITE_PART=checkout runs them alone, and the case after the call further
 #     down runs them that way from a plain folder to see the lines.
 checkout_parts(){
-  local REAL _sel _want _real_sel _real_floor _real_n _lockers _ln _sf _code _reg _declared _onfail _default _cap
+  local REAL _sel _unpublished _want _real_sel _real_floor _real_n _lockers _ln _sf _code _reg _declared _onfail _default _cap
   # The selection against THIS repository, read rather than assumed. Fixtures can only confirm the
   # rule as written; what matters is which real suites it picks, and above all that it never picks
   # the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27 seconds,
@@ -86,8 +86,28 @@ checkout_parts(){
   # Found by the one shared test, lib/checkout-root.sh (claude-config#1663): empty outside a checkout.
   REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
   if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
+  # The gate reads the messages of the commits the pretend push adds before it lists anything, and
+  # two things decide that reading which this suite does not own (claude-config#3312, the cases
+  # after the plain folder one below). What this Mac's dev update registry holds is taken out of
+  # it: the gate is handed the stub reader every fixture push gets (WN_READER, defined beside
+  # wn_fire, before anything calls this function). Which commits count as added cannot be set from
+  # here, since it is the checkout's own knowledge of its remote, so it is detected below.
   _sel="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$REAL" \
-          | SCANNERS_LIST=1 bash "$H" 2>&1)"
+          | SCANNERS_LIST=1 WORK_NAMES_REGISTRY_READER="$WN_READER" bash "$H" 2>&1)"
+  _unpublished=""
+  case "$_sel" in
+    *'PUSH BLOCKED: a commit this push adds names a work organisation or repository in its message.'*'Judged: every commit, since this repository knows no remote branch to compare against'*) _unpublished=1 ;;
+  esac
+  if [ -n "$_unpublished" ]; then
+  # A checkout that knows no remote branch has, as far as the gate can tell, published nothing, so
+  # the gate judged every message in its history and refused on one before listing a suite. That
+  # is a fact about where this suite was run, and no check below can say anything of the selection
+  # from a refusal, so the part is said unmeasured on the runner's line (L411), with the gate's own
+  # count, rather than failed once per check. The same refusal in a checkout that DOES know its
+  # remote names a commit the branch itself adds, and is left to fail below.
+  printf 'SUITE-PART-UNMEASURED the checks of which real suites the gate selects in this repository: the checkout at %s knows no remote branch, so the gate took every commit in its history for one a push adds, refused on a message among them and listed no suite (%s); they run in a checkout that knows its remote, as a clone or a worktree of one does (claude-config#3312)\n' \
+    "$REAL" "$(grep -m 1 '^work-names: checked ' <<< "$_sel" | sed 's/ for the work organisation names.*//' | cut -c1-80)"
+  else
   [ "$(grep -c '^SUITE ' <<< "$_sel")" -ge 5 ] \
     && check "the real repo's standalone scanners are all selected" ok \
     || check "the real repo's standalone scanners are all selected" "got=$_sel"
@@ -166,6 +186,7 @@ checkout_parts(){
   grep -q '^SUITE payload/hooks/test-run-all-tests-real-tree\.sh$' <<< "$_sel" \
     && check "#1997 and the runner suite's checks over this repository's files are selected" ok \
     || check "#1997 and the runner suite's checks over this repository's files are selected" "got=$_sel"
+  fi
   else
   # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
   # will be, so there is no selection to read and that is not a fault. Said on the runner's agreed
@@ -292,9 +313,10 @@ fire(){              # $1 = repo  $2 = the command  -> prints the hook's output,
 }
 
 # The work names the commit message check reads (claude-config#1995), and the gate call that hands
-# them over. Defined here, beside fire, because the parts that read the checkout use them too: the
-# organisation is an invented one, handed to the scanner by hash, and the registry reader is a stub,
-# so what this Mac's own registry holds cannot decide a case.
+# them over. Defined here, beside fire, because the parts that read the checkout use them too (their
+# pretend push is handed WN_READER, claude-config#3312): the organisation is an invented one, handed
+# to the scanner by hash, and the registry reader is a stub, so what this Mac's own registry holds
+# cannot decide a case.
 WN_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
 WN_READER="$TMPROOT/wn-registry-missing.js"
 printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WN_READER"
@@ -1082,6 +1104,65 @@ else
     && check "#2232 and each line names its part" ok \
     || check "#2232 and each line names its part" "out=$_plain_out"
 fi
+
+# --- the same parts in a checkout whose git state they cannot set (claude-config#3312). They ask the
+#     gate which suites a pretend push selects, and the gate reads the messages of the commits that
+#     push adds before it lists anything. On 2026-11-21 the merge helper ran this suite in a clone
+#     that knew no remote branch, so the gate judged all 3347 messages of the history, with that Mac's
+#     own dev update registry, refused on one from 2026-10-29, and nine checks of the selection failed
+#     on a pull request that touched none of it. Two things there were state these parts do not set:
+#       which commits count as added. With no remote branch known and the gate refusing on the
+#         history, the selection was not measured, and that is said on the runner's line (L411),
+#         never failed. Where the checkout knows its remote, the same refusal is about the commits
+#         the branch itself adds, and stays a failure.
+#       what this Mac's registry holds. The pretend push hands the gate the suite's own stub, as
+#         every fixture push above does, so the registry cannot decide which suites are selected.
+#     The checkout is a fixture shaped like one (claude-sync and payload/ at its top), holding a copy
+#     of this suite and the gate. It has no scanners, so where the selection IS read its checks
+#     fail, in the child's output only: that failure is how the cases below see it was read.
+U3312="$(mkrepo unpublished3312)"; : > "$U3312/claude-sync"
+cp "$H" "$DIR/test-scanners-before-push.sh" "$U3312/payload/hooks/" && cp -R "$DIR/lib" "$U3312/payload/hooks/lib" \
+  || check "#3312 a copy of this suite could be made in a fixture checkout" "the copy into $U3312 failed"
+find "$U3312/payload/hooks/lib" -name __pycache__ -type d -prune -exec rm -rf {} +
+git -C "$U3312" add -A >/dev/null 2>&1
+git -C "$U3312" commit -q -m "an old commit, published long ago, naming Globex-Corp/halcyon#12" >/dev/null 2>&1
+u3312_parts(){ SCANNERS_SUITE_PART=checkout bash "$U3312/payload/hooks/test-scanners-before-push.sh" 2>&1; }
+_u_out="$(u3312_parts)"; _u_rc=$?
+[ "$_u_rc" -eq 0 ] && ! grep -q '^FAIL' <<< "$_u_out" \
+  && grep -q '^SUITE-PART-UNMEASURED .*selects in this repository.*knows no remote branch' <<< "$_u_out" \
+  && check "#3312 where the checkout knows no remote branch and the gate refuses on its history, the selection is said unmeasured, and nothing fails" ok \
+  || check "#3312 where the checkout knows no remote branch and the gate refuses on its history, the selection is said unmeasured, and nothing fails" "exit=$_u_rc out=$(cut -c1-400 <<< "$_u_out" | sed -n '1,12p')"
+grep -q -x 'SUITE-RESULT passed=0 failed=0' <<< "$_u_out" \
+  && check "#3312 and no check of the selection is counted as passed there (L98)" ok \
+  || check "#3312 and no check of the selection is counted as passed there (L98)" "out=$(grep '^SUITE-RESULT' <<< "$_u_out")"
+# Control: the same history once the checkout knows it is published. The push adds nothing, the
+# gate lists, and the selection is read (and fails, the fixture holding no scanners).
+git init -q --bare "$TMPROOT/unpublished3312-remote.git"
+git -C "$U3312" branch -M main
+git -C "$U3312" remote add origin "$TMPROOT/unpublished3312-remote.git"
+git -C "$U3312" push -q origin main >/dev/null 2>&1; git -C "$U3312" fetch -q origin >/dev/null 2>&1
+_u_out="$(u3312_parts)"; _u_rc=$?
+! grep -q 'knows no remote branch' <<< "$_u_out" && ! grep -q 'PUSH BLOCKED' <<< "$_u_out" \
+  && grep -q "^FAIL: the real repo's standalone scanners are all selected" <<< "$_u_out" \
+  && check "#3312 control: once the checkout knows its remote branch the selection is read, not said unmeasured" ok \
+  || check "#3312 control: once the checkout knows its remote branch the selection is read, not said unmeasured" "exit=$_u_rc out=$(cut -c1-400 <<< "$_u_out" | sed -n '1,12p')"
+# A commit the branch adds names a repository only this Mac's registry holds, stood in for by a
+# reader answering one invented name. The pretend push does not consult it.
+U3312_READER="$TMPROOT/wn-registry-3312.js"
+printf 'console.log(JSON.stringify({state: "ok", file: "/nowhere/repos.local.json", repos: ["Initech-Labs/falconry"]}))\n' > "$U3312_READER"
+git -C "$U3312" commit -q --allow-empty -m "a commit not pushed yet, naming Initech-Labs/falconry#4" >/dev/null 2>&1
+_u_out="$(WORK_NAMES_REGISTRY_READER="$U3312_READER" u3312_parts)"; _u_rc=$?
+! grep -q 'PUSH BLOCKED' <<< "$_u_out" && grep -q "^FAIL: the real repo's standalone scanners are all selected" <<< "$_u_out" \
+  && check "#3312 what this Mac's registry holds does not decide which suites the pretend push selects" ok \
+  || check "#3312 what this Mac's registry holds does not decide which suites the pretend push selects" "exit=$_u_rc out=$(cut -c1-400 <<< "$_u_out" | sed -n '1,12p')"
+# And a commit the branch adds that names a listed repository is refused as before: the checkout
+# knows what is published, so the refusal is about the change, and it stays a failure.
+git -C "$U3312" commit -q --allow-empty -m "a commit not pushed yet, naming Globex-Corp/halcyon#13" >/dev/null 2>&1
+_u_out="$(u3312_parts)"; _u_rc=$?
+[ "$_u_rc" -ne 0 ] && ! grep -q 'knows no remote branch' <<< "$_u_out" \
+  && grep -q "^FAIL: the real repo's standalone scanners are all selected (got=PUSH BLOCKED" <<< "$_u_out" \
+  && check "#3312 a refusal on a commit the branch itself adds stays a failure where the remote branch is known" ok \
+  || check "#3312 a refusal on a commit the branch itself adds stays a failure where the remote branch is known" "exit=$_u_rc out=$(cut -c1-400 <<< "$_u_out" | sed -n '1,12p')"
 
 # --- scanners that do not finish inside the gate's own budget REFUSE the push (claude-config#1881).
 #     On 2026-10-28 this gate was killed at its declared 180 second timeout on three of three cold

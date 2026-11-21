@@ -886,6 +886,13 @@ ut_done_for=""; ut_ran=""; ut_tool_there=""; ut_tool_for=""
 ut_hint(){ printf " To merge without running them, for this run only, say why: MWR_UNTESTED_SKIP='<why>' %s %s --repo %s%s" "$SELF" "$pr" "$slug" "${flags[*]:+ ${flags[*]}}"; }
 ut_refuse(){ stop 1 "Stopped: $1 Nothing was merged.$(ut_hint)"; }
 ut_plural(){ if [ "$1" -eq 1 ]; then printf '%s %s' "$1" "$2"; else printf '%s %ss' "$1" "$2"; fi; }
+# ut_published <clone>: tells the clone what is published, once its base is fetched (see THE CLONE
+# KNOWS WHAT IS PUBLISHED in untested_step). Fails, in git's words, on the first thing it cannot record.
+ut_published(){
+  git -C "$1" remote add origin "$origin_url" \
+    && git -C "$1" update-ref "refs/remotes/origin/$base" refs/mwr/base \
+    && git -C "$1" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$base"
+}
 ut_tool_read(){
   local out rc
   ut_tool_there=""
@@ -1070,6 +1077,18 @@ untested_step(){
     wait_a_look "ut-pull-ref" "GitHub's head of #$pr is at ${tip:0:7}, not ${h7}, which this run judged; waiting a look before running anything."
     return 1
   fi
+  # THE CLONE KNOWS WHAT IS PUBLISHED, as the checkouts suites are written for do: a builder's
+  # worktree and a runner's checkout both have origin, and the first knows its default branch. An
+  # empty repository fetched into refs of its own knows no remote at all, and to anything that asks
+  # git there what a push would add, nothing of it has been published. On 2026-11-21 the step's
+  # first real merge, of #3392, stopped on that: test-scanners-before-push.sh asks the push gate
+  # about the checkout it sits in, the gate took all 3347 commits of the history for new ones, and
+  # refused on the message of one from 2026-10-29, so nine checks failed on a pull request that
+  # had touched none of what they read. So the clone is told: where origin is, the base as origin's
+  # branch, and that branch as origin's default, which it is by here (the round goes no further
+  # than wait_for_base while the base is any other branch). A clone that cannot be told is not run
+  # in: its reds would be about the clone.
+  out="$(ut_published "$ut_dir/wt" 2>&1)" || ut_refuse "the clone the suites run in could not be told which branch of $slug is published (${out:0:300}), and suites run where nothing is known to be published take the whole history for new work."
   git -C "$ut_dir/wt" checkout -q --detach refs/mwr/head >/dev/null 2>&1 || ut_refuse "the head $h7 could not be checked out to run the suites in."
   mb="$(git -C "$ut_dir/wt" merge-base refs/mwr/base refs/mwr/head 2>/dev/null)" || ut_refuse "the point where #$pr's head left $base could not be found, so what it changed is not known."
   git -C "$ut_dir/wt" ls-files > "$ut_dir/tree" 2>/dev/null || ut_refuse "the tree at $h7 could not be listed."

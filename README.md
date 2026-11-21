@@ -4742,6 +4742,17 @@ this command", and "line 3 as it is on disk" for a line of the script's own that
 it is made from. Nothing is refused or allowed that was not before. Editing the two files in
 separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
 
+Since claude-config#3356 one refusal says what to run instead. `bun test` with test files named,
+typed in a mod's folder, is refused where the gate cannot find a module one of those files imports
+(on 2026-11-20: `bun test tests/rules.test.ts tests/register.test.ts` in
+`payload/mods/design-round-guard`). A mod's tests are run with `claude plugin test <mod folder>`,
+which the gate lets through, and the refusal now ends by naming that command with the mod's folder
+written out (`mod_tests_seen`, `mod_tests_note`). A folder is a mod's where it, or a folder above
+it, holds `.claude-plugin/plugin.json`. The sentence is added only for a `bun test` the call itself
+types, in a folder the gate is certain of, and only to a refusal that is no finding of a post: a
+test file that posts is refused as a post and is told to save a draft, as before. Nothing is refused
+or allowed that was not before. Suite: `test-slack-drafts-mod-tests.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a
@@ -5331,7 +5342,12 @@ changed, or that name a file it changed as a path: a slash, then the shortest en
 no other file in the head's tree has. It runs those in a throwaway clone of the head through the
 head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
 they started, every two minutes that they are still running with how many have finished, and how
-they ended. A suite that fails, could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
+they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+the base as origin's branch, and that branch as origin's default. A suite that asks git there what
+a push would add is then answered with the pull request's commits; in a clone that knew no remote
+the answer was the whole history, and the step's first real merge stopped on it (#3392, on
+2026-11-21). A clone that cannot be told refuses the merge. A suite that fails,
+could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
 (2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
 being read: a notice or record that cannot be fetched or does not add up (the records are kept a
 day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
