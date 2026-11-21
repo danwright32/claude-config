@@ -1391,11 +1391,19 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   out every wait on a limit. Parking goes through `sleep-queue.sh release`, which writes the note.
   A claim entry with no time of its own is never judged stuck by time. Active time is wall time
   from the claim entry to now less those waits only, so waiting for checks, for a merge turn or on
-  subagents counts, and so does any time after the work was noted done while the claim stayed held;
-  the watchdog times only the session's newest held claim, so a session holding several reaches
-  the older ones only after the newest passes 2 hours (measured on the night of 18 Nov 2026,
-  #3276). The report reads a park of the driver's against the session's done note for the issue
-  and does not list a finished one.
+  subagents counts. Every claim the session holds is timed from its own start, and of several past
+  their 2 hours the one held longest is parked first, the next at the next minute (#3330: on the
+  night of 2026-11-18 the watchdog timed only the newest of five held claims, and parked the older
+  ones one a minute only once the newest passed 2 hours). A claim the session noted done is ended:
+  a `sleep_note` done note naming an issue ends its writer's own claim on it as done, in the same
+  step, through `sleep-queue.sh done-noted` (no second note, no GitHub read; another session's
+  claim, or one already ended, is left as it is). The driver also reads tonight's notes after the
+  claims and treats a claim with a done note by the same session (same repository in any case,
+  same issue, at or after the claim) as not held, so it is neither timed, parked, nor the claim in
+  hand. A done note landing between that read and a park races the park for the claim's next
+  entry, and the queue lets exactly one land; the report reads the done note either way. A claim
+  with no done note of its own is parked exactly as before. The report reads a park of the
+  driver's against the session's done note for the issue and does not list a finished one.
 - Claims that cannot be read just now park nothing and judge nothing stuck, and the session is
   blocked on with the reason said: one failed read never stops the night. Three in a row stop it
   with a `failed` note. The rules carry the repository path shell quoted where it needs to be.
@@ -1805,8 +1813,10 @@ morning offers what the night proposed, filing nothing he has not picked.
   `hooks/durable-lesson-check.sh` describe, and its picker carries the check line the morning
   session arrives at. That line is never read from the night's notes: the block of overnight text
   still gives each lesson's source and rule only, so the one line Dan's answer covers is one the
-  session worked out and he read. `hooks/test-durable-lesson-check.sh` holds the step numbers
-  named here to the hook's own.
+  session worked out and he read. Since #3320 the same holds for the entry's SHORT line, which
+  the morning session writes, shows on a line of its own and carries in `metadata.short`, where
+  the rule is too long for the index line. `hooks/test-durable-lesson-check.sh` holds the step
+  numbers named here to the hook's own, and the two metadata keys to the mod's.
 - A message from Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain
   line, whether he is up (`isDaytimeEt`, tested at both edges in each season and on both change
   days), counted as asked only once that prompt went in.
@@ -2627,14 +2637,19 @@ and the band question is removed rather than kept beside it (L29). Three defects
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
   lessons reviews of #869 found a new shape each round): the file the write leaves must be the file
-  as it is now with exactly the entry block inserted at one line boundary. A Write leaves its
+  as it is now with exactly the entry block inserted at one line boundary, and since the review of
+  #3320, below, that boundary must be an entry boundary (`boundaryFault`). A Write leaves its
   content; an Edit, never replace_all, whose old text is found exactly once leaves the file with that
   text replaced. An Edit was once judged by the shape of its two texts instead, which refused old
   text cut as whole lines with their newline, the shape Claude sent for L1030, so Dan's add lapsed
   unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
-  shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
+  shape: `- **L<n>.`, the rule word for word (wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
-  is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
+  is within the cap, with no blank line inside, a line of spaces included. Where the entry has a
+  SHORT line the index renders that line, and where the rule's bold closes is the file's layout.
+  Where it has none the index renders the bold span, so the whole rule and nothing else is in bold
+  (`wholeRuleInBold`, since the review of #3320, below). Nothing Dan did not read rides along with
+  it (the SHORT line was the exception until #3320: it was held to the cap and to nothing else).
   Since #3245 (built 2026-11-19; Dan on the issue that day: "Yes, cover the check line") the picker
   may also carry the lesson's check line in `metadata.check`, the line saying which check holds the
   rule or that none can, which the durable lesson check now asks for before a lesson is written.
@@ -2643,7 +2658,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   the one place `hooks/durable-lesson-check.sh` tells the session to write it, and one the lessons
   file's reader reads (`claude-sync lesson_entries_render` scans every line of an entry after its
   first, so it also reads a line after the SHORT line, where L865 has one; no approval covers that
-  place, and such a line is asked about). It is taken on the same footing as the rule,
+  place, and an entry holding such a line is refused). It is taken on the same footing as the rule,
   as text Dan read: the picker is refused unless the line is one line in a check line's shape
   (`readCheckLine`: `CHECK:` with something named and `(full)` or `(partial)`, or `NO CHECK:` with
   three words of reason) and stands whole on a line of its own in the question, since a short line
@@ -2673,7 +2688,9 @@ and the band question is removed rather than kept beside it (L29). Three defects
   In the entry every other line is still read as the rule's, so a different check line, a second
   one, one in another place, the same line under
   another rule or on another lesson, and any check line on an approval that showed him none fail
-  the comparison and are asked about. An entry without the line still goes through, as it did
+  the comparison and are refused (asked about For good until the review of #3320, below, which
+  sends every such entry back to the lesson picker). An entry without the line still goes through,
+  as it did
   before the line existed. The value is read back from storage through `checkLine` again (L50), so
   a damaged record covers the rule alone.
   The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
@@ -2681,7 +2698,7 @@ and the band question is removed rather than kept beside it (L29). Three defects
   marks and folds white space, and neither read a character: a rule holding a zero width
   character, a bidirectional control, a run of tag characters or an escape sequence was approved
   and written with what Dan never saw, an entry could hold a tab or a no break space where he read
-  a space, and the SHORT line, which the picker never shows, could hold anything. A rule is prose
+  a space, and the SHORT line, which the picker did not show then, could hold anything. A rule is prose
   and quotes real text, so it is not cut to ASCII as a check line is. What is refused is a class,
   by Unicode's own properties, so a character nobody listed is still in it (`unseenIn`): every
   control but the newline, every format character, private use, surrogate halves and code points
@@ -2740,8 +2757,151 @@ and the band question is removed rather than kept beside it (L29). Three defects
   were, and refused though honest: an emoji that needs a joiner or a variation selector, and
   Persian text, which needs a zero width non joiner. Accepted by design: a letter of another
   script that looks Latin and a run of combining marks, which Dan can see. The SHORT line's markup
-  is not judged, since the picker never shows that line at all.
-  Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
+  was not judged then, since the picker never showed that line at all.
+  The SHORT line is shown and held since #3320 (built 2026-11-20). It is the one line of a lesson
+  the index carries into every session, and the review of #3295 found it was shown nowhere and
+  compared with nothing: under an approval for one rule, `addsLesson` took an entry whose SHORT
+  line said something else, up to 160 characters. The picker now carries the line in
+  `metadata.short`, whole, as `SHORT: <text>`, the way it carries the check line, and Dan reads it
+  on a line of its own. The approval records it, and the entry's SHORT line must be that line but
+  for the file's indentation (`addsLesson`, read from the same copy of the entry the check line
+  is). An approval that showed none covers an entry with none, so a SHORT line added afterwards is
+  refused, and where he read one an entry without it is not the entry he read. The line is
+  judged by `shownFault`, the function every shown text is judged by, through `readShortLine`:
+  there is no second copy of the character or markup checks, and a SHORT line is prose, so it is
+  not cut to ASCII as a check line is. The picker also refuses any other line starting `SHORT:`
+  in the question, which he would read as the entry's and the entry could not carry.
+  Two things are settled before he is asked, because the entry is written after (L667). Whether
+  the entry needs a SHORT line: a rule too long for the index line with none carried is refused,
+  or his answer would cover an entry that can only be written with a line he never saw. And the
+  line's length: the picker is asked before the lesson has a number, since `claude-sync
+  next-lesson` reserves the number it prints and is run only on his approval, so the text is held
+  to `MAX_SHORT_TEXT`, 151, which is the index cap of 160 less `- L1000. `, the prefix of the
+  longest number in use (bands start at 501 on the work MacBook and 1001 on the personal one, and
+  five digits start at 10,000, where `addsLesson`'s count of the whole index line still refuses).
+  Chosen over two other numbers: 154, the most that fits under any number, approves lines that
+  then cannot be written under the number the lesson gets, which costs Dan a second question; 150
+  is safe to 99,999 and takes one more character from every line today. Measured 2026-11-20 over
+  the lessons file, through the mod's own functions on a copy rg made: of 895 entries 737 carry a
+  SHORT line and all 737 are in the shape the picker takes; laid out as the picker shows them (the
+  rule as one paragraph, a blank line, the check line, the SHORT line) each fits the 20 rows and
+  1,500 code units, the tallest (L441) at 12 rows, or 16 beside a check line of 300 characters;
+  `shownFault` refuses one, L731's, which names two placeholders in angle brackets outside
+  backticks, as its rule does inside them; 39 have text over 151 (38 of 152 under a three digit
+  number, one of 154 under a one digit number); and of the 158 entries with no SHORT line, 6 have
+  a rule of 152 to 154 characters, which the picker would now ask a SHORT line for. Of the lesson
+  pickers in the transcripts this Mac kept, 8 calls, all answered Add to LESSONS.md, all 8 would
+  be refused: each rule is over 151 (202 to 434) and no picker showed a SHORT line, because none
+  could. That is the new requirement, not a fault in them. With a SHORT line of 151 characters
+  added, those 8 questions take 11 to 14 rows.
+  The independent review of #3320 (2026-11-20, at 4cc48e4af6) found four ways the line a session
+  loads could still differ from what Dan read, and each is closed. First, and blocking: with no
+  SHORT line the index renders the entry's bold span, and nothing held that span to the rule, so
+  under an approval for one sentence an entry went through whose bold closed after six words, and
+  those six words were the lesson every session loaded. Such an entry is now taken in one shape
+  only (`wholeRuleInBold`): `- **`, the number and the whole rule, the closing marks at once, and
+  no other bold mark, with no line of spaces in any entry, since the index stops reading a wrapped
+  rule at one. The mod requires that shape and keeps no copy of the generator's reading. Sharing
+  one reading was ruled out: it means changing `claude-sync` for a mod's sake or copying its awk
+  into the mod, where the copy drifts (L370). The proof is `tests/test-lesson-index-line-shown.sh`,
+  which cuts `lesson_entries_render` out of `claude-sync`, runs it over the entries listed in the
+  mod's `tests/index-lines.ts` and holds each rendered line to the text he was shown, while the
+  mod's own suite holds the mod to the same list. Second: the approved Edit could put its entry
+  inside another entry, where the new entry took that entry's SHORT line as its own. The entry
+  must now land at an entry boundary (`boundaryFault`, `lessonPlaced`): above it an entry's last
+  line or a section heading, and below it, as the next line that is not blank, an entry's first
+  line, a section heading or the end of the file. Third: a For good could still approve an Edit
+  that adds or changes a lesson entry, under a question of the session's own wording that held
+  none of the entry. An Edit or Write to `~/.claude/LESSONS.md` that adds or changes an entry is
+  now refused, in words that send the session to the lesson picker, and no question waits on it
+  (`entriesTouched`, `pickerOnly`, `lessonEditBy` in register.ts). An entry is every line the
+  file's reader gives it, down to the next entry or section heading, and the check reads the file
+  as it stands on every send, so a For good given earlier is not taken either. Nor do Dan's own
+  words that make a save permanent ("from now on", "always" leading a sentence): the lessons review
+  at the push found that route still open (L450), since such a call went on before the lessons file
+  was read, and `saveCall` now keeps a call that touches an entry out of the saves his words
+  approve. Changing an entry
+  already in the file therefore takes the lesson picker for the entry as it should read, then the
+  old one taken out and the new one added. Fourth: length was counted in UTF-16 code units, where
+  the index cap counts bytes, so 151 accented letters passed the picker and made a line of 311;
+  it is counted in bytes now (`indexLength`), the cap still 151. And a line that reads as a SHORT
+  line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
+  and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
+  of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
+  route now closed. Left as they were and filed as #3343: a write that touches no entry (a section
+  heading, an entry taken out whole, text above the first section) and a checkout's
+  `payload/LESSONS.md`, which the lesson picker does not cover. A shell command that writes the
+  lessons file was filed there with them and has since been built, below.
+  Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
+  by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
+  the file against their rules once, since none was ever shown.
+  The first of the three left on #3343 is built (2026-11-20): a shell command that writes
+  `~/.claude/LESSONS.md` is refused, with no For good offered and Edit or Write named in its
+  place. It cannot be sent to the lesson picker, which is what the issue asked first: the mod
+  reads which files a command writes, never what it writes to them, so nothing could hold the
+  entry to what Dan read. It is decided from the one judgement of the command (`lastingTargets`,
+  then `lessonsByShell`), never a second reading of it, so each way mod-kit's reader finds a
+  write of that file counts alike, a file handed to a script and one named by its path beside a
+  write the reader cannot follow included; those two may only read it, and the refusal
+  (`byShellOnly`) says which it found and how a read is sent. The issue's open question, whether
+  a write can be told from a read without refusing reads, is answered by that reader: 17 reading
+  commands run unasked in the suite and 19 writing ones are refused. A For good already standing
+  for the command is not taken, and `saveCall` keeps it out of the saves Dan's own words approve.
+  Deliberately not refused: a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md` through a
+  variable only a command's output or a condition sets, a bare name in a patch's prose). A first
+  build refused those too, and two cases already in the suite became refusals with no way through:
+  the copy of a checkout's lessons file into a scratch folder (#1241) and a patch whose message
+  says LESSONS.md (#1883). They are asked about as before. Also out of reach: a removal, which
+  the reader counts as no write, and a script that writes the file with no word of the command
+  naming it.
+  The second is built (2026-11-21), as Dan decided on the issue on 2026-11-20 ("For good, held to
+  facts": "The For good question stays, and the mod refuses it unless it names each entry removed
+  or moved, by number, and each heading changed. No new picker."). A write that touches no entry's
+  words is still asked For good, and the question is held to what the write does. `lessonFacts`
+  reads the file as it is and as the write leaves it, in the one walk `entriesTouched` uses
+  (`lessonLayout`), and gives the entries taken out whole, the entries left word for word under
+  another heading, and the headings taken out or added. Four things were left to the build, each
+  decided toward the stricter reading and recorded in the pull request:
+  - How a name is judged (`unnamed`). A number is a whole token in its own case, so `L17` is not
+    named by `L174`, `XL17`, `L17th` or `l17`, and a range names its two ends only. A heading is
+    its text after `## `, less the white space at its ends, between double quotes: without the
+    quotes "Data safety" was named by any question holding "Data safety net". The mod checks that
+    a name is in the question and cannot check what the question says about it.
+  - Which entries a heading change moves. A heading is read as renamed when every entry that stood
+    under the old one stands under the new one and nothing else does; both names are named and its
+    entries are not, since they stay together in the one file the rename renames. Every other
+    entry whose heading changes is named: under a heading added above it, left by a heading taken
+    out, or in a section whose entries did not stay together. Naming every entry under a renamed
+    heading was the stricter reading and was not taken, for two reasons. The issue's own account
+    (the comment of 2026-11-20 he chose from) sets the two apart: a rename "renames a file every session imports",
+    and an added heading "moves every entry below it into another file". And it would not last:
+    measured 2026-11-21, the numbers of the largest section's 208 entries take 1,227 of the 1,500
+    code units a question may hold, so they fit today with little room for the sentence, and stop
+    fitting as that section grows, after which its rename could be asked only by moving its
+    entries out a few at a time. It is one condition in `lessonFacts` (`carried`) if Dan wants
+    every entry named.
+  - Text that is no entry's and no heading (above the first section, or between a heading and its
+    first entry) needs no name. The file's reader gives it to no index and no session loads it,
+    Dan's decision names entries and headings, and it has no number or heading a question could
+    be held to; a fixed phrase would show only that the session typed the phrase. Blank lines and
+    a change of order inside a section, or of whole sections, are not held either.
+  - Asleep it is what any save is: noted for the morning report and refused, with nothing asked.
+    The note says what the write would take out, since an Edit's new text says nothing of it.
+  The answer is held to the same facts as the question, wherever an answer is taken. The approval
+  keeps the question Dan read (`asked`), and `takeApproval` takes it only when that question names
+  what the call does to the file as it stands when the call is sent, so a For good stored before
+  this rule, or given while the same Edit took nothing out, covers no removal; the refusal says
+  first that his For good does not cover it and what its question lacked, and his next answer
+  about the same save replaces it. The `isApproved` noun answers the same way. His own permanent
+  words cover such a write only when they name the same things (`saveCall`, L450): under "from now
+  on" an unnamed removal went on unasked, the route #3320's review found open for an entry added.
+  Two refusals have no question: a lessons file that could not be read, since what the write
+  would take out cannot be told (`cannotHold`, L345), and a heading that could not be shown to Dan
+  as it is written, which no question he could read can name (`cannotName`, L665). The second is a
+  dead end for a heading already in the file; setting such a name aside from the shown check, as
+  a file's own name is, would end it and is an exemption for Dan to decide.
+  Any other write that touches no entry is asked about as before. The approval is
+  used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
   way, only once its write lands (#1691): an Edit or Write that errors, or that a guard beneath
@@ -3860,6 +4020,56 @@ on its default branch, held "for this session", and one file inside it held the 
   costly half, and a listing that fails holds the call.
 - **A write is judged as before.** A copy can be pushed, so what is written into one can reach the
   product. Only a removal passes: `rm`, `rm -rf`, a pattern matched in a folder there.
+
+### What #3279 changed for a merge of the default branch, 2026-11-20
+
+Since #3345 the guard asks git what a merge, rebase, cherry-pick, revert, switch, checkout of a
+branch, hard reset or stash pop would bring into the working tree, and judges each look changing
+file against the issue the branch names (Dan, 2026-11-19, "Ask only if a look file arrives"; the
+README's design round guard entry lists the commands). Built that way, every branch that took main
+in was asked again about a look change Dan had already answered on its own issue. Dan's answer on
+2026-11-20, asked whether the guard should ask about look changes already on main: "Skip what is on
+main (Recommended)". The comment on #3279 that records it that day gives the reason and the reach:
+"A look change already on main has shipped, so holding a branch that takes main in protects
+nothing", and it "covers only files whose change is already on the default branch. A cherry-pick, a
+merge of any other branch, and a stash stay asked."
+
+- **The one exemption among the moves, and it is an exemption.** Anything wider (another branch,
+  another kind of move, a name pattern, a switch that turns it off) is a new decision of Dan's.
+- **The default branch comes from the checkout, never from the command.** It is the branch
+  `$.modkit.branch` reads from the checkout's own record of its remote, at the commit last fetched
+  (the ref of that name under `refs/remotes/origin/`). mod-kit's fallback to a branch named main or
+  master is not used here: a local branch is not proof of anything having shipped. The remote is
+  never asked, so the answer is as old as the last fetch, which can only make the guard ask more.
+- **Shipped is decided by commits, per file.** For the commit being merged, or rebased onto, git
+  names the newest commit it shares with the default branch (`git merge-base`). Where that is the
+  commit itself, all of it is on the default branch and no look changing file is asked about.
+  Otherwise git lists what the commit holds differently from that shared commit
+  (`git diff --name-status`), and exactly those files are asked about. So a branch holding main and
+  one more commit is asked about that commit's files only, and a local main that is ahead of the
+  remote's is asked about what it is ahead by, whatever it is called.
+- **Only a merge and a rebase onto an upstream.** A cherry-pick, a revert, a switch, a checkout of a
+  branch, a hard reset and a stash go through no part of this, even naming a commit of the default
+  branch: none of them takes the default branch in, and a switch or a reset can also take the
+  branch's own look changes away.
+- **Where it cannot tell, it asks.** No default branch recorded for the remote, one never fetched,
+  a detached head (mod-kit's reader names no default branch there), no commit shared, git failing,
+  timing out or printing what cannot be read: every file is asked about as before.
+- **Each skip is written to the guard's log** (rules.ts `onDefaultSaid`): the files, the command,
+  and the commit of the default branch they were read against. It is the only trace, since nothing
+  is asked and nothing recorded for Dan.
+- **Costs three more reads of git, and only when a look changing file arrives**: the default
+  branch's commit, the shared commit, and, where the commit is not on the default branch, the list
+  of what it holds beyond it. Each was measured at 10 to 32 ms for #3345.
+- **Known limit.** The guard trusts the checkout's record of its remote. A command that rewrote
+  that record by hand (the remote's branch ref, or which branch it calls the default) in an earlier
+  call would make unshipped commits read as shipped. One on the same line as the merge is already
+  held, as any command before a move is. Checking against the remote itself needs the network,
+  which the guard does not use.
+- **Proven against real git, not only the tests' stand in.** The questions were run by hand on a
+  throwaway repository (git 2.51.1) for a merge of the default branch, of an older commit of it, of
+  another branch, of a branch holding main and one more commit, of one that had merged main in, of
+  a local main ahead of the remote's, and of an unrelated history; the tests' answers are those.
 
 ## Picker manners (#615), built 2026-10-04
 

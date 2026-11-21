@@ -179,6 +179,23 @@ for f in "$SKILL" "$GLOBAL_RULES"; do
   check "#2563 $(basename "$f") names the merge method and how it is chosen" "$method"
 done
 
+# claude-config#3317: on 2026-11-19 two sessions, one on each Mac, built the same fix, because a
+# branch in a local worktree is invisible to the other Mac and nothing on the issue said it was
+# taken. A build item from an issue is claimed on the issue, by claim-issue.sh, before its builder
+# is dispatched, and released when it ends without closing the issue.
+claiming="$(section "### Claiming an issue before its builder starts")"
+check "#3317 the skill holds the claiming section" "$(holds "$claiming" 'claim-issue.sh' 'no claiming section naming claim-issue.sh')"
+check "#3317 the claim command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh claim <owner/repo> <issue number> <branch>' 'no claim command')"
+check "#3317 the claim goes up before the dispatch" "$(holds "$claiming" 'before its builder is dispatched' 'no before the dispatch')"
+check "#3317 a builder is dispatched on exit 0 only" "$(holds "$claiming" 'Dispatch on exit 0 only' 'no exit 0 rule')"
+check "#3317 a held item is not started and the board says who holds it" "$(holds "$claiming" '`held by <who>`' 'no held by board wording')"
+check "#3317 a failed check is not read as free" "$(holds "$claiming" 'nothing was claimed' 'no could not check rule')"
+check "#3317 the release command is written out" "$(holds "$claiming" 'bash ~/.claude/skills/orchestrate/claim-issue.sh release <owner/repo> <issue number> <branch>' 'no release command')"
+check "#3317 a read only item needs no claim" "$(holds "$claiming" 'needs no claim' 'no read only exemption')"
+check "#3317 the board states include held by" "$(holds "$(section "## 4. While agents run")" '`held by <who>`' 'no held by state')"
+check "#3317 Finish releases claims left standing" "$(holds "$finish" 'claim-issue.sh release' 'Finish does not release claims')"
+check "#3317 the script the skill names is there and executable" "$([ -x "$DIR/claim-issue.sh" ] && echo ok || echo "$DIR/claim-issue.sh missing or not executable")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
