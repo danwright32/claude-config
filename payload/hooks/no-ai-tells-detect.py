@@ -85,16 +85,19 @@ try:
 
     is_writing = False
 
-    # Check direct prose format matches. The prose terms and the write verbs are matched as whole
-    # words (word_pattern). The code terms are still matched as substrings, which only ever SUPPRESSES
-    # the pointer, so this change makes nothing quieter than before on their account.
+    # Check direct prose format matches. Every list is matched as whole words (word_pattern). The
+    # code terms were letters until claude-config#3280, so "script" inside "description", "cli"
+    # inside "click", "api" inside "rapid" and "test " inside "latest " hid the pointer from prompts
+    # asking for prose.
     if word_pattern(prose_terms).search(prompt):
         is_writing = True
 
-    # Check write verb + no code signal
+    # Check write verb + no code signal. A pasted git diff is code whatever words sit around it:
+    # matched as words alone, the code terms newly pointed 14 of 5,888 distinct prompts in this
+    # Mac's transcripts (2026-11-21), and all 14 were the push judges' prompts carrying a diff.
     if not is_writing:
         has_write_verb = bool(word_pattern(write_verbs).search(prompt))
-        has_code_signal = any(code in prompt for code in code_terms)
+        has_code_signal = bool(word_pattern(code_terms).search(prompt)) or "diff --git" in prompt
         if has_write_verb and not has_code_signal:
             is_writing = True
 

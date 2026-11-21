@@ -128,6 +128,43 @@ for p in \
     || check "it still fires on: $p" "it stayed quiet"
 done
 
+# The CODE terms are words too (claude-config#3280). Matched as letters, "script" inside
+# "description", "cli" inside "click" and "client", "api" inside "rapid" and "test " inside
+# "latest " each read as a coding request and kept the pointer out of a prompt asking for prose.
+for p in \
+  "write a description of the feature for the release notes" \
+  "draft a reply to the client about the delay" \
+  "write a rapid summary for the team" \
+  "draft the latest update for our readers" \
+  "rewrite the click through copy so it reads warmer" \
+  ; do
+  [ "$(fires "$p")" = "yes" ] \
+    && check "a code term inside another word does not hide prose: $p" ok \
+    || check "a code term inside another word does not hide prose: $p" "it stayed quiet"
+done
+
+# Matched as words, the code terms keep their forms, and the end of the prompt counts as the end
+# of a word ("test " needed a space after it, so a prompt ending in "test" read as prose).
+for p in \
+  "write the tests for the parser" \
+  "write a test" \
+  "draft the scripts for the release" \
+  "rewrite these classes" \
+  ; do
+  [ "$(fires "$p")" = "no" ] \
+    && check "a code term in another form still reads as code: $p" ok \
+    || check "a code term in another form still reads as code: $p" "it fired"
+done
+
+# A pasted diff is code whatever words surround it. Measured over 5,888 distinct prompts in this
+# Mac's transcripts on 2026-11-21: matching the code terms as words alone newly pointed 14, and all
+# 14 were the push judges' prompts carrying a git diff, whose only code terms had been letters
+# inside other words. The same marker also stops the pointer on 35 such prompts it reached before.
+diff_prompt="$(printf 'COMMIT MESSAGES:\n- Reword the welcome notes\n\nSOURCE DIFF:\ndiff --git a/notes.txt b/notes.txt\n+Write a warmer welcome for new readers\n')"
+[ "$(fires "$diff_prompt")" = "no" ] \
+  && check "it stays quiet on a prompt carrying a git diff" ok \
+  || check "it stays quiet on a prompt carrying a git diff" "it fired"
+
 # ---------------------------------------------------------------------------
 # What it injects has to be a pointer at the writing skill, not merely something.
 # ---------------------------------------------------------------------------
