@@ -569,7 +569,10 @@ dcs_icloud() { # <path>
 # Drive, Desktop or Documents when iCloud syncs them, any ~/Library/CloudStorage mount (Google Drive,
 # OneDrive, Dropbox and Box through macOS's file provider), or a sync client's own folder in home.
 # Moving anything there to the Trash removes it on every device that syncs it, and a folder that
-# looks missing there may only not have arrived yet (#2346).
+# looks missing there may only not have arrived yet (#2346). Dropbox names its folder for the account
+# when a personal and a team account are linked, ~/Dropbox (Personal) and ~/Dropbox (<team>), and Box
+# Sync, Box's older client, keeps ~/Box Sync (#3233, from Dropbox's and Box's help pages).
+# build-folders.sh and forgotten-worktrees.sh both leave out what this matches.
 dcs_synced() { # <path>
   local p="${1%/}" h
   for h in "$HOME" "$DCS_HOME"; do
@@ -577,9 +580,9 @@ dcs_synced() { # <path>
       "$h/Library/Mobile Documents/"*) DCS_WHY="iCloud Drive"; return 0 ;;
       "$h/Library/CloudStorage/"*) DCS_WHY="a cloud storage folder"; return 0 ;;
       "$h/Google Drive/"*) DCS_WHY="Google Drive"; return 0 ;;
-      "$h/Dropbox/"*|"$h/.dropbox/"*) DCS_WHY="Dropbox"; return 0 ;;
+      "$h/Dropbox/"*|"$h/Dropbox ("*|"$h/.dropbox/"*) DCS_WHY="Dropbox"; return 0 ;;
       "$h/OneDrive/"*|"$h/OneDrive - "*) DCS_WHY="OneDrive"; return 0 ;;
-      "$h/Box/"*) DCS_WHY="Box"; return 0 ;;
+      "$h/Box/"*|"$h/Box Sync/"*) DCS_WHY="Box"; return 0 ;;
       "$h/pCloud Drive/"*|"$h/.pcloud/"*) DCS_WHY="pCloud"; return 0 ;;
       "$h/SynologyDrive/"*) DCS_WHY="Synology Drive"; return 0 ;;
       "$h/Desktop/"?*) dcs_icloud "$p" && { DCS_WHY="Desktop, which iCloud syncs"; return 0; } ;;

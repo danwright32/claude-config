@@ -304,11 +304,11 @@ run_scan --only build-folders
 check "build folders: one iCloud syncs is not listed" "$(eq "$(item_of "$H/Documents/proj/node_modules")" "")"
 check "build folders: nor its neighbour" "$(eq "$(item_of "$H/Documents/proj2/node_modules")" "")"
 check "build folders: a project outside iCloud is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
-check "build folders: the kind's note counts what iCloud syncs and says why" "$(eq "$(note_of build-folders)" "2 build folders were left out because iCloud syncs them: removing one would remove it from iCloud on every device.")"
-check "build folders: the scan's summary says so too" "$(has "$OUT_TEXT" "2 build folders were left out because iCloud syncs them")"
+check "build folders: the kind's note counts what iCloud syncs and says why" "$(eq "$(note_of build-folders)" "2 build folders were left out because they are in Documents, which iCloud syncs: removing one would remove it on every device that syncs it.")"
+check "build folders: the scan's summary says so too" "$(has "$OUT_TEXT" "2 build folders were left out because they are in Documents, which iCloud syncs")"
 check "build folders: one iCloud syncs is never passed to du" "$(hasnt "$(dc_calls du)" "$H/Documents/proj/node_modules")"
 judge build-folders "$H/Documents/proj/node_modules"
-check "build folders judge: one iCloud syncs is not offerable" "$(eq "$JUDGED" "not offerable: iCloud syncs it, so removing it would remove it from iCloud on every device")"
+check "build folders judge: one iCloud syncs is not offerable" "$(eq "$JUDGED" "not offerable: it is in Documents, which iCloud syncs, so removing it would remove it on every device that syncs it")"
 # The control: the same folder once iCloud no longer syncs Documents is listed and offered.
 rm -rf "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
 run_scan --only build-folders
@@ -316,7 +316,52 @@ check "build folders: once iCloud does not sync Documents, the same folder is of
 check "build folders: and no note is written" "$(eq "$(note_of build-folders)" "")"
 mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"; rm -rf "$H/Documents/proj2"; old "$H/Documents"
 run_scan --only build-folders
-check "build folders: one left out is counted in the singular" "$(eq "$(note_of build-folders)" "1 build folder was left out because iCloud syncs it: removing it would remove it from iCloud on every device.")"
+check "build folders: one left out is counted in the singular" "$(eq "$(note_of build-folders)" "1 build folder was left out because it is in Documents, which iCloud syncs: removing it would remove it on every device that syncs it.")"
+
+# The same holds for every other sync service (#3233): removing a build folder Dropbox, Google Drive,
+# OneDrive or Box keeps removes it on every device that syncs it. One predicate decides it, scan-lib's
+# dcs_synced, which forgotten-worktrees.sh reads too, never a second list here. The walk never goes
+# into ~/Dropbox, ~/Google Drive, ~/OneDrive, ~/Box or ~/Library, so those reach this kind only
+# through its judge (a record from before this rule, a path pasted in); a Dropbox folder named for a
+# linked account, ~/Dropbox (Personal), and Box Sync's ~/Box Sync are walked, so the scan meets them.
+fresh
+mkdir -p "$H/Library/Mobile Documents/com~apple~CloudDocs/Documents"
+for d in "$H/Documents/proj" "$H/Dropbox (Personal)/proj" "$H/Box Sync/proj" "$H/Apps/local" \
+  "$H/Dropbox/proj" "$H/Library/CloudStorage/Dropbox/proj" "$H/Library/CloudStorage/GoogleDrive-dan/My Drive/proj" \
+  "$H/Google Drive/proj" "$H/Library/CloudStorage/OneDrive-Personal/proj" "$H/OneDrive/proj" \
+  "$H/OneDrive - Acme/proj" "$H/Library/CloudStorage/Box-Box/proj" "$H/Box/proj"; do
+  mkdir -p "$d/node_modules/x"; printf '{}\n' > "$d/package.json"
+done
+ln -s "$H/Dropbox/proj" "$H/Apps/linked"
+old "$H"
+run_scan --only build-folders
+check "build folders: one in a linked account's Dropbox folder is not listed" "$(eq "$(item_of "$H/Dropbox (Personal)/proj/node_modules")" "")"
+check "build folders: nor one in Box Sync's folder" "$(eq "$(item_of "$H/Box Sync/proj/node_modules")" "")"
+check "build folders: a project in no synced folder is still offered (the control)" "$(eq "$(state_of "$H/Apps/local/node_modules")" offerable)"
+check "build folders: the note names each place and counts it, when there is more than one" "$(eq "$(note_of build-folders)" "3 build folders were left out because a sync service keeps them (1 in Box; 1 in Documents, which iCloud syncs; 1 in Dropbox): removing one would remove it on every device that syncs it.")"
+# The stub log writes each argument shell quoted, so the spaces in these names are escaped there;
+# every synced fixture is a proj folder and the control is not.
+check "build folders: none of them is passed to du" "$(hasnt "$(dc_calls du)" "/proj/node_modules")"
+check "build folders: while the control is" "$(has "$(dc_calls du)" "/Apps/local/node_modules")"
+synced_judged() { # <target> <where>
+  judge build-folders "$1"
+  check "build folders judge: ~/${1#"$H"/} is not offerable, saying it is in $2" "$(eq "$JUDGED" "not offerable: it is in $2, so removing it would remove it on every device that syncs it")"
+}
+synced_judged "$H/Dropbox/proj/node_modules" Dropbox
+synced_judged "$H/Dropbox (Personal)/proj/node_modules" Dropbox
+synced_judged "$H/Google Drive/proj/node_modules" "Google Drive"
+synced_judged "$H/OneDrive/proj/node_modules" OneDrive
+synced_judged "$H/OneDrive - Acme/proj/node_modules" OneDrive
+synced_judged "$H/Box/proj/node_modules" Box
+synced_judged "$H/Box Sync/proj/node_modules" Box
+synced_judged "$H/Library/CloudStorage/Dropbox/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/GoogleDrive-dan/My Drive/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/OneDrive-Personal/proj/node_modules" "a cloud storage folder"
+synced_judged "$H/Library/CloudStorage/Box-Box/proj/node_modules" "a cloud storage folder"
+# A path reaching a synced folder through a link is judged by where it really is.
+synced_judged "$H/Apps/linked/node_modules" Dropbox
+judge build-folders "$H/Apps/local/node_modules"
+check "build folders judge: a project in no synced folder is offerable (the control)" "$(eq "$JUDGED" offerable)"
 
 # A folder iCloud keeps only in the cloud (dataless) is never read, because listing one makes iCloud
 # fetch it, and du does not skip it (#1860: four Slate worktree build folders held 1,673). chflags

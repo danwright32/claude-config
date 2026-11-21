@@ -66,8 +66,9 @@ Report what it printed, in plain words, in this order:
    the reason beside each: Operation not permitted is macOS protecting the folder, which Full Disk
    Access usually lifts, and Permission denied is the folder's own permissions, which it does not.
 4. Every note the scan printed under a kind, in plain words. Under Project build folders it says
-   how many build folders were left out because iCloud syncs them: none of those is ever offered,
-   since removing one would remove it from iCloud on every device (#3215).
+   how many build folders were left out because a sync service keeps them, and where (Documents or
+   Desktop while iCloud syncs them, Dropbox, Google Drive, OneDrive, Box and the rest): none of those
+   is ever offered, since removing one would remove it on every device that syncs it (#3215, #3233).
 5. Two kinds mostly show where space is (#3235): Records Claude Code and this config keep (its
    state, session notes among them, file history, the finding spool and its backups, the home
    folders its hooks write, with the rest of the state and every other home entry named for Claude

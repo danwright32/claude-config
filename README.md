@@ -6347,10 +6347,12 @@ is not write free: it writes the scan record, and the review page writes itself 
 the folder it is given, which the skill names to Dan, and with `--clear-clipboard` empties the
 clipboard first. Inside the folders it judges it changes
 nothing, which is why the worktrees kind reads with `git --no-optional-locks status`: a plain
-`git status` refreshes the repository's index file as it reads (#3216). Project build folders that
-iCloud syncs (in Desktop or Documents while iCloud syncs them) are never offered, since removing one
-removes it from iCloud on every device: they are left out of the list, counted in the kind's note,
-and refused by its judge (#3215). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
+`git status` refreshes the repository's index file as it reads (#3216). Project build folders a sync
+service keeps (`dcs_synced` in `scan-lib.sh`, the predicate the forgotten worktrees kind reads too:
+Desktop or Documents while iCloud syncs them, iCloud Drive, `~/Library/CloudStorage`, Dropbox, Google
+Drive, OneDrive, Box and the rest) are never offered, since removing one removes it on every device
+that syncs it: they are left out of the list, counted by place in the kind's note, and refused by its
+judge, which follows a link to where the folder really is (#3215, #3233). It runs a Full Disk Access probe first (listing `~/Library/Mail`),
 one pruned walk of the home folder (never into `~/Library`, the Trash, key folders, sync clients,
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
