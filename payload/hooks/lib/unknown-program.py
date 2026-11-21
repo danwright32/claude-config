@@ -52,8 +52,13 @@ it can refuse a command those let through and never the reverse:
     and is not read, which is what keeps a commit message out: `git commit -m '<exactly a
     refused command>'` is refused, git commit being a program the gate does not know to be
     unable to run its words, and `git commit -m 'refuse <that command> behind a helper'` is
-    not. Left open by that: a quoted word whose command starts with a second program the gate
-    does not know (`hyperfine 'op run -- node x.js'`), and one the reader cannot cut. Behind a
+    not. The word must also begin like a command line: its first command starts with a program
+    the gate knows (one it reads by name, a runner, or one it knows to be unable to run its
+    words), which a sed script, an awk program or a filter does not, though cut at its | marks
+    one can hold a piece that starts with a program's name (`sed -i 's|^python3 a|python3 b|'
+    file`). Left open by that: a quoted word whose command starts with a second program the gate
+    does not know (`hyperfine 'op run -- node x.js'`, `hyperfine 'mytool && node x.js'`), and
+    one the reader cannot cut. Behind a
     function, such a word is read only where the body does something with what it is handed
     as the words of a command (function_acts's as_words); a body that only pipes it into a
     program's input is left as it was, and so is `f() { echo "$1" | bash; }`.
@@ -123,7 +128,7 @@ def make(judged_by_name, sh_redirect):
         bodies_memo = {}  # {(a text, its folder): function_bodies's answer}
         # {(a text, its folder, a function's name, whether only words count): function_acts's answer}
         acts_memo = {}
-        lines_memo = {}  # {(a word, the folder): holds_command's answer}
+        lines_memo = {}  # {(a word, the folder, the text being read): holds_command's answer}
 
         def starts_command(self, word):
             """Whether a word, as the program gets it, names a program the gate reads by its name
@@ -134,7 +139,7 @@ def make(judged_by_name, sh_redirect):
                 got = self.starts_memo[word] = bool(name) and (judged_by_name(name) or name in self.sw.RUNNERS)
             return got
 
-        def holds_command(self, word, d):
+        def holds_command(self, word, d, depth):
             """Whether one word that holds white space, as the program gets it, is a command line
             one of whose commands starts with a program the gate reads by its name or a runner
             (`hyperfine 'node --test x.js'`, claude-config#3304): the shared reader cuts it into
@@ -142,10 +147,21 @@ def make(judged_by_name, sh_redirect):
             starts_command. A commit message or a sentence that only mentions such a program
             starts with another word and is not one. A word the reader cannot cut is left as it
             was. Most words hold no white space, and most that do hold no such name anywhere, so
-            those are answered before anything is cut."""
+            those are answered before anything is cut.
+
+            The word must also BEGIN like a command line: the first of its commands that has a
+            program starts with one the gate knows, which is one it reads by its name, a runner,
+            or one it knows to be unable to run its words (may_run_its_words: cd, export, echo).
+            Text in another language does not begin so, and cut at its | marks it can hold a
+            piece that starts with a program's name: of the 62,307 past commands counted on
+            2026-11-21, the four the first build newly refused were three sed scripts
+            (`sed -i '27s|^python3 a|python3 b|' file`, an edit of a file) and one awk program.
+            Left open by that: a command line in quotes whose first command starts with a
+            program the gate does not know (`hyperfine 'mytool && node x.js'`)."""
             if not WHITE.search(word):
                 return False
-            got = self.lines_memo.get((word, d))
+            key = (word, d, self.shell.get("text") or "")  # the text's functions answer for a first word too
+            got = self.lines_memo.get(key)
             if got is None:
                 got = False
                 if any(self.starts_command(t) for t in BETWEEN.split(word) if t):
@@ -153,14 +169,22 @@ def make(judged_by_name, sh_redirect):
                         records = self.sw.every_command(word, d)
                     except self.sw.Unreadable:
                         records = ()
+                    begun = False
                     for record in records:
-                        first = self.words_of(self.rest_of(record[1])[0])[:1]
-                        if first and self.starts_command(first[0]):
+                        words = self.words_of(self.rest_of(record[1])[0])
+                        if not words:
+                            continue  # assignments alone (`A=1; node x.js`), which begin nothing
+                        starts = self.starts_command(words[0])
+                        if not begun:
+                            begun = True
+                            if not starts and self.may_run_its_words(words, d, depth):
+                                break  # it begins with a program the gate does not know
+                        if starts:
                             got = True
                             break
                 if len(self.lines_memo) > 512:
                     self.lines_memo.clear()
-                self.lines_memo[(word, d)] = got
+                self.lines_memo[key] = got
             return got
 
         def may_run_its_words(self, words, d, depth):
@@ -277,7 +301,7 @@ def make(judged_by_name, sh_redirect):
                 return None
             rest = self.rest_of(text)[0]
             words = self.words_of(rest)
-            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(OPTION.sub("", w, 1), d)
+            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(OPTION.sub("", w, 1), d, depth)
                                          for w in words[1:]):
                 return None
             name = os.path.basename(words[0])
@@ -304,7 +328,7 @@ def make(judged_by_name, sh_redirect):
             # script was refused as posting for a command it only quotes.
             lines = [v for k in range(1, end) if toks[k][0] == "word" and toks[k - 1][0] == "word"
                      for m in (ONE_QUOTED.fullmatch(toks[k][1]),) if m
-                     for v in (self.word_value(m.group(1)),) if v and self.holds_command(v, d)]
+                     for v in (self.word_value(m.group(1)),) if v and self.holds_command(v, d, depth)]
             if lines and isinstance(runs, str) and not self.function_acts(
                     words[0], self.shell.get("text") or "", d, depth, (), True):
                 lines = []  # a function whose body only pipes what it is handed on (function_acts)

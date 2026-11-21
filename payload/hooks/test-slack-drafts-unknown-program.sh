@@ -544,6 +544,30 @@ EOF
 gate_says allowed "#3304 left open: a quoted word whose command starts with a program the gate does not know" 3<<EOF
 hyperfine 'op run -- node --test test/notify.test.js'
 EOF
+# A quoted word is a command line only where it BEGINS like one: its first command starts with a
+# program the gate knows (one it reads by name, a runner, or one it knows to be unable to run its
+# words, such as cd or export). Text in another language does not: a sed script begins with an
+# address or a letter, an awk program with a brace or a pattern, a filter with a dot. The count of
+# this Mac's past commands (2026-11-21, 62,307 of them) found four that the first build newly
+# refused, every one a sed script or an awk program whose text, cut at its | marks as a shell would
+# cut a pipeline, held a piece starting with python3 or bash: `sed -i '27s|^python3 a|python3 b|'`
+# is an edit of a file, and nothing in it is run.
+gate_says allowed "#3304 a quoted word that does not begin like a command line (a sed script, a filter) is left as it was" 3<<EOF
+sed -i.bak '27s|^node --test test/plain.test.js|node --test test/notify.test.js|' run.sh
+sed -i.bak 's|node --test test/plain.test.js|node --test test/notify.test.js|g' run.sh
+mytool --filter '.[] | node --test test/notify.test.js'
+mytool '{print \$3 | "sort"}; node --test test/notify.test.js'
+EOF
+# What that leaves open, held so a change is seen: a command line in quotes whose FIRST command
+# starts with a program the gate does not know, with the refused command after it.
+gate_says allowed "#3304 left open: a quoted command line that begins with a program the gate does not know" 3<<EOF
+hyperfine 'mytool && node --test test/notify.test.js'
+EOF
+gate_says refused "#3304 a quoted command line that begins with an assignment or a program known to run nothing is read" "command line of its own" 3<<EOF
+hyperfine 'export NODE_ENV=test; node --test test/notify.test.js'
+hyperfine 'A=1; node --test test/notify.test.js'
+hyperfine 'echo start; node --test test/notify.test.js'
+EOF
 # Only a word written as one quoted string is read. A quoted string glued to more is what a line
 # of JSON read as a command holds ("command": "<a command>"}}), and read as a command line it
 # refused a transcript that a script sources as posting, for a command the transcript only quotes
