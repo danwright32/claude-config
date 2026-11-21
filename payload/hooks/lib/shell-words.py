@@ -1209,7 +1209,8 @@ def _redirections(s):
     starts, its descriptor included; where its operator ends, past the descriptor it copies when it
     names one, `2>&1`; whether that descriptor was its whole target). The one reading of where a
     redirection stands, for spaced(), which writes a space before one, and unredirected(), which
-    takes each out with its target. None for a command that opens on a test or an arithmetic."""
+    takes each out with its target. An empty tuple for a command that opens on a test or an
+    arithmetic."""
     if TEST_OPENS.match(s):
         return ()
     n, i, floor, found = len(s), 0, 0, []

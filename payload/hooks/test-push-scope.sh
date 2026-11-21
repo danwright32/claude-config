@@ -1983,8 +1983,9 @@ git update-index --refresh >/dev/null; git commit -m x && git push
 git stash list | wc -l; git commit -m x && git push
 x=$(git symbolic-ref --short HEAD) && git push origin "$x"
 HARMLESS
-# A redirection is among the words the reader hands over and is none of git's own, so a branch made
-# at HEAD with its output sent away is still that, and a move with its output sent away still a move.
+# A redirection is none of git's own words, and since #3322 the reader hands none over, so a branch
+# made at HEAD with its output sent away is still that, and a move with its output sent away still a
+# move.
 moves_or_stages "#3098 a redirection is not one of git's words" "git checkout main 2>&1 | tail -1; git push" "move git checkout"
 moves_or_stages "#3098 a redirection is not one of git's words" "git checkout -b new origin/main >/dev/null 2>&1 && git push -u origin new" "move git checkout"
 moves_or_stages "#3098 a redirection is not one of git's words" "git reset 2>/dev/null; git commit -m x; git push" "stage git reset"

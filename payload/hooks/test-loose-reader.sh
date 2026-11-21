@@ -88,8 +88,8 @@ if [ "$rc" -eq 0 ] && [ ! -e "$WORK/stale/left-over" ] && [ -f "$WORK/stale/lib/
 else check "the old copy is gone and the new one is there" "exit $rc, $(ls "$WORK/stale" 2>&1 | tr '\n' ' ')"; fi
 
 echo "a reader with nothing to undo is refused, and leaves no copy"
-# A hooks folder whose reader holds none of the three readings, as the reader would after a change
-# that moved one of them.
+# A hooks folder whose reader holds none of the readings the five variants undo, as the reader would
+# after a change that moved one of them.
 mkdir -p "$WORK/moved/lib"
 printf 'def past_redirects(s, cwd=""):\n    return s.lstrip()\n' > "$WORK/moved/lib/shell-words.py"
 for variant in redirects rejoin glue among marks; do
