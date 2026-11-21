@@ -4680,6 +4680,24 @@ the fill in does not work out. This repository's `test-work-names-scripts.sh` so
 hook writes while the suite runs by such a string, and passed only because the file was looked up
 under the variable's name; it now reads what that file puts on `PATH` without sourcing it.
 
+Since claude-config#3278 an import statement in Python text this python3 cannot parse as a whole is
+read as Python reads a line (`py_import_line`). Such text is most often code that holds a shell
+variable for the shell to fill in first (`python3 -c "import time,sys; print(time.time() - $start)"`).
+Its import statements are still found by each one's first line, as before. That line used to be cut
+at its commas and each piece's first word taken, so the list above named a module called `sys;`,
+which is found nowhere, and a one line timing helper stopped a measurement script that names no
+endpoint (2026-11-18). Now Python's own tokenizer gives the whole line (a list in brackets over
+several lines, one carried on by a backslash, a comment after it), a semicolon outside brackets ends
+a statement, and each statement of the line that starts with `import` or `from` is parsed by itself.
+Every import statement of the line is read, the ones after a semicolon too, so `import sys; import
+poster` follows `poster`. Two things were let through before and are refused now: a relative import
+whose list in brackets runs over several lines (`from . import (` and the modules on the lines
+after), which named nothing, and `from pkg import a; ...`, whose last name was read as `a;`. Where
+Python cannot read the line (a string that never closes, a shell variable where a module belongs, a
+compound statement after a semicolon that holds an import), it is read as it was before. An import
+that follows a semicolon on a line that does not start with one (`x = 1; import poster`) is not
+found in such text, as before. Suite: `test-slack-drafts-python-imports.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a

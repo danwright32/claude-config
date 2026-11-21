@@ -683,6 +683,78 @@ def py_nodes(text):
     return py_read(text, "nodes", lambda: tuple(ast.walk(tree)))
 
 
+def py_import_names(node):
+    """(level, module, names) for each module the import statement that is node names, as
+    Judge.py_imports gives them; nothing for any other node."""
+    if isinstance(node, ast.Import):
+        return [(0, a.name, ()) for a in node.names]
+    if isinstance(node, ast.ImportFrom):
+        return [(node.level, node.module or "", tuple(a.name for a in node.names))]
+    return []
+
+
+def py_import_line(text, at):
+    """What the line of Python text that starts at offset at imports, as py_import_names gives it,
+    or None where Python cannot read that line (claude-config#3278). For text this python3 cannot
+    parse as a whole, where each import statement is found by its first line (PY_IMPORT_LINE).
+
+    The line is read as Python reads one: its own tokenizer gives the logical line (so a list in
+    brackets over several lines, one carried on by a backslash and a comment after it are each
+    read to the statement's real end), a semicolon outside brackets ends a statement, and each
+    statement of the line that starts with import or from is parsed by itself. Cutting the list at
+    its commas instead named `sys;` as a module of `import time,sys; ...`, and refused a one line
+    timing helper on 2026-11-18. Every import statement of the line is read, not only the first:
+    one that follows a semicolon runs too.
+
+    None, and the caller reads the line as it did before, where the tokenizer stops before the
+    line ends (a string that never closes), where a statement that starts with import or from is
+    not one Python can parse, and where any other statement of the line holds the word import (a
+    compound statement after a semicolon, which the line's statements cannot be told apart in)."""
+    src, lines = io.StringIO(text[at:], newline=None), []
+
+    def readline():
+        lines.append(src.readline())
+        return lines[-1]
+
+    def offset(pos):
+        return sum(len(line) for line in lines[:pos[0] - 1]) + pos[1]
+    statements, cur, depth = [], [], 0
+    try:
+        for tok in tokenize.generate_tokens(readline):
+            if tok.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+                break
+            if tok.type in (tokenize.NL, tokenize.COMMENT):
+                continue
+            if tok.type == tokenize.ERRORTOKEN and tok.string[:1] in ('"', "'"):
+                return None  # a string that never closes, as a python3 before 3.12 reports one
+            if tok.type == tokenize.OP and tok.string in ("(", "[", "{"):
+                depth += 1
+            elif tok.type == tokenize.OP and tok.string in (")", "]", "}"):
+                depth -= 1
+            elif tok.type == tokenize.OP and tok.string == ";" and depth == 0:
+                statements.append(cur)
+                cur = []
+                continue
+            cur.append(tok)
+    except (tokenize.TokenError, SyntaxError, ValueError):
+        return None
+    if cur:
+        statements.append(cur)
+    out = []
+    for k, toks in enumerate(statements):
+        if toks and toks[0].type == tokenize.NAME and toks[0].string in ("import", "from"):
+            try:
+                body = py_parse("".join(lines)[offset(toks[0].start):offset(toks[-1].end)]).body
+            except (SyntaxError, ValueError):
+                return None
+            if len(body) != 1 or not isinstance(body[0], (ast.Import, ast.ImportFrom)):
+                return None
+            out += py_import_names(body[0])
+        elif not toks or k == 0 or any(t.type == tokenize.NAME and t.string == "import" for t in toks):
+            return None
+    return out
+
+
 def py_marker(text, docs_read=False, held=None):
     """MARKER's first hit in Python text outside the pattern of a regular expression, or None
     (claude-config#2844). A re.compile whose pattern spells out an endpoint looks for it, as
@@ -3241,8 +3313,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
     @staticmethod
     def py_imports(text):
-        """(level, module, names) for each import statement in Python source, by its syntax tree, or
-        by each statement's first line when this python3 cannot parse it."""
+        """(level, module, names) for each import statement in Python source, by its syntax tree.
+        When this python3 cannot parse the text, each statement is found by its first line and that
+        line read as Python reads one (py_import_line, claude-config#3278), or by its first line's
+        words where Python cannot read the line either."""
         return list(py_read(text, "imports", lambda: Judge.py_imports_read(text)))
 
     @staticmethod
@@ -3253,7 +3327,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         except (SyntaxError, ValueError):
             out = []
             for m in PY_IMPORT_LINE.finditer(text):
-                if m.group(3) is not None:
+                read = py_import_line(text, m.start() + len(m.group(0)) - len(m.group(0).lstrip(" \t")))
+                if read is not None:
+                    out += read
+                elif m.group(3) is not None:
                     out += [(0, a.split()[0], ()) for a in m.group(3).split(",") if a.split()]
                 else:
                     dots = len(m.group(1)) - len(m.group(1).lstrip("."))
@@ -3262,10 +3339,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             return tuple(out)
         out = []
         for node in nodes:
-            if isinstance(node, ast.Import):
-                out += [(0, a.name, ()) for a in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
+            out += py_import_names(node)
         return tuple(out)
 
     @staticmethod
