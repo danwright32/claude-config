@@ -4187,9 +4187,8 @@ export const gitMove = (git: { sub: string | undefined; args: readonly string[] 
     return bad === undefined ? { said, ask } : { said, unread: `it names what it brings in as ${bad}, which the guard cannot hand to git to read` }
   }
   // A stopped move carried on, given up or looked at. `git rebase --show-current-patch` only prints
-  // the patch the rebase stopped on; it is told by how it starts and by naming no commit, since the
-  // shared parts scan reads that option's whole spelling as a branch read by hand (#980).
-  const resuming = has('--abort', '--continue', '--skip', '--quit', '--edit-todo') || (!ops.length && [...flags].some(f => f.startsWith('--show-')))
+  // the patch the rebase stopped on, and is read as that only when it names no commit.
+  const resuming = has('--abort', '--continue', '--skip', '--quit', '--edit-todo') || (!ops.length && has('--show-current-patch'))
   if (sub === 'pull')
     return { said, unread: 'git pull fetches before it merges, so what it brings in is not known until it has run', remedy: 'Run git fetch as its own command first, then git merge (or git rebase) of the fetched branch on its own, and the guard reads that.' }
   if (sub === 'merge') {
