@@ -52,6 +52,8 @@ case "$1 $2" in
     [ -e "$FAKE/empty_issue" ] && exit 0
     echo "STATE $(cat "$FAKE/state" 2>/dev/null || echo OPEN)"
     cat "$FAKE/markers" 2>/dev/null
+    # A lagging read path: what was posted shows from the read after the first one.
+    [ -e "$FAKE/pending" ] && { cat "$FAKE/pending" >>"$FAKE/markers"; rm -f "$FAKE/pending"; }
     exit 0 ;;
   "pr list")
     [ -e "$FAKE/fail_pr" ] && { echo "gh: HTTP 502 simulated" >&2; exit 1; }
@@ -59,6 +61,9 @@ case "$1 $2" in
     exit 0 ;;
   "issue comment")
     [ -e "$FAKE/fail_post" ] && { echo "gh: could not post, simulated" >&2; exit 1; }
+    dest="$FAKE/markers"
+    [ -e "$FAKE/lag" ] && dest="$FAKE/pending"
+    [ -e "$FAKE/drop" ] && dest=/dev/null
     body=""
     while [ $# -gt 0 ]; do
       [ "$1" = "--body-file" ] && body="$2"
@@ -71,8 +76,10 @@ case "$1 $2" in
     # Another session's claim that reached GitHub a moment before this one.
     [ -e "$FAKE/race" ] && { cat "$FAKE/race" >>"$FAKE/markers"; rm -f "$FAKE/race"; }
     while IFS= read -r line; do
-      case "$line" in "<!-- orchestrate-"*) echo "$CLAIM_NOW $line" >>"$FAKE/markers" ;; esac
+      case "$line" in "<!-- orchestrate-"*) echo "$CLAIM_NOW $line" >>"$dest" ;; esac
     done <"$body"
+    # A write that landed but answered with an error, as a timeout or a 5xx can.
+    [ -e "$FAKE/landed_but_failed" ] && { echo "gh: HTTP 504 simulated" >&2; exit 1; }
     exit 0 ;;
 esac
 if [ "$1" = api ]; then
@@ -96,7 +103,7 @@ new_case() { # a fresh fixture folder for each case
   : >"$FAKE/calls"
 }
 run() { # run <args...>   sets out and code
-  out="$(PATH="$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_HOST="${HOST_OVERRIDE:-Daniels-MacBook-Pro-2}" bash "$SCRIPT" "$@" 2>&1)"
+  out="$(PATH="$TMP/bin:$PATH" FAKE="$FAKE" CLAIM_NOW="$NOW" CLAIM_READBACK_WAIT=0 CLAIM_HOST="${HOST_OVERRIDE:-Daniels-MacBook-Pro-2}" bash "$SCRIPT" "$@" 2>&1)"
   code=$?
 }
 posted_count() { local n=0 f; for f in "$FAKE"/posted.*; do [ -e "$f" ] && n=$((n + 1)); done; echo "$n"; }
@@ -220,12 +227,37 @@ is "branch reader fails: exit 2" 2 "$code"
 has "branch reader fails: says it could not check" "COULD NOT CHECK" "$out"
 is "branch reader fails: nothing posted" 0 "$(posted_count)"
 
-# The post itself failing.
+# The post itself failing: the claim's state is unknown, so the release command is named.
 new_case
 : >"$FAKE/fail_post"
 run claim "$REPO" 3317 "$MINE"
 is "post fails: exit 2" 2 "$code"
 lacks "post fails: never says claimed" "CLAIMED:" "$out"
+has "post fails: says a claim may still have landed" "may still have landed" "$out"
+has "post fails: names the release command" "claim-issue.sh release $REPO 3317 $MINE" "$out"
+
+# A post that answered with an error but landed is found on reading back, and holds.
+new_case
+: >"$FAKE/landed_but_failed"
+run claim "$REPO" 3317 "$MINE"
+is "post errored but landed: exit 0" 0 "$code"
+has "post errored but landed: says claimed" "CLAIMED:" "$out"
+
+# A read path that lags the write: the claim shows on the second read back.
+new_case
+: >"$FAKE/lag"
+run claim "$REPO" 3317 "$MINE"
+is "lagging read back: exit 0" 0 "$code"
+has "lagging read back: says claimed" "CLAIMED:" "$out"
+is "lagging read back: one comment posted" 1 "$(posted_count)"
+
+# A claim that never shows on reading back: not started, and the release command named.
+new_case
+: >"$FAKE/drop"
+run claim "$REPO" 3317 "$MINE"
+is "claim never seen: exit 2" 2 "$code"
+has "claim never seen: says it could not be seen" "could not be seen on reading it back 3 times" "$out"
+has "claim never seen: names the release command" "claim-issue.sh release $REPO 3317 $MINE" "$out"
 
 # ---- 6. two sessions racing: the earlier claim wins and ours is released ----
 new_case

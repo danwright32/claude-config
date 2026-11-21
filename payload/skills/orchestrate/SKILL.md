@@ -41,7 +41,7 @@ It reads the issue's claims, the open pull requests naming it and the remote bra
 
 - Exit 0, `CLAIMED` or `ALREADY CLAIMED`: dispatch the builder.
 - Exit 1, `HELD` or `CLOSED`: the item is not started. Its board row shows `held by <who>`, taken from the lines the script prints, and Dan is told in one line.
-- Exit 2, `COULD NOT CHECK`: the item is not started and nothing was claimed. Show the reason it prints on the board and run it again later; never read a failed check as free.
+- Exit 2, `COULD NOT CHECK`: the item is not started, and nothing was claimed unless the message says a claim may have been posted, when it names the release command to run straight away. Show the reason it prints on the board and run it again later; never read a failed check as free.
 
 A `check` or `investigate` item changes nothing and needs no claim. `claim-issue.sh check` does the same reads and posts nothing, for a look before the board is shown.
 

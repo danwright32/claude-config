@@ -31,13 +31,18 @@
 # still printed. The open pull request and remote branch reads block whatever a claim's age.
 #
 # Exit codes: 0 claimed by us (or free, for check, or released); 1 held by someone else or closed,
-# do not start it; 2 could not check, or bad arguments: do not start it, and nothing was claimed.
+# do not start it; 2 could not check, or bad arguments: do not start it. After exit 2 nothing was
+# claimed unless the message says a claim may have been posted (the post errored, or the claim could
+# not be read back); then it names the release command to run.
 # A failed read is never taken as "nobody holds it".
 #
-# Test seams: CLAIM_NOW (epoch seconds) and CLAIM_HOST stand in for the clock and the hostname.
+# Test seams: CLAIM_NOW (epoch seconds) and CLAIM_HOST stand in for the clock and the hostname, and
+# CLAIM_READBACK_WAIT (seconds, default 2) and CLAIM_READBACK_TRIES (default 3) for the read back.
 set -uo pipefail
 
 STALE_HOURS="${CLAIM_STALE_HOURS:-24}"
+READBACK_WAIT="${CLAIM_READBACK_WAIT:-2}"
+READBACK_TRIES="${CLAIM_READBACK_TRIES:-3}"
 BRANCH_READER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/branch-issues.mjs"
 
 usage() {
@@ -112,8 +117,9 @@ live_claims() {
   ' "$tmp/issue"
 }
 
-# Prints the blocking findings, one per line, and the stale claims after a "stale" prefix.
-# Sets first_holder to "ours", "other" or "".
+# Prints nothing. Fills three globals from the live claims: blocking (one line per claim held by
+# another session), stale (one line per claim past the stale window, which does not block) and
+# first_holder ("ours" or "other" for whoever holds the first live claim GitHub lists, "" for none).
 blocking=()
 stale=()
 first_holder=""
@@ -245,18 +251,23 @@ fi
   echo ""
   echo "<!-- orchestrate-claim branch=$branch host=$host -->"
 } >"$tmp/claim"
-if ! post "$tmp/claim"; then
-  echo "COULD NOT CHECK: the claim could not be posted on $repo#$issue. Do not start it."
-  sed 's/^/  /' "$tmp/post.err"
-  exit 2
-fi
-
-if ! read_issue; then
-  echo "COULD NOT CHECK: the claim was posted on $repo#$issue but could not be read back. Do not start it until 'claim-issue.sh check $repo $issue $branch' says ALREADY CLAIMED."
-  sed 's/^/  /' "$tmp/issue.err"
-  exit 2
-fi
-judge_claims
+# A post that errored (a timeout, a 5xx) may still have landed, and GitHub's read path can lag its
+# write, so the issue is read back after a pause, up to READBACK_TRIES times, whatever the post said.
+posted=yes
+post "$tmp/claim" || posted=no
+attempt=0
+first_holder=""
+while [ "$attempt" -lt "$READBACK_TRIES" ]; do
+  attempt=$((attempt + 1))
+  sleep "$READBACK_WAIT"
+  if read_issue; then
+    judge_claims
+  else
+    first_holder=""
+  fi
+  [ -n "$first_holder" ] && break
+done
+release_cmd="claim-issue.sh release $repo $issue $branch \"<reason>\""
 case "$first_holder" in
   ours)
     echo "CLAIMED: $repo#$issue for branch $branch, from $(mac_name "$host") at $(et_time "$now"). Start the builder."
@@ -269,6 +280,12 @@ case "$first_holder" in
     print_list "${blocking[@]}"
     exit 1 ;;
   *)
-    echo "COULD NOT CHECK: the claim was posted on $repo#$issue but is not there on reading it back. Do not start it."
+    if [ "$posted" = no ]; then
+      echo "COULD NOT CHECK: posting the claim on $repo#$issue failed, and no claim of this session's could be read back. Do not start it. A claim may still have landed: run $release_cmd so it does not block the next session."
+      sed 's/^/  /' "$tmp/post.err"
+    else
+      echo "COULD NOT CHECK: the claim was posted on $repo#$issue but could not be seen on reading it back $READBACK_TRIES times. Do not start it, and run $release_cmd so it does not block the next session."
+      [ -s "$tmp/issue.err" ] && sed 's/^/  /' "$tmp/issue.err"
+    fi
     exit 2 ;;
 esac
