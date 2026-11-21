@@ -84,6 +84,49 @@ case "$code:$out" in
   *) check "the control: with no seam the runner reads the real core count and runs" "exit=$code out=$out" ;;
 esac
 
+# The measurement the default rests on is recorded in the two places a person reads the setting, the
+# note beside the formula and the README settings row, and the two give the same figures
+# (claude-config#2589). Until 2026-11-21 both said the 18 core Mac had never been timed, which stayed
+# true in print after it stopped being true (L244). Each is read joined into one line, so a figure
+# that wraps is still found. The note is the runner's own, so it is read wherever this suite runs.
+# The README is the repository's, found through the checkout this copy sits in
+# (lib/checkout-root.sh, #1567); the installed copy is in none, so there the row is reported
+# unmeasured rather than failing for a file it can never hold (L411).
+MEASURED_ON='2026-11-21'
+MEASURED_FIGURES=('37m03s' '32m20s' '33m08s')
+recorded() { # recorded <where> <text joined into one line>   -> one check per fact it must hold
+  local where="$1" text="$2" figure
+  if [ -z "$text" ]; then
+    check "$where was found" "nothing matched, so nothing was read"
+    return
+  fi
+  case "$text" in
+    *[Nn][Oo][Tt]' '[Mm][Ee][Aa][Ss][Uu][Rr][Ee][Dd]*) check "$where no longer says the 18 core Mac is unmeasured" "it still says not measured" ;;
+    *) check "$where no longer says the 18 core Mac is unmeasured" ok ;;
+  esac
+  case "$text" in
+    *"$MEASURED_ON"*'#2589'*|*'#2589'*"$MEASURED_ON"*) check "$where names the measurement's date and issue" ok ;;
+    *) check "$where names the measurement's date and issue" "no $MEASURED_ON with #2589" ;;
+  esac
+  for figure in "${MEASURED_FIGURES[@]}"; do
+    case "$text" in
+      *"$figure"*) check "$where gives the measured average $figure" ok ;;
+      *) check "$where gives the measured average $figure" "$figure not found" ;;
+    esac
+  done
+}
+
+note="$(awk '/^# THE DEFAULT, when HOOK_TESTS_BUDGET is unset/{on=1} on && !/^#/{exit} on' "$RUNNER" | sed 's/^# \{0,1\}//' | tr '\n' ' ')"
+recorded "the note beside the formula" "$note"
+
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$CHECKOUT" ]; then
+  row="$(awk '/^`HOOK_TESTS_BUDGET`$/{on=1} on{print} on && /<\/td><\/tr>/{exit}' "$CHECKOUT/README.md" | tr '\n' ' ')"
+  recorded "the README settings row" "$row"
+else
+  echo "SUITE-PART-UNMEASURED the README settings row for HOOK_TESTS_BUDGET: $DIR/.. is not the payload of a claude-config checkout, so there is no README.md to read"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
