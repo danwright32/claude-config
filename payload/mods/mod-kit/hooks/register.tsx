@@ -6,6 +6,7 @@ import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, holdRefusal, holdsOf, judgeProviders, newestFile, reloadedUnder, withHold, withoutHold } from './dependents.ts'
 import type { Hold } from './dependents.ts'
+import { askingRefusal, type OwnDialog, withAsking, withoutAsking } from './asked.ts'
 import { ghArgs, mergeHelperArgs } from './gh.ts'
 import { goalAt } from './goal.ts'
 import { sendTwice } from './send.ts'
@@ -69,16 +70,21 @@ const holdsRef = { plugin: 'mod-kit', key: 'holds' } as const
 // Read, change and write the holds with ifVersion, again on a miss, so a hold taken while a pass
 // drops an expired one is never lost (assume it runs twice). The engine requires $ to be spelled in
 // place, so each caller hands its own read and write.
-type HoldsRead = () => Promise<{ value?: Hold[]; version: number }>
-type HoldsWrite = (value: Hold[], ifVersion: number) => Promise<{ isSet: boolean }>
-const changeHolds = async (read: HoldsRead, write: HoldsWrite, fn: (held: Hold[]) => Hold[]) => {
+type KeptRead<T> = () => Promise<{ value?: T[]; version: number }>
+type KeptWrite<T> = (value: T[], ifVersion: number) => Promise<{ isSet: boolean }>
+const changeKept = async <T,>(what: string, read: KeptRead<T>, write: KeptWrite<T>, fn: (kept: T[]) => T[]) => {
   for (let attempt = 0; attempt < 10; attempt++) {
-    const held = await read()
-    const r = await write(fn(held.value ?? []), held.version)
+    const kept = await read()
+    const r = await write(fn(kept.value ?? []), kept.version)
     if (r.isSet) return
   }
-  throw new Error('the holds changed under every one of 10 attempts to update them')
+  throw new Error(`the ${what} changed under every one of 10 attempts to update them`)
 }
+const changeHolds = (read: KeptRead<Hold>, write: KeptWrite<Hold>, fn: (held: Hold[]) => Hold[]) => changeKept('holds', read, write, fn)
+// Each dialog a mod has open that it raised itself (#3321), from $.modkit.asking to
+// $.modkit.answered, read by picker manners to tell a mod's own question from a session's picker.
+// Written nowhere but in those two nouns: that is what makes an entry a mod's own word.
+const askingRef = { plugin: 'mod-kit', key: 'asking' } as const
 
 // #960, measured 2026-10-08 with throwaway mods in a session of its own. When one delivery changes
 // mod-kit and a mod that starts using something mod-kit only now provides (the steps card hooking
@@ -428,6 +434,17 @@ export const register: Register = (on, options) => {
       },
       release: async ({ mod, id }) => {
         await changeHolds(() => built.state.get(holdsRef), (v, ifVersion) => built.state.set(holdsRef, v, { ifVersion }), held => withoutHold(held, mod, id))
+      },
+      // #3321: a mod saying the dialog it is about to open is its own, and taking that back.
+      asking: async input => {
+        const why = askingRefusal(input)
+        if (why) throw new Error(why)
+        await changeKept<OwnDialog>('dialogs being asked', () => built.state.get(askingRef), (v, ifVersion) => built.state.set(askingRef, v, { ifVersion }), kept => withAsking(kept, input))
+      },
+      answered: async input => {
+        const why = askingRefusal(input, 'answered')
+        if (why) throw new Error(why)
+        await changeKept<OwnDialog>('dialogs being asked', () => built.state.get(askingRef), (v, ifVersion) => built.state.set(askingRef, v, { ifVersion }), kept => withoutAsking(kept, input))
       },
     }
     return { ...built, modkit }
