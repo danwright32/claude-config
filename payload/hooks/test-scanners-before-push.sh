@@ -1526,6 +1526,11 @@ grep -q 'working out what the scanners will read' <<< "$o3357" \
 grep -q 'Send the same push again' <<< "$o3357" \
   && check "#3357 and says the remedy is to send the same push again" ok \
   || check "#3357 and says the remedy is to send the same push again" "out=$o3357"
+# With a key, a scanner already started is left going for the next push to count, and the stop says
+# so; the case for a run WITHOUT a key, further down, checks this same sentence is then absent.
+grep -q 'goes on in the background' <<< "$o3357" \
+  && check "#3357 and, with a key, that a scanner it started goes on for the next push to count" ok \
+  || check "#3357 and, with a key, that a scanner it started goes on for the next push to count" "out=$o3357"
 _alive3357=""
 _pids3357="$(cat "$TMPROOT/slowshim.pids" 2>/dev/null)"
 while IFS= read -r _p; do

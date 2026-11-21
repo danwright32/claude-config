@@ -250,7 +250,8 @@ _sc_stop_refuse(){   # $1 = the supervisor's folder
       echo "How long its process took to start, before its clock, could not be read."
     fi
     echo ""
-    echo "Nothing here is a finding about your change: this Mac was too busy for the gate to finish."
+    echo "Nothing here is a finding about your change: the gate did not finish in time, whether because this"
+    echo "Mac was busy or because the step named above hung."
     if [ -n "$_sc_keyless_stopped" ]; then
       echo "Send the same push again. The scanners it had started were stopped too, because without a key"
       echo "for what they read no later push could count their result, so the next push starts them again."
@@ -267,12 +268,14 @@ _sc_stop_refuse(){   # $1 = the supervisor's folder
 # Runs WITHOUT a key are the run's to stop at the budget (#1910: no later push could count them),
 # and each leads a session of its own, so stopping the run's group does not reach them. They are the
 # only runs kept inside the run's work folder, so they are found there by the pid each recorded
-# (a run this push started, so younger than the stop's cap) and their groups stopped. A run left going on purpose, with a
-# key, is kept in the state folder and is never found here.
+# (a run this push started, so younger than the stop's cap) and their groups stopped. A run that has
+# written its exit code has finished, and its pid may already be another process's, so it is left.
+# A run left going on purpose, with a key, is kept in the state folder and is never found here.
 _sc_stop_keyless_runs(){
   local f p
   for f in "$_sc_sup_dir"/scanners-before-push.*/runs/*/pid; do
     [ -f "$f" ] || continue
+    [ -f "${f%/pid}/rc" ] && continue
     # The launcher writes the pid with no newline after it, so read reports end of file while still
     # filling p: its status is not the test, the value is.
     p=""; read -r p < "$f" 2>/dev/null
@@ -310,7 +313,9 @@ _sc_supervise(){
   # A polite stop of this process stops the run with it, and the timer, so nothing it started
   # outlives the hook (a timer left sleeping would later signal a pid that may be another process).
   trap 'kill -KILL -- "-$body" 2>/dev/null; kill -9 "$timer" 2>/dev/null; _sc_stop_keyless_runs; exit 2' TERM HUP INT
-  _SC_SUPERVISED=1 _SC_T0="$_sc_t0" _SC_PHASE_FILE="$_sc_sup_dir/phase" _SC_WORK_PARENT="$_sc_sup_dir" \
+  # The marker against a nested push is cleared for the run alone: this supervisor set it, and the
+  # run must pass that check as the first and only gate, then set it again for what it starts.
+  SCANNERS_GATE_RUNNING= _SC_SUPERVISED=1 _SC_T0="$_sc_t0" _SC_PHASE_FILE="$_sc_sup_dir/phase" _SC_WORK_PARENT="$_sc_sup_dir" \
     perl -e 'setpgrp(0, 0); exec @ARGV or exit 127' bash "$self" \
     < "$_sc_sup_dir/payload" > "$_sc_sup_dir/out" 2> "$_sc_sup_dir/err" &
   body=$!
@@ -340,19 +345,6 @@ _sc_supervise(){
   exit "$rc"
 }
 
-_sc_phase_file=""
-if [ -z "${_SC_SUPERVISED:-}" ]; then
-  _sc_supervise
-else
-  # The run under the supervisor: its clock is the supervisor's, so the time spent starting this
-  # second process is counted against the budget too. Only a time no later than this one's own is
-  # taken. None of these is passed on to anything this run starts.
-  case "${_SC_T0:-}" in ''|*[!0-9]*) ;; *) [ "$_SC_T0" -le "$_sc_t0" ] && _sc_t0="$_SC_T0" ;; esac
-  _sc_phase_file="${_SC_PHASE_FILE:-}"
-  _sc_work_parent="${_SC_WORK_PARENT:-}"
-  unset _SC_SUPERVISED _SC_T0 _SC_PHASE_FILE _SC_WORK_PARENT
-fi
-
 # A push it lets through unscanned says so in a systemMessage, since Claude Code discards a
 # PreToolUse hook's stderr on exit 0 (#1906).
 # shellcheck source=lib/hook-notice.sh
@@ -379,6 +371,22 @@ cd "$repo_dir" 2>/dev/null || exit 0
 
 # Not this repository, so there is nothing here this hook knows how to run.
 [ -f payload/hooks/run-all-tests.sh ] || exit 0
+
+# The split into supervisor and run (claude-config#3357, the hard stop above), made only here, once
+# this is known to be a push of this repository, so a push anywhere else pays nothing for it. The run
+# starts again from the top, reads the same payload, and comes back to this point as the run.
+_sc_phase_file=""
+if [ -z "${_SC_SUPERVISED:-}" ]; then
+  _sc_supervise
+else
+  # The run under the supervisor: its clock is the supervisor's, so the time spent starting this
+  # second process is counted against the budget too. Only a time no later than this one's own is
+  # taken. None of these is passed on to anything this run starts.
+  case "${_SC_T0:-}" in ''|*[!0-9]*) ;; *) [ "$_SC_T0" -le "$_sc_t0" ] && _sc_t0="$_SC_T0" ;; esac
+  _sc_phase_file="${_SC_PHASE_FILE:-}"
+  _sc_work_parent="${_SC_WORK_PARENT:-}"
+  unset _SC_SUPERVISED _SC_T0 _SC_PHASE_FILE _SC_WORK_PARENT
+fi
 
 # THE MESSAGES of the commits this push adds name no work organisation (claude-config#1995) and no
 # work repository (claude-config#2111). This repository is public and squash merges with the commit
