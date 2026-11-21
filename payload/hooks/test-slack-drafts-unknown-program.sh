@@ -162,6 +162,9 @@ for line in sys.stdin:
     if not shown:
         continue
     judge = gate.Judge(gate.load_reader())
+    # VERDICT_BEHIND stands the command inside that many of the rule's readings already, so the
+    # nesting limit's own refusal is what comes back, with no reading around it to word it.
+    judge.behind = int(os.environ.get("VERDICT_BEHIND", "0"))
     try:
         judge.watch()
         try:
@@ -614,6 +617,19 @@ helper_counts() { # helper_counts <label> <the failures it must count>, the comm
 }
 helper_counts "#3304 the helper counts a refusal by the nesting limit as this rule's" 1 3<<EOF
 op run -- bash -c 'op run -- bash -c "op run -- bash -c \"op run -- node --test test/notify.test.js\""'
+EOF
+# Typed four deep, the three readings around the limit's refusal each word theirs in front of it,
+# so the refusal as a whole carried the rule's words whatever the limit's own said. Asked with the
+# command already standing inside the readings, the limit's refusal comes back alone, and it is
+# that text the helper must know: it is what a reading that words nothing around it would hand on.
+VERDICT_BEHIND=99 gate_says refused "#3304 the nesting limit's own refusal, with no reading around it, carries the rule's words" "$KNOWS" 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
+VERDICT_BEHIND=99 gate_says refused "#3304 and it is the nesting limit's refusal" "inside one another" 3<<EOF
+op run -- node --test test/notify.test.js
+EOF
+VERDICT_BEHIND=99 helper_counts "#3304 the helper counts the nesting limit's own refusal as this rule's" 1 3<<EOF
+op run -- node --test test/notify.test.js
 EOF
 helper_counts "#3304 the helper counts a refusal by the limit on words as this rule's" 1 3<<EOF
 op run -- node node node node node node node node node --test test/notify.test.js
