@@ -134,6 +134,14 @@ check "#3173 agent rules say a filter or a second step goes inside the wrapped c
 # the auto mode safety check refused what followed, so the exception for a resent hold is bounded.
 check "#3028 only a hold the brief lets the agent decide is resent" "$(has "$RULES" 'a hold your brief lets you decide')"
 check "#3028 a hold the brief does not cover is reported, not decided" "$(has "$RULES" 'is not yours to decide: stop and report it like any other refusal')"
+
+# claude-config#3390: measured on 2026-11-21, of 1,102 builder runs that made a commit, 11 loaded
+# the skill the test first rule named, while 509 wrote a test, ran it and saw it fail before the
+# fix. The rule holds without the skill, so it asks for the behaviour itself, in the words of the
+# check the orchestrator runs on a report ("its claim that the test failed first"), and names no
+# skill a builder does not load.
+check "#3390 agent rules ask for a test seen to fail before the code is edited" "$(has "$RULES" 'Test first: write the test, run it, and see it fail before you edit the code it covers.')"
+check "#3390 agent rules name no skill for working test first" "$(grep -F -q -- 'superpowers:test-driven-development' "$RULES" && echo 'still names superpowers:test-driven-development' || echo ok)"
 check "#3028 every brief, a reviewer's included, starts with the agent rules" "$(has "$SKILL" '1. `Read ~/.claude/skills/orchestrate/agent-rules.md before anything else and follow it.`')"
 check "#3028 the brief parts apply to a reviewer's brief too" "$(has "$SKILL" 'Every brief has exactly these parts')"
 
