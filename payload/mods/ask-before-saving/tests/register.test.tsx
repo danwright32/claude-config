@@ -1614,7 +1614,8 @@ const LESSONS_SHOWN = '~/.claude/LESSONS.md'
 // picker covers it (independent review of #3320): it was asked about through For good until then.
 // refusedAs is what a write in a list of them is told: every Edit or Write of the lessons file in
 // those lists adds or changes an entry unless the test says otherwise, and anything else (another
-// file, a shell command) is asked about as before.
+// file, a shell command that writes another file) is asked about as before. A shell command that
+// writes the lessons file is refused in words of its own (#3343, BY_SHELL below).
 const PICKER_ONLY = 'so he approves it only in the lesson picker'
 const refusedAs = (input: { tool?: unknown; file_path?: unknown }) => ((input.tool === 'Edit' || input.tool === 'Write') && input.file_path === LESSONS ? PICKER_ONLY : ASKS)
 // The rule and its why, as the durable lesson check has Claude propose it.
@@ -2961,7 +2962,7 @@ const ISSUE_3082 = [
   'EOF',
   `R=${HOME}/Apps/claude-config; python3 -I $W/measure.py $W/claude-main.txt --md "$(git -C $R log -1 --format='%h, %cs' origin/main)" > $W/candidates.md; head -20 $W/candidates.md`,
 ].join('\n')
-test('a heredoc editing a script whose text names lasting memory in a quoted sentence goes straight through; one whose target is lasting memory is asked (#3082)', withKit, async ($, on) => {
+test('a heredoc editing a script whose text names lasting memory in a quoted sentence goes straight through; one whose target is lasting memory is held, asked about or, for the lessons file, refused (#3082, #3343)', withKit, async ($, on) => {
   const w = world($, on)
   expect(ISSUE_3082).toContain('LESSONS.md"}')
   expect(refusalOf(await call($, { tool: 'Bash', command: ISSUE_3082 }))).toBe('')

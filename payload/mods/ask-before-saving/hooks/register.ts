@@ -856,6 +856,10 @@ export const register: Register = on => {
         const now = await built.clock.now()
         const approvals = (await built.state.get(approvalsRef)).value ?? []
         // A For good covers no call that adds or changes a lesson entry (independent review of #3320).
+        // A Bash call is answered by its For good alone: what the command writes is not read here,
+        // so one that writes the lessons file, which tool.check refuses whatever stands for it
+        // (#3343), can be answered true. Nobody asks about a Bash call today (no build asks for the
+        // one Edit of the lessons file), and the types say so for whoever does.
         return { isApproved: approvals.some(x => stands(x.until, now) && ((edit.touched.length === 0 && savesThis(x, key)) || addsThis(x, edit.added))) }
       },
     }

@@ -2828,9 +2828,10 @@ and the band question is removed rather than kept beside it (L29). Three defects
   line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
   and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
   of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
-  route now closed. Left as they were and filed as #3343: a shell command that writes the lessons
-  file, a write that touches no entry (a section heading, an entry taken out whole, text above the
-  first section), and a checkout's `payload/LESSONS.md`, which the lesson picker does not cover.
+  route now closed. Left as they were and filed as #3343: a write that touches no entry (a section
+  heading, an entry taken out whole, text above the first section) and a checkout's
+  `payload/LESSONS.md`, which the lesson picker does not cover. A shell command that writes the
+  lessons file was filed there with them and has since been built, below.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
