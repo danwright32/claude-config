@@ -239,7 +239,9 @@ PARTS=(
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
   "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name), or \$.modkit.ghRepo({ spelling }) for a repository as gh spells one"
-  "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
+  # #3333: --show-current ends where the option does, so git rebase and git am's --show-current-patch,
+  # which prints a stopped move's patch and reads no branch, is not taken for one.
+  "branch-reader|--show-current([^-[:alnum:]_]|\$)|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
   "merge-helper|merge-when-ready\\\\\\.sh|[\"'\`/]merge-when-ready\\.sh[\"'\`/)]|\$.modkit.mergeHelper(command)"
