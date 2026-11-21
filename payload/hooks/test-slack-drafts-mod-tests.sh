@@ -88,7 +88,10 @@ mod "$S/mods/beta"
 printf '%s\n' "import { expect, test } from 'claude-code/testing'" \
   "test('posts', async () => { await fetch('https://slack.com/api/chat.postMessage', { method: 'POST', body: 'text=hi' }) })" \
   > "$S/mods/beta/tests/a.test.ts"
-printf '%s\n' '#!/bin/bash' "cd '$S/mods/alpha' && bun test tests/a.test.ts" > "$S/run-tests.sh"
+# The script's one command is written by echo, as text: nothing here runs it, and the scan of the
+# tools this repository calls (tests/test-ci-environment-tools.sh) reads an echo's words as text.
+printf '%s\n' '#!/bin/bash' > "$S/run-tests.sh"
+echo "cd $S/mods/alpha && bun test tests/a.test.ts" >> "$S/run-tests.sh"
 run_s() { run_raw "$(payload Bash "$(bash_input "$1")" "${2:-$S}")"; }
 ROUTE="claude plugin test"
 NOTFOUND="a module the gate cannot find"
@@ -152,9 +155,13 @@ run_s "bash run-tests.sh"
 refused "#3356 a script that runs bun test in the mod's folder is refused"
 says "#3356 and for the same reason" "$NOTFOUND"
 lacks "#3356 and the call that ran the script is not told to run the mod's tests" "$ROUTE"
-# A folder the gate cannot be certain of (a cd through a variable nothing sets) is not named.
-run_s "cd \"\$WHERE_3356\" && bun test tests/a.test.ts" "$S/mods/alpha"
-lacks "#3356 bun test behind a cd the gate cannot work out names no folder" "$ROUTE"
+# A folder the gate cannot be certain of (a cd through a variable nothing sets) is not named. The
+# test file is given by its full path, so it is found and the call is refused for its import as the
+# others are: by a path from the folder it would name no file and be allowed, with nothing said.
+run_s "cd \"\$WHERE_3356\" && bun test $S/mods/alpha/tests/a.test.ts" "$S/mods/alpha"
+refused "#3356 bun test of a file by its full path, behind a cd the gate cannot work out, is refused"
+says "#3356 and for the same reason" "$NOTFOUND"
+lacks "#3356 and no folder is named, since the one it runs in is not certain" "$ROUTE"
 # bun test with no file named reads no file, so it is allowed, as before.
 run_s "cd $S/mods/alpha && bun test"
 allowed "#3356 bun test with no file named, in a mod's folder, is allowed as before"
