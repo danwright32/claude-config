@@ -2630,7 +2630,12 @@ and the band question is removed rather than kept beside it (L29). Three defects
   an answer with no id to a later save that names the same file was not built: it could approve a
   save he did not mean, and nothing here lets through a save refused before. Instead:
   - The memory section of the system prompt tells every session, before it asks anything, to send
-    the save first and ask with the id its refusal gives (rules.ts `sendFirstNote`).
+    the save first and ask with the id its refusal gives (rules.ts `sendFirstNote`). It rides the
+    same `prompt.section` hook as Just this session's rules, which runs only while the managed
+    settings file keeps the security default out of first place (#876, in place on both Macs since
+    2026-10-07; listed in `tools/sec-default-bypassed-hooks.tsv`). Without that file the note does
+    not arrive, and the refusal below is the only part of this fix that still acts. Seen in the
+    mod's test harness only; no live session was read for it before merge.
   - A question with no save id that names lasting memory (a file, as `mentionsAny` reads one, or the
     word) and offers For good or Just this session, in any case, is refused before Dan reads it,
     saying to send the save first (rules.ts `asksBeforeTheSave`). It sits on the path a question
