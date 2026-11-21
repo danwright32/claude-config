@@ -25,6 +25,13 @@ const READ_MS = 20_000
 const EVENTS_PER_PAGE = 100
 const EVENT_PAGES = 3
 /**
+ * A repository's workflow runs, a page of 100 at a time (GitHub's most). Filtered by `created`,
+ * GitHub lists at most 1,000 runs (its REST documentation, List workflow runs for a repository), so
+ * page 11 is never asked for (#3284).
+ */
+const RUNS_PER_PAGE = 100
+const RUN_PAGES = 10
+/**
  * `checked` is one line saying how many repositories were read and what was left out as healthy
  * (#2766): it is written every time the check runs, so a quiet night reads differently from a check
  * that never ran or stopped looking (Dan's alert rule: silence must still mean healthy).
@@ -576,20 +583,65 @@ export const wakeCheck = async (
       // one that failed, was cancelled or timed out is listed. A deploy that passed for a merge the
       // night's notes account for is counted too; every other deploy or dispatch is listed, as before.
       type Actor = { login?: string; type?: string } | null
-      type RunRow = { name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
-      const page = await json<{ total_count?: number; workflow_runs?: RunRow[] }>(['gh', 'api', `repos/${repo}/actions/runs?per_page=100&created=>=${since}`], `deploy runs in ${repo}`)
-      const runs = Array.isArray(page?.workflow_runs) ? page.workflow_runs : page ? null : []
-      if (runs === null) {
-        unmeasured.push(`deploy runs in ${repo} were not checked (gh api: the answer held no list of runs)`)
-        continue
+      type RunRow = { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
+      // #3284: GitHub lists runs newest first, so one page of 100 left a busy night's first hours
+      // unread (2026-11-19: 160 runs, 12:07 AM to 3:16 AM ET never checked for a failed deploy).
+      // Every page since sleep began is read, each through `run`, so the pages keep to the check's
+      // one deadline. Page 2 carries on where page 1 stopped and total_count stays the whole
+      // window's count (measured 2026-11-20). A run a newer one pushed onto the next page while the
+      // pages were read is judged once, by its id. A page not read (a failure, the deadline, GitHub's
+      // 1,000) says the window left by its two ends: sleep's start and the oldest run read.
+      type RunPage = { total_count?: unknown; workflow_runs?: unknown }
+      const runs: RunRow[] = []
+      const seen = new Set<number>()
+      let oldest: number | null = null
+      let total: number | null = null
+      const unread = (why: string) => {
+        const span = oldest === null ? `since ${etWhen(o.since)}` : `from ${etWhen(o.since)} to ${etWhen(oldest)}`
+        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (${why})`)
       }
-      // Newest first: more runs since sleep than were read leaves the oldest out (L24), and what is
-      // left out is said by its two ends, as the events are (#1160).
-      const total = typeof page?.total_count === 'number' ? page.total_count : runs.length
-      if (total > runs.length) {
-        const times = runs.map(r => at(r.created_at)).filter(t => !Number.isNaN(t))
-        const span = times.length ? `from ${etWhen(o.since)} to ${etWhen(Math.min(...times))}` : `since ${etWhen(o.since)}`
-        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (only the newest ${runs.length} of ${total} were asked for)`)
+      for (let p = 1; ; p++) {
+        if (p > RUN_PAGES) {
+          unread(`GitHub lists only the newest ${RUN_PAGES * RUNS_PER_PAGE} runs of a window${total === null ? '' : `, and this one held ${total}`}`)
+          break
+        }
+        const r = await run(['gh', 'api', `repos/${repo}/actions/runs?per_page=${RUNS_PER_PAGE}&created=>=${since}&page=${p}`], `page ${p} of the runs in ${repo}`)
+        // A first page past the deadline is said in the stop's own line, which names this repository
+        // as not finished; a later one says what the pages read did not reach.
+        if (r.exitCode === SKIPPED) {
+          if (p > 1) unread(`page ${p}: the check ran out of time first`)
+          break
+        }
+        let why = r.exitCode !== 0 ? firstLine(r.stderr) || `exit ${r.exitCode}` : ''
+        let got: RunPage | null = null
+        if (!why)
+          try {
+            const parsed: unknown = JSON.parse(r.stdout)
+            got = parsed && typeof parsed === 'object' ? (parsed as RunPage) : {}
+          } catch {
+            why = 'the answer was not JSON'
+          }
+        const list = Array.isArray(got?.workflow_runs) ? (got?.workflow_runs as RunRow[]) : null
+        if (!why && !list) why = 'the answer held no list of runs'
+        if (why || !list) {
+          if (p === 1) unmeasured.push(`deploy runs in ${repo} were not checked (gh api: ${why})`)
+          else unread(`page ${p}: ${why}`)
+          break
+        }
+        for (const x of list) {
+          if (!x || typeof x !== 'object') continue
+          if (typeof x.id === 'number') {
+            if (seen.has(x.id)) continue
+            seen.add(x.id)
+          }
+          runs.push(x)
+          const t = at(x.created_at)
+          if (!Number.isNaN(t) && (oldest === null || t < oldest)) oldest = t
+        }
+        if (typeof got?.total_count === 'number') total = got.total_count
+        // A page that is not full is the last there is; so is one that brings the runs read to
+        // every run GitHub counts in the window.
+        if (list.length < RUNS_PER_PAGE || (total !== null && runs.length >= total)) break
       }
       for (const r of runs) {
         const name = r.name ?? ''

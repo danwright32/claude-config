@@ -298,14 +298,31 @@ dcs_recent_file() { # <dir> <days> <stderr file> [<prune name>...]
 # never lists a folder iCloud keeps only in the cloud, since that makes iCloud fetch it: such a part
 # makes the item unmeasured, as does anything find could not read, or find failing.
 dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
+  dcs_idle "$DCS_UNUSED_DAYS" 0 "$@"
+}
+# The reading the floor is, for any number of days: keeps V at offerable only when nothing at or
+# beneath <path> was changed or opened in the last <days> days, by the times and with the gaps the
+# floor's own comment gives. The one reading of "changed or opened", so a rule with a window of its
+# own (Dan, 2026-11-19, recorded on #3235: a task folder idle for 7 days) asks the floor's question
+# rather than a second one (L261).
+#
+# <depth> is 0 to read <path> itself with everything beneath it, as the floor does, or 1 to leave
+# out <path>'s own times and read only what it holds. A folder's own modification time moves when
+# an entry directly in it is made, removed or renamed, so depth 1 is for a folder whose direct
+# entries disk-clean itself removes: without it, moving one ticked item to the Trash would make
+# every sibling read as changed just now. A <name> holding a slash is a path pattern, for the files
+# of a whole folder the scan itself reads (a checkout's .git).
+dcs_idle() { # <days> <depth: 0 or 1> <path> [<name or path pattern whose access time the scan itself moves>...]
   [ "${V:-}" = offerable ] || return 0
-  local p="${1%/}" n hit rc rel why err="$DCS_WORK/floor.err.$$"
-  shift
+  local DCS_UNUSED_DAYS="$1" depth="$2" p="${3%/}" n hit rc rel why err="$DCS_WORK/floor.err.$$"
+  shift 3
   local ex=( -name .disk-clean-excludes-nothing )
-  for n in "$@"; do ex=( "${ex[@]}" -o -name "$n" ); done
+  for n in "$@"; do
+    case "$n" in */*) ex=( "${ex[@]}" -o -path "$n" ) ;; *) ex=( "${ex[@]}" -o -name "$n" ) ;; esac
+  done
   why="so whether it was changed or opened in $DCS_UNUSED_DAYS days is not known"
   dcs_floor_ref || { V="unmeasured: the reference time for the $DCS_UNUSED_DAYS day rule could not be made ($DCS_WHY), $why"; return 0; }
-  hit="$(find "$p" -type d \( "${DCS_DL[@]}" \) -print -quit \
+  hit="$(find "$p" -mindepth "$depth" -type d \( "${DCS_DL[@]}" \) -print -quit \
     -o \( -newermm "$DCS_FLOOR_REF" -o -type f ! \( "${ex[@]}" \) -neweram "$DCS_FLOOR_REF" \) -print -quit 2> "$err")"; rc=$?
   hit="${hit%%$'\n'*}"
   if [ -n "$hit" ]; then
@@ -332,12 +349,13 @@ dcs_floor() { # <path> [<name whose access time the scan itself moves>...]
   rm -f "$err"
   return 0
 }
-# Makes, once per process, the file whose modification time is DCS_UNUSED_DAYS days ago, which every
-# floor find compares against. Sets DCS_WHY and fails when it cannot.
+# Makes, once per process and per number of days, the file whose modification time is
+# DCS_UNUSED_DAYS days ago (dcs_idle's <days> while it runs), which every floor find compares
+# against, and sets DCS_FLOOR_REF to it. Sets DCS_WHY and fails when it cannot.
 DCS_FLOOR_REF=""
 dcs_floor_ref() {
-  [ -n "$DCS_FLOOR_REF" ] && [ -f "$DCS_FLOOR_REF" ] && return 0
-  local now then stamp f="$DCS_WORK/floor.ref.$$"
+  local now then stamp f="$DCS_WORK/floor.ref.$DCS_UNUSED_DAYS.$$"
+  if [ -f "$f" ]; then DCS_FLOOR_REF="$f"; return 0; fi
   now="$(date '+%s')" || { DCS_WHY="date failed"; return 1; }
   then=$(( now - DCS_UNUSED_DAYS * 86400 ))
   stamp="$(date -r "$then" '+%Y%m%d%H%M.%S' 2>/dev/null || date -d "@$then" '+%Y%m%d%H%M.%S' 2>/dev/null)"
@@ -586,6 +604,48 @@ dcs_gitdir() { # <dir>
     for (i = 2; i <= NF; i++) { if ($i == "" || $i == ".") continue; if ($i == "..") { if (n) n--; continue } p[++n] = $i }
     s = ""; for (i = 1; i <= n; i++) s = s "/" p[i]; print (s == "" ? "/" : s) }')"
   case "${g%/*}" in */worktrees) printf '%s\n' "$g" ;; *) return 1 ;; esac
+}
+# owner/name of a GitHub remote URL; fails for anything else.
+dcs_github_repo() { # <url>
+  local u="$1"
+  case "$u" in
+    https://github.com/*) u="${u#https://github.com/}" ;;
+    git@github.com:*) u="${u#git@github.com:}" ;;
+    ssh://git@github.com/*) u="${u#ssh://git@github.com/}" ;;
+    *) return 1 ;;
+  esac
+  u="${u%.git}"; u="${u%/}"
+  case "$u" in */*/*|/*|*/|'') return 1 ;; */*) printf '%s\n' "$u" ;; *) return 1 ;; esac
+}
+# The one test of whether everything in a git checkout is somewhere else too, so removing the
+# folder loses no work (the worktrees kind's, #1806, moved here when a second kind needed it,
+# #3235; L261). Sets V to offerable, and D to what it found, only when ALL of these hold, in order:
+#   `git --no-optional-locks status --porcelain --untracked-files=all` is empty, untracked files
+#   included (optional locks off: a plain git status refreshes the index file it reads, which is a
+#   write, and the scan writes nothing in the folders it judges, #3216)
+#   it is on a branch, and gh finds a MERGED pull request for that branch whose head is exactly the
+#   checkout's HEAD, so nothing in it is unpushed or unmerged. Asked of gh because squash merges
+#   leave no merged branch git could see locally (L642)
+# Any git or gh failure is unmeasured, never merged. A caller keeps its 30 day floor BEFORE this,
+# since git status reads files and so moves their access times.
+dcs_git_merged() { # <checkout>
+  local t="${1%/}" st br head url repo out err="$DCS_WORK/git.err.$$" n oid
+  D=""
+  st="$(git -C "$t" --no-optional-locks status --porcelain --untracked-files=all 2> "$err" </dev/null)" || { V="unmeasured: git status failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  [ -z "$st" ] || { V="not offerable: it has uncommitted or untracked files"; rm -f "$err"; return; }
+  br="$(git -C "$t" symbolic-ref --short -q HEAD 2>/dev/null </dev/null)"
+  [ -n "$br" ] || { V="not offerable: it is on no branch, so no pull request can be matched to it"; rm -f "$err"; return; }
+  head="$(git -C "$t" rev-parse HEAD 2> "$err" </dev/null)" || { V="unmeasured: git rev-parse failed ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  url="$(git -C "$t" remote get-url origin 2>/dev/null </dev/null)" || { V="not offerable: it has no origin remote, so no pull request can say it merged"; rm -f "$err"; return; }
+  repo="$(dcs_github_repo "$url")" || { V="not offerable: its repository is not on GitHub ($url), so no pull request can say it merged"; rm -f "$err"; return; }
+  out="$(gh pr list --repo "$repo" --head "$br" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"' 2> "$err" </dev/null)" || {
+    V="unmeasured: gh could not say whether its pull request merged ($(awk 'NR == 1' "$err"))"; rm -f "$err"; return; }
+  rm -f "$err"
+  [ -n "$out" ] || { V="not offerable: no merged pull request for its branch $br"; return; }
+  while read -r n oid; do
+    [ "$oid" = "$head" ] && { V=offerable; D="branch $br, merged in pull request #$n at its HEAD"; return; }
+  done <<< "$out"
+  V="not offerable: it has commits its merged pull request #$(printf '%s\n' "$out" | awk 'NR == 1 { print $1 }') does not"
 }
 # Joins flags and details: <flags var value> <new flag>
 dcs_join() { if [ -n "$1" ]; then printf '%s,%s' "$1" "$2"; else printf '%s' "$2"; fi; }
