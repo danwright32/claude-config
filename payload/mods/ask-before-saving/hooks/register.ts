@@ -14,17 +14,27 @@ import {
   LESSON_CHECK_KEY,
   LESSON_HEADER,
   LESSON_PROJECT,
+  LESSON_SHORT_KEY,
   LESSON_SKIP,
   LESSON_SOURCE,
   MAX_CHECK,
   MAX_SHORT,
+  MAX_SHORT_TEXT,
   MIN_RULE,
   addsThis,
   readCheckLine,
+  readShortLine,
   unindented,
   askFault,
   shownFault,
   lessonAddition,
+  lessonPlaced,
+  entriesTouched,
+  pickerOnly,
+  lessonsByShell,
+  byShellOnly,
+  indexLength,
+  readsAsShort,
   lessonOptions,
   lessonsFile,
   pressed,
@@ -447,6 +457,36 @@ const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: W
 const lessonAdded = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> =>
   lessonAddedBy(tool, input, at, file => textNow($, file))
 
+// What an Edit or Write does to the entries of the lessons file (independent review of #3320), from
+// one reading of the file: `added`, the one entry it adds at an entry boundary, as lessonAddedBy
+// gives it; `touched`, the numbers of the entries it adds or changes (rules.ts entriesTouched); and
+// `misplaced`, where a single added entry would land when that is no entry boundary. A write that
+// touches an entry is covered by Dan's answer in the lesson picker or by nothing: a For good never
+// covers it. A lessons file that cannot be read is judged as if every entry the write holds were
+// new, so nothing reaches it unseen behind a failed read.
+type LessonEdit = { added: string | undefined; touched: string[]; misplaced: string | undefined }
+const NO_LESSON_EDIT: LessonEdit = { added: undefined, touched: [], misplaced: undefined }
+const lessonEditBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<Current>): Promise<LessonEdit> => {
+  if (tool !== 'Edit' && tool !== 'Write') return NO_LESSON_EDIT
+  const file = lessonsFile(at.home)
+  if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return NO_LESSON_EDIT
+  const old = await now(file)
+  if ('unreadable' in old) return { added: undefined, touched: entriesTouched(tool, input, undefined), misplaced: undefined }
+  const text = 'text' in old ? old.text : undefined
+  const placed = lessonPlaced(tool, input, text)
+  return { added: placed !== undefined && placed.misplaced === undefined ? placed.entry : undefined, touched: entriesTouched(tool, input, text), misplaced: placed?.misplaced }
+}
+const lessonEdit = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<LessonEdit> => lessonEditBy(tool, input, at, file => textNow($, file))
+
+// Whether a shell command writes or may write the installed lessons file (#3343, rules.ts
+// lessonsByShell), read from the one judgement of the command (lastingTargets), so every way mod-kit's
+// reader finds a write of it counts: its words, a script it is handed to, a mention beside a write
+// the words do not name. Such a command is covered by nothing: what it does to an entry cannot be
+// read, so neither a For good nor words of Dan's let it through (an index cover never could: it
+// covers a call whose one file is a MEMORY.md). Never an Edit or a Write, which are read
+// (lessonEdit), nor a command that only reads the file.
+const shellLessons = (tool: string, targets: Targets, home: string): boolean => tool === 'Bash' && lessonsByShell(targets.files, home)
+
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
 const takeLesson = async ($: EngineInterface, added: string) => {
@@ -547,7 +587,7 @@ const agentRefusal = ({ files, guessed, handed }: Targets) =>
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
 
-type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown } }
+type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown; check?: unknown; short?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 // Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
@@ -609,7 +649,14 @@ const saveCall: MatchedHook<'tool.call', { tool: typeof TOOL_NAMES }> = async ($
   let files: string[] = []
   if (madePermanent((await $.state.get(promptRef)).value)) {
     const at = await whereOf($)
-    files = (await lastingTargets($, tool, input, at)).files
+    // His words cover no lesson entry (lessons review of #3320, L450): one added or changed is
+    // covered by his answer in the lesson picker or by nothing, so it is left for the tool.check
+    // hook to refuse, as it is under a For good. It went on unread here, SHORT line and all.
+    const entry = (await lessonEdit($, tool, input, at)).touched.length > 0
+    const targets = entry ? undefined : await lastingTargets($, tool, input, at)
+    // Nor a shell command that writes or may write the lessons file (#3343): left for the
+    // tool.check hook to refuse the same way, with the Edit route named.
+    files = targets === undefined || shellLessons(tool, targets, at.home) ? [] : targets.files
     if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
   }
   let r: Awaited<ReturnType<typeof next>>
@@ -724,16 +771,23 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   const targets = await lastingTargets($, tool, input, at)
   const { files } = targets
   if (!files.length) return next(e)
+  // What the call does to the entries of the lessons file. One that adds or changes an entry is
+  // covered by Dan's answer in the lesson picker or by nothing (independent review of #3320): a For
+  // good is neither taken for it here nor asked for below.
+  const edit = await lessonEdit($, tool, input, at)
+  // A shell command that writes or may write the lessons file (#3343): what it does to an entry
+  // cannot be read, so no approval of any kind is taken for it and no question is asked below.
+  const byShell = shellLessons(tool, targets, at.home)
   // A save Dan answered For good, sent again: on to the settings hooks and the permission check
   // beneath (the auto mode classifier among them), never asked about again.
-  const { live, lapsed } = await takeApproval($, key)
+  const { live, lapsed } = edit.touched.length || byShell ? { live: undefined, lapsed: undefined } : await takeApproval($, key)
   if (live) {
     taken.set(String(raw.tool_use_id ?? ''), live)
     return next(e)
   }
   // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
   // that only adds it to the lessons file: on beneath like a For good save, never asked about again.
-  const added = await lessonAdded($, tool, input, at)
+  const added = edit.added
   const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
   if (lesson.live) {
     taken.set(String(raw.tool_use_id ?? ''), lesson.live)
@@ -755,6 +809,20 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   // and nothing waits on an answer.
   const asleep = await whileAsleep($, targets, await savedText($, tool, input, at))
   if (asleep !== null) return { decision: 'deny', reason: asleep }
+
+  // An entry of the lessons file added or changed with no answer in the lesson picker covering it:
+  // refused in words that send Claude there, and no question waits, so no For good can be given.
+  if (edit.touched.length) {
+    const only = pickerOnly(display(lessonsFile(at.home), at.home), tool, edit.touched, edit.misplaced)
+    return { decision: 'deny', reason: lesson.lapsed ? `${lapsedNote(lesson.lapsed)} ${only}` : only }
+  }
+  // A shell command that writes or may write the lessons file (#3343): refused the same way, with
+  // the Edit route named, where the write is read. No question waits, so no For good can be given.
+  if (byShell) {
+    const file = display(lessonsFile(at.home), at.home)
+    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file) }
+    return { decision: 'deny', reason: byShellOnly(file, how, files.filter(f => f !== file)) }
+  }
 
   const id = String(raw.tool_use_id ?? '') || `save-${++saves}`
   const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
@@ -782,12 +850,17 @@ export const register: Register = on => {
         const home = (await built.env.get('HOME')) ?? ''
         const at: Where = { home, cwd: await built.session.cwd() }
         const key = saveKey(tool, input, at.cwd, at.home)
-        const added = await lessonAddedBy(tool, input, at, file =>
+        const edit = await lessonEditBy(tool, input, at, file =>
           currentText({ exists: p => built.fs.exists(p), stat: (p, o) => built.fs.stat(p, o), read: p => built.fs.read(p) }, file),
         )
         const now = await built.clock.now()
         const approvals = (await built.state.get(approvalsRef)).value ?? []
-        return { isApproved: approvals.some(x => stands(x.until, now) && (savesThis(x, key) || addsThis(x, added))) }
+        // A For good covers no call that adds or changes a lesson entry (independent review of #3320).
+        // A Bash call is answered by its For good alone: what the command writes is not read here,
+        // so one that writes the lessons file, which tool.check refuses whatever stands for it
+        // (#3343), can be answered true. Nobody asks about a Bash call today (no build asks for the
+        // one Edit of the lessons file), and the types say so for whoever does.
+        return { isApproved: approvals.some(x => stands(x.until, now) && ((edit.touched.length === 0 && savesThis(x, key)) || addsThis(x, edit.added))) }
       },
     }
     return { ...built, askBeforeSaving }
@@ -879,6 +952,41 @@ export const register: Register = on => {
         }
       if (check !== undefined && !question.split('\n').some(l => unindented(l) === check))
         return { deny: `The question must state the check line word for word on a line of its own, as metadata "${LESSON_CHECK_KEY}" carries it, so Dan approves the line that is added to ${file}.` }
+      // The entry's SHORT line (#3320): the one line the index carries into every session, which the
+      // picker once never showed, so an entry went through under his answer with a SHORT line that
+      // said something else. It is carried and shown as the check line is, and judged by the one
+      // function every shown text is (readShortLine). Each fault stops the picker and says why,
+      // before he is asked anything: a line in no shape or one he could not read as written; a rule
+      // too long for the index line that brings no SHORT line, whose entry would need one nobody
+      // was shown; a line the question does not state on a line of its own; and any other line
+      // starting SHORT: in the question, which he would read as the entry's and the entry could not carry.
+      const givenShort = (ask.metadata as Record<string, unknown> | undefined)?.[LESSON_SHORT_KEY]
+      const readShort = givenShort === undefined ? undefined : readShortLine(givenShort)
+      const short = readShort !== undefined && 'line' in readShort ? readShort.line : undefined
+      const shortShape = `"SHORT: <the rule in one line>", its text at most ${MAX_SHORT_TEXT} bytes (a character outside ASCII counts two to four), on one line he can read as written`
+      if (readShort !== undefined && 'fault' in readShort)
+        return {
+          deny: `Metadata "${LESSON_SHORT_KEY}" reads as no SHORT line: ${readShort.fault}. Put the entry's SHORT line there, word for word as it will be added to ${file}: ${shortShape}. Leave "${LESSON_SHORT_KEY}" out only when the rule itself is at most ${MAX_SHORT_TEXT} bytes, so the lessons index can hold it as it is.`,
+        }
+      // Counted as the index cap counts a line, in bytes (independent review of #3320): a rule of
+      // accented text within the cap in characters was asked with no SHORT line, and its entry was
+      // then refused by the send.
+      if (short === undefined && indexLength(rule) > MAX_SHORT_TEXT)
+        return {
+          deny: `The rule is ${indexLength(rule)} bytes, the unit the lessons index counts a line in (a character outside ASCII is two to four), and the index holds one line a lesson, at most ${MAX_SHORT_TEXT} after its number, so this entry needs a SHORT line, and that line is what every session loads. Dan approves it only by reading it: put it in metadata "${LESSON_SHORT_KEY}" as ${shortShape}, and state it word for word on a line of its own in the question.`,
+        }
+      // Every line that reads as a SHORT line once drawn, in bold, in a list or in a quote too
+      // (readsAsShort): he would read each as the entry's, and the entry carries the one.
+      const shortLines = question.split('\n').map(unindented).filter(readsAsShort)
+      if (short !== undefined && !shortLines.includes(short))
+        return { deny: `The question must state the SHORT line word for word on a line of its own, as metadata "${LESSON_SHORT_KEY}" carries it, so Dan approves the line that is added to ${file} and loaded into every session.` }
+      if (shortLines.some(l => l !== short))
+        return {
+          deny:
+            short !== undefined
+              ? `The question holds another line starting "SHORT:" beside the one metadata "${LESSON_SHORT_KEY}" carries, and the entry takes one SHORT line, the one Dan approves. State that one line and no other.`
+              : `The question holds a line starting "SHORT:", and metadata "${LESSON_SHORT_KEY}" carries none, so Dan would read a SHORT line his answer does not cover. Put the line in metadata "${LESSON_SHORT_KEY}" too, as ${shortShape}, or take it out of the question when the rule needs none.`,
+        }
       // The whole question is what he reads (#3295): one holding what he cannot see, or longer than
       // the dialog shows, where the rule or the check line could stand past the cut, is not asked.
       // Every text of the call is judged as the dialog will get it, the mod's own header and answers
@@ -901,14 +1009,22 @@ export const register: Register = on => {
       if (typeof chosen === 'string' && chosen.trim() && chosen !== LESSON_ADD)
         return say(await typedSaid($, chosen, { still: 'the lesson is not approved', again: 'ask him the same question again, with the same metadata and the rule as it then stands' }))
       if (chosen !== LESSON_ADD) return say(`Dan did not choose ${LESSON_ADD}, and gave no answer, so the lesson is not approved. Ask him again, or leave it.`)
-      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}) }
+      const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule, ...(check !== undefined ? { check } : {}), ...(short !== undefined ? { short } : {}) }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
       const checked = check !== undefined ? ` its check line exactly as he read it, "${check}", on a line of its own just before the SHORT line (last, when the entry has none),` : ''
+      // The SHORT line is the one he read, or none (#3320): Claude is told which, so the one Edit
+      // his answer covers is not sent with a line of its own wording and asked about again.
+      const shortened =
+        short !== undefined
+          ? ` and its SHORT line exactly as he read it, "${short}", as the entry's last line, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
+          : ` and no SHORT line, since he was shown none: the rule itself is the lesson's line in the index, which renders what is in bold, so set the whole rule in bold and nothing else, "- **L<number>. <the rule>**" with the bold closed after the rule's last word and before the provenance, which with its "- L<number>. " is at most ${MAX_SHORT} bytes`
       return say(
         `Dan answered ${LESSON_ADD}. Add it now with one Edit to ${file}: old_string one or more whole lines of the file found once (a section heading, say), ` +
-          `new_string that text, a newline and the entry, or the entry, a newline and that text. The entry is "- **L<number>." then the rule word for word as he approved it (bold and line wrapping are fine), ` +
-          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked} and one SHORT line, which with its "- L<number>. " is at most ${MAX_SHORT} characters, with no blank line inside it. That is saved without asking him again. Anything else written to that file is asked about as usual. If it is not added within ${MINUTES} minutes, this lapses.`,
+          `new_string that text, a newline and the entry, or the entry, a newline and that text. Put it at an entry boundary, never inside another entry: straight after another entry's last line or under a section heading, ` +
+          `with another entry's first line, a section heading or the end of the file as the next line that is not blank. The entry is "- **L<number>." then the rule word for word as he approved it (line wrapping is fine), ` +
+          `then nothing but its provenance, (repo#N, YYYY-MM-DD),${checked}${shortened}, with no blank line inside it. That is saved without asking him again. Any other Edit or Write that adds or changes a lesson entry in that file, by a SHORT line he did not read or one word of a rule, ` +
+          `is refused, and he is not asked For good about it: an entry is approved only in this picker. If it is not added within ${MINUTES} minutes, this lapses.`,
       )
     }
     if (ask.metadata?.source === LESSON_SOURCE) {

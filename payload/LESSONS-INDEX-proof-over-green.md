@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1039. After breaking then restoring a Python file, clear __pycache__ before each test run, or a same size same second edit tests the old code.
 - L865. A query API that may answer from a sample must be checked on every answer: a control passes on an estimate while a rare needle reads zero.
 - L827. A retried operation's recorded duration spans every attempt, so size a per attempt timeout only from per attempt timings.
 - L823. Tests compiled differently from how code ships prove nothing about loading; refuse what the shipping loader can't run (erasableSyntaxOnly).

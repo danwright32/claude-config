@@ -179,10 +179,44 @@ export const saidStopped = (notesText: string | null, self: string, since: numbe
 
 /** `since` is the claim entry's own time, null when it carries none: never judged stuck by time then. */
 export type Claim = { repo: string; issue: number; attempts: number; since: number | null }
-export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim } | { state: 'unknown'; why: string }
-/** The claim this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed tonight. */
-export const heldClaim = (claimsText: string, self: string): ClaimReading => {
-  let held: Claim | null = null
+/**
+ * `claim` is the newest claim held, the one being worked; `all` is every claim held, oldest first,
+ * each timed from its own start (#3330). A reading made by hand with no `all` holds `claim` alone.
+ */
+export type ClaimReading = { state: 'none' } | { state: 'held'; claim: Claim; all?: Claim[] } | { state: 'unknown'; why: string }
+
+/**
+ * Whether this session noted the claim's issue done since it claimed it (#3330): a done note it
+ * wrote, naming the claim's repository (in any case, as GitHub and a claim folder may differ) and
+ * issue, at or after the claim's start. Such a claim is ended, released or not: the note is the
+ * session's word the work is finished, so it is neither timed nor parked, and never the claim in
+ * hand. Notes that cannot be read (null) let off nothing, so a stuck claim is still parked.
+ */
+const notedDone = (notesText: string | null, self: string, c: Claim): boolean => {
+  if (!notesText) return false
+  for (const line of notesText.split('\n')) {
+    if (!line.includes('"done"')) continue
+    let n: { kind?: unknown; by?: unknown; repo?: unknown; issue?: unknown; at?: unknown }
+    try {
+      n = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (n?.kind !== 'done' || n.by !== self || n.issue !== c.issue) continue
+    if (typeof n.repo !== 'string' || n.repo.toLowerCase() !== c.repo.toLowerCase()) continue
+    if (c.since === null || (isNum(n.at) && n.at >= c.since)) return true
+  }
+  return false
+}
+
+/**
+ * The claims this session holds, from `sleep-queue.sh claims`: one JSON line per issue claimed
+ * tonight. Read with tonight's notes, a claim this session noted done is not held (notedDone). The
+ * notes are a required argument, so no caller can leave them out and park finished work unawares;
+ * null is only for notes that could not be read.
+ */
+export const heldClaim = (claimsText: string, self: string, notesText: string | null): ClaimReading => {
+  const all: Claim[] = []
   for (const line of claimsText.split('\n')) {
     if (!line.trim()) continue
     let c: { repo?: unknown; issue?: unknown; attempts?: unknown; entries?: unknown }
@@ -194,13 +228,34 @@ export const heldClaim = (claimsText: string, self: string): ClaimReading => {
     const es = Array.isArray(c.entries) ? (c.entries as { kind?: unknown; session?: unknown; at?: unknown }[]) : []
     const last = es[es.length - 1]
     if (last?.kind === 'claim' && last.session === self && typeof c.repo === 'string' && isNum(c.issue)) {
-      // Two held at once would be a fault in the queue; the newest is the one being worked.
-      const since = isNum(last.at) ? last.at : null
-      if (!held || (since ?? -1) >= (held.since ?? -1)) held = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since }
+      const claim: Claim = { repo: c.repo, issue: c.issue, attempts: isNum(c.attempts) ? c.attempts : 1, since: isNum(last.at) ? last.at : null }
+      if (!notedDone(notesText, self, claim)) all.push(claim)
     }
   }
-  return held ? { state: 'held', claim: held } : { state: 'none' }
+  if (!all.length) return { state: 'none' }
+  // Oldest first, a claim with no start of its own first of all; the newest is the one being worked.
+  all.sort((a, b) => (a.since ?? -1) - (b.since ?? -1))
+  return { state: 'held', claim: all[all.length - 1] as Claim, all }
 }
+
+/**
+ * The held claim past the active time an issue gets, if any (#3330): every claim timed from its own
+ * start, never only the newest, and of several past it the one held longest, so a minute's tick
+ * parks the oldest first and the next tick the one after. A claim with no start is never timed.
+ */
+export const overdueClaim = (reading: ClaimReading, waits: Wait[], now: number): { claim: Claim; active: number } | null => {
+  if (reading.state !== 'held') return null
+  let worst: { claim: Claim; active: number } | null = null
+  for (const claim of reading.all ?? [reading.claim]) {
+    if (claim.since === null) continue
+    const active = activeMs(waits, claim.since, now)
+    if (active >= LIMITS.stuckMs && (!worst || active > worst.active)) worst = { claim, active }
+  }
+  return worst
+}
+
+/** Why a claim held past its active time is parked, in the one form the Stop and the watchdog say. */
+export const stuckWhy = (active: number) => `${mins(active)} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
 
 /** A note for the night's report, as sleep_note writes it (the writer adds v, generation). */
 export type Note = Record<string, unknown> & { kind: string }
@@ -208,10 +263,27 @@ export type Note = Record<string, unknown> & { kind: string }
 /** A claim the driver ends through sleep-queue.sh, which writes the matching note itself (one writer, #844). */
 export type Release = { issue: number; state: 'parked' | 'failed'; why: string }
 
-/** A block's reason leaves out what its release came to, known only after the queue answers: say it with blockTold (#925). */
+/**
+ * Every claim a stopping session holds, each ended (#3342): a stopped session is no longer working,
+ * so none is left held by it, and each is ended with the stop's own state and reason. The claim in
+ * hand comes first, then the older ones, oldest first. `own` is a release already decided for one
+ * claim on its own terms (a park past the night's attempts), kept as decided for that claim. Each
+ * issue is ended once. Claims that cannot be read end nothing, since none can be named.
+ */
+export const endEvery = (reading: ClaimReading | undefined, state: Release['state'], why: string, own?: Release): Release[] => {
+  const held = reading?.state === 'held' ? [reading.claim, ...(reading.all ?? []).filter(c => c.issue !== reading.claim.issue)] : []
+  const out: Release[] = own ? [own] : []
+  for (const c of held) if (!out.some(r => r.issue === c.issue)) out.push({ issue: c.issue, state, why })
+  return out
+}
+
+/**
+ * A block's reason leaves out what its release came to, known only after the queue answers: say it
+ * with blockTold (#925). A block ends at most one claim; a stop ends every claim held (#3342).
+ */
 export type StopDecision =
   | { kind: 'block'; reason: string; record: DriverRecord; notes: Note[]; release?: Release }
-  | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; release?: Release; why: string }
+  | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; releases: Release[]; why: string; release?: undefined }
   /**
    * Let the session stop, idle, until `record.resumeAt`, keeping its claim, then start it again: for
    * mods out of step, with `reload` true, so they load again (#1281); or while its own background
@@ -258,6 +330,33 @@ export const queueData = (answer: string) =>
 /** One piece of a block's reason followed by the next: a space after a sentence, nothing after a line break. */
 export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
 
+/**
+ * A park's words joined to the ones not yet said. A park the queue refused leaves the claim held
+ * and overdue, so the watchdog tries it again each minute: its new words take the place of that
+ * issue's earlier refusal (`earlier`), so one failure is said once, not once a minute (#3330).
+ */
+export const parkedWith = (unsaid: string | null | undefined, told: string, earlier?: string): string => {
+  if (!unsaid) return told
+  // Joining the same words twice changes nothing, so a join that runs again cannot double them.
+  if (unsaid.includes(told)) return unsaid
+  if (earlier && unsaid.includes(earlier)) return unsaid.replace(earlier, () => told)
+  return `${thenNext(unsaid)}${told}`
+}
+
+/** A park whose record could not be saved: its words, and the saved refusal they are a second try at. */
+export type UnsavedPark = { told: string; earlier?: string }
+
+/**
+ * The saved words not yet said, with every park the record could not take joined in, each once.
+ * What could not be saved is kept by issue, never as joined words, so this is the one place the
+ * two are put together, by the same rule the watchdog joins by (#3330).
+ */
+export const parkedWithUnsaved = (saved: string | null | undefined, unsaved: Iterable<UnsavedPark>): string | null => {
+  let all = saved ?? ''
+  for (const u of unsaved) all = parkedWith(all, u.told, u.earlier)
+  return all || null
+}
+
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const mins = (ms: number) => `${Math.round(ms / MIN)} minutes`
 
@@ -275,12 +374,11 @@ export const decideStop = (i: StopInput): StopDecision => {
   const { now, self } = i
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so the driver cannot count its blocks and stopped rather than loop`
-    // The claim in hand is ended too, as on every other stop, never left held by a stopped session.
-    const held = i.claim.state === 'held' ? i.claim.claim : null
-    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed', why } } : {}), notes: [{ kind: 'stopped', text: why }] }
+    // Every claim held is ended too, as on every other stop, never left held by a stopped session.
+    return { kind: 'stop', record: null, why, releases: endEvery(i.claim, 'failed', why), notes: [{ kind: 'stopped', text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, self, now)
-  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
+  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, releases: [], notes: [] }
   // A turn that ended (rather than failed) starts the waits over.
   d.waitStep = 0
   d.resumeAt = null
@@ -295,27 +393,28 @@ export const decideStop = (i: StopInput): StopDecision => {
   }
   const claim = i.claim.state === 'held' ? i.claim.claim : null
   const where = claim ? { repo: claim.repo, issue: claim.issue } : i.repo ? { repo: i.repo } : {}
-  const stop = (why: string, release?: Release, extra: Note[] = []): StopDecision => {
+  // Every claim held is ended at a stop (#3342), each by the queue, which writes its note.
+  const stop = (why: string, releases: Release[], extra: Note[] = []): StopDecision => {
     d.stopped = why
     // A stop with no claim to end still leaves a failed note when it is a fault, so it shows in the report.
-    return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...extra, { kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: d, why, releases, notes: [...extra, { kind: 'stopped', ...where, text: why }] }
   }
 
   // Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker
   // left without one at bedtime does nothing, and a claim it somehow holds is given up.
-  if (i.goal === null) return stop(NO_GOAL_WHY, claim ? { issue: claim.issue, state: 'parked', why: NO_GOAL_WHY } : undefined)
+  if (i.goal === null) return stop(NO_GOAL_WHY, endEvery(i.claim, 'parked', NO_GOAL_WHY))
 
   if (saidStopped(i.notesText, self, d.since)) {
-    return stop('the session said it stopped (its stopped note)', claim ? { issue: claim.issue, state: 'parked', why: 'the session said it stopped while still holding this issue' } : undefined)
+    return stop('the session said it stopped (its stopped note)', endEvery(i.claim, 'parked', 'the session said it stopped while still holding this issue'))
   }
 
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) {
     const why = `the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`
-    return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
+    return stop(why, endEvery(i.claim, 'parked', why))
   }
   if (d.blocks >= LIMITS.nightCap) {
     const why = `this session reached the night's cap of ${LIMITS.nightCap} blocks`
-    return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
+    return stop(why, endEvery(i.claim, 'failed', why), claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
   // #1281: mods out of step refuse every call, and a busy session never loads its mods again (a
   // reload lands only once it is idle, measured on 2.1.302). One rest lets it idle so the reload can
@@ -331,7 +430,7 @@ export const decideStop = (i: StopInput): StopDecision => {
       return { kind: 'rest', record: d, why, reload: true, notes: [{ kind: 'finding', ...where, text: why }] }
     }
     const why = `${skew} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
-    return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
+    return stop(why, endEvery(i.claim, 'parked', why))
   }
   d.rested = false
   // Claims that cannot be read just now judge nothing stuck and park nothing, and the work goes on:
@@ -342,7 +441,7 @@ export const decideStop = (i: StopInput): StopDecision => {
     d.claimFails++
     if (d.claimFails >= LIMITS.claimReadFails) {
       const why = `the claims could not be read ${d.claimFails} times in a row (${i.claim.why})`
-      return stop(why, undefined, [{ kind: 'failed', ...where, text: why }])
+      return stop(why, [], [{ kind: 'failed', ...where, text: why }])
     }
     unread = `The claims could not be read just now, so carry on with the issue in hand.\n${queueData(i.claim.why)}`
   } else {
@@ -356,15 +455,16 @@ export const decideStop = (i: StopInput): StopDecision => {
   const idle = progressed ? 0 : d.idleBlocks
   if (busy === null && (idle >= LIMITS.breakerBlocks || idleMs >= LIMITS.breakerMs)) {
     const why = `circuit breaker: ${idle >= LIMITS.breakerBlocks ? `${idle} blocks in a row` : `${mins(idleMs)} of active time`} with no new commit, claim or note`
-    return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
+    return stop(why, endEvery(i.claim, 'failed', why), claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
 
   let release: Release | undefined
   let told = ''
   if (claim && claim.attempts > LIMITS.attempts) {
     release = { issue: claim.issue, state: 'parked', why: `attempt ${claim.attempts}: an issue is parked after ${LIMITS.attempts} attempts in a night` }
-  } else if (claim && claim.since !== null && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
-    release = { issue: claim.issue, state: 'parked', why: `${mins(activeMs(d.waits, claim.since, now))} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` }
+  } else {
+    const over = overdueClaim(i.claim, d.waits, now)
+    if (over) release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
   }
   // #2511: with nothing to end, a session whose own work is still working rests until that work
   // reports (its report starts a turn) or busyRestMs passes, rather than being blocked into turns
@@ -395,11 +495,14 @@ export const decideStop = (i: StopInput): StopDecision => {
     const why = `the weekly usage has had no reading for ${mins(now - measuredAt)}, so the night stops after the issue in hand (unmeasured)`
     const unmeasured: Note[] = first ? [{ kind: 'finding', ...where, text: why }] : []
     // Claims that cannot be read just now may still hold one: blocked on rather than stopped on it.
-    if ((!claim && i.claim.state !== 'unknown') || release) return stop(why, release, unmeasured)
+    // It stops once nothing is left to finish, or the claim in hand is itself ended, every older
+    // claim then ended with it (#3342). An older claim parked past its time leaves the claim in hand
+    // to finish: that park is said in this block, never a stop that leaves the claim in hand held.
+    if ((!claim && i.claim.state !== 'unknown') || (release && release.issue === claim?.issue)) return stop(why, endEvery(i.claim, 'parked', why, release), unmeasured)
     d.blocks++
     if (!progressed) d.idleBlocks++
     return {
-      kind: 'block', record: d, notes: [...unmeasured, { kind: 'heartbeat', ...where }],
+      kind: 'block', record: d, ...(release ? { release } : {}), notes: [...unmeasured, { kind: 'heartbeat', ...where }],
       reason: `${told}${unread}Finish ${claim ? `#${claim.issue}` : 'the issue in hand'} and release it, then claim nothing new: ${why}. ${i.rules}`,
     }
   }
@@ -436,7 +539,7 @@ export const blockTold = (d: Extract<StopDecision, { kind: 'block' }>, failed: s
 
 export type FailureDecision =
   | { kind: 'wait'; record: DriverRecord; minutes: number; notes: Note[] }
-  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[]; release?: Release }
+  | { kind: 'stop'; record: DriverRecord | null; why: string; notes: Note[]; releases: Release[] }
 
 /**
  * A turn that ended on an API error (classic.StopFailure). It carries no reset time and calls an
@@ -449,20 +552,18 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   const said = i.message.replace(/\s+/g, ' ').trim().slice(0, 200)
   if (i.driver.state === 'unreadable') {
     const why = `${i.driver.why}, so after the ${i.error} error the driver stopped rather than retry on a count it cannot keep`
-    const held = i.claim?.state === 'held' ? i.claim.claim : null
-    return { kind: 'stop', record: null, why, ...(held ? { release: { issue: held.issue, state: 'failed' as const, why } } : {}), notes: [{ kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: null, why, releases: endEvery(i.claim, 'failed', why), notes: [{ kind: 'stopped', ...where, text: why }] }
   }
   const d: DriverRecord = i.driver.state === 'ok' ? { ...i.driver.record, waits: [...i.driver.record.waits] } : freshDriver(i.generation, i.self, i.now)
-  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, notes: [] }
+  if (d.stopped) return { kind: 'stop', record: d, why: d.stopped, releases: [], notes: [] }
   if (i.weekly !== null) d.weeklyAt = i.now
-  // A stop ends the claim in hand as Stop's own stops do: parked at the weekly limit, failed on an
-  // error waiting does not cure, through the queue, which writes that note (one writer, #905).
+  // A stop ends every claim held as Stop's own stops do (#3342): parked at the weekly limit, failed
+  // on an error waiting does not cure, through the queue, which writes each note (one writer, #905).
   const claim = i.claim?.state === 'held' ? i.claim.claim : null
   const stop = (why: string, failed: boolean): FailureDecision => {
     d.stopped = why
-    const release: Release | undefined = claim ? { issue: claim.issue, state: failed ? 'failed' : 'parked', why } : undefined
     const own: Note[] = failed && !claim ? [{ kind: 'failed', ...where, text: why }] : []
-    return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...own, { kind: 'stopped', ...where, text: why }] }
+    return { kind: 'stop', record: d, why, releases: endEvery(i.claim, failed ? 'failed' : 'parked', why), notes: [...own, { kind: 'stopped', ...where, text: why }] }
   }
   if (i.weekly !== null && i.weekly >= LIMITS.weeklyStop) return stop(`the weekly limit is at ${pct(i.weekly)}, past the ${LIMITS.weeklyStop}% the night stops at`, false)
   if (!RETRY.has(i.error)) return stop(`the API answered ${i.error}${said ? ` (${said})` : ''}, which waiting does not cure`, true)
@@ -604,7 +705,8 @@ export const overnightRules = (self: string, rootPath: string, goal: string) => 
     'If the goal names no issue, work the task itself in a worktree of its own (git worktree add under .claude/worktrees), never in the primary checkout, committing as you go and noting each step done with sleep_note (kind progress, with text), since only a claim\'s commits are read as progress; note each pull request you merge as done, as in `sleep_note \'{"kind":"done","repo":"owner/name","pr":<its number>,"text":"<what it did>"}\'` (an issue closed with no pull request: issue in place of pr), or the report calls it unaccounted for.',
     `If \`next\` prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
-    `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues.`,
+    // #3330: a done note ends its writer's claim (sleep-queue.sh done-noted), so the rules say so.
+    `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues. A done note you write yourself with sleep_note naming the issue ends your claim on it as done too, so a finished issue is never left held and timed.`,
     // #1771: a question is asked before bed in a dialog, so it carries the answers Dan picks from,
     // shown in an example (a rule an example breaks is the one copied, L270), and sleep_note
     // refuses one with fewer than two.

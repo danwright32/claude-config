@@ -77,6 +77,12 @@
 # cannot be resolved before the command runs: the gates read the branch checked out and its files.
 # The remedy is to push it from a checkout of it. A commit that names its own paths (#3111) is not
 # refused: the library reads the paths, so the gates judge them.
+#
+# Since claude-config#3338 it refuses a push that sends this worktree's commits to the branch name
+# another worktree has checked out (HEAD:<that name>, or any <src>:<that name>), unless what it sends
+# builds on that branch's own commits. On 2026-11-20 a builder's shell stood in the wrong worktree
+# and `git push origin HEAD:<its own branch>` put another issue's commit on GitHub under its name,
+# with every gate passing it. The remedy names the push from the worktree that owns the name.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
@@ -191,7 +197,7 @@ answered_no() {   # $1 = the exit code
   [ -n "${PS_NO:-}" ] && [ "$1" -eq "$PS_NO" ]
 }
 unasked() {   # $1 = the library question  $2 = its exit code
-  printf 'PUSH REFUSED: push-scope-notice.sh could not ask whether this command changes what it pushes before it pushes: %s exited %s, which is none of its answers (127 means %s does not hold it, and any other code that the question crashed or that the library is older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again; if it still refuses, hand back and say so.\n' \
+  printf 'PUSH REFUSED: push-scope-notice.sh could not ask one of its questions about what this push sends and where it sends it: %s exited %s, which is none of its answers (127 means %s does not hold it, and any other code that the question crashed or that the library is older than this hook). A question that could not be asked is not one answered no. Reinstall the hooks with claude-sync pull, then push again; if it still refuses, hand back and say so.\n' \
     "$1" "$2" "$HOOK_DIR/lib/push-scope.sh" >&2
   exit 2
 }
@@ -297,6 +303,47 @@ unread_source_check() {   # $1 = the one repository directory the push runs in
   exit 2
 }
 
+# A push that sends this checkout's commits to the branch name another worktree has checked out,
+# without building on that branch's own commits (claude-config#3338). Every gate passes it, since
+# what it sends is the branch checked out here, and it puts one piece of work on GitHub under
+# another's name. The rule, what was measured and why an unreadable worktree list refuses live with
+# the question, ps_push_to_held_branch in lib/push-scope.sh. No override: the remedy is the push run
+# from the worktree that owns the name, or this checkout's push under a name of its own.
+held_name_check() {   # $1 = the one repository directory the push runs in
+  local found rc kind rest dst holder src remote top cur here instead
+  found="$(ps_push_to_held_branch "$cmd" "$1" 2>/dev/null)"; rc=$?
+  answered_no "$rc" && return 0
+  [ "$rc" -eq 0 ] || unasked ps_push_to_held_branch "$rc"
+  kind="${found%% *}"; rest="${found#* }"
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || top="$1"
+  [ -n "$top" ] || top="$1"
+  if [ "$kind" = unlisted ]; then
+    printf 'PUSH REFUSED: this command pushes to the branch name %s, and the list of worktrees of the repository at %s could not be read (git worktree list failed), so whether another worktree has %s checked out could not be checked (claude-config#3338). A check that could not be made is not one that passed. Run git -C %s worktree list to see why (git worktree prune clears the records of folders that are gone), then push again.\n' \
+      "$rest" "$top" "$rest" "$top" >&2
+    exit 2
+  fi
+  if [ "$kind" = unresolved ]; then
+    printf 'PUSH REFUSED: this command pushes to the branch name %s, which cannot be read before the command runs (a variable, a substitution or a pattern), so whether another worktree of the repository at %s has that branch checked out could not be checked (claude-config#3338). Name the branch outright, HEAD:<the branch> or HEAD:$(git branch --show-current) for the one checked out here. If a command works the name out, run that as a command of its own, then push naming it.\n' \
+      "$rest" "$top" >&2
+    exit 2
+  fi
+  dst="${rest%%$'\x1f'*}"; rest="${rest#*$'\x1f'}"
+  holder="${rest%%$'\x1f'*}"; rest="${rest#*$'\x1f'}"
+  src="${rest%%$'\x1f'*}"; remote="${rest#*$'\x1f'}"
+  [ -n "$remote" ] || remote=origin
+  cur="$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null)" || cur=""
+  if [ -n "$cur" ]; then
+    here="the worktree $top (branch $cur)"
+    instead="If you meant this worktree's own work, push it under its own name: git -C $top push $remote HEAD:$cur"
+  else
+    here="the worktree $top (a detached HEAD, no branch)"
+    instead="If you meant this worktree's own work, push it under a name no worktree has checked out"
+  fi
+  printf 'PUSH REFUSED: this command pushes %s from %s to the branch name %s. That is the branch checked out in another worktree, %s, and what this push sends does not build on that branch'"'"'s own commits, so it would put this worktree'"'"'s work on GitHub under the other branch'"'"'s name. Every other gate passes it, because they read the branch checked out here (claude-config#3338). If %s is the branch you meant, push it from the worktree that has it checked out, as a command of its own: git -C %s push %s HEAD:%s. %s.\n' \
+    "$src" "$here" "$dst" "$holder" "$dst" "$holder" "$remote" "$dst" "$instead" >&2
+  exit 2
+}
+
 # Asked through ps_repo_dirs, the list ps_repo_dir is built on, so the two causes of a gate standing
 # down get their own sentence and their own remedy (L11, L111): a directory that could not be
 # resolved (exit 2), or pushes into MORE THAN ONE repository (claude-config#1062), each of which
@@ -308,7 +355,7 @@ dirs="$out"; err="$out"
 # rc 1 (no repository named and none at the session directory) is a push git itself will refuse, and
 # a single repository is a push the gates do judge.
 if [ "$rc" -eq 0 ]; then
-  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; unread_move_check; unread_write_check; unread_source_check "${dirs%%$'\n'*}"; exit 0 ;; esac
+  case "$dirs" in *$'\n'?*) ;; *) hooks_folder_check "${dirs%%$'\n'*}"; pending_merge_check "${dirs%%$'\n'*}"; unread_route_check; unread_move_check; unread_write_check; unread_source_check "${dirs%%$'\n'*}"; held_name_check "${dirs%%$'\n'*}"; exit 0 ;; esac
   printf 'PUSH REFUSED: this command pushes from more than one repository (%s), and every push gate (tests, style, scanners, docs and the rest) judges one repository per command, so the pushes after the first would go out with no gate having looked at them (claude-config#1062). Run each repository'"'"'s push as a command of its own.\n' \
     "$(printf '%s' "$dirs" | awk 'NF' | paste -sd ',' - | sed 's/,/, /g')" >&2
   exit 2
