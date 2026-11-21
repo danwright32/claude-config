@@ -75,7 +75,7 @@ describe('morningPrompt: the summary and the morning pickers, on the session tha
     expect(both).toContain('as steps 3 to 5 of ~/.claude/hooks/durable-lesson-check.sh describe')
     expect(both).toMatch(/Ask the rungs of each lesson first/)
     expect(both).toMatch(/its check line on a line of its own/)
-    expect(both).toContain('{"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>"}')
+    expect(both).toContain('{"source":"durable-lesson","rule":"<the rule, word for word>","check":"<the check line, word for word>","short":"<the SHORT line, word for word>"}')
     // The block still gives only what the night wrote: the check line is the morning session's to
     // work out and Dan's to read, never a worker's note.
     expect(both).toContain('2.1 Parse dates with their zone. Metadata: {"source":"durable-lesson","rule":"Parse dates with their zone."}')
@@ -84,6 +84,17 @@ describe('morningPrompt: the summary and the morning pickers, on the session tha
     const fromReport = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })
     expect(fromReport).toMatch(/Ask the rungs of each lesson first/)
     expect(fromReport).toContain('"check":"<the check line, word for word>"')
+  })
+  // claude-config#3320: the SHORT line is what the index carries into every session, so the picker
+  // shows it and carries it too, or the lesson picker refuses a rule too long for the index line.
+  test('each lesson is offered with its SHORT line on a line of its own and in its metadata, where the entry needs one (#3320)', () => {
+    expect(both).toMatch(/then the entry's SHORT line on a line of its own, where step 5 says the entry needs one/)
+    expect(both).toContain('"short":"<the SHORT line, word for word>"')
+    expect(both).toMatch(/leave "short" out where the rule needs no SHORT line/)
+    // The night's notes never carry one: it is the morning session's to write and Dan's to read.
+    expect(both).not.toMatch(/Metadata: \{[^\n]*"short"/)
+    const fromReport = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })
+    expect(fromReport).toContain('"short":"<the SHORT line, word for word>"')
   })
   test('nothing was filed or added overnight, and the prompt says so', () => {
     expect(both).toMatch(/Nothing was filed and no lesson was added overnight/)
