@@ -19,7 +19,7 @@ import { branchAt } from './mod-kit/hooks/branch.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 import { PAGE_TOOL, publishInstead } from '../hooks/mod-kit/deliver.ts'
-import { dialogOfCall } from '../hooks/mod-kit/asked.ts'
+import { isOwnDialog } from '../hooks/mod-kit/asked.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
 // mod-kit's band, card and send retry, the status bar's setModes, and the session registry's list.
@@ -50,6 +50,18 @@ const deps: { name: string; register: Register } = {
         }
       }
       return { isDelivered: false, reason: why.trim().replace(/\.$/, '') || 'no reason given' }
+    })
+    // #3321: standing where picker manners does, another mod's hook on every question: it reads
+    // scope modes' own state and hands that and the call it got to the world, which judges whether
+    // the mod had kept that very dialog as its own. A world that answers no such run changes nothing.
+    on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+      try {
+        const value = (await $.state.get({ plugin: 'scope-modes', key: 'asking' })).value
+        await $.process.run(['__own', JSON.stringify({ value: value ?? null, call: e })])
+      } catch {
+        // No world beneath, or one that refuses the run: the question goes on as it would.
+      }
+      return next(e)
     })
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
@@ -106,13 +118,6 @@ const deps: { name: string; register: Register } = {
           },
           release: async (input: unknown) => {
             await kit('release', input)
-          },
-          // #3321: the mod saying a dialog it opens is its own, and taking that back, kept by the world.
-          asking: async (input: unknown) => {
-            await kit('asking', input)
-          },
-          answered: async (input: unknown) => {
-            await kit('answered', input)
           },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
@@ -545,9 +550,7 @@ const world = (on: On, o: Opts = {}) => {
     holding: new Set<string>(),
     /** #2132: each prompt or question the mod made with no hold standing, which a reload would drop. */
     unheld: [] as string[],
-    /** #3321: the dialogs the mod has told mod-kit are its own and not yet taken back. */
-    owning: [] as string[],
-    /** #3321: how many questions the mod asked itself, and each one asked while mod-kit had not been told that very dialog is its own. */
+    /** #3321: how many questions the mod asked itself, and each one asked while its own state did not hold that very dialog. */
     ownAsks: 0,
     unowned: [] as string[],
     /** Reading this session's id throws from now on (#834: a permission decision that throws). */
@@ -787,18 +790,23 @@ const world = (on: On, o: Opts = {}) => {
     }
     // mod-kit's readers, read here with its copy; a command naming __reader_fails stands for a
     // reader that throws. Not one of the runs a test watches, which reach the Mac.
+    // #3321: what the reader in the mod-kit stand in saw as a question was asked. A question the
+    // mod asks through $.ui.ask carries a generated toolu_ id; it must be a dialog the mod had kept
+    // as its own, word for word as a hook gets it.
+    if (cmd === '__own') {
+      const seen = JSON.parse(a[0] as string) as { value: unknown; call: Record<string, unknown> & { questions?: { question?: unknown }[] } }
+      if (/^toolu_/.test(String(seen.call.tool_use_id))) {
+        w.ownAsks++
+        if (!isOwnDialog(seen.value, seen.call)) w.unowned.push(`ask ${String(seen.call.questions?.[0]?.question).slice(0, 60)}`)
+      }
+      return ok('')
+    }
     if (cmd === '__modkit' && (a[0] === 'hold' || a[0] === 'release')) {
       if (a[0] === 'hold' && o.holdFails) return fail(1, o.holdFails)
       const { id } = JSON.parse(a[1] as string) as { id: string }
       if (a[0] === 'hold') w.holding.add(id)
       else w.holding.delete(id)
       w.held.push(`${a[0]} ${a[1]}`)
-      return ok('')
-    }
-    if (cmd === '__modkit' && (a[0] === 'asking' || a[0] === 'answered')) {
-      const { dialog } = JSON.parse(a[1] as string) as { dialog: string }
-      if (a[0] === 'asking') w.owning.push(dialog)
-      else if (w.owning.includes(dialog)) w.owning.splice(w.owning.indexOf(dialog), 1)
       return ok('')
     }
     if (cmd === '__modkit') {
@@ -1111,10 +1119,6 @@ const world = (on: On, o: Opts = {}) => {
       if (/^toolu_/.test(String((e as unknown as { tool_use_id?: unknown }).tool_use_id))) {
         w.held.push('ask')
         if (!w.holding.size) w.unheld.push(`ask ${q.slice(0, 60)}`)
-        // #3321: the call as a hook gets it must be a dialog the mod said is its own, word for word.
-        w.ownAsks++
-        const dialog = dialogOfCall(e as unknown as Record<string, unknown>)
-        if (dialog === undefined || !w.owning.includes(dialog)) w.unowned.push(`ask ${q.slice(0, 60)}`)
       }
       w.asked.push(q)
       w.askedOptions.push((first?.options ?? []).map(x => (x && typeof x === 'object' ? String((x as { label?: unknown }).label) : String(x))))
@@ -1160,7 +1164,7 @@ const world = (on: On, o: Opts = {}) => {
   return { w, clock, readAttempted }
 }
 // #2132: every world made in this file, so the last test can read every wait the mod made in all of them.
-const everyWorld: { o: Opts; held: string[]; unheld: string[]; ownAsks: number; unowned: string[]; owning: string[] }[] = []
+const everyWorld: { o: Opts; held: string[]; unheld: string[]; ownAsks: number; unowned: string[] }[] = []
 
 type $T = {
   session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown>; receive: (e: never) => Promise<unknown> }
@@ -8747,11 +8751,12 @@ test('every prompt the mod sends and every question it asks Dan holds back a rel
 })
 
 // #3321: a question the mod asks through its own dialog reaches picker manners with nothing on it
-// saying a mod raised it, so the mod tells mod-kit first, through mod-kit's recorder, and picker
-// manners reads that. Last in the file like the case above: of every question the mod asked in
-// every test, each was a dialog mod-kit had been told is the mod's own, word for word as a hook
-// gets it, and the count shows the questions were reached at all.
-test('every question the mod asks Dan itself is said to be its own dialog while it is open (#3321)', async () => {
+// saying a mod raised it, so the mod keeps the dialog in its own state, which only it can write,
+// for as long as it is open, through mod-kit's recorder, and picker manners reads that. Last in
+// the file like the case above: of every question the mod asked in every test, each was a dialog
+// its state held, word for word as another mod's hook gets it (the engine's own chip over a
+// question that gives none included), and the count shows the questions were reached at all.
+test('every question the mod asks Dan itself is kept as its own dialog while it is open (#3321)', async () => {
   expect(everyWorld.flatMap(x => x.unowned)).toEqual([])
   expect(everyWorld.reduce((n, x) => n + x.ownAsks, 0)).toBeGreaterThan(50)
 })

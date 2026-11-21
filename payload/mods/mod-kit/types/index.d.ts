@@ -345,21 +345,7 @@ export type ModKit = {
   hold: (input: { mod: string; id: string; what: string; ms: number }) => Promise<void>
   /** Lets go of this mod's hold with that id, taken by `hold`; letting go of one not held is fine. */
   release: (input: { mod: string; id: string }) => Promise<void>
-  /**
-   * Says the dialog this mod is about to open with `$.ui.ask` is its own (#3321). The engine hands
-   * a mod's own dialog to every hook on AskUserQuestion with nothing on it saying a mod raised it,
-   * so a hook that treats a session's picker and a mod's own question differently (picker manners)
-   * reads mod-kit's `asking` state and compares. `dialog` is the whole dialog as one string, as
-   * hooks/asked.ts's `dialogOf` makes it; that file's `recordedAsk` is the one caller. Two of the
-   * same dialog open at once are kept twice. Rejects an input with no mod or dialog.
-   */
-  asking: (input: ModKitAsking) => Promise<void>
-  /** Takes back one entry `asking` kept for that mod and dialog, once the dialog is answered or dismissed; one never kept is fine. */
-  answered: (input: ModKitAsking) => Promise<void>
 }
-
-/** A dialog a mod has open that it raised itself, as `$.modkit.asking` keeps it: the mod, and the dialog as one string. */
-export type ModKitAsking = { mod: string; dialog: string }
 
 /** A mod's hold on its reload, as `$.modkit.hold` keeps it: until when, in ms since the epoch. */
 export type ModKitHold = { mod: string; id: string; what: string; until: number }
@@ -721,10 +707,7 @@ declare module 'claude-code' {
      * `holds`: each mod's hold on its reload while it waits on work (#2100), kept here so a reload of
      * mod-kit or of the holding mod keeps it. `cards`: each tool result row's card, by its
      * tool_use_id (#2512), kept here so a reload of mod-kit still draws the row as its card.
-     * `asking`: each dialog a mod has open that it raised itself (#3321), kept from
-     * `$.modkit.asking` to `$.modkit.answered`. Only mod-kit writes it, and only in those two
-     * nouns, so an entry is a mod's own word that the dialog is its own; a new session starts empty.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null; holds: ModKitHold[]; cards: StateFamily<ModKitCard>; asking: ModKitAsking[] }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null; holds: ModKitHold[]; cards: StateFamily<ModKitCard> }
   }
 }

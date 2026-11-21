@@ -122,19 +122,30 @@ export const checkOffAnswered = async ($: EngineInterface, e: { question: string
 
 // #3321: whether a call is a dialog some mod raised itself. The engine hands such a dialog on with
 // nothing saying so (seen on Claude Code 2.1.330), so the asking mod says it first: mod-kit's
-// recorder (hooks/mod-kit/asked.ts) calls $.modkit.asking, which keeps the whole dialog in
-// mod-kit's own $.state until $.modkit.answered. A session cannot put an entry there: $.state is
-// written by its owner alone, mod-kit writes this key only in those two nouns, and a noun is
-// called by a mod's code, never through a tool. The call must be that very dialog with nothing
-// beside it. A state that cannot be read, a mod-kit loaded before it kept this, or a call of any
-// other shape is a session's picker, the side that keeps the refusal on it.
-const askingRef = { plugin: 'mod-kit', key: 'asking' } as const
+// recorder (hooks/mod-kit/asked.ts) keeps the whole dialog in the asking mod's own $.state for as
+// long as it is open. A session cannot put an entry there: $.state is written by its owner alone
+// (measured in this mod's suite), each of those mods writes the key only in the recorder, and a
+// session has only tools, none of which writes a mod's state. The call must be that very dialog
+// with nothing beside it. A state that cannot be read, a mod not loaded or loaded before it kept
+// this, or a call of any other shape is a session's picker, the side that keeps the refusal on it.
+//
+// The engine wants a state's plugin and key spelled as literals where it is read, so each mod in
+// the recorder's OWN_ASKERS has its line here, and tools/check-mod-shared-parts.sh fails when the
+// two differ. These mods are not dependencies of this one (it must load without them), so their
+// contracts are not in its types and each read is cast; isOwnDialog takes whatever comes back.
 const ownDialog = async ($: EngineInterface, call: Record<string, unknown>): Promise<boolean> => {
-  try {
-    return isOwnDialog((await $.state.get(askingRef)).value, call)
-  } catch {
-    return false
+  const reads: (() => Promise<{ value?: unknown }>)[] = [
+    () => $.state.get({ plugin: 'scope-modes', key: 'asking' } as never),
+    () => $.state.get({ plugin: 'keystroke-guard', key: 'asking' } as never),
+  ]
+  for (const read of reads) {
+    try {
+      if (isOwnDialog((await read()).value, call)) return true
+    } catch {
+      // That mod's state could not be read, so the call is not known to be its dialog.
+    }
   }
+  return false
 }
 
 export const register: Register = on => {

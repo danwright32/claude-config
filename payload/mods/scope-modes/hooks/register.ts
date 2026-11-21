@@ -629,6 +629,7 @@ const heldBy = ($: EngineInterface, id: string, what: string, ms: number = HOLD_
 // mod-kit's one recorder (hooks/mod-kit/asked.ts) notes its size first, never a word of it, and
 // asks it whatever the record says. `which` is this mod's short name for the question. The one
 // place this mod calls the dialog: the scan holds every call to the recorder's line.
+const askingRef = { plugin: 'scope-modes', key: 'asking' } as const
 const askDan = ($: EngineInterface, which: string, question: string, options?: AskedOptions): Promise<string> => {
   const io: AskedIo = {
     now: () => $.clock.now(),
@@ -637,10 +638,9 @@ const askDan = ($: EngineInterface, which: string, question: string, options?: A
     list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
     run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
     ask: (asked, offered) => $.ui.ask(asked, offered),
-    // The recorder tells mod-kit the dialog is this mod's own for as long as it is open, so picker
-    // manners never takes it for a session's picker.
-    asking: dialog => $.modkit.asking({ mod: 'scope-modes', dialog }),
-    answered: dialog => $.modkit.answered({ mod: 'scope-modes', dialog }),
+    // The recorder keeps the dialog in this mod's own state for as long as it is open, which only
+    // this mod can write, so picker manners never takes it for a session's picker.
+    own: { read: () => $.state.get(askingRef), write: (value, ifVersion) => $.state.set(askingRef, value, { ifVersion }) },
     said: line => $.ui.log(line),
   }
   return recordedAsk(io, 'scope-modes', which, question, options)

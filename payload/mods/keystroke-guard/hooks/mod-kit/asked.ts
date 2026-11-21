@@ -46,10 +46,8 @@ export type AskedIo = {
   run: (argv: string[]) => Promise<{ exitCode: number; stderr: string }>
   /** The dialog itself: $.ui.ask. */
   ask: (question: string, options?: AskedOptions) => Promise<string>
-  /** Says the dialog about to open is this mod's own: $.modkit.asking({ mod, dialog }). */
-  asking: (dialog: string) => Promise<void>
-  /** Takes that back once the dialog is answered or dismissed: $.modkit.answered({ mod, dialog }). */
-  answered: (dialog: string) => Promise<void>
+  /** The mod's own state for its open dialogs: $.state.get and $.state.set of { plugin: <the mod>, key: 'asking' }. */
+  own: OwnState
   /** Where a record that could not be kept is said (the transcript's dim line). */
   said: (line: string) => void
 }
@@ -132,23 +130,36 @@ export const recordAsked = async (io: AskedIo, mod: string, which: string, quest
 // A dialog a mod raises itself, told apart from a session's picker (#3321). The engine hands a
 // mod's own dialog to every hook on AskUserQuestion with nothing on it saying a mod raised it
 // (seen on Claude Code 2.1.330: tool, questions and a tool_use_id), and $.ui.ask takes no
-// metadata. So the asking mod says so itself, before it asks: $.modkit.asking keeps the dialog,
-// as one string, in mod-kit's own $.state (`asking`) until $.modkit.answered takes it back. A hook
-// that must not treat a mod's own question as a session's (picker manners, which refuses a
-// session's unreadable picker about an issue) reads that state and compares the call it was handed.
+// metadata. So the asking mod says so itself, before it asks: it keeps the dialog, as one string,
+// in its own $.state (the key `asking`) for as long as the dialog is open. A hook that must not
+// treat a mod's own question as a session's (picker manners, which refuses a session's unreadable
+// picker about an issue) reads that state and compares the call it was handed.
 //
 // Why a session cannot fake it: $.state is written by its owner alone (the engine's own rule,
-// measured in tests/asked.test.ts), mod-kit writes `asking` only inside these two nouns, and a
-// noun is called by a mod's code, never by a session, which has only tools. The entry is the whole
-// dialog, so a session's picker asked while a mod's dialog is open is the mod's own only if it is
-// that very dialog, word for word, with nothing beside it. The words are kept in the session's
-// memory only, for as long as the dialog is open; nothing of them is written to a file.
+// measured in picker manners' suite), the mod writes this key nowhere but here, around its own
+// dialog, and a session has only tools, none of which writes a mod's state. The entry is the
+// whole dialog, so a session's picker asked while a mod's dialog is open is the mod's own only if
+// it is that very dialog, word for word, with nothing beside it. The words are kept in the
+// session's memory only, for as long as the dialog is open; nothing of them is written to a file.
 //
-// An entry a reload leaves behind (the mod replaced between asking and answered) stays for the
+// An entry a reload leaves behind (the mod replaced while its dialog was open) stays for the
 // session and covers that one dialog's exact words only.
 
-/** One dialog a mod has open that it raised itself, as mod-kit's $.state keeps it. */
-export type OwnDialog = { mod: string; dialog: string }
+/**
+ * The mods that ask through their own dialog and keep it in their own $.state while it is open.
+ * The engine requires a state's plugin and key spelled as literals where it is read, so a reader
+ * (picker manners) spells one read a mod named here, and tools/check-mod-shared-parts.sh fails a
+ * mod that calls the recorder and is not named, and a reader that misses one.
+ */
+export const OWN_ASKERS = ['scope-modes', 'keystroke-guard'] as const
+/** The key each of them keeps its open dialogs under. */
+export const OWN_KEY = 'asking'
+
+/** A mod's own $.state value for its open dialogs: read with its version, written only at that version. */
+export type OwnState = {
+  read: () => Promise<{ value?: readonly string[] | undefined; version: number }>
+  write: (value: string[], ifVersion: number) => Promise<{ isSet: boolean }>
+}
 
 /**
  * A dialog as one string, as the engine will hand it on: its question, its chip (the engine's own
@@ -183,26 +194,31 @@ export const dialogOfCall = (call: Record<string, unknown>): string | undefined 
   return JSON.stringify([q.question, q.header ?? '', labels, q.multiSelect === true])
 }
 
-/** Whether a call is a dialog some mod said it is asking itself: `asking` is mod-kit's state as read. */
-export const isOwnDialog = (asking: readonly OwnDialog[] | undefined, call: Record<string, unknown>): boolean => {
+/** Whether a call is a dialog a mod has open that it raised itself: `asking` is that mod's state as read, whatever it holds. */
+export const isOwnDialog = (asking: unknown, call: Record<string, unknown>): boolean => {
   if (!Array.isArray(asking)) return false
   const dialog = dialogOfCall(call)
-  return dialog !== undefined && asking.some(a => a?.dialog === dialog)
-}
-
-/** Why $.modkit.asking or answered refuses an input, or undefined. */
-export const askingRefusal = (input: unknown, noun = 'asking'): string | undefined => {
-  const i = input as { mod?: unknown; dialog?: unknown } | undefined
-  return typeof i?.mod === 'string' && i.mod !== '' && typeof i?.dialog === 'string' && i.dialog !== '' ? undefined : `$.modkit.${noun} needs mod and dialog as words`
+  return dialog !== undefined && asking.some(kept => kept === dialog)
 }
 
 /** The kept dialogs with one more: two of the same open at once are kept twice. */
-export const withAsking = (kept: readonly OwnDialog[], one: OwnDialog): OwnDialog[] => [...kept, { mod: one.mod, dialog: one.dialog }]
+export const withDialog = (kept: readonly string[], dialog: string): string[] => [...kept, dialog]
 
-/** The kept dialogs with one of that mod's entries for that dialog taken out; one never kept changes nothing. */
-export const withoutAsking = (kept: readonly OwnDialog[], one: OwnDialog): OwnDialog[] => {
-  const at = kept.findIndex(a => a.mod === one.mod && a.dialog === one.dialog)
+/** The kept dialogs with one entry for that dialog taken out; one never kept changes nothing. */
+export const withoutDialog = (kept: readonly string[], dialog: string): string[] => {
+  const at = kept.indexOf(dialog)
   return at < 0 ? [...kept] : [...kept.slice(0, at), ...kept.slice(at + 1)]
+}
+
+// Read, change and write with ifVersion, again on a miss, so two dialogs opened or closed at once
+// never lose each other's entry (assume it runs twice).
+const changeOwn = async (own: OwnState, fn: (kept: readonly string[]) => string[]): Promise<void> => {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const kept = await own.read()
+    const r = await own.write(fn(Array.isArray(kept.value) ? kept.value.filter(x => typeof x === 'string') : []), kept.version)
+    if (r.isSet) return
+  }
+  throw new Error('its open dialogs changed under every one of 10 attempts to update them')
 }
 
 // A record that cannot be kept, and a dialog that could not be said to be the mod's own, are each
@@ -216,11 +232,11 @@ export const resetAskedSaid = (): void => {
 }
 
 /**
- * Asks a question through the mod's own dialog, recording its size first and saying the dialog is
- * the mod's own for as long as it is open. The one way a mod calls $.ui.ask (the scan holds every
- * call to this line): the question is asked whatever the record says, whether or not it could be
- * kept and whether or not mod-kit could be told, and the dialog's own answer or rejection is the
- * caller's, untouched.
+ * Asks a question through the mod's own dialog, recording its size first and keeping the dialog in
+ * the mod's own state for as long as it is open. The one way a mod calls $.ui.ask (the scan holds
+ * every call to this line): the question is asked whatever the record says, whether or not it
+ * could be kept and whether or not the dialog could be said to be the mod's own, and the dialog's
+ * own answer or rejection is the caller's, untouched.
  */
 export const recordedAsk = async (io: AskedIo, mod: string, which: string, question: string, options?: AskedOptions): Promise<string> => {
   const why = await recordAsked(io, mod, which, question, options)
@@ -235,7 +251,7 @@ export const recordedAsk = async (io: AskedIo, mod: string, which: string, quest
   const dialog = dialogOf(question, options)
   let isOwnSaid = false
   try {
-    await io.asking(dialog)
+    await changeOwn(io.own, kept => withDialog(kept, dialog))
     isOwnSaid = true
   } catch (err) {
     if (!saidOwnOnce) {
@@ -252,6 +268,6 @@ export const recordedAsk = async (io: AskedIo, mod: string, which: string, quest
   } finally {
     // Taken back on every way out. One that cannot be leaves an entry that covers this dialog's
     // exact words only, for the rest of the session.
-    if (isOwnSaid) await io.answered(dialog).catch(() => undefined)
+    if (isOwnSaid) await changeOwn(io.own, kept => withoutDialog(kept, dialog)).catch(() => undefined)
   }
 }

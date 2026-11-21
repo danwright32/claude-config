@@ -1,7 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
-import type { Register } from 'claude-code'
-import { ASKED_KEEP, type AskedIo, askedDir, askedOf, askingRefusal, dialogOf, ENGINE_CHIP, dialogOfCall, isOwnDialog, recordedAsk, resetAskedSaid, withAsking, withoutAsking } from '../hooks/asked.ts'
+import { ASKED_KEEP, type Asked, type AskedIo, askedDir, askedOf, dialogOf, ENGINE_CHIP, dialogOfCall, isOwnDialog, OWN_ASKERS, OWN_KEY, recordedAsk, resetAskedSaid, withDialog, withoutDialog } from '../hooks/asked.ts'
 import { MAX_QUESTION } from '../hooks/shown.ts'
 
 // A question a mod asks Dan through its own dialog is counted before any limit is put on it
@@ -9,9 +8,9 @@ import { MAX_QUESTION } from '../hooks/shown.ts'
 // word of it. These hold the record's shape, that the question is asked whatever happens to the
 // record, the bound on how many are kept, and that a record that cannot be kept is said.
 
-type World = { files: Map<string, string>; ran: string[][]; asked: { question: string; options: unknown }[]; said: string[]; now: number; io: AskedIo; failWrite?: string; noDir?: boolean; home?: string | undefined; order: string[]; own: string[]; failAsking?: string }
+type World = { files: Map<string, string>; ran: string[][]; asked: { question: string; options: unknown }[]; said: string[]; now: number; io: AskedIo; failWrite?: string; noDir?: boolean; home?: string | undefined; order: string[]; own: string[]; ownValue: readonly string[] | undefined; ownVersion: number; misses: number; failAsking?: string }
 const world = (): World => {
-  const w: World = { files: new Map(), ran: [], asked: [], said: [], now: 1_800_000_000_000, home: '/Users/x', io: undefined as never, order: [], own: [] }
+  const w: World = { files: new Map(), ran: [], asked: [], said: [], now: 1_800_000_000_000, home: '/Users/x', io: undefined as never, order: [], own: [], ownValue: undefined, ownVersion: 0, misses: 0 }
   w.io = {
     now: async () => w.now++,
     home: async () => w.home,
@@ -32,21 +31,33 @@ const world = (): World => {
       w.asked.push({ question, options })
       return 'Go ahead'
     },
-    asking: async dialog => {
-      if (w.failAsking) throw new Error(w.failAsking)
-      w.order.push('asking')
-      w.own.push(dialog)
-    },
-    answered: async dialog => {
-      w.order.push('answered')
-      w.own.splice(w.own.indexOf(dialog), 1)
+    // The mod's own state for its open dialogs, as $.state keeps a value: with a version, written
+    // only at the version read. `misses` makes that many writes miss, as another write in between does.
+    own: {
+      read: async () => {
+        if (w.failAsking) throw new Error(w.failAsking)
+        return { value: w.ownValue, version: w.ownVersion }
+      },
+      write: async (value, ifVersion) => {
+        if (w.misses > 0) {
+          w.misses--
+          w.ownVersion++
+          return { isSet: false }
+        }
+        if (ifVersion !== w.ownVersion) return { isSet: false }
+        w.order.push(value.length > w.own.length ? 'kept' : 'taken back')
+        w.own = [...value]
+        w.ownValue = [...value]
+        w.ownVersion++
+        return { isSet: true }
+      },
     },
     said: line => void w.said.push(line),
   }
   resetAskedSaid()
   return w
 }
-const records = (w: World) => [...w.files.entries()].map(([path, text]) => ({ path, ...(JSON.parse(text) as Record<string, unknown>) }))
+const records = (w: World): (Asked & { path: string })[] => [...w.files.entries()].map(([path, text]) => ({ ...(JSON.parse(text) as Asked), path }))
 
 test('the record holds sizes and which question, and never a word of it', async () => {
   const w = world()
@@ -152,9 +163,8 @@ test('the folder is bounded: past the most kept, the oldest go, and only files t
 
 // #3321: a question a mod asks through its own dialog reaches every hook on AskUserQuestion like a
 // session's picker, with nothing on it saying a mod raised it (seen on Claude Code 2.1.330). So the
-// asking mod says so first, through mod-kit ($.modkit.asking), which keeps the dialog in its own
-// $.state until it is answered. $.state is written by its owner alone and a noun is called by a
-// mod's code alone, so a session, which has only tools, can put nothing there.
+// asking mod says so itself: it keeps the dialog in its own $.state for as long as it is open.
+// $.state is written by its owner alone, so a session, which has only tools, can put nothing there.
 const CALL = { tool: 'AskUserQuestion', tool_use_id: 'toolu_x', questions: [{ question: 'o/r#7: Keep the old flag?', header: 'Before bed', options: [{ label: 'Keep it', description: '' }, { label: 'Drop it', description: '' }], multiSelect: false }] }
 
 test('a dialog reads the same from what the mod asked and from the call a hook is handed', () => {
@@ -190,33 +200,33 @@ test("a call shaped as no mod's own dialog is never read as one", () => {
   expect(dialogOfCall({})).toBeUndefined()
 })
 
-test('a call is a mod own dialog only while that very dialog is kept as being asked', () => {
+test('a call is a mod own dialog only while that very dialog is kept as open', () => {
   const dialog = dialogOf('o/r#7: Keep the old flag?', { options: ['Keep it', 'Drop it'], header: 'Before bed' })
-  const kept = withAsking([], { mod: 'scope-modes', dialog })
+  const kept = withDialog([], dialog)
   expect(isOwnDialog(kept, CALL)).toBe(true)
-  // Nothing kept, another dialog kept, or a state that is not a list: a session's picker.
+  // Nothing kept, another dialog kept, or a state that is no list of dialogs: a session's picker.
   expect(isOwnDialog([], CALL)).toBe(false)
   expect(isOwnDialog(undefined, CALL)).toBe(false)
-  expect(isOwnDialog('x' as never, CALL)).toBe(false)
-  expect(isOwnDialog(withAsking([], { mod: 'scope-modes', dialog: dialogOf('Another?', ['Yes', 'No']) }), CALL)).toBe(false)
+  expect(isOwnDialog('x', CALL)).toBe(false)
+  expect(isOwnDialog([{ dialog }], CALL)).toBe(false)
+  expect(isOwnDialog(withDialog([], dialogOf('Another?', ['Yes', 'No'])), CALL)).toBe(false)
   expect(isOwnDialog(kept, { ...CALL, metadata: { source: 'x' } })).toBe(false)
   // Two of the same dialog open at once are kept twice, and one answered leaves the other.
-  const twice = withAsking(kept, { mod: 'scope-modes', dialog })
+  const twice = withDialog(kept, dialog)
   expect(twice.length).toBe(2)
-  expect(isOwnDialog(withoutAsking(twice, { mod: 'scope-modes', dialog }), CALL)).toBe(true)
-  expect(withoutAsking(withoutAsking(twice, { mod: 'scope-modes', dialog }), { mod: 'scope-modes', dialog })).toEqual([])
-  // Another mod's entry for the same words is its own, and taking back one never kept changes nothing.
-  expect(withoutAsking(kept, { mod: 'keystroke-guard', dialog })).toEqual(kept)
-  expect(askingRefusal({ mod: 'scope-modes', dialog })).toBeUndefined()
-  expect(askingRefusal({ mod: '', dialog })).toContain('needs mod and dialog')
-  expect(askingRefusal({ mod: 'scope-modes', dialog: 7 })).toContain('needs mod and dialog')
-  expect(askingRefusal(undefined)).toContain('needs mod and dialog')
+  expect(isOwnDialog(withoutDialog(twice, dialog), CALL)).toBe(true)
+  expect(withoutDialog(withoutDialog(twice, dialog), dialog)).toEqual([])
+  // Taking back one never kept changes nothing.
+  expect(withoutDialog(kept, 'another')).toEqual(kept)
+  // The mods a reader looks at, and the key, are named once, here.
+  expect([...OWN_ASKERS]).toEqual(['scope-modes', 'keystroke-guard'])
+  expect(OWN_KEY).toBe('asking')
 })
 
-test('the mod says the dialog is its own before it asks, and takes that back once it is answered or dismissed', async () => {
+test('the mod keeps the dialog as its own before it asks, and takes it back once it is answered or dismissed', async () => {
   const w = world()
   expect(await recordedAsk(w.io, 'scope-modes', 'bedtime', 'Keep?', { options: ['Yes', 'No'], header: 'Before bed' })).toBe('Go ahead')
-  expect(w.order).toEqual(['asking', 'ask', 'answered'])
+  expect(w.order).toEqual(['kept', 'ask', 'taken back'])
   expect(w.own).toEqual([])
   const v = world()
   let during: string[] = []
@@ -228,59 +238,36 @@ test('the mod says the dialog is its own before it asks, and takes that back onc
   expect(v.own).toEqual([])
 })
 
+test('a write that misses because the state moved is made again, so no dialog is lost', async () => {
+  const w = world()
+  w.ownValue = ['another dialog, open at the same time']
+  w.own = [...w.ownValue]
+  w.misses = 3
+  let during: string[] = []
+  w.io = { ...w.io, ask: async () => { during = [...w.own]; return 'Go ahead' } }
+  expect(await recordedAsk(w.io, 'scope-modes', 'bedtime', 'Keep?', ['Yes', 'No'])).toBe('Go ahead')
+  expect(during).toEqual(['another dialog, open at the same time', dialogOf('Keep?', ['Yes', 'No'])])
+  expect(w.own).toEqual(['another dialog, open at the same time'])
+})
+
 test('a dialog that could not be said to be its own is asked all the same, said once, and nothing is taken back', async () => {
   const w = world()
-  w.failAsking = '$.modkit.asking is not a function'
+  w.failAsking = 'the state could not be read'
   expect(await recordedAsk(w.io, 'scope-modes', 'bedtime', 'Keep?', ['Yes', 'No'])).toBe('Go ahead')
   expect(await recordedAsk(w.io, 'scope-modes', 'bedtime', 'Keep?', ['Yes', 'No'])).toBe('Go ahead')
   expect(w.order).toEqual(['ask', 'ask'])
   expect(w.said.length).toBe(1)
-  expect(w.said[0]).toContain('scope-modes could not say a question it asked is its own ($.modkit.asking is not a function)')
+  expect(w.said[0]).toContain('scope-modes could not say a question it asked is its own (the state could not be read)')
   expect(w.said[0]).toContain('is refused')
+  // A state that moves under every attempt is said the same way, and the question still asked.
+  const m = world()
+  m.misses = 99
+  expect(await recordedAsk(m.io, 'scope-modes', 'bedtime', 'Keep?', ['Yes', 'No'])).toBe('Go ahead')
+  expect(m.said[0]).toContain('changed under every one of 10 attempts')
   // A taking back that fails never costs the answer.
   const v = world()
-  v.io = { ...v.io, answered: async () => { throw new Error('no state') } }
+  const write = v.io.own.write
+  let writes = 0
+  v.io = { ...v.io, own: { read: v.io.own.read, write: async (value, ifVersion) => { if (++writes > 1) throw new Error('no state'); return write(value, ifVersion) } } }
   expect(await recordedAsk(v.io, 'scope-modes', 'bedtime', 'Keep?', ['Yes', 'No'])).toBe('Go ahead')
-})
-
-// The nouns themselves, called from another plugin as a mod calls them, and the state read as
-// picker manners reads it. A plugin in a test runs apart from this module, so the stand in is
-// driven by Bash commands and answers through its refusal.
-const asker: { name: string; register: Register } = {
-  name: 'asker',
-  register: on => {
-    on('tool.call', { tool: 'Bash' }, async ($, e) => {
-      const [verb, ...rest] = String((e as { command?: string }).command).split(' ')
-      const input = rest.length ? JSON.parse(rest.join(' ')) : undefined
-      try {
-        if (verb === 'asking') await $.modkit.asking(input)
-        if (verb === 'answered') await $.modkit.answered(input)
-        // What only mod-kit may do: the engine refuses another plugin's write of its state.
-        if (verb === 'forge') await $.state.set({ plugin: 'mod-kit', key: 'asking' } as never, input as never)
-      } catch (err) {
-        return { deny: `threw: ${err instanceof Error ? err.message : String(err)}` }
-      }
-      return { deny: JSON.stringify((await $.state.get({ plugin: 'mod-kit', key: 'asking' })).value ?? null) }
-    })
-  },
-}
-
-test('$.modkit.asking keeps a dialog as being asked until $.modkit.answered, and only mod-kit can write it', { plugins: [asker] }, async $ => {
-  const run = async (command: string) => String(((await $.tool.call({ tool: 'Bash', command } as never)) as { deny?: string }).deny)
-  const one = { mod: 'scope-modes', dialog: dialogOf('Keep?', ['Yes', 'No']) }
-  const two = { mod: 'keystroke-guard', dialog: dialogOf('Ready?', ['Go ahead', 'Not now']) }
-  expect(await run('read')).toBe('null')
-  expect(JSON.parse(await run(`asking ${JSON.stringify(one)}`))).toEqual([one])
-  expect(JSON.parse(await run(`asking ${JSON.stringify(two)}`))).toEqual([one, two])
-  expect(JSON.parse(await run(`asking ${JSON.stringify(one)}`))).toEqual([one, two, one])
-  expect(JSON.parse(await run(`answered ${JSON.stringify(one)}`))).toEqual([two, one])
-  expect(JSON.parse(await run(`answered ${JSON.stringify(two)}`))).toEqual([one])
-  expect(JSON.parse(await run(`answered ${JSON.stringify(one)}`))).toEqual([])
-  // One never kept is fine to take back; an input missing a part is refused by name.
-  expect(JSON.parse(await run(`answered ${JSON.stringify(one)}`))).toEqual([])
-  expect(await run(`asking ${JSON.stringify({ mod: 'scope-modes' })}`)).toContain('threw: ')
-  expect(await run(`asking ${JSON.stringify({ mod: 'scope-modes' })}`)).toContain('$.modkit.asking needs mod and dialog')
-  // The guarantee the whole mark rests on, measured: a plugin that is not mod-kit cannot write it.
-  expect(await run(`forge ${JSON.stringify([one])}`)).toContain('threw: ')
-  expect(await run('read')).toBe('[]')
 })
