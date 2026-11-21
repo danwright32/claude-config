@@ -81,6 +81,7 @@ import {
   defaultBranchRef,
   beyondDefault,
   onDefaultSaid,
+  MAINLINE_PICKS_MAX,
   MOVE_FILES_MAX,
   MOVE_ALONE_REMEDY,
   MOVE_FETCH_REMEDY,
@@ -523,14 +524,54 @@ const filesUnder = async ($: EngineInterface, folder: string): Promise<{ tree: s
   }
 }
 
+// #3337: where a question is put to git. A checkout's folder (`git -C <folder>`), or, for a command
+// that names its repository or its working folder apart from the folder it runs in, the options the
+// command itself is read with, each value written out whole (`-C <folder> --git-dir=<repository>
+// --work-tree=<folder>`), so git answers for the repository the command means and no other.
+type GitAt = string | readonly string[]
+
+// #3337: the repository a git command names apart from the folder it runs in (mod-kit's `gitDir` and
+// `workTree`: --git-dir, --work-tree, GIT_DIR, GIT_WORK_TREE), as where to put the guard's questions
+// (`at`) and the folder its files land in (`tree`), which git itself is asked for (`rev-parse
+// --show-toplevel`) with the command's own naming, never worked out here: measured with git 2.51.1,
+// with only the repository named that is the folder the command runs in, with only the working
+// folder named the repository is the one found from that folder, and a relative value is read from
+// the folder -C names. Undefined for a command naming neither. Why not, so the command is held,
+// where the guard cannot tell: a value the shell fills in or an empty one, and a repository git
+// cannot answer for (none there, one with no working folder, an answer that is no one folder).
+const namedApart = async ($: EngineInterface, g: { gitDir?: string; workTree?: string }, dir: string, home: string): Promise<{ at: GitAt; tree: string } | { why: string } | undefined> => {
+  if (g.gitDir === undefined && g.workTree === undefined) return undefined
+  const at: string[] = ['-C', dir]
+  // A value as the folder it names, or why it names none the guard can follow.
+  const followed = (value: string, what: string): string | { why: string } =>
+    value === '' || /[$`*?[\]]/.test(value.replace(/^\$(?:HOME|\{HOME\})(?=\/|$)/, ''))
+      ? { why: `it names its ${what} as ${value === '' ? 'nothing' : value}, which the guard cannot follow to a folder` }
+      : resolvePath(value, dir, home)
+  if (g.gitDir !== undefined) {
+    const repository = followed(g.gitDir, 'repository')
+    if (typeof repository !== 'string') return repository
+    at.push(`--git-dir=${repository}`)
+  }
+  if (g.workTree !== undefined) {
+    const folder = followed(g.workTree, 'working folder')
+    if (typeof folder !== 'string') return folder
+    at.push(`--work-tree=${folder}`)
+  }
+  const top = await askGit($, at, ['rev-parse', '--show-toplevel'])
+  const tree = 'out' in top ? top.out.replace(/\n$/, '') : ''
+  if (!tree.startsWith('/') || tree.includes('\n')) return { why: `git could not say which repository and working folder it means: ${'why' in top ? top.why : 'git rev-parse --show-toplevel named no one folder'}` }
+  return { at, tree: plainPath(tree) }
+}
+
 // #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): one read only question to git about a
 // move, in the checkout it runs in. Never a command that changes anything: rev-parse, diff
-// --name-status, log --no-walk, for-each-ref, ls-tree and merge-base only. Why not, in words, where
-// git cannot say: it fails, cannot run, runs past its time, or prints more than can be read whole.
-const askGit = async ($: EngineInterface, tree: string, args: string[]): Promise<{ out: string } | { why: string; code?: number }> => {
+// --name-status, log --no-walk, rev-list --no-walk, for-each-ref, ls-tree and merge-base only. Why
+// not, in words, where git cannot say: it fails, cannot run, runs past its time, or prints more than
+// can be read whole. `at` is where the question is put (GitAt, #3337).
+const askGit = async ($: EngineInterface, at: GitAt, args: string[]): Promise<{ out: string } | { why: string; code?: number }> => {
   const said = `git ${args.join(' ')}`
   try {
-    const r = await $.process.run(['git', '-C', tree, ...args], { timeoutMs: 5000 })
+    const r = await $.process.run(['git', ...(typeof at === 'string' ? ['-C', at] : at), ...args], { timeoutMs: 5000 })
     if (r.exitCode !== 0) return { why: `${said} exited ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'with no message'}`, code: r.exitCode }
     if (r.isStdoutTruncated) return { why: `${said} printed more than could be read whole` }
     return { out: r.stdout }
@@ -540,8 +581,8 @@ const askGit = async ($: EngineInterface, tree: string, args: string[]): Promise
 }
 
 // The commit a name is, as git knows it in this checkout, or why git does not know it here.
-const commitOf = async ($: EngineInterface, tree: string, name: string): Promise<{ sha: string } | { why: string; remedy?: string }> => {
-  const r = await askGit($, tree, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`])
+const commitOf = async ($: EngineInterface, at: GitAt, name: string): Promise<{ sha: string } | { why: string; remedy?: string }> => {
+  const r = await askGit($, at, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`])
   if ('out' in r && /^[0-9a-f]{40,64}$/.test(r.out.trim())) return { sha: r.out.trim() }
   // rev-parse --verify --quiet says nothing and exits 1 for a name that is no commit here.
   if ('code' in r && r.code === 1) return { why: `git does not know ${name} as a commit in this checkout`, remedy: MOVE_FETCH_REMEDY }
@@ -590,8 +631,9 @@ const beyondDefaultBranch = async ($: EngineInterface, tree: string, commit: str
 // git puts back from the index. Why not, where git cannot say, with what to do instead where there
 // is something: a commit git does not know here is fetched first. `merged` takes out of what a merge
 // or a rebase onto an upstream brings in the files not to ask about (beyondDefaultBranch); no other
-// move's files go through it.
-const moveFiles = async ($: EngineInterface, tree: string, ask: MoveAsk, merged: (commit: string, files: MovedFile[]) => Promise<MovedFile[]>): Promise<{ files: MovedFile[] } | { restore: string } | { why: string; remedy?: string }> => {
+// move's files go through it. Since #3337 `tree` is where each question is put (GitAt): the
+// checkout's folder, or the command's own naming of its repository.
+const moveFiles = async ($: EngineInterface, tree: GitAt, ask: MoveAsk, merged: (commit: string, files: MovedFile[]) => Promise<MovedFile[]>): Promise<{ files: MovedFile[] } | { restore: string } | { why: string; remedy?: string }> => {
   const diffed = async (args: string[], from: string): Promise<{ files: MovedFile[] } | { why: string }> => {
     const r = await askGit($, tree, ['diff', '--name-status', '-z', '--no-renames', ...args])
     if ('why' in r) return { why: r.why }
@@ -614,6 +656,24 @@ const moveFiles = async ($: EngineInterface, tree: string, ask: MoveAsk, merged:
     if ('why' in commit) return commit
     // A hard reset writes the commit over the working tree; a switch carries what is uncommitted with it.
     return diffed(ask.worktree ? ['-R', commit.sha] : ['HEAD', commit.sha], commit.sha)
+  }
+  if (ask.ask === 'picks' && ask.mainline !== undefined) {
+    // #3337: with a mainline number past the first, each commit the command names (a range walked
+    // as cherry-pick walks it) is read against that parent, turned round for a revert, which puts
+    // back what the parent held. A commit with no such parent is one git cannot answer for: held.
+    const listed = await askGit($, tree, ['rev-list', '--no-walk', ...ask.revs, '--'])
+    if ('why' in listed) return { why: listed.why, ...(listed.code === 128 ? { remedy: MOVE_FETCH_REMEDY } : {}) }
+    const shas = listed.out.split('\n').filter(Boolean)
+    if (shas.some(sha => !/^[0-9a-f]{40,64}$/.test(sha))) return { why: 'git rev-list printed what the guard could not read as a list of commits' }
+    if (shas.length > MAINLINE_PICKS_MAX) return { why: `it names ${shas.length} commits with a mainline number, more than the ${MAINLINE_PICKS_MAX} the guard reads one by one` }
+    const files: MovedFile[] = []
+    for (const sha of shas) {
+      const parent = `${sha}^${ask.mainline}`
+      const got = await diffed(ask.revert ? [sha, parent] : [parent, sha], ask.revert ? parent : sha)
+      if ('why' in got) return { why: `git could not read commit ${sha.slice(0, 12)} against its parent ${ask.mainline}, the one the mainline number names: ${got.why}` }
+      files.push(...got.files)
+    }
+    return { files }
   }
   if (ask.ask === 'picks') {
     const r = await askGit($, tree, ['log', '--no-walk', '--format=%x01%H', '--name-status', '-z', '--no-renames', '-m', '--first-parent', ...ask.revs, '--'])
@@ -662,7 +722,8 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
   if (!/\bgit\b/.test(command)) return { targets, restores }
   const commands = (await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) as readonly RunCommand[]
   const gits: (Awaited<ReturnType<typeof $.modkit.git>> | undefined)[] = []
-  for (const c of commands) gits.push((c.words[0] ?? '').split('/').pop() === 'git' ? await $.modkit.git({ words: [...c.words] }) : undefined)
+  // With the settings each command runs with (#3337), which may name its repository (GIT_DIR, GIT_WORK_TREE).
+  for (const c of commands) gits.push((c.words[0] ?? '').split('/').pop() === 'git' ? await $.modkit.git({ words: [...c.words], ...(c.env ? { env: [...c.env] } : {}) }) : undefined)
   const look = (p: string) => shapeKind(p) !== null || isModHookTs(p)
   for (const [i, c] of commands.entries()) {
     const g = gits[i]
@@ -679,13 +740,22 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
     }
     const folder = c.folder ?? at.cwd
     const dir = g.dir === undefined ? folder : resolvePath(g.dir, folder, at.home)
-    let tree: string | null
-    try {
-      tree = await $.modkit.workingTree({ path: dir })
-    } catch (err) {
-      held(`the disk could not say which checkout ${dir} is in: ${message(err)}`)
+    // #3337: a command naming its repository or working folder apart is asked about with that
+    // naming, and its files land where git says; one the guard cannot tell the repository of is held.
+    const apart = await namedApart($, g, dir, at.home)
+    if (apart !== undefined && 'why' in apart) {
+      held(apart.why)
       continue
     }
+    let tree: string | null
+    if (apart !== undefined) tree = apart.tree
+    else
+      try {
+        tree = await $.modkit.workingTree({ path: dir })
+      } catch (err) {
+        held(`the disk could not say which checkout ${dir} is in: ${message(err)}`)
+        continue
+      }
     if (tree === null) continue
     const first = commands.slice(0, i).findIndex((b, j) => b.words[0] !== 'cd' && !leavesGitAlone(b.words, gits[j] ?? undefined) && !pathRestore(gits[j] ?? undefined))
     if (first >= 0) {
@@ -694,13 +764,19 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
       held(`\`${before.words.slice(0, 6).join(' ')}\` runs before it in the same command and may change what it brings in`, fetches ? MOVE_FETCH_REMEDY : MOVE_ALONE_REMEDY)
       continue
     }
-    const got = await moveFiles($, tree, move.ask, (commit, files) => beyondDefaultBranch($, tree, commit, files, look, move.said))
+    // What is on the default branch is skipped only for a move read in the checkout it runs in
+    // (#3337): the default branch is mod-kit's reading of the checkout on disk, which is not asked
+    // of a repository named apart, so every file such a move brings in is asked about.
+    const got = await moveFiles($, apart?.at ?? tree, move.ask, apart !== undefined ? async (_commit, files) => files : (commit, files) => beyondDefaultBranch($, tree, commit, files, look, move.said))
     if ('why' in got) {
       held(got.why, got.remedy)
       continue
     }
     if ('restore' in got) {
-      restores.push({ word: got.restore, path: resolvePath(got.restore, dir, at.home) })
+      // git reads a path from the folder the command runs in, or, told its working folder, from
+      // that folder's top when the command runs outside it (#3337, measured with git 2.51.1).
+      const from = apart === undefined || dir === tree || dir.startsWith(`${tree}/`) ? dir : tree
+      restores.push({ word: got.restore, path: resolvePath(got.restore, from, at.home) })
       continue
     }
     const files = got.files.filter(f => look(`${tree}/${f.rel}`))
