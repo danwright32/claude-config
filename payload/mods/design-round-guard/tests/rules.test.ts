@@ -3122,6 +3122,10 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
   expect(pathRestore({ sub: 'checkout', args: ['HEAD', '--', 'f'] })).toBe(true)
   expect(pathRestore({ sub: 'checkout', args: ['main', 'f'] })).toBe(true)
   expect(pathRestore({ sub: 'checkout', args: ['main'] })).toBe(false)
+  // A `--` with nothing after it names no path, so the checkout switches branch and is no
+  // restore, as gitMove reads it (lessons review of 371124a).
+  expect(pathRestore({ sub: 'checkout', args: ['main', '--'] })).toBe(false)
+  expect(pathRestore({ sub: 'checkout', args: ['--'] })).toBe(false)
   expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
   expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
   expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])

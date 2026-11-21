@@ -1201,6 +1201,7 @@ test('#3279: a move the guard cannot read before it runs is held, saying how to 
   knows(w, 'origin/main', C1)
   knows(w, 'other-branch', C1)
   w.gitSays[`/w/slate ${DIFF} HEAD...${C1}`] = 'M\0docs/notes.md\0'
+  w.gitSays[`/w/slate ${DIFF} HEAD ${C1}`] = 'M\0docs/notes.md\0'
   const FETCH = 'Run git fetch as its own command first, then this one on its own'
   const ALONE = 'Run it as its own command, with nothing before it on the line but cd and commands that only read'
   const wrong: string[] = []
@@ -1210,6 +1211,8 @@ test('#3279: a move the guard cannot read before it runs is held, saying how to 
     ['git commit -qm wip && git merge other-branch', '`git commit -qm wip` runs before it in the same command', ALONE],
     ['python3 gen.py; git merge other-branch', '`python3 gen.py` runs before it in the same command', ALONE],
     ['git merge other-branch && git merge origin/main', '`git merge other-branch` runs before it in the same command', ALONE],
+    // A checkout ending in `--` switches branch, so it holds a later move as any switch does.
+    ['git checkout other-branch -- && git merge origin/main', '`git checkout other-branch --` runs before it in the same command', ALONE],
     // A pull fetches before it merges.
     ['git pull', 'git pull fetches before it merges', 'Run git fetch as its own command first, then git merge (or git rebase) of the fetched branch on its own'],
     ['git pull --ff-only origin main', 'git pull fetches before it merges', 'Run git fetch as its own command first'],

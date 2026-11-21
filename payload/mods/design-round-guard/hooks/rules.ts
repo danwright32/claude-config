@@ -4013,7 +4013,11 @@ export const leavesGitAlone = (words: readonly string[], git: { sub: string | un
 export const pathRestore = (git: { sub: string | undefined; args: readonly string[] } | undefined): boolean => {
   if (git?.sub === 'restore') return true
   if (git?.sub !== 'checkout' || git.args.some(a => ['-b', '-B', '--orphan'].includes(a))) return false
-  return git.args.includes('--') || git.args.filter(a => !a.startsWith('-')).length >= 2
+  // Words after `--` are paths. A `--` with nothing after it names none: the checkout switches to
+  // the branch before it, which gitMove reads, so it is no restore.
+  const dashes = git.args.indexOf('--')
+  if (dashes >= 0) return dashes < git.args.length - 1
+  return git.args.filter(a => !a.startsWith('-')).length >= 2
 }
 
 /** Whether a restore's source, as `git cat-file blob <from>:<path>` reads it, is git's index or one side of a conflict in it (#2830). */
