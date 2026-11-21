@@ -510,6 +510,13 @@ gate_says refused "#3304 a function that evaluates the word it is handed, or run
 run() { eval "\$1"; }; run 'node --test test/notify.test.js'
 run() { bash -c "\$1"; }; run 'node --test test/notify.test.js'
 EOF
+# A body that pipes one word it is handed into a command NAMED by another runs that other word: the
+# pipe hands text to read, and the command's own name is still a word of a command. The first build
+# passed such a command over with the ones a pipe only feeds, looking at the words after the name
+# alone (the lessons review of this branch, 2026-11-21).
+gate_says refused "#3304 a function that pipes one word into a command named by another word it is handed runs that word" "command line of its own" 3<<EOF
+ask() { printf '%s' "\$2" | \$1; }; ask 'node --test test/notify.test.js' hello
+EOF
 gate_says refused "#3304 and the refusal is this rule's, by the words every refusal of it carries" "$KNOWS" 3<<EOF
 hyperfine 'node --test test/notify.test.js'
 EOF

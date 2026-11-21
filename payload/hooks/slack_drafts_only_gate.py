@@ -7118,8 +7118,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                        body[flow["part"][idx]["start"]:flow["part"][idx]["end"]])),
                    "env": lambda assigns=assigns: self.sh_env_code(assigns, body, names)}
             why = self.sh_command_acts(cmd, handed, defined, d, depth, around)
-            if why and not (around and around[2] and fed and not any(handed.search(w) for w in words[1:])):
-                return why  # with around's third part, not where the body only pipes it to the command
+            if why and not (around and around[2] and fed and not any(handed.search(w) for w in words)):
+                # With around's third part, not where the body only pipes it to the command. The
+                # command's own name counts with the words after it: `printf '%s' "$2" | $1` runs
+                # the first word the body was handed.
+                return why
             if not (takes or expands):
                 continue
             # It passed, holding what was handed: whatever it pipes on goes to the next command.

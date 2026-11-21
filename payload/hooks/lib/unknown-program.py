@@ -121,7 +121,8 @@ def make(judged_by_name, sh_redirect):
         starts_memo = {}  # {a word: whether it can start a command the gate reads}, one Judge a process
         funcs_memo = {}  # {a text: the names of the functions it defines}
         bodies_memo = {}  # {(a text, its folder): function_bodies's answer}
-        acts_memo = {}  # {(a text, its folder, a function's name): function_acts's answer}
+        # {(a text, its folder, a function's name, whether only words count): function_acts's answer}
+        acts_memo = {}
         lines_memo = {}  # {(a word, the folder): holds_command's answer}
 
         def starts_command(self, word):
