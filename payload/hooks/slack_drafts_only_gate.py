@@ -710,10 +710,14 @@ def py_import_line(text, at):
     line ends (a string that never closes), where a statement that starts with import or from is
     not one Python can parse, and where any other statement of the line holds the word import (a
     compound statement after a semicolon, which the line's statements cannot be told apart in)."""
-    src, lines = io.StringIO(text[at:], newline=None), []
+    lines, read = [], [at]
 
     def readline():
-        lines.append(src.readline())
+        # One line of the text at a time, from where it stands: a copy of the rest of the text for
+        # each import line would cost the square of a long file's length.
+        end = text.find("\n", read[0]) + 1 or len(text)
+        lines.append(text[read[0]:end])
+        read[0] = end
         return lines[-1]
 
     def offset(pos):
@@ -738,6 +742,8 @@ def py_import_line(text, at):
             cur.append(tok)
     except (tokenize.TokenError, SyntaxError, ValueError):
         return None
+    if re.search(r"\r(?!\n)", "".join(lines)):
+        return None  # a line ended by a bare return, which the tokenizer numbers as a line of its own
     if cur:
         statements.append(cur)
     out = []

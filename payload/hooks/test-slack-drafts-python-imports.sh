@@ -212,6 +212,25 @@ x = $start'
 refused "#3278 an import line inside a string of text Python cannot parse is still read"
 says "#3278 and the refusal names the helper" "helper_posts.py"
 
+echo "slack drafts python imports: line ends and long files (claude-config#3278)"
+
+# Lines ended as Windows ends them are read the same way.
+printf 'import time,sys; x = $start\r\nimport helper_ok,sys; y = $start\r\n' > "$I/crlf.py"
+run_i "python3 $I/crlf.py"
+allowed "#3278 lines ended by a return and a newline: a helper that only saves a draft"
+printf 'import time,sys; x = $start\r\nimport helper_posts,sys; y = $start\r\n' > "$I/crlf.py"
+run_i "python3 $I/crlf.py"
+refused "#3278 lines ended by a return and a newline: a helper that posts"
+says "#3278 and the refusal names the helper" "helper_posts.py"
+# A long file is read to its end: 3,000 such lines, the helper named on the last. This is no guard
+# on the cost of the reading, which was measured by hand once (2026-11-21, this suite's wall clock
+# with 30,000 lines against 3,000, one reading each, under load: 0.8 seconds more, about 30
+# millionths of a second a line).
+awk 'BEGIN { for (i = 0; i < 3000; i++) print "import time,sys; x" i " = $start  # " i; print "import sys,helper_posts; y = $start" }' > "$I/long.py"
+run_i "python3 $I/long.py"
+refused "#3278 a file of 3,000 import lines is read to its end: the helper that posts is on the last"
+says "#3278 and the refusal names the helper, not the time it ran out of" "helper_posts.py"
+
 echo
 
 echo "passed: $pass, failed: $fail"
