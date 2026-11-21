@@ -15,7 +15,8 @@ WHAT IT RECORDS AND CHECKS AGAIN (Recorder): everything else the judgement read.
 gate and its libraries make goes through one place, the stand ins install() puts in each one's
 namespace under the names os, glob, importlib, ast and open, so a new direct call such as os.path.isfile
 is recorded without anybody remembering to (L621). Each question is recorded with its answer: the
-bytes of each file read (as a hash), each file test (isfile, isdir, exists, lexists, islink), each
+bytes of each file read (as a hash; of a file larger than MAX_READ, the start the caller read, where
+one read of a start within MAX_READ is all it did, _Start), each file test (isfile, isdir, exists, lexists, islink), each
 realpath, size, access test, directory listing and walk, each glob, each import lookup, each
 environment variable read by a name only known at run time, and the home of each ~user expanded (from
 the password database, which the key does not hold). Before a kept judgement is used,
@@ -24,7 +25,8 @@ lookup() asks every one of them again and uses it only if every answer is the sa
 FAIL CLOSED. A judgement is kept only when it is an allow and the recording is whole: anything the
 stand ins do not know (an os attribute not classified here), any disk event Python raises outside
 them (an audit hook sees open, listdir, scandir, subprocesses and the rest, from any route), a file
-larger than MAX_READ, or a question answered two ways within one judgement marks it not keepable.
+larger than MAX_READ read any way but by one read of a start within MAX_READ (_Start), or a
+question answered two ways within one judgement marks it not keepable.
 Any doubt on the way back (an entry that cannot be read, is not an entry, is not signed with this
 cache's key, names an operation not listed here, or finds one answer changed) is a miss, and the call
 is judged afresh. A refusal is never kept, so the cache can only skip the work of an allow, never
@@ -68,7 +70,9 @@ FORMAT = 2  # 2: signed with the cache's key rather than checksummed (claude-con
 MAX_ENTRIES = 200
 MAX_ENTRY = 4 * 1024 * 1024  # bytes of one entry; a larger judgement is not kept
 MAX_TOTAL = 64 * 1024 * 1024  # bytes of all entries
-MAX_READ = 8 * 1024 * 1024  # a file larger than this is read as it always was, and nothing is kept
+# A file larger than this is read as it always was, and nothing is kept unless all the caller read
+# of it was one start no longer than this (_Start).
+MAX_READ = 8 * 1024 * 1024
 
 # The environment variables the gate and its libraries read by name. test-judgement-cache.sh fails
 # when a name read in their source is missing here. A variable read by a name worked out at run time
@@ -121,6 +125,15 @@ def _read_hash(path):
     return None if len(data) > MAX_READ else _sha(data)
 
 
+def _head_hash(path, size):
+    """The hash of a file's first size bytes, as one read of that many finds them (_Start). A size
+    no record of this cache holds (not a whole number, or past MAX_READ) is asked of nothing."""
+    if type(size) is not int or not 0 <= size <= MAX_READ:
+        raise ValueError("not a start this cache records")
+    with builtins.open(path, mode="rb") as f:
+        return _sha(f.read(size))
+
+
 def _dirsplit(top):
     """One directory as os.walk (topdown, no onerror, links not followed) splits it: [dirs, others].
     Raises OSError where os.walk skips the directory."""
@@ -150,7 +163,7 @@ OPS = {
     "dirsplit": (_dirsplit, None), "glob": (_glob.glob, None),
     "find_spec": (_util.find_spec, _spec_form),
     "pathfinder": (lambda name, dirs: _machinery.PathFinder.find_spec(name, list(dirs)), _spec_form),
-    "read": (_read_hash, None), "env": (_os.environ.get, None),
+    "read": (_read_hash, None), "head": (_head_hash, None), "env": (_os.environ.get, None),
     # A user's home by name, as ~name gives it (os.path.expanduser): read from the password database,
     # which no key holds, so a judgement that reads one is kept only while it is the same.
     "home": (lambda name: _os.path.expanduser("~" + name), None),
@@ -170,6 +183,67 @@ def _ask(op, args):
 def _normal(x):
     """x as JSON gives it back (tuples as lists), so a recorded and a fresh answer compare alike."""
     return json.loads(json.dumps(x))
+
+
+class _Start:
+    """A file larger than MAX_READ, opened to read bytes, as the caller of the stand in for open holds
+    it (pull request #3394). The gate reads the first 2 MB of any file it reads, so what a judgement
+    saw of a file this large is a start of it, and a start within MAX_READ is something the record
+    can hold: one read, the first thing asked, of a stated length within MAX_READ gives those bytes
+    and records them as ("head", file, length), asked again by _head_hash before a kept judgement is
+    used. Anything else asked of the file (a second read, a longer or unbounded one, a seek, a line)
+    marks the record not whole, as opening such a file always did, and is answered by the file
+    itself from where the caller had got to. Before this, `bash /bin/echo hi` in a script, where
+    /bin/echo is one program of over 8 MB (CI's Linux runner), meant the judgement was never kept."""
+
+    def __init__(self, recorder, file, data):
+        self._recorder, self._file, self._data = recorder, file, data
+        self._at, self._real, self._shut = 0, None, False
+
+    def read(self, size=-1):
+        if self._data is None or type(size) is not int or not 0 <= size <= MAX_READ:
+            return self._itself().read(size)
+        got, self._data, self._at = self._data[:size], None, size
+        answer = ["ok", _sha(got)]
+        if self._recorder.reads.setdefault(("head", self._file, size), answer) != answer:
+            self._recorder.taint(f"head {self._file!r} answered two ways in one judgement")
+        return got
+
+    def _itself(self):
+        """The file, opened where the caller had got to, once it is asked for more than one start."""
+        if self._real is None:
+            self._recorder.taint(f"{self._file} is larger than {MAX_READ} bytes")
+            self._data = None
+            self._recorder.inside += 1
+            try:
+                real = builtins.open(self._file, "rb")
+            finally:
+                self._recorder.inside -= 1
+            real.seek(self._at)
+            if self._shut:
+                real.close()  # asked after close(): the closed file says so, as any does
+            self._real = real
+        return self._real
+
+    def close(self):
+        self._data, self._shut = None, True
+        if self._real is not None:
+            self._real.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def __iter__(self):
+        return iter(self._itself())
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._itself(), name)
 
 
 class Recorder:
@@ -246,6 +320,8 @@ class Recorder:
                     self.taint(f"read {file!r} answered two ways in one judgement")
                 raise
             if len(data) > MAX_READ:
+                if mode == "rb" and encoding is None and errors is None and newline is None:
+                    return _Start(self, file, data)  # kept only if the caller reads one start of it
                 self.taint(f"{file} is larger than {MAX_READ} bytes")
                 return builtins.open(file, mode, buffering, encoding=encoding, errors=errors, newline=newline)
         finally:

@@ -4160,6 +4160,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
+A file of over 8 MB is recorded by the start the gate read of it (it reads the first 2 MB of any
+file), and the kept allow is used only while that start is the same; read any other way, such a file
+means nothing is kept. Before pull request #3394 it always meant that: once a quoted command line
+is read as a command (#3304), `bash tests/test-claude-sync.sh` reaches `bash /bin/echo hi`, and on
+CI's Linux runner, where /bin/echo is one program of over 8 MB, it was judged whole every time.
 Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper

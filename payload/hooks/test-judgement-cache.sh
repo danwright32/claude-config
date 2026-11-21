@@ -188,6 +188,49 @@ with gate.open(os.path.join(work, "t", "a", "f.txt"), "rb") as f:
     expect("a file past MAX_READ is still read whole", f.read() == b"hello\n")
 jc.MAX_READ = was
 expect("a file past MAX_READ marks the record: %r" % rec4.tainted, rec4.tainted and "larger" in rec4.tainted)
+# A file past MAX_READ of which the caller reads only a start, by one read of a stated length within
+# MAX_READ, is recorded as that start (pull request #3394): the gate reads the first 2 MB of any
+# file, and a judgement that read the start of a program of over 8 MB was never kept. Anything else
+# done with such a file (a second read, a longer one, text mode) marks the record as before.
+head_path = os.path.join(work, "t", "a", "f.txt")
+rec7 = jc.Recorder()
+jc.install(rec7, [vars(gate)])
+was, jc.MAX_READ = jc.MAX_READ, 3
+with gate.open(head_path, "rb") as f:
+    expect("one read of a start of a file past MAX_READ gives that start", f.read(2) == b"he")
+expect("and the record holds that start and is not marked: %r, %r" % (rec7.tainted, sorted(rec7.reads)),
+       rec7.tainted is None and ("head", head_path, 2) in rec7.reads and ("read", head_path) not in rec7.reads)
+kept_head = [[k[0], list(k[1:]), a] for k, a in rec7.reads.items() if k[0] == "head"]
+rec8 = jc.Recorder()
+jc.install(rec8, [vars(gate)])
+with gate.open(head_path, "rb") as f:
+    expect("a second read of a file past MAX_READ still gives its bytes", f.read(2) + f.read(1) == b"hel")
+expect("and marks the record: %r" % rec8.tainted, rec8.tainted and "larger" in rec8.tainted)
+rec9 = jc.Recorder()
+jc.install(rec9, [vars(gate)])
+with gate.open(head_path, "rb") as f:
+    expect("a read longer than MAX_READ still gives its bytes", f.read(4) == b"hell")
+expect("and marks the record: %r" % rec9.tainted, rec9.tainted and "larger" in rec9.tainted)
+rec10 = jc.Recorder()
+jc.install(rec10, [vars(gate)])
+with gate.open(head_path, encoding="utf-8") as f:
+    expect("a file past MAX_READ opened as text still gives its text", f.read(2) == "he")
+expect("and marks the record: %r" % rec10.tainted, rec10.tainted and "larger" in rec10.tainted)
+jc.MAX_READ = was
+expect("asked again with the file as it was, the recorded start answers the same: %r" % jc.changed(kept_head),
+       len(kept_head) == 1 and jc.changed(kept_head) is None)
+with builtins.open(head_path, "wb") as f:
+    f.write(b"heXXX and more\n")
+expect("a change past the recorded start is no change to it: %r" % jc.changed(kept_head), jc.changed(kept_head) is None)
+with builtins.open(head_path, "wb") as f:
+    f.write(b"jello\n")
+expect("a change inside the recorded start answers differently: %r" % jc.changed(kept_head),
+       "answers differently now" in (jc.changed(kept_head) or ""))
+with builtins.open(head_path, "wb") as f:
+    f.write(b"hello\n")
+too_long = [["head", [head_path, jc.MAX_READ + 1], ["ok", jc._sha(b"hello\n")]]]
+expect("a recorded start longer than MAX_READ is not one this cache asks again: %r" % jc.changed(too_long),
+       "answers differently now" in (jc.changed(too_long) or ""))
 # importlib.util.module_from_spec is where a compiled extension's file is loaded from the disk, by
 # the system's loader, with no open and no event the audit hook reads (claude-config#3151): passed
 # through as pure, a judgement that made one could be kept with that file nowhere in its record.

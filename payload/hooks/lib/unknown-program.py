@@ -309,8 +309,12 @@ def make(judged_by_name, sh_redirect):
                 return None
             rest = self.rest_of(text)[0]
             words = self.words_of(rest)
-            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(OPTION.sub("", w, 1), d, depth)
-                                         for w in words[1:]):
+            # White space is asked of the word here, before its option name is cut off and
+            # holds_command is called: this line runs for every word of every command a script
+            # holds, most words hold none, and cutting `--name=` off adds none.
+            if len(words) < 2 or not any(
+                    self.starts_command(w) or (WHITE.search(w) and self.holds_command(OPTION.sub("", w, 1), d, depth))
+                    for w in words[1:]):
                 return None
             name = os.path.basename(words[0])
             runs = None if judged_by_name(name) else self.may_run_its_words(words, d, depth)

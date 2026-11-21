@@ -5841,6 +5841,38 @@ printf '%s\n' 'URL = "https://slack.com/api/chat.postMessage"' 'print(URL)' >> "
 jc_run "python3 $JC/prose.py"
 refused "once that script names the endpoint in a string it can send, the same command is refused"
 traced "the kept judgement is not used once the script has changed (#3255)" "miss: read" "answers differently now"
+# A file larger than the cache reads whole (lib/judgement-cache.py's MAX_READ) made its judgement one
+# the cache could not keep, though the gate reads only the start of any file. A quoted command line
+# handed to a function that runs it is read as a command (lib/unknown-program.py, #3304), and the
+# claude-sync suite holds `check_expr_shape "... bash /bin/echo hi"`: on CI's Linux runner /bin/echo
+# is one program of over 8 MB, so `bash tests/test-claude-sync.sh` was judged whole every time it was
+# asked, about 61 units against the 6 a kept judgement costs (pull request #3394, 2026-11-21). The
+# start the gate read is now what the record holds, so the judgement is kept, and is used only while
+# that start is the same.
+head -c 8392704 /dev/zero > "$JC/program.bin"
+printf '%s\n' 'probe() { bash -n -c "$1"; }' "probe \"A=1 bash $JC/program.bin hi\"" > "$JC/quoted.sh"
+jc_run "bash $JC/quoted.sh"
+allowed "a script handing a function a quoted command line that runs a file of over 8 MB is allowed"
+traced "its judgement is kept, the large file recorded as far as the gate read it (#3394)" "stored"
+jc_run "bash $JC/quoted.sh"
+allowed "judged again with nothing changed, it is allowed"
+traced "and that second judgement is answered from the cache (#3394)" "hit"
+jc_run "bash $JC/program.bin hi"
+allowed "the same large file run by bash, typed plainly, is allowed"
+traced "and its judgement is kept too (#3394)" "stored"
+jc_run "bash $JC/program.bin hi"
+traced "judged again, it is answered from the cache (#3394)" "hit"
+# A byte added past what the gate reads changes nothing a judgement saw, and the kept one is used.
+printf 'x' >> "$JC/program.bin"
+jc_run "bash $JC/quoted.sh"
+traced "a change past what the gate reads of the large file leaves the kept judgement in use (#3394)" "hit"
+# Kept, it is still only as good as the start it read: once that start names an endpoint, it is refused.
+{ printf '\0\n'; printf "$POSTS\n"; head -c 8392704 /dev/zero; } > "$JC/program.bin"
+jc_run "bash $JC/quoted.sh"
+refused "once the start of the large file names an endpoint, the same command is refused"
+traced "the kept judgement is not used once the start the gate read has changed (#3394)" "miss: head" "answers differently now"
+jc_run "bash $JC/program.bin hi"
+refused "and so is the large file run by bash, typed plainly"
 unset SLACK_GATE_CACHE_TRACE
 # Outside this suite the cache is in ~/.claude/state, which the sync does not carry; under a test run
 # with no cache named it is off, so no suite reads or writes this Mac's.
