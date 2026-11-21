@@ -4625,7 +4625,8 @@ hands its functions a program's name as a plain label (`run_slow python`); a bod
 arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
-reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
+with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
 when the words after it happen to spell a command the gate refuses. Left open: a word that names

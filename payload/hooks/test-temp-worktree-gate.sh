@@ -177,9 +177,9 @@ allowed "git worktree prune" 'git worktree prune'
 allowed "a move within the repository" 'git worktree move .claude/worktrees/a .claude/worktrees/b'
 # A file the output goes to is not where the worktree goes, and a quoted `>` is a word git gets.
 allowed "#3322: a redirection before a path in the repository" 'git worktree add >/dev/null .claude/worktrees/fix-2528 -b fix/2528'
-allowed "#3322: output sent to a temp file, before a path in the repository" 'git worktree add >/tmp/wt-2528.log .claude/worktrees/fix-2528'
-allowed "#3322: output sent to a temp file, after a path in the repository" 'git worktree add .claude/worktrees/fix-2528 > /tmp/wt-2528.log 2>&1'
-allowed "#3322: a list sent to a temp file" 'git worktree list >/tmp/wt-2528.txt'
+allowed "#3322: output sent to a temp file, before a path in the repository" 'git worktree add >/var/folders/ab/cd1234/T/wt-2528.log .claude/worktrees/fix-2528'
+allowed "#3322: output sent to a temp file, after a path in the repository" 'git worktree add .claude/worktrees/fix-2528 > /var/folders/ab/cd1234/T/wt-2528.log 2>&1'
+allowed "#3322: a list sent to a temp file" 'git worktree list >/var/folders/ab/cd1234/T/wt-2528.txt'
 allowed "#3322: a quoted > is the path git gets, in the repository" "git worktree add '>' /tmp/wt-2528"
 allowed "an echo naming one" 'echo "git worktree add /tmp/wt-2528"'
 allowed "a commit message naming one" 'git commit -m "refuse git worktree add /tmp/wt-2528"'

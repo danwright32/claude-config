@@ -1810,7 +1810,16 @@ when nothing can read the command, takes them out in one place as well (`ps__dro
 What deliberately keeps every redirection: the command's own words (`PS__R_WORDS`), which
 `ps__writes_out` judges a write by, and the stages `gh_issue_scan.py` reads a body on standard
 input from. `rtk_field` is left as it was: `check-rtk-init.sh` refuses any word it does not know,
-a redirection included, which is the stricter reading.
+a redirection included, which is the stricter reading. Two more readers had the fault and no case.
+`lib/temp-worktree.py` made its own words, read `git worktree add >/dev/null /tmp/x` as a worktree
+placed at `>/dev/null` and let it through; it takes its words from `tool_words` now. The push to
+main gate (`linux-sections-before-push.sh`) read a redirection before the remote as the remote,
+which is not the shared repository, so `git push 2>&1 origin main` went through until the words
+it is handed held none. One reader still has it: `lib/agent-overrides.py` makes its own words for
+the amend, forced push, hook skip and standard input readers, and a redirection whose target
+reads as an option (`git commit > -m --amend`) hides each from them. The same swap there would
+also change what the standard input reader refuses (`git commit -F - < /dev/stdin` is refused
+today because the spaced target is a word), so it was recorded for a change of its own.
 
 The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
 line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
