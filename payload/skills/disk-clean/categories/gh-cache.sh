@@ -19,10 +19,16 @@ HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 
 G="$HOME/.cache/gh"
 
+# The cache folder's physical path, resolved once a run by whatever calls gh_rules, never once an
+# entry: every entry asked for it again in a subshell, about 2,100 times a scan on the personal
+# MacBook (claude-config#3280).
+GPHYS=""
+gh_resolve() { GPHYS="$(dcs_phys "$G" 2>/dev/null)"; }
+
 # Sets V for <target>, given the open file listing <listing> or, when that failed, OPEN_WHY.
 gh_rules() { # <target> <listing>
   local t="${1%/}" held
-  dcs_parent_is "$t" "$(dcs_phys "$G" 2>/dev/null)" || { V="not offerable: it is not an entry directly inside ~/.cache/gh"; return; }
+  dcs_parent_is "$t" "$GPHYS" || { V="not offerable: it is not an entry directly inside ~/.cache/gh"; return; }
   [ -e "$t" ] && [ ! -L "$t" ] || { V="not offerable: it is no longer there, or is a link"; return; }
   if [ -n "${OPEN_WHY:-}" ]; then V="unmeasured: could not tell whether it is in use ($OPEN_WHY)"; return; fi
   held="$(dcs_holders "$t" "$2")"
@@ -55,6 +61,7 @@ do_scan() {
   # The page draws this kind as ONE row of what can go (review-lib.sh, DCRV_WHOLE, #3232): only an
   # offerable entry is an item, and what is kept is counted here, in the kind's note, by why.
   local p kib size ident recent=0 used=0 unjudged=0 other=0 kept
+  gh_resolve
   while IFS="$S" read -r p kib size ident; do
     gh_rules "$p" "$LISTING"
     case "$V" in
@@ -83,6 +90,6 @@ do_scan() {
 
 case "${1:-}" in
   scan) do_scan ;;
-  judge) open_listing; gh_rules "${2:-}" "$LISTING"; echo "$V" ;;
+  judge) open_listing; gh_resolve; gh_rules "${2:-}" "$LISTING"; echo "$V" ;;
   *) echo "usage: gh-cache.sh scan | gh-cache.sh judge <target>" >&2; exit 2 ;;
 esac

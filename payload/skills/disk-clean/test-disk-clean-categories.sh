@@ -1000,6 +1000,14 @@ check "gh cache: lsof saying anything on stderr makes the kind unmeasured" "$(ha
 check "gh cache: and offers nothing" "$(eq "$(items_in gh-cache)" 0)"
 check "gh cache: and the note counts them as not judged" "$(has "$(note_of gh-cache)" "could not be judged")"
 dc_stub lsof 'exit 1'
+# The cache folder is resolved once a scan, never once an entry (claude-config#3280): every entry
+# asked for it again in a subshell, about 2,100 times on the personal MacBook. Counted from the
+# shell's own trace of the module, which names each call as it runs.
+GH_TRACE="$DC_ROOT/gh-cache.trace"
+dc_run env SHELLOPTS=xtrace bash "$CATS/gh-cache.sh" scan > "$DC_ROOT/gh-cache.out" 2> "$GH_TRACE"
+check "gh cache: control: the traced scan judged each of its 4 entries" "$(eq "$(grep -c -E '^\+ gh_rules ' "$GH_TRACE")" 4)"
+check "gh cache: the scan resolves the cache folder once, however many entries it holds" \
+  "$(eq "$(grep -c -E '^\++ dcs_phys ' "$GH_TRACE")" 1)"
 
 # ================================================================================================
 # Claude Code's own records: measured and shown (state, file history, the finding spool and its
