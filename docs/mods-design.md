@@ -2693,6 +2693,20 @@ and the band question is removed rather than kept beside it (L29). Three defects
   as it did
   before the line existed. The value is read back from storage through `checkLine` again (L50), so
   a damaged record covers the rule alone.
+  The check of shown text described next was built here in #3295 and has been mod-kit's since
+  #3321 (`hooks/shown.ts`, `shownFault` and `askFault`, copied into each mod that reads a picker's
+  answer), so every guard that acts on Dan's answer to a picker holds the call to the same
+  character classes, limits and hidden markup: this mod's two pickers, the design round guard's
+  two questions, the area check's restructure question and sleep mode's recorded morning pickers
+  refuse a picker that fails, and picker manners writes it onto no issue. One set of limits serves
+  every picker (decided 2026-11-21 while building #3321: the dialog cuts every question at the same
+  place whichever guard asks, so a looser limit for one guard would be an exemption), and a picker
+  too long for one is asked in parts. Counted first on the personal MacBook's session records
+  (`tools/picker-check-count.ts`, 2026-11-21): of the pickers that reached the dialog the check
+  refuses 0 of 10 lesson, 0 of 180 memory save, 0 of 1 restructure, 3 of 103 design round (each a
+  placeholder in angle brackets in the session's own sentence), 0 of 462 in the shape sleep mode
+  records and 0 of 32 picker manners would write to an issue. Still open on #3321: questions a mod
+  asks itself through `$.ui.ask`, and the database approvals, which are hooks.
   The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
   question stated the rule and compared the entry with it through `ruleText`, which drops bold
   marks and folds white space, and neither read a character: a rule holding a zero width

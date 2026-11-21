@@ -317,7 +317,9 @@ redir "a script run by its path is still one, named by its own path" "direct|it 
 redir_same "a program after a redirection, its target the next word" "-" wrap "> /dev/null ls -la"
 redir_same "a quoted operator is a word, not a redirection" "" tool "'>' $G push"
 redir_same "a quoted redirection is the command's name" "" tool "\"2>/x\" $G push"
-redir_same "a redirection after the command's name stays its word" "$G|push||2>/dev/null" tool "$G push 2>/dev/null"
+# Until claude-config#3322 this one was handed on among the push's words; the copy that reads as
+# before #2235 still hands it on, so it is no redir_same any more (the #3322 cases below hold it).
+check_eq "#2235 control: a redirection after the command's name is no word of the push (#3322)" "$G|push||" "$(redir_read "$SW" tool "$G push 2>/dev/null")"
 redir_same "a descriptor number alone is a program's name" "" tool "2 $G push"
 
 # The words a caller split itself (claude-config#2235): gh_issue_scan.py cuts a command with
@@ -429,19 +431,21 @@ import sys
 print(" ; ".join(r.split("\x1f")[0] or "-" for r in sys.stdin.read().split("\x1e") if r.strip("\n")))'
 }
 words_of(){ printf '%s' "$1" | python3 -B "$SW" words | tr '\037' ','; }
-check_eq "#3252 a redirection glued to the name" "$G|push||origin,main,>/dev/null" "$(reading "$G>/dev/null push origin main")"
-check_eq "#3252 an append glued to the name" "$G|push||>>log" "$(reading "$G>>log push")"
-check_eq "#3252 both streams glued to the name" "$G|push||&>/dev/null" "$(reading "$G&>/dev/null push")"
-check_eq "#3252 a copied descriptor glued to the name" "$G|push||>&2" "$(reading "$G>&2 push")"
-check_eq "#3252 input glued to the name" "$G|push||</dev/null" "$(reading "$G</dev/null push")"
-check_eq "#3252 a redirection of its own between the name and the subcommand" "$G|push||origin,main,2>/dev/null" "$(reading "$G 2>/dev/null push origin main")"
-check_eq "#3252 an operator and its target between the name and the subcommand" "$G|push||origin,main,>,/dev/null" "$(reading "$G > /dev/null push origin main")"
-check_eq "#3252 a redirection glued to the subcommand" "$G|push||>/dev/null,origin,main" "$(reading "$G push>/dev/null origin main")"
-check_eq "#3252 a redirection glued to the last word" "$G|push||origin,main,>/dev/null" "$(reading "$G push origin main>/dev/null")"
-check_eq "#3252 gh, glued to the name" "gh|pr|merge|7,>/dev/null" "$(reading 'gh>/dev/null pr merge 7')"
-check_eq "#3252 gh, glued to the subcommand" "gh|pr|merge|7,>/dev/null" "$(reading 'gh pr>/dev/null merge 7')"
-check_eq "#3252 gh, glued to the action" "gh|pr|merge|>/dev/null,7" "$(reading 'gh pr merge>/dev/null 7')"
-check_eq "#3252 gh, a redirection of its own before the subcommand" "gh|pr|merge|7,2>/dev/null" "$(reading 'gh 2>/dev/null pr merge 7')"
+# The words each is read with hold no redirection since claude-config#3322 (below): until then one
+# passed over was handed on after the last word, and one after the subcommand where it stood.
+check_eq "#3252 a redirection glued to the name" "$G|push||origin,main" "$(reading "$G>/dev/null push origin main")"
+check_eq "#3252 an append glued to the name" "$G|push||" "$(reading "$G>>log push")"
+check_eq "#3252 both streams glued to the name" "$G|push||" "$(reading "$G&>/dev/null push")"
+check_eq "#3252 a copied descriptor glued to the name" "$G|push||" "$(reading "$G>&2 push")"
+check_eq "#3252 input glued to the name" "$G|push||" "$(reading "$G</dev/null push")"
+check_eq "#3252 a redirection of its own between the name and the subcommand" "$G|push||origin,main" "$(reading "$G 2>/dev/null push origin main")"
+check_eq "#3252 an operator and its target between the name and the subcommand" "$G|push||origin,main" "$(reading "$G > /dev/null push origin main")"
+check_eq "#3252 a redirection glued to the subcommand" "$G|push||origin,main" "$(reading "$G push>/dev/null origin main")"
+check_eq "#3252 a redirection glued to the last word" "$G|push||origin,main" "$(reading "$G push origin main>/dev/null")"
+check_eq "#3252 gh, glued to the name" "gh|pr|merge|7" "$(reading 'gh>/dev/null pr merge 7')"
+check_eq "#3252 gh, glued to the subcommand" "gh|pr|merge|7" "$(reading 'gh pr>/dev/null merge 7')"
+check_eq "#3252 gh, glued to the action" "gh|pr|merge|7" "$(reading 'gh pr merge>/dev/null 7')"
+check_eq "#3252 gh, a redirection of its own before the subcommand" "gh|pr|merge|7" "$(reading 'gh 2>/dev/null pr merge 7')"
 check_eq "#3252 glued to rtk in front" "$G|push||" "$(reading "rtk>/dev/null $G push")"
 check_eq "#3252 glued to env in front" "$G|push||" "$(reading "env>/dev/null $G push")"
 check_eq "#3252 a redirection before a runner's positional" "$G|push||" "$(reading "timeout 2>/dev/null 30 $G push")"
@@ -457,7 +461,7 @@ check_eq "#3252 a script file with a redirection glued on keeps its true name" "
 # check-wrapped-commands.sh refuses beside git, gh or rtk. The report stays, word for word, beside
 # the true reading, until Dan decides whether that refusal goes (glued_script).
 check_eq "#3252 kept: a redirection holding a slash glued to the name is still reported as a script file" "direct|it runs the script file $G>/dev/null, whose commands are in the file, not the command" "$(redir_read "$SW" wrap "$G>/dev/null push")"
-check_eq "#3252 kept: and read as the push it is beside that" "$G|push||>/dev/null" "$(each_tool "$G>/dev/null push")"
+check_eq "#3252 kept: and read as the push it is beside that" "$G|push||" "$(each_tool "$G>/dev/null push")"
 check_eq "#3252 kept: a shell so written is still reported as one, its string read after it" "direct|it runs the script file bash>/dev/null, whose commands are in the file, not the command ; -" "$(redir_read "$SW" wrap "bash>/dev/null -c '$G push'")"
 check_eq "#3252 kept: a program in a system folder was never a script file, glued or not" "-" "$(redir_read "$SW" wrap "/usr/bin/$G>/dev/null status")"
 check_eq "#3252 a cd with a redirection glued on moves the commands after it" "- ; /x" "$(each_dir "cd>/dev/null /x && $G push")"
@@ -473,7 +477,7 @@ check_eq "#3252 words a caller split with shlex: glued to a runner" "gh|pr|merge
 check_eq "#3252 tokens: an operator and its target before the subcommand" "gh|pr|merge" "$(words_read "$SW" tokens 'gh > /dev/null pr merge 7')"
 check_eq "#3252 tokens: glued to the name" "gh|issue|create" "$(words_read "$SW" tokens 'gh>/dev/null issue create --title T')"
 # What must read exactly as it did: text that only looks like a redirection.
-check_eq "#3252 control: a redirection written last stays where it is" "$G|push||origin,2>&1" "$(reading "$G push origin 2>&1")"
+check_eq "#3252 control: a redirection written last is no word of the push either (#3322)" "$G|push||origin" "$(reading "$G push origin 2>&1")"
 check_eq "#3252 control: a quoted message holding > is the message" "$G|commit||-m,a -> b,-m,c>d" "$(reading "$G commit -m \"a -> b\" -m 'c>d'")"
 check_eq "#3252 control: a quoted name holding > is a program of that name" "" "$(reading "'$G>/dev/null' push")"
 check_eq "#3252 control: an escaped > is part of the word" "" "$(reading "$G\\>x push")"
@@ -505,6 +509,118 @@ check_eq "#3252 control: and behind a reserved word alone" "-" "$(headed '{ bash
 check_eq "#3252 control: a header before a command that hands no string" "-" "$(headed "f() { $G push")"
 check_eq "#3252 control: a header before a shell handed a file, whose commands are not in the command" "-" "$(headed 'f() { bash ./x.sh')"
 check_eq "#3252 control: a function named as eval is, whose words were read before as eval's string" "-" "$(headed 'eval () { bash -c "echo hi"')"
+
+# --- a redirection among a command's words (claude-config#3322) -----------------------------------
+# The shell takes every redirection out of a command before the program gets its words, wherever it
+# stands. The reader handed each on among the words (after the last one when it stood before the
+# subcommand, where it stood otherwise), so a gate taking the first word that is no option for the
+# endpoint of a gh api read >/dev/null, and one taking the first number for a pull request read the
+# 2 of 2>/dev/null. It is taken out once now, where the words are made (tool_words). Each case is
+# also read by a copy that takes none out and must read otherwise there; each control must read the
+# same in both. These strings are read, never run.
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-among" among
+check_eq "#3322 the copy that takes no redirection out of the words was made from the reader" "0" "$?"
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-marks" marks
+check_eq "#3322 the copy whose shell_tokens marks no redirection was made from the reader" "0" "$?"
+tool_of(){ # tool_of <reader> <command>: tool|sub|act|words, as the bash gates are handed them
+  printf '%s' "$2" | python3 -B "$1" tool | tr '\035\037' '|,'
+}
+among(){ # among <name> <expected> <command>
+  local got
+  check_eq "#3322 $1" "$2" "$(tool_of "$SW" "$3")"
+  got="$(tool_of "$WORK/loose-among/lib/shell-words.py" "$3")"
+  if [[ "$got" != "$2" ]]; then ok; else bad "#3322 and the copy that takes none out reads it otherwise: $1 (it read '$got' too)"; fi
+}
+among_same(){ # among_same <name> <expected> <command>
+  check_eq "#3322 control: $1" "$2" "$(tool_of "$SW" "$3")"
+  check_eq "#3322 control, and the copy that takes none out reads it the same: $1" "$2" "$(tool_of "$WORK/loose-among/lib/shell-words.py" "$3")"
+}
+REF="repos/o/r/git/refs/heads/b"
+among "gh api, glued to api" "gh|api||-X,DELETE,$REF" "gh api>/dev/null -X DELETE $REF"
+among "gh api, an operator and its target after api" "gh|api||-X,DELETE,$REF" "gh api > /dev/null -X DELETE $REF"
+among "gh api, between the method and the endpoint" "gh|api||-X,DELETE,$REF" "gh api -X DELETE 2>/dev/null $REF"
+among "gh api, both streams after an option" "gh|api||--silent,--method,DELETE,$REF" "gh api --silent &>/dev/null --method DELETE $REF"
+among "gh pr merge, before the number" "gh|pr|merge|7,--squash" "gh pr merge 2>/dev/null 7 --squash"
+among "gh pr merge, a target that is a number" "gh|pr|merge|--squash,7" "gh pr merge --squash > 5 7"
+among "a push, among its words" "$G|push||origin,--delete,b" "$G push origin 2>/dev/null --delete b"
+among "a push, a copied descriptor before the remote" "$G|push||origin,b" "$G push 2>&1 origin b"
+among "a push, a closed descriptor" "$G|push||origin,b" "$G push origin <&- b"
+among "a push, a descriptor the shell names" "$G|push||origin,b" "$G push {fd}>&1 origin b"
+among "a push, written last" "$G|push||origin,b" "$G push origin b 2>&1"
+among "a target holding a space, quoted" "$G|push||origin" "$G push > \"a b\" origin"
+among "a target made by a substitution" "$G|push||origin" "$G push >\$(mktemp -d)/x origin"
+among "one written against the target of another" "$G|push||origin" "$G push >out<in origin"
+among "a heredoc's opener" "$G|commit||-F,-" "$G commit -F - <<'EOF'"
+among "a here string" "gh|pr|comment|5,--body-file,-" 'gh pr comment 5 --body-file - <<<"some text"'
+among "an add, between its paths" "$G|add||a.txt,b.txt" "$G add a.txt > /dev/null b.txt"
+among_same "a quoted message that starts with > is the message" "$G|commit||-m,> quoted,notes.txt" "$G commit -m \"> quoted\" notes.txt"
+among_same "a quoted word that reads as a redirection is a word" "$G|commit||-m,x,2>odd" "$G commit -m x '2>odd'"
+among_same "an escaped > is part of the word" "$G|commit||-m,x,>odd" "$G commit -m x \\>odd"
+among_same "a quoted > that is an option's value" "gh|api||-H,>,-X,DELETE,$REF" "gh api -H '>' -X DELETE $REF"
+among_same "a comparison inside a query is text" 'gh|api||graphql,-f,query={ a(x: ">") }' "gh api graphql -f query='{ a(x: \">\") }'"
+among_same "a format holding < and > is the format" "$G|log||--format=%an <%ae>,-1" "$G log --format='%an <%ae>' -1"
+among_same "a command with no redirection" "$G|push||origin,main" "$G push origin main"
+# What was taken out is given beside the text, as written, for a reader that wants it.
+check_eq "#3322 unredirected gives the text without them and the redirections it took" "$G push origin main|2>&1,>'a b',<<<x" "$(python3 -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+text, taken = sw.unredirected(sys.argv[2])
+print(" ".join(text.split()) + "|" + ",".join(taken))' "$SW" "$G push 2>&1 origin >'a b' main <<<x")"
+# The command's own words keep every redirection, for a reader that judges where output goes
+# (lib/push-scope.sh ps__writes_out reads these, never the tool's words).
+check_eq "#3322 control: the command's own words still hold the redirection" "$G,push,>,out.txt,origin" "$(words_of "$G push > out.txt origin")"
+check_eq "#3322 control: and so does the copy that takes none out of the tool's words" "$G,push,>,out.txt,origin" "$(printf '%s' "$G push > out.txt origin" | python3 -B "$WORK/loose-among/lib/shell-words.py" words | tr '\037' ',')"
+
+# The words a caller cut itself with shell_tokens (gh_issue_scan.py, lib/merge-selector.py): an
+# operator written outside quotes is marked, and tool_command takes it out with its target. Each
+# case is also read by a copy whose shell_tokens marks none, and must read otherwise there.
+toks_of(){ # toks_of <reader> <tokens|split> <command>: sub|act|words as tool_command reads them
+  python3 -B -c '
+import importlib.util, shlex, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+words = shlex.split(sys.argv[3]) if sys.argv[2] == "split" else sw.shell_tokens(sys.argv[3])
+found = sw.tool_command(words)
+print("|".join(found[1:3]) + "|" + ",".join(found[3] + found[4]) if found else "")' "$1" "$2" "$3"
+}
+marked(){ # marked <name> <expected> <command>
+  local got
+  check_eq "#3322 tokens: $1" "$2" "$(toks_of "$SW" tokens "$3")"
+  got="$(toks_of "$WORK/loose-marks/lib/shell-words.py" tokens "$3")"
+  if [[ "$got" != "$2" ]]; then ok; else bad "#3322 and the copy that marks none reads it otherwise: $1 (it read '$got' too)"; fi
+}
+marked_same(){ # marked_same <name> <expected> <tokens|split> <command>
+  check_eq "#3322 control: $1" "$2" "$(toks_of "$SW" "$3" "$4")"
+  check_eq "#3322 control, and the copy that marks none reads it the same: $1" "$2" "$(toks_of "$WORK/loose-marks/lib/shell-words.py" "$3" "$4")"
+}
+marked "a merge, a redirection before the number" "pr|merge|7" "gh pr merge 2>/dev/null 7"
+marked "a merge, a target that is a number" "pr|merge|--squash,7" "gh pr merge --squash > 5 7"
+marked "a merge, a copied descriptor written last" "pr|merge|7" "gh pr merge 7 2>&1"
+marked "a merge through the API, after api" "api||-X,PUT,repos/o/x/pulls/7/merge" "gh api > /dev/null -X PUT repos/o/x/pulls/7/merge"
+marked "a create, a here string after its flags" "issue|create|--title,T,--body-file,-" "gh issue create --title T --body-file - <<< text"
+marked_same "tokens: a quoted > that is a flag's value stays, with the word after it" "pr|merge|--body,>,7" tokens "gh pr merge --body '>' 7"
+marked_same "tokens: a quoted 2> is a word" "pr|merge|2>,7" tokens "gh pr merge '2>' 7"
+marked_same "tokens: an escaped > is a word" "pr|merge|>,7" tokens "gh pr merge \\> 7"
+marked_same "tokens: a quoted digit against an operator is not marked" "pr|merge|2>,x,7" tokens "gh pr merge \"2\">x 7"
+marked_same "split: a word a caller split itself is never marked, so it stays" "pr|merge|2>/dev/null,7" split "gh pr merge 2>/dev/null 7"
+check_eq "#3322 control: shell_tokens cuts the same tokens as before, marked or not" "gh,pr,merge,2>,/dev/null,7,>,x" "$(words_read "$SW" cut "gh pr merge 2>/dev/null 7 '>' x")"
+check_eq "#3322 control: a # starts no comment unless the caller asks, and a broken quote still raises" "a,#b|ValueError|a|a,b" "$(python3 -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+out = [",".join(sw.shell_tokens("a #b"))]
+try:
+    sw.shell_tokens("a \"b")
+    out.append("read")
+except ValueError:
+    out.append("ValueError")
+out.append(",".join(sw.shell_tokens("a #b", commenters="#")))
+out.append(",".join(sw.shell_tokens("a b \"c", commenters="#", partial=True)))
+print("|".join(out))' "$SW")"
 
 mkdir -p "$WORK/empty"
 scan "$WORK/empty"

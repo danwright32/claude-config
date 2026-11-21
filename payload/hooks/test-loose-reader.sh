@@ -41,6 +41,10 @@ elif probe == "rejoin":
     print(sw.rejoin(["2>", "/dev/null", "gh", "issue", "create"]))
 elif probe == "glue":
     print(" ".join(sw.shell_tokens("2>/dev/null gh issue create")))
+elif probe == "among":
+    print(" ".join(sw.unredirected("git push 2>&1 origin")[0].split()))
+elif probe == "marks":
+    print(" ".join(type(t).__name__ for t in sw.shell_tokens("gh > x")))
 ' "$1" "$2" 2>&1
 }
 
@@ -48,18 +52,28 @@ echo "the real reader reads each probe the #2235 way, the control for the copies
 same "past_redirects passes the redirection over" "git push" "$(read_with "$DIR" redirects)"
 same "rejoin writes the operator bare" "2> /dev/null gh issue create" "$(read_with "$DIR" rejoin)"
 same "shell_tokens keeps the descriptor with its operator" "2> /dev/null gh issue create" "$(read_with "$DIR" glue)"
+same "#3322 unredirected takes a redirection out of the words" "git push origin" "$(read_with "$DIR" among)"
+same "#3322 shell_tokens marks an operator written outside quotes" "str Redirection str" "$(read_with "$DIR" marks)"
 
 echo "each variant undoes its own reading, and only that one"
 want_redirects="2>/dev/null git push"
 want_rejoin="'2>' /dev/null gh issue create"
 want_glue="2 > /dev/null gh issue create"
-for variant in redirects rejoin glue; do
+want_among="git push 2>&1 origin"
+want_marks="str str str"
+for variant in redirects rejoin glue among marks; do
   out="$(python3 -B "$LOOSE" "$DIR" "$WORK/$variant" "$variant" 2>&1)"; rc=$?
   same "$variant: the copy is made" "0|" "$rc|$out"
   want="want_$variant"
   same "$variant: its reading is undone" "${!want}" "$(read_with "$WORK/$variant" "$variant")"
-  for other in redirects rejoin glue; do
+  for other in redirects rejoin glue among marks; do
     [ "$other" = "$variant" ] && continue
+    # The redirects copy reads as the reader did before #2235, when no redirection was taken out
+    # of the words either, so it undoes that reading too (claude-config#3322).
+    if [ "$variant" = redirects ] && [ "$other" = among ]; then
+      same "redirects: the among reading is undone with it" "$want_among" "$(read_with "$WORK/$variant" among)"
+      continue
+    fi
     same "$variant: the $other reading is left as it is" "$(read_with "$DIR" "$other")" "$(read_with "$WORK/$variant" "$other")"
   done
   # Only the reader differs, so a gate in the copy is the real gate reading the old way.
@@ -74,11 +88,11 @@ if [ "$rc" -eq 0 ] && [ ! -e "$WORK/stale/left-over" ] && [ -f "$WORK/stale/lib/
 else check "the old copy is gone and the new one is there" "exit $rc, $(ls "$WORK/stale" 2>&1 | tr '\n' ' ')"; fi
 
 echo "a reader with nothing to undo is refused, and leaves no copy"
-# A hooks folder whose reader holds none of the three readings, as the reader would after a change
-# that moved one of them.
+# A hooks folder whose reader holds none of the readings the five variants undo, as the reader would
+# after a change that moved one of them.
 mkdir -p "$WORK/moved/lib"
 printf 'def past_redirects(s, cwd=""):\n    return s.lstrip()\n' > "$WORK/moved/lib/shell-words.py"
-for variant in redirects rejoin glue; do
+for variant in redirects rejoin glue among marks; do
   out="$(python3 -B "$LOOSE" "$WORK/moved" "$WORK/moved-$variant" "$variant" 2>&1)"; rc=$?
   same "$variant: exit 1" "1" "$rc"
   case "$out" in *"the $variant reading was not found"*) check "$variant: and names the variant" ok ;;

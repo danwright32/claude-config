@@ -158,6 +158,7 @@ import { toolArgs } from './mod-kit/toolargs.ts'
 import { patchedPaths, readPatch } from './mod-kit/patch.ts'
 import { freshTemp, leadingVariable } from './mod-kit/scriptvars.ts'
 import { guardAsks } from './mod-kit/designquestions.ts'
+import { askFault } from './mod-kit/shown.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -2830,9 +2831,28 @@ export const register: Register = on => {
     if (!guardAsks(source)) return next(e)
     const isSkip = source.startsWith(`${SKIP_SOURCE}:`)
 
+    // What a session is told to do about a picker the shared check refuses (#3321): the guard words
+    // each question, so only what the session itself sent can be reworded, and a name the guard
+    // shows that is itself at fault cannot be asked about at all, which is said and never hidden (L111).
+    const NAMED = "Where what is at fault is a name the guard shows (a file's or an issue's), this question cannot be asked as it stands: tell Dan in one line what is held and why."
+    const SKIP_YOURS = `The guard words this question, and the part of it that is yours is metadata "onScreen": say there what changes on screen in plain words without what is at fault, and send no field beside the questions that holds it. ${NAMED}`
+    const SETTLED_YOURS = `The guard words this question and its answers, so send it with no field beside the questions that holds what is at fault. ${NAMED}`
     // Asked of Dan with the guard's own question and answers; his choice read back, or why there is none.
-    const asked = async (question: string, options: { label: string; description: string }[]): Promise<{ r: Awaited<ReturnType<typeof next>>; chosen?: string; none?: string }> => {
-      const r = await next({ ...e, questions: [{ question, header: HEADER, options, multiSelect: false }] } as typeof e)
+    // He decides on the words he reads (#3321), so the call is first judged as the dialog will get
+    // it, the guard's own question, header and answers in place and every field sent beside them,
+    // by the one check of text a person approves in a picker (mod-kit's hooks/shown.ts): a call
+    // holding what he cannot see, markup a surface hides, or more than the dialog shows whole is
+    // refused before he is asked, and nothing is recorded. `yours` says which part of the question
+    // the session wrote and can reword.
+    const asked = async (question: string, options: { label: string; description: string }[], yours: string): Promise<{ r: Awaited<ReturnType<typeof next>>; chosen?: string; none?: string }> => {
+      const sent = { ...e, questions: [{ question, header: HEADER, options, multiSelect: false }] } as typeof e
+      const unread = askFault(sent as unknown as Record<string, unknown>)
+      if (unread !== undefined)
+        return {
+          r: { deny: `${unread.what} would not reach Dan as written: ${unread.fault}. He decides on the words he can read whole, so nothing was asked and nothing is recorded. ${yours} Then ask again, with the same metadata.` } as Awaited<ReturnType<typeof next>>,
+          none: '',
+        }
+      const r = await next(sent)
       if (r.deny !== undefined || r.isError) return { r, none: '' }
       const out = (r.result ?? {}) as AskResult
       const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
@@ -2944,7 +2964,7 @@ export const register: Register = on => {
         }
         const s = listed(open.map(x => x.label))
         const options = skipOptions(open)
-        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), options)
+        const { r, chosen, none } = await asked(skipQuestion(onScreen, waiting.files, open), options, SKIP_YOURS)
         if (chosen === undefined) return none ? say(r, none) : r
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
@@ -2985,7 +3005,7 @@ export const register: Register = on => {
       const { subjects, from } = found
       const s = listed(subjects.map(x => x.label))
       const options = settledOptions(subjects)
-      const { r, chosen, none } = await asked(settledQuestion(subjects), options)
+      const { r, chosen, none } = await asked(settledQuestion(subjects), options, SETTLED_YOURS)
       if (chosen === undefined) return none ? say(r, none) : r
       if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: ${settledNotYet}`)
       // A typed answer counts as Not yet, and is the next round's feedback (#1336).
