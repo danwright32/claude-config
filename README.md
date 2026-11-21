@@ -5062,7 +5062,8 @@ whose checks carry no notice. A run that reused an earlier green run of the same
 so the helper follows the run its checks' logs name ("NOT RUN AGAIN. Tree ... already passed in run
 ..."), and takes that run's notice and records only when its own artifacts hold `green-tree-<tree>`
 for exactly that tree; a log, run, notice or record it cannot find or read there refuses, naming the
-run it looked for. A changed file no suite
+run it looked for. A pull request from a fork refuses too: its code is never run on this Mac. A
+changed file no suite
 can name alone (its path ends the same way as another's all the way up) is said, never passed
 over, and a part a suite still cannot test on this Mac is said and is not a failure. After suites
 have run the helper asks every gate again; a pass is recorded under `MWR_UNTESTED_DIR`

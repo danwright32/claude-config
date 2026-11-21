@@ -4261,9 +4261,9 @@ merge_at="$(awk 'index($0, "Merging, pinned to that head") && !n { n = NR } END 
 check_eq "#3312 each check's annotations are read once" "1" "$(count gh-calls 'check-runs/501/annotations')"
 check_eq "#3312 and the other check's once" "1" "$(count gh-calls 'check-runs/502/annotations')"
 
-# A read that fails is said, and the merge goes on: this reports, it never gates.
+# A read that keeps failing is said, and the merge goes on: this reports, it never gates.
 ut_fresh
-printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-fails"
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-down"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#3312 an annotations read that fails does not stop the merge" "0" "$rc"
 check "#3312 and says what it could not read" "Could not read what check suite said it did not test" "$out"
@@ -4466,6 +4466,22 @@ pid="$(cat "$ST/runner-pid" 2>/dev/null)"
 if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive=alive; else alive=gone; fi
 check_eq "#3312 and the runner is gone" "gone" "$alive"
 check_eq "#3312 nothing merged past the bound" "0" "$(count gh-calls 'pr merge')"
+# A runner stopped before it has a process group of its own (stopped in its first moments, or a
+# setpgrp that did not happen) is stopped by its own pid, and the step does not wait out its work.
+mkdir -p "$STUBS/nogroup"
+cat > "$STUBS/nogroup/perl" <<'EOS'
+#!/usr/bin/env bash
+case "${2:-}" in *setpgrp*) shift 2; exec "$@" ;; esac
+exec /usr/bin/perl "$@"
+EOS
+chmod +x "$STUBS/nogroup/perl"
+ut_state; printf sleep > "$ST/runner-mode"
+out="$(PATH="$STUBS/nogroup:$PATH" MWR_UNTESTED_MAX_SECONDS=60 ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a runner with no group of its own past the bound refuses the merge" "1" "$rc"
+pid="$(cat "$ST/runner-pid" 2>/dev/null)"
+if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive=alive; else alive=gone; fi
+check_eq "#3312 and that runner is gone too" "gone" "$alive"
+check_eq "#3312 before its work could finish" "0" "$(count runner-woke woke)"
 
 # While they run it says it is still running, with how long and how many have finished.
 ut_state; printf slow > "$ST/runner-mode"
@@ -4513,6 +4529,28 @@ ut_state; rm -rf "$ST/artifacts-900"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 records that cannot be fetched refuse the merge" "1" "$rc"
 check "#3312 saying what to do" "gh run rerun 900 --repo acme/widget" "$out"
+# A read GitHub did not answer is asked again, as every other read here is, and a network fault is
+# never blamed on records that expired.
+ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/check-runs/501/annotations": net/http: TLS handshake timeout' > "$ST/annotations-fails"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a notice read that fails once is asked again, and it merges" "0" "$rc"
+check_eq "#3312 read twice" "2" "$(count gh-calls 'check-runs/501/annotations')"
+ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/actions/runs/900/artifacts": net/http: TLS handshake timeout' > "$ST/download-fails"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a records download that fails once is asked again, and it merges" "0" "$rc"
+check_eq "#3312 fetched twice" "2" "$(count gh-calls 'run download 900')"
+ut_state; printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/actions/runs/900/artifacts": net/http: TLS handshake timeout' > "$ST/download-down"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a records download that keeps failing refuses the merge" "1" "$rc"
+check "#3312 saying it could not be read" "could not read the record of what each part did not test from workflow run 900" "$out"
+check_not "#3312 and not blaming expired records" "keeps them for a day" "$out"
+
+# A fork's head is somebody else's code, never run on this Mac: refused, saying so.
+ut_state; printf true > "$ST/cross"; printf someone > "$ST/fork-owner"
+out="$(ut_run 7 --squash)"; rc=$?
+check_eq "#3312 a fork's pull request with suites to run refuses the merge" "1" "$rc"
+check "#3312 saying its code is not run here" "#7 comes from a fork (someone/widget), so its code is not run on this Mac" "$out"
+check_eq "#3312 and nothing is dealt or run" "0" "$(count runner-calls .)"
 ut_state; printf 'test-c.sh\tnot macOS\n' > "$ST/artifacts-900/part-unmeasured-1/unmeasured.tsv"
 out="$(ut_run 7 --squash)"; rc=$?
 check_eq "#3312 records that do not add up to the notice refuse the merge" "1" "$rc"
