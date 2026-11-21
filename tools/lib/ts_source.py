@@ -2,7 +2,7 @@
 """TypeScript and TSX source read the way the mod scans need it: which characters are code, which
 are a string, a regex literal, JSX text or a comment. One reader for every scan that has to tell a
 comment from code (tools/check-mod-shared-parts.sh, tools/check-mod-dependencies.sh,
-tools/check-mod-noun-waits.sh and the contract check in tests/test-mods.sh), rather than a stripper
+tools/check-mod-noun-waits.sh, tools/check-mod-tiers.sh and the contract check in tests/test-mods.sh), rather than a stripper
 per script that each misreads something of its own (L613). The one it replaces took a regex literal holding // or /* for a comment, and JSX
 text's // or apostrophe for a comment or a quote (#735); the shared parts scan dropped any line
 that merely started like a comment (#732).
@@ -328,6 +328,37 @@ def _sources(folder):
         for name in sorted(files):
             if name.endswith(SOURCE):
                 yield os.path.join(base, name)
+
+
+# Not a mod's own code: its tests (which stand in for other mods), its own contract, and what Claude
+# Code generates into its folder.
+NOT_MOD_CODE = {"tests", "types", ".claude-plugin", "node_modules"}
+
+
+def mod_code(folder):
+    """Each source file that is a mod's own code, wherever its hooks module imports it from: every
+    source file under the mod's folder less NOT_MOD_CODE's folders, its test files and any .d.ts."""
+    for base, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d not in NOT_MOD_CODE)
+        for name in sorted(files):
+            if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
+                yield os.path.join(base, name)
+
+
+def hook_events(text, jsx=False):
+    """Every event a module's on( calls name, in the order written: on('<event>' where the on is
+    code, never part of a comment, a string or a longer name, and the event is a plain string."""
+    code = code_only(text, jsx)
+    raw_kinds = kinds(text, jsx)
+    events = []
+    for m in re.finditer(r"(?<![\w.$])on\s*\(", code):
+        if raw_kinds[m.start()] != CODE:
+            continue
+        # The event name is a string, so it is read from the text, not the code view that blanks it.
+        name = re.match(r"\s*(['\"`])([A-Za-z][\w.*]*)\1", text[m.end() :])
+        if name:
+            events.append(name.group(2))
+    return events
 
 
 def tool_call_hooks(text, jsx=False):

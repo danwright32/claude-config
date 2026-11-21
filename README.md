@@ -9485,6 +9485,26 @@ where the workflow installs it, a compiler that does not start fails instead. (I
 longer checks ask before saving's waiting saves against the goal tracker: since #777 the question
 is Claude Code's own dialog, which the goal tracker reads like any other question.)
 
+Every guard must sit in the same tier as the mods it watches, and that is the user tier for all of
+them: `CLAUDE_CODE_PLUGIN_DIRS` loads every mod there. Claude Code's types, in the comment on `Tier`
+since 2.1.328 (read on 2026-11-20 in the copy 2.1.329 wrote, never run), say a person's hooks do not
+hear a call an organization's mod makes, or what is raised beneath it, and that the organization's
+mods are those it seats in `prepend` or `append` and those it requires in `user`. So a mod seated
+higher could call a tool with the secret guard, ask before saving and the Slack drafts gate's mod
+side never hearing it, and nothing would say so. `tools/check-mod-tiers.sh` fails when one is,
+naming the mod, the file that seats it and each user tier mod whose hook on a tool event would not
+hear it (#3298). It reads what Claude Code reads: the managed settings file with each
+`managed-settings.d` file beside it (`prependPlugins`, `appendPlugins`, and an `enabledPlugins` entry
+from a remote marketplace those settings declare), and `~/.claude/settings.json`, whose own two lists
+seat a person's mod wherever nothing sets them aside and are counted as unheard, since the types do
+not say otherwise. It keeps no list of mods allowed higher, and its last line names what is in no
+file it can open: managed settings from a device management profile or the organization's server,
+and a plugin the starting app marks as required. `tests/test-mod-tiers.sh` runs it in every full
+suite run and in the pull request checks, on fixtures for each of those seats and on `payload/mods`
+with the machine's own settings. The types say the reverse holds (a person's mod's call "runs
+through every hook but the calling one", the organization's included), so the guards could be seated
+higher along with a mod; none has been moved, and moving one is Dan's decision.
+
 ## Sleep mode
 
 Sleep mode lets the Claude Code sessions you leave open keep working toward the goal you set each
