@@ -7064,8 +7064,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 
         around is given where body is one function's body out of a longer text (lib/unknown-program.py,
         claude-config#3304): (the names of that text's functions, a question that gives how one of
-        them acts on what it is handed). A command of body that hands what body was handed to one of
-        them is then answered by that function's own body (sh_command_acts)."""
+        them acts on what it is handed, whether only words count). A command of body that hands what
+        body was handed to one of them is then answered by that function's own body
+        (sh_command_acts). Where only words count, a command that is only fed what body was handed,
+        through a pipe, is passed over: the question is then what body does with it as the words
+        of a command, and a pipe hands the next program text to read."""
         if depth > MAX_DEPTH:
             return "nests code deeper than the gate reads"
         defined = set(re.findall(r"(?:^|[\s;&|(){}])(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", body))
@@ -7115,8 +7118,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                        body[flow["part"][idx]["start"]:flow["part"][idx]["end"]])),
                    "env": lambda assigns=assigns: self.sh_env_code(assigns, body, names)}
             why = self.sh_command_acts(cmd, handed, defined, d, depth, around)
-            if why:
-                return why
+            if why and not (around and around[2] and fed and not any(handed.search(w) for w in words[1:])):
+                return why  # with around's third part, not where the body only pipes it to the command
             if not (takes or expands):
                 continue
             # It passed, holding what was handed: whatever it pipes on goes to the next command.

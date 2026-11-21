@@ -42,6 +42,19 @@ it can refuse a command those let through and never the reverse:
     (`cat post.py | op run -- python3`). A word that names a file is not such a start: read
     that way, `git add scripts/post.sh` and `sed -n 1,5p scripts/post.sh` would each be a run
     of the script. That leaves `op run -- ./post.sh` open.
+  * A word after it that holds white space (`hyperfine 'node --test x.js'`, `tmux send-keys
+    '...'`) is read as a command line of its own (inner_line) where one of its commands, as the
+    shared reader cuts them, starts with such a name past its assignments (holds_command,
+    claude-config#3304). Until then the whole word had to name a program, so a command in
+    quotes was never read. A sentence that only mentions a program starts with another word
+    and is not read, which is what keeps a commit message out: `git commit -m '<exactly a
+    refused command>'` is refused, git commit being a program the gate does not know to be
+    unable to run its words, and `git commit -m 'refuse <that command> behind a helper'` is
+    not. Left open by that: a quoted word whose command starts with a second program the gate
+    does not know (`hyperfine 'op run -- node x.js'`), and one the reader cannot cut. Behind a
+    function, such a word is read only where the body does something with what it is handed
+    as the words of a command (function_acts's as_words); a body that only pipes it into a
+    program's input is left as it was, and so is `f() { echo "$1" | bash; }`.
   * Where a redirection is glued to one of those words (`node --test test/notify.test.js>out.txt`)
     the words are judged again with a space each side of it, as judge_unglued does for a glued
     name: before claude-config#3252 the shared reader split words on white space alone, so the
@@ -61,7 +74,8 @@ their text alone: after ps (`-o command`), which (`which node`) and top in all b
 of which spells a refused command. The gate's own verdict on each was not taken: the installed
 gate refused the script that asks it (the pull request says what was and was not measured).
 
-More than MAX_STARTS words that could each start a command are not all read: a typed command is
+More than MAX_STARTS words that could each start a command, or be a command line of their own,
+are not all read: a typed command is
 refused as unread there, and a script on disk is left alone, as an unread feed is. The same holds
 past MAX_NESTED of these readings inside one another, so that a reading of a reading ends. Only a
 string a shell runs adds one (`op run -- bash -c 'op run -- bash -c "op run -- bash -c \\"op run --
@@ -80,6 +94,14 @@ MAX_STARTS = 6
 MAX_NESTED = 3
 # A pattern nothing matches: no word of a typed command is "what the script was handed".
 NOTHING = re.compile(r"(?!)")
+# The words every refusal of this rule says of the program, after its name. The rule's suite tells
+# this rule's refusals from another rule's by them alone, so a refusal worded without them is one
+# the suite cannot see (claude-config#3304: the nesting limit's wording was one).
+NOT_KNOWN = "is not a program the gate knows to be unable to run the words after it"
+# White space, which a word that could be a command line of its own holds, and what stands between
+# the names in one (white space, quotes and the shell's operators).
+WHITE = re.compile(r"\s")
+BETWEEN = re.compile(r"[\s;&|(){}<>\"'`]+")
 # A redirection that writes the file named after it.
 WRITES_TO = re.compile(r"\d*(?:>>|>\||&>>|&>|>)")
 
@@ -95,6 +117,7 @@ def make(judged_by_name, sh_redirect):
         funcs_memo = {}  # {a text: the names of the functions it defines}
         bodies_memo = {}  # {(a text, its folder): function_bodies's answer}
         acts_memo = {}  # {(a text, its folder, a function's name): function_acts's answer}
+        lines_memo = {}  # {(a word, the folder): holds_command's answer}
 
         def starts_command(self, word):
             """Whether a word, as the program gets it, names a program the gate reads by its name
@@ -103,6 +126,35 @@ def make(judged_by_name, sh_redirect):
             if got is None:
                 name = os.path.basename(word)
                 got = self.starts_memo[word] = bool(name) and (judged_by_name(name) or name in self.sw.RUNNERS)
+            return got
+
+        def holds_command(self, word, d):
+            """Whether one word that holds white space, as the program gets it, is a command line
+            one of whose commands starts with a program the gate reads by its name or a runner
+            (`hyperfine 'node --test x.js'`, claude-config#3304): the shared reader cuts it into
+            commands as it cuts any text, and each one's first word past its assignments is asked
+            starts_command. A commit message or a sentence that only mentions such a program
+            starts with another word and is not one. A word the reader cannot cut is left as it
+            was. Most words hold no white space, and most that do hold no such name anywhere, so
+            those are answered before anything is cut."""
+            if not WHITE.search(word):
+                return False
+            got = self.lines_memo.get((word, d))
+            if got is None:
+                got = False
+                if any(self.starts_command(t) for t in BETWEEN.split(word) if t):
+                    try:
+                        records = self.sw.every_command(word, d)
+                    except self.sw.Unreadable:
+                        records = ()
+                    for record in records:
+                        first = self.words_of(self.rest_of(record[1])[0])[:1]
+                        if first and self.starts_command(first[0]):
+                            got = True
+                            break
+                if len(self.lines_memo) > 512:
+                    self.lines_memo.clear()
+                self.lines_memo[(word, d)] = got
             return got
 
         def may_run_its_words(self, words, d, depth):
@@ -118,7 +170,11 @@ def make(judged_by_name, sh_redirect):
                     self.funcs_memo.clear()
                 defined = self.funcs_memo[text] = frozenset(self.sh_funcs(text))
             if "/" not in words[0] and words[0] in defined:
-                return self.function_acts(words[0], text, d, depth, ())
+                why = self.function_acts(words[0], text, d, depth, ())
+                if why and not any(self.starts_command(w) for w in words[1:]) and \
+                        not self.function_acts(words[0], text, d, depth, (), True):
+                    return None  # only a quoted word could be a command, and the body only pipes it on
+                return why
             cmd ={"words": words, "docs": None, "fed": False, "takes": True, "expands": False, "block": False,
                    "env": lambda: None}
             return bool(self.sh_command_acts(cmd, NOTHING, defined, d, depth))
@@ -156,25 +212,31 @@ def make(judged_by_name, sh_redirect):
             (shell_acts's around), so a script on disk is read as it was."""
             return all(WRITES_TO.fullmatch(words[k - 1]) for k in range(1, len(words)) if handed.search(words[k]))
 
-        def function_acts(self, name, text, d, depth, seen):
+        def function_acts(self, name, text, d, depth, seen, as_words=False):
             """How a function text defines acts on the words it is handed, as a phrase, or None where
             the gate reads its body and sees it unable to: the question a script on disk is asked
             (shell_acts), asked of the body, with a function of text the body hands them to asked
             the same (claude-config#3304). A body the gate cannot find or read is not known to be
-            unable, as a script it cannot read is not."""
+            unable, as a script it cannot read is not. as_words asks only what the body does with
+            them as words of a command (a program's arguments, the code of an eval or a shell's
+            -c, the command's own name), which is what decides whether one quoted word is a
+            command line the function runs: a body that only pipes what it is handed into a
+            program's input hands that program text to read, and this repository's gate suites
+            do exactly that with each command they ask the gate about."""
             if name in seen:
                 return None  # a function that hands them back to itself runs nothing by that alone
             if len(seen) >= MAX_NESTED:
                 return f"hands them through more than {MAX_NESTED} functions, more than the gate reads"
-            key = (text, d, name)
+            key = (text, d, name, as_words)
             if not seen and key in self.acts_memo:
                 return self.acts_memo[key]
             bodies = self.function_bodies(text, d)
             if bodies is None or not bodies.get(name):
-                why = "is a function whose body the gate could not read"
+                why = "has a body the gate could not read"
             else:
                 names = frozenset(bodies)
-                asked = (names, lambda other: self.function_acts(other, text, d, depth, seen + (name,)))
+                asked = (names, lambda other: self.function_acts(other, text, d, depth, seen + (name,), as_words),
+                         as_words)
                 why = None
                 for body in bodies[name]:
                     why = self.shell_acts(body, d, False, depth + 1, asked)
@@ -209,7 +271,7 @@ def make(judged_by_name, sh_redirect):
                 return None
             rest = self.rest_of(text)[0]
             words = self.words_of(rest)
-            if len(words) < 2 or not any(self.starts_command(w) for w in words[1:]):
+            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(w, d) for w in words[1:]):
                 return None
             name = os.path.basename(words[0])
             runs = None if judged_by_name(name) else self.may_run_its_words(words, d, depth)
@@ -229,21 +291,27 @@ def make(judged_by_name, sh_redirect):
                 at += len(raw)
             starts = [k for k in range(1, end) if toks[k][0] == "word" and toks[k - 1][0] == "word"
                       and self.starts_command(self.word_value(toks[k][1]) or "")]
-            if not starts:
+            lines = [v for k in range(1, end) if toks[k][0] == "word" and toks[k - 1][0] == "word"
+                     for v in (self.word_value(toks[k][1]),) if v and self.holds_command(v, d)]
+            if lines and isinstance(runs, str) and not self.function_acts(
+                    words[0], self.shell.get("text") or "", d, depth, (), True):
+                lines = []  # a function whose body only pipes what it is handed on (function_acts)
+            if not starts and not lines:
                 return None
+            # Every refusal of this rule opens with these words (NOT_KNOWN), so one test of a
+            # refusal's text says whether this rule gave it (claude-config#3304).
+            unknown += " " + NOT_KNOWN
             if self.behind >= MAX_NESTED:
                 # Asked only here, once there are words to read: an unread cap that says nothing
                 # allows what stands past it (the lessons review of this branch, 2026-11-19).
                 return self.unread_typed(
-                    f"the words after {words[0]} could start a command, and they stand {MAX_NESTED} such readings "
-                    f"inside one another, more than the gate reads, and it does not know {name} to be unable to "
-                    "run them, so whether the command posts cannot be checked")
-            if len(starts) > MAX_STARTS:
+                    f"{unknown}, and they could start a command {MAX_NESTED} such readings inside one another, "
+                    "more than the gate reads, so whether the command posts cannot be checked")
+            if len(starts) + len(lines) > MAX_STARTS:
                 return self.unread_typed(
-                    f"{len(starts)} of the words after {words[0]} could each start a command, more than the "
-                    f"{MAX_STARTS} the gate reads, and it does not know {name} to be unable to run them, so "
-                    "whether the command posts cannot be checked")
-            last = places[end - 1] + len(toks[end - 1][1])
+                    f"{unknown}, and {len(starts) + len(lines)} of them could each start a command, more than "
+                    f"the {MAX_STARTS} the gate reads, so whether the command posts cannot be checked")
+            last = places[end - 1] + len(toks[end - 1][1]) if end else 0
             noted = len(self.unfollowed)
             self.behind += 1
             try:
@@ -260,8 +328,16 @@ def make(judged_by_name, sh_redirect):
                             # the script's own reading of its variables around them.
                             del self.unfollowed[noted:]
                             continue
-                        return (f"{unknown} is not a program the gate knows to be unable to run the words after "
-                                f"it, so they are read as a command it runs: {inner}")
+                        return f"{unknown}, so they are read as a command it runs: {inner}"
+                for line in lines:
+                    inner = self.inner_line(line, d, depth)
+                    if not inner:
+                        continue
+                    if self.sh_in_script() and any(u in inner for u in self.unfollowed[noted:]):
+                        del self.unfollowed[noted:]  # as above: only a finding that something posts stands
+                        continue
+                    return (f"{unknown}, and one of them is a command line of its own, read as one it "
+                            f"runs: {inner}")
             finally:
                 self.behind -= 1
             return None
