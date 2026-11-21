@@ -79,6 +79,9 @@ export type AskBeforeSaving = {
    * on this save, or Add to LESSONS.md in the durable lesson picker for the lesson it adds. It only
    * looks: the approval is spent by this mod as the call passes its check, so a call sent again after
    * one that landed is answered false. `input` is the tool's arguments as Claude sent them.
+   * A Bash call is answered by its For good alone, without reading what the command writes: one
+   * that writes ~/.claude/LESSONS.md is refused at this mod's check whatever is answered here
+   * (#3343), so never take a true for a Bash call as leave to run it past that check.
    */
   isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }>
 }

@@ -3952,6 +3952,13 @@ mkdir -p "$unheld_made" && cp "$HOOK" "$unheld_made/" && cp -R "$DIR/lib" "$unhe
 check "a copy of the gate that holds no reading is made for the checks of #3255 to be seen to fail on" \
   "$(if grep -q '^ONCE = False$' "$unheld_made/slack_drafts_only_gate.py" 2>/dev/null && ! grep -q '^ONCE = True$' "$unheld_made/slack_drafts_only_gate.py"; then echo ok; else echo "slack_drafts_only_gate.py has no line 'ONCE = True' to turn, so the copy at $unheld_made is not a gate that holds nothing"; fi)"
 CS=""
+several=""
+# Every SUITE-NOTE this part prints goes through here and is counted, because run-all-tests shows a
+# passing suite's first SUITE_NOTE_MAX of them and drops the rest (#505): the note holding the
+# readings must come before the cap, and this count is how the suite knows it did (#3170).
+notes_n=0
+phase_notes=""
+suite_note() { notes_n=$((notes_n + 1)); printf 'SUITE-NOTE %s\n' "$1"; }
 REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 for c in "${REPO:+$REPO/claude-sync}" "$HOME/claude-config-sync/claude-sync"; do
   if [ -n "$c" ] && [ -f "$c" ]; then CS="$c"; break; fi
@@ -4100,10 +4107,14 @@ payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd
 # a judgement past the ceiling is measured again, up to three in all, and the least is judged, each
 # against yardstick samples taken around it. A cold measurement (an empty cache to start) is
 # repeated from an empty cache each time, so no sample is answered from the one before.
+# SLACK_GATE_COST_SAMPLES asks for that many judgements whether or not the first is inside the
+# ceiling (#3170), for a case whose limit is to be placed from its readings on a runner (L172): the
+# verdict is the same, the least of them against the ceiling, and the log then holds the spread.
 cache = os.environ.get("SLACK_GATE_CACHE_DIR", "")
 cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
 ratios, ran_out = [], []
-for attempt in range(int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3"))):
+need = int(os.environ.get("SLACK_GATE_COST_SAMPLES", "1"))
+for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3")))):
     env = dict(os.environ)
     if cold and attempt:
         env["SLACK_GATE_CACHE_DIR"] = tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/")))
@@ -4134,7 +4145,7 @@ for attempt in range(int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3"))):
     if p.returncode != 0:
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
-    if ratios[-1][0] <= ceiling:
+    if len(ratios) >= need and min(ratios)[0] <= ceiling:
         break
 ratio, spent, unit = min(ratios)
 # Every measurement is recorded where the suite prints it, passing or not, so the ceiling's premise
@@ -4151,7 +4162,8 @@ print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processo
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
 PY
   export SLACK_GATE_COST_LOG="$T/cost.log"
-  cost="$(SLACK_GATE_COST_LABEL=one-lesson SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 36 L174 2>&1)"
+  several="one-lesson"
+  cost="$(SLACK_GATE_COST_LABEL=one-lesson SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 36 L174 2>&1)"
   check "one claude-sync lesson is judged within 36 units of the yardstick (#2784)" "$cost"
   cost="$(SLACK_GATE_COST_LABEL=three-lessons SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 66 L174 L290 L656 2>&1)"
   check "three claude-sync lessons in one line are judged within 66 units of the yardstick (#2784)" "$cost"
@@ -4237,19 +4249,22 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     *) cold_note="$(sed -n 's/^suite-cold .*: \([0-9][0-9.]* (.*)\)$/at \1/p' "$T/cost.log" | sed -n 1p)" ;;
   esac
   if [ -n "$cold_note" ]; then
-    printf 'SUITE-NOTE drafts gate on %s, bash tests/test-claude-sync.sh from an empty cache: %s (#3167)\n' "$(uname -s)" "$cold_note"
+    suite_note "$(printf 'drafts gate on %s, bash tests/test-claude-sync.sh from an empty cache: %s (#3167)' "$(uname -s)" "$cold_note")"
     cold_note=ok
   else
     cold_note="no suite-cold line in the cost log to print: $(cat "$T/cost.log" 2>&1)"
   fi
   check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
   # Where that judgement's time went, phase by phase (#3170): the gate writes one line per judgement
-  # to SLACK_GATE_PHASE_LOG, printed here for each cold judgement cost.py made, so a slow runner's
-  # log says which part of the gate grew. The warm judgement below names the same file, since the
+  # to SLACK_GATE_PHASE_LOG, collected here for each cold judgement cost.py made and printed at the
+  # end of this part, so a slow runner's log says which part of the gate grew. The warm judgement below names the same file, since the
   # variable is part of the cache's key, and is answered from the cache.
   cold_phases="$(grep -c '^phases: ' "$T/phases.log" 2>/dev/null || true)"
   if [ "${cold_phases:-0}" -ge 1 ] 2>/dev/null; then
-    sed -n "s/^phases: /SUITE-NOTE drafts gate phases on $(uname -s), bash tests\/test-claude-sync.sh cold (#3170): /p" "$T/phases.log"
+    # Printed after the note with every cost reading, below: these are one line per cold judgement,
+    # so more than one when the first was past its limit, and the note cap must drop them rather
+    # than the readings (#3170).
+    phase_notes="$(sed -n "s/^phases: /drafts gate phases on $(uname -s), bash tests\/test-claude-sync.sh cold (#3170): /p" "$T/phases.log")"
     cold_phases=ok
   else
     cold_phases="the gate wrote no phases line to SLACK_GATE_PHASE_LOG: $(cat "$T/phases.log" 2>&1)"
@@ -4284,11 +4299,24 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   mkdir -p "$short" && cp "$HOOK" "$short/" && cp -R "$DIR/lib" "$short/lib" \
     && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.2/' "$DIR/slack_drafts_only_gate.py" > "$short/slack_drafts_only_gate.py"
   if grep -q '^BUDGET_SECONDS = 0\.2$' "$short/slack_drafts_only_gate.py" 2>/dev/null; then
-    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
+    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
     if [ "$cost" = ok ] && ! grep -q '^short-budget .*ran out on this machine' "$T/cost.log"; then
       cost="the copy with a budget of 0.2 s did not run out of it, so the step clock reading was never taken: $(grep '^short-budget' "$T/cost.log")"
     fi
     check "where the gate's seconds run out, its work is read on the step clock and held to the same 36 units (#3170)" "$cost"
+    # Judged from several readings, never one (L656, L395): on 2026-11-20 this check turned a pull
+    # request's run red from a single reading, 42.6 units against 36 (run 44850974680, part 2), and
+    # one reading of a duration cannot be told from noise. Every one of them is a reading where the
+    # seconds ran out, taken on the step clock, or the samples are of some other work.
+    sb_line="$(grep '^short-budget ' "$T/cost.log" | sed -n 1p)"
+    sb_n="$(printf '%s\n' "$sb_line" | sed -n 's/.*, samples \([0-9][0-9., ]*\)[;)].*/\1/p' | tr ',' '\n' | grep -c . || true)"
+    sb_out="$(printf '%s\n' "$sb_line" | grep -o ' s a unit' | grep -c . || true)"
+    if [ "${sb_n:-0}" -ge 3 ] 2>/dev/null && [ "$sb_out" = "$sb_n" ]; then
+      sb_n=ok
+    else
+      sb_n="judged from ${sb_n:-0} reading(s), ${sb_out:-0} of them where the seconds ran out: ${sb_line:-no short-budget line in the cost log}"
+    fi
+    check "where the gate's seconds run out, it is judged from at least 3 readings, each on the step clock (#3170)" "$sb_n"
     cost="$(SLACK_GATE_COST_LABEL=short-budget-over SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 1 L174 2>&1)"
     case "$cost" in
       "judging it took"*) cost=ok ;;
@@ -4316,12 +4344,11 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     Darwin) own_ceiling=27 ;;
     *) own_ceiling=37 ;;
   esac
-  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
+  several="$several own-suite"
+  cost="$(SLACK_GATE_COST_LABEL=own-suite SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
   check "the command that starts this suite is judged within $own_ceiling units of the yardstick on $(uname -s) (#3255)" "$cost"
-  own_note="$(sed -n 's/^own-suite .*: \([0-9][0-9.]* (.*)\)$/at \1/p' "$T/cost.log" | sed -n 1p)"
-  if [ -n "$own_note" ]; then
-    printf 'SUITE-NOTE drafts gate on %s, the command that starts its own suite, from an empty cache: %s (#3255)\n' "$(uname -s)" "$own_note"
-  fi
+  # Its readings are printed with every other cost case's, in the one note at the end of this part
+  # (#3170), which took the place of a note of its own when the note cap was full.
   if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
     cost="$(SLACK_GATE_COST_LABEL=own-suite-unheld SLACK_GATE_COST_ATTEMPTS=1 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET=1000000000 python3 -B "$T/cost.py" "$unheld_made/slack-drafts-only-gate.sh" "$CS" "$own_ceiling" --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
     case "$cost" in
@@ -4338,6 +4365,50 @@ else
 fi
 if [ -f "$T/cost.log" ]; then
   sed 's/^/cost measured (#2918): /' "$T/cost.log"
+  # The one lesson case (36 units) and the command that starts this suite (27 on macOS, 37 off it)
+  # take several readings whether or not the first passes (#3170), so one run's log gives the spread
+  # a limit is placed from, not a lone reading (L172). The fallback case, also held to 36, takes them
+  # too and is checked above, where it also has to show each reading was taken on the step clock.
+  for lbl in $several; do
+    l="$(grep "^$lbl " "$T/cost.log" | sed -n 1p)"
+    n="$(printf '%s\n' "$l" | sed -n 's/.*, samples \([0-9][0-9., ]*\)[;)].*/\1/p' | tr ',' '\n' | grep -c . || true)"
+    if [ "${n:-0}" -ge 3 ] 2>/dev/null; then n=ok; else n="${n:-0} reading(s): ${l:-no $lbl line in the cost log}"; fi
+    check "the $lbl cost case takes at least 3 readings, whether or not the first passes (#3170)" "$n"
+  done
+  # Every reading, on a passing run too (#3170). run-all-tests prints only a passing suite's
+  # SUITE-NOTE lines, at most SUITE_NOTE_MAX of them (3, #505), and the claude-sync suite's reading
+  # and its phases already take two. So the rest go in one line, each case's least reading and then
+  # every sample, and the line's entries are counted against the log's, so a change to the log's
+  # shape that matches nothing fails here rather than printing a shorter note (L100). The 42.6 that
+  # failed on 2026-11-20 was the first Linux reading of this kind anybody saw.
+  cost_read="$(grep -v '^suite-cold ' "$T/cost.log" | sed -E -n \
+    -e 's/^([a-z-]+) .*: ([0-9][0-9.]*) \(.*, samples ([0-9][0-9., ]*); the gate.*\)$/\1 \2 (\3, on the step clock)/p' -e t \
+    -e 's/^([a-z-]+) .*: ([0-9][0-9.]*) \(.*, samples ([0-9][0-9., ]*)\)$/\1 \2 (\3)/p')"
+  cost_want="$(grep -v -c '^suite-cold ' "$T/cost.log" || true)"
+  cost_got="$(printf '%s\n' "$cost_read" | grep -c . || true)"
+  notes_before="$notes_n"
+  if [ -n "$cost_read" ] && [ "$cost_got" = "$cost_want" ]; then
+    suite_note "$(printf 'drafts gate costs on %s from an empty cache, in units of the yardstick, the least and then every reading: %s (#3170)' \
+      "$(uname -s)" "$(printf '%s\n' "$cost_read" | paste -s -d ';' - | sed 's/;/; /g')")"
+    cost_read=ok
+  else
+    cost_read="${cost_got:-0} of the cost log's ${cost_want:-0} lines matched, so they were not printed: $(cat "$T/cost.log")"
+  fi
+  check "every cost reading is printed in one note for a passing run too (#3170)" "$cost_read"
+  note_max="$(sed -n 's/^SUITE_NOTE_MAX="\${SUITE_NOTE_MAX:-\([0-9][0-9]*\)}"$/\1/p' "$DIR/run-all-tests.sh" 2>/dev/null | sed -n 1p)"
+  if [ -z "$note_max" ]; then
+    notes_before="run-all-tests.sh beside this suite has no line SUITE_NOTE_MAX=\"\${SUITE_NOTE_MAX:-<n>}\" to read the cap from, so whether the readings are shown is unknown"
+  elif [ "$notes_before" -lt "$note_max" ]; then
+    notes_before=ok
+  else
+    notes_before="$notes_before note(s) came before it and run-all-tests shows $note_max, so a passing run's log drops the readings"
+  fi
+  check "the note with every cost reading is among the notes a passing run shows (#3170)" "$notes_before"
+fi
+if [ -n "$phase_notes" ]; then
+  while IFS= read -r ph; do
+    suite_note "$ph"
+  done <<< "$phase_notes"
 fi
 unset SLACK_GATE_COST_LOG
 

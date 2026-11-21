@@ -2828,13 +2828,33 @@ and the band question is removed rather than kept beside it (L29). Three defects
   line once its markdown is drawn, in bold, in a list or in a quote, is refused in the question
   and in the entry (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits
   of the lessons file were ever approved For good, both adding a whole lesson entry, which is the
-  route now closed. Left as they were and filed as #3343: a shell command that writes the lessons
-  file, a write that touches no entry (a section heading, an entry taken out whole, text above the
-  first section), and a checkout's `payload/LESSONS.md`, which the lesson picker does not cover.
+  route now closed. Left as they were and filed as #3343: a write that touches no entry (a section
+  heading, an entry taken out whole, text above the first section) and a checkout's
+  `payload/LESSONS.md`, which the lesson picker does not cover. A shell command that writes the
+  lessons file was filed there with them and has since been built, below.
   Not built, and Dan's to decide (#3320's open questions): deriving the SHORT line from the rule
   by a fixed rule, so that nothing is free to differ; and reading the 737 SHORT lines already in
   the file against their rules once, since none was ever shown.
-  A shell append, and a write that touches no entry, are asked about as before. The approval is
+  The first of the three left on #3343 is built (2026-11-20): a shell command that writes
+  `~/.claude/LESSONS.md` is refused, with no For good offered and Edit or Write named in its
+  place. It cannot be sent to the lesson picker, which is what the issue asked first: the mod
+  reads which files a command writes, never what it writes to them, so nothing could hold the
+  entry to what Dan read. It is decided from the one judgement of the command (`lastingTargets`,
+  then `lessonsByShell`), never a second reading of it, so each way mod-kit's reader finds a
+  write of that file counts alike, a file handed to a script and one named by its path beside a
+  write the reader cannot follow included; those two may only read it, and the refusal
+  (`byShellOnly`) says which it found and how a read is sent. The issue's open question, whether
+  a write can be told from a read without refusing reads, is answered by that reader: 17 reading
+  commands run unasked in the suite and 19 writing ones are refused. A For good already standing
+  for the command is not taken, and `saveCall` keeps it out of the saves Dan's own words approve.
+  Deliberately not refused: a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md` through a
+  variable only a command's output or a condition sets, a bare name in a patch's prose). A first
+  build refused those too, and two cases already in the suite became refusals with no way through:
+  the copy of a checkout's lessons file into a scratch folder (#1241) and a patch whose message
+  says LESSONS.md (#1883). They are asked about as before. Also out of reach: a removal, which
+  the reader counts as no write, and a script that writes the file with no word of the command
+  naming it.
+  A write that touches no entry is asked about as before. The approval is
   used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
   Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
@@ -3954,6 +3974,56 @@ on its default branch, held "for this session", and one file inside it held the 
   costly half, and a listing that fails holds the call.
 - **A write is judged as before.** A copy can be pushed, so what is written into one can reach the
   product. Only a removal passes: `rm`, `rm -rf`, a pattern matched in a folder there.
+
+### What #3279 changed for a merge of the default branch, 2026-11-20
+
+Since #3345 the guard asks git what a merge, rebase, cherry-pick, revert, switch, checkout of a
+branch, hard reset or stash pop would bring into the working tree, and judges each look changing
+file against the issue the branch names (Dan, 2026-11-19, "Ask only if a look file arrives"; the
+README's design round guard entry lists the commands). Built that way, every branch that took main
+in was asked again about a look change Dan had already answered on its own issue. Dan's answer on
+2026-11-20, asked whether the guard should ask about look changes already on main: "Skip what is on
+main (Recommended)". The comment on #3279 that records it that day gives the reason and the reach:
+"A look change already on main has shipped, so holding a branch that takes main in protects
+nothing", and it "covers only files whose change is already on the default branch. A cherry-pick, a
+merge of any other branch, and a stash stay asked."
+
+- **The one exemption among the moves, and it is an exemption.** Anything wider (another branch,
+  another kind of move, a name pattern, a switch that turns it off) is a new decision of Dan's.
+- **The default branch comes from the checkout, never from the command.** It is the branch
+  `$.modkit.branch` reads from the checkout's own record of its remote, at the commit last fetched
+  (the ref of that name under `refs/remotes/origin/`). mod-kit's fallback to a branch named main or
+  master is not used here: a local branch is not proof of anything having shipped. The remote is
+  never asked, so the answer is as old as the last fetch, which can only make the guard ask more.
+- **Shipped is decided by commits, per file.** For the commit being merged, or rebased onto, git
+  names the newest commit it shares with the default branch (`git merge-base`). Where that is the
+  commit itself, all of it is on the default branch and no look changing file is asked about.
+  Otherwise git lists what the commit holds differently from that shared commit
+  (`git diff --name-status`), and exactly those files are asked about. So a branch holding main and
+  one more commit is asked about that commit's files only, and a local main that is ahead of the
+  remote's is asked about what it is ahead by, whatever it is called.
+- **Only a merge and a rebase onto an upstream.** A cherry-pick, a revert, a switch, a checkout of a
+  branch, a hard reset and a stash go through no part of this, even naming a commit of the default
+  branch: none of them takes the default branch in, and a switch or a reset can also take the
+  branch's own look changes away.
+- **Where it cannot tell, it asks.** No default branch recorded for the remote, one never fetched,
+  a detached head (mod-kit's reader names no default branch there), no commit shared, git failing,
+  timing out or printing what cannot be read: every file is asked about as before.
+- **Each skip is written to the guard's log** (rules.ts `onDefaultSaid`): the files, the command,
+  and the commit of the default branch they were read against. It is the only trace, since nothing
+  is asked and nothing recorded for Dan.
+- **Costs three more reads of git, and only when a look changing file arrives**: the default
+  branch's commit, the shared commit, and, where the commit is not on the default branch, the list
+  of what it holds beyond it. Each was measured at 10 to 32 ms for #3345.
+- **Known limit.** The guard trusts the checkout's record of its remote. A command that rewrote
+  that record by hand (the remote's branch ref, or which branch it calls the default) in an earlier
+  call would make unshipped commits read as shipped. One on the same line as the merge is already
+  held, as any command before a move is. Checking against the remote itself needs the network,
+  which the guard does not use.
+- **Proven against real git, not only the tests' stand in.** The questions were run by hand on a
+  throwaway repository (git 2.51.1) for a merge of the default branch, of an older commit of it, of
+  another branch, of a branch holding main and one more commit, of one that had merged main in, of
+  a local main ahead of the remote's, and of an unrelated history; the tests' answers are those.
 
 ## Picker manners (#615), built 2026-10-04
 

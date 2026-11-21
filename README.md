@@ -7932,8 +7932,9 @@ lesson check's picker (which carries `metadata.source` `durable-lesson` and the 
 for word in the question) approves the one Edit or Write that only adds that rule to
 `~/.claude/LESSONS.md`, for 10 minutes, so he is not asked For good about it again. Since #3320 any
 other Edit or Write that adds or changes an entry there is refused and sent back to that picker,
-under a For good and under his own "from now on" words alike; a write that touches no entry, and a
-shell command, still ask.
+under a For good and under his own "from now on" words alike; a write that touches no entry still
+asks. Since #3343 a shell command that writes that file is refused too, with Edit or Write named in
+its place (told in full below).
 Since #3295 the picker is refused, before he is asked and saying which character and
 where, when its rule or its question holds a character he cannot see: a control other than the
 newline (a tab, a carriage return, the escape of a terminal sequence), a format character (zero
@@ -7990,13 +7991,38 @@ is refused in words that send the session to the lesson picker, and no question 
 either, a route the lessons review at the push found still open.
 An entry is every line the file's reader gives it, down to the
 next entry or section heading. A write that touches no entry (a section heading, an entry taken
-out whole, text above the first section) and a shell command are asked about as before. Changing
+out whole, text above the first section) is asked about as before, and so was a shell command
+until #3343, below. Changing
 an entry already in the file therefore takes the lesson picker for the entry as it should read,
 then the old one taken out and the new one added. Length is counted in bytes, as the index cap
 counts a line (`indexLength`), and a line that reads as a `SHORT:` line once its markdown is
 drawn, in bold, in a list or in a quote, is refused in the question and in the entry
 (`readsAsShort`). Counted 2026-11-20 in the transcripts this Mac kept: 2 Edits of the lessons
 file were ever approved For good, both adding a whole lesson entry.
+Since #3343 a shell command that writes `~/.claude/LESSONS.md` is refused, and no For good is
+offered. It was asked about through For good, whose question is of the session's own wording and
+shows Dan neither the rule nor its `SHORT:` line, so an entry could reach every session by `>>`
+where an Edit of the same text was refused. The mod reads which files a command writes, never what
+it writes to them, so such a command cannot be sent to the lesson picker and held to what he read.
+The refusal names Edit or Write instead, where an entry goes to the lesson picker and anything
+else is asked about as before. It is decided from the one judgement of the command, by mod-kit's
+reader of what a command writes (rules.ts `lessonsByShell`, `byShellOnly`), so every way that
+reader finds the file counts: a redirection, `tee`, `sed -i`, `perl -pi`, a `cp` or `mv` onto it
+or into its folder, a heredoc, a bare name after a `cd` there, a variable the command fixes to its
+folder, an inline program that opens it to write, a patch naming it, the file handed to a script
+as an argument, and the file named by its path beside a write the reader cannot follow (`eval`, a
+program whose target is an argument). The last two may only read it, and are refused all the same,
+since what cannot be read is not taken for a read. The refusal says which of the three it found,
+and how to send a read: the file fed on standard input, or a copy handed over. A For good already
+standing for the same command does not cover it, and neither do Dan's own "from now on" words. A
+command whose words show that it only reads the file runs unasked, as ever: `cat`, `grep`, `wc`,
+`sed -n`, `awk`, `diff`, a copy of it made elsewhere, output redirected to another file, an inline
+program that only reads it, and `claude-sync lesson`, `next-lesson`, `lesson-faults` and `pull`.
+Left as they were: a checkout's `payload/LESSONS.md` and a write that touches no entry, which are
+Dan's to decide on #3343; a `LESSONS.md` the reader can place nowhere (`$S/LESSONS.md`, through a
+variable only a command's output sets), which is as likely a scratch copy and is asked about as
+before; a removal (`rm`), which the reader counts as no write; and a script that writes the file
+with no word of the command naming it, which no reader of the words can see.
 Since #3245 (Dan, 2026-11-19: "Yes, cover the check line") the picker may also carry the
 lesson's check line in `metadata.check`, and the same answer then covers that one line in the same
 entry, just before its `SHORT:` line, or last in an entry that has none. The picker is refused
@@ -8084,10 +8110,23 @@ each comes from, with commands that change nothing: `git rev-parse --verify --qu
 `git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
 this branch, or between the working tree and the commit for a reset,
 `git log --no-walk --name-status` for the commits a cherry-pick or revert names,
-`git for-each-ref` for the one remote branch a name may stand for, and `git ls-tree` for a stash's
-untracked files; each look changing file is then judged
+`git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
+untracked files, and `git merge-base` for the commit a merged one shares with the default branch
+(below); each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
+a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing
+file whose change is already on that branch (Dan, 2026-11-20, "Skip what is on main": it has
+shipped, so asking again under every branch that takes main in protects nothing): the default
+branch is the one the checkout records for its remote, read by mod-kit's branch reader, at the
+commit it last fetched (`git rev-parse --verify --quiet` of that ref under `refs/remotes/origin/`),
+never a name the command gives, and a file is skipped only where the commit being taken in holds it
+exactly as the newest commit it shares with that branch does (`git merge-base`, then
+`git diff --name-status` between the two), so a merge of another branch, or of a local main that is
+ahead of the remote's, is still asked about everything it holds beyond the default branch, and each
+skip is written to the guard's log; a cherry-pick, a revert, a switch, a checkout, a hard reset and
+a stash are asked as before whatever commit they name, and so is a merge where the checkout records
+no default branch, never fetched it, stands on a detached head, or git cannot answer;
 `--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
 the working tree alone and `git stash` putting work away bring nothing in and are not read; a move
 the guard cannot read before it runs is held with how to run it so it can, asking nothing of Dan:

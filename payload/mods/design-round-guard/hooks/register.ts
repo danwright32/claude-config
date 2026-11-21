@@ -78,6 +78,9 @@ import {
   type MovedFile,
   movedFiles,
   pickedFiles,
+  defaultBranchRef,
+  beyondDefault,
+  onDefaultSaid,
   MOVE_FILES_MAX,
   MOVE_ALONE_REMEDY,
   MOVE_FETCH_REMEDY,
@@ -522,8 +525,8 @@ const filesUnder = async ($: EngineInterface, folder: string): Promise<{ tree: s
 
 // #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): one read only question to git about a
 // move, in the checkout it runs in. Never a command that changes anything: rev-parse, diff
-// --name-status, log --no-walk, for-each-ref and ls-tree only. Why not, in words, where git cannot
-// say: it fails, cannot run, runs past its time, or prints more than can be read whole.
+// --name-status, log --no-walk, for-each-ref, ls-tree and merge-base only. Why not, in words, where
+// git cannot say: it fails, cannot run, runs past its time, or prints more than can be read whole.
 const askGit = async ($: EngineInterface, tree: string, args: string[]): Promise<{ out: string } | { why: string; code?: number }> => {
   const said = `git ${args.join(' ')}`
   try {
@@ -545,11 +548,50 @@ const commitOf = async ($: EngineInterface, tree: string, name: string): Promise
   return { why: 'why' in r ? r.why : `git rev-parse gave no commit for ${name}` }
 }
 
+// #3279 (Dan, 2026-11-20, "Skip what is on main"): of the files a merge of `commit`, or a rebase onto
+// it, brings into `tree`, the ones still to ask about: every one but a look changing file (`look`)
+// the commit holds exactly as the default branch does (rules.ts beyondDefault), which has shipped.
+// The default branch is the one mod-kit reads from the checkout's own record of its remote, at the
+// commit last fetched; it is never taken from the command, and nothing here reaches the network.
+// Three more questions that change nothing, asked only when a look changing file arrives: the
+// default branch's commit (rev-parse), the newest commit the two share (merge-base), and, where
+// that is not the commit itself, what the commit holds beyond it (diff --name-status). Each skip
+// is written to the guard's log before the files are left out. Every file is returned, so asked
+// about as before, where the checkout's branch cannot be read (a detached head too), it records no
+// default branch, that branch was never fetched, or git fails, shares no commit or prints what
+// cannot be read. A reader or a log that throws stops the whole check, which holds the call.
+const beyondDefaultBranch = async ($: EngineInterface, tree: string, commit: string, files: MovedFile[], look: (path: string) => boolean, said: string): Promise<MovedFile[]> => {
+  const looks = files.filter(f => look(`${tree}/${f.rel}`))
+  if (!looks.length) return files
+  const b = await $.modkit.branch({ path: tree })
+  const ref = b === null || 'unreadable' in b ? undefined : defaultBranchRef(b.defaultBranch)
+  if (ref === undefined) return files
+  const tip = await commitOf($, tree, ref)
+  if ('why' in tip) return files
+  const base = await askGit($, tree, ['merge-base', commit, tip.sha])
+  const shared = 'out' in base ? base.out.trim() : ''
+  if (!/^[0-9a-f]{40,64}$/.test(shared)) return files
+  let beyond: MovedFile[] = []
+  if (shared !== commit) {
+    const r = await askGit($, tree, ['diff', '--name-status', '-z', '--no-renames', shared, commit])
+    const read = 'out' in r ? movedFiles(r.out, commit) : undefined
+    if (read === undefined) return files
+    beyond = read
+  }
+  const { shipped } = beyondDefault(looks, beyond)
+  if (!shipped.length) return files
+  await $.ui.log(onDefaultSaid(said, shipped.map(f => f.rel), ref, tip.sha), { to: 'debug' })
+  const skip = new Set(shipped.map(f => f.rel))
+  return files.filter(f => !skip.has(f.rel))
+}
+
 // The files one move brings into the working tree of `tree` (#3279), as git says before it runs, each
 // with the commit it is written from, or taken away; `restore` where a checkout's one name is a path
 // git puts back from the index. Why not, where git cannot say, with what to do instead where there
-// is something: a commit git does not know here is fetched first.
-const moveFiles = async ($: EngineInterface, tree: string, ask: MoveAsk): Promise<{ files: MovedFile[] } | { restore: string } | { why: string; remedy?: string }> => {
+// is something: a commit git does not know here is fetched first. `merged` takes out of what a merge
+// or a rebase onto an upstream brings in the files not to ask about (beyondDefaultBranch); no other
+// move's files go through it.
+const moveFiles = async ($: EngineInterface, tree: string, ask: MoveAsk, merged: (commit: string, files: MovedFile[]) => Promise<MovedFile[]>): Promise<{ files: MovedFile[] } | { restore: string } | { why: string; remedy?: string }> => {
   const diffed = async (args: string[], from: string): Promise<{ files: MovedFile[] } | { why: string }> => {
     const r = await askGit($, tree, ['diff', '--name-status', '-z', '--no-renames', ...args])
     if ('why' in r) return { why: r.why }
@@ -563,7 +605,7 @@ const moveFiles = async ($: EngineInterface, tree: string, ask: MoveAsk): Promis
       if ('why' in commit) return commit
       const got = await diffed([`HEAD...${commit.sha}`], commit.sha)
       if ('why' in got) return got
-      files.push(...got.files)
+      files.push(...(await merged(commit.sha, got.files)))
     }
     return { files }
   }
@@ -652,7 +694,7 @@ const movedTargets = async ($: EngineInterface, command: string, at: Where): Pro
       held(`\`${before.words.slice(0, 6).join(' ')}\` runs before it in the same command and may change what it brings in`, fetches ? MOVE_FETCH_REMEDY : MOVE_ALONE_REMEDY)
       continue
     }
-    const got = await moveFiles($, tree, move.ask)
+    const got = await moveFiles($, tree, move.ask, (commit, files) => beyondDefaultBranch($, tree, commit, files, look, move.said))
     if ('why' in got) {
       held(got.why, got.remedy)
       continue

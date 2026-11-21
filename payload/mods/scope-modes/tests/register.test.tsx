@@ -8681,3 +8681,61 @@ test('two claims the watchdog parks a minute apart are both said at the next Sto
   w.o.claims = ''
   expect((await stop($ as never)).block).toMatch(/^The watchdog parked #1 \(.*\); its claim is ended, so leave it and claim the next issue\. The watchdog parked #2 \(.*\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
 })
+
+// #3342: a session holding several claims at once had only the newest ended when it was stopped,
+// and the older ones were left held by a session no longer working. Three claims, none past its 2
+// hours, the newest (#3) in hand: every stop ends all three through the queue, each once.
+const THREE = [claimLine(1, T0 - 90 * MIN), claimLine(2, T0 - 60 * MIN), claimLine(3, T0 - 5 * MIN)].join('\n')
+const appendedNotes = (w: { appended: { line: string }[] }) => w.appended.map(a => JSON.parse(a.line) as { kind: string; issue?: number; text?: string })
+
+test('the circuit breaker ends all three claims a session holds, each failed with its reason (#3342)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE })
+  await start($ as never, clock)
+  for (let n = 0; n < 4; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released).toEqual([['/repo', '3', 's1', 'failed', BREAKER], ['/repo', '1', 's1', 'failed', BREAKER], ['/repo', '2', 's1', 'failed', BREAKER]])
+  expect(w.releasedBy).toEqual(['1', '1', '1'])
+  expect(kinds(w).filter(k => k === 'stopped')).toEqual(['stopped'])
+})
+
+test('an API error that stops the night ends all three claims (#3342)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'billing_error', 'API Error: 402')
+  const why = 'the API answered billing_error (API Error: 402), which waiting does not cure'
+  expect(w.released).toEqual([['/repo', '3', 's1', 'failed', why], ['/repo', '1', 's1', 'failed', why], ['/repo', '2', 's1', 'failed', why]])
+})
+
+test('a counter that cannot be written on a Stop ends all three claims (#3342)', withDeps, async ($, on) => {
+  const one = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE, driverWriteFails: [1] })
+  await start($ as never, one.clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(one.w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '3', 's1', 'failed'], ['/repo', '1', 's1', 'failed'], ['/repo', '2', 's1', 'failed']])
+  expect(new Set(one.w.released.map(r => r[4])).size).toBe(1)
+})
+
+test('an API error whose wait cannot be recorded ends all three claims (#3342)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE, driverWriteFails: [1] })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'rate_limit')
+  expect(w.released.map(r => r.slice(0, 4))).toEqual([['/repo', '3', 's1', 'failed'], ['/repo', '1', 's1', 'failed'], ['/repo', '2', 's1', 'failed']])
+})
+
+test('claims the queue refused to end at a stop are each said once, by issue (#3342)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE, releaseFails: 'not-released\tthe queue is busy' })
+  await start($ as never, clock)
+  await stopFailure($ as never, 'billing_error', 'API Error: 402')
+  const findings = appendedNotes(w).filter(n => n.kind === 'finding')
+  expect(findings.map(n => n.issue)).toEqual([3, 1, 2])
+  for (const n of findings) expect(n.text).toBe(`the claim on #${n.issue} could not be ended as failed: not-released\tthe queue is busy`)
+})
+
+test('a counter that cannot be written, with claims the queue refused, says each refused claim once (#3342)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: THREE, driverWriteFails: [1], releaseFails: 'not-released\tthe queue is busy' })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  const notes = appendedNotes(w)
+  expect(notes.filter(n => n.kind === 'stopped').length).toBe(1)
+  const all = notes.map(n => n.text ?? '').join('\n')
+  for (const issue of [1, 2, 3]) expect(all.split(`the claim on #${issue} could not be ended`).length - 1).toBe(1)
+})
