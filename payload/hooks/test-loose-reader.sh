@@ -45,6 +45,8 @@ elif probe == "among":
     print(" ".join(sw.unredirected("git push 2>&1 origin")[0].split()))
 elif probe == "marks":
     print(" ".join(type(t).__name__ for t in sw.shell_tokens("gh > x")))
+elif probe == "compiled":
+    print(sw.compiled(bytes.fromhex("cffaedfe0c000001")))
 ' "$1" "$2" 2>&1
 }
 
@@ -54,6 +56,7 @@ same "rejoin writes the operator bare" "2> /dev/null gh issue create" "$(read_wi
 same "shell_tokens keeps the descriptor with its operator" "2> /dev/null gh issue create" "$(read_with "$DIR" glue)"
 same "#3322 unredirected takes a redirection out of the words" "git push origin" "$(read_with "$DIR" among)"
 same "#3322 shell_tokens marks an operator written outside quotes" "str Redirection str" "$(read_with "$DIR" marks)"
+same "#3299 a Mach-O header is called a compiled program" "True" "$(read_with "$DIR" compiled)"
 
 echo "each variant undoes its own reading, and only that one"
 want_redirects="2>/dev/null git push"
@@ -61,12 +64,13 @@ want_rejoin="'2>' /dev/null gh issue create"
 want_glue="2 > /dev/null gh issue create"
 want_among="git push 2>&1 origin"
 want_marks="str str str"
-for variant in redirects rejoin glue among marks; do
+want_compiled="False"
+for variant in redirects rejoin glue among marks compiled; do
   out="$(python3 -B "$LOOSE" "$DIR" "$WORK/$variant" "$variant" 2>&1)"; rc=$?
   same "$variant: the copy is made" "0|" "$rc|$out"
   want="want_$variant"
   same "$variant: its reading is undone" "${!want}" "$(read_with "$WORK/$variant" "$variant")"
-  for other in redirects rejoin glue among marks; do
+  for other in redirects rejoin glue among marks compiled; do
     [ "$other" = "$variant" ] && continue
     # The redirects copy reads as the reader did before #2235, when no redirection was taken out
     # of the words either, so it undoes that reading too (claude-config#3322).
@@ -88,11 +92,11 @@ if [ "$rc" -eq 0 ] && [ ! -e "$WORK/stale/left-over" ] && [ -f "$WORK/stale/lib/
 else check "the old copy is gone and the new one is there" "exit $rc, $(ls "$WORK/stale" 2>&1 | tr '\n' ' ')"; fi
 
 echo "a reader with nothing to undo is refused, and leaves no copy"
-# A hooks folder whose reader holds none of the readings the five variants undo, as the reader would
+# A hooks folder whose reader holds none of the readings the six variants undo, as the reader would
 # after a change that moved one of them.
 mkdir -p "$WORK/moved/lib"
 printf 'def past_redirects(s, cwd=""):\n    return s.lstrip()\n' > "$WORK/moved/lib/shell-words.py"
-for variant in redirects rejoin glue among marks; do
+for variant in redirects rejoin glue among marks compiled; do
   out="$(python3 -B "$LOOSE" "$WORK/moved" "$WORK/moved-$variant" "$variant" 2>&1)"; rc=$?
   same "$variant: exit 1" "1" "$rc"
   case "$out" in *"the $variant reading was not found"*) check "$variant: and names the variant" ok ;;
