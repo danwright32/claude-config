@@ -145,7 +145,13 @@ def read_hearing(mods):
     hearing, unknown = {}, set()
     for name, folder in mods.items():
         events = set()
-        for path in mod_code(folder):
+
+        def unlisted(e, name=name, folder=folder):
+            # A folder of the mod that cannot be listed may hold a hook: never walked past in silence.
+            cannot(f"{name}'s {os.path.relpath(e.filename, folder)} cannot be listed ({e.strerror}), so whether it hooks a tool event is not known.")
+            unknown.add(name)
+
+        for path in mod_code(folder, unlisted):
             rel = os.path.relpath(path, folder)
             try:
                 with open(path, errors="replace") as f:

@@ -303,7 +303,7 @@ out="$(CHECK_MOD_TIERS_MANAGED="$TMP/clean/managed-settings.json" CHECK_MOD_TIER
   || check "the check's own helper failing is exit 4 with words, never a seat and never a pass" "exit $code: $out"
 # Then what only permissions can produce. Root reads everything, so there it is said and not measured (L411).
 if [ "$(id -u)" -eq 0 ]; then
-  echo "UNMEASURED: the cases of a file or folder this user may not read, because root may read them all."
+  echo "SUITE-PART-UNMEASURED the tier check's cases of a file or folder this user may not read, because this suite is running as root, which may read them all"
 else
   S="$TMP/locked-file"; settings "$S" '{"prependPlugins": ["caller"]}' ''
   chmod 000 "$S/managed-settings.json"
@@ -335,6 +335,19 @@ else
   [ "$code" -eq 4 ] && has "guard's hooks/register.ts cannot be read" \
     && check "a mod's source this user may not read is refused, never read as no hook" ok \
     || check "a mod's source this user may not read is refused, never read as no hook" "exit $code: $out"
+  # A folder inside a mod that cannot be listed may hold a hook, so it is refused too, never walked past.
+  M13B="$TMP/mods13b"
+  mkmod "$M13B" deep "import { wire } from '../lib/wire.ts'
+export const register = on => wire(on)"
+  mkdir -p "$M13B/deep/lib"
+  printf "export const wire = on => { on('tool.call', async (\$, e, next) => next(e)) }\n" > "$M13B/deep/lib/wire.ts"
+  mkmod "$M13B" caller "export const register = () => {}"
+  chmod 000 "$M13B/deep/lib"
+  run "$TMP/seat11" "$M13B"
+  chmod 700 "$M13B/deep/lib"
+  [ "$code" -eq 4 ] && has "deep's lib cannot be listed" && ! has "so this does not fail" \
+    && check "a folder inside a mod this user may not list is refused, never walked past as no hook" ok \
+    || check "a folder inside a mod this user may not list is refused, never walked past as no hook" "exit $code: $out"
   mkdir -p "$TMP/locked-mods"
   chmod 000 "$TMP/locked-mods"
   run "$TMP/clean" "$TMP/locked-mods"

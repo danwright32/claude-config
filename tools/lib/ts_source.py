@@ -335,10 +335,12 @@ def _sources(folder):
 NOT_MOD_CODE = {"tests", "types", ".claude-plugin", "node_modules"}
 
 
-def mod_code(folder):
+def mod_code(folder, onerror=None):
     """Each source file that is a mod's own code, wherever its hooks module imports it from: every
-    source file under the mod's folder less NOT_MOD_CODE's folders, its test files and any .d.ts."""
-    for base, dirs, files in os.walk(folder):
+    source file under the mod's folder less NOT_MOD_CODE's folders, its test files and any .d.ts.
+    A folder that cannot be listed is handed to onerror as the OSError, as os.walk does; a caller for
+    whom an unread file is not an absent one passes it (the tier check, #3298)."""
+    for base, dirs, files in os.walk(folder, onerror=onerror):
         dirs[:] = sorted(d for d in dirs if d not in NOT_MOD_CODE)
         for name in sorted(files):
             if name.endswith(SOURCE) and ".test." not in name and not name.endswith(".d.ts"):
