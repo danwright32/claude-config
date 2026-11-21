@@ -4753,6 +4753,15 @@ the seconds run out, the check now judges the same line again on the step clock 
 units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
 does more work fails on any machine, and a slow machine fails nothing by itself.
 
+A cost check that starts from an empty cache also fails when the judgement cache answered any of
+its samples (#3255, 2026-11-21). The least sample is the one held to the limit, and a judgement
+answered from the cache reads about 2 units, which would pass any limit there is. Each sample after
+the first already got an empty cache folder of its own; now the check reads the cache's own trace
+(`SLACK_GATE_CACHE_TRACE`) for every sample and fails unless it says the gate judged afresh. The
+two checks of a second asking are held the other way by the same reading: the trace must say the
+cache answered. That the first kind fails was not seen: the installed gate refused both commands
+that would have run it with the samples left in one folder.
+
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
 refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
