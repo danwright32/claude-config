@@ -1004,6 +1004,27 @@ check_eq "the section is the outage, the two that stopped work, the single refus
 check_eq "the morning picker gets the same rows (#3223)" "$pf" \
   "$(needs_rows "$SLEEPDIR/notes/g34.needs.json" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
 
+# A refusal note naming no session held nothing anybody can name (#3280). Matched by its missing
+# session, it was given every claim another note with no session had made, so its row could say an
+# issue no session it belonged to was working on. The writer always stamps a session, so these
+# notes are hand made: a claim of o/r#41 and one of the three refusals carry no "by".
+G=g37
+record g37 '["aaaa1111"]' "$SLEEPDIR/ended/g37.json"
+{
+  printf '{"v":1,"kind":"claim","at":%s,"repo":"o/r","issue":41,"attempts":1,"generation":"g37"}\n' "$(fold_at 0)"
+  work claim aaaa1111 0 42 ',"attempts":1'
+  nvs aaaa1111 1 w1 Bash 'git add c.txt' "$CU" ''
+  nvs aaaa1111 2 w2 Bash 'git add d.txt' "$CU" ''
+  printf '{"v":1,"kind":"failed","at":%s,"cwd":"/r/repo","tool":"Bash","text":"the auto mode classifier refused Bash: %s","reason":"%s","noVerdict":true,"toolUseId":"w3","what":"git add e.txt","generation":"g37"}\n' "$(fold_at 3)" "$CU" "$CU"
+  work parked aaaa1111 10 42 ',"text":"two attempts"'
+} > "$SLEEPDIR/notes/g37.jsonl"
+NOW=$(fold_at 30) py render --record "$SLEEPDIR/ended/g37.json" >/dev/null 2>&1
+pf="$(section_rows "$(report_of g37)" 'Parked and failed')"
+has "control: the refusal naming no session is in the report (#3280)" "git add e.txt" "$pf"
+lacks "a refusal naming no session is never said to have held another unnamed note's claim (#3280)" "o/r#41" "$pf"
+has "and is said to belong to work that did not carry on (#3280)" \
+  "and its session finished no work after it: Bash: git add e.txt" "$pf"
+
 # ---- a park on the clock does not outlast a done note (#3276) ----
 # On the night of 2026-11-18 one session held up to five claims at once and noted each finished
 # issue with sleep_note done, never ending its claim, so the overnight driver's watchdog parked
@@ -1090,11 +1111,11 @@ check_eq "the wake check's Open questions heading is the gate's (#3273)" \
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 19 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 20 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g35.md|Sleep report g36.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g15.md|Sleep report g2.md|Sleep report g3.md|Sleep report g31.md|Sleep report g32.md|Sleep report g33.md|Sleep report g34.md|Sleep report g35.md|Sleep report g36.md|Sleep report g37.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"

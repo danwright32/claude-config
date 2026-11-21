@@ -641,7 +641,11 @@ def filed_line(notes):
 
 
 def held_at(notes, by, at):
-    """The issues session `by` held at moment `at`, in the order it claimed them."""
+    """The issues session `by` held at moment `at`, in the order it claimed them. None for a note
+    naming no session: matched by its absence, it took every claim another unnamed note had made
+    (claude-config#3280)."""
+    if not isinstance(by, str) or not by:
+        return []
     held = {}
     for n in sorted((n for n in notes if n.get("by") == by and num(n.get("at")) and n["at"] <= at), key=lambda n: n["at"]):
         key = _issue_key(n)
