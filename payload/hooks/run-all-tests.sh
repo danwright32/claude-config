@@ -298,10 +298,16 @@ run_now() { if [ -n "${HOOK_TESTS_NOW:-}" ]; then printf '%s\n' "$HOOK_TESTS_NOW
 # share the 12 core Mac has run at since then, kept rather than replaced: every machine of up to 12
 # cores gets exactly what it got before (the CI runner's 2, the 12 core Mac's 8), 16 cores get 10,
 # 18 get 12 and 24 get 16, so a third of a bigger Mac stays free for the sessions working on it.
-# NOT MEASURED: no full run has been timed at 12 or 16 on the 18 core Mac; on 2026-11-09 the only
-# Mac reachable was the 12 core one, at a load average of 51 to 81 after a restart (media analysis,
-# Backblaze, Spotlight), which is no reading (L356). The premise to re-measure (L316, #2589): full
-# runs on the 18 core Mac at HOOK_TESTS_BUDGET 8, 12 and 16, several each (L395), on a quiet machine.
+# MEASURED 2026-11-21 on the 18 core Mac (#2589): three full runs each at HOOK_TESTS_BUDGET 8, 12
+# and 16, the budgets alternated (L395). A whole run averaged 37m03s at 8, 32m20s at 12 and 33m08s
+# at 16. Every run at 12 beat every run at 8. 16 finished its suites soonest and was no faster in
+# all: test-claude-sync.sh and test-mods.sh each failed first time in 2 of its 3 runs, at a load
+# average of 24 to 26, and passed when run again, which neither did at 8 or 12. So 12 stays. Two
+# things keep 12 against 16 from being settled, and are the premise to re-measure (L316): 14
+# commits landed in the checkout during the series, and the launch order alternated run by run,
+# which gave all three runs at 16 the quicker order and two of the three at 12 the slower one,
+# worth about 5 minutes of a run at 12. Time 12 against 16 again once the launch order holds still
+# from one run to the next.
 # Since #2012 only one full run holds a Mac at a time, so this is the whole of what full runs take.
 # HOOK_TESTS_CORES sets the core count for one run (test-run-all-tests-budget.sh), and a value that
 # is not a positive whole number is refused rather than guessed at, like the budget itself (L50).

@@ -3332,6 +3332,18 @@ machine's bash dropped, and a gate killed from outside leaves a `scanners-gate.*
 temporary folder saying what the supervisor and the run were doing, which the suite prints when a
 call ends at its deadline.
 
+A run can also end by itself just as the stop comes, and bash can then lose its exit code (#3333,
+from the lessons review of pull request 3382). Measured on 2026-11-21 on a Mac under bash 3.2, in 5
+staged calls of 5, with the gate held in its wait while its run ended with 2 and the stop signal
+was sent: bash left the wait for the signal without recording the run's end, the wait after the
+kill found no child and gave -1, and the gate exited 255 over a run that had refused. So after the
+kill the supervisor reads an answer as the run's own only from 0 to 126, and 137 as its own kill.
+Given anything else it refuses with exit 2, says the run's exit code did not reach it and what bash
+gave, and shows what the run had printed, so a refusal the run had written still reaches the
+reader and a run that had passed costs one more push. It also stops any scanner the run had started
+without a key and not finished, as the refusal at the stop does, since it cannot know the run
+stopped them itself.
+
 A scanner still running at the budget is LEFT RUNNING, never stopped (the follow up to #1881 and
 #1889). The whole repository suite, `test-run-all-tests.sh`, took about 410 seconds in CI and 444
 on a busy Mac on 2026-10-29, so stopping it meant it could never finish and every push needing it was refused for
@@ -4698,6 +4710,38 @@ the fill in does not work out. This repository's `test-work-names-scripts.sh` so
 hook writes while the suite runs by such a string, and passed only because the file was looked up
 under the variable's name; it now reads what that file puts on `PATH` without sourcing it.
 
+Since claude-config#3278 an import statement in Python text this python3 cannot parse as a whole is
+read as Python reads a line (`py_import_line`). Such text is most often code that holds a shell
+variable for the shell to fill in first (`python3 -c "import time,sys; print(time.time() - $start)"`).
+Its import statements are still found by each one's first line, as before. That line used to be cut
+at its commas and each piece's first word taken, so the list above named a module called `sys;`,
+which is found nowhere, and a one line timing helper stopped a measurement script that names no
+endpoint (2026-11-18). Now Python's own tokenizer gives the whole line (a list in brackets over
+several lines, one carried on by a backslash, a comment after it), a semicolon outside brackets ends
+a statement, and each statement of the line that starts with `import` or `from` is parsed by itself.
+Every import statement of the line is read, the ones after a semicolon too, so `import sys; import
+poster` follows `poster`. Two things were let through before and are refused now: a relative import
+whose list in brackets runs over several lines (`from . import (` and the modules on the lines
+after), which named nothing, and `from pkg import a; ...`, whose last name was read as `a;`. Where
+Python cannot read the line (a string that never closes, a shell variable where a module belongs, a
+compound statement after a semicolon that holds an import), it is read as it was before. An import
+that follows a semicolon on a line that does not start with one (`x = 1; import poster`) is not
+found in such text, as before. Suite: `test-slack-drafts-python-imports.sh`.
+
+The same issue's second refusal named a line no file has. A script that code earlier in the same
+call wrote is read as everything it may now hold: each file that code names, joined, then the
+script as it is on disk (#2721, #2772). One python3 heredoc edited `claude-sync` and
+`durable-lesson-check.sh` and the hook's suite ran after it, so the hook was read as possibly
+holding `claude-sync`, whose line 80 sources its library by a variable set from its own folder. In
+the hook's folder that library is not there, the path cannot be worked out, and the call was
+refused for "durable-lesson-check.sh, line 80", a line of the joined text. The refusal stands, since
+the gate cannot tell that the code did not copy one file into the other, and reading the copy in
+`claude-sync`'s own folder would pass a script copied next to a different library. What changed is
+what it names (`line_place`): "line 80 of claude-sync, which the script is made from earlier in
+this command", and "line 3 as it is on disk" for a line of the script's own that comes after what
+it is made from. Nothing is refused or allowed that was not before. Editing the two files in
+separate calls, or the hook alone, passes. Suite: `test-slack-drafts-made-lines.sh`.
+
 Since claude-config#3277 the words written after a program the gate does not know are read as the
 command they spell (`lib/unknown-program.py`, `judge_behind_unknown`), one more reading after the
 ones there were, so it can refuse a command those let through and never the reverse. Before it a
@@ -5578,7 +5622,9 @@ CPUs up to 8, then two thirds of the CPUs
 How many processes the whole run may have in flight. Everything else is derived from it. A value
 that is not a positive whole number is refused rather than guessed at. The default keeps what every
 machine of up to 12 cores had under the old cap of 8 and gives a bigger Mac two thirds of its cores
-(12 on 18), the share the 12 core Mac runs at (#2548). Not measured on the 18 core Mac (#2589).
+(12 on 18), the share the 12 core Mac runs at (#2548). Measured on the 18 core Mac on 2026-11-21
+(#2589), three full runs at each budget: a whole run averaged 37m03s at 8, 32m20s at 12 and 33m08s
+at 16, where two suites failed first time in 2 of the 3 runs. So 12 stays.
 
 </td></tr>
 <tr><td>
