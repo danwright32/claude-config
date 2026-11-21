@@ -228,7 +228,10 @@ dc_notes_checkout() { # <path> <home> <physical home>
 #   status with any option but the two it was measured with, --porcelain and --untracked-files=all,
 #   because -v prints a diff and has more spellings (-vv, -sv, --verb) than a list would hold;
 #   a filter whose name holds an equals sign, which -c cannot name (measured: it still ran), and a
-#   submodule whose path git prints quoted, whose settings could therefore not be read.
+#   submodule whose path git prints quoted, whose settings could therefore not be read;
+#   more than 100 submodules checked out beneath the folder, whose settings it will not read: a
+#   bound on the work one call does, since each costs two git calls before the one asked for;
+#   a call that names no git command at all.
 # A failure of git's own is returned as git's exit code with git's words on stderr.
 #
 # Not covered: a program named by the USER's own configuration or environment, which is theirs;

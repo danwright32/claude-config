@@ -6450,9 +6450,10 @@ bare repository it merely finds at a folder.
   none of those is turned off; an option before the command other than `--no-optional-locks`; a
   stash list with anything after it, and a status with any option but `--porcelain` and
   `--untracked-files=all`, since either can be asked to print a diff; a filter whose name holds an
-  equals sign, which `-c` cannot name; a submodule whose path git prints quoted; and an empty
-  folder name, which git reads as the directory the caller stands in. Adding a command or a
-  status option means measuring it in `hooks/test-disk-clean-git.sh` first.
+  equals sign, which `-c` cannot name; a submodule whose path git prints quoted; more than 100
+  submodules checked out beneath the folder, whose settings it will not read; a call with no
+  command; and an empty folder name, which git reads as the directory the caller stands in.
+  Adding a command or a status option means measuring it in `hooks/test-disk-clean-git.sh` first.
 - **The next call cannot forget.** The harness's command check refuses a `git` written anywhere in
   a disk-clean script but inside `dc_git` (`DC_WRAPPED` in `hooks/lib/disk-clean-harness.sh`), by
   every route a script can take to one, and refuses a second definition of the helper.
