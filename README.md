@@ -7378,7 +7378,12 @@ zsh only a `bash -c` or `sh -c` script is split), which the design round guard, 
 the collision guard and scope modes' overnight LESSONS.md check judge as a write of each file
 (#1592), as winding down counts each among this session's uncommitted work (#1664), and which no
 build reads; and, apart in `byGit`, what git mv, git rm, a checkout of a path and git restore change
-(a checkout or restore carrying `from`, where git puts the file back from, #1158), which winding
+(a checkout or restore carrying `from`, where git puts the file back from, #1158; since #3337 each
+relative path placed in the working folder the command names by `--work-tree` or `GIT_WORK_TREE`
+when it runs outside that folder, and left in the folder the command runs in, where it was placed
+before, when that folder cannot be known: a value the shell fills in, or `GIT_DIR` or
+`GIT_WORK_TREE` set by an earlier command on the line; that path is a guess, kept so the guards
+that skip an entry with no path judge the calls they always did), which winding
 down counts, and the design round guard and the collision guard judge since #1136, while ask before
 saving does not; and, apart in `stdout`, the files a redirect sends standard output to (`> log`, `&>
 log`, never a tee, a copy or `2> err.log` alone), which the job watcher reads, #1976; and, apart in
@@ -7392,7 +7397,11 @@ by every mod that needs it), of what Dan and Claude are told when he types an an
 question instead of choosing one (`$.modkit.typedAnswer({ guard, typed, still, again })`, #1145: a
 toast saying it was not recorded, and Claude told to say so, answer what he said and ask the same
 question again, used by the design round guard and ask before saving), of git commands
-(`$.modkit.git`), of gh commands (`$.modkit.gh({ words })`: the subcommand and action past gh's
+(`$.modkit.git({ words, env })`: the subcommand, its arguments, the folder `-C` names and, since
+#3337, the repository and the working folder the command names apart from that folder, by
+`--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, each as written, the two variables read
+from the `env` that `pipeline` gives the command), of gh commands
+(`$.modkit.gh({ words })`: the subcommand and action past gh's
 global flags, each flag as pflag reads it, the positionals, the repository the command names itself,
 from `-R`, a github.com link or a `gh repo` owner/name, and for `gh api` its method, endpoint,
 fields, the repository its endpoint names as gh reaches it and its GraphQL document; moved here from
@@ -8262,10 +8271,24 @@ and `stash apply`; before one runs the guard asks git which files it would chang
 each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
 `git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
 this branch, or between the working tree and the commit for a reset,
-`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names, or, since #3337,
+where the command gives a mainline number past the first (`-m 2`, `--mainline 2`), the commits
+`git rev-list --no-walk` names, each read against the parent that number names, so a cherry-pick or
+revert of a merge commit is asked about what it brings in against that parent, and a number the
+guard cannot read, two that differ, or an option that may be the mainline one spelled another way
+holds the command,
 `git for-each-ref` for the one remote branch a name may stand for, `git ls-tree` for a stash's
 untracked files, and `git merge-base` for the commit a merged one shares with the default branch
-(below); each look changing file is then judged
+(below); since #3337 a git command that names its repository or its working folder apart from the
+folder it runs in (by `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`) is read from that
+repository: every question is put to git with the command's own naming, first
+`git rev-parse --show-toplevel` for the folder its files land in, the files are judged in that
+folder's project, nothing is skipped as already on the default branch, `git am` places its patch
+there too, and a restore, `git rm` or `git mv` whose files git says land somewhere other than its
+words give (a repository that keeps its own working folder, as a submodule's does) is held; where
+the guard cannot tell which repository or folder is meant (a value the shell fills in, an empty
+one, `GIT_DIR` or `GIT_WORK_TREE` set by an earlier command on the line, git unable to answer) the
+command is held, saying why; each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
 a merge that takes the default branch in, or a rebase onto it, is not asked about a look changing

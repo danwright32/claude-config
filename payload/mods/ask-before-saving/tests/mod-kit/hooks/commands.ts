@@ -1848,17 +1848,41 @@ export const commands = (cmd: string, opts: ReadOptions = {}): string[][] => pip
 // A git command's subcommand, after git's own global options, and the folder -C points it at. The
 // one reading of a git command every mod uses (the style check's commit, the collision guard's
 // checkout), so neither keeps its own.
+// #3337: and where the command names its repository or its working folder apart from that folder,
+// each as written: `gitDir` from --git-dir or GIT_DIR, `workTree` from --work-tree or GIT_WORK_TREE,
+// absent where the command names none. `env` is the settings the command is run with, as the
+// command reader gives them (Command.env). git reads each variable exactly as its option (measured
+// with git 2.51.1): an option wins over the variable, the last of each wins, and a relative value
+// is read from the folder the command runs in once every -C is followed. With only `gitDir`, that
+// folder is the working folder, unless the repository keeps its own in its settings (core.worktree,
+// as a submodule's does), which only git can say; with only `workTree`, the repository is the one
+// found from that folder. Until #3337 both values were skipped and only -C's folder handed on, so a reader placed
+// `git --git-dir=/other/.git --work-tree=/w/x merge y` in the folder it ran in.
 const GIT_GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace'])
-export type GitCommand = { sub: string | undefined; args: string[]; dir: string | undefined }
-export const git = (words: string[]): GitCommand | undefined => {
+const GIT_NAMES_APART: Readonly<Record<string, 'gitDir' | 'workTree'>> = { '--git-dir': 'gitDir', '--work-tree': 'workTree', GIT_DIR: 'gitDir', GIT_WORK_TREE: 'workTree' }
+export type GitCommand = { sub: string | undefined; args: string[]; dir: string | undefined; gitDir?: string; workTree?: string }
+export const git = (words: string[], env: readonly string[] = []): GitCommand | undefined => {
   if ((words[0] ?? '').split('/').pop() !== 'git') return undefined
   let dir: string | undefined
+  const apart: { gitDir?: string; workTree?: string } = {}
+  // Its own keys only: a name every object inherits (`constructor`) is no option and no variable here.
+  const names = (name: string) => (Object.prototype.hasOwnProperty.call(GIT_NAMES_APART, name) ? GIT_NAMES_APART[name] : undefined)
+  for (const set of env) {
+    const eq = set.indexOf('=')
+    const field = eq > 0 ? names(set.slice(0, eq)) : undefined
+    if (field) apart[field] = set.slice(eq + 1)
+  }
   for (let i = 1; i < words.length; i++) {
     const w = words[i] as string
+    const eq = w.indexOf('=')
+    const joined = w.startsWith('--') && eq > 0 ? names(w.slice(0, eq)) : undefined
     if (GIT_GLOBAL_WITH_VALUE.has(w)) {
+      const field = w.startsWith('--') ? names(w) : undefined
       if (w === '-C') dir = words[i + 1]
+      else if (field && words[i + 1] !== undefined) apart[field] = words[i + 1] as string
       i++
-    } else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1), dir }
+    } else if (joined) apart[joined] = w.slice(eq + 1)
+    else if (!w.startsWith('-')) return { sub: w, args: words.slice(i + 1), dir, ...apart }
   }
-  return { sub: undefined, args: [], dir }
+  return { sub: undefined, args: [], dir, ...apart }
 }
