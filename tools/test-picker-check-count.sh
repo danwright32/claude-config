@@ -22,6 +22,10 @@ TOOL="$DIR/picker-check-count.ts"
 W="$(mktemp -d "${TMPDIR:-/tmp}/picker-check-count.XXXXXX")" || exit 1
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/projects/one" "$W/projects/two"
+# A zero width space as JSON writes it, a backslash, a u and its code point, put together here from
+# two pieces so that this file holds neither the character nor its escape whole (an editor can
+# strip the one unseen, and a tool can turn the other into it).
+ZW="$(printf '%s%s' '\u' '200b')"
 
 # One picker as a session record keeps it: the call on an assistant line, its result on a user
 # line. $1 id, $2 the call's input, $3 the result (toolUseResult), $4 extra keys of the result
@@ -38,7 +42,7 @@ answered(){ printf '{"questions":[{"question":"%s","header":"H","multiSelect":fa
   picker t2 "$(q 'Skip design rounds for this issue?' 'design-round-guard:t8')" "$(answered 'The heading on <page> moves. Skip design rounds for this issue?')"
   # The lesson picker, clean; and one holding a zero width space that closed while he was away.
   picker t3 "$(q 'Add this lesson? A rule in plain words.' 'durable-lesson')" "$(answered 'Add this lesson? A rule in plain words.')"
-  picker t4 "$(q 'Add this lesson? A rule​ in plain words.' 'durable-lesson')" '{"questions":[],"answers":{},"afkTimeoutMs":60000}'
+  picker t4 "$(q "Add this lesson? A rule${ZW} in plain words." 'durable-lesson')" '{"questions":[],"answers":{},"afkTimeoutMs":60000}'
   # Read by no guard: an ordinary question, faulty or not.
   picker t5 "$(q 'Which <thing> first?' 'none')" "$(answered 'Which <thing> first?')"
   # Never counted: a subagent's picker, one whose result is an error, and a call with no result.
