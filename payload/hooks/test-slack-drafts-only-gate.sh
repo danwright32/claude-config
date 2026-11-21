@@ -4256,8 +4256,8 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   fi
   check "the cold reading of bash tests/test-claude-sync.sh is printed for a passing run too (#3167)" "$cold_note"
   # Where that judgement's time went, phase by phase (#3170): the gate writes one line per judgement
-  # to SLACK_GATE_PHASE_LOG, printed here for each cold judgement cost.py made, so a slow runner's
-  # log says which part of the gate grew. The warm judgement below names the same file, since the
+  # to SLACK_GATE_PHASE_LOG, collected here for each cold judgement cost.py made and printed at the
+  # end of this part, so a slow runner's log says which part of the gate grew. The warm judgement below names the same file, since the
   # variable is part of the cache's key, and is answered from the cache.
   cold_phases="$(grep -c '^phases: ' "$T/phases.log" 2>/dev/null || true)"
   if [ "${cold_phases:-0}" -ge 1 ] 2>/dev/null; then
