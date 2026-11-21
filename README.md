@@ -5331,7 +5331,12 @@ changed, or that name a file it changed as a path: a slash, then the shortest en
 no other file in the head's tree has. It runs those in a throwaway clone of the head through the
 head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
 they started, every two minutes that they are still running with how many have finished, and how
-they ended. A suite that fails, could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
+they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+the base as origin's branch, and that branch as origin's default. A suite that asks git there what
+a push would add is then answered with the pull request's commits; in a clone that knew no remote
+the answer was the whole history, and the step's first real merge stopped on it (#3392, on
+2026-11-21). A clone that cannot be told refuses the merge. A suite that fails,
+could not run, or is still running after `MWR_UNTESTED_MAX_SECONDS`
 (2700, a setting, not a measurement) refuses the merge, and so does anything that stops the list
 being read: a notice or record that cannot be fetched or does not add up (the records are kept a
 day; `gh run rerun <run>` makes them again), or a tree holding `tools/ci-unmeasured-summary.sh`
