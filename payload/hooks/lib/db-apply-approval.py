@@ -267,9 +267,11 @@ def _picker_faults(asks, deadline=None):
     if node is None:
         raise PickerCheckFailed("node is not on PATH, and it runs the check")
     entry = os.path.join(os.path.dirname(os.path.abspath(__file__)), PICKER_CHECK)
+    # json.dumps writes ASCII alone (ensure_ascii), a lone surrogate as its escape, so the encode
+    # cannot meet a character it refuses; strict says so rather than hiding one.
     try:
         r = subprocess.run([node, "--experimental-strip-types", "--no-warnings", entry],
-                           input=json.dumps({"asks": asks}).encode("utf-8"), capture_output=True,
+                           input=json.dumps({"asks": asks}).encode("utf-8", "strict"), capture_output=True,
                            timeout=limit)
     except subprocess.TimeoutExpired:
         raise PickerCheckFailed("the check did not answer in " + ("%.1f" % limit) + " seconds")
