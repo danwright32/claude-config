@@ -1781,13 +1781,13 @@ test('the entries a write takes out whole are read by their numbers, by a Write,
   expect(entriesTouched('Write', { content: SHAPED.replace('seen to fail', 'seen to pass') }, SHAPED)).toEqual(['L1'])
 })
 
-test('an entry left word for word under another heading is read as moved, with both headings; above the first heading no index reads it (#3343 route 2)', () => {
+test('an entry left word for word under another heading is read as moved, with both headings; above the first heading it is in no section (#3343 route 2)', () => {
   const toHonest = without(SHAPED, 'L7').replace('## Honest failure\n', `## Honest failure\n${L7}`)
   expect(writes(toHonest)).toEqual({ ...NO_FACTS, moved: [{ entry: 'L7', from: 'Data safety', to: 'Honest failure' }] })
   const l1 = entryOf('L1')
   const above = writes(without(SHAPED, 'L1').replace('## Proof over green\n', `${l1}\n## Proof over green\n`))
   expect(above).toEqual({ ...NO_FACTS, moved: [{ entry: 'L1', from: 'Proof over green', to: undefined }] })
-  expect(factsSaid(above)).toBe('moves L1 from "Proof over green" to the place above the first section heading, which no index reads')
+  expect(factsSaid(above)).toBe('moves L1 from "Proof over green" to no section (the place above the first section heading)')
   // Two that go the same way are said together.
   const two = writes(without(SHAPED, 'L5', 'L7').replace('## Honest failure\n', `## Honest failure\n${entryOf('L5')}${L7}`))
   expect(factsSaid(two)).toBe('moves L5, L7 from "Data safety" to "Honest failure"')
@@ -1872,6 +1872,10 @@ test('a fact is named by its own token: a number whole and in its case, a headin
   // A heading's words inside a longer heading's, without quotes, in another case or in other quotes, name nothing.
   expect(unnamed(facts, 'L17 L5 "Data and its safety"')).toEqual(['"Data safety"'])
   expect(unnamed(facts, `L17 L5 Data safety, "data safety", 'Data safety', "Data  safety" and "Data and its safety"`)).toEqual(['"Data safety"'])
+  // A name is matched as it is written, never as a pattern: the reader's fallback number for an
+  // entry line it could not number, "L?", is named by those two characters and by nothing else.
+  expect(unnamed({ ...NO_FACTS, removed: ['L?'] }, 'Save to ~/.claude/LESSONS.md for good: tidy the lessons file?')).toEqual(['L?'])
+  expect(unnamed({ ...NO_FACTS, removed: ['L?'] }, 'take out L? whole')).toEqual([])
   // A range does not name the numbers inside it.
   expect(unnamed({ ...NO_FACTS, removed: ['L5', 'L6', 'L7'] }, 'take out L5 to L7')).toEqual(['L6'])
   // What could not be read is covered by no text at all.

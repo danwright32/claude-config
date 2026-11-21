@@ -1151,7 +1151,9 @@ export const lessonEntries = (file: string): string[] => lessonLayout(file).entr
  * every reading here is made from (L370): its section headings in order, each as the text after
  * "## ", which is what the reader names that section's index file from, and its entries, each with
  * its number, its lines (lessonEntries) and the heading it stands under, undefined above the first
- * one, where the reader gives it to no index at all.
+ * one, where the reader files it under no section's name (its split rendering calls that
+ * "Unsectioned"). No suite yet runs that reader beside this walk over one fixture, as
+ * tests/test-lesson-index-line-shown.sh does for an entry's index line.
  */
 export const lessonLayout = (file: string): { heads: string[]; entries: { n: string; text: string; under: string | undefined }[] } => {
   const heads: string[] = []
@@ -1225,8 +1227,10 @@ export const entriesTouched = (tool: string, input: Record<string, unknown>, fil
  * - `removed`, the numbers of the entries it takes out whole. A rule leaves every session, and
  *   `claude-sync lesson` fails for its number.
  * - `moved`, the entries it leaves word for word under another section heading than they stood
- *   under, with both headings (undefined above the first one, where no index reads an entry). The
- *   index is one generated file a section, so the entry's line moves to another file.
+ *   under, with both headings (undefined above the first one, where an entry belongs to no
+ *   section). The index is one generated file a section, so the entry's line moves to another
+ *   file. A section is its heading's text, as its index file is: two headings of the same words
+ *   are one section here.
  * - `gone` and `arrived`, the section headings it takes out and adds, a heading whose words
  *   change being one of each. The index file is named from the heading and CLAUDE.md imports it by
  *   that name.
@@ -1319,7 +1323,10 @@ export const factNames = (facts: LessonFacts): string[] => [...new Set([...facts
  */
 export const unnamed = (facts: LessonFacts, text: string | null | undefined): string[] => {
   const t = text ?? ''
-  return factNames(facts).filter(name => (name.startsWith('"') ? !t.includes(name) : !new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(t)))
+  // The name is matched as it is written, never as a pattern (lessons review at c258904): the
+  // fallback number of an entry line that could not be numbered, "L?", read as a pattern makes its
+  // letter optional and is found in any text holding two marks side by side.
+  return factNames(facts).filter(name => (name.startsWith('"') ? !t.includes(name) : !new RegExp(`(?<![A-Za-z0-9_])${escapeRe(name)}(?![A-Za-z0-9_])`).test(t)))
 }
 
 /**
@@ -1329,7 +1336,7 @@ export const unnamed = (facts: LessonFacts, text: string | null | undefined): st
  */
 export const coversFacts = (facts: LessonFacts, text: string | null | undefined): boolean => facts.unread === undefined && unnamed(facts, text).length === 0
 
-const sectionSaid = (h: string | undefined): string => (h === undefined ? 'the place above the first section heading, which no index reads' : headingNamed(h))
+const sectionSaid = (h: string | undefined): string => (h === undefined ? 'no section (the place above the first section heading)' : headingNamed(h))
 
 /**
  * `facts` in words, as what a write does, to follow "this Edit" or "it"; empty when it does none.

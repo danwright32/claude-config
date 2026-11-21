@@ -8031,7 +8031,7 @@ was asked in the session's own wording, so an entry could leave every session, o
 move to another file, under a question that named nothing. The mod reads the file as it is and as
 the write would leave it (rules.ts `lessonFacts`, from the one walk `entriesTouched` uses) and
 finds three things: the entries taken out whole; the entries left word for word under another
-section heading, one above the first heading among them, where no index reads it; and the section
+section heading, one put above the first heading among them, in no section; and the section
 headings taken out or added, a renamed heading being one of each. The question is refused, before
 Dan is asked, unless it names every one: each entry by its number as a whole token (`L17` is not
 named by `L174`, `XL17` or `l17`, and a range names only its two ends) and each heading in double
