@@ -248,12 +248,20 @@ def _stamp_ns(stamp):
     return int(t.timestamp()) * 1_000_000_000 + t.microsecond * 1000
 
 
-def _picker_faults(asks):
+def _picker_faults(asks, deadline=None):
     """For each picker's input in asks, None when Dan would read it as written, else the sentence
     saying what in it he would not (the shared check's own words). Raises PickerCheckFailed, with
     why, when the check could not be run or gave no verdict that could be read for every picker:
-    a verdict is never assumed (HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ, above)."""
+    a verdict is never assumed (HIS ANSWER COUNTS ONLY FOR A PICKER HE COULD READ, above).
+    deadline, when given, is the time.monotonic() the caller's git runs share (COMMIT_SECONDS): the
+    check waits no longer than what is left of it, so the hook ends inside its own limit and asks,
+    with the reason, rather than being cut off."""
     import shutil
+    limit = PICKER_CHECK_SECONDS
+    if deadline is not None:
+        limit = min(limit, deadline - time.monotonic())
+        if limit <= 0:
+            raise PickerCheckFailed("no time was left in the hook to run it")
     node = shutil.which("node")
     if node is None:
         raise PickerCheckFailed("node is not on PATH, and it runs the check")
@@ -261,9 +269,9 @@ def _picker_faults(asks):
     try:
         r = subprocess.run([node, "--experimental-strip-types", "--no-warnings", entry],
                            input=json.dumps({"asks": asks}).encode("utf-8"), capture_output=True,
-                           timeout=PICKER_CHECK_SECONDS)
+                           timeout=limit)
     except subprocess.TimeoutExpired:
-        raise PickerCheckFailed("the check did not answer in " + ("%g" % PICKER_CHECK_SECONDS) + " seconds")
+        raise PickerCheckFailed("the check did not answer in " + ("%.1f" % limit) + " seconds")
     except OSError as e:
         raise PickerCheckFailed("the check could not be started (" + type(e).__name__ + ")")
     if r.returncode != 0:
@@ -289,17 +297,17 @@ def _picker_faults(asks):
     return out
 
 
-def _read_by_dan(answered, word, unread):
+def _read_by_dan(answered, word, unread, deadline=None):
     """Those of answered, [(a picker's input as the dialog got it, what to keep of it)], whose
     picker Dan could read as written, as the kept halves in order. Each other is added to unread,
     the caller's list, when it gave one, as (its kept half, why it is not taken), so a caller can
     say the reason of the picker for the very thing it is asked about and of no other. When the
     check cannot run, none is taken and each is given that reason: the caller then asks about the
-    write, as it does with no picker at all."""
+    write, as it does with no picker at all. deadline is _picker_faults'."""
     if not answered:
         return []
     try:
-        faults = _picker_faults([ask for ask, _ in answered])
+        faults = _picker_faults([ask for ask, _ in answered], deadline)
     except PickerCheckFailed as e:
         why = ("whether Dan could read the picker he answered " + word + " in could not be checked ("
                + str(e) + "), so his answer is not taken until it can be")
@@ -327,8 +335,9 @@ def applies(transcript_path, session_id, unread=None):
     return _pickers(transcript_path, session_id, SOURCE, APPLY, unread)
 
 
-def _pickers(transcript_path, session_id, source, word, unread=None):
-    """applies(), for the pickers of one source that Dan answered with one word."""
+def _pickers(transcript_path, session_id, source, word, unread=None, deadline=None):
+    """applies(), for the pickers of one source that Dan answered with one word. deadline is
+    _picker_faults'."""
     found, asked, dries, dry_sent = [], {}, [], {}
     with open(transcript_path, "rb") as f:
         for raw in f:
@@ -376,7 +385,7 @@ def _pickers(transcript_path, session_id, source, word, unread=None):
                         shown = result.get("questions")
                         got = dict(pair[0], questions=shown) if isinstance(shown, list) and shown else pair[0]
                         found.append((got, (pair[0]["metadata"], pair[1])))
-    return _read_by_dan(found, word, unread)
+    return _read_by_dan(found, word, unread, deadline)
 
 
 def _pending_why_not(pending, name):
@@ -634,7 +643,7 @@ def _keep(keys, refs, unkept):
                   "(claude-config#3058).")
 
 
-def _trusted_by_dan(session_id, transcript_path):
+def _trusted_by_dan(session_id, transcript_path, deadline=None):
     """({(a list's resolved path, a ref)} for every picker of this session Dan answered TRUST, None,
     untaken), or (nothing, why his pickers could not be looked for, {}). Fails closed: no
     transcript, one that cannot be read, or a picker naming no absolute list path or no ref gives
@@ -642,12 +651,13 @@ def _trusted_by_dan(session_id, transcript_path):
     none was read (L11). untaken is {(a list's resolved path, a ref): why} for each line he
     answered TRUST for in a picker that was not taken, because he could not have read it as
     written or the check of that could not run (#3321): the question about that line says so, and
-    the question about any other line does not."""
+    the question about any other line does not. deadline is the one the caller's git runs share,
+    so the check of his pickers waits only for what is left of it (_picker_faults)."""
     if not isinstance(transcript_path, str) or not transcript_path or not isinstance(session_id, str) or not session_id:
         return set(), "the call named no session transcript" + UNLOOKED, {}
     unread = []
     try:
-        found = _pickers(transcript_path, session_id, TRUST_SOURCE, TRUST, unread)
+        found = _pickers(transcript_path, session_id, TRUST_SOURCE, TRUST, unread, deadline)
     except (OSError, ValueError) as e:
         return set(), ("this session's transcript could not be read (" + type(e).__name__ + ")"
                        + UNLOOKED), {}
@@ -696,8 +706,8 @@ def _unapproved(workdir, ref, deadline, session_id=None, transcript_path=None, a
     key = _digest("1", clone, prefix + LIST_PATH, ref)
     if key in approved:
         return None
-    dan, unread, untaken = _trusted_by_dan(session_id, transcript_path)
-    line = (os.path.realpath(os.path.join(workdir, TEST_LIST)), ref)
+    dan, unread, untaken = _trusted_by_dan(session_id, transcript_path, deadline)
+    line =(os.path.realpath(os.path.join(workdir, TEST_LIST)), ref)
     if line in dan:
         if not agent:
             _keep([key], [ref], unkept)
@@ -737,7 +747,7 @@ def _not_approved(folder, added, deadline, session_id, transcript_path, agent, u
         if key in approved:
             continue
         if dan is None:
-            dan, unread, untaken = _trusted_by_dan(session_id, transcript_path)
+            dan, unread, untaken = _trusted_by_dan(session_id, transcript_path, deadline)
         here = (os.path.realpath(os.path.join(top_dir, rel)), line)
         if here in dan:
             keys.append((key, line))

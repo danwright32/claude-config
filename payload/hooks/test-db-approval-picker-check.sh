@@ -136,7 +136,7 @@ with open(path, "w") as f:
 #   applies  the n of each Apply taken, then each reason a picker was not
 #   trusted  the refs Dan trusted, then why his pickers could not all be taken
 reader() {
-  python3 -I -B - "$DIR/lib" "$1" "$2" "${3:-}" <<'PY'
+  python3 -I -B - "$DIR/lib" "$1" "$2" "${3:-}" "${4:-}" <<'PY'
 import importlib.util, sys, time
 spec = importlib.util.spec_from_file_location("ap", sys.argv[1] + "/db-apply-approval.py")
 ap = importlib.util.module_from_spec(spec)
@@ -149,7 +149,11 @@ if sys.argv[3] == "applies":
     found = ap.applies(sys.argv[2], "s1", unread)
     print("taken=%s unread=%s" % ([m["n"] for m, _ in found], [(kept[0]["n"], why) for kept, why in unread]))
 else:
-    lines, why, untaken = ap._trusted_by_dan("s1", sys.argv[2])
+    # The fifth argument, when given, is the seconds left of the hook's shared deadline.
+    if sys.argv[5]:
+        lines, why, untaken = ap._trusted_by_dan("s1", sys.argv[2], t + float(sys.argv[5]))
+    else:
+        lines, why, untaken = ap._trusted_by_dan("s1", sys.argv[2])
     print("trusted=%s why=%s untaken=%s" % (sorted(r for _, r in lines), why, sorted((r, w) for (_, r), w in untaken.items())))
 print("took %.1f" % (time.monotonic() - t))
 PY
@@ -209,6 +213,14 @@ case "$got" in "taken=[] unread=["*"could not be checked"*) check "an answer wit
 fakenode allnull 'cat >/dev/null; echo "{\"faults\":[\"fine\"]}"'
 got="$(PATH="$WORK/allnull:$PATH" reader "$WORK/plain.jsonl" applies 2>&1)"
 case "$got" in "taken=[] unread=["*"could not be checked"*) check "a verdict in a shape the entry never gives takes no Apply" ok ;; *) check "a verdict in a shape the entry never gives takes no Apply" "got: ${got:0:400}" ;; esac
+# The check shares the hook's deadline with the git runs before it, so the hook's own limit of 10
+# seconds is never passed: with less time left than the check's own limit it waits only that long,
+# and with none left it is not started, and the Trust is not taken, with the reason.
+got="$(PATH="$WORK/hang:$PATH" reader "$WORK/trust-plain.jsonl" trusted "" 0.3 2>&1)"
+case "$got" in "trusted=[] why=None untaken=[('ref0', "*"could not be checked"*"took 0."*) check "with less of the hook's time left than the check's own limit, the check is given up on when that time runs out" ok ;; *) check "with less of the hook's time left than the check's own limit, the check is given up on when that time runs out" "got: ${got:0:400}" ;; esac
+fakenode spent "touch '$WORK/spent-ran'; exit 1"
+got="$(PATH="$WORK/spent:$PATH" reader "$WORK/trust-plain.jsonl" trusted "" 0 2>&1)"
+case "$got" in "trusted=[] why=None untaken=[('ref0', "*"could not be checked"*"no time was left"*) [ ! -e "$WORK/spent-ran" ] && check "with none of the hook's time left, the check is never started and the Trust is not taken, with why" ok || check "with none of the hook's time left, the check is never started and the Trust is not taken, with why" "node was run" ;; *) check "with none of the hook's time left, the check is never started and the Trust is not taken, with why" "got: ${got:0:400}" ;; esac
 
 # --- the cost: no picker of the source, no node --------------------------------------------------
 fakenode marker "touch '$WORK/node-ran'; exit 1"

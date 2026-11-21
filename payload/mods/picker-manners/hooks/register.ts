@@ -15,6 +15,9 @@ import { isOwnDialog } from './mod-kit/asked.ts'
 //   through the mod's own $ noun, which Claude Code cuts off at 10 seconds, so the dialog then asked
 //   every question a second time.
 // - One question per call (CLAUDE.md): more are refused, and so is none.
+// - A picker whose answer would be written onto an issue is refused when Dan could not read it as
+//   written (mod-kit's askFault; #3321, Dan, 2026-11-21: "Refuse outright"), unless it is a mod's
+//   own dialog, which is asked and written onto no issue (ownDialog).
 // - "no next issue" or "just give me the list" turns next issue pickers off for the session;
 //   /pickers on brings them back.
 
