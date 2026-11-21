@@ -224,7 +224,9 @@ dc_notes_checkout() { # <path> <home> <physical home>
 #   an empty folder name, which git -C reads as the directory the caller stands in, so a judged
 #   folder whose name was lost would be answered for by whatever repository that is;
 #   an option before the command other than --no-optional-locks, which could turn a setting back on;
-#   stash list with anything after it, and status -v, which print a diff;
+#   stash list with anything after it, which is read as log options and can print a diff;
+#   status with any option but the two it was measured with, --porcelain and --untracked-files=all,
+#   because -v prints a diff and has more spellings (-vv, -sv, --verb) than a list would hold;
 #   a filter whose name holds an equals sign, which -c cannot name (measured: it still ran), and a
 #   submodule whose path git prints quoted, whose settings could therefore not be read.
 # A failure of git's own is returned as git's exit code with git's words on stderr.
@@ -252,7 +254,7 @@ dc_git() { # <folder> <git arguments...>
     case "$kind" in
       remote|stash|worktree) [ "$rest" -eq 1 ] && kind="$kind $a" ;;
       "stash list") echo "dc_git: refused: stash list takes nothing after it here, since what follows is read as log options, and one that prints a diff runs the repository's diff programs" >&2; return 125 ;;
-      status) case "$a" in -v|--verbose) echo "dc_git: refused: a status that prints a diff ($a) runs the repository's diff programs" >&2; return 125 ;; esac ;;
+      status) case "$a" in --porcelain|--untracked-files=all) ;; *) echo "dc_git: refused: $a is not an option status was measured with here (--porcelain and --untracked-files=all), and a status that prints a diff, as -v does in any of its spellings, runs the repository's diff programs" >&2; return 125 ;; esac ;;
     esac
   done
   case "$kind" in

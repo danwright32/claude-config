@@ -268,6 +268,13 @@ for q in "fetch origin" "remote update" "remote show origin" "stash pop" "stash"
 done
 check "dc_git refuses stash list with anything after it, which would be log options" "$(refused "takes nothing after it" "$C" stash list -p)"
 check "dc_git refuses a status asked to print a diff" "$(refused "prints a diff" "$C" status -v)"
+# -v has other spellings (a cluster, a second v, a shortened long name), so status takes only the
+# two options it was measured with and no list of the spellings to refuse is kept.
+for q in "-vv" "-sv" "-vs" "--verb" "--verbose" "--short" "--porcelain -v"; do
+  # shellcheck disable=SC2086
+  check "dc_git refuses 'git status $q': status takes only the options it was measured with" "$(refused "is not an option status was measured with" "$C" status $q)"
+done
+check "dc_git still runs the status the scan asks, with both its options" "$(eq "$(ans dc_git "$C" --no-optional-locks status --porcelain --untracked-files=all)" "0|")"
 check "dc_git refuses a setting of the caller's before the command, which could turn one back on" "$(refused "is not an option it passes" "$C" -c core.fsmonitor=true status)"
 check "dc_git refuses a call with no command" "$(refused "dc_git: " "$C")"
 # An empty folder name: git -C "" stays where the caller stands, so a judged folder whose name was
