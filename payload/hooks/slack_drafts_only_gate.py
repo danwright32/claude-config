@@ -5801,7 +5801,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         reason = (self.judge_written(d, text, wrapper, why, depth, whole, fed_by)
                   or self.judge_unglued(d, text, depth, whole))
         # And a shell, its code or its script named another way: $SHELL, /dev/stdin, a line read and
-        # then run, xargs, \$( ) in a double quoted string (lib/sh-walk-shapes.py, claude-config#3251).
+        # then run, xargs, \$( ) in a double quoted string (lib/sh-walk-shapes.py, claude-config#3251),
+        # and a string whose outer shell fills something in inside its own single quotes (#3316).
         reason = reason or self.judge_unread_shapes(d, text, wrapper, depth, whole)
         # And the words after a program the gate does not know, which may run them, read as the
         # command they spell (`op run -- node --test x.test.js`; lib/unknown-program.py, #3277).
