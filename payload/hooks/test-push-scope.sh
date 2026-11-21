@@ -1983,12 +1983,30 @@ git update-index --refresh >/dev/null; git commit -m x && git push
 git stash list | wc -l; git commit -m x && git push
 x=$(git symbolic-ref --short HEAD) && git push origin "$x"
 HARMLESS
-# A redirection is among the words the reader hands over and is none of git's own, so a branch made
-# at HEAD with its output sent away is still that, and a move with its output sent away still a move.
+# A redirection is none of git's own words, and since #3322 the reader hands none over, so a branch
+# made at HEAD with its output sent away is still that, and a move with its output sent away still a
+# move.
 moves_or_stages "#3098 a redirection is not one of git's words" "git checkout main 2>&1 | tail -1; git push" "move git checkout"
 moves_or_stages "#3098 a redirection is not one of git's words" "git checkout -b new origin/main >/dev/null 2>&1 && git push -u origin new" "move git checkout"
 moves_or_stages "#3098 a redirection is not one of git's words" "git reset 2>/dev/null; git commit -m x; git push" "stage git reset"
 moves_or_stages "#3098 a redirection is not one of git's words" "git apply --index < fix.patch && git commit -m x && git push" "stage git apply"
+# claude-config#3322: the reader hands over no redirection, wherever one was written, so this reader
+# steps over none itself. A quoted word that only looks like one is a word of git's, which the step
+# this reader used to take passed over: `git checkout -b new '>odd'` names a start point, so it is no
+# branch made where HEAD already is.
+moves_or_stages "#3322 a quoted word that looks like a redirection is one of git's words" "git checkout -b new '>odd' && git push -u origin new" "move git checkout"
+moves_or_stages "#3322 a redirection before the words is not one of git's words" "git checkout 2>&1 main; git push" "move git checkout"
+r="$(ps_unread_move_or_stage "git checkout > out.txt -b new && git push -u origin new")"; rc=$?
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3322 a branch made at HEAD with a redirection before its words is still that" ok \
+  || check "#3322 a branch made at HEAD with a redirection before its words is still that" "exit $rc, printed [$r]"
+# With nothing to read the command the words are the crude cut's, and a redirection is taken out of
+# those once too (ps__drop_redirections), by its look alone.
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_unread_move_or_stage "git checkout -b new > out.txt && git push -u origin new")"; rc=$?
+[ "$rc" = "$NO" ] && [ -z "$r" ] && check "#3322 with no reader a redirection is still none of git's words" ok \
+  || check "#3322 with no reader a redirection is still none of git's words" "exit $rc, printed [$r]"
+r="$(PS_SHELL_WORDS=/nonexistent/shell-words.py; ps_runs_git "git push > out.txt origin 2>&1 main" push && printf '%s,' "${PS_RUN_ARGS[@]}")"
+[ "$r" = "origin,main," ] && check "#3322 with no reader the words handed out hold no redirection" ok \
+  || check "#3322 with no reader the words handed out hold no redirection" "got [$r]"
 # A move inside a loop, a condition or a list is one too.
 moves_or_stages "#3098 wherever the command stands" "for b in a b; do git checkout \$b && git push; done" "move git checkout"
 moves_or_stages "#3098 wherever the command stands" "if git checkout main; then git push; fi" "move git checkout"
@@ -2062,6 +2080,10 @@ want_scope "(git commit a.txt -m x) && git push" "PATHS|a.txt" "#3111 inside bra
 want_scope "git commit -F msg.txt a.txt && git push" "PATHS|a.txt" "#3111 the message file is no path, the word after it is"
 want_scope "git commit -m x a.txt 2>&1 && git push" "PATHS|a.txt" "#3111 a redirection is not a path"
 want_scope "git commit a.txt -m x > out.txt && git push" "PATHS|a.txt" "#3111 nor is the file a redirection writes"
+# claude-config#3322: the reader hands over no redirection, so this reader steps over none itself;
+# a quoted path that only looks like one, which that step passed over, is read as the path it is.
+want_scope "git commit a.txt > out.txt b.txt -m x && git push" "PATHS|a.txt|b.txt" "#3322 a redirection between two paths is neither"
+want_scope "git commit -m x '>odd' a.txt && git push" "PATHS|>odd|a.txt" "#3322 a quoted path that looks like a redirection is a path"
 want_scope "git -C sub commit a.txt -m x && git -C sub push" "PATHS|a.txt" "#3111 behind git -C"
 want_scope "rtk git commit a.txt -m x && rtk git push" "PATHS|a.txt" "#3111 behind rtk"
 want_scope "git commit a.txt -m x && git commit b.txt -m y && git push" "PATHS|a.txt|b.txt" "#3111 two commits, each naming one"
