@@ -79,12 +79,16 @@ own by the suite, of one Judge handed two lines.
 
 WHAT A PASS DOES NOT MEAN. The gate has not read what runs under the wrapper; it has checked which
 program is started and that nothing else is. The route stops code from using the network while it
-runs under the wrapper, which is what makes an accidental post from a test impossible. It does not
-contain code written to get out: the sandbox allows every file write, so such code can leave
+runs under the wrapper, which is what makes an accidental post from a test impossible. Since #3288
+the wrapper also refuses the hand offs it names, where a program outside the sandbox would act for
+the code: starting open, osascript, launchctl, crontab or shortcuts, and the requests to have
+something opened, to send an Apple event to another app and to have launchd make a job. It does
+not contain code written to get out: the sandbox allows every file write, so such code can leave
 something behind that a later call reads without this gate reading it (a shell startup file, a
-tool's config file, a program in a folder on the PATH the user can write, the wrapper's own file),
-or ask a program outside the sandbox to act for it (launchd, another app, a page opened in a
-browser). no-network-run.sh says the same of itself.
+tool's config file, a program in a folder on the PATH the user can write, the wrapper's own file,
+a file in a folder launchd reads at the next login), or reach a hand off the wrapper's rules do
+not name (a service found by its name that acts for its caller in a way no rule there names).
+no-network-run.sh says the same of itself, with what was measured.
 
 It also holds the sentence a refusal gains so the route is named where it is needed (route_note).
 """

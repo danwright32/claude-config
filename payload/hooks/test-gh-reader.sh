@@ -622,6 +622,76 @@ out.append(",".join(sw.shell_tokens("a #b", commenters="#")))
 out.append(",".join(sw.shell_tokens("a b \"c", commenters="#", partial=True)))
 print("|".join(out))' "$SW")"
 
+# --- a compiled program is no script file (claude-config#3299) -------------------------------------
+# A caller that asks for the script files a command runs (every_command with a list) was handed the
+# bytes of a compiled program run by its path as commands: 616 of them for one Mach-O helper, measured
+# 2026-11-19. The kernel runs such a file, or the shell refuses it; no shell reads it as commands. The
+# reader now leaves it unread and says so (compiled_program), for a file run by its path or handed to
+# bash whose first four bytes are a Mach-O or ELF magic number with a NUL byte after them before
+# anything a shell ends a word at. Every other file is read exactly as before, because a shell does
+# run it (measured 2026-11-21 on zsh 5.9, bash 3.2, dash and ksh): one with a NUL after its first
+# line, one with bytes that are not UTF-8, one with the magic number and no NUL, and any file handed
+# to zsh, sh, dash or ksh or sourced. The fixtures are a few bytes written here, never committed.
+# Every case is also read by a copy of the reader that calls nothing compiled, and must read
+# otherwise there; a control reads the same in both.
+C3299="$WORK/c3299"; mkdir -p "$C3299"
+python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$WORK/loose-compiled" compiled
+check_eq "#3299 the copy that calls nothing compiled was made from the reader" "0" "$?"
+printf '\317\372\355\376\014\000\000\001\000\000\000\000\ngit push origin main\n' > "$C3299/tool"
+printf '\177ELF\002\001\001\000\000\000\000\000\ngit push origin main\n' > "$C3299/elftool"
+printf '\312\376\272\276\000\000\000\002\ngit push origin main\n' > "$C3299/fattool"
+{ printf '\317\372\355\376\014\000\000\001'; head -c 300000 /dev/zero; } > "$C3299/bigtool"
+printf '#!/bin/bash\ngit push origin main\n\000\000\n' > "$C3299/nul-later.sh"
+printf 'git push origin main # caf\351\n' > "$C3299/latin1.sh"
+printf '\177ELF;git push origin main\n' > "$C3299/magic-no-nul"
+printf '\177ELF;git push origin main;\000\n' > "$C3299/magic-break-nul"
+printf '#!/bin/bash\ngit push origin main\n' > "$C3299/plain.sh"
+printf '#!/usr/bin/env python3\nimport os\nos.system("git push origin main")\n' > "$C3299/tool.py"
+script_read(){ # script_read <reader> <command>: each command as depth:text, the script files read, the programs called compiled
+  python3 -B -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+scripts, out, compiled = [], [], []
+for d, text, wrapper, why, depth in sw.every_command(sys.argv[3], sys.argv[2], scripts):
+    out.append("%d:%s" % (depth, text.strip() if text.isprintable() else "(bytes)"))
+    name = sw.script_file(why) if why else None
+    if name and sw.compiled_program(name, d, wrapper):
+        compiled.append(os.path.basename(name))
+print("%s | read %d | compiled %s" % (" ; ".join(out), len(scripts), ",".join(compiled) or "-"))' "$1" "$C3299" "$2" 2>&1
+}
+compiled(){ # compiled <name> <expected> <command>
+  local loose
+  check_eq "#3299 $1" "$2" "$(script_read "$SW" "$3")"
+  loose="$(script_read "$WORK/loose-compiled/lib/shell-words.py" "$3")"
+  if [[ "$loose" != "$2" ]]; then ok; else bad "#3299 and the copy that calls nothing compiled reads it otherwise: $1 (it read '$loose' too)"; fi
+}
+compiled_same(){ # compiled_same <name> <expected> <command>
+  check_eq "#3299 control: $1" "$2" "$(script_read "$SW" "$3")"
+  check_eq "#3299 control, and the copy that calls nothing compiled reads it the same: $1" "$2" "$(script_read "$WORK/loose-compiled/lib/shell-words.py" "$3")"
+}
+compiled "a Mach-O program run by its path is not read as a script" "0:./tool --front-window notes.txt | read 0 | compiled tool" "./tool --front-window notes.txt"
+compiled "nor an ELF program" "0:./elftool | read 0 | compiled elftool" "./elftool"
+compiled "nor a universal Mach-O program" "0:./fattool | read 0 | compiled fattool" "./fattool"
+compiled "nor one named by its full path" "0:$C3299/tool | read 0 | compiled tool" "$C3299/tool"
+compiled "nor one handed to bash, which refuses to run it" "0:bash tool | read 0 | compiled tool" "bash tool"
+compiled "the commands beside it are still read" "0:./tool ; 0:git push origin main | read 0 | compiled tool" "./tool && git push origin main"
+compiled "a program too large to read as a script is still called compiled" "0:./bigtool | read 0 | compiled bigtool" "./bigtool"
+compiled_same "a script with a NUL after its first line still runs, so it is still read" "0:./nul-later.sh ; 1:git push origin main ; 1:(bytes) | read 1 | compiled -" "./nul-later.sh"
+compiled_same "a script with bytes that are not UTF-8 still runs, so it is still read" "0:./latin1.sh ; 1:git push origin main | read 1 | compiled -" "./latin1.sh"
+compiled_same "the magic number with no NUL after it is run as commands by a shell, so it is still read" "0:./magic-no-nul ; 1:(bytes) ; 1:git push origin main | read 1 | compiled -" "./magic-no-nul"
+compiled_same "and so is one whose NUL comes after a word has ended, which ksh runs" "0:./magic-break-nul ; 1:(bytes) ; 1:git push origin main ; 1:(bytes) | read 1 | compiled -" "./magic-break-nul"
+for shell in zsh sh dash ksh; do
+  compiled_same "$shell runs the lines of any file it is handed, so it is still read" "0:$shell tool ; 1:(bytes) ; 1:git push origin main | read 1 | compiled -" "$shell tool"
+done
+compiled_same "a sourced file is run by the shell itself, so it is still read" "0:source tool ; 1:(bytes) ; 1:git push origin main | read 1 | compiled -" "source tool"
+compiled_same "and by the dot spelling" "0:. ./tool ; 1:(bytes) ; 1:git push origin main | read 1 | compiled -" ". ./tool"
+compiled_same "a shell script is read as it was" "0:./plain.sh ; 1:git push origin main | read 1 | compiled -" "./plain.sh"
+compiled_same "a script whose #! names python, run by its path, was never read as a shell script" "0:./tool.py | read 0 | compiled -" "./tool.py"
+compiled_same "handed to bash, bash runs its lines as commands, so it is read as one" "0:bash tool.py ; 1:import os ; 1:os.system(\"git push origin main\") | read 1 | compiled -" "bash tool.py"
+compiled_same "a file that is not there is no compiled program" "0:./missing | read 0 | compiled -" "./missing"
+
 mkdir -p "$WORK/empty"
 scan "$WORK/empty"
 check_eq "a folder with no hook is refused, not passed" "2" "$rc"
