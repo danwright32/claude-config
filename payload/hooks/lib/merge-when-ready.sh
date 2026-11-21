@@ -933,7 +933,7 @@ ut_dl_read(){
 # ut_found, and ut_via to say which run it came from. 0 when found, 1 to look again; any other
 # outcome refuses the merge.
 ut_follow_reuse(){
-  local h7="${head:0:7}" rows id jrun jname tree from_repo from sha names jobs out found=""
+  local h7="${head:0:7}" rows id jrun jname tree from_repo from="" sha names jobs out found=""
   ut_via=""; ut_reused_mains=""
   rows="$(ut_rows)"
   while IFS=$'\t' read -r id jrun jname; do
