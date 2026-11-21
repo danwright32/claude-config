@@ -304,6 +304,8 @@ new_case
 : >"$FAKE/fail_issue"
 run release "$REPO" 3317 "$MINE" "dropped"
 is "release when the read fails: exit 2" 2 "$code"
+has "release when the read fails: says the claim still stands" "COULD NOT RELEASE" "$out"
+lacks "release when the read fails: never says nothing was claimed" "nothing was claimed" "$out"
 
 # ---- 10. bad arguments call nothing ----
 new_case

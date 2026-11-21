@@ -144,7 +144,11 @@ judge_claims() {
 }
 
 fail_read() { # fail_read <what> <error file>
-  echo "COULD NOT CHECK: could not read $1 for $repo#$issue, so whether another session holds it is unknown. Do not start it, and nothing was claimed."
+  if [ "$mode" = release ]; then
+    echo "COULD NOT RELEASE: could not read $1 for $repo#$issue, so nothing was posted and any claim of this session's still stands. Run the release again."
+  else
+    echo "COULD NOT CHECK: could not read $1 for $repo#$issue, so whether another session holds it is unknown. Do not start it, and nothing was claimed."
+  fi
   sed 's/^/  /' "$2"
   exit 2
 }
