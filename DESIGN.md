@@ -1787,6 +1787,31 @@ their text is not on this machine, a public gist's files are read the same way (
 refused when no file is named; a `-` is refused by the command hook and read by the guard), and `gh repo create` is judged on its own
 text for a public repository with or without `--push`, as is `gh repo edit`.
 
+A redirection among a command's words (#3322). The shell takes every redirection out before the
+program gets its words, and the shared reader used to hand each on among them, leaving every gate
+to step over it. Three did not: the stacked branch delete gate read `>/dev/null` as the endpoint of
+`gh api >/dev/null -X DELETE <ref>` and let the delete run unasked, read it as the remote of a push,
+and `lib/merge-selector.py`, lexing for itself, read `gh pr merge 2>/dev/null 7` as pull request 2
+and `gh api >/dev/null -X PUT .../pulls/7/merge` as no merge. The fix is one place, not a step in
+each reader: `tool_words` in `lib/shell-words.py` makes a gh or git command's words from its text
+with `unredirected` applied, and both `tool_field` (the bash gates) and `tool_command` (the python
+ones) go through it. It works on the text because only there is a quoted `'>'` told from the
+operator. Taking a word out by its look, after the quotes are gone, was rejected: it would take a
+quoted message such as `--body '>'` and the word after it, and a gate reading that body would then
+read less than before. For the callers that cut a command into tokens themselves, `shell_tokens`
+marks each operator it read outside quotes (the token is the same text and compares as it always
+did), and `rejoin` writes a marked one back bare; a token a caller got any other way is never taken
+for a redirection, so those callers read exactly what they read before. `merge-selector.py` gave up
+its own lexer for `shell_tokens`, keeping its two habits through arguments (a `#` starts a comment,
+and the walk keeps the tokens before one it cannot read). The five readers in `lib/push-scope.sh`
+that stepped over a redirection themselves no longer do, so a quoted path or start point that only
+looks like one is now read as the word it is, which reads more and never less; the crude cut, used
+when nothing can read the command, takes them out in one place as well (`ps__drop_redirections`).
+What deliberately keeps every redirection: the command's own words (`PS__R_WORDS`), which
+`ps__writes_out` judges a write by, and the stages `gh_issue_scan.py` reads a body on standard
+input from. `rtk_field` is left as it was: `check-rtk-init.sh` refuses any word it does not know,
+a redirection included, which is the stricter reading.
+
 The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
 line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
 text `create` before reading a command, so `gh issue new` and `gh pr new` passed them unread. Their
