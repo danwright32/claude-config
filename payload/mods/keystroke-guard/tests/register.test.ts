@@ -206,7 +206,7 @@ test('the right app, frontmost and alone, gets the agreed question once and then
 test("the Ready question's size is recorded as it is asked, and never a word of it (#3321)", withKit, async ($, on) => {
   mock.clock(on, { now: 1_800_000_000_000 })
   const written: Record<string, string> = {}
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/Users/x' : undefined }) as never)
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/fake-home/x' : undefined }) as never)
   on('fs.write', ($, e) => {
     written[e.path] = e.text
     return { value: undefined }
@@ -219,7 +219,7 @@ test("the Ready question's size is recorded as it is asked, and never a word of 
   expect(w.reached).toContain('Bash')
   const paths = Object.keys(written)
   expect(paths.length).toBe(1)
-  expect(/^\/Users\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(paths[0] ?? '')).toBe(true)
+  expect(/^\/fake-home\/x\/\.claude\/state\/asked-questions\/\d{13}-[a-z0-9]+\.json$/.test(paths[0] ?? '')).toBe(true)
   const text = written[paths[0] ?? ''] ?? ''
   expect(JSON.parse(text)).toMatchObject({ mod: 'keystroke-guard', which: 'ready', units: question.length, rows: 1, options: 2, longest: 8, header: 11, refused: false })
   for (const word of ['Overture', 'Ready', 'Go ahead', 'Taking over']) expect(text).not.toContain(word)
@@ -229,7 +229,7 @@ test("the Ready question's size is recorded as it is asked, and never a word of 
 // The record failing is said once, in the transcript, and the question is asked all the same.
 test('a record that cannot be kept is said once, and the Ready question is still asked (#3321)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  on('env.get', () => ({ value: '/Users/x' }) as never)
+  on('env.get', () => ({ value: '/fake-home/x' }) as never)
   on('fs.write', () => {
     throw new Error('EACCES: permission denied')
   })

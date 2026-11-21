@@ -25,8 +25,8 @@ trap 'rm -rf "$W"' EXIT
 D="$W/asked"
 mkdir -p "$D"
 
-# One record as asked.ts writes it. $1 the file's moment in ms, $2 mod, $3 which, $4 units,
-# $5 rows, $6 refused.
+# One record as asked.ts writes it, given in order: when it was asked, the mod, which question,
+# its units, its rows, and whether the check would refuse it. These are made up, not measured.
 rec(){ printf '{"at":%s,"mod":"%s","which":"%s","units":%s,"rows":%s,"options":2,"longest":9,"header":0,"refused":%s}\n' "$1" "$2" "$3" "$4" "$5" "$6" > "$D/$1-abc$4.json"; }
 # 2026-11-21 and 2026-11-22, noon UTC.
 A=1795262400000; B=1795348800000

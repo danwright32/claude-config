@@ -10,7 +10,7 @@ import { MAX_QUESTION } from '../hooks/shown.ts'
 
 type World = { files: Map<string, string>; ran: string[][]; asked: { question: string; options: unknown }[]; said: string[]; now: number; io: AskedIo; failWrite?: string; noDir?: boolean; home?: string | undefined; order: string[]; own: string[]; ownValue: readonly string[] | undefined; ownVersion: number; misses: number; failAsking?: string }
 const world = (): World => {
-  const w: World = { files: new Map(), ran: [], asked: [], said: [], now: 1_800_000_000_000, home: '/Users/x', io: undefined as never, order: [], own: [], ownValue: undefined, ownVersion: 0, misses: 0 }
+  const w: World = { files: new Map(), ran: [], asked: [], said: [], now: 1_800_000_000_000, home: '/fake-home/x', io: undefined as never, order: [], own: [], ownValue: undefined, ownVersion: 0, misses: 0 }
   w.io = {
     now: async () => w.now++,
     home: async () => w.home,
@@ -67,8 +67,8 @@ test('the record holds sizes and which question, and never a word of it', async 
   expect(w.asked).toEqual([{ question, options: { options: ['Go ahead', 'Not now'], header: 'Taking over' } }])
   const { path, ...fields } = records(w)[0] as { path: string }
   expect(fields).toEqual({ at: 1_800_000_000_000, mod: 'keystroke-guard', which: 'ready', units: question.length, rows: 1, options: 2, longest: 8, header: 11, refused: false })
-  expect(/^\/Users\/x\/\.claude\/state\/asked-questions\/1800000000000-[a-z0-9]+\.json$/.test(path)).toBe(true)
-  expect(askedDir('/Users/x/')).toBe('/Users/x/.claude/state/asked-questions')
+  expect(/^\/fake-home\/x\/\.claude\/state\/asked-questions\/1800000000000-[a-z0-9]+\.json$/.test(path)).toBe(true)
+  expect(askedDir('/fake-home/x/')).toBe('/fake-home/x/.claude/state/asked-questions')
   const text = [...w.files.values()].join('\n')
   for (const word of ['Lightroom', 'Ready', 'Go ahead', 'Not now', 'Taking over']) expect(text).not.toContain(word)
   expect(w.said).toEqual([])
@@ -99,7 +99,7 @@ test('a folder that is not there yet is made, and the record written', async () 
   const w = world()
   w.noDir = true
   await recordedAsk(w.io, 'scope-modes', 'no build', 'Switch to build?', ['Yes', 'No'])
-  expect(w.ran).toEqual([['mkdir', '-p', askedDir('/Users/x')]])
+  expect(w.ran).toEqual([['mkdir', '-p', askedDir('/fake-home/x')]])
   expect(records(w).map(r => r.which)).toEqual(['no build'])
   expect(w.said).toEqual([])
 })
@@ -143,7 +143,7 @@ test('a dismissed dialog rejects as it always did, with its record kept', async 
 
 test('the folder is bounded: past the most kept, the oldest go, and only files this wrote', async () => {
   const w = world()
-  const dir = askedDir('/Users/x')
+  const dir = askedDir('/fake-home/x')
   for (let k = 0; k < ASKED_KEEP + 2; k++) w.files.set(`${dir}/${1_700_000_000_000 + k}-seed${k}.json`, '{}')
   w.files.set(`${dir}/notes.txt`, 'not a record')
   w.files.set(`${dir}/README`, 'not a record')
