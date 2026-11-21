@@ -6499,7 +6499,8 @@ Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
   say, moves a file's access time only on the first read after each change, so it can delay an
   offer once and never bring one forward. The task folder's own modification time is left out,
   because moving one ticked leftover to the Trash moves it just before the next one in the same
-  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  folder is judged again. The row states its 7 days, since it is the one row whose time differs
+  from the 30 days the page's opening sentence gives for a row that states no time of its own.
   The remover lets no new path through for this: these are the same four level folders, and what
   changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
   files and are not offered.
@@ -9005,7 +9006,8 @@ refused for git only where it would run git, never for the word in prose (#1124)
 when every git call in it is a local read (show, cat-file, log, diff and the like) with its
 subcommand written out, read through mod-kit's git reading (#2939). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+and deploy runs since sleep began, and notes each one that needs Dan for the top of the report
+(a complete issue filed overnight is not one, and is said under Done, as below). It lists only what
 needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
 passed, was skipped or is still running, a run anyone dispatched whose name is not a deploy's and
 that ended the same way, any run a schedule, a dispatch or another workflow started that skipped
