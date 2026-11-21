@@ -3,6 +3,8 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { byShellOnly, lessonsByShell, pickerOnly } from '../hooks/rules.ts'
+import { NO_FACTS, cannotHold, cannotName, coversFacts, entriesTouched, factNames, factsAsk, factsSaid, heldToFacts, lessonFacts, notCovered, unnamed, unshownName } from '../hooks/rules.ts'
+import { SHAPED, entryOf, without } from './lessons-shaped.ts'
 import { LESSON_SHORT_KEY, MAX_CHECK, MAX_QUESTION, MAX_QUESTION_ROWS, MAX_SHORT, MAX_SHORT_TEXT, QUESTION_COLUMNS, addsThis, askFault, checkLine, editedFile, indexLineAdded, linksOnlyTo, memoryFileOf, readCheckLine, readShortLine, rowsAt, ruleText, shellAppended, shortLine, shownFault, unseenIn } from '../hooks/rules.ts'
 import type { AskBeforeSavingApproval } from '../types/index.d.ts'
 import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, lessonPlaced, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, patchNames, rerunInGrace, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
@@ -1731,4 +1733,183 @@ test('a line that reads as a SHORT line once its markdown is drawn is refused in
     const inside = `- **L9. ${BRIEF}** ${mark} (slate#9, 2026-11-19)\n  ${BRIEF_SHORT}`
     expect(`${mark}: ${addsLesson(inside, rule, undefined, BRIEF_SHORT)}`).toBe(`${mark}: true`)
   }
+})
+
+// #3343 route 2 (Dan, 2026-11-20: "For good, held to facts"): the For good question about a write
+// to the lessons file is held to what the write takes out, moves or renames. These hold the reading
+// of those facts and how a text is judged to name them, on a file shaped as the real one is.
+const writes = (content: string) => lessonFacts('Write', { content }, SHAPED)
+const L7 = entryOf('L7')
+
+test('a write that takes no entry out, moves none to another section and changes no heading has no facts to name (#3343 route 2)', () => {
+  const nothing: [string, string][] = [
+    ['the file as it is', SHAPED],
+    ['text above the first section', SHAPED.replace('Numbering is stable for reference.', 'Numbering is stable.')],
+    ['the title', SHAPED.replace('# Build-time lessons', '# Lessons')],
+    ['a blank line', SHAPED.replace('\n## Honest failure', '\n\n## Honest failure')],
+    ['an entry added', `${SHAPED}- **L11. Distinct causes get distinct messages.** (slate#7, 2026-07-27)\n`],
+    ['entries in another order inside their section', without(SHAPED, 'L5').replace(L7, `${L7}${entryOf('L5')}`)],
+    ['whole sections in another order', SHAPED.replace(`## Honest failure\n${entryOf('L10')}`, '').replace('## Data safety', `## Honest failure\n${entryOf('L10')}\n## Data safety`)],
+  ]
+  for (const [what, content] of nothing) expect(`${what}: ${JSON.stringify(writes(content))}`).toBe(`${what}: ${JSON.stringify(NO_FACTS)}`)
+  // Read only for an Edit or a Write, and a file that is not there holds nothing to take out.
+  expect(lessonFacts('Bash', { command: 'rm x' }, SHAPED)).toEqual(NO_FACTS)
+  expect(lessonFacts('Write', { content: '# Lessons\n' }, undefined)).toEqual(NO_FACTS)
+  for (const facts of [NO_FACTS, writes(SHAPED)]) {
+    expect(factNames(facts)).toEqual([])
+    expect(factsSaid(facts)).toBe('')
+    expect(factsAsk('Edit', facts)).toBe('')
+    expect(coversFacts(facts, undefined)).toBe(true)
+  }
+})
+
+test('the entries a write takes out whole are read by their numbers, by a Write, an Edit and an Edit of every place (#3343 route 2)', () => {
+  expect(writes(without(SHAPED, 'L5'))).toEqual({ ...NO_FACTS, removed: ['L5'] })
+  // An entry that wraps, with its check line and its SHORT line, and the last of the file.
+  expect(writes(without(SHAPED, 'L17', 'L10'))).toEqual({ ...NO_FACTS, removed: ['L17', 'L10'] })
+  expect(lessonFacts('Edit', { old_string: entryOf('L174'), new_string: '' }, SHAPED)).toEqual({ ...NO_FACTS, removed: ['L174'] })
+  expect(lessonFacts('Edit', { old_string: entryOf('L1'), new_string: '', replace_all: true }, `${SHAPED}${entryOf('L1')}`)).toEqual({ ...NO_FACTS, removed: ['L1'] })
+  // One of two copies of an entry: one leaves, and it is still named by its number.
+  expect(lessonFacts('Write', { content: SHAPED }, `${SHAPED}${entryOf('L10')}`)).toEqual({ ...NO_FACTS, removed: ['L10'] })
+  // A copy under another heading taken out: the one that stays is paired with itself, never read as moved.
+  expect(lessonFacts('Write', { content: SHAPED }, SHAPED.replace('## Data safety\n', `## Data safety\n${entryOf('L10')}`))).toEqual({ ...NO_FACTS, removed: ['L10'] })
+  // Everything: each entry and each heading.
+  expect(writes('# Build-time lessons\n')).toEqual({ ...NO_FACTS, removed: ['L1', 'L17', 'L174', 'L5', 'L7', 'L10'], gone: ['Proof over green', 'Data safety', 'Honest failure'] })
+  // An entry changed in a word is paired with nothing, so it reads as taken out here; it is
+  // entriesTouched's, and the write is the lesson picker's, never asked For good.
+  expect(writes(SHAPED.replace('seen to fail', 'seen to pass')).removed).toEqual(['L1'])
+  expect(entriesTouched('Write', { content: SHAPED.replace('seen to fail', 'seen to pass') }, SHAPED)).toEqual(['L1'])
+})
+
+test('an entry left word for word under another heading is read as moved, with both headings; above the first heading no index reads it (#3343 route 2)', () => {
+  const toHonest = without(SHAPED, 'L7').replace('## Honest failure\n', `## Honest failure\n${L7}`)
+  expect(writes(toHonest)).toEqual({ ...NO_FACTS, moved: [{ entry: 'L7', from: 'Data safety', to: 'Honest failure' }] })
+  const l1 = entryOf('L1')
+  const above = writes(without(SHAPED, 'L1').replace('## Proof over green\n', `${l1}\n## Proof over green\n`))
+  expect(above).toEqual({ ...NO_FACTS, moved: [{ entry: 'L1', from: 'Proof over green', to: undefined }] })
+  expect(factsSaid(above)).toBe('moves L1 from "Proof over green" to the place above the first section heading, which no index reads')
+  // Two that go the same way are said together.
+  const two = writes(without(SHAPED, 'L5', 'L7').replace('## Honest failure\n', `## Honest failure\n${entryOf('L5')}${L7}`))
+  expect(factsSaid(two)).toBe('moves L5, L7 from "Data safety" to "Honest failure"')
+  expect(factNames(two)).toEqual(['L5', 'L7'])
+})
+
+test('a heading changed is read as taken out, added or renamed, and the entries a rename carries are not moved (#3343 route 2)', () => {
+  // Renamed: every entry under the old heading is under the new one and nothing else is.
+  const renamed = writes(SHAPED.replace('## Data safety', '## Data and its safety'))
+  expect(renamed).toEqual({ ...NO_FACTS, gone: ['Data safety'], arrived: ['Data and its safety'], renamed: [{ from: 'Data safety', to: 'Data and its safety' }] })
+  expect(factsSaid(renamed)).toBe('renames the section heading "Data safety" to "Data and its safety"')
+  expect(factNames(renamed)).toEqual(['"Data safety"', '"Data and its safety"'])
+  // Renamed with one of its entries taken out in the same write: still one section under a new name.
+  expect(writes(without(SHAPED, 'L5').replace('## Data safety', '## Data and its safety'))).toEqual({ ...renamed, removed: ['L5'] })
+  // Not a rename once its entries do not stay together: each is moved, and named.
+  const apart = writes(without(SHAPED, 'L7').replace('## Data safety', '## Data and its safety').replace('## Honest failure\n', `## Honest failure\n${L7}`))
+  expect(apart.renamed).toEqual([])
+  expect(apart.moved).toEqual([
+    { entry: 'L5', from: 'Data safety', to: 'Data and its safety' },
+    { entry: 'L7', from: 'Data safety', to: 'Honest failure' },
+  ])
+  // Added at the end, with no entry under it; added in a section, taking the entries below it.
+  expect(writes(`${SHAPED}\n## Test speed\n`)).toEqual({ ...NO_FACTS, arrived: ['Test speed'] })
+  const split = writes(SHAPED.replace(entryOf('L17'), `## Checks\n${entryOf('L17')}`))
+  expect(split).toEqual({ ...NO_FACTS, arrived: ['Checks'], moved: [{ entry: 'L17', from: 'Proof over green', to: 'Checks' }, { entry: 'L174', from: 'Proof over green', to: 'Checks' }] })
+  expect(factsSaid(split)).toBe('moves L17, L174 from "Proof over green" to "Checks"; adds the section heading "Checks"')
+  // Taken out: its entries fall into the section above.
+  const merged = writes(SHAPED.replace('## Data safety\n', ''))
+  expect(merged).toEqual({ ...NO_FACTS, gone: ['Data safety'], moved: [{ entry: 'L5', from: 'Data safety', to: 'Proof over green' }, { entry: 'L7', from: 'Data safety', to: 'Proof over green' }] })
+  expect(factsSaid(merged)).toBe('moves L5, L7 from "Data safety" to "Proof over green"; takes out the section heading "Data safety"')
+  // An empty section renamed has no entry to pair it by: one heading out, one in, both named.
+  const empty = lessonFacts('Edit', { old_string: '## Test speed', new_string: '## Suite speed' }, `${SHAPED}\n## Test speed\n`)
+  expect(empty).toEqual({ ...NO_FACTS, gone: ['Test speed'], arrived: ['Suite speed'] })
+  expect(factsSaid(empty)).toBe('takes out the section heading "Test speed"; adds the section heading "Suite speed"')
+  // A heading is named as it is written after "## ", less the white space at its ends.
+  expect(factNames(writes(SHAPED.replace('## Data safety', '## Data safety ')))).toEqual(['"Data safety"'])
+  // A line that only looks like a heading is no heading: three hashes, or no space.
+  expect(writes(SHAPED.replace('# Build-time lessons', '# Build-time lessons\n### A note\n##Not one'))).toEqual(NO_FACTS)
+})
+
+// The real file held 895 entries in 12 sections on 2026-11-20, the largest of 208 (README, the
+// lessons table of contents). The reading is the same at that size, where a section's entries are
+// many and a heading added in the largest moves most of them.
+test('at the size of the real file, 900 entries in 12 sections, an entry taken out, a section renamed and a section split are read the same (#3343 route 2)', () => {
+  const entry = (n: number) => `- **L${n}. Rule ${n} keeps its own words, wrapped onto\n  a second line.** (slate#${n}, 2026-07-27)\n  SHORT: Rule ${n}, short.\n`
+  const section = (s: number) => `## Section ${s}\n${Array.from({ length: 75 }, (_, k) => entry(s * 75 + k + 1)).join('')}\n`
+  const big = `# Build-time lessons\n\nText above the first section.\n\n${Array.from({ length: 12 }, (_, s) => section(s)).join('')}`
+  const read = (content: string) => lessonFacts('Write', { content }, big)
+  expect(read(big)).toEqual(NO_FACTS)
+  expect(read(big.replace(entry(450), ''))).toEqual({ ...NO_FACTS, removed: ['L450'] })
+  // L45 is the start of L450 to L459, and each is its own entry.
+  expect(read(big.replace(entry(45), '')).removed).toEqual(['L45'])
+  const renamed = read(big.replace('## Section 5\n', '## Section five\n'))
+  expect(renamed).toEqual({ ...NO_FACTS, gone: ['Section 5'], arrived: ['Section five'], renamed: [{ from: 'Section 5', to: 'Section five' }] })
+  // A heading put above the second entry of a section takes the other 74 with it.
+  const split = read(big.replace(entry(377), `## Half\n${entry(377)}`))
+  expect(split.arrived).toEqual(['Half'])
+  expect(split.moved.length).toBe(74)
+  expect(split.moved[0]).toEqual({ entry: 'L377', from: 'Section 5', to: 'Half' })
+  expect(split.moved[73]).toEqual({ entry: 'L450', from: 'Section 5', to: 'Half' })
+  expect(factNames(split).length).toBe(75)
+  // Naming all 74 fits one question. Naming every entry of the file does not, and the question is
+  // then refused for its length: the way through is smaller Edits, each asked about by itself.
+  const asking = (names: string[]) => `Save to ~/.claude/LESSONS.md for good: this takes ${names.join(', ')}?`
+  expect(shownFault(asking(factNames(split)))).toBeUndefined()
+  const all = factNames(read('# Build-time lessons\n'))
+  expect(all.length).toBe(912)
+  expect(shownFault(asking(all))).toContain('UTF-16 code units')
+})
+
+test('a fact is named by its own token: a number whole and in its case, a heading between double quotes word for word (#3343 route 2)', () => {
+  const facts = { ...NO_FACTS, removed: ['L17'], moved: [{ entry: 'L5', from: 'Data safety', to: undefined }], gone: ['Data safety'], arrived: ['Data and its safety'] }
+  const all = ['L17', 'L5', '"Data safety"', '"Data and its safety"']
+  expect(factNames(facts)).toEqual(all)
+  expect(unnamed(facts, 'Take out L17, move L5 up, and rename "Data safety" to "Data and its safety"?')).toEqual([])
+  expect(coversFacts(facts, 'L5; L17. "Data safety" "Data and its safety"')).toBe(true)
+  for (const none of [undefined, null, '', 'tidy the lessons file']) expect(unnamed(facts, none)).toEqual(all)
+  // A number inside a longer number or a word, in another case, or split, names nothing.
+  expect(unnamed(facts, 'L174 L55 XL17 L5a l17 L 5 17 L17_old L5_ "Data safety" "Data and its safety"')).toEqual(['L17', 'L5'])
+  // Punctuation at either side is not part of a number.
+  expect(unnamed(facts, '(L17), L5: #L17 L5. "Data safety" "Data and its safety"')).toEqual([])
+  // A heading's words inside a longer heading's, without quotes, in another case or in other quotes, name nothing.
+  expect(unnamed(facts, 'L17 L5 "Data and its safety"')).toEqual(['"Data safety"'])
+  expect(unnamed(facts, `L17 L5 Data safety, "data safety", 'Data safety', "Data  safety" and "Data and its safety"`)).toEqual(['"Data safety"'])
+  // A range does not name the numbers inside it.
+  expect(unnamed({ ...NO_FACTS, removed: ['L5', 'L6', 'L7'] }, 'take out L5 to L7')).toEqual(['L6'])
+  // What could not be read is covered by no text at all.
+  expect(coversFacts({ ...NO_FACTS, unread: 'it is a folder, not a file' }, 'L17 L5 "Data safety" "Data and its safety"')).toBe(false)
+})
+
+test('the refusals say what the write does and exactly which names the question lacks, and an instruction with no facts is the one it was (#3343 route 2)', () => {
+  const file = '~/.claude/LESSONS.md'
+  const facts = writes(SHAPED.replace('## Data safety\n', ''))
+  const held = heldToFacts(file, 'Edit', facts, ['L7', '"Data safety"'])
+  expect(held).toContain('The question must name what this Edit does to ~/.claude/LESSONS.md, so Dan decides on the entries and headings themselves: it moves L5, L7 from "Data safety" to "Proof over green"; takes out the section heading "Data safety". ')
+  expect(held).toContain('It does not name L7, "Data safety". ')
+  expect(held).toContain('Ask again with the same metadata.')
+  // One wording of how a fact is named, in the first refusal and in the question's.
+  const how = 'Name each entry by its number as it is written here (a number inside a longer number or a word does not count) and each heading in double quotes, word for word as it is written here'
+  expect(held).toContain(how)
+  const ask = factsAsk('Edit', facts)
+  expect(ask).toContain('This Edit moves L5, L7 from "Data safety" to "Proof over green"; takes out the section heading "Data safety", and the question must name each of those (L5, L7, "Data safety")')
+  expect(ask).toContain(how)
+  const told = askInstruction('toolu_1', [file], [], [], ask)
+  expect(told).toContain(`and Not at all. ${ask}If he answers For good, send this same call again unchanged`)
+  expect(askInstruction('toolu_1', [file], [], [], factsAsk('Edit', NO_FACTS))).toBe(askInstruction('toolu_1', [file]))
+  expect(notCovered(file, ['L7'])).toBe("Dan's For good on this save does not cover it as ~/.claude/LESSONS.md stands now: the question he answered did not name L7.")
+  expect(cannotHold(file, 'Write', 'it is a folder, not a file')).toContain('~/.claude/LESSONS.md could not be read before this Write (it is a folder, not a file), so which entries and headings it would take out cannot be told')
+})
+
+test('a heading Dan could not read as written cannot be named, so its save is refused in words that say so: reworded when new, his to change when it is in the file (#3343 route 2)', () => {
+  const file = '~/.claude/LESSONS.md'
+  const nbsp = String.fromCodePoint(0xa0)
+  expect(unshownName(writes(SHAPED.replace('## Data safety', '## Data and its safety')))).toBeUndefined()
+  const adding = unshownName(writes(`${SHAPED}\n## Test${nbsp}speed\n`))
+  expect(adding?.arriving).toBe(true)
+  expect(adding?.fault).toContain('U+00A0')
+  expect(cannotName(file, adding ?? { name: '', fault: '', arriving: false })).toContain('Give the new heading a name he can read, and send the save again.')
+  const there = `${SHAPED}\n## Test${nbsp}speed\n`
+  const leaving = unshownName(lessonFacts('Write', { content: SHAPED }, there))
+  expect(leaving?.arriving).toBe(false)
+  const said = cannotName(file, leaving ?? { name: '', fault: '', arriving: true })
+  expect(said).toContain('Not saved, and Dan is not asked For good about it: the question would have to name the section heading')
+  expect(said).toContain('A heading already in ~/.claude/LESSONS.md that cannot be shown to him cannot be asked about here. Tell Dan in one line')
 })
