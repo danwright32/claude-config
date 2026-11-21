@@ -41,8 +41,8 @@ it can refuse a command those let through and never the reverse:
     name: before claude-config#3252 the shared reader split words on white space alone, so the
     file was a word naming no file. Since #3252 the reader takes a glued redirection off the
     word in the readings it gives, so behind a script that runs its words the older rule now
-    refuses the glued form itself; the cases still open in the reader are claude-config#3322,
-    and this reading stays for the words read here.
+    refuses the glued form itself; claude-config#3322 then took every redirection out of the
+    words the reader hands for a gh or git command, and this reading stays for the words read here.
   * The reader's wrappers (a shell's -c, eval, find -exec, watch, script, parallel) hand their
     command to the walk already, so a command that is one is left to that reading.
 

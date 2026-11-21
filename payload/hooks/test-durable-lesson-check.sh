@@ -364,12 +364,14 @@ fi
 # AND THE SESSION IS TOLD WHAT THE PICKER REFUSES IN THE RULE AND THE QUESTION (security review of
 # claude-config#3295: the instruction said nothing of those limits, so the first refusal was how a
 # session learned them, and no test held the question's cap to it). The three numbers are read from
-# the mod (L41), and each kind of refusal is named.
-maxquestion="$(sed -n 's/^export const MAX_QUESTION = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
-maxrows="$(sed -n 's/^export const MAX_QUESTION_ROWS = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
-columns="$(sed -n 's/^export const QUESTION_COLUMNS = \([0-9][0-9]*\)$/\1/p' "$rules" 2>/dev/null)"
+# the mod (L41), and each kind of refusal is named. Since claude-config#3321 they are mod-kit's, in
+# the one check every guard's picker is held to (hooks/shown.ts), so they are read from there.
+shown="$(dirname "${BASH_SOURCE[0]}")/../mods/mod-kit/hooks/shown.ts"
+maxquestion="$(sed -n 's/^export const MAX_QUESTION = \([0-9][0-9]*\)$/\1/p' "$shown" 2>/dev/null)"
+maxrows="$(sed -n 's/^export const MAX_QUESTION_ROWS = \([0-9][0-9]*\)$/\1/p' "$shown" 2>/dev/null)"
+columns="$(sed -n 's/^export const QUESTION_COLUMNS = \([0-9][0-9]*\)$/\1/p' "$shown" 2>/dev/null)"
 if [ -z "$maxquestion" ] || [ -z "$maxrows" ] || [ -z "$columns" ]; then
-  FAIL=$((FAIL+1)); echo "FAIL: could not read MAX_QUESTION (${maxquestion:-unread}), MAX_QUESTION_ROWS (${maxrows:-unread}) or QUESTION_COLUMNS (${columns:-unread}) from $rules, so the question's limits in the instruction were compared against nothing"
+  FAIL=$((FAIL+1)); echo "FAIL: could not read MAX_QUESTION (${maxquestion:-unread}), MAX_QUESTION_ROWS (${maxrows:-unread}) or QUESTION_COLUMNS (${columns:-unread}) from $shown, so the question's limits in the instruction were compared against nothing"
 else
   q_missing=""
   case "$reason" in *"at most $maxrows rows at $columns columns and $maxquestion UTF-16 code units"*) ;; *) q_missing="$q_missing size:$maxrows/$columns/$maxquestion" ;; esac

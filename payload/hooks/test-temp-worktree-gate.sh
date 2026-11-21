@@ -131,6 +131,19 @@ refused "--lock --reason with a value before the path" 'git worktree add --lock 
 refused "--reason=value before the path" 'git worktree add --reason=keep --lock /tmp/wt-2528' "$SUGGEST"
 refused "after --" 'git worktree add -- /tmp/wt-2528' "$SUGGEST"
 refused "a move into /tmp" 'git worktree move .claude/worktrees/wt-2528 /tmp/wt-2528' "$SUGGEST"
+# The shell takes a redirection out before git gets its words, so one standing before the path is
+# not the path: read as a word it made the path `>/dev/null`, and the worktree under /tmp went
+# through (claude-config#3322).
+refused "#3322: a redirection before the path" 'git worktree add >/dev/null /tmp/wt-2528 -b fix/2528' "$SUGGEST"
+refused "#3322: a numbered redirection before the path" 'git worktree add 2>/dev/null /tmp/wt-2528' "$SUGGEST"
+refused "#3322: a redirection with its target apart, before the path" 'git worktree add > /dev/null /tmp/wt-2528' "$SUGGEST"
+refused "#3322: 2>&1 before the path" 'git worktree add 2>&1 /tmp/wt-2528' "$SUGGEST"
+refused "#3322: &> before the path" 'git worktree add &>/dev/null /tmp/wt-2528 -b fix/2528' "$SUGGEST"
+refused "#3322: a redirection between an option's value and the path" 'git worktree add -b fix/2528 >/dev/null /tmp/wt-2528 origin/main' "$SUGGEST"
+refused "#3322: a redirection before the action" 'git worktree >/dev/null add /tmp/wt-2528' "$SUGGEST"
+refused "#3322: a move with a redirection before the worktree it moves" 'git worktree move >/dev/null .claude/worktrees/wt-2528 /tmp/wt-2528' "$SUGGEST"
+refused "#3322: a move with a redirection before where it goes" 'git worktree move .claude/worktrees/wt-2528 2>/dev/null /tmp/wt-2528' "$SUGGEST"
+refused "#3322 control: a redirection after the path" 'git worktree add /tmp/wt-2528 >/dev/null 2>&1' "$SUGGEST"
 # The repository is found by git where it can be: from a worktree, the main checkout's folder.
 STUB_COMMON="/opt/work/apps/main/.git" refused "the suggestion is the main checkout's .claude/worktrees" \
   'git worktree add /tmp/wt-2528' "/opt/work/apps/main/.claude/worktrees/wt-2528"
@@ -162,6 +175,12 @@ allowed "git worktree list" 'git worktree list'
 allowed "git worktree remove of a temp worktree" 'git worktree remove /tmp/wt-2528'
 allowed "git worktree prune" 'git worktree prune'
 allowed "a move within the repository" 'git worktree move .claude/worktrees/a .claude/worktrees/b'
+# A file the output goes to is not where the worktree goes, and a quoted `>` is a word git gets.
+allowed "#3322: a redirection before a path in the repository" 'git worktree add >/dev/null .claude/worktrees/fix-2528 -b fix/2528'
+allowed "#3322: output sent to a temp file, before a path in the repository" 'git worktree add >/var/folders/ab/cd1234/T/wt-2528.log .claude/worktrees/fix-2528'
+allowed "#3322: output sent to a temp file, after a path in the repository" 'git worktree add .claude/worktrees/fix-2528 > /var/folders/ab/cd1234/T/wt-2528.log 2>&1'
+allowed "#3322: a list sent to a temp file" 'git worktree list >/var/folders/ab/cd1234/T/wt-2528.txt'
+allowed "#3322: a quoted > is the path git gets, in the repository" "git worktree add '>' /tmp/wt-2528"
 allowed "an echo naming one" 'echo "git worktree add /tmp/wt-2528"'
 allowed "a commit message naming one" 'git commit -m "refuse git worktree add /tmp/wt-2528"'
 allowed "a command that is not git" 'ls -la /tmp'

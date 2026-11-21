@@ -2693,6 +2693,20 @@ and the band question is removed rather than kept beside it (L29). Three defects
   as it did
   before the line existed. The value is read back from storage through `checkLine` again (L50), so
   a damaged record covers the rule alone.
+  The check of shown text described next was built here in #3295 and has been mod-kit's since
+  #3321 (`hooks/shown.ts`, `shownFault` and `askFault`, copied into each mod that reads a picker's
+  answer), so every guard that acts on Dan's answer to a picker holds the call to the same
+  character classes, limits and hidden markup: this mod's two pickers, the design round guard's
+  two questions, the area check's restructure question and sleep mode's recorded morning pickers
+  refuse a picker that fails, and picker manners writes it onto no issue. One set of limits serves
+  every picker (decided 2026-11-21 while building #3321: the dialog cuts every question at the same
+  place whichever guard asks, so a looser limit for one guard would be an exemption), and a picker
+  too long for one is asked in parts. Counted first on the personal MacBook's session records
+  (`tools/picker-check-count.ts`, 2026-11-21): of the pickers that reached the dialog the check
+  refuses 0 of 10 lesson, 0 of 180 memory save, 0 of 1 restructure, 3 of 103 design round (each a
+  placeholder in angle brackets in the session's own sentence), 0 of 462 in the shape sleep mode
+  records and 0 of 32 picker manners would write to an issue. Still open on #3321: questions a mod
+  asks itself through `$.ui.ask`, and the database approvals, which are hooks.
   The rule itself had no such limit until #3295 (built 2026-11-19). The picker checked that the
   question stated the rule and compared the entry with it through `ruleText`, which drops bold
   marks and folds white space, and neither read a character: a rule holding a zero width
@@ -3992,6 +4006,40 @@ retired the guard that once held it.
   read as it stands on disk (12); a module found
   only through a changed `sys.path` or an installed package; and a file run by its own name with no
   python, node or shell extension.
+- **The two routes counted again for #3230, and what the count could not answer.** Over the 14 days
+  to 2026-11-21, of this Mac's 49,003 recorded Bash calls (10,344 running a script file, each
+  script read from disk as it stood on the day of the count, so a call whose shell script has
+  since gone is missing from the second figure): 124 calls ran a script through a variable the
+  command sets a way the reader does not follow, and 324 ran a shell script that names a script
+  through a variable its own text never sets. By how the command sets the variable, the 124 are 60
+  a variable set once to a literal (56 of them the whole word, `S=/x/gen.sh; bash "$S"`, which
+  scriptPath does not follow, reading only `$N/step.py`), 52 a loop's, 12 a command's output, 2
+  one of two literals and 1 some other way (a call with two variables counts under each). Of the
+  324, 300 spell the script's own folder inline with `BASH_SOURCE`, the suites' line that sources
+  suite-deadline.sh, which neverSetVariable takes for a variable never set; 25 use a variable that
+  whatever ran or sourced the script sets, in 15 scripts, 9 of them pieces of a suite kept in a
+  session's notes folder (one call has both, so the two come to 325). How many of either class name a look changing file at all was not
+  measured: the step that reads each script with the guard's own readers was refused by the Slack
+  drafts gate, since the recorded commands it is handed spell a Slack webhook host. So nothing was
+  built, and both routes stay as they were.
+  A hook can ask what Claude Code's environment holds for a variable named at run time only
+  through `$.process.run` and printenv, as ask before saving does (`$.env.get` takes literal names
+  alone). That is Claude Code's environment, not the shell's: it lacks what a shell profile sets,
+  and a Bash call is a fresh shell, so it answers only for a variable no text sets. None of the 25
+  calls' variables was in the environment of the count, and the 2 calls of the 14 days whose command
+  never sets its variable are held already (#3214).
+- **The #2991 fixture is held to the suite it is taken from (#3231).** The guard's test of the
+  design rounds adapter suite runs on an excerpt of test-score-adapters.sh carried in
+  register.test.ts. It said it was lines 46 to 48 and 166 to 315 word for word, which it was, and
+  left out lines 41 to 45, which set `SKILL` and `ADAPTER`, so it ran make-settled.py and the
+  adapter through variables it never set where the real suite sets both. A mod's test cannot read
+  a repository file (measured: its runner refuses an import of node:fs, of a file outside the
+  mod's folder and of a file that is not code, gives no Bun, process, require or fetch, and answers
+  no `fs.read` beneath the plugins), so the fixture now carries lines 41 to 48 and 166 to 315 and
+  names them in a `SUITE_2991-LINES` comment, and `tests/test-design-guard-suite-fixture.sh`
+  compares the two on every run: each line word for word, and no line left out that sets a variable
+  the fixture runs a script through, or one such a line uses in turn. A missing file, comment or
+  line fails, saying so. With the five lines in, every verdict of the #2991 test is as it was.
 - **mod-kit's python reader stops rereading the program (folded in by Dan).** The #2855 sweep found
   make-switcher.py took 1.4 to 4.1 seconds to read, every other script under 0.4. code.ts found a
   `.replace(` call's receiver (`receiverBefore`), the call a literal sits in (`pathCall`) and the

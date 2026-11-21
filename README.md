@@ -1720,6 +1720,25 @@ which fails on a hook that reads a gh or git subcommand by word position again; 
 allows carry `gh-reader:` with a reason, in the reader itself and in the crude readings a few callers
 keep for when it cannot be loaded, which see more commands than are there, never fewer.
 
+The words it hands a gate hold no redirection (claude-config#3322). The shell takes every redirection
+out of a command before the program gets its words, wherever it stands, so `gh api >/dev/null -X
+DELETE <ref>` deletes the ref and `gh pr merge 2>/dev/null 7` merges pull request 7. Until #3322 the
+reader handed each one on among the words and each gate had to step over it. Five readers in
+`lib/push-scope.sh` did; the stacked branch delete gate took `>/dev/null` for the endpoint and let
+the delete of a branch with a pull request based on it run unasked, and the merge selector took the
+2 of `2>/dev/null` for the pull request. Now each is taken out once, where the words are made:
+`unredirected` in `lib/shell-words.py` reads the command's text, where a quoted `'>'` is still told
+from the operator, so a message or a path that only looks like a redirection stays the word it is,
+and `tool_words` is what both the bash gates (`tool_field`, then `PS_RUN_ARGS`) and the python ones
+(`tool_command`) get a gh or git command's words from. Words a caller cut itself with
+`shell_tokens` (`gh_issue_scan.py`, `lib/merge-selector.py`) carry a mark on each operator written
+outside quotes, which is how `tool_command` tells one from a quoted word; a word a caller split any
+other way is never taken for a redirection. With no reader the crude cut's words lose theirs in one
+place too (`ps__drop_redirections`), by their look alone. A gate that judges where a command's
+output goes, or what is fed to its input, does not read these words: `ps__writes_out` reads the
+command's own words (`PS__R_WORDS`), and `gh_issue_scan.py` keeps each stage's redirections beside
+its words, and both still see every one.
+
 It also reads through the programs that run a command for you (claude-config#1478), so each gate
 judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
 xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and
@@ -2112,7 +2131,10 @@ delete written as a full `https://` URL (read as the path it names, on the host 
 `{branch}` or `:branch` in its path, read as the branch checked out where the command runs as gh
 fills it, and refused where none is, `git push <remote>
 --delete <branch>`, `-d` or `:<branch>` to a GitHub remote, and `gh pr merge --delete-branch` (or
-`-d`; a fork's pull request deletes no branch, as gh deletes none for one). `{owner}/{repo}` is
+`-d`; a fork's pull request deletes no branch, as gh deletes none for one). A redirection written
+among any of those words is none of them (claude-config#3322): until then `gh api >/dev/null -X
+DELETE <ref>` was a call to an endpoint named `>/dev/null` and passed unasked, and `git
+push >/dev/null origin --delete <branch>` was refused over a remote named `>/dev/null`. `{owner}/{repo}` is
 asked of gh where the command runs, since gh fills it with the first of the remotes `upstream`,
 `github` and `origin`: in a fork's checkout that is the parent, where reading origin had listed
 the fork and let the delete through (#1758). A pull request from a fork based on the branch counts
@@ -4667,7 +4689,8 @@ hands its functions a program's name as a plain label (`run_slow python`); a bod
 arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
-reads by name is the shared reader's to read, and the cases still open there are #3322. What it
+reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
+with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
 when the words after it happen to spell a command the gate refuses. Left open: a word that names
@@ -4731,6 +4754,32 @@ unchanged, and running out of it still refuses the call. The gate's phase line
 suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
 that holds nothing (`ONCE = False`).
 
+Three things that pull request left were settled on 2026-11-21 (#3255), all measured that day on the
+personal MacBook with a unit at 0.097 s:
+
+- The judgement of the command that starts the gate's suite is now kept. The gate imported
+  `tokenize` where it used it, in the middle of a judgement; a module loaded there reads its own
+  files, the judgement cache sees a read nobody recorded, and nothing is kept. So that command cost
+  19.4 to 20.1 units every time it was asked (5 askings, one cache, 2026-11-21). With the import at the top of
+  the gate the first asking cost 20.2 units and the next four 1.8 each, answered from the cache.
+  Loading it at the start adds about 1.2 ms to every call (9 readings), which the gate's fixed cost
+  of 1.8 to 1.9 units does not show. No rule about what the cache keeps changed.
+- The refusal of the mods suite on 2026-11-19 was the work and not the load. The call was not
+  `bash tests/test-mods.sh` alone: it wrote a file first (`uptime > $S/load-before.txt; ...`). The
+  gate keeps a record of files already found clean, so a suite that runs one script hundreds of
+  times reads it once, and it keeps nothing once an earlier command of the call has written a file.
+  With that day's gate the whole call needed 122.4 to 123.3 units, 11.7 to 11.9 s of processor time
+  against the 11 s budget (3 readings, and refused 3 times of 3 on the real clock), and 14.4 to 14.8
+  with the first write taken out. Main's gate judges the same call in 58.2 to 60.2 units, the suite
+  alone in 10.7 to 10.8, and the suite after one write in 34.4 to 35.0. That record is as it was:
+  changing when it is kept is its own piece of work. Until then a call that starts a suite is
+  cheapest when it writes nothing before it.
+- `bash tests/test-claude-sync.sh` still reads 52.0 to 53.0 units against its 57 (3 readings,
+  2026-11-21), and nothing was found to take out. One judgement is 28 million calls with no function above 5% of the
+  time, and the disk is 0.05 s of it. The two things found are small: half a million lookups of an
+  already compiled pattern, about 0.8 units, less than the readings spread, and 1,043 patterns
+  compiled once each for a shell name, about 3%. The limit was not moved.
+
 The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
 CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
 on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
@@ -4738,6 +4787,15 @@ failed for the runner's speed. Where
 the seconds run out, the check now judges the same line again on the step clock and holds those
 units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
 does more work fails on any machine, and a slow machine fails nothing by itself.
+
+A cost check that starts from an empty cache also fails when the judgement cache answered any of
+its samples (#3255, 2026-11-21). The least sample is the one held to the limit, and a judgement
+answered from the cache reads about 2 units, which would pass any limit there is. Each sample after
+the first already got an empty cache folder of its own; now the check reads the cache's own trace
+(`SLACK_GATE_CACHE_TRACE`) for every sample and fails unless it says the gate judged afresh. The
+two checks of a second asking are held the other way by the same reading: the trace must say the
+cache answered. That the first kind fails was not seen: the installed gate refused both commands
+that would have run it with the samples left in one folder.
 
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
@@ -6666,7 +6724,9 @@ Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
 under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
 session notes folder shapes described above, and the home folder's standard folders and listed
-dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
+dotfolders themselves), whatever the category says; a path ending in a slash refused, since no scan
+records one and the slash would have the link test follow a link rather than see it (#3332); a
+symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
 of the checks so that measuring never sits between it and the removal (#1872); an INTENT line in `~/.claude/state/disk-clean/removals/<scan_id>.log`; the removal; a check that it
@@ -6769,6 +6829,56 @@ gone; a lock whose agent cannot be checked because ps could not be read; and any
 a Claude agent's. Each is named with the reason it was kept. `tools/shipped-worktrees.sh` reads
 locks the same way, through `payload/hooks/lib/agent-lock.sh`, so the two cleanups agree. Without
 `--remove` the check reports and changes nothing, locks included.
+
+Both cleanups ask git about a worktree with that worktree's program running settings off
+(claude-config#3355). A status, a rev-list and the status inside `git worktree remove` are answered
+with the worktree's own configuration, which can name a program git then starts, and the sweep
+judges every worktree git lists, by itself, in every session. Before #3355 both ran those calls
+plain: on a fixture a status ran the repository's `core.fsmonitor` program, its filter, a filter
+only the worktree's own `config.worktree` named and the `post-index-change` hook. Now every such
+call goes through `dc_git` ("git in a folder being judged", above), the one helper disk-clean uses,
+which `payload/hooks/lib/judged-worktree.sh` sources and adds one thing to:
+
+- **`jw_remove <repository> <worktree> [--force]`** is how both remove a worktree. It runs
+  `git worktree remove` in the worktree, where both ran it in the repository before, because
+  `dc_git` reads which filters to turn off from the folder it is given, and from the repository's
+  folder a filter named only in the worktree's own configuration stayed on. Run in the worktree, git
+  removes whichever repository's worktree it finds there, so `jw_remove` first asks git which
+  repository answers in the worktree and in the repository's folder and refuses unless they are
+  one; a folder whose `.git` named another repository's worktree record was removed through that
+  repository without the check. A worktree whose folder is gone is removed from the repository's
+  folder, where git only drops its record. `--force` is what the sweep passes to finish a removal
+  cut off part way; git then asks for no status and ran nothing even called bare.
+- **Where the settings cannot be turned off, git is not run there.** A filter whose name holds an
+  equals sign, a submodule path git prints quoted, or a folder that answers for another repository
+  keeps the worktree, and the line that keeps it carries the reason (`dc_git: refused: ...` or
+  `jw_remove: refused: ...`). A removal refused this way reads "its removal was not tried", never
+  "git would not remove it".
+- **What it changes in an answer.** The same as for disk-clean: with a repository's own filter off
+  git compares a file as it lies, one the repository marks required makes the status fail, and a
+  partial clone missing an object fails where it used to fetch. Each of those keeps the worktree.
+  One more changed with it: the sweep's finisher used to read a status git could not give as
+  nothing changed, and then forced the removal, which on a fixture took a folder holding a changed
+  file. It now keeps that worktree and its marker and says why. The same reading sat after a
+  removal git fails: both cleanups ask for a status to tell a worktree left whole from one left part
+  deleted, and a status git could not give read as whole, so the marker was cleared and a dead
+  agent's lock put back on a worktree that might be part deleted. Now a status that cannot be read
+  leaves the marker and leaves the lock off, and the line says so. A removal that was never tried
+  left the worktree whole, so no status is asked for and the lock goes back.
+- **What stays plain.** git run in the repository itself about its own records (listing its
+  worktrees, locking and unlocking one, reading a ref, deleting a local branch). That is the
+  repository the tool was run for, where the session's every other git call runs too, and no call
+  the fixtures reach started a program there. Two they do not reach are log commands (the sweep's
+  `reflog show` and `log -1` over a remote branch, asked when a branch was pushed), which run the
+  repository's `gpg.program` over a signed commit when it sets `log.showSignature`, as #3328
+  measured for stash list. The lines the sweep prints for a person to run by hand are plain git too.
+
+`hooks/test-judged-worktree.sh` and `tools/test-shipped-worktrees-git.sh` ask the git on the
+machine, never a stub. Each sees the programs run with the call written bare, then runs the tool,
+report and `--remove`, over worktrees whose settings name them and sees nothing run. Each also
+reads its tool's source with the disk-clean command reader and fails on a `git` written outside
+`dc_git` in any form but a short list of calls about the repository's own records, so a status or
+a `worktree remove` written plain again is caught by its line.
 
 ## A build scored against its settled design
 
@@ -7564,6 +7674,22 @@ event without the keys Claude Code carries beside them (`tool`, `tool_use_id`, `
 `hooks/mod-kit/toolargs.ts` (#3190: eight mods took the keys off by hand in twelve places, so a key
 the engine added had to be learned by every copy); a site wanting `tool_use_id` or `agentId` reads
 that one key from the event, and the scan fails a mod line naming both `agentId` and `consent`.
+Text Dan approves in a picker is judged by one check, `askFault` in `hooks/shown.ts`, kept by each
+mod that reads a picker's answer at `hooks/mod-kit/shown.ts` (#3321, built for the lesson picker in
+#3295 and moved here unchanged). Claude Code's dialog cuts a question at 2,000 characters and draws
+some characters and markup as nothing, so the whole call, every field beside the question
+included, is judged before he is asked: a character he cannot see, more than 1,500 UTF-16 code
+units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
+link definition, a character reference or a link to a file. There is one set of limits for every
+picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
+design round guard's two questions, the area check's restructure question and sleep mode's
+recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
+manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
+`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
+open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
+its leave open questions, the keystroke guard's), and the database apply and test project
+approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs
 no copy of `hooks/code.ts`. The file reader that move was made for, `hooks/reaches.ts`, was deleted

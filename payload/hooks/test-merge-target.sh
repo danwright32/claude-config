@@ -1718,11 +1718,33 @@ for w in "gh>/dev/null pr merge 7 --squash" \
   if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3252 a merge was not read as a merge: $w"; fi
   eq "$(mt_pr_number "$w")" "7" "#3252 and it names its pull request: $w"
 done
-# A redirection of its own between gh and pr: read as a merge now. Its pull request is not named
-# yet (mt_pr_number prints nothing for it, measured 2026-11-19), which is recorded for an issue of
-# its own and has no case here.
-w="gh 2>/dev/null pr merge 7"
-if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3252 a merge was not read as a merge: $w"; fi
+# A redirection among the merge's words (claude-config#3322). The shell takes it out wherever it
+# stands, so each of these merges pull request 7. The selector cut `2>/dev/null` into a word 2, an
+# operator and a target, so between gh and pr it read a subcommand named 2 and no pull request (the
+# gates then judged the current branch's), and after merge it read pull request 2.
+for w in "gh 2>/dev/null pr merge 7" \
+         "gh pr 2>/dev/null merge 7" \
+         "gh pr merge 2>/dev/null 7 --squash" \
+         "gh pr merge 2> /dev/null 7 --squash" \
+         "gh pr merge 9>&2 7" \
+         "gh pr merge --squash > 5 7" \
+         "gh pr merge 7 2>&1" \
+         "rtk gh 2>/dev/null pr merge 7"; do
+  if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3322 a merge was not read as a merge: $w"; fi
+  eq "$(mt_pr_number "$w")" "7" "#3322 and it names its pull request: $w"
+done
+# The same for a merge through the API: the endpoint is the first word that is no redirection.
+for w in "gh api>/dev/null -X PUT repos/o/x/pulls/7/merge" \
+         "gh api 2>/dev/null -X PUT repos/o/x/pulls/7/merge" \
+         "gh api -X PUT 2> /dev/null repos/o/x/pulls/7/merge"; do
+  if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#3322 a merge through the API was not read as a merge: $w"; fi
+  eq "$(mt_pr_number "$w")" "7" "#3322 and it names its pull request: $w"
+done
+# Controls: a quoted word that only looks like a redirection is a word. As a message it takes
+# nothing after it with it, and as the pull request it is no number, so none is named.
+eq "$(mt_pr_number "gh pr merge --body '>' 7")" "7" "#3322 control: a quoted > that is the body does not take the pull request for its target"
+eq "$(mt_pr_number "gh pr merge '2>' 7")" "7" "#3322 control: a quoted 2> is a word, and the number after it is still the pull request"
+eq "$(mt_pr_number "gh pr merge '>7'")" "" "#3322 control: a quoted >7 is no pull request number"
 for w in "echo gh>/dev/null pr merge 7" "git commit -m 'gh>/dev/null pr merge 7'" "gh pr view>/dev/null 7 --json mergeable"; do
   if mt_runs_merge "$w"; then fail "#3252 control: a merge named in an argument, or a view, was read as a merge: $w"; else pass; fi
 done
