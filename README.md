@@ -4574,6 +4574,32 @@ the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 onc
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
+Repeated work was taken out of that budget on 2026-11-20 (#3255), with every verdict as it was. On
+the personal MacBook the installed gate had run out of its 11 seconds on the command that starts
+its own suite, `bash payload/hooks/test-slack-drafts-only-gate.sh`, so that suite could not be
+started from a session. Measured that day: the suite runs the gate's own source as a program some
+sixty times, and each run read those 457,000 characters afresh, 46 parses, 48 whole walks of its
+syntax tree and 12 cuts into tokens in one judgement. Now a Python text is parsed, walked and read
+for the endpoints it names once in a run (`py_read` and the readings through it: `py_tree`,
+`py_nodes`, `py_marker`, `py_imports`). Judging that command took 63.6 to 66.1 units of the suite's
+yardstick before and 18.7 to 19.0 after (5 readings each, a unit 0.095 s), and `bash
+tests/test-mods.sh` 13.6 to 13.8 before and 10.4 to 10.6 after (3 each). `bash
+tests/test-claude-sync.sh` reads no Python to speak of and did not move: 49.2 to 50.3 before, 50.1
+to 50.9 after (5 each); what it costs is two shell files of 1.8 and 1.0 million characters, each
+read once. The budget itself is
+unchanged, and running out of it still refuses the call. The gate's phase line
+(`SLACK_GATE_PHASE_LOG`) counts the real parses and readings (`py_parse`, `py_marker_read`), and the
+suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
+that holds nothing (`ONCE = False`).
+
+The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
+CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
+on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
+failed for the runner's speed. Where
+the seconds run out, the check now judges the same line again on the step clock and holds those
+units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
+does more work fails on any machine, and a slow machine fails nothing by itself.
+
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
 refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
