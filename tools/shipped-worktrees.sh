@@ -36,7 +36,10 @@
 #                 process has, or whose agent started before the last boot, keeps nothing, and is
 #                 lifted just before the removal (only if it is still that lock, and put back if
 #                 git then refuses and leaves the worktree whole; one left part deleted stays
-#                 unlocked so a single --force can finish it). An older lock with no start time, "claude agent <name> (pid
+#                 unlocked so a single --force can finish it, and so does one whose status git
+#                 cannot give after the refusal, since whole and part deleted cannot then be told
+#                 apart (#3355); a removal never tried left it whole, and its lock goes back).
+#                 An older lock with no start time, "claude agent <name> (pid
 #                 <pid>)", keeps nothing only when no process has its pid. A live agent's lock, a
 #                 pid now held by a process started at another time, an older lock whose pid is
 #                 running, a lock whose agent cannot be read, and any other lock keep it.
