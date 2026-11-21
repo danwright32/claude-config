@@ -284,6 +284,33 @@ unparsed_run "#2424 a payload no reader parses naming gh pr new is refused too" 
 unparsed_run "#2424 control: a payload no reader parses naming no pull request passes" $ALLOW \
   '{"tool_input":{"command":"ls -la'
 
+# The same three fallbacks against the forms the shared reader takes as a commit or a pull request
+# write with something between or glued to the words (claude-config#3280). Each fallback looked for
+# the text "git commit" or "pr " and passed anything else, so with no reader a commit written
+# `git 2>/dev/null commit`, `git -C <dir> commit` or `git>/dev/null commit`, and a pull request
+# written `gh pr>/dev/null create`, went through unrefused while the reader, had it run, would have
+# judged each one (#3252 made the reader see them).
+for form in \
+  'git 2>/dev/null commit -m "Part of #897, which stays open."' \
+  'git -C /tmp commit -m "Part of #897, which stays open."' \
+  'git>/dev/null commit -m "Part of #897, which stays open."' \
+  'gh pr>/dev/null create --title x --body "Part of #897, which stays open."' \
+  ; do
+  run_nopy "#3280 with no python3 this form is refused: $form" $BLOCK "$form" 'python3'
+  nolib_run "#3280 with push-scope.sh missing this form is refused: $form" $BLOCK "$form"
+done
+unparsed_run "#3280 a payload no reader parses naming git 2>/dev/null commit is refused" $BLOCK \
+  '{"tool_input":{"command":"git 2>/dev/null commit -m \"Part of #897\"'
+unparsed_run "#3280 a payload no reader parses naming gh pr>/dev/null create is refused" $BLOCK \
+  '{"tool_input":{"command":"gh pr>/dev/null create --title x --body \"Part of #897\"'
+# Controls: a git command that commits nothing still passes every fallback (L54).
+run_nopy "#3280 control: with no python3 git 2>/dev/null status passes" $ALLOW \
+  'git 2>/dev/null status'
+nolib_run "#3280 control: with push-scope.sh missing git 2>/dev/null status passes" $ALLOW \
+  'git 2>/dev/null status'
+unparsed_run "#3280 control: a payload no reader parses naming git 2>/dev/null status passes" $ALLOW \
+  '{"tool_input":{"command":"git 2>/dev/null status'
+
 rm -rf "$NOPY_ROOT"
 
 echo
