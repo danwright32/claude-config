@@ -5,8 +5,9 @@
 # then the real payload is checked against this machine's own settings, and must find the real
 # guards, so a hook reader that reads nothing cannot pass as nothing to miss (L98).
 #
-# Every fixture names its own managed and user settings files, so no case but the last reads this
-# machine's, and none writes anywhere but its own scratch folder.
+# Every fixture names its own managed and user settings files, so only the second half of section
+# 12 (payload/mods against this machine's own settings) reads this machine's, and no case writes
+# anywhere but its own scratch folder.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
