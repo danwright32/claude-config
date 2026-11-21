@@ -75,10 +75,13 @@ fixture_check() {
   done
   want="${want%
 }"
-  # 1. Word for word.
+  # 1. Word for word. The two texts go to files for diff: a process substitution inside a function
+  # whose output is captured can lose its output on the bash 3.2 a Mac ships.
   if [ "$body" != "$want" ]; then
+    printf '%s\n' "$want" > "$tmp/want.txt"
+    printf '%s\n' "$body" > "$tmp/body.txt"
     out="the fixture is not lines $(printf '%s' "$ranges" | tr '\n' ' ') of $rel word for word; the first lines that differ (the real suite's, then the fixture's):
-$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$body") | grep -E '^[<>]' | sed -n '1,4p')"
+$(diff "$tmp/want.txt" "$tmp/body.txt" | grep -E '^[<>]' | sed -n '1,4p')"
   fi
   # 2. Each variable the fixture runs a script through, and each variable a line setting one uses
   # in turn, is set by the real suite only on lines the fixture holds.

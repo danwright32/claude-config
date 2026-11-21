@@ -4004,7 +4004,7 @@ retired the guard that once held it.
   324, 300 spell the script's own folder inline with `BASH_SOURCE`, the suites' line that sources
   suite-deadline.sh, which neverSetVariable takes for a variable never set; 25 use a variable that
   whatever ran or sourced the script sets, in 15 scripts, 9 of them pieces of a suite kept in a
-  session's notes folder. How many of either class name a look changing file at all was not
+  session's notes folder (one call has both, so the two come to 325). How many of either class name a look changing file at all was not
   measured: the step that reads each script with the guard's own readers was refused by the Slack
   drafts gate, since the recorded commands it is handed spell a Slack webhook host. So nothing was
   built, and both routes stay as they were.
