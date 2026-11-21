@@ -612,6 +612,72 @@ RE_PATTERN_CALLS = frozenset({"compile", "search", "match", "fullmatch", "findal
                               "split"})
 
 
+# One Python text is read once in a run (claude-config#3255). The suite of this gate runs the gate's
+# own source as a program some sixty times, and each run read those 457,000 characters afresh: in
+# one judgement of `bash payload/hooks/test-slack-drafts-only-gate.sh` the source was parsed 46
+# times, walked whole 48 times (2.8 million nodes) and cut into tokens 12 times, 20 of the 26
+# seconds a profiler gave that judgement (measured 2026-11-20), and the installed gate ran out of
+# its 11 seconds on the command that starts its own suite. Every reading below depends on the text
+# alone, so it is worked out the first time it is asked for and handed back after that. Nothing
+# is skipped or shortened: the first reading is the whole one, and every later asker is given what
+# it found. A tree and its nodes are shared, so no caller may change one.
+# ONCE False holds nothing: every reading here is made afresh, as all of them were before #3255.
+# Nothing sets it but the suite, in a copy of this file, where its counts and its cost limit are
+# each seen to fail (L1). It only makes the gate slower: no verdict reads it.
+ONCE = True
+# How many characters of Python text have their readings held at once, the oldest dropped first: a
+# tree is some twenty times its text, and one judgement of the gate's suite reads 27 texts, 600,000
+# characters in all.
+PY_HELD = 4 * 1024 * 1024
+_PY_READ = {}  # {a Python text: {the name of a reading: what it found}}, oldest first
+_PY_SIZE = [0]  # the characters of the texts in _PY_READ
+
+
+def py_read(text, name, work):
+    """work(), the reading of Python text called name, worked out once while the text is held."""
+    if not ONCE:
+        return work()
+    held = _PY_READ.get(text)
+    if held is None:
+        while _PY_READ and _PY_SIZE[0] + len(text) > PY_HELD:
+            oldest = next(iter(_PY_READ))
+            _PY_SIZE[0] -= len(oldest)
+            del _PY_READ[oldest]
+        held = _PY_READ[text] = {}
+        _PY_SIZE[0] += len(text)
+    if name not in held:
+        held[name] = work()
+    return held[name]
+
+
+def py_parse(text):
+    """ast.parse(text) with Python's warnings about the text silenced: the one place the readings
+    below parse Python, under a name of its own so a suite can count the parses (PHASES)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return ast.parse(text)
+
+
+def py_tree(text):
+    """The syntax tree of Python text, raising as ast.parse does for text this python3 cannot
+    parse (SyntaxError, ValueError): the same error each time it is asked for."""
+    def parsed():
+        try:
+            return py_parse(text), None
+        except (SyntaxError, ValueError) as e:
+            return None, e
+    tree, error = py_read(text, "tree", parsed)
+    if error is not None:
+        raise error
+    return tree
+
+
+def py_nodes(text):
+    """Every node of Python text's tree, in the order ast.walk gives them, raising as py_tree does."""
+    tree = py_tree(text)
+    return py_read(text, "nodes", lambda: tuple(ast.walk(tree)))
+
+
 def py_marker(text, docs_read=False, held=None):
     """MARKER's first hit in Python text outside the pattern of a regular expression, or None
     (claude-config#2844). A re.compile whose pattern spells out an endpoint looks for it, as
@@ -629,15 +695,23 @@ def py_marker(text, docs_read=False, held=None):
 
     held, a list, asks for names held only as data to be told apart too (claude-config#2913): see
     lib/data-names.py, whose marks() is the reading every caller but this one's own uses."""
+    asked = (bool(docs_read), held is not None)
+    sent, extra = py_read(text, ("marks",) + asked, lambda: py_marker_read(text, *asked))
+    if extra:
+        held.append(extra[0])
+    return sent
+
+
+def py_marker_read(text, docs_read, want_held):
+    """py_marker's reading of one text: (what it returns, a tuple of the one thing it puts in held,
+    empty where it puts nothing there)."""
     hit = MARKER.search(text)
     if not hit:
-        return None
+        return None, ()
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            tree = ast.parse(text)
+        tree = py_tree(text)
     except (SyntaxError, ValueError):
-        return hit
+        return hit, ()
     # Lines as ast numbers them: ended by \r\n, \r or \n only (str.splitlines also ends one at a form
     # feed, \x1c to \x1e, \x85 and U+2028/2029, which would shift every line after it).
     starts = [0] + [m.end() for m in re.finditer(r"\r\n|\r|\n", text)]
@@ -648,7 +722,7 @@ def py_marker(text, docs_read=False, held=None):
         return a + len(raw[:col].decode("utf-8", "surrogatepass"))  # a lone surrogate keeps its place
     spans = []
     docs_read = docs_read or "__doc__" in text or "getdoc" in text
-    for node in ast.walk(tree):
+    for node in py_nodes(text):
         body = getattr(node, "body", None)
         if isinstance(body, list):
             for k, st in enumerate(body):
@@ -678,9 +752,9 @@ def py_marker(text, docs_read=False, held=None):
     # Where held is a list, a string held only as data (a list's element, a comparison's operand) is
     # left out too, and the first name found only in one is put in held (lib/data-names.py, #2913).
     data = _data_names.py_held_spans(tree, lambda n: (offset(n.lineno, n.col_offset),
-                                                      offset(n.end_lineno, n.end_col_offset))) if held is not None else []
+                                                      offset(n.end_lineno, n.end_col_offset))) if want_held else []
     if not spans and not data:
-        return hit
+        return hit, ()
 
     def blanked(cut):
         out, last = [], 0
@@ -691,9 +765,7 @@ def py_marker(text, docs_read=False, held=None):
             last = b
         return MARKER.search("".join(out) + text[last:])
     sent = blanked(spans + data)
-    if sent is None and data:
-        held.append(blanked(spans))
-    return sent
+    return sent, ((blanked(spans),) if sent is None and data else ())
 
 
 def js_code(text):
@@ -3168,10 +3240,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
     def py_imports(text):
         """(level, module, names) for each import statement in Python source, by its syntax tree, or
         by each statement's first line when this python3 cannot parse it."""
+        return list(py_read(text, "imports", lambda: Judge.py_imports_read(text)))
+
+    @staticmethod
+    def py_imports_read(text):
+        """py_imports' reading of one text, as a tuple."""
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                tree = ast.parse(text)
+            nodes = py_nodes(text)
         except (SyntaxError, ValueError):
             out = []
             for m in PY_IMPORT_LINE.finditer(text):
@@ -3181,14 +3256,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                     dots = len(m.group(1)) - len(m.group(1).lstrip("."))
                     names = tuple(a.split()[0] for a in m.group(2).split(",") if a.split())
                     out.append((dots, m.group(1)[dots:], names))
-            return out
+            return tuple(out)
         out = []
-        for node in ast.walk(tree):
+        for node in nodes:
             if isinstance(node, ast.Import):
                 out += [(0, a.name, ()) for a in node.names]
             elif isinstance(node, ast.ImportFrom):
                 out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
-        return out
+        return tuple(out)
 
     @staticmethod
     def py_first_import(text):
@@ -3196,9 +3271,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         import_targets writes it (`import a, b` gives a, `from a.b import c` gives a.b), or None when
         the first statement is anything else or text does not parse (claude-config#2631)."""
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                body = ast.parse(text).body
+            body = py_tree(text).body
         except (SyntaxError, ValueError):
             return None
         node = body[0] if body else None
@@ -3325,15 +3398,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         directory, as Python takes it. A change the gate cannot evaluate adds nothing, and an import
         only it would place is then placed nowhere and refused."""
         try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                tree = ast.parse(text)
+            # The assignments and calls of text in the order they are written, found once for a text.
+            nodes = py_read(text, "path changes", lambda: tuple(sorted(
+                (n for n in py_nodes(text) if isinstance(n, (ast.Assign, ast.Call))),
+                key=lambda n: (n.lineno, n.col_offset))))
         except (SyntaxError, ValueError):
             return
         cwd = self.py_cmd["cwd"]
         known = {}  # NAME = <path expression> assignments, as far as each has been read
-        nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.Call))]
-        for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset)):
+        for node in nodes:
             if isinstance(node, ast.Assign):
                 for t in node.targets:
                     if isinstance(t, ast.Name):
@@ -7615,7 +7688,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
 PHASES = ("load_reader", "Judge.line", "Judge.judge_written", "Judge.sh_walk", "Judge.note_writes",
           "Judge.script", "Judge.every_file", "Judge.acts", "Judge.py_acts", "Judge.shell_acts",
           "Judge.content", "Judge.sh_known", "Judge.sh_bound_in", "Judge.made_from", "Judge.curl_defaults",
-          "sw.commands")
+          "sw.commands", "py_parse", "py_marker_read")
 
 
 class PhaseTimes:

@@ -151,7 +151,7 @@ check "it says when the scan was taken" "$(has "$HTML" "Scanned ")"
 check "and that nothing goes until the selection is copied back" "$(has "$HTML" "Nothing is removed until you copy your selection back.")"
 # The 30 day floor (#2134), claiming only what it measures: change and access times, which a plain
 # read of a data file moves only on the first read after each change, so "run", never "opened".
-check "it says the 30 day rule, the Trash apart" "$(has "$HTML" "Apart from the Trash, everything offered here has gone at least 30 days without being changed or run.")"
+check "it says the 30 day rule, the Trash and a row with a time of its own apart" "$(has "$HTML" "Apart from the Trash, and any row that states a shorter time of its own, everything offered here has gone at least 30 days without being changed or run.")"
 
 # The fixture's three Trash entries can all be ticked, so the Trash is one row (#3216): every other
 # item has its own box, and the Trash has one.

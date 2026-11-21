@@ -381,6 +381,18 @@ each kind offers). It is written whole on every run, never added to, and a run t
 it fails and says so, while its removals still happen. With the job switched off on a Mac the list
 is not written there, and `/disk-clean` says those folders are unmeasured.
 
+Two more lists are written beside it on every run, in the same shape, for two things the job never
+removes and `/disk-clean` offers with a tick (Dan, 2026-11-19, both recorded on #3235):
+
+- `open-leftovers.tsv` ("Offer after 7 idle days"): in each session the registry shows open, the
+  folders the notes rule would remove had the session ended. One function, `judge_folder`, is the
+  definition of bulky for the rule that removes and for this list. A task folder that is a git
+  checkout is left out, and so is one that is, or holds, the working folder an open session's
+  registry record names. When a record that may be an open session's cannot be read, the list
+  says unmeasured.
+- `kept-checkouts.tsv` ("Offer when git says safe"): in each ended session, every task folder and
+  every folder in one that the notes rule keeps because it is a git checkout.
+
 - See what it would remove, changing nothing: `claude-sync leftovers`
 - Run it now: `claude-sync remove-leftovers`
 - Switch it off on one Mac: `mkdir -p ~/.claude/state/keep-rules && touch ~/.claude/state/keep-rules/off` (status says it is off for as
@@ -3370,6 +3382,30 @@ started with fewer than 20 seconds left, is given only what is left when that is
 refused as could not judge when it runs to that shortened limit. A full length first call that fails
 still fails open, as before.
 
+A reading whose answer could not be read is asked again (#3327). On 2026-11-19 and 2026-11-20 one
+branch was refused as could not judge twice and passed on a resend of the same head, minutes apart.
+Its one further reading had answered `{"covered":[1]}` after prose quoting a shell function,
+`busy(){ ...; }`, and the shared judge call (`pc_judge` in `lib/push-changes.sh`) read the answer
+from the first brace in the reply to the last, which is not JSON. It now reads each JSON object in
+the reply from its own opening brace, so a brace in the prose is passed over; a reply holding two
+different objects (the judge answering, then correcting itself) is still not read as either. Over
+the judge transcripts on this Mac to 2026-11-20, 5 of 199 further readings had failed that way and
+the new reading reads all 5; the 12 of 1,629 first readings it still cannot read held two answers
+or a spend limit message. Beyond that, a reading whose answer could not be read (no single object,
+an error envelope, nothing at all, or an object without the list asked for) is asked again, up to
+three times in all, with no wait between tries and only while 20 seconds of the deadline are left;
+a reading that timed out or could not start is not asked again, since it would fail the same way.
+It is never a pass: a further reading still unreadable after that refuses as could not judge as
+before, saying how many times it was asked and which test files it held, and a first reading still
+unreadable fails open as before, saying how many times it was asked. Every could not judge refusal
+now says what the gate reads (every commit the checked out commit adds to its base, whichever
+commits the push command names, so pushing one commit at a time reads the same) and gives advice
+by why it stopped: send the same push again when a reading failed or time ran out, and move a self
+contained part of the work to its own branch only when the cap on readings was reached. The
+record's detail for such a refusal starts with why. The suite moves the gate's clock with
+`REQUIRE_TESTS_CLOCK_FILE`, a whole number of seconds added to it, which can only bring the
+deadline closer.
+
 A branch that merges main and then pushes is judged on its own change, not on everything main
 gained since the branch was last pushed (#2028). On 2026-11-01 four pull requests in a work project were each
 refused for size alone after merging a busy main, and each needed a one time override. Both gates
@@ -4579,6 +4615,32 @@ the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 onc
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
+Repeated work was taken out of that budget on 2026-11-20 (#3255), with every verdict as it was. On
+the personal MacBook the installed gate had run out of its 11 seconds on the command that starts
+its own suite, `bash payload/hooks/test-slack-drafts-only-gate.sh`, so that suite could not be
+started from a session. Measured that day: the suite runs the gate's own source as a program some
+sixty times, and each run read those 457,000 characters afresh, 46 parses, 48 whole walks of its
+syntax tree and 12 cuts into tokens in one judgement. Now a Python text is parsed, walked and read
+for the endpoints it names once in a run (`py_read` and the readings through it: `py_tree`,
+`py_nodes`, `py_marker`, `py_imports`). Judging that command took 63.6 to 66.1 units of the suite's
+yardstick before and 18.7 to 19.0 after (5 readings each, a unit 0.095 s), and `bash
+tests/test-mods.sh` 13.6 to 13.8 before and 10.4 to 10.6 after (3 each). `bash
+tests/test-claude-sync.sh` reads no Python to speak of and did not move: 49.2 to 50.3 before, 50.1
+to 50.9 after (5 each); what it costs is two shell files of 1.8 and 1.0 million characters, each
+read once. The budget itself is
+unchanged, and running out of it still refuses the call. The gate's phase line
+(`SLACK_GATE_PHASE_LOG`) counts the real parses and readings (`py_parse`, `py_marker_read`), and the
+suite holds each by that count, which no load can move, and sees each fail on a copy of the gate
+that holds nothing (`ONCE = False`).
+
+The suite's cost checks hold the gate's work in units, never its seconds (#3170). On the slowest
+CI runner seen, on 2026-11-17, a unit took 0.16 to 0.22 s, against 0.095 s on the personal MacBook
+on 2026-11-20, so a gate inside its ceiling still ran out of its 11 seconds there and the check
+failed for the runner's speed. Where
+the seconds run out, the check now judges the same line again on the step clock and holds those
+units to the same ceiling, and records beside the reading that the seconds ran out: a gate that
+does more work fails on any machine, and a slow machine fails nothing by itself.
+
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
 refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
@@ -5007,6 +5069,22 @@ check declaring it (`check "<the part> could not be measured here" ok` alone on 
 the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a
 case arm, is a check like any other (#1452). A pull's closing sentence names the suites that ran
 with parts unmeasured, from the runner's block, and never says "all N of its suites" for them.
+
+The pull request checks say the same where a reviewer looks, not only in a part's log (#3312). With
+`HOOK_TESTS_UNMEASURED_FILE` set, the runner also writes every unmeasured part, uncapped, as
+`<suite><TAB><why>` to that file, started empty each run and never handed to a suite. Each part job
+hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
+job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
+left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
+`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
+a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
+full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
+untested says so on the summary's first line and in a second notice,
+`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
+exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
+from each check's annotations before it merges and prints them, so a merge's log says what its green
+did not cover; a read that fails is said and the merge goes on.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
@@ -6255,7 +6333,9 @@ one `~/.local/bin/claude` points at, never one a running process holds), the Git
 cache (`gh-cache.sh`: entries in `~/.cache/gh` nothing holds open, drawn as one row through the
 Trash's `DCRV_WHOLE` summary in `review-lib.sh`, its kept entries a count in the kind's note), npx
 copies (`package-caches.sh`, by Dan's decision of 2026-11-18, "Offer npx copies only"; npm's
-download cache, its logs and the pnpm store are shown there and never offered), and in build
+download cache, its logs and the pnpm store's own folder are shown there and never offered), the
+pnpm store's prune row (the same module, by his decision of 2026-11-19, "Offer a prune row",
+described below), and in build
 folders a Swift `.build` beside its `Package.swift` and a build folder inside a home dotfolder whose
 project is a git worktree (a `.git` file naming a gitdir under `.git/worktrees/`, so a submodule
 stays refused). Shown and never offered, each row saying why: in `claude-records.sh`, session notes
@@ -6269,8 +6349,10 @@ rather than listed). A kind that offers nothing carries the line `# offers: noth
 this off on 2026-11-18), and `test-disk-clean-categories.sh` then requires it to set offerable
 nowhere instead of keeping the floor, and pins the marker to exactly that one kind.
 
-Folders of images and documents in session notes are the one thing `claude-records.sh` offers.
-Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
+`claude-records.sh` offers three things, all folders in session notes that the daily keep rules
+list and never remove: folders of images and documents in ended sessions, bulky leftovers in
+sessions still open, and git checkouts in ended sessions. The first is described here and the other
+two after it. Dan's keep rules for session notes and for agent and test run transcripts (#3235) are a separate
 daily job, and they keep an ended session's folder when more than half of it is images or
 documents (Dan, 2026-11-18: "2.4 Keep, and show in disk cleanup"). Each such folder is a row here,
 offered once nothing in it was changed or opened in 30 days, and ticking it moves it to the Trash.
@@ -6294,11 +6376,69 @@ Two decisions of 2026-11-19, both recorded on #3235, are behind that:
   by its own path (no link at any level, no `..`, no empty level), and only when it is a real
   folder. The judge then still requires that the keep rules' list names it and that the 30 day
   floor holds. Everything else under the state folder stays refused: `session-notes` itself, a
-  project, a session, a task folder, a file, and anything five or more levels down. So does the
+  project, a session, a task folder (unless it is a git checkout, below), a file, and anything
+  five or more levels down. So does the
   same four level folder under any other kind, by any method but the Trash, or named to
   `--propose`, whose only check is that the item is the one proposed. The shape is one predicate,
   `dc_notes_shape` and `dc_notes_folder` in `hooks/lib/disk-clean-predicates.sh`, read by both the
   page and the remover, so a row is offered only where the remover takes it.
+
+Three more decisions of 2026-11-19, recorded on #3235, each from its own picker:
+
+- **Bulky leftovers in a session still open: "Offer after 7 idle days".** The daily rule removes a
+  session's bulky leftovers only once it has ended, and an orchestrator session can stay open for
+  weeks (on the work MacBook one held 82.7 GB on 2026-11-19). The job lists them in
+  `open-leftovers.tsv` and the page offers each to the Trash when all of these hold on the day it
+  is asked: the list names it; it holds no `.git` at its top; no live session's working folder
+  (`~/.claude/sessions`) is its task folder or inside it; and nothing in its task folder was
+  changed or opened for 7 days (`OPEN_IDLE_DAYS`). The 7 days are read as the 30 day floor is, by
+  `dcs_idle` in `scan-lib.sh`, which the floor itself now calls: the modification time of
+  everything in the task folder and the access time of its files, the notes beside the leftover
+  included. A folder's access time is never read, and listing folders is all the daily job and
+  the scan do there, so neither moves a time this reads. A program that reads the files, a backup
+  say, moves a file's access time only on the first read after each change, so it can delay an
+  offer once and never bring one forward. The task folder's own modification time is left out,
+  because moving one ticked leftover to the Trash moves it just before the next one in the same
+  folder is judged again. The row states its 7 days, since the page's opening sentence says 30.
+  The remover lets no new path through for this: these are the same four level folders, and what
+  changed is which of them the judge takes. Tar files, which the keep rules also call bulky, are
+  files and are not offered.
+- **Git checkouts in ended sessions' notes: "Offer when git says safe".** The keep rules keep a
+  checkout because it may hold work that exists nowhere else, and list each in
+  `kept-checkouts.tsv`. The page offers one to the Trash only when its session is not open now, no
+  live session is working in it, it holds its own repository, the 30 day floor holds (git's own
+  files' access times apart, since every look reads them), and git says it is safe: nothing
+  uncommitted or untracked, on a branch whose merged pull request head is exactly its HEAD
+  (`dcs_git_merged` in `scan-lib.sh`, the one test the Finished worktrees kind uses), no stash, and
+  no commit on another branch or tag that no remote has. Whether it holds its own repository is
+  asked of git, never read off the disk (`dc_git_own_repo` in `lib/disk-clean-predicates.sh`):
+  `git rev-parse --absolute-git-dir`, run in the folder, must name the folder's own `.git`. A
+  worktree or a submodule answers with a repository elsewhere, a `.git` that is a link with the
+  folder the link names, and a `.git` folder that holds no repository with nothing, so none of
+  them is offered: git run there would be answering for some other repository. A checkout in a
+  task folder is the four level shape. A task folder that is itself a checkout is three levels
+  under `session-notes`, which needed the remover's second exception: `dc_notes_task_shape` and
+  `dc_notes_checkout` let it reach the judge only as a `claude-records` item going to the Trash,
+  by its own path, and only when git says it holds its own repository, so a task folder that is
+  not such a checkout stays refused whatever a judge says. A checkout in an open session is never
+  offered.
+- **The pnpm store: "Offer a prune row".** The npm and pnpm caches kind lists one row whose target
+  is `store prune`, which is not a path: ticking it runs pnpm's own `pnpm store prune`, the way the
+  Docker kind's build cache row runs Docker's own prune. Nothing in the store is removed by this
+  config; pnpm decides what no project uses. The row is listed wherever `~/Library/pnpm/store`
+  holds a store, and offered when pnpm is on the PATH, `pnpm store path` (asked from the home
+  folder, so no project's settings choose the store) names a real folder directly inside
+  `~/Library/pnpm/store`, no running process holds a file in it, and nothing in it was changed or
+  opened in 30 days. Otherwise the row says which of those failed. It carries no size, since what
+  a prune frees is not known until pnpm has run, and the store's own folder stays a row that is
+  shown and never offered. The remover's `pnpm` method takes exactly that target and nothing
+  else, only for this kind: it asks pnpm where the store is and holds it to the same place,
+  measures the store, asks the judge again, writes the INTENT line, runs `pnpm store prune`, and
+  measures again. A prune that exits anything but 0 is a failure. One that leaves the store its
+  size is reported as pnpm having found nothing no project uses, and settled. One that shrinks it
+  is reported removed, by how much smaller `du` found the store, with the caution that a package
+  a project holds as a clone keeps its disk blocks, so the disk can gain less than that. Any
+  other pnpm target, the store's folder as one among them, is refused by name.
 
 Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
 folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
@@ -6316,7 +6456,10 @@ MacBook all look gone, and trashing one would sync the removal back. Its suite i
 On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
 `DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
 beneath it was changed (modification time) or opened (access time) in the last 30 days, and the
-floor can only take an item out of the offer, never add one. Opened is read from access times
+floor can only take an item out of the offer, never add one. One row has a shorter time by Dan's
+later decision, described above: a bulky leftover in a session still open asks the same question
+of its task folder over 7 days (`dcs_idle`, which the floor itself calls), and its row says so.
+Opened is read from access times
 because Spotlight's last used date only repeats the change date. That leaves a known gap: running a
 program moves its access time on every run, but a plain read of a data file moves it only on the
 first read after each change, so a data file read again and again without changing can look
@@ -6357,8 +6500,8 @@ an hour old (exit 3) and when its scan is not the last scan (exit 4), with a mes
 
 Each item, in order: the identity deny list (sync and cloud stores, iCloud Drive, app packages,
 Photos and photo editor libraries, the Mail and Messages stores, keys and credentials, anything
-under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the one
-session notes folder shape described above, and the home folder's standard folders and listed
+under `/Applications` or `/System`, Claude Code's own state in `~/.claude/state` apart from the two
+session notes folder shapes described above, and the home folder's standard folders and listed
 dotfolders themselves), whatever the category says; a symbolic link refused and the path resolved physically;
 the deny list again on where it really is; inside HOME or the temp folders; its size; the category's
 own `judge`, run again now; an `lsof` check whose stderr means "could not tell", never "free", last
@@ -6367,7 +6510,9 @@ is gone (or, for truncate, smaller); an OUTCOME line. The methods are `trash` (`
 which ships with macOS 15, and never a fallback to deleting without it), `delete`, `truncate` (with
 `tee`, for a log a process holds open), `worktree` (`git worktree remove` without `--force`),
 `docker` (named images and stopped containers, and the build cache; volumes and both prunes are
-refused by name) and `derived-data` (the sweep's `--remove-one` above). The result is one line per
+refused by name), `derived-data` (the sweep's `--remove-one` above) and `pnpm` (the one target
+`store prune`, which runs pnpm's own prune of its store and is checked by the store's size before
+and after; every other target is refused by name). The result is one line per
 item and the sum of the verified per item sizes, with trashed items counted apart because they free
 nothing until the Trash is emptied; the disk wide `df -m` change and any local Time Machine
 snapshots are printed as context only. Exit 0 when every item went, 5 when any was skipped or
@@ -8455,7 +8600,9 @@ it kept has not stalled, or a Monitor is listed as running in the stop's own `ba
 (#2897) is no idle turn: the session rests, unblocked, until that work's report
 starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
 afresh from it (#2511, `hooks/busy.ts`); a claim is parked
-after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
+after 2 attempts or 2 active hours, each claim the session holds timed from its own start, and a
+`sleep_note` done note naming an issue ends the writer's own claim on it, so finished work is
+neither timed nor parked (#3330); a rate limit or server error is waited out at waits of five,
 ten, twenty and forty minutes, then hourly, each wait noted, and the session started again; `/sleep`
 refuses on battery and holds `caffeinate -i` for the night, and each refusal is also a notification
 (#1545): on battery it says to plug in and run `/sleep` again, a power reading pmset does not give
@@ -8513,11 +8660,19 @@ needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot s
 passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
 for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
 in one line it writes every time it runs, so a final report with no note of the check says it did
-not run. A failed, cancelled or timed out run is listed. The check runs once a night, when sleep
+not run. A failed, cancelled or timed out run is listed. An issue filed overnight is read whole,
+with its repository's open issues read once, and one with a milestone, a priority level, a
+category label and an Open questions section (the issue field gate's own rules), in a repository
+the night's notes name, and with no other open issue of the same title, is noted `filed` and said
+in one line under Done, never put to Dan (#3273); one missing any of those, or whose reads failed,
+is still listed with why. The check runs once a night, when sleep
 mode ends, and its GitHub reads together keep to 30 s (`WAKE_CHECK_MS` in `wakecheck.ts`, a chosen
 limit, not a measurement), each read given at most 20 s of what is left. It reads GitHub in six
 parts, in order: the login, the events since sleep began, the issues created overnight, the lessons
-file's changes, the milestones in each repository, then the deploy runs in each repository. Every
+file's changes, the milestones in each repository, then the deploy runs in each repository, a
+page of 100 at a time back to the moment sleep began (#3284: one page left a busy night's first
+hours unread), at most ten pages, the 1,000 runs GitHub lists for a window. A page not read says
+the window it left, sleep's start to the oldest run read, never a count. Every
 read it makes is kept with its part and how long it took, as `steps` on the one line it always
 writes, so the limit can be set from real nights (#3240). A read past the limit is not made, and the
 stop is said once, as one `unmeasured` note whose `limit` field keeps the facts as data, the same
@@ -9487,7 +9642,8 @@ number, so the report credits that merge and the issues it closes. When the goal
 be done tonight, the session stops with a note. It approves its own permission prompts, except for anything
 banned below. It writes for you only into the report: a question it needs you to answer, a proposed
 issue or lesson, or anything it noticed. An issue that takes two attempts or two hours of work is
-parked for the morning. A session that makes no progress for three turn ends in a row, or for 20
+parked for the morning, each issue a session holds timed on its own; one it has noted done is never
+parked. A session that makes no progress for three turn ends in a row, or for 20
 minutes, is let go with a note. A usage limit or an overloaded server is waited out (5, 10, 20 and
 40 minutes, then hourly, all night, each wait in the report). These limits are chosen, not
 measurements. Work stops when the weekly usage
@@ -9568,7 +9724,13 @@ never sent again unchanged and run, and after which its session did not finish t
 ended, was noted done afterwards; a session holding no claim finished its work when it later noted
 something done or a step of progress. A real refusal by the check is always
 its own row. At wake, Parked and failed rows in the same words are one picker saying how many there
-are (#3223).
+are (#3223). How an issue ended is read from one record, its session's done note (#3276): an end
+the overnight driver wrote (its park after 2 hours, a limit the code sets, not measured; its
+attempts limit; its circuit breaker) is not
+listed when the session that held the issue noted it done, before that end or after it, since the
+driver times a claim, not the work, and a claim left held after its done note keeps counting. Under
+Done one sentence says how many finished issues took longer than the 2 hours, measured from claim
+to done note.
 
 **Tested against the real engine.** `tests/test-sleep-real-engine.sh` runs one night with Claude
 Code itself, in a scratch home folder and a scratch repository that never reach GitHub: `/sleep`,

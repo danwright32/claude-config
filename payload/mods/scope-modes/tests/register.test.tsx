@@ -6203,6 +6203,11 @@ const permission = async ($: $T, tool_name: string, tool_input: Record<string, u
   (await $.classic.PermissionRequest({ tool_name, tool_input } as never)) as Decided
 const PUSH = { command: 'git push -u origin sleep-834' }
 const worker = { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } }
+// #3273: o/r#9 as GitHub holds it, with every required field, and o/r's open issues, where it has no twin.
+const FILED_9 = {
+  'gh api repos/o/r/issues/9': JSON.stringify({ labels: [{ name: 'priority-p2' }, { name: 'bug' }], milestone: { title: 'Ungrouped' }, body: '## Open questions\n\n- None.\n' }),
+  'gh issue list -R o/r --state open --limit 1000 --json number,title': JSON.stringify([{ number: 9, title: 'Filed overnight' }]),
+}
 
 test('asleep, a worker session has its permission prompts approved by themselves', withDeps, async ($, on) => {
   const { clock } = world(on, worker)
@@ -6390,19 +6395,39 @@ test('/wake puts what the overnight check found first, in the reply and the note
     ...worker,
     night: {
       'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      ...FILED_9,
       [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: { fails: 'ENOENT' },
     },
   })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
+  // Filed in a repository no note names, so it still needs a look (#3273).
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight" \(in a repository no session worked tonight\)\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
   const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
   // Written before the night's end note, so the final render puts them at the top of the report.
   expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'checked', 'woke'])
   // What it read and left out as healthy is said every time it runs (#2766).
   expect(notes[2]?.text).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
   expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
-  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
+  expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight" (in a repository no session worked tonight)')
+})
+
+// #3273: an issue the night's own session filed with every field, in the repository it worked, is
+// written as a filed note for the report's one line under Done, never as a row put to Dan.
+test('/wake writes an issue filed overnight that needs nothing as filed, not as something to look at (#3273)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: '{"v":1,"kind":"claim","repo":"o/r","issue":7,"by":"s1"}\n' },
+    night: {
+      'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
+      ...FILED_9,
+    },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).not.toMatch(/Issue created overnight/)
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string; repo?: string; issue?: number })
+  expect(notes.filter(n => n.kind === 'outward')).toEqual([])
+  expect(notes.filter(n => n.kind === 'filed')).toEqual([expect.objectContaining({ kind: 'filed', repo: 'o/r', issue: 9, text: 'Filed overnight', by: 's1' })])
 })
 
 test('the wake check times its 30 s GitHub budget on the engine clock, so a slow night stops on it (#1147, L524)', withDeps, async ($, on) => {
@@ -6748,6 +6773,33 @@ test("a park the watchdog could not make is said at the next Stop with the queue
   expect(w.released.length).toBe(1)
   w.o.claims = ''
   framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(120 minutes of active work on it, past the 2 hours an issue gets\), so end its claim yourself with `bash ~\/\.claude\/hooks\/lib\/sleep-queue\.sh release \/repo 7 s1 parked '120 minutes of active work on it, past the 2 hours an issue gets'`, then claim the next issue\.$/)
+})
+
+test('a park the queue goes on refusing is said once at the next Stop, in its newest words, not once a minute (#3330)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, releaseFails: QUEUE_REFUSED })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(3)
+  w.o.claims = ''
+  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(122 minutes of active work on it/)
+})
+
+test('a refused park whose record could not be saved takes the place of the saved one at the next Stop, said once (#3330)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  // The Stop's write is the first, the first refused park's the second, and the second refused
+  // park's the third, which fails: the record on disk still holds the first park's words.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, releaseFails: QUEUE_REFUSED, driverWriteFails: [3] })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(2)
+  w.o.claims = ''
+  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(121 minutes of active work on it/)
 })
 
 test("a claim the Stop could not end is said with the queue's answer only as data (#922)", withDeps, async ($, on) => {
@@ -8577,4 +8629,55 @@ test('every prompt the mod sends and every question it asks Dan holds back a rel
   expect(worlds.flatMap(x => x.unheld)).toEqual([])
   const ids = new Set(worlds.flatMap(x => x.held.filter(h => h.startsWith('hold ')).map(h => (JSON.parse(h.slice(5)) as { id: string }).id.replace(/ \d+$/, ''))))
   expect([...ids].sort()).toEqual(['bedtime', 'cleanup branch', 'earlier night', 'held pick', 'left branch', 'left open', 'morning', 'night start', 'no build', 'resume'])
+})
+
+// #3330: the watchdog times every claim the session holds from its own start, and leaves alone a
+// claim the session noted done, released or not. A claim with no done note is parked as before.
+const claimLine = (issue: number, at: number) => JSON.stringify({ repo: 'o/r', issue, attempts: 1, entries: [{ kind: 'claim', session: 's1', at }] })
+const PAST = T0 - 2 * 60 * MIN + 40_000
+
+test('the watchdog parks an older claim past its 2 hours though the newest claim is young (#3330)', withDeps, async ($, on) => {
+  const claims = [claimLine(1, PAST), claimLine(2, T0 - 60 * MIN), claimLine(3, T0 - 5 * MIN)].join('\n')
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  // The first Stop, which starts the driver's counter, is still inside every claim's 2 hours.
+  expect((await stop($ as never)).block).toMatch(/^You hold #3 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '1', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+})
+
+test('the watchdog never parks a claim its session noted done, though it was never released (#3330)', withDeps, async ($, on) => {
+  const done = JSON.stringify({ v: 1, kind: 'done', repo: 'o/r', issue: 7, pr: 12, text: 'merged', by: 's1', at: T0 - 10 * MIN })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [NOTES]: `${done}\n` }, claims: claimLine(7, PAST) })
+  await start($ as never, clock)
+  // The Stop never tells the session to carry on with it, and the watchdog never parks it.
+  expect((await stop($ as never)).block).toMatch(/^You hold no issue/)
+  await clock.advance(3 * MIN)
+  expect(w.released).toEqual([])
+  expect((await stop($ as never)).block).toMatch(/^You hold no issue/)
+  expect(w.released).toEqual([])
+})
+
+test('the watchdog still parks a stuck claim with no done note beside one noted done (#3330)', withDeps, async ($, on) => {
+  const done = JSON.stringify({ v: 1, kind: 'done', repo: 'o/r', issue: 2, pr: 12, text: 'merged', by: 's1', at: T0 - 10 * MIN })
+  // The one noted done is the newer, so the stuck one is timed only once claims are timed one by one.
+  const claims = [claimLine(1, PAST), claimLine(2, T0 - 30 * MIN)].join('\n')
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [NOTES]: `${done}\n` }, claims })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #1 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released).toEqual([['/repo', '1', 's1', 'parked', '120 minutes of active work on it, past the 2 hours an issue gets']])
+})
+
+test('two claims the watchdog parks a minute apart are both said at the next Stop, the first never written over (#3330)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: [claimLine(1, PAST), claimLine(2, PAST + 30_000)].join('\n') })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toMatch(/^You hold #2 in o\/r/)
+  await clock.advance(MIN)
+  expect(w.released.map(r => r[1])).toEqual(['1'])
+  w.o.claims = claimLine(2, PAST + 30_000)
+  await clock.advance(MIN)
+  expect(w.released.map(r => r[1])).toEqual(['1', '2'])
+  w.o.claims = ''
+  expect((await stop($ as never)).block).toMatch(/^The watchdog parked #1 \(.*\); its claim is ended, so leave it and claim the next issue\. The watchdog parked #2 \(.*\); its claim is ended, so leave it and claim the next issue\. You hold no issue/)
 })
