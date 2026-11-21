@@ -42,8 +42,10 @@ it can refuse a command those let through and never the reverse:
     (`cat post.py | op run -- python3`). A word that names a file is not such a start: read
     that way, `git add scripts/post.sh` and `sed -n 1,5p scripts/post.sh` would each be a run
     of the script. That leaves `op run -- ./post.sh` open.
-  * A word after it that holds white space (`hyperfine 'node --test x.js'`, `tmux send-keys
-    '...'`) is read as a command line of its own (inner_line) where one of its commands, as the
+  * A word after it written as one quoted string, alone or as an option's value (`hyperfine
+    'node --test x.js'`, `tmux send-keys '...'`, `--prepare='...'`; never a quoted string glued
+    to more, which is what a line of JSON read as a command holds) and holding white space
+    is read as a command line of its own (inner_line) where one of its commands, as the
     shared reader cuts them, starts with such a name past its assignments (holds_command,
     claude-config#3304). Until then the whole word had to name a program, so a command in
     quotes was never read. A sentence that only mentions a program starts with another word
@@ -102,6 +104,9 @@ NOT_KNOWN = "is not a program the gate knows to be unable to run the words after
 # the names in one (white space, quotes and the shell's operators).
 WHITE = re.compile(r"\s")
 BETWEEN = re.compile(r"[\s;&|(){}<>\"'`]+")
+# A word that is one quoted string and nothing else, bare or as the value of an option (--name=).
+OPTION = re.compile(r"^--?[\w-]+=")
+ONE_QUOTED = re.compile(r"(?s)(?:--?[\w-]+=)?(\$?'[^']*'|\"(?:[^\"\\]|\\.)*\")")
 # A redirection that writes the file named after it.
 WRITES_TO = re.compile(r"\d*(?:>>|>\||&>>|&>|>)")
 
@@ -271,7 +276,8 @@ def make(judged_by_name, sh_redirect):
                 return None
             rest = self.rest_of(text)[0]
             words = self.words_of(rest)
-            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(w, d) for w in words[1:]):
+            if len(words) < 2 or not any(self.starts_command(w) or self.holds_command(OPTION.sub("", w, 1), d)
+                                         for w in words[1:]):
                 return None
             name = os.path.basename(words[0])
             runs = None if judged_by_name(name) else self.may_run_its_words(words, d, depth)
@@ -291,8 +297,13 @@ def make(judged_by_name, sh_redirect):
                 at += len(raw)
             starts = [k for k in range(1, end) if toks[k][0] == "word" and toks[k - 1][0] == "word"
                       and self.starts_command(self.word_value(toks[k][1]) or "")]
+            # Only a word written as one quoted string, alone or as an option's value: a quoted
+            # string glued to more (`"curl ..."}}`, a line of JSON read as a command) is no word
+            # a program is handed as its command, and read as one a transcript sourced by a
+            # script was refused as posting for a command it only quotes.
             lines = [v for k in range(1, end) if toks[k][0] == "word" and toks[k - 1][0] == "word"
-                     for v in (self.word_value(toks[k][1]),) if v and self.holds_command(v, d)]
+                     for m in (ONE_QUOTED.fullmatch(toks[k][1]),) if m
+                     for v in (self.word_value(m.group(1)),) if v and self.holds_command(v, d)]
             if lines and isinstance(runs, str) and not self.function_acts(
                     words[0], self.shell.get("text") or "", d, depth, (), True):
                 lines = []  # a function whose body only pipes what it is handed on (function_acts)

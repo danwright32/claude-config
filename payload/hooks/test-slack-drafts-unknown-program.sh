@@ -495,6 +495,7 @@ hyperfine "node --test test/notify.test.js"
 hyperfine '$POST'
 hyperfine 'cd . && node --test test/notify.test.js'
 hyperfine --warmup 3 'NODE_ENV=test node --test test/notify.test.js'
+hyperfine --prepare='node --test test/notify.test.js' 'sleep 1'
 hyperfine 'node --test test/plain.test.js' 'node --test test/notify.test.js'
 hyperfine 'bash post.sh'
 bench() { hyperfine "\$@"; }; bench 'node --test test/notify.test.js'
@@ -535,6 +536,14 @@ EOF
 # command>"), and read as a run of it every one of those suites would be refused.
 gate_says allowed "#3304 left open: a quoted word whose command starts with a program the gate does not know" 3<<EOF
 hyperfine 'op run -- node --test test/notify.test.js'
+EOF
+# Only a word written as one quoted string is read. A quoted string glued to more is what a line
+# of JSON read as a command holds ("command": "<a command>"}}), and read as a command line it
+# refused a transcript that a script sources as posting, for a command the transcript only quotes
+# (the gate suite's own 3 MB transcript case, which must run out of time and say so).
+gate_says allowed "#3304 a quoted string glued to more is not one quoted word, and is left as it was" 3<<EOF
+{type: user, message: {content: "node --test test/notify.test.js"}}
+jot "node --test test/notify.test.js",
 EOF
 gate_says allowed "#3304 a function that only pipes what it is handed into a program, handed the refused command as one word" 3<<EOF
 ask() { printf '%s' "\$1" | $T/quiet.sh; }; ask 'node --test test/notify.test.js'
