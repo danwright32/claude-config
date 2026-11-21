@@ -320,8 +320,24 @@ export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
  */
 export const parkedWith = (unsaid: string | null | undefined, told: string, earlier?: string): string => {
   if (!unsaid) return told
+  // Joining the same words twice changes nothing, so a join that runs again cannot double them.
+  if (unsaid.includes(told)) return unsaid
   if (earlier && unsaid.includes(earlier)) return unsaid.replace(earlier, () => told)
   return `${thenNext(unsaid)}${told}`
+}
+
+/** A park whose record could not be saved: its words, and the saved refusal they are a second try at. */
+export type UnsavedPark = { told: string; earlier?: string }
+
+/**
+ * The saved words not yet said, with every park the record could not take joined in, each once.
+ * What could not be saved is kept by issue, never as joined words, so this is the one place the
+ * two are put together, by the same rule the watchdog joins by (#3330).
+ */
+export const parkedWithUnsaved = (saved: string | null | undefined, unsaved: Iterable<UnsavedPark>): string | null => {
+  let all = saved ?? ''
+  for (const u of unsaved) all = parkedWith(all, u.told, u.earlier)
+  return all || null
 }
 
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`

@@ -4,7 +4,7 @@ import {
   LIMITS, REST_RESUME, RESUME, activeMs, blockTold, busyWords, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
-import { parkedWith } from '../hooks/driver.ts'
+import { parkedWith, parkedWithUnsaved } from '../hooks/driver.ts'
 
 // The overnight driver's decisions (#844), on recorded state only. Every limit is read from LIMITS,
 // never written here as a literal at its edge (L401), so moving one moves its tests with it.
@@ -691,4 +691,25 @@ test('parkedWith: an earlier refusal already said is not looked for, so the new 
 })
 test('parkedWith: a dollar sign in the new words is kept as written', () => {
   expect(parkedWith('old', 'cost $& $1', 'old')).toBe('cost $& $1')
+})
+test('parkedWith: words already among the unsaid ones are not added a second time', () => {
+  expect(parkedWith('A. B.', 'B.')).toBe('A. B.')
+})
+// Parks whose record could not be saved, joined to the saved words at the next Stop (lessons review of defdc10).
+test('parkedWithUnsaved: nothing unsaved leaves the saved words as they are, and none at all is null', () => {
+  expect(parkedWithUnsaved('A.', [])).toBe('A.')
+  expect(parkedWithUnsaved(null, [])).toBe(null)
+})
+test('parkedWithUnsaved: an unsaved park is joined after the saved ones, which are said once', () => {
+  expect(parkedWithUnsaved('A.', [{ told: 'B.' }])).toBe('A. B.')
+  expect(parkedWithUnsaved(null, [{ told: 'B.' }])).toBe('B.')
+})
+test('parkedWithUnsaved: an unsaved refusal takes the place of the saved refusal it was a second try at', () => {
+  expect(parkedWithUnsaved('A. old\ndata\n', [{ told: 'new\ndata\n', earlier: 'old\ndata\n' }])).toBe('A. new\ndata\n')
+})
+test('parkedWithUnsaved: a park the record did take after all is not said twice', () => {
+  expect(parkedWithUnsaved('A. B.', [{ told: 'B.' }])).toBe('A. B.')
+})
+test('parkedWithUnsaved: parks of two issues that could not be saved are both joined, each once', () => {
+  expect(parkedWithUnsaved('A.', [{ told: 'B.' }, { told: 'C.' }])).toBe('A. B. C.')
 })

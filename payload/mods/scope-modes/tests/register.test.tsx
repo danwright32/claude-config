@@ -6788,6 +6788,20 @@ test('a park the queue goes on refusing is said once at the next Stop, in its ne
   framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(122 minutes of active work on it/)
 })
 
+test('a refused park whose record could not be saved takes the place of the saved one at the next Stop, said once (#3330)', withDeps, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 - 2 * 60 * MIN + 40_000 }] })
+  // The Stop's write is the first, the first refused park's the second, and the second refused
+  // park's the third, which fails: the record on disk still holds the first park's words.
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims, releaseFails: QUEUE_REFUSED, driverWriteFails: [3] })
+  await start($ as never, clock)
+  await stop($ as never)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.released.length).toBe(2)
+  w.o.claims = ''
+  framedOnce((await stop($ as never)).block ?? '', /^The watchdog could not park #7 \(121 minutes of active work on it/)
+})
+
 test("a claim the Stop could not end is said with the queue's answer only as data (#922)", withDeps, async ($, on) => {
   // Past the night's attempts, so this Stop parks it at once.
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 3, entries: [{ kind: 'claim', session: 's1', at: T0 }] })

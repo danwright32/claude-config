@@ -73,8 +73,8 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, SLEEP_START, blockTold, overdueClaim, parkedWith, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
-  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
+  LIMITS, SLEEP_START, blockTold, overdueClaim, parkedWith, parkedWithUnsaved, stuckWhy, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, unstartedSaid,
+  type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted, type UnsavedPark,
 } from './driver.ts'
 import { busyNow } from './busy.ts'
 import { overnightData } from './overnightdata.ts'
@@ -3542,10 +3542,12 @@ const oneAtATime = <T>(fn: () => Promise<T>): Promise<T> => {
 // written is still a stop: the next Stop never blocks on the older count it would read back.
 const stoppedHere = new Set<string>()
 const stopKey = (en: Enrolled) => `${en.record.generation}/${en.self}`
-// A park the watchdog made but could not record on disk, said at the next Stop all the same.
-const parkedHere = new Map<string, string>()
-// Each park the queue refused since the last Stop, by issue, in the words not yet said. The next
-// minute's try at the same issue replaces these words; it never says the failure a second time.
+// Parks the watchdog made but could not record on disk, by issue, said at the next Stop all the
+// same. Each holds only its own words, never the saved ones joined in, so the Stop cannot say a
+// saved park twice.
+const parkedHere = new Map<string, Map<number, UnsavedPark>>()
+// Each refused park the saved record holds since the last Stop, by issue. The next minute's try
+// at the same issue takes the place of these words; the failure is never said a second time.
 const refusedHere = new Map<string, Map<number, string>>()
 
 // One Stop of an enrolled session: a block keeping it working, or null to let it stop.
@@ -3564,10 +3566,10 @@ const driveStop = ($: EngineInterface, backgroundTasks?: unknown): Promise<{ blo
       return null
     }
     let driver = await loadDriver($, en)
-    const unsavedPark = parkedHere.get(stopKey(en))
-    if (unsavedPark && driver.state !== 'unreadable') {
+    const unsavedParks = parkedHere.get(stopKey(en))
+    if (unsavedParks?.size && driver.state !== 'unreadable') {
       const base = driver.state === 'ok' ? driver.record : freshDriver(en.record.generation, en.self, en.now)
-      driver = { state: 'ok', record: { ...base, parked: base.parked ? `${thenNext(base.parked)}${unsavedPark}` : unsavedPark } }
+      driver = { state: 'ok', record: { ...base, parked: parkedWithUnsaved(base.parked, unsavedParks.values()) } }
     }
     parkedHere.delete(stopKey(en))
     refusedHere.delete(stopKey(en))
@@ -3677,17 +3679,24 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     const rel: Release = { issue: over.claim.issue, state: 'parked', why: stuckWhy(over.active) }
     // Several claims can now be parked a minute apart before the next Stop says so: each park is
     // added after any not yet said, never written over it (lessons review of feb6dd4).
-    // A park the queue refused is tried again next minute, and its words then replace that
-    // issue's earlier refusal, so one failure is not said, and stored, once a minute until the
-    // next Stop (lessons review of d137576).
+    // A park the queue refused is tried again next minute, and its words then take the place of
+    // that issue's saved refusal, so one failure is not said, and stored, once a minute until
+    // the next Stop. A park the record could not take is kept by issue with only its own words,
+    // and joined to the saved ones once, at the next Stop (lessons reviews of d137576, defdc10).
     const failed = await endClaim($, en, where.root, rel)
     const told = releaseTold('watchdog', rel, failed, { root: where.root, self: en.self })
-    const refused = refusedHere.get(stopKey(en)) ?? new Map<number, string>()
-    d.parked = parkedWith(d.parked, told, refused.get(rel.issue))
-    if (failed === null) refused.delete(rel.issue)
-    else refused.set(rel.issue, told)
-    refusedHere.set(stopKey(en), refused)
-    if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
+    const key = stopKey(en)
+    const saved = refusedHere.get(key) ?? new Map<number, string>()
+    const unsaved = parkedHere.get(key) ?? new Map<number, UnsavedPark>()
+    const earlier = saved.get(rel.issue)
+    d.parked = parkedWith(d.parked, told, earlier)
+    if ((await saveDriver($, en, d)) === null) {
+      unsaved.delete(rel.issue)
+      if (failed === null) saved.delete(rel.issue)
+      else saved.set(rel.issue, told)
+    } else unsaved.set(rel.issue, { told, earlier })
+    refusedHere.set(key, saved)
+    parkedHere.set(key, unsaved)
     return null
   })
   if (!resume) return
