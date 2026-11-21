@@ -1573,6 +1573,268 @@ while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
 $_pids3357
 PIDS
 
+# --- WHAT A GATE KILLED AT ITS CALL DEADLINE LEFT BEHIND, printed (claude-config#3333, L177). On
+#     2026-11-21 the case further down for a run without a key ended at its 50 second call deadline
+#     on GitHub's runner with nothing printed, and passed when run again, so nothing said where the
+#     gate had been for the 27 seconds past its stop. A gate that ends by itself removes its own
+#     folder; one killed from outside leaves it, holding what its supervising process was doing,
+#     what its run was doing, and the run's output and errors so far. gate_left prints that folder,
+#     for a call given a temporary folder of its own, so the next such failure names the step.
+gate_left(){   # $1 = the TMPDIR the call was given -> what the gate's leftover folder holds, on one line
+  local d f any=""
+  for d in "$1"/scanners-gate.*; do
+    [ -d "$d" ] || continue
+    any=1
+    for f in supervisor phase age out err; do
+      if [ -f "$d/$f" ]; then printf ' [%s: %s]' "$f" "$(head -c 1500 "$d/$f" | tr '\n' '|')"
+      else printf ' [%s: no such file]' "$f"; fi
+    done
+  done
+  [ -n "$any" ] || printf ' [the gate left no folder, so it ended by itself and removed it]'
+}
+# It is seen to print further down, once the stand in for perl that makes a gate's pid known exists.
+
+# --- A STOP SIGNAL THE GATE HANDLES BEFORE IT IS WAITING FOR IT is not the only one it gets
+#     (claude-config#3333). The timer told the gate to stop with one signal. A signal bash handles
+#     before `wait` has begun does not end that wait: measured on 2026-11-21 under bash 3.2, a wait
+#     begun one second after the signal ran for the whole life of what it waited on. So a gate that
+#     reached its wait after its stop time waited on its run with no stop at all, which is the hang
+#     the stop exists to end. Staged with no setting in the gate: a BASH_ENV file gives the gate's
+#     own shell, the first bash to read it, a function named wait that removes itself, sleeps three
+#     seconds, and then calls wait, which is by then the real one. (Never `builtin wait`: measured
+#     the same day, a wait reached through `builtin` is one no trapped signal ends at all, so it
+#     would hold a gate that stops correctly.) The stop is at 2 seconds on a clock of whole seconds,
+#     so its signal comes under 3 seconds after the gate's clock started, which is before that sleep
+#     can end: it is always handled before the real wait begins. The run hangs on the stand in
+#     shasum as above. The gate must still refuse in its own words; one that waits on is ended by
+#     FIRE_DEADLINE.
+cat > "$TMPROOT/earlysignal.sh" <<EOF
+mkdir "$TMPROOT/earlysignal.once" 2>/dev/null && wait(){ unset -f wait; sleep 3; wait "\$@"; }
+EOF
+: > "$TMPROOT/slowshim.pids"
+_t0="$(date +%s)"
+o3333e="$(BASH_ENV="$TMPROOT/earlysignal.sh" PATH="$SLOWBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" \
+           SCANNERS_BUDGET_SECONDS=1 SCANNERS_STOP_GRACE_SECONDS=1 FIRE_DEADLINE=40 \
+           FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" fire "$R3357" "git push")"; c3333e=$?
+_took3333e=$(( $(date +%s) - _t0 ))
+echo "MEASURED #3333: with its stop signal handled before its wait began, the gate returned in ${_took3333e}s (exit $c3333e)"
+[ -d "$TMPROOT/earlysignal.once" ] && [ "$c3333e" -eq 2 ] && grep -q 'PUSH BLOCKED' <<< "$o3333e" && grep -q 'not scanned' <<< "$o3333e" \
+  && check "#3333 a stop signal handled before the gate's wait began still stops the gate, in its own words" ok \
+  || check "#3333 a stop signal handled before the gate's wait began still stops the gate, in its own words" "exit=$c3333e took ${_took3333e}s out=$o3333e"
+_pids3357="$(cat "$TMPROOT/slowshim.pids" 2>/dev/null)"
+while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
+$_pids3357
+PIDS
+
+# --- THE TIMER'S END IS NEVER IN THE REFUSAL, however late it comes (claude-config#3333). The stop
+#     kills the timer and the run, and bash reports a child it finds killed ("Killed: 9", with a
+#     line of source) on its own standard error at the next command it waits for, unless that child
+#     was waited on with standard error closed. A stop that waited on the run alone left a timer
+#     that was slow to die to be reported in the refusal itself: seen on 2026-11-21 on this Mac at a
+#     load average above 100, where the check above for a shell report failed with the timer's line
+#     in the refusal, once in 6 runs. Staged with no setting in the gate: a BASH_ENV file gives the
+#     gate's own shell, the first bash to read it, a function named kill that hands the first
+#     kill -9 it is asked for, which is the timer's, to a process that holds it back for as long as
+#     the gate is still there, up to 3 seconds (a setting, not measured), and records which it was:
+#     "waited" when the gate was still there at the end, "left" when the gate had gone on and ended
+#     with its timer alive. A gate that waits for its timer is still there at the end whatever the
+#     machine's load; load can only make a gate that does not wait look as if it did.
+cat > "$TMPROOT/latekill.sh" <<EOF
+mkdir "$TMPROOT/latekill.once" 2>/dev/null && kill(){
+  if [ "\$1" = -9 ] && [ ! -e "$TMPROOT/latekill.asked" ]; then
+    : > "$TMPROOT/latekill.asked"
+    ( n=0; while builtin kill -0 "\$\$" 2>/dev/null && [ "\$n" -lt 30 ]; do sleep 0.1; n=\$((n + 1)); done
+      if builtin kill -0 "\$\$" 2>/dev/null; then echo waited; else echo left; fi > "$TMPROOT/latekill.verdict"
+      builtin kill -9 "\$2" ) </dev/null >/dev/null 2>&1 &
+  else
+    builtin kill "\$@"
+  fi
+}
+EOF
+: > "$TMPROOT/slowshim.pids"
+_t0="$(date +%s)"
+o3333k="$(BASH_ENV="$TMPROOT/latekill.sh" PATH="$SLOWBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" \
+           SCANNERS_BUDGET_SECONDS=1 SCANNERS_STOP_GRACE_SECONDS=1 FIRE_DEADLINE=40 \
+           FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" fire "$R3357" "git push")"; c3333k=$?
+_took3333k=$(( $(date +%s) - _t0 ))
+echo "MEASURED #3333: with the end of its timer held back, the gate returned in ${_took3333k}s (exit $c3333k)"
+[ -e "$TMPROOT/latekill.asked" ] && hang_wait '[ -s "$TMPROOT/latekill.verdict" ]'
+_v3333k="$(cat "$TMPROOT/latekill.verdict" 2>/dev/null)"
+[ "$c3333k" -eq 2 ] && [ "$_v3333k" = waited ] && grep -q 'PUSH BLOCKED' <<< "$o3333k" && ! grep -q 'Killed' <<< "$o3333k" \
+  && check "#3333 a stopped gate waits for its timer to be gone before it refuses, so the timer's end is never in the refusal" ok \
+  || check "#3333 a stopped gate waits for its timer to be gone before it refuses, so the timer's end is never in the refusal" "exit=$c3333k took ${_took3333k}s the held kill recorded: ${_v3333k:-nothing, so the gate never asked for its timer to be killed} out=$o3333k"
+_pids3357="$(cat "$TMPROOT/slowshim.pids" 2>/dev/null)"
+while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
+$_pids3357
+PIDS
+
+# --- A STOP THAT COMES BEFORE THE RUN HAS BECOME A PROCESS GROUP OF ITS OWN still ends the run
+#     (claude-config#3333). The run is started by a perl that makes itself a group and then becomes
+#     the run, and the stop killed that group and nothing else. Until perl has made the group there
+#     is none to kill: the kill fails, and the gate then waited for the run to end by itself and
+#     passed on its exit code as the verdict. Measured 2026-11-21 under bash 3.2 with a run that
+#     never made a group: the kill failed, the wait ran the run's whole 6 seconds and gave 0. Staged
+#     by a stand in for perl that, asked to start the run, records its pid and the gate's and sleeps
+#     in the gate's own group, and is the real perl for every other call. The call deadline's own
+#     perl is one of those, which is why the stand in matches the whole of the run's script and
+#     nothing shorter; the check below fails if it never matched. The stand in sleeps for twice the
+#     ceiling of hang_wait, so the wait for the run to be gone ends at once for a run the gate
+#     stopped and runs out for one nobody stopped, whatever that ceiling is set to.
+PERLBIN="$TMPROOT/perlbin"; mkdir -p "$PERLBIN"
+REALPERL="$(command -v perl)"
+cat > "$PERLBIN/perl" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = -e ] && [ "\$2" = 'setpgrp(0, 0); exec @ARGV or exit 127' ]; then
+  echo \$\$ >> "$TMPROOT/nogroup.pids"
+  echo \$PPID > "$TMPROOT/nogroup.gate"
+  exec sleep $(( HANG_S * 2 ))
+fi
+exec "$REALPERL" "\$@"
+EOF
+chmod +x "$PERLBIN/perl"
+_t0="$(date +%s)"
+o3333g="$(PATH="$PERLBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" SCANNERS_BUDGET_SECONDS=1 \
+           SCANNERS_STOP_GRACE_SECONDS=1 FIRE_DEADLINE=40 FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" \
+           fire "$R3357" "git push")"; c3333g=$?
+_took3333g=$(( $(date +%s) - _t0 ))
+echo "MEASURED #3333: with a run that had not become a group of its own, the gate returned in ${_took3333g}s (exit $c3333g)"
+_pid3333g="$(sed -n 1p "$TMPROOT/nogroup.pids" 2>/dev/null)"
+if [ "$c3333g" -eq 2 ] && grep -q 'PUSH BLOCKED' <<< "$o3333g" && [ -n "$_pid3333g" ] \
+   && hang_wait '! kill -0 "$_pid3333g" 2>/dev/null'; then
+  check "#3333 a stop that comes before the run is a group of its own still ends the run and refuses" ok
+else
+  check "#3333 a stop that comes before the run is a group of its own still ends the run and refuses" "exit=$c3333g took ${_took3333g}s run pid=${_pid3333g:-none recorded, so the stand in never matched} out=$o3333g"
+fi
+[ -n "$_pid3333g" ] && kill -9 "$_pid3333g" 2>/dev/null
+# The same before a polite stop of the gate itself, which ends the run with it: the gate is fired
+# in the background, told to end once its run has started, and the run must be gone. It is told
+# only once it says it is waiting for its run (the record it leaves in a temporary folder of its
+# own), since a gate told to end in the instant between starting its run and noting the run's pid
+# has no pid to end. A gate that never says so runs to its call deadline, which ends the wait and
+# fails the check on the exit code, and is then not signalled at all, its pid being nobody's.
+gate_in_background(){   # $1 = a name for its files  $2 = the log its deadline goes to  [$3 = the folder of another stand in for perl, which records the same two files] -> starts a gate behind the stand in for perl
+  : > "$TMPROOT/nogroup.pids"; rm -f "$TMPROOT/nogroup.gate" "$TMPROOT/$1.rc"
+  mkdir -p "$TMPROOT/$1.tmp"
+  ( TMPDIR="$TMPROOT/$1.tmp" PATH="${3:-$PERLBIN}:$PATH" SCANNERS_STATE_DIR="$TMPROOT/hardstop-state" SCANNERS_BUDGET_SECONDS=100 \
+      FIRE_DEADLINE=40 FIRE_DEADLINE_LOG="$2" fire "$R3357" "git push" > "$TMPROOT/$1.out" 2>&1
+    echo $? > "$TMPROOT/$1.rc" ) &
+  _bg3333=$!
+  _name3333="$1"
+  # The gate says it is waiting as soon as it has started its run, which can be before the stand in
+  # has recorded the run's pid and the gate's, so the wait is for all three (seen on 2026-11-21 with
+  # the stand in held back 2 seconds: the gate was never told to end and ran to its call deadline).
+  hang_wait '[ -s "$TMPROOT/$_name3333.rc" ] || { [ -s "$TMPROOT/nogroup.gate" ] && [ -s "$TMPROOT/nogroup.pids" ] && grep -q "waiting for its run" "$TMPROOT/$_name3333.tmp"/scanners-gate.*/supervisor 2>/dev/null; }'
+  _gate3333="$(cat "$TMPROOT/nogroup.gate" 2>/dev/null)"; _run3333="$(sed -n 1p "$TMPROOT/nogroup.pids" 2>/dev/null)"
+}
+gate_in_background nogroup-term "$TMPROOT/hardstop-deadlines"
+[ -s "$TMPROOT/nogroup-term.rc" ] || { [ -n "$_gate3333" ] && kill -TERM "$_gate3333" 2>/dev/null; }
+wait "$_bg3333" 2>/dev/null
+_pid3333t="$_run3333"
+if [ "$(cat "$TMPROOT/nogroup-term.rc" 2>/dev/null)" = 2 ] && [ -n "$_pid3333t" ] \
+   && hang_wait '! kill -0 "$_pid3333t" 2>/dev/null'; then
+  check "#3333 and a gate told to end before its run is a group of its own takes the run with it" ok
+else
+  check "#3333 and a gate told to end before its run is a group of its own takes the run with it" "exit=$(cat "$TMPROOT/nogroup-term.rc" 2>/dev/null) run pid=${_pid3333t:-none recorded} out=$(cat "$TMPROOT/nogroup-term.out" 2>/dev/null)"
+fi
+[ -n "$_pid3333t" ] && kill -9 "$_pid3333t" 2>/dev/null
+
+# gate_left, seen to print (L1; and L322: the folder is where the call's TMPDIR says only if the
+# gate honours it). A gate started the same way is killed outright, its whole group, the moment it
+# says it is waiting for its run, as a call deadline kills one. Nothing waits a fixed time: the
+# stand in keeps the run at its first step, so what the folder holds is the same on any machine.
+gate_in_background left-behind "$TMPROOT/selftest-deadlines"
+[ -s "$TMPROOT/left-behind.rc" ] || { [ -n "$_gate3333" ] && kill -KILL -- "-$_gate3333" 2>/dev/null; }
+wait "$_bg3333" 2>/dev/null
+_left3333d="$(gate_left "$TMPROOT/left-behind.tmp")"
+grep -q -F '[supervisor: waiting for its run to finish' <<< "$_left3333d" && grep -q -F '[phase: starting its run' <<< "$_left3333d" \
+  && check "#3333 a gate killed from outside leaves what it and its run were doing, and the suite prints it" ok \
+  || check "#3333 a gate killed from outside leaves what it and its run were doing, and the suite prints it" "exit=$(cat "$TMPROOT/left-behind.rc" 2>/dev/null) left behind:$_left3333d"
+[ -n "$_run3333" ] && kill -9 "$_run3333" 2>/dev/null
+
+# --- A RUN THAT ENDS BY ITSELF JUST AS THE STOP COMES is refused in words, never passed on under an
+#     exit code bash made up (claude-config#3333, from the lessons review of pull request 3382). The
+#     stop killed the run and waited for it a second time, and whatever that second wait gave was
+#     the gate's exit code unless it was 137. Measured on 2026-11-21 on this Mac, bash 3.2, in 5
+#     staged calls of 5: when the run has ended and the stop signal is waiting at the moment bash
+#     comes back from its wait, bash leaves the wait for the signal and drops the exit code it had
+#     just been handed. The second wait then finds no child and gives -1, and the gate exited 255
+#     over a run that had printed a refusal and ended with 2. Staged with signals and no setting in
+#     the gate, and nothing waits a fixed time: a stand in for perl is the run, which prints a
+#     refusal, records its pid and the gate's, and ends with 2 once a file exists. The gate is held
+#     (SIGSTOP) once it is asleep in its wait, the run is let go and seen to have ended, the stop
+#     signal is sent, and the gate is let go on. Held like that, macOS finishes the wait inside the
+#     kernel, so the run is gone from the process list; a system that leaves it there as a zombie
+#     (Linux, as recalled and not measured here) may leave bash knowing its exit code. On either,
+#     the gate must exit 2 and the run's own words must reach the reader. Which of its two routes
+#     the gate took is printed as a note. A gate never seen held fails the check by name.
+#
+#     The staged run also leaves what a run without a key leaves in its work folder: a scanner in a
+#     process group of its own, its pid recorded and no exit code beside it. A gate that refuses for
+#     want of its run's exit code cannot know the run stopped that scanner itself, and no later
+#     push could count it, so the gate must stop it and say so, as its refusal at the stop does
+#     (from the lessons review of this case's own change, 2026-11-21).
+OWNBIN="$TMPROOT/ownendbin"; mkdir -p "$OWNBIN"
+cat > "$OWNBIN/perl" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = -e ] && [ "\$2" = 'setpgrp(0, 0); exec @ARGV or exit 127' ]; then
+  echo "PUSH BLOCKED: the staged run refused this push." >&2
+  mkdir -p "\$_SC_WORK_PARENT/scanners-before-push.staged/runs/one"
+  "$REALPERL" -e 'setpgrp(0, 0); open(my \$f, ">", \$ARGV[0]) or exit 1; print \$f \$\$; close \$f; rename \$ARGV[0], \$ARGV[1]; exec "sleep", \$ARGV[2]' \\
+    "$TMPROOT/ownend.keyless.tmp" "$TMPROOT/ownend.keyless" $(( HANG_S * 2 )) </dev/null >/dev/null 2>&1 &
+  n=0
+  while [ ! -s "$TMPROOT/ownend.keyless" ] && [ "\$n" -lt $(( HANG_S * 10 )) ]; do sleep 0.1; n=\$((n + 1)); done
+  cp "$TMPROOT/ownend.keyless" "\$_SC_WORK_PARENT/scanners-before-push.staged/runs/one/pid"
+  echo \$\$ >> "$TMPROOT/nogroup.pids"
+  echo \$PPID > "$TMPROOT/nogroup.gate"
+  n=0
+  while [ ! -e "$TMPROOT/ownend.release" ] && [ "\$n" -lt $(( HANG_S * 20 )) ]; do sleep 0.1; n=\$((n + 1)); done
+  exit 2
+fi
+exec "$REALPERL" "\$@"
+EOF
+chmod +x "$OWNBIN/perl"
+_state3333(){ ps -o stat= -p "$1" 2>/dev/null | tr -d ' '; }   # $1 = a pid -> its state as ps gives it, nothing once it has gone
+rm -f "$TMPROOT/ownend.release"
+gate_in_background ownend "$TMPROOT/hardstop-deadlines" "$OWNBIN"
+_held3333o="no"
+if [ ! -s "$TMPROOT/ownend.rc" ] && [ -n "$_gate3333" ] && [ -n "$_run3333" ]; then
+  # Asleep, which is where a gate waiting for its run is; one still on its way there is running.
+  hang_wait 'case "$(_state3333 "$_gate3333")" in S*|I*) true ;; *) false ;; esac'
+  kill -STOP "$_gate3333" 2>/dev/null
+  hang_wait 'case "$(_state3333 "$_gate3333")" in T*) true ;; *) false ;; esac' && _held3333o="yes"
+  : > "$TMPROOT/ownend.release"
+  hang_wait 'case "$(_state3333 "$_run3333")" in ""|Z*) true ;; *) false ;; esac' || _held3333o="yes, but its run was never seen to end"
+  kill -USR1 "$_gate3333" 2>/dev/null
+  kill -CONT "$_gate3333" 2>/dev/null
+fi
+: > "$TMPROOT/ownend.release"
+wait "$_bg3333" 2>/dev/null
+c3333o="$(cat "$TMPROOT/ownend.rc" 2>/dev/null)"; o3333o="$(cat "$TMPROOT/ownend.out" 2>/dev/null)"
+if grep -q 'did not reach it' <<< "$o3333o"; then
+  # What bash gave the gate for its run, as the refusal says it: -1 under bash 3.2 on 2026-11-21,
+  # which is why the gate's test of it has an arm for below 0. Each machine's run prints its own.
+  _gave3333o="$(sed -n 's/.*(bash gave \(-\{0,1\}[0-9][0-9]*\) for the run).*/\1/p' <<< "$o3333o")"
+  _route3333o="refused in its own words, having lost the exit code of its run (bash gave ${_gave3333o:-an unread value} for it)"
+else _route3333o="passed on what its run said"; fi
+echo "SUITE-NOTE bash ${BASH_VERSION%%(*} on $(uname -s): a gate whose run ended by itself as its stop came ${_route3333o} (exit ${c3333o:-unread}) (#3333)"
+if [ "$_held3333o" = yes ] && [ "$c3333o" = 2 ] && grep -q 'the staged run refused this push' <<< "$o3333o" && ! grep -q 'Killed' <<< "$o3333o"; then
+  check "#3333 a run that ends by itself as the stop comes is refused with exit 2 and its own words, never passed on under a code bash made up" ok
+else
+  check "#3333 a run that ends by itself as the stop comes is refused with exit 2 and its own words, never passed on under a code bash made up" "exit=${c3333o:-unread} the gate was held: $_held3333o left behind:$(gate_left "$TMPROOT/ownend.tmp") out=$o3333o"
+fi
+# Judged only where the gate refused for want of the exit code; where bash still knew it, the gate
+# passed on what its run said, as it does for any run that ends by itself, and that is said.
+_keyless3333o="$(cat "$TMPROOT/ownend.keyless" 2>/dev/null)"
+if ! grep -q 'did not reach it' <<< "$o3333o"; then
+  printf 'SUITE-PART-UNMEASURED the check that a gate refusing for want of its run exit code stops the scanners that run started without a key: on this machine bash still knew the exit code, so the gate never refused that way (#3333)\n'
+elif [ -n "$_keyless3333o" ] && hang_wait '! kill -0 "$_keyless3333o" 2>/dev/null' && grep -q 'were stopped too' <<< "$o3333o"; then
+  check "#3333 and a gate refusing for want of its run's exit code stops the scanners that run started without a key, and says so" ok
+else
+  check "#3333 and a gate refusing for want of its run's exit code stops the scanners that run started without a key, and says so" "scanner pid=${_keyless3333o:-none recorded, so the staged run never started one} still there: $(kill -0 "$_keyless3333o" 2>/dev/null && echo yes || echo no) out=$o3333o"
+fi
+[ -n "$_keyless3333o" ] && kill -9 "$_keyless3333o" 2>/dev/null
+[ -n "$_run3333" ] && kill -9 "$_run3333" 2>/dev/null
+
 # How the gate names a repository in its state folder: its origin, or its path when it has none. The
 # fixtures below that are given an origin are given their own path as one, so this names them too.
 fx_key(){ printf '%s' "$(cd "$1" && pwd -P)" | shasum -a 256 | awk '{print $1}'; }
@@ -1792,33 +2054,94 @@ nokey_case state state 'could not be made' "$TMPROOT/nokey-notafolder/state"
 #     it has no key, its held scanner is running, and a stand in for ps never returns, so the gate
 #     hangs where it stops that run at its budget, and the hard stop is what ends it. The scanner
 #     must be gone afterwards, and the refusal must not promise a later push will count it.
+#
+#     The stand in for ps never returns for the gate's own call either, the one that asks how old
+#     the gate's process is. That reader used to be a child of the gate, so in this case alone the
+#     gate had a third child that outlived the stop, and any wait of the gate's that bash could not
+#     settle from the run and the timer was held until that child ended (claude-config#3333; the
+#     reading of the failure of 2026-11-21 is at the stop, in the gate). So the stand in also says
+#     whether the gate is still its ancestor: asked for an age, it looks up its own ancestors with
+#     the real ps for up to 10 seconds and records "apart" the moment the process it was asked
+#     about is not among them, or "child" if it still is at the end.
 NK3357="$TMPROOT/nokey-3357-hooks"; nokey_hooks "$NK3357" pidlock
 PSBIN="$TMPROOT/psbin"; mkdir -p "$PSBIN"
+REALPS="$(command -v ps)"
 cat > "$PSBIN/ps" <<EOF
 #!/usr/bin/env bash
 echo \$\$ >> "$TMPROOT/psshim.pids"
-sleep 120
+case " \$* " in *" etime= "*)
+  asked="\${@: -1}"; verdict=child; n=0
+  while [ "\$n" -lt 100 ]; do
+    p=\$\$; found=""; hops=0
+    while [ "\$hops" -lt 8 ]; do
+      p="\$("$REALPS" -o ppid= -p "\$p" 2>/dev/null | tr -d ' ')"
+      [ "\$p" -gt 1 ] 2>/dev/null || break
+      [ "\$p" = "\$asked" ] && { found=1; break; }
+      hops=\$((hops + 1))
+    done
+    [ -z "\$found" ] && { verdict=apart; break; }
+    sleep 0.1; n=\$((n + 1))
+  done
+  echo "\$verdict" >> "$TMPROOT/psshim.age" ;;
+esac
+exec sleep 120
 EOF
 chmod +x "$PSBIN/ps"
 R3357k="$(mkrepo hardstopnokey)"; HOLD3357k="$TMPROOT/hold3357k"; : > "$HOLD3357k"
 add_held_scanner "$R3357k" lam3357 "$HOLD3357k" 0; commit_all "$R3357k"
-o3357k="$(H="$NK3357/scanners-before-push.sh" PATH="$PSBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/nokey-3357-state" \
+# A temporary folder of its own, so that what a gate killed at the call deadline left is this
+# call's and no other's, and the time the call took, both printed when the check fails (L177).
+TMP3357k="$TMPROOT/tmp3357k"; mkdir -p "$TMP3357k"
+_t0="$(date +%s)"
+o3357k="$(TMPDIR="$TMP3357k" H="$NK3357/scanners-before-push.sh" PATH="$PSBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/nokey-3357-state" \
            SCANNERS_BUDGET_SECONDS=20 SCANNERS_BUDGET_ENDS_WHEN="$(budget_ready "$R3357k")" SCANNERS_BUDGET_ENDS_NOT_BEFORE=2 \
            SCANNERS_STOP_GRACE_SECONDS=3 FIRE_DEADLINE=50 FIRE_DEADLINE_LOG="$TMPROOT/hardstop-deadlines" \
            fire "$R3357k" "git push")"; c3357k=$?
+_took3357k=$(( $(date +%s) - _t0 ))
+echo "MEASURED #3357: a gate stuck stopping a run without a key, with a stop at 23 seconds, returned in ${_took3357k}s (exit $c3357k)"
 note_held lam3357
 _pid3357k="$(cat "$TMPROOT/lam3357.pid" 2>/dev/null)"
 if [ "$c3357k" -eq 2 ] && [ -n "$_pid3357k" ] && hang_wait '! kill -0 "$_pid3357k" 2>/dev/null' \
    && grep -q 'were stopped too' <<< "$o3357k" && ! grep -q 'goes on in the background' <<< "$o3357k"; then
   check "#3357 a run without a key is stopped at the hard stop, and the refusal says so" ok
 else
-  check "#3357 a run without a key is stopped at the hard stop, and the refusal says so" "exit=$c3357k scanner pid=${_pid3357k:-none} out=$o3357k"
+  check "#3357 a run without a key is stopped at the hard stop, and the refusal says so" "exit=$c3357k took=${_took3357k}s scanner pid=${_pid3357k:-none} left behind:$(gate_left "$TMP3357k") out=$o3357k"
 fi
+_age3357k="$(tr '\n' ' ' < "$TMPROOT/psshim.age" 2>/dev/null)"
+[ "$_age3357k" = "apart " ] \
+  && check "#3333 the reader of the gate's age is no child of the gate, so no wait of the gate's can be held by it" ok \
+  || check "#3333 the reader of the gate's age is no child of the gate, so no wait of the gate's can be held by it" "the stand in for ps recorded: ${_age3357k:-nothing, so the gate never asked its age}"
 rm -f "$HOLD3357k"
 _pids3357="$(cat "$TMPROOT/psshim.pids" 2>/dev/null)"
 while IFS= read -r _p; do [ -n "$_p" ] && kill -9 "$_p" 2>/dev/null; done <<PIDS
 $_pids3357
 PIDS
+
+# --- MEASURED HERE, NEVER JUDGED: whether bash on this machine drops a child's exit when the child
+#     signals it and exits in the same breath (claude-config#3333, L177). That is the reading of
+#     the failure of 2026-11-21 that fits what was seen and could not be reproduced on a Mac: the
+#     timer signalled the gate and exited at once, bash 5.2's waitchld leaves for a trapped signal
+#     after waitpid has returned and before it records the child it was handed, and Linux (as
+#     recalled, not read) hands a waiter a finished child even when a signal is waiting too, so on
+#     a busy runner the gate could lose its timer's exit and then wait on a timer that had gone for
+#     as long as any other child lived. Forty children each signal a bash that is waiting on them
+#     and exit with 7. The first wait is cut short by the signal; the second gives 7 when bash
+#     still knows the child and 127 when it dropped it. On this Mac, bash 3.2, 2026-11-21: 0 of
+#     300 dropped. The count goes in a note, so each run on GitHub's runner says what its bash
+#     does. No check reads it: the gate no longer depends on the answer, since its timer no longer
+#     exits after signalling and the gate has no third child.
+_lost3333="$(bash -c '
+  trap ":" USR1; lost=0; cut=0; i=0
+  while [ "$i" -lt 40 ]; do
+    i=$((i + 1))
+    perl -e "select(undef, undef, undef, 0.02); kill q(USR1), getppid; exit 7" </dev/null >/dev/null 2>&1 &
+    t=$!
+    wait "$t" 2>/dev/null; r1=$?
+    wait "$t" 2>/dev/null; r2=$?
+    [ "$r1" -gt 128 ] && { cut=$((cut + 1)); [ "$r2" -eq 127 ] && lost=$((lost + 1)); }
+  done
+  echo "$lost of $cut"' 2>/dev/null)"
+echo "SUITE-NOTE bash ${BASH_VERSION%%(*} on $(uname -s) dropped the exit of ${_lost3333:-an unread number} children that signalled it and exited at once (#3333)"
 
 # --- the messages of the commits a push adds name no work organisation (claude-config#1995). This
 #     repository squash merges with the commit messages as the body, so a message naming one lands

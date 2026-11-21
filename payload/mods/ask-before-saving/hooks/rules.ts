@@ -503,6 +503,42 @@ export const saveIdOf = (source: unknown): string | undefined => {
   return source.slice(MOD.length + 1) || undefined
 }
 
+// A question asked before the save (#3293). The save id is handed out only in the refusal of the
+// save itself, so a session that asked Dan "save this to memory?" first had an answer that could
+// approve nothing: the save was refused and he was asked the identical question again (twice in
+// one session on 2026-11-19). Matching such an answer to a later save was ruled unsafe, since it
+// could approve a save he did not mean, so the question is refused before he is asked instead.
+// Recognised narrowly, by the mod's own answers: a question that names lasting memory (a file, as
+// `mentioned` reads one, or the word) and offers For good or Just this session. Counted over this
+// Mac's session records on 2026-11-21 before it refused anything: 4 of 1,651 pickers with no save id
+// took that shape, each followed by the refused save and the same question with the id; a question
+// that only names a memory file (35) or says save and memory (10) was as often something else, a
+// choice of route or a question about a file's contents, so neither is refused. Another guard's
+// picker (a source of its own) and a subagent's are never this mod's to refuse.
+const SAVE_ANSWERS = new Set([FOR_GOOD, THIS_SESSION].map(x => x.toLowerCase()))
+export const asksBeforeTheSave = (ask: { questions?: unknown; metadata?: unknown }): boolean => {
+  const source = typeof ask.metadata === 'object' && ask.metadata !== null ? (ask.metadata as { source?: unknown }).source : undefined
+  if (source !== undefined && (typeof source !== 'string' || (source !== MOD && !source.startsWith(`${MOD}:`)) || saveIdOf(source) !== undefined)) return false
+  const questions = Array.isArray(ask.questions) ? (ask.questions as { question?: unknown; options?: unknown }[]) : []
+  return questions.some(q => {
+    const text = typeof q?.question === 'string' ? q.question : ''
+    const offers = Array.isArray(q?.options) ? (q.options as { label?: unknown }[]) : []
+    return (mentionsAny(text) || /\bmemory\b/i.test(text)) && offers.some(o => typeof o?.label === 'string' && SAVE_ANSWERS.has(o.label.trim().toLowerCase()))
+  })
+}
+
+/** What Claude is told to do instead (#3293): in the refusal of the early question, and in the memory section. */
+export const SEND_FIRST = 'send the save itself first'
+export const askedBeforeSave =
+  `Not asked: this question is about saving to lasting memory and carries no save id in metadata "source", so Dan's answer could approve nothing, and he would be asked the same question again once the save was refused. ` +
+  `Do not ask yet: ${SEND_FIRST} (the Write, Edit or Bash call that writes it). It is refused with the one question to ask him and the metadata "source" that ties his answer to it, and then you ask him once. ` +
+  `A lesson entry in LESSONS.md is the exception: it is approved only in the durable lesson check's picker, which its refusal names. ` +
+  `A question that is not about saving to memory offers neither ${FOR_GOOD} nor ${THIS_SESSION}.`
+export const sendFirstNote =
+  `A lesson entry in LESSONS.md is approved only in the durable lesson check's picker. ` +
+  `Before asking Dan whether to save anything else to lasting memory (the memory folder, MEMORY.md, CLAUDE.md or AGENTS.md), ${SEND_FIRST}. ` +
+  `It is refused with the one question to ask him and the metadata "source" that ties his answer to it. A question asked before the save approves nothing, so he would be asked it twice.`
+
 // The durable lesson check's picker (#867). payload/hooks/durable-lesson-check.sh tells Claude to ask
 // with this `metadata.source` and the rule in `metadata.rule`; its suite holds the two to these names.
 // Dan's "Add to LESSONS.md", read from the dialog's own result, approves the write that adds that rule
@@ -1236,7 +1272,8 @@ export const wholeRuleInBold = (lines: readonly string[], numbered: string): boo
  * reader reads (claude-sync lesson_entries_render scans every line of the entry after its first, so
  * it also reads a line after the SHORT line, which no approval covers). Every other line is still
  * read as the rule's, so another check line, a second one, one in another place, or the same line
- * under another rule fails the comparison below and is asked about. With no `check`, or one that is
+ * under another rule fails the comparison below, and the write is refused and sent back to the
+ * lesson picker (pickerOnly). With no `check`, or one that is
  * no check line (checkLine), the entry takes no check line at all.
  *
  * The entry's line is compared as the entry holds it (security review of #3245). The lines above are
@@ -1256,7 +1293,8 @@ export const wholeRuleInBold = (lines: readonly string[], numbered: string): boo
  * else. The entry's SHORT line is now that line, equal to it but for the file's indentation, read
  * from the same copy of the entry the check line is, and it stays the entry's last line. With no
  * `short`, or one that is no SHORT line (shortLine), the entry takes no SHORT line at all, so one
- * added after an approval that showed none is asked about. And where he read one, an entry
+ * added after an approval that showed none is refused and sent back to the lesson picker. And
+ * where he read one, an entry
  * without it is not the entry he read. Whether a lesson needs one is settled before he is asked:
  * the picker refuses a rule too long for the index line that brings no SHORT line (register.ts).
  *

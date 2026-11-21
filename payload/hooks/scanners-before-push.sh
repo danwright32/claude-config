@@ -265,6 +265,38 @@ _sc_stop_refuse(){   # $1 = the supervisor's folder
   } >&2
 }
 
+# The refusal when the stop came just as the run ended and bash has no exit code of the run's to
+# give (claude-config#3333; the measurement is at the stop, in _sc_supervise). It claims only that:
+# the run may have passed or refused, so what the run had printed is shown under the gate's own
+# words, and a refusal there stands. Builtins only, but for the cat of what the run printed.
+_sc_stop_refuse_no_code(){   # $1 = what bash gave for the run  $2 = the supervisor's folder
+  {
+    echo "PUSH BLOCKED: the whole tree scanners gate reached its stop at ${_sc_stop_at} seconds just as its run ended,"
+    echo "and the run's exit code did not reach it (bash gave $1 for the run). It cannot say this push passed,"
+    echo "so the push has not gone out."
+    echo ""
+    if [ -s "$2/err" ]; then
+      echo "What the run had printed is at the end of this message. If that is a refusal of its own, it stands."
+      echo "If it is not, nothing here is a finding about your change: send the same push again."
+    else
+      echo "The run had printed nothing on its standard error, where a refusal goes, so nothing here is a"
+      echo "finding about your change: send the same push again."
+    fi
+    if [ -n "$_sc_keyless_stopped" ]; then
+      echo "The scanners the run had started were stopped too, because without a key for what they read no"
+      echo "later push could count their result, so the next push starts them again."
+    fi
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+    if [ -s "$2/err" ]; then
+      echo ""
+      echo "What the run had printed:"
+      cat "$2/err" 2>/dev/null
+    fi
+  } >&2
+}
+
 # Runs WITHOUT a key are the run's to stop at the budget (#1910: no later push could count them),
 # and each leads a session of its own, so stopping the run's group does not reach them. They are the
 # only runs kept inside the run's work folder, so they are found there by the pid each recorded
@@ -287,8 +319,28 @@ _sc_stop_keyless_runs(){
 }
 _sc_keyless_stopped=""
 
+# Ends the run: its whole process group, or, when it has not made that group yet (it is started by a
+# perl that makes the group and then becomes the run, and a stop can come first), its own pid. The
+# pid is that of this process's own child, read from the shell when it started it, and a pid freed
+# in the moment of the stop cannot have gone round to another process, so the kill reaches the run
+# or nothing (claude-config#3333). A builtin, like the rest of the stop.
+_sc_kill_run(){   # $1 = the run's pid
+  case "$1" in ''|*[!0-9]*) return 0 ;; esac
+  kill -KILL -- "-$1" 2>/dev/null || kill -KILL "$1" 2>/dev/null
+  return 0
+}
+
+# What this supervising process is doing, written as it goes beside the run's own phase. Nothing
+# in the gate reads it: it is there for whoever finds the folder of a gate that was killed from
+# outside, which leaves the folder behind, and it is what the gate's suite prints when a call ends
+# at its deadline (claude-config#3333, L177). A builtin write, never a process.
+_sc_sup_says(){
+  [ -n "${_sc_sup_dir:-}" ] && printf '%s\n' "$1" > "$_sc_sup_dir/supervisor" 2>/dev/null
+  return 0
+}
+
 _sc_supervise(){
-  local body timer rc self
+  local body timer rc self no_code=""
   _sc_sup_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-gate.XXXXXXXX" 2>/dev/null)" || _sc_sup_dir=""
   if [ -z "$_sc_sup_dir" ] || ! command -v perl >/dev/null 2>&1; then
     # Said, never swallowed (L11): the run below is then bounded by its wait budget only, as
@@ -304,15 +356,19 @@ _sc_supervise(){
   printf '%s\n' "starting its run" > "$_sc_sup_dir/phase"
   # How old this process was when its clock started, read in the background so the stop never waits
   # on ps: the time before the clock is time Claude Code's limit counts (claude-config#3357).
-  ( _b="$(date +%s)"; _e="$(ps -o etime= -p "$$" 2>/dev/null)"
-    printf '%s\n%s\n' "$_b" "$_e" > "$_sc_sup_dir/age.tmp" && mv -f "$_sc_sup_dir/age.tmp" "$_sc_sup_dir/age" ) \
-    </dev/null >/dev/null 2>&1 &
+  # Started from a subshell that ends at once, so the reader is no child of this process. Its only
+  # children are then its run and its timer, and no wait below can be held by anything else: a ps
+  # that never returned used to be a third child that outlived the stop (claude-config#3333, THE
+  # STOP CANNOT BE MISSED, below).
+  ( ( _b="$(date +%s)"; _e="$(ps -o etime= -p "$$" 2>/dev/null)"
+      printf '%s\n%s\n' "$_b" "$_e" > "$_sc_sup_dir/age.tmp" && mv -f "$_sc_sup_dir/age.tmp" "$_sc_sup_dir/age" ) \
+      </dev/null >/dev/null 2>&1 & )
   self="$HOOK_DIR/${BASH_SOURCE[0]##*/}"
   _sc_stopped=""
   trap '_sc_stopped=1' USR1
   # A polite stop of this process stops the run with it, and the timer, so nothing it started
-  # outlives the hook (a timer left sleeping would later signal a pid that may be another process).
-  trap 'kill -KILL -- "-$body" 2>/dev/null; kill -9 "$timer" 2>/dev/null; _sc_stop_keyless_runs; exit 2' TERM HUP INT
+  # outlives the hook (a timer left going would later signal a pid that may be another process).
+  trap '_sc_kill_run "$body"; kill -9 "$timer" 2>/dev/null; _sc_stop_keyless_runs; exit 2' TERM HUP INT
   # The marker against a nested push is cleared for the run alone: this supervisor set it, and the
   # run must pass that check as the first and only gate, then set it again for what it starts.
   SCANNERS_GATE_RUNNING= _SC_SUPERVISED=1 _SC_T0="$_sc_t0" _SC_PHASE_FILE="$_sc_sup_dir/phase" _SC_WORK_PARENT="$_sc_sup_dir" \
@@ -321,23 +377,87 @@ _sc_supervise(){
   body=$!
   # The timer is given the moment to stop at, not a length, so however late perl starts on a busy
   # machine it does not stop late.
-  perl -e 'my ($end, $pid) = @ARGV; my $d = $end - time; sleep $d if $d > 0; kill "USR1", $pid' \
+  #
+  # THE STOP CANNOT BE MISSED (claude-config#3333). The timer used to send one signal and exit, and
+  # the stop then rested on that one signal finding this process inside the wait below. Three ways
+  # it did not hold, the first two measured on 2026-11-21 under bash 3.2 with the supervisor's
+  # shape cut down:
+  #   A signal bash handles BEFORE the wait begins does not end the wait. With the signal one
+  #   second ahead of it, the wait ran for the whole life of what it waited on. So a gate that
+  #   reached its wait after its stop time had no stop at all.
+  #   A stop that comes before the run has made its own process group finds no group to kill. The
+  #   kill failed, the wait ran the run's whole life, and its exit code was passed on.
+  #   And a reading, not reproduced: bash's waitchld leaves for a trapped signal after waitpid has
+  #   returned and before it records the child it was handed (bash 5.2.37 jobs.c, CHECK_WAIT_INTR),
+  #   and the timer signalled and exited in the same breath. A gate woken late could be handed
+  #   both at once, never learn its timer had gone, and then wait on that timer for as long as it
+  #   had any other child. That Linux hands a waiter a finished child ahead of a pending signal,
+  #   and macOS does not, is recalled and was not read or measured; what was measured is that 300
+  #   such exits on this Mac lost none. The reading fits the one failure there is: on 2026-11-21,
+  #   on GitHub's Linux runner, the suite's case with a ps that never returns sat silent until its
+  #   50 second deadline, and that case alone gave this process a third child that outlived the
+  #   stop. The suite prints what each machine's bash does, as a note, on every run.
+  # So: the timer goes on signalling, once a second, for as long as this process is still its
+  # parent (a pid that has become another process is never signalled), and it does not exit until
+  # it is killed, so its exit never arrives with its signal. Once stopped, this process ignores the
+  # signal, so nothing cuts short what it does next, kills the timer first (a timer still going
+  # would otherwise be a child this process could wait on for ever), kills the run's group or, when
+  # there is none yet, the run's own pid (_sc_kill_run), and waits on the run and then on the
+  # timer, each already killed. The signal is never put back to its default, under which one
+  # already on its way would end this process before it had refused.
+  perl -e 'my ($end, $pid) = @ARGV; my $d = $end - time; sleep $d if $d > 0;
+    while (getppid() == $pid && kill("USR1", $pid)) { sleep 1 }' \
     "$(( _sc_t0 + _sc_stop_at ))" "$$" </dev/null >/dev/null 2>&1 &
   timer=$!
+  _sc_sup_says "waiting for its run to finish"
   # Standard error closed on each wait, because bash reports a job it reaps after a kill ("Killed:
   # 9", with this line's source) on its own standard error, which is this hook's refusal (#1881).
   wait "$body" 2>/dev/null; rc=$?
   if [ -n "$_sc_stopped" ]; then
-    kill -KILL -- "-$body" 2>/dev/null
+    trap '' USR1
+    _sc_sup_says "stopping its run at the hard stop"
+    # KILL, never a plain kill, for the reason the scanners' own watchdog gives (claude-config#1889).
+    kill -9 "$timer" 2>/dev/null
+    _sc_kill_run "$body"
     wait "$body" 2>/dev/null; rc=$?
+    # WHAT THAT SECOND WAIT GIVES IS NOT ALWAYS A VERDICT (claude-config#3333). A run can end by
+    # itself just as the stop comes. Measured on 2026-11-21 on a Mac, bash 3.2, in 5 staged calls of
+    # 5 (the gate held with SIGSTOP in the first wait, its run then ended with 2, the signal sent,
+    # the gate let go on): bash left the first wait for the signal after it had been handed the
+    # run's end and before it recorded it, the kill found nothing, this wait found no child and
+    # gave -1, and the gate exited 255 over a run that had refused. The -1 is what that bash puts
+    # in $? itself, not a 255: the refusal of the same staged call, once this was fixed, read
+    # "bash gave -1 for the run", and it is the exit with it that comes out as 255. So the test
+    # below needs both of its arms, the one below 0 for that bash and the one above 126 for a bash
+    # that hands over 255 or 127 instead. An answer here is read as the run's own only from 0 to
+    # 126. 137 is the kill above, refused below as the stop. Anything else (below 0, 127 for a
+    # child bash no longer knows, an end by another signal) is no verdict, and a gate with no
+    # verdict refuses: it says what bash gave and shows what the run had printed.
+    if [ "$rc" -ne 137 ] && { [ "$rc" -lt 0 ] || [ "$rc" -gt 126 ]; }; then no_code="$rc"; fi
+    # And on the timer it killed, standard error closed like the wait above, so that bash's report
+    # of the timer's end is never in the refusal. Left unwaited, a timer slow to die was reported
+    # at the next command this process waited for: seen on 2026-11-21 at a load average above 100,
+    # once in 6 runs of the suite. The timer has been killed and the signal is ignored, so nothing
+    # can hold or cut short this wait, and the run it could have been held by has gone.
+    wait "$timer" 2>/dev/null
+  else
+    _sc_sup_says "passing on what its run said"
+    kill -9 "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
+    trap '' USR1
   fi
-  # KILL, never a plain kill, for the reason the scanners' own watchdog gives (claude-config#1889).
-  kill -9 "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
-  trap - USR1 TERM HUP INT
+  trap - TERM HUP INT
   # Stopped by the timer, and not merely finished at the same moment: refused in this gate's words.
   if [ -n "$_sc_stopped" ] && [ "$rc" -eq 137 ]; then
     _sc_stop_keyless_runs
     _sc_stop_refuse "$_sc_sup_dir"
+    exit 2
+  fi
+  # Stopped as its run ended, with no exit code of the run's to go by: refused, never passed on.
+  # The gate cannot know the run stopped its own runs without a key, so it stops any still going,
+  # as the stop above does; one that has written its exit code has finished and is left.
+  if [ -n "$no_code" ]; then
+    _sc_stop_keyless_runs
+    _sc_stop_refuse_no_code "$no_code" "$_sc_sup_dir"
     exit 2
   fi
   cat "$_sc_sup_dir/out" 2>/dev/null
