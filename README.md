@@ -7814,11 +7814,12 @@ since #3279 what a git command that moves committed work brings into the working
 2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
 `switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`
 and `stash apply`; before one runs the guard asks git which files it would change and the commit
-each comes from, with commands that change nothing: `git rev-parse --verify --quiet`, `git diff
---name-status` between HEAD and the commit, from where a merged or rebased commit left this branch,
-or between the working tree and the commit for a reset, `git log --no-walk --name-status` for the
-commits a cherry-pick or revert names, `git for-each-ref` for the one remote branch a name may
-stand for, and `git ls-tree` for a stash's untracked files; each look changing file is then judged
+each comes from, with commands that change nothing: `git rev-parse --verify --quiet`,
+`git diff --name-status` between HEAD and the commit, from where a merged or rebased commit left
+this branch, or between the working tree and the commit for a reset,
+`git log --no-walk --name-status` for the commits a cherry-pick or revert names,
+`git for-each-ref` for the one remote branch a name may stand for, and `git ls-tree` for a stash's
+untracked files; each look changing file is then judged
 as a checkout of that file from that commit is, by the lines it changes where that rule applies,
 against the issue the branch being worked on names, so a merge that brings in none runs unasked;
 `--abort`, `--continue`, `--skip`, `--quit`, a branch made with no start point, a reset that leaves
