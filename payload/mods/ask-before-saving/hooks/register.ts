@@ -59,6 +59,8 @@ import {
   THIS_SESSION,
   addedText,
   askInstruction,
+  askedBeforeSave,
+  asksBeforeTheSave,
   callShown,
   cannotCheck,
   rerunInGrace,
@@ -82,6 +84,7 @@ import {
   saveIdOf,
   saveKey,
   savesThis,
+  sendFirstNote,
   stands,
   withoutPythonText,
   writesWhat,
@@ -1099,8 +1102,10 @@ export const register: Register = on => {
     }
     const id = saveIdOf(ask.metadata?.source)
     // A question about no save is Claude Code's alone, its failures included (lessons review of #783:
-    // a catch over the whole hook reported them as a save whose answer could not be read).
-    if (id === undefined) return next(e)
+    // a catch over the whole hook reported them as a save whose answer could not be read). One asked
+    // before the save it is about (#3293) is refused before Dan reads it: his answer could approve
+    // nothing, and he would be asked it again. Judged by the question alone, so it needs no read.
+    if (id === undefined) return e.agentId === undefined && asksBeforeTheSave(ask) ? { deny: askedBeforeSave } : next(e)
     const answered = async () => {
       if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about saving to lasting memory. Put the rule and the file in your final report instead.' }
       const q = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
@@ -1197,13 +1202,16 @@ export const register: Register = on => {
   })
 
   // The rules Dan gave for this session only ride the system prompt's memory section, which is
-  // assembled afresh for every request, so a compaction of the conversation keeps them.
+  // assembled afresh for every request, so a compaction of the conversation keeps them. The same
+  // section tells every session, before it asks anything, to send a save first (#3293): the id that
+  // ties Dan's answer to a save is handed out only in that save's refusal.
   on('prompt.section', { name: 'memory' }, async ($, e, next) => {
     const r = await next(e)
+    const base = r.text ? `${r.text}\n\n${sendFirstNote}` : sendFirstNote
     const rules = (await $.state.get(rulesRef)).value ?? []
-    if (!rules.length) return r
+    if (!rules.length) return { text: base }
     const section = ['# Rules for this session only', 'Dan gave these for this session only. Follow them until the session ends, and never save them to memory.', ...rules.map(x => `- ${x.replace(/\n/g, '\n  ')}`)].join('\n')
-    return { text: r.text ? `${r.text}\n\n${section}` : section }
+    return { text: `${base}\n\n${section}` }
   })
 
   // Dropped at session end, a /clear included: nothing of this session's answers outlives it.

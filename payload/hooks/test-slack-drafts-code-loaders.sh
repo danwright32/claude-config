@@ -224,6 +224,32 @@ run_n7 "bash outerq.sh"
 allowed "#2977 a file bash sources whose part before the NUL posts nothing passes"
 run_n7 "source srcquiet.sh"
 read_refused "#2977 a file sourced by the session's own shell, which may be zsh, is refused"
+# A compiled program is no script file (claude-config#3299). The shared reader read the bytes of one
+# run by its path as commands for the guards that ask it for script files. This gate reads files
+# itself and never did: a program with no #! is searched for an endpoint and its bytes are not
+# commands. These cases hold that, in both directions, with a Mach-O header written here.
+N9="$T/n3299"
+mkdir -p "$N9"
+printf '%s\n' "$POST" > "$N9/post.sh"
+printf '\317\372\355\376\014\000\000\001\000\000\000\000\n./post.sh\n' > "$N9/tool"
+{ printf '\317\372\355\376\014\000\000\001\000\000\000\000\n'; printf '%s\n' "$POST"; } > "$N9/poster"
+printf '#!/bin/bash\n./post.sh\n\000\000\n' > "$N9/nul-later.sh"
+printf '\177ELF;./post.sh\n' > "$N9/magic-no-nul"
+run_n9() { run_raw "$(payload Bash "$(bash_input "$1")" "$N9")"; }
+run_n9 "./tool --front-window notes.txt"
+allowed "#3299 a compiled program run by its path, whose bytes spell a script that posts, passes"
+run_n9 "bash tool"
+allowed "#3299 and handed to bash, which refuses to run it, passes"
+run_n9 "./poster"
+refused "#3299 a compiled program naming an endpoint is still refused"
+run_n9 "./tool && ./post.sh"
+refused "#3299 a script that posts, run beside a compiled program, is still refused"
+run_n9 "zsh tool"
+read_refused "#3299 a compiled program's lines run by zsh, which runs them, are still read"
+run_n9 "bash nul-later.sh"
+read_refused "#3299 a script with a NUL after its first line still runs, so it is still read"
+run_n9 "zsh magic-no-nul"
+read_refused "#3299 a file with the magic number and no NUL, which a shell runs as commands, is still read"
 # $0 of such a file is the word that ran it, as any script's is (#2913), and of one that is sourced
 # the script that ran (claude-config#3020). It was left unknown, so a cd built from it was not
 # followed, and the file sourced after the cd was read from the folder the command ran in: a quiet
