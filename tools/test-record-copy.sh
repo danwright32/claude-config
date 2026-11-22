@@ -170,10 +170,23 @@ ok "free space: refused, exit 3, nothing written" "[ $rc -eq 3 ] && has 'free' \
 # ---- no records folder, and options that are not options ----
 rm -rf "$H"; mkdir -p "$H"
 out="$(run report --days 7)"; rc=$?
-ok "no records folder: exits 1 and says so" "[ $rc -eq 1 ] && has 'no records folder' \"\$out\""
+ok "no records folder: exits 1 and says it is not there" "[ $rc -eq 1 ] && has 'no records folder' \"\$out\" && ! has 'link' \"\$out\""
+ln -s "$WORK" "$H/projects"
+out="$(run report --days 7)"; rc=$?
+ok "a records folder that is a link: exits 1 and says it is not followed" "[ $rc -eq 1 ] && has 'a link is never followed' \"\$out\""
+rm -f "$H/projects"
+# A kind with no records at all: the refusal never advises a window that would still be refused.
+plant
+rm -rf "$P/-private-tmp-abc" "$P/-Users-x-proj--claude-worktrees-w1"
+out="$(run report --days 3)"; rc=$?
+ok "no records of a kind: refused, names the kind, and never advises 0 days" "[ $rc -eq 3 ] && has 'there are no worktree and temporary folder runs at all' \"\$out\" && ! has 'Ask for 0 days' \"\$out\" && has '--kinds' \"\$out\""
 plant
 out="$(run report)"; rc=$?
 ok "no --days: exits 2" "[ $rc -eq 2 ]"
+out="$(run report --days inf)"; rc=$?
+ok "--days inf: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
+out="$(run report --days nan)"; rc=$?
+ok "--days nan: exits 2 with no traceback" "[ $rc -eq 2 ] && ! has 'Traceback' \"\$out\""
 out="$(run report --days 7 --kinds own,everything)"; rc=$?
 ok "an unknown kind: exits 2 and names the kinds there are" "[ $rc -eq 2 ] && has 'own, agent, run' \"\$out\""
 out="$(run copy --days 7)"; rc=$?

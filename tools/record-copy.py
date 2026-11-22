@@ -51,6 +51,7 @@ import sys
 
 sys.dont_write_bytecode = True
 
+import math
 import os
 import re
 import shutil
@@ -104,8 +105,12 @@ class Kind:
 def measure(home, now, days, wanted):
     root = os.path.join(home, "projects")
     st = keep_rules.lst(root)
+    if st is None:
+        return None, "there is no records folder at %s, so there is nothing to count" % root
+    if stat.S_ISLNK(st.st_mode):
+        return None, "the records folder %s is a link, and a link is never followed, so nothing was counted" % root
     if not keep_rules.is_dir(st):
-        return None, "no records folder at %s (a link is never followed), so there is nothing to count" % root
+        return None, "%s is not a folder, so there is no records folder to count" % root
     kinds = [Kind(k, n) for k, n, _ in KINDS if k in wanted]
     of = {}
     for k in kinds:
@@ -143,9 +148,15 @@ def refusal(short, now, days):
                          "written %s), so a count over %s would silently read %s of them."
                          % (days_text(days), k.name, reach_text(k.reach(now)), when(k.oldest),
                             days_text(days), reach_text(k.reach(now))))
-    fewest = min((k.reach(now) for k in short if k.oldest is not None), default=0)
-    lines.append("Ask for %d days or fewer, or run again with --accept-shorter to go on, and the window each "
-                 "kind really has is stated. Nothing was copied." % int(fewest))
+    reaches = [k.reach(now) for k in short if k.oldest is not None]
+    empty = [k for k in short if k.oldest is None]
+    ways = []
+    if reaches:
+        ways.append("ask for %d days or fewer" % int(min(reaches)))
+    if empty:
+        ways.append("leave out %s with --kinds" % " and ".join(k.key for k in empty))
+    ways.append("run again with --accept-shorter to go on, and the window each kind really has is stated")
+    lines.append("To count anyway, %s. Nothing was copied." % ", or ".join(ways))
     return "\n".join(lines)
 
 
@@ -217,14 +228,8 @@ def do_copy(home, kinds, now, days, label, keep_free):
             rel = os.path.relpath(p, root)
             to = os.path.join(work, "projects", rel)
             try:
-                d = os.path.dirname(to)
-                if not os.path.isdir(d):
-                    parts = os.path.relpath(d, work).split(os.sep)
-                    cur = work
-                    for part in parts:
-                        cur = os.path.join(cur, part)
-                        if not os.path.isdir(cur):
-                            make_private_dir(cur)
+                # Under the 077 umask set above, every folder made here is 0700.
+                os.makedirs(os.path.dirname(to), mode=0o700, exist_ok=True)
                 shutil.copyfile(p, to, follow_symlinks=False)
                 os.chmod(to, 0o600)
                 os.utime(to, (st.st_atime, st.st_mtime))
@@ -291,9 +296,11 @@ def main(argv):
             v = argv[i + 1]
             if a == "--now":
                 now = float(v)
+                if not math.isfinite(now):
+                    return usage("--now takes seconds since the epoch, not %r" % v)
             elif a == "--days":
                 days = float(v)
-                if days <= 0:
+                if not math.isfinite(days) or days <= 0:
                     return usage("--days takes a number of days above 0, not %r" % v)
                 days = int(days) if days == int(days) else days
             elif a == "--label" and mode == "copy":
