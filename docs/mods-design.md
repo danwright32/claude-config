@@ -4428,8 +4428,9 @@ placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs i
 - `dir` is unchanged: the last `-C` as written. A mod that places a git command by `dir` judges
   exactly the calls it judged before, so nothing held under the old reading passes because the
   reader moved. A mod moves to `chained` in its own change, and decides there whether it goes on
-  judging `dir` too. The collision guard, the design round guard, the write reader's placing of
-  what git itself writes, and scope modes still place a chained command by `dir`.
+  judging `dir` too. The collision guard is the first (below). The design round guard, the write
+  reader's placing of what git itself writes, and scope modes still place a chained command by
+  `dir`.
 - Where the chain cannot be worked out, `chained` is null, the mark `pipeline` gives the folder of
   a command behind a `cd` it cannot follow, and never a guess. That is a value the shell fills in
   after another `-C` (`-C /a -C "$B"`: absolute or relative, which only the shell knows), a folder
@@ -4440,6 +4441,41 @@ placed `git -C /a -C b merge y`, which runs in `/a/b`, in `<the folder it runs i
   only guess: yes for the one place this reader would otherwise have had to guess, and that mark
   is the null above. The write reader's guessed path (a working folder named by a value it cannot
   follow) is not marked here. It is the write reader's to mark, in its own change.
+
+The collision guard judged a checkout wide git command (a branch switch, `reset --hard`, `stash
+pop`, `add -A`, `branch -D`) against the sessions in one folder: the last `-C` read from the
+session's folder, else that folder. It handed mod-kit's git reader no settings and followed no
+`cd`, so `git --git-dir=/other/.git --work-tree=/other checkout main`, the same through `GIT_DIR`
+and `GIT_WORK_TREE`, `cd /other && git -C sub checkout main` and `git -C /other -C sub checkout
+main` each ran unjudged beside a session at work in `/other`.
+
+- It now asks about every checkout the command acts on. The folder it runs in comes from
+  `$.modkit.pipeline` (where a `cd` leaves the shell) and the reader's `chained` or `dir`, put to
+  git as `git -C <folder> -C <as written> rev-parse --show-toplevel`, so git reads a relative
+  `-C` itself. For a command naming its repository or working folder apart, git is asked with the
+  command's own naming where the files land, and which repository it is
+  (`rev-parse --absolute-git-dir`): the checkout around that repository is judged, and so is every
+  other session's checkout that git says is that same repository. With only the repository named,
+  the files land in the folder the command runs in and the branch that moves is the named
+  repository's (measured), so both are judged. The rule is `whereGit` in `collide.ts`.
+- The folder the guard always asked about is still asked first, in the same words. A command
+  judged before is judged as it was, and a plain command, one with one `-C` and one in the folder
+  it runs in put exactly the one question to git they always put. Nothing more is asked while no
+  other session is open.
+- That old question is Dan's to drop. For `git -C /other -C sub checkout main` and for
+  `cd /other && git checkout main` it names the session's own checkout, which git does not touch.
+  Read as git reads them, both would run unjudged with nobody in `/other`. That is the correct
+  reading and a loosening, so both questions are put until he decides (the test is marked his).
+- Where the guard cannot tell the repository, it stops the command while any other session is
+  open, and says to write every folder out in full. That is a `-C`, `--git-dir` or `--work-tree`
+  value the shell fills in, a chain mod-kit marks null, a `cd` that cannot be followed before a
+  relative folder, and `GIT_DIR` or `GIT_WORK_TREE` named anywhere in the call but on the git
+  command itself (git reads an exported one, which no reader follows). Nothing is put to the
+  judge and no session is told, since there is no checkout to name to either. Until now each of
+  these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- Not covered: the files such a command writes are still placed by the write reader, by `dir`.
+  A session's own environment carrying either variable before any command is typed is seen by
+  no reader.
 
 ### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
 

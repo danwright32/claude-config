@@ -43,7 +43,7 @@ const deps: { name: string; register: Register } = {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
           commands: async (input: { command: string }) => kit('commands', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
-          git: async (input: { words: string[] }) => kit('git', input),
+          git: async (input: { words: string[]; env?: readonly string[] }) => kit('git', input),
           // Where a checkout stands (#980), read by the world with mod-kit's own reader.
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           // A folder with no .git entry the world names is none; one the world cannot read refuses.
@@ -66,7 +66,8 @@ const deps: { name: string; register: Register } = {
           ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
           linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
-          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          // #3398: each command with the settings in front of it and the folder a cd leaves it in.
+          pipeline: async (input: { command: string; cwd?: string; home?: string }) => kit('pipeline', input),
           bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
           clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
@@ -141,6 +142,68 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 // What mod-kit's readers give for each request these tests make (commands, writes and git), each
 // measured from the reader itself (#712).
 const KIT = new Map<string, unknown>([
+  // #3398: a repository named that is a linked worktree's, measured from mod-kit's readers on 2026-11-22.
+  ["commands {\"command\":\"git --git-dir=/main/.git/worktrees/w checkout main\"}",[["git","--git-dir=/main/.git/worktrees/w","checkout","main"]]],
+  ["pipeline {\"command\":\"git --git-dir=/main/.git/worktrees/w checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","--git-dir=/main/.git/worktrees/w","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"--git-dir=/main/.git/worktrees/w\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"gitDir":"/main/.git/worktrees/w"}],
+  ["writes {\"command\":\"git --git-dir=/main/.git/worktrees/w checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  // #3398: the folder and settings of each watched git command these tests already ran, measured from mod-kit's pipeline reader on 2026-11-22.
+  ["pipeline {\"command\":\"git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"git -C /other reset --hard origin/main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","-C","/other","reset","--hard","origin/main"],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"git switch -c window-two\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","switch","-c","window-two"],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"git checkout main && echo NO-BUILD\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"folder":"/repo"},{"words":["echo","NO-BUILD"],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"echo \\\"on $(git checkout main)\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["echo","on $(git checkout main)"],"derived":[null,{"unresolved":"it runs git, whose output this reader does not know","commands":[{"words":["git","checkout","main"],"substitution":true}]}],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"echo \\\"on `git checkout main`\\\"\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["echo","on `git checkout main`"],"derived":[null,{"unresolved":"it runs git, whose output this reader does not know","commands":[{"words":["git","checkout","main"],"substitution":true}]}],"folder":"/repo"}]],
+  ["pipeline {\"command\":\"cat <<EOF\\non $(git checkout main)\\nEOF\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["cat","<<EOF"],"heredocs":[{"word":1,"body":"on $(git checkout main)","quoted":false}],"folder":"/repo"}]],
+  // #3398: a git command naming its repository, its folder or a chain of folders, measured from mod-kit's readers on 2026-11-22.
+  ["commands {\"command\":\"git --git-dir=/other/.git --work-tree=/other checkout main\"}",[["git","--git-dir=/other/.git","--work-tree=/other","checkout","main"]]],
+  ["pipeline {\"command\":\"git --git-dir=/other/.git --work-tree=/other checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","--git-dir=/other/.git","--work-tree=/other","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"--git-dir=/other/.git\",\"--work-tree=/other\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"gitDir":"/other/.git","workTree":"/other"}],
+  ["writes {\"command\":\"git --git-dir=/other/.git --work-tree=/other checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git --git-dir=/other/.git checkout main\"}",[["git","--git-dir=/other/.git","checkout","main"]]],
+  ["pipeline {\"command\":\"git --git-dir=/other/.git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","--git-dir=/other/.git","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"--git-dir=/other/.git\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"gitDir":"/other/.git"}],
+  ["writes {\"command\":\"git --git-dir=/other/.git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main\"}",[["git","checkout","main"]]],
+  ["pipeline {\"command\":\"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","checkout","main"],"env":["GIT_DIR=/other/.git","GIT_WORK_TREE=/other"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"checkout\",\"main\"],\"env\":[\"GIT_DIR=/other/.git\",\"GIT_WORK_TREE=/other\"]}",{"sub":"checkout","args":["main"],"gitDir":"/other/.git","workTree":"/other"}],
+  ["writes {\"command\":\"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cd /other && git -C sub checkout main\"}",[["cd","/other"],["git","-C","sub","checkout","main"]]],
+  ["pipeline {\"command\":\"cd /other && git -C sub checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["cd","/other"],"folder":"/repo"},{"words":["git","-C","sub","checkout","main"],"folder":"/other"}]],
+  ["git {\"words\":[\"git\",\"-C\",\"sub\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"dir":"sub"}],
+  ["writes {\"command\":\"cd /other && git -C sub checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cd /other && git checkout main\"}",[["cd","/other"],["git","checkout","main"]]],
+  ["pipeline {\"command\":\"cd /other && git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["cd","/other"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":"/other"}]],
+  ["writes {\"command\":\"cd /other && git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git -C /other -C sub checkout main\"}",[["git","-C","/other","-C","sub","checkout","main"]]],
+  ["pipeline {\"command\":\"git -C /other -C sub checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","-C","/other","-C","sub","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"-C\",\"/other\",\"-C\",\"sub\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"dir":"sub","chained":"/other/sub"}],
+  ["writes {\"command\":\"git -C /other -C sub checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git -C \\\"$X\\\" checkout main\"}",[["git","-C","$X","checkout","main"]]],
+  ["pipeline {\"command\":\"git -C \\\"$X\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","-C","$X","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"-C\",\"$X\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"dir":"$X"}],
+  ["writes {\"command\":\"git -C \\\"$X\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git -C /a -C \\\"$B\\\" checkout main\"}",[["git","-C","/a","-C","$B","checkout","main"]]],
+  ["pipeline {\"command\":\"git -C /a -C \\\"$B\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","-C","/a","-C","$B","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"-C\",\"/a\",\"-C\",\"$B\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"dir":"$B","chained":null}],
+  ["writes {\"command\":\"git -C /a -C \\\"$B\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"cd \\\"$X\\\" && git checkout main\"}",[["cd","$X"],["git","checkout","main"]]],
+  ["pipeline {\"command\":\"cd \\\"$X\\\" && git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["cd","$X"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":null}]],
+  ["git {\"words\":[\"cd\",\"$X\"]}",null],
+  ["writes {\"command\":\"cd \\\"$X\\\" && git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"git --git-dir=\\\"$G\\\" checkout main\"}",[["git","--git-dir=$G","checkout","main"]]],
+  ["pipeline {\"command\":\"git --git-dir=\\\"$G\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","--git-dir=$G","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"--git-dir=$G\",\"checkout\",\"main\"]}",{"sub":"checkout","args":["main"],"gitDir":"$G"}],
+  ["writes {\"command\":\"git --git-dir=\\\"$G\\\" checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["commands {\"command\":\"export GIT_DIR=/other/.git; git checkout main\"}",[["export","GIT_DIR=/other/.git"],["git","checkout","main"]]],
+  ["pipeline {\"command\":\"export GIT_DIR=/other/.git; git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["export","GIT_DIR=/other/.git"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":"/repo"}]],
+  ["git {\"words\":[\"export\",\"GIT_DIR=/other/.git\"]}",null],
+  ["writes {\"command\":\"export GIT_DIR=/other/.git; git checkout main\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
+  ["pipeline {\"command\":\"git status\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","status"],"folder":"/repo"}]],
+  ["commands {\"command\":\"git -C /other log\"}",[["git","-C","/other","log"]]],
+  ["pipeline {\"command\":\"git -C /other log\",\"cwd\":\"/repo\",\"home\":\"\"}",[{"words":["git","-C","/other","log"],"folder":"/repo"}]],
+  ["git {\"words\":[\"git\",\"-C\",\"/other\",\"log\"]}",{"sub":"log","args":[],"dir":"/other"}],
+  ["writes {\"command\":\"git -C /other log\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[]}],
   // #3323: a program the reader does not know, handed words that spell a path, measured from mod-kit's readers on 2026-11-21.
   ["commands {\"command\":\"prettier --write notes.txt\"}",[["prettier","--write","notes.txt"]]],
   ["git {\"words\":[\"prettier\",\"--write\",\"notes.txt\"]}",null],
@@ -368,7 +431,7 @@ type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null> }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -402,6 +465,12 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
     if (cmd === 'tail') {
       const user = { type: 'user', message: { role: 'user', content: 'restyle the invoice table' } }
       return ok(JSON.stringify(user) + '\n')
+    }
+    // #3398: what git answers a rev-parse question put with these exact words, where a test says:
+    // a folder, or null for a question git fails (no such folder, no repository there).
+    if (cmd === 'git' && args.includes('rev-parse') && o.tops && args.join(' ') in o.tops) {
+      const top = o.tops[args.join(' ')]
+      return top === null ? { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false } } : ok(`${top}\n`)
     }
     if (cmd === 'git' && args.includes('rev-parse')) return ok((o.repo ?? '/repo') + '\n')
     if (cmd === 'git' && args.includes('status')) return ok(' M src/InvoiceTable.tsx\n')
@@ -618,6 +687,147 @@ test('a git -C into another checkout is judged against that checkout', withDeps,
   await $.tool.call(bash('git -C /other reset --hard origin/main'))
   expect(w.prompts.length).toBe(1)
   expect(w.prompts[0]?.prompt).toContain('git reset --hard origin/main')
+})
+
+// #3398: git acts on the repository a command names, never on the folder the call was typed in.
+// The guard asked only about the folder the last -C names, read from the session's folder, with no
+// settings handed to mod-kit's git reader and no cd followed. Each case here ran unjudged until
+// then: the session's own checkout (/repo) has nobody else in it, and the checkout the command
+// really acts on (/other) has another session at work.
+const inOther = () => [rec('them', { cwd: '/other', repoRoot: '/other' })]
+const revParses = (w: { runs: string[] }) => w.runs.filter(r => r.startsWith('git ') && r.includes('rev-parse'))
+const stopped = '{"verdict":"Stop","reason":"They have uncommitted work."}'
+
+test('a branch switch naming another repository by --git-dir and --work-tree is judged against the sessions there (#3398)', withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { open: inOther(), judge: stopped, tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git --work-tree=/other checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe('Blocked: Another session is working in this checkout. They have uncommitted work. Leave it to the other session, or ask Dan.')
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+  expect(w.sent[0]?.text).toBe('Another session wanted to run git checkout main in this checkout while you are working in it, so it was stopped. Nothing here was touched.')
+})
+
+test('the same naming through GIT_DIR and GIT_WORK_TREE in front of the command is read too (#3398)', withDeps, async ($, on) => {
+  const named = '-C /repo --git-dir=/other/.git --work-tree=/other rev-parse'
+  const w = world($, on, { open: inOther(), tops: { [`${named} --show-toplevel`]: '/other', '-C /other rev-parse --show-toplevel': '/other', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  await $.tool.call(bash('GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+})
+
+test('a repository named alone has its own checkout judged, where its branch moves, beside the folder the files land in (#3398)', withDeps, async ($, on) => {
+  // Measured with git 2.51.1: with only the repository named, the files land in the folder the
+  // command runs in, and the branch that moves is the named repository's.
+  const named = '-C /repo --git-dir=/other/.git rev-parse'
+  // The checkout around the named repository is found by mod-kit's walk for one, on the disk.
+  const w = world($, on, { open: inOther(), gits: { '/other/.git': 'dir' }, tops: { [`${named} --show-toplevel`]: '/repo', [`${named} --absolute-git-dir`]: '/other/.git' } })
+  await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+})
+
+test("another session's checkout that git says is the named repository is judged, wherever the repository sits (#3398)", withDeps, async ($, on) => {
+  // A linked worktree's repository is a folder inside the main checkout's, which no walk up from
+  // it finds the worktree by: git is asked of each other session's checkout which repository it is.
+  const named = '-C /repo --git-dir=/main/.git/worktrees/w rev-parse'
+  const tops = { [`${named} --show-toplevel`]: '/repo', [`${named} --absolute-git-dir`]: '/main/.git/worktrees/w', '-C /wt rev-parse --absolute-git-dir': '/main/.git/worktrees/w' }
+  const w = world($, on, { open: [rec('them', { cwd: '/wt', repoRoot: '/wt' })], tops })
+  await $.tool.call(bash('git --git-dir=/main/.git/worktrees/w checkout main'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /wt, on branch')
+})
+
+test('a relative -C after a cd, and a command after a cd, are judged where the cd leaves the shell (#3398)', withDeps, async ($, on) => {
+  // What the guard asked until now: sub read from the session's folder, where there is none.
+  const tops = { '-C sub rev-parse --show-toplevel': null, '-C /other -C sub rev-parse --show-toplevel': '/other', '-C /other rev-parse --show-toplevel': '/other' }
+  const w = world($, on, { open: inOther(), tops })
+  await $.tool.call(bash('cd /other && git -C sub checkout main', 'c1'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+  await $.tool.call(bash('cd /other && git checkout main', 'c2'))
+  expect(w.prompts.length).toBe(2)
+  expect(w.prompts[1]?.prompt).toContain('The checkout: /other, on branch')
+})
+
+test('more than one -C is judged in the folder git chains them to, never the last one read alone (#3398)', withDeps, async ($, on) => {
+  const w = world($, on, { open: inOther(), tops: { '-C sub rev-parse --show-toplevel': null, '-C /other/sub rev-parse --show-toplevel': '/other' } })
+  await $.tool.call(bash('git -C /other -C sub checkout main'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+})
+
+test('a watched git command whose repository cannot be told is stopped while another session is open, saying how to write it (#3398)', withDeps, async ($, on) => {
+  const cases: [string, string][] = [
+    ['git -C "$X" checkout main', 'the shell fills in the folder -C names ($X)'],
+    ['git -C /a -C "$B" checkout main', 'its -C options lead to a folder the shell fills in'],
+    ['cd "$X" && git checkout main', 'the cd before it cannot be followed'],
+    ['git --git-dir="$G" checkout main', 'it names its repository as $G, which the guard cannot follow to a folder'],
+    ['export GIT_DIR=/other/.git; git checkout main', 'the call names GIT_DIR somewhere other than as a setting on the git command itself'],
+  ]
+  // The other session is in a checkout nothing in the command's words leads to.
+  const w = world($, on, { open: [rec('far', { cwd: '/far', repoRoot: '/far' })], tops: { '-C $X rev-parse --show-toplevel': null, '-C $B rev-parse --show-toplevel': null } })
+  for (const [i, [command, why]] of cases.entries()) {
+    const r = await $.tool.call(bash(command, `u${i}`))
+    expect(refusal(r)).toBe(
+      `Blocked: Couldn't tell which checkout git checkout main acts on (${why}), and another session is open, so this was stopped. Run it with every folder it names written out in full (git -C /path/to/checkout ...), or ask Dan.`,
+    )
+  }
+  expect(w.reached).not.toContain('Bash')
+  // Nothing was put to the judge and no session was told: there is no checkout to name to either.
+  expect(w.prompts.length).toBe(0)
+  expect(w.sent.length).toBe(0)
+})
+
+test('with no other session open, a command whose repository cannot be told goes through as it always did (#3398)', withDeps, async ($, on) => {
+  const w = world($, on, { tops: { '-C $X rev-parse --show-toplevel': null } })
+  await $.tool.call(bash('git -C "$X" checkout main', 'a1'))
+  await $.tool.call(bash('cd "$X" && git checkout main', 'a2'))
+  expect(w.reached.filter(t => t === 'Bash').length).toBe(2)
+  expect(w.prompts.length).toBe(0)
+})
+
+// FOR DAN TO DECIDE (#3398): these are judged only because of the folder the guard always asked
+// about, which is not where git runs them. Read as git reads them, neither touches /repo, so with
+// nobody in /other they would run unjudged. That is the correct reading and a loosening, so the old
+// question is still put beside the new one and these stay judged until Dan says to drop it.
+test("what the old reading judged is still judged: the session's own checkout, for a chain or a cd leading elsewhere (#3398, Dan's to decide)", withDeps, async ($, on) => {
+  // /repo/sub is a folder of the session's checkout, so the last -C read alone lands in /repo.
+  const tops = { '-C sub rev-parse --show-toplevel': '/repo', '-C /other/sub rev-parse --show-toplevel': '/other', '-C /other rev-parse --show-toplevel': '/other' }
+  const w = world($, on, { open: [rec('them')], tops })
+  await $.tool.call(bash('git -C /other -C sub checkout main', 'p1'))
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]?.prompt).toContain('The checkout: /repo, on branch')
+  await $.tool.call(bash('cd /other && git checkout main', 'p2'))
+  expect(w.prompts.length).toBe(2)
+  expect(w.prompts[1]?.prompt).toContain('The checkout: /repo, on branch')
+})
+
+test('the controls: a plain command, one -C and a command in the folder it runs in ask git exactly what they always asked (#3398)', withDeps, async ($, on) => {
+  // Not watched: nothing is asked of git at all.
+  const quiet = world($, on, { open: [rec('them')] })
+  await $.tool.call(bash('git status', 'k1'))
+  await $.tool.call(bash('git -C /other log', 'k2'))
+  expect(revParses(quiet)).toEqual([])
+  expect(quiet.prompts.length).toBe(0)
+  expect(quiet.reached.filter(t => t === 'Bash').length).toBe(2)
+})
+
+test('the controls: a watched command in the folder it runs in, and one with one -C, put one question to git and are judged as before (#3398)', withDeps, async ($, on) => {
+  const here = world($, on, { open: [rec('them')] })
+  await $.tool.call(bash('git checkout main'))
+  expect(revParses(here)).toEqual(['git -C /repo rev-parse --show-toplevel'])
+  expect(here.prompts.length).toBe(1)
+  expect(here.prompts[0]?.prompt).toContain('The checkout: /repo, on branch')
+})
+
+test('the controls: one -C into another checkout puts its one question to git and is judged there as before (#3398)', withDeps, async ($, on) => {
+  const there = world($, on, { open: [rec('them', { repoRoot: '/other' })], repo: '/other' })
+  await $.tool.call(bash('git -C /other reset --hard origin/main'))
+  expect(revParses(there)).toEqual(['git -C /other rev-parse --show-toplevel'])
+  expect(there.prompts.length).toBe(1)
+  expect(there.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
 })
 
 // #1491: from 2.1.307 every plugin's tool.check hook judges a mod's own $.tool.call, the job

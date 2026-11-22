@@ -7975,7 +7975,11 @@ changes (a checkout of a path, `git restore`, `git rm`, `git mv`); a script's wr
 docs/mods-design.md, but since #1592 a file handed to a script file as its argument, `python3
 tool.py notes.txt`, is judged and noted as an edit of it), or a checkout wide git command (checkout,
 switch, `branch -D`, `reset --hard`, `stash pop`, `add -A` or `.`) in a checkout another open
-session works in, or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
+session works in (since #3398 every checkout the command acts on as git reads it: where a `cd`
+before it and each `-C` lead, and the repository and working folder it names by `--git-dir`,
+`--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, beside the folder the guard always asked about; one
+whose repository cannot be told, a folder the shell fills in or a `cd` that cannot be followed,
+is stopped while another session is open, with how to write it), or since #3021 a command there whose effect cannot be read (mod-kit's `unread`:
 `eval`, a command a value names, an alias being set, `ssh`), judged once per checkout against the
 folder it runs in, asks Sonnet for Proceed, Worktree or Stop with the other session's latest request
 (read from its transcript). Proceed is a toast; Worktree and Stop are the grey card plus a message

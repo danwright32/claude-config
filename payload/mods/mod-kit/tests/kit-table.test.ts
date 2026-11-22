@@ -7,10 +7,69 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import { commands, git } from '../hooks/commands.ts'
-import { commandWrites } from '../hooks/writes.ts'
+import { commandWrites, pipelineIn } from '../hooks/writes.ts'
 
-type Entry = { method: 'commands' | 'writes' | 'git'; input: Record<string, unknown>; want: unknown }
+type Entry = { method: 'commands' | 'writes' | 'git' | 'pipeline'; input: Record<string, unknown>; want: unknown }
 const ENTRIES: Entry[] = [
+  {"method":"commands","input":{"command":"git --git-dir=/main/.git/worktrees/w checkout main"},"want":[["git","--git-dir=/main/.git/worktrees/w","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git --git-dir=/main/.git/worktrees/w checkout main","cwd":"/repo","home":""},"want":[{"words":["git","--git-dir=/main/.git/worktrees/w","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","--git-dir=/main/.git/worktrees/w","checkout","main"]},"want":{"sub":"checkout","args":["main"],"gitDir":"/main/.git/worktrees/w"}},
+  {"method":"writes","input":{"command":"git --git-dir=/main/.git/worktrees/w checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"pipeline","input":{"command":"git checkout main","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"git -C /other reset --hard origin/main","cwd":"/repo","home":""},"want":[{"words":["git","-C","/other","reset","--hard","origin/main"],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"git switch -c window-two","cwd":"/repo","home":""},"want":[{"words":["git","switch","-c","window-two"],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"git checkout main && echo NO-BUILD","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"folder":"/repo"},{"words":["echo","NO-BUILD"],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"echo \"on $(git checkout main)\"","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["echo","on $(git checkout main)"],"derived":[null,{"unresolved":"it runs git, whose output this reader does not know","commands":[{"words":["git","checkout","main"],"substitution":true}]}],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"echo \"on `git checkout main`\"","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["echo","on `git checkout main`"],"derived":[null,{"unresolved":"it runs git, whose output this reader does not know","commands":[{"words":["git","checkout","main"],"substitution":true}]}],"folder":"/repo"}]},
+  {"method":"pipeline","input":{"command":"cat <<EOF\non $(git checkout main)\nEOF","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"substitution":true,"folder":"/repo"},{"words":["cat","<<EOF"],"heredocs":[{"word":1,"body":"on $(git checkout main)","quoted":false}],"folder":"/repo"}]},
+  {"method":"commands","input":{"command":"git --git-dir=/other/.git --work-tree=/other checkout main"},"want":[["git","--git-dir=/other/.git","--work-tree=/other","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git --git-dir=/other/.git --work-tree=/other checkout main","cwd":"/repo","home":""},"want":[{"words":["git","--git-dir=/other/.git","--work-tree=/other","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","--git-dir=/other/.git","--work-tree=/other","checkout","main"]},"want":{"sub":"checkout","args":["main"],"gitDir":"/other/.git","workTree":"/other"}},
+  {"method":"writes","input":{"command":"git --git-dir=/other/.git --work-tree=/other checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"git --git-dir=/other/.git checkout main"},"want":[["git","--git-dir=/other/.git","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git --git-dir=/other/.git checkout main","cwd":"/repo","home":""},"want":[{"words":["git","--git-dir=/other/.git","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","--git-dir=/other/.git","checkout","main"]},"want":{"sub":"checkout","args":["main"],"gitDir":"/other/.git"}},
+  {"method":"writes","input":{"command":"git --git-dir=/other/.git checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main"},"want":[["git","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main","cwd":"/repo","home":""},"want":[{"words":["git","checkout","main"],"env":["GIT_DIR=/other/.git","GIT_WORK_TREE=/other"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","checkout","main"],"env":["GIT_DIR=/other/.git","GIT_WORK_TREE=/other"]},"want":{"sub":"checkout","args":["main"],"gitDir":"/other/.git","workTree":"/other"}},
+  {"method":"writes","input":{"command":"GIT_DIR=/other/.git GIT_WORK_TREE=/other git checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cd /other && git -C sub checkout main"},"want":[["cd","/other"],["git","-C","sub","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"cd /other && git -C sub checkout main","cwd":"/repo","home":""},"want":[{"words":["cd","/other"],"folder":"/repo"},{"words":["git","-C","sub","checkout","main"],"folder":"/other"}]},
+  {"method":"git","input":{"words":["git","-C","sub","checkout","main"]},"want":{"sub":"checkout","args":["main"],"dir":"sub"}},
+  {"method":"writes","input":{"command":"cd /other && git -C sub checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cd /other && git checkout main"},"want":[["cd","/other"],["git","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"cd /other && git checkout main","cwd":"/repo","home":""},"want":[{"words":["cd","/other"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":"/other"}]},
+  {"method":"writes","input":{"command":"cd /other && git checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"git -C /other -C sub checkout main"},"want":[["git","-C","/other","-C","sub","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git -C /other -C sub checkout main","cwd":"/repo","home":""},"want":[{"words":["git","-C","/other","-C","sub","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","-C","/other","-C","sub","checkout","main"]},"want":{"sub":"checkout","args":["main"],"dir":"sub","chained":"/other/sub"}},
+  {"method":"writes","input":{"command":"git -C /other -C sub checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"git -C \"$X\" checkout main"},"want":[["git","-C","$X","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git -C \"$X\" checkout main","cwd":"/repo","home":""},"want":[{"words":["git","-C","$X","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","-C","$X","checkout","main"]},"want":{"sub":"checkout","args":["main"],"dir":"$X"}},
+  {"method":"writes","input":{"command":"git -C \"$X\" checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"git -C /a -C \"$B\" checkout main"},"want":[["git","-C","/a","-C","$B","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git -C /a -C \"$B\" checkout main","cwd":"/repo","home":""},"want":[{"words":["git","-C","/a","-C","$B","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","-C","/a","-C","$B","checkout","main"]},"want":{"sub":"checkout","args":["main"],"dir":"$B","chained":null}},
+  {"method":"writes","input":{"command":"git -C /a -C \"$B\" checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"cd \"$X\" && git checkout main"},"want":[["cd","$X"],["git","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"cd \"$X\" && git checkout main","cwd":"/repo","home":""},"want":[{"words":["cd","$X"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":null}]},
+  {"method":"git","input":{"words":["cd","$X"]},"want":null},
+  {"method":"writes","input":{"command":"cd \"$X\" && git checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"git --git-dir=\"$G\" checkout main"},"want":[["git","--git-dir=$G","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"git --git-dir=\"$G\" checkout main","cwd":"/repo","home":""},"want":[{"words":["git","--git-dir=$G","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","--git-dir=$G","checkout","main"]},"want":{"sub":"checkout","args":["main"],"gitDir":"$G"}},
+  {"method":"writes","input":{"command":"git --git-dir=\"$G\" checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"commands","input":{"command":"export GIT_DIR=/other/.git; git checkout main"},"want":[["export","GIT_DIR=/other/.git"],["git","checkout","main"]]},
+  {"method":"pipeline","input":{"command":"export GIT_DIR=/other/.git; git checkout main","cwd":"/repo","home":""},"want":[{"words":["export","GIT_DIR=/other/.git"],"folder":"/repo"},{"words":["git","checkout","main"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["export","GIT_DIR=/other/.git"]},"want":null},
+  {"method":"writes","input":{"command":"export GIT_DIR=/other/.git; git checkout main","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
+  {"method":"pipeline","input":{"command":"git status","cwd":"/repo","home":""},"want":[{"words":["git","status"],"folder":"/repo"}]},
+  {"method":"commands","input":{"command":"git -C /other log"},"want":[["git","-C","/other","log"]]},
+  {"method":"pipeline","input":{"command":"git -C /other log","cwd":"/repo","home":""},"want":[{"words":["git","-C","/other","log"],"folder":"/repo"}]},
+  {"method":"git","input":{"words":["git","-C","/other","log"]},"want":{"sub":"log","args":[],"dir":"/other"}},
+  {"method":"writes","input":{"command":"git -C /other log","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[]}},
   {"method":"commands","input":{"command":"prettier --write notes.txt"},"want":[["prettier","--write","notes.txt"]]},
   {"method":"git","input":{"words":["prettier","--write","notes.txt"]},"want":null},
   {"method":"writes","input":{"command":"prettier --write notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}},
@@ -227,15 +286,18 @@ const ENTRIES: Entry[] = [
 ]
 
 const ask = (e: Entry): unknown => {
-  const i = e.input as { command: string; cwd: string; home: string; words: string[] }
-  const got = e.method === 'commands' ? commands(i.command) : e.method === 'writes' ? commandWrites(i.command, i.cwd, i.home) : git(i.words)
+  const i = e.input as { command: string; cwd: string; home: string; words: string[]; env?: string[] }
+  // git with the settings written in front of the command, where the guard hands them on, and
+  // pipeline with the folder each command runs in, as the guard asks for it (#3398).
+  const got =
+    e.method === 'commands' ? commands(i.command) : e.method === 'writes' ? commandWrites(i.command, i.cwd, i.home) : e.method === 'pipeline' ? pipelineIn(i.command, i.cwd, i.home) : git(i.words, i.env)
   // As the collision guard receives it: through JSON, nothing standing for no answer.
   return got === undefined ? null : JSON.parse(JSON.stringify(got))
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 213 entries', () => {
-    expect(ENTRIES.length).toBe(213)
+  test('holds 272 entries', () => {
+    expect(ENTRIES.length).toBe(272)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

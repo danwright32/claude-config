@@ -22,7 +22,7 @@ import sys
 
 TABLE = 'payload/mods/collision-guard/tests/register.test.ts'
 OUT = 'payload/mods/mod-kit/tests/kit-table.test.ts'
-METHODS = {'commands', 'writes', 'git'}
+METHODS = {'commands', 'writes', 'git', 'pipeline'}
 
 
 def entries(text):
@@ -76,16 +76,19 @@ def render(es):
 import {{ describe, expect }} from 'claude-code/testing'
 import {{ test }} from './hang-ceiling.ts'
 import {{ commands, git }} from '../hooks/commands.ts'
-import {{ commandWrites }} from '../hooks/writes.ts'
+import {{ commandWrites, pipelineIn }} from '../hooks/writes.ts'
 
-type Entry = {{ method: 'commands' | 'writes' | 'git'; input: Record<string, unknown>; want: unknown }}
+type Entry = {{ method: 'commands' | 'writes' | 'git' | 'pipeline'; input: Record<string, unknown>; want: unknown }}
 const ENTRIES: Entry[] = [
 {rows},
 ]
 
 const ask = (e: Entry): unknown => {{
-  const i = e.input as {{ command: string; cwd: string; home: string; words: string[] }}
-  const got = e.method === 'commands' ? commands(i.command) : e.method === 'writes' ? commandWrites(i.command, i.cwd, i.home) : git(i.words)
+  const i = e.input as {{ command: string; cwd: string; home: string; words: string[]; env?: string[] }}
+  // git with the settings written in front of the command, where the guard hands them on, and
+  // pipeline with the folder each command runs in, as the guard asks for it (#3398).
+  const got =
+    e.method === 'commands' ? commands(i.command) : e.method === 'writes' ? commandWrites(i.command, i.cwd, i.home) : e.method === 'pipeline' ? pipelineIn(i.command, i.cwd, i.home) : git(i.words, i.env)
   // As the collision guard receives it: through JSON, nothing standing for no answer.
   return got === undefined ? null : JSON.parse(JSON.stringify(got))
 }}
