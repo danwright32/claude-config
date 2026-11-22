@@ -2661,13 +2661,21 @@ or in a file the guard read, was held already, since every definition the reader
 a function's body included. A function that is never called by a command of its name is held like
 one that is: a call can come by a route the reading does not follow (a command whose name is a
 variable, a trap, a file it did not read). Replayed on the recount's 47 distinct newly judged calls
-the same day, the fix judges none of the 25 cleared calls again; 21 stay judged, 3 of their helpers
-for one of the new reasons where another reason held them before (G, silent, fires), and 1 call's
-script is gone from the disk with the worktree it ran in. Left open, as it was: a file the guard
+the same day, the fix judges none of the 25 cleared calls again; 20 stay judged, 3 of their helpers
+for one of the new reasons where another reason held them before (G, silent, fires), and 2 calls'
+scripts are gone from the disk with the worktrees they ran in. Whether a `source` command stands at
+the top is asked in the one reading that places the script's definitions (`placed`): asked in a
+reading of its own it handed the readers the whole script once more, 1,806,612 characters in place
+of 1,355,198 for the Slack gate's suite. And a place typed after a `#` that may start a comment on
+its line is not probed, so it is never at the top: a probe written into a comment ends the comment,
+the rest of the line is read as commands, and a `}` there closed a group the script never closed,
+after which a definition or a read in command inside a function read as standing at the top (so on
+the branch before this fix too). A `#` inside a quoted string is taken for a comment as well, which
+only judges. Left open, as it was: a file the guard
 did not read, read in at the top of the script above the definition, could define a function under
 another name that, called below the definition, defines the helper's name again. Judging whenever
 such a file is read in closes it and was measured on the same 47 calls, not built: it clears 0 of
-them, all 25 judged again (23 `says`, 2 `call_has`), since each of those suites reads in a file of
+them, all 25 judged again (23 `says`, 2 `call_has`), since the suites they run read in a file of
 that kind at its top (in the push test gate's suite, read for this, the suite deadline library, by
 a path typed with the own folder idiom inside the word, which the reader does not place). Reading
 such a file would close it for a suite of that shape and is a wider reading, Dan's to decide.
