@@ -638,8 +638,9 @@ run "export PATH=$M:\$PATH; cat calm.sh | bash" "$M"; unsure "cat piped into a s
 run "export PATH=$M:\$PATH; bash copy.sh" "$M";    refused "#3440 a script whose caller exported PATH, running what its cat wrote, is refused"
 run "export PATH=$M:\$PATH; bash copy-run.sh" "$M"; refused "#3440 a script whose caller exported PATH, running what its cp copied, is refused"
 # PATH named in the text of a script on disk is not counted for these readings (system_program in
-# lib/exact-output.py says why: 160 of this repository's 315 suites name PATH, and most make a file
-# with cat or cp and then run it). So this still passes, as it did, and is left for its own change.
+# lib/exact-output.py says why: counted on 2026-11-22, 160 of this repository's 315 suites name
+# PATH, and most make a file with cat or cp and then run it). So this still passes, as it did, and
+# is left for its own change.
 run "bash path-copy.sh" "$M";                      still "a script on disk that names PATH and runs what its cat wrote"
 # In a script on disk, and a post in what the system's program would have written is still found.
 run "bash local-copy.sh" "$M";                     refused "#3440 a script on disk that runs what a script named cp copied is refused"
