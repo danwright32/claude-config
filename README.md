@@ -5357,10 +5357,15 @@ the helper fetches each part's `part-unmeasured-<part>` record from the run the 
 notice itself is cut by GitHub at 4096 characters, so it is not the list), believes them only when
 their lines number what the notice's first line counts, and chooses the suites the pull request
 changed, or that name a file it changed as a path: a slash, then the shortest end of the file's path
-no other file in the head's tree has. It runs those in a throwaway clone of the head through the
-head's own `run-all-tests.sh` (dealt into a part of their own, and run as that part), saying when
-they started, every two minutes that they are still running with how many have finished, and how
-they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
+no other file in the head's tree has. A file the pull request deletes is a changed file too
+(#3403): it is named the same way against the tree the head left the base at, where it still is,
+and a suite naming it is run, saying the file is deleted. Such a suite often fails until it is
+brought up to date, and that refuses the merge like any other failure, so the suite is mended in
+the same pull request. A renamed file counts as its old path deleted and its new path added, so a
+suite still naming the old path runs, and so does one naming the new. It runs those in a
+throwaway clone of the head through the head's own `run-all-tests.sh` (dealt into a part of their
+own, and run as that part), saying when they started, every two minutes that they are still
+running with how many have finished, and how they ended. The clone is told what is published, as a builder's worktree knows it: where origin is,
 the base as origin's branch, and that branch as origin's default. A suite that asks git there what
 a push would add is then answered with the pull request's commits; in a clone that knew no remote
 the answer was the whole history, and the step's first real merge stopped on it (#3392, on
