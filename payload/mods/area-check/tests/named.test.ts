@@ -253,20 +253,21 @@ test('a command naming no such script is read as it was, asking nothing (#3022)'
   expect(asked).toEqual([])
 })
 
-const REFUSED: [string, Partial<NamedFacts>, string][] = [
+// The fourth, where given, says the reason is what else the command runs, which the record marks (#3417).
+const REFUSED: ([string, Partial<NamedFacts>, string] | [string, Partial<NamedFacts>, string, true])[] = [
   ['in no checkout', { checkout: async () => ({ unread: 'it is in no checkout' }) }, 'its checkout cannot be read (it is in no checkout)'],
   ['in a checkout of no GitHub repository', { checkout: async () => ({ root: APP, github: null, defaultBranch: 'main' }) }, `it is in a checkout of no GitHub repository, never ${REPO}`],
   ['in a checkout whose origin names no default branch', { checkout: async () => ({ root: APP, github: REPO, defaultBranch: null }) }, 'origin names no default branch, so its text cannot be compared with the one the suite proved'],
   ['handed something that is no folder', { isFolder: async () => false }, 'src/ is no folder on the disk'],
   ['in a command whose commands cannot be read', { commands: async () => Promise.reject(new Error('the pipeline could not be read')) }, 'it could not be checked (the pipeline could not be read)'],
   ['in a command the run cannot be found in', { commands: only([{ words: ['bash', 'other.sh', 'src/'] }]) }, 'the run cannot be found among the commands, so what else runs with it cannot be read'],
-  ['after a command that is no change of folder', { commands: only([{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
+  ['after a command that is no change of folder', { commands: only([{ words: ['export', 'TMPDIR'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read', true],
   // Written after it, a command still runs before it the second time round a loop, or once a function is called.
-  ['before a command that is no reader of its output', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read'],
+  ['before a command that is no reader of its output', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['export', 'TMPDIR'] }]) }, 'export runs in the same command, and what that leaves in the environment cannot be read', true],
   // The reason is written to the area check's log, so it names only the program, never its arguments,
   // which can carry a credential.
-  ['beside a command whose arguments carry a credential', { commands: only([{ words: ['curl', '-H', 'Authorization: Bearer not-a-real-token', 'x'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'curl runs in the same command, and what that leaves in the environment cannot be read'],
-  ['run twice in the command', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'the script is run more than once in the command, and what runs between cannot be read'],
+  ['beside a command whose arguments carry a credential', { commands: only([{ words: ['curl', '-H', 'Authorization: Bearer not-a-real-token', 'x'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'curl runs in the same command, and what that leaves in the environment cannot be read', true],
+  ['run twice in the command', { commands: only([{ words: ['bash', 'tools/check-mods.sh', 'src/'] }, { words: ['bash', 'tools/check-mods.sh', 'src/'] }]) }, 'the script is run more than once in the command, and what runs between cannot be read', true],
   ['whose checkout cannot be asked about', { checkout: async () => Promise.reject(new Error('git could not be asked')) }, 'it could not be checked (git could not be asked)'],
   ['whose folder cannot be looked at', { isFolder: async () => Promise.reject(new Error('EACCES')) }, 'it could not be checked (EACCES)'],
   ['whose text git cannot be started to compare', { git: async () => Promise.reject(new Error('git timed out')) }, 'it could not be checked (git timed out)'],
@@ -274,9 +275,9 @@ const REFUSED: [string, Partial<NamedFacts>, string][] = [
 
 test('a fact that cannot be had, or that is wrong, leaves the run to be judged as before, saying why (#3022)', async () => {
   const w = commandWrites(RUN, APP, HOME)
-  for (const [what, over, why] of REFUSED) {
+  for (const [what, over, why, beside] of REFUSED) {
     const r = await namedReaders(RUN, w, facts(over))
-    expect([what, r.writes, r.named]).toEqual([what, w, [{ script: `${APP}/tools/check-mods.sh`, word: 'src/', folder: `${APP}/src`, why }]])
+    expect([what, r.writes, r.named]).toEqual([what, w, [{ script: `${APP}/tools/check-mods.sh`, word: 'src/', folder: `${APP}/src`, why, ...(beside ? { beside: true } : {}) }]])
   }
 })
 
@@ -644,4 +645,76 @@ test('a hold on a write beside a named script let through, or on a command namin
   expect(refusal(none)).toContain('The area check held this Bash command')
   expect(refusal(none)).not.toContain('let through by name')
   expect(JSON.stringify(w.cards)).not.toContain('let through by name')
+})
+
+// #3417: on 2026-11-21 a builder ran the per mod check three times in one command, each run's output
+// sent to a file and its exit code echoed after it, and the run on a mod with more files than are
+// judged one by one was held. The hold said why the rule declined it (the script run more than once)
+// and nothing of what the rule does let through, so it was taken for a hold on every run of the
+// check and filed as one, while the same run alone in a command went through the same evening. The
+// rule is as it was, and so is what is held: a hold whose reason is what else the command runs now
+// also says the one shape let through. Named once here and never read from named.ts (L721).
+const ALONE = 'A script is let through by name only when the command runs nothing else: the script once, with nothing before it but a cd and nothing after it but readers its output is piped into.'
+const MORE_THAN_ONCE = 'the script is run more than once in the command, and what runs between cannot be read'
+// The line as it was typed, with this world's folders in place of the three mods.
+const THRICE = `cd ${APP} && bash tools/check-mods.sh docs > a.txt 2>&1; echo a $?; bash tools/check-mods.sh lib > b.txt 2>&1; echo b $?; bash tools/check-mods.sh src/ > c.txt 2>&1; echo c $?`
+
+test('the per mod check run three times in one command is still held, and the hold says the one shape let through (#3417)', KIT, async ($, on) => {
+  const w = ours($, on)
+  const r = await bash($ as never, w, THRICE)
+  expect(refusal(r)).toContain(HELD)
+  expect(refusal(r)).toContain(`tools/check-mods.sh was not let through by name: ${MORE_THAN_ONCE}. ${ALONE}`)
+  expect(JSON.stringify(w.cards.at(-1))).toContain(ALONE)
+  expect(named(w).map(x => [x.word, x.decision, x.why])).toEqual([
+    ['docs', 'judged', MORE_THAN_ONCE],
+    ['lib', 'judged', MORE_THAN_ONCE],
+    ['src/', 'judged', MORE_THAN_ONCE],
+  ])
+})
+
+test('each of those three runs alone in a command, its output sent to a file, is let through, so the shape the hold names is one that runs (#3417)', KIT, async ($, on) => {
+  const w = ours($, on)
+  expect((await bash($ as never, w, `cd ${APP} && bash tools/check-mods.sh docs > a.txt 2>&1`)).result).toBe('done')
+  expect((await bash($ as never, w, `cd ${APP} && bash tools/check-mods.sh lib > b.txt 2>&1`, {}, 'b2')).result).toBe('done')
+  expect((await bash($ as never, w, `cd ${APP} && bash tools/check-mods.sh src/ > c.txt 2>&1`, {}, 'b3')).result).toBe('done')
+  expect(named(w).map(x => [x.word, x.decision])).toEqual([['docs', 'passed'], ['lib', 'passed'], ['src/', 'passed']])
+})
+
+// What else the command runs: another command after or before the script, or a value set on its own.
+const BESIDE_IT: [string, string, string][] = [
+  ['its exit code echoed after it', 'bash tools/check-mods.sh src/ > c.txt 2>&1; echo c $?', `echo ${BESIDE}`],
+  ['a command before it', 'git fetch origin && bash tools/check-mods.sh src/', `git ${BESIDE}`],
+  ['a value set on its own before it', 'TMPDIR=src; bash tools/check-mods.sh src/', setAlone('TMPDIR')],
+]
+
+test('a hold whose reason is what else the command runs says the one shape let through (#3417)', KIT, async ($, on) => {
+  const w = ours($, on)
+  for (const [i, [what, command, why]] of BESIDE_IT.entries()) {
+    const said = refusal(await bash($ as never, w, command, {}, `b${i + 1}`))
+    expect(`${what}: ${said}`).toContain(HELD)
+    expect(`${what}: ${said}`).toContain(`tools/check-mods.sh was not let through by name: ${why}. ${ALONE}`)
+  }
+})
+
+// A reason the run alone in a command would still be declined for: the hold must not send the
+// session to reshape a command when that changes nothing (L111).
+const NOT_BESIDE: [string, string][] = [
+  ['handed a second folder', 'bash tools/check-mods.sh lib src/'],
+  ['with a value set for it', 'TMPDIR=src bash tools/check-mods.sh src/'],
+  ['behind a runner', 'env -u TMPDIR bash tools/check-mods.sh src/'],
+  ['run by a copy elsewhere', 'bash copy/tools/check-mods.sh src/'],
+]
+
+test('a hold for any other reason says nothing of running the script alone, a changed text among them (#3417)', KIT, async ($, on) => {
+  const w = ours($, on)
+  w.files[`${APP}/copy/tools/check-mods.sh`] = UNREADABLE
+  for (const [i, [what, command]] of NOT_BESIDE.entries()) {
+    const said = refusal(await bash($ as never, w, command, {}, `b${i + 1}`))
+    expect(`${what}: ${said}`).toContain('was not let through by name')
+    expect(`${what}: ${said}`).not.toContain('only when the command runs nothing else')
+  }
+  w.ctl.namedDiff = 1
+  const changed = refusal(await bash($ as never, w, 'bash tools/check-mods.sh src/', {}, 'changed'))
+  expect(changed).toContain('has changed since this checkout left origin/main')
+  expect(changed).not.toContain('only when the command runs nothing else')
 })

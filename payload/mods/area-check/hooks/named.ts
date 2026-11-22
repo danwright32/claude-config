@@ -100,8 +100,25 @@ export type NamedFacts = {
   git: (root: string, args: string[]) => Promise<number>
 }
 
-/** A run of a script of that name: let through, or judged as before with why. */
-export type Named = { script: string; word: string; folder?: string } & ({ passed: true } | { why: string })
+/**
+ * A run of a script of that name: let through, or judged as before with why. `beside` marks a reason
+ * that is what else the command runs (#3417), which a hold answers with the one shape let through.
+ */
+export type Named = { script: string; word: string; folder?: string } & ({ passed: true } | { why: string; beside?: true })
+
+// A reason that is what else the command runs: another run of the script, another command, or a
+// value set on its own (#3417). Apart from the rest, so a hold can say what to run instead.
+type Beside = { beside: string }
+
+/**
+ * What a hold adds to a reason that is what else the command runs (#3417). On 2026-11-21 a line that
+ * ran tools/check-mods.sh three times, an echo after each, was held with the rule's reason and no
+ * word of what the rule does let through, and was filed as a hold on every run of the check. It says
+ * only what the rule asks of the command, never that the run would then pass: its checkout and its
+ * texts are read after this, and a reason of theirs gets no such sentence, since no other way of
+ * writing the command changes it (L111).
+ */
+const ALONE = 'A script is let through by name only when the command runs nothing else: the script once, with nothing before it but a cd and nothing after it but readers its output is piped into.'
 
 const SHELLS = ['a bash script file', 'a script file run directly']
 
@@ -199,8 +216,9 @@ const byValueNamed = (command: string, n: NamedScript): string | null => {
   return `the command names ${names.join(', ')} before it, and the script runs the program ${names.length === 1 ? 'that variable names' : 'each of those variables names'}`
 }
 
-// Why a run shaped like the named one is not it, or null when it is.
-const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts): Promise<string | null> => {
+// Why a run shaped like the named one is not it, or null when it is. A reason that is what else the
+// command runs comes back as `beside` (#3417); the rule is the same whichever way it is given.
+const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts): Promise<string | Beside | null> => {
   const [handed, ...more] = r.args
   if (!handed || more.length) return 'it is handed more than the one folder it reads'
   if (!handed.path) return `${handed.word} cannot be read as the one folder it is handed`
@@ -228,13 +246,13 @@ const whyNot = async (command: string, r: Run, n: NamedScript, facts: NamedFacts
   const run = await facts.commands(command)
   const mine = run.flatMap((c, i) => (c.words.includes(r.script) ? [i] : []))
   if (mine.length === 0) return 'the run cannot be found among the commands, so what else runs with it cannot be read'
-  if (mine.length > 1) return 'the script is run more than once in the command, and what runs between cannot be read'
+  if (mine.length > 1) return { beside: 'the script is run more than once in the command, and what runs between cannot be read' }
   const own = mine[0] as number
   const other = run.find((c, i) => i !== own && !(i < own ? c.words[0] === 'cd' : c.pipedFrom !== undefined))
-  if (other?.words.length && other.words.every(w => SETS.test(w))) return `the command sets ${namesOf(other.words)} on its own, ${READS}`
+  if (other?.words.length && other.words.every(w => SETS.test(w))) return { beside: `the command sets ${namesOf(other.words)} on its own, ${READS}` }
   // Only the program is named: this reason goes into the area check's log, and an argument can carry
   // a credential. So can a first word that sets a value in a way the reader gives as a word (`A+=b`).
-  if (other) return `${other.words[0]?.includes('=') ? 'a word holding an equals sign' : (other.words[0] ?? 'another command')} runs in the same command, and what that leaves in the environment cannot be read`
+  if (other) return { beside: `${other.words[0]?.includes('=') ? 'a word holding an equals sign' : (other.words[0] ?? 'another command')} runs in the same command, and what that leaves in the environment cannot be read` }
   // A setting is said first, so the log names it (`env TMPDIR=x bash ...` is held for TMPDIR, the
   // more exact reason, though it stands behind env too).
   const set = command.includes('=') ? whySet(run, own, r) : null
@@ -300,7 +318,7 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
       continue
     }
     const about = { script: path, word: r.args[0]?.word ?? '', ...(r.args[0]?.path ? { folder: r.args[0].path } : {}) }
-    let why: string | null
+    let why: string | Beside | null
     try {
       why = await whyNot(command, r, n, facts)
     } catch (err) {
@@ -308,7 +326,7 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
     }
     if (why === null) named.push({ ...about, passed: true })
     else {
-      named.push({ ...about, why })
+      named.push(typeof why === 'string' ? { ...about, why } : { ...about, why: why.beside, beside: true })
       kept.push(r)
     }
   }
@@ -320,13 +338,14 @@ export const namedReaders = async (command: string, w: ModKitWrites, facts: Name
  * What a hold says of the runs of named scripts among `scripts` (each a run's path) that were not let
  * through (#3162): each script as NAMED spells it, with the reason it was judged as before, so the
  * session can tell what to change. Undefined where none was declined. The reason names programs and
- * variables, never a value, as it does in the log.
+ * variables, never a value, as it does in the log. Where any of those reasons is what else the
+ * command runs, the one shape let through is said after them, once (#3417, ALONE).
  */
 export const declinedNote = (named: readonly Named[], scripts: readonly (string | null | undefined)[]): string | undefined => {
-  const lines = named.flatMap(n =>
-    'why' in n && scripts.includes(n.script) ? [`${NAMED.find(s => n.script.endsWith(`/${s.script}`))?.script ?? n.script} was not let through by name: ${n.why}.`] : [],
-  )
-  return lines.length ? [...new Set(lines)].join(' ') : undefined
+  const declined = named.flatMap(n => ('why' in n && scripts.includes(n.script) ? [n] : []))
+  const lines = declined.map(n => `${NAMED.find(s => n.script.endsWith(`/${s.script}`))?.script ?? n.script} was not let through by name: ${n.why}.`)
+  if (!lines.length) return undefined
+  return [...new Set(lines), ...(declined.some(n => n.beside) ? [ALONE] : [])].join(' ')
 }
 
 /**
