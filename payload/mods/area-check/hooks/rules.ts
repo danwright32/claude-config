@@ -145,24 +145,25 @@ const mayBeSource = (word: string) => {
 
 type ModKitRun = NonNullable<ModKitWrites['runs']>[number]
 
-/**
- * The script a path was handed to, as mod-kit named the run (#2407). `unknown`, on a program
- * mod-kit's write reader does not know or a form of a listed one that writes (#3323), is the program
- * as written with the reader's own words for why it was read as a writer and what to do, which a
- * hold says (unknownNote).
- */
-export type ShellRun = { what: string; path?: string; tool?: true; unknown?: { program: string; why: string; remedy: string } }
+/** The script a path was handed to, as mod-kit named the run (#2407). */
+export type ShellRun = { what: string; path?: string; tool?: true }
 
 /**
- * What a hold says of the programs mod-kit's write reader does not know among the runs a held path
- * was handed to (#3323; Dan, 2026-11-21: "Turn it round, with the list (Recommended)"): for each,
- * why it was judged as a write and what to do, in the reader's own words, the same in every guard
- * (L111, L118). Undefined where none is.
+ * The runs of a command, or of a script's own text, that the area check judges: every one but those
+ * mod-kit's write reader marks `unknown`, a program it does not know (or a form of a listed one that
+ * writes) handed a word that spells a path (#3323). The area check is left out of that rule for now
+ * (Dan, 2026-11-21: "Leave the area check out for now (Recommended)"), so it reads a command as it
+ * did before the reader marked them. Why: in 35 days of the personal MacBook's records such a
+ * program was handed a source file or a folder in a checkout in 726 past calls, 713 of them a
+ * folder, gh 633 times (the value of an option that happens to name a folder where it ran, `state`
+ * in `--json state`) and `claude plugin test <folder>` 80 times, and a folder holding more files the
+ * area check could hold than it judges one by one is held whole. gh needs its own reading before
+ * the area check joins. Until then a writer nobody has listed, typed as a command and handed a held
+ * file (`prettier --write src/big.ts`), passes here unjudged, as it did before #3323; the design
+ * round guard, ask before saving, the collision guard and scope modes do judge it.
+ * tests/test-area-check-shell-reader.sh holds this to the real reader.
  */
-export const unknownNote = (runs: readonly ShellRun[] | undefined): string | undefined => {
-  const lines = (runs ?? []).flatMap(r => (r.unknown ? [`It was judged as a write because ${r.unknown.why}.${r.unknown.remedy ? ` ${r.unknown.remedy}` : ''}`] : []))
-  return lines.length ? [...new Set(lines)].join(' ') : undefined
-}
+const judgedRuns = (w: ModKitWrites): ModKitRun[] => (w.runs ?? []).filter(r => !r.unknown)
 
 const PLAIN_NAME = /^[A-Za-z0-9._+-]+$/
 
@@ -307,12 +308,12 @@ const handedPlace = (word: string, folder: string): { path: string; tree?: true 
 export const scriptReach = (w: ModKitWrites, folder: string, home?: string, script?: string): { reaches: string } | { placed: ScriptPlaced[] } => {
   // #3323: mod-kit gives a program it does not know as a run marked `unknown` wherever it is handed a
   // word that spells a path. That rule covers a command as typed. A script's own text is read as it
-  // was before it, so such a run is no script it runs in turn and no write of its own: nearly every
-  // script holds one (`exit 1`, `sleep 2`), so counting them would have every script reach the whole
-  // folder it is handed, which #2407 and #2565 ended. So a script that hands its folder to a program
-  // nobody has listed is not caught here.
-  const known = w.runs?.filter(r => !r.unknown)
-  const run = known?.[0]
+  // was before it, so such a run is no script it runs in turn and no write of its own (judgedRuns
+  // here, and again inside shellTargets below): nearly every script holds one (`exit 1`, `sleep 2`),
+  // so counting them would have every script reach the whole folder it is handed, which #2407 and
+  // #2565 ended. So a script that hands its folder to a program nobody has listed is not caught
+  // here. This holds whenever the area check joins the rule for a command as typed.
+  const run = judgedRuns(w)[0]
   if (run) return { reaches: `it runs ${run.what} (${run.script}), whose writes are not read` }
   const placed: ScriptPlaced[] = []
   const nowhere = (p: string) => p === SCRIPT_ROOT || p.startsWith(`${SCRIPT_ROOT}/`)
@@ -320,7 +321,7 @@ export const scriptReach = (w: ModKitWrites, folder: string, home?: string, scri
   // `onlyLoads`) writes nothing in its own text, as one importing a local module by a fixed name
   // reads: the folder it is handed is read, not written. Only here, for a script's own text; the same
   // program typed in a command is judged as before.
-  const own = { ...w, unnamed: w.unnamed.filter(u => !u.onlyLoads), ...(w.runs ? { runs: known ?? [] } : {}) }
+  const own = { ...w, unnamed: w.unnamed.filter(u => !u.onlyLoads) }
   for (const t of shellTargets(own, home)) {
     if ('path' in t) {
       if (nowhere(t.path)) return { reaches: `it writes ${t.word}, which lands wherever it is run from` }
@@ -468,7 +469,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     if (had) {
       if ('path' in had && 'path' in t && t.tree) had.tree = true
       if (!had.runs || !t.runs) delete had.runs
-      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool && h.unknown?.program === r.unknown?.program)) had.runs.push(r)
+      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
       return
     }
     seen.set(k, t)
@@ -487,15 +488,11 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     if (g.path && g.tree && literalExt(g.path) === undefined) add({ word: g.word, unread: `git writes ${g.word}, which reaches a whole folder` })
     else named(g.word, g.path, undefined, `git matches ${g.word} across folders`, g.tree)
   }
-  for (const r of w.runs ?? []) {
+  // Not the runs of a program the reader does not know (#3323, judgedRuns): what such a program is
+  // handed is no target here, so the command is judged as it was before the reader marked them.
+  for (const r of judgedRuns(w)) {
     if (spoolNote(r, home)) continue
-    const run: ShellRun = {
-      what: r.what,
-      ...(r.path ? { path: r.path } : {}),
-      ...(r.tool ? { tool: true as const } : {}),
-      // #3323: a program the reader does not know, with the reader's words for it.
-      ...(r.unknown ? { unknown: { program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' } } : {}),
-    }
+    const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
     const keyOnly = spoolKeyOnly(r, home)
     for (const [i, a] of r.args.entries()) {
       if (keyOnly && i === 1) continue
@@ -897,9 +894,8 @@ export type Held = {
   under?: string
   /**
    * Why a script the area check knows by name, run in the held command, was not let through (#3162,
-   * named.ts declinedNote), said beside the files so the session can tell what to change. Since #3323
-   * it also holds why a file handed to a program mod-kit's write reader does not know was judged as
-   * a write, and what to do (unknownNote). It changes nothing about what is held.
+   * named.ts declinedNote), said beside the files so the session can tell what to change. It changes
+   * nothing about what is held.
    */
   declined?: string
 }

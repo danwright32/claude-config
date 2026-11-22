@@ -17,6 +17,9 @@
 #     at all; one holding a $ the shell expands ("$OUT/big.ts", x$'y', "$(") is still unread.
 #   - The known blind spot, measured so it is never claimed away (L460): a program that builds its own
 #     file names, or a script run with no arguments, is not marked unread, so it passes unjudged.
+#   - A program the reader does not know, which it marks as a run since #3323, is left out: the area
+#     check judges each such command as it did before the reader marked them (Dan, 2026-11-21,
+#     "Leave the area check out for now (Recommended)"), until gh has a reading of its own.
 #   - Every answer register.test.ts gives in place of the reader (its WRITES) is what the real reader
 #     answers for that command in /w/app.
 set -u
@@ -41,7 +44,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=48
+EXPECTED=57
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -81,6 +84,28 @@ is('a command writing nothing is not judged', 'npm test', [])
 is('a removal adds no lines, so it is not judged', 'rm src/big.ts', [])
 is('known blind spot: a script run with no arguments that builds its own file names passes unjudged (node)', 'node gen.js', [])
 is('known blind spot: a script run with no arguments that builds its own file names passes unjudged (python3)', 'python3 gen.py', [])
+// #3323: mod-kit's reader gives a program it does not know, handed a word that spells a path, as a
+// run marked unknown. The area check leaves those out (Dan, 2026-11-21: "Leave the area check out
+// for now (Recommended)"), so each command below is judged exactly as it was before the reader
+// marked them: `want` is what shellTargets gave for it over the reader as it stood on main before
+// #3323 (commit 3cf551888f), measured there on 2026-11-21. Each check first sees the real reader mark
+// a run unknown, so an empty answer is the area check leaving it out, never a reader that stopped
+// marking (L98).
+const leftOut = (name, c, want) => {
+  n++
+  const marked = (commandWrites(c, CWD, '/Users/dan').runs ?? []).filter(r => r.unknown).map(r => r.script)
+  const got = targets(c)
+  say(name, marked.length > 0 && canon(got) === canon(want), `${c}: the reader marked ${JSON.stringify(marked)} unknown, and the targets were ${canon(got)}`)
+}
+leftOut("gh handed an option's value that names a folder is judged as before #3323", 'gh pr view 5 --json state', [])
+leftOut("claude plugin test handed a mod's folder is judged as before #3323", 'claude plugin test payload/mods/area-check', [])
+leftOut('a compiler handed a source file is judged as before #3323', 'swiftc -o x y.swift', [])
+leftOut('a program on no list handed a source file is judged as before #3323', 'prettier --write src/big.ts', [])
+leftOut('the [[ test handed a source file is judged as before #3323', '[[ -f src/big.ts ]]', [])
+leftOut('a listed program in a form that runs a program is judged as before #3323', 'rg --pre ./tool x src/big.ts', [])
+leftOut('a write beside a program the reader does not know is still that write, and nothing more', "prettier --write src/big.ts && sed -i '' 's/a/b/' src/lib/slack.ts", [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+leftOut('a folder handed to a script and to a program the reader does not know carries the script alone', 'bash scan.sh src/ && mystery src/', [{ word: 'src/', path: '/w/app/src', runs: [{ what: 'a bash script file', path: '/w/app/scan.sh' }] }])
+leftOut('the same, the program the reader does not know first', 'mystery src/ && bash scan.sh src/', [{ word: 'src/', path: '/w/app/src', runs: [{ what: 'a bash script file', path: '/w/app/scan.sh' }] }])
 // #2254: a findings note to the installed spool helper writes no file of the repository; nothing else is let off.
 const F = 'reads $PWD and every *.ts file, so why?'
 const NOTE = `bash ~/.claude/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`

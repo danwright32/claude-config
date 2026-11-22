@@ -68,7 +68,6 @@ import {
   shellTargets,
   scriptProgram,
   scriptReach,
-  unknownNote,
   argsMove,
   placedCost,
   SCRIPT_RUN_FROM,
@@ -937,9 +936,7 @@ const gateShell = async ($: EngineInterface, id: string, command: string, agent:
   for (const target of targets) {
     let t: Unread
     // A hold on what a named script that was not let through reaches says why it was not (#3162).
-    // And one on what a program the write reader does not know is handed says which program, why it
-    // was judged as a write and what to do (#3323, unknownNote), in the same place beside the files.
-    const declined = [declinedNote(named, (target.runs ?? []).map(r => r.path)), unknownNote(target.runs)].filter(Boolean).join(' ') || undefined
+    const declined = declinedNote(named, (target.runs ?? []).map(r => r.path))
     const r = 'path' in target ? await gatePath($, id, target, agent, declined) : target.runs ? await gateHanded($, id, { ...target, runs: target.runs }, agent, declined) : null
     if (r === null) t = target as Unread
     else if ('deny' in r) return r

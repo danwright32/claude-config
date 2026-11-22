@@ -580,6 +580,29 @@ describe('whose uncommitted files they are (#1108)', () => {
     for (const c of ['cat src/a.ts', 'grep -n x src/a.ts', 'wc -l src/a.ts', 'diff src/a.ts src/b.ts']) expect([c, filesWritten({ tool: 'Bash', input: {}, writes: commandWrites(c, '/repo', home) })]).toEqual([c, []])
     expect(filesWritten({ tool: 'Bash', input: {}, writes: commandWrites('tar -xzf /tmp/a.tgz src/a.ts', '/repo', home) })).toEqual(['/repo/src/a.ts'])
   })
+  // #3323: every word such a program is handed that spells a path goes on the list, and most name
+  // no file (`gh pr view 5 --json state` hands pr, view, 5 and state). None of those becomes work to
+  // finish: only an uncommitted file is ever asked about, and it is this session's only when the
+  // list names that very file, so a word naming nothing matches none, and one naming a folder
+  // claims no file under it. Measured over 35 days of the personal MacBook's records (2026-11-21):
+  // 13,430 paths only this rule adds, 12,208 naming nothing on disk and 48 a folder.
+  test("the words a program the write reader does not know is handed make no uncommitted file this session's but one they name (#3323)", () => {
+    const home = `${'/Users'}/x`
+    const written = (c: string) => filesWritten({ tool: 'Bash', input: {}, writes: commandWrites(c, '/repo', home) })
+    const gh = written('gh pr view 5 --json state')
+    expect(gh).toEqual(['/repo/pr', '/repo/view', '/repo/5', '/repo/state'])
+    // Uncommitted files beside and under what it was handed, a `state` folder's among them: none is
+    // this session's, as none was before the rule.
+    const dirty = ['state/store.ts', 'state/pr', 'README.md', 'src/view.ts']
+    expect(whoseFiles(dirty, '/repo', gh)).toEqual({ own: [], others: dirty })
+    // A compiler is handed the file it writes and the file it reads. Both count while uncommitted,
+    // as a file handed to a script does (#1664): what it did with either cannot be read.
+    const swiftc = written('swiftc -o out in.swift')
+    expect(swiftc).toEqual(['/repo/out', '/repo/in.swift'])
+    expect(whoseFiles(['out', 'in.swift', 'other.swift'], '/repo', swiftc)).toEqual({ own: ['out', 'in.swift'], others: ['other.swift'] })
+    // Committed, neither is asked about.
+    expect(whoseFiles(['other.swift'], '/repo', swiftc)).toEqual({ own: [], others: ['other.swift'] })
+  })
   // #1664: a file handed to a script as its argument counts as written, as every other gate has
   // counted it since #1592, so winding down never lets it go uncommitted unmentioned. A pattern the
   // reader can only place in a folder names no file, since that folder may hold another session's.
