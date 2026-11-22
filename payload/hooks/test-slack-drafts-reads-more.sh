@@ -435,9 +435,13 @@ if [ -f "$DIR/lib/exact-output.py" ] && [ "$(printf 'a\n' | sed 's/a/b/' 2>/dev/
   else check "#3395 an escaped delimiter that means something in an expression is never read" "$got"; fi
   if [ "$differ" -eq 0 ] && [ "$same" -ge 60 ]; then check "#3395 the emulation prints what sed prints for each of $same programs, and reads none of $outside it must not" ok
   else check "#3395 the emulation prints what sed prints" "$same the same, $differ wrong, $outside not read"; fi
+elif [ ! -f "$DIR/lib/exact-output.py" ]; then
+  # The library missing is a fault of the tree, so it fails.
+  check "#3395 the emulation prints what sed prints" "no lib/exact-output.py beside the suite"
 else
-  # UNMEASURED, not a pass: there is no library yet, or no sed that answers as sed does (L411).
-  check "#3395 the emulation prints what sed prints" "UNMEASURED: no lib/exact-output.py beside the suite, or no working sed on this Mac"
+  # No sed here answers as sed does: a state this suite cannot set, so it is said UNMEASURED on the
+  # runner's one line for that, never a pass and never a failure (L411, run-all-tests.sh #1444).
+  echo "SUITE-PART-UNMEASURED #3395 the emulation against sed: printf a | sed s/a/b/ did not print b here, so there is no sed to hold the emulation to"
 fi
 
 echo "slack drafts only: a file as a commit holds it, written by git show and then run (claude-config#3395)"
@@ -474,7 +478,9 @@ if git -C "$R" init -q 2>/dev/null && cp "$G/lib/posts.sh" "$G/lib/calm.sh" "$R/
   run "git show $SHA:absent.sh > old.sh; bash old.sh" "$R"
   unread "git show of a file the commit does not hold" "$by_git"
 else
-  check "#3395 git show of a commit's file" "UNMEASURED: git could not make a repository under $T"
+  # git could not make and commit to a repository here, a state this suite cannot set: said on the
+  # runner's one line for that, never a failure (L411, run-all-tests.sh #1444).
+  echo "SUITE-PART-UNMEASURED #3395 git show of a commit's file: git could not make a repository with one commit under $T"
 fi
 
 echo "slack drafts only: an error inside either reading refuses the call (claude-config#3395)"
