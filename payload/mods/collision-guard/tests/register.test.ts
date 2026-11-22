@@ -431,7 +431,7 @@ type Send = true | { refused: string } | 'throws'
 // How the call fares beneath the guard: it runs (the default), it runs and fails, or a later guard
 // refuses it.
 type Ran = 'ok' | 'error' | { deny: string }
-type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null> }
+type Opts = { self?: Record<string, unknown>; open?: unknown[]; unreadable?: string[]; judge?: Judge; repo?: string; branch?: string | { fails: string }; branchReaderFails?: string; sends?: Send[]; tail?: 'fails' | 'no-request'; ran?: Ran; gits?: Record<string, 'dir' | 'file'>; locked?: string; tmpdir?: string; listBreaks?: boolean; tops?: Record<string, string | null | { says: string }> }
 
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
@@ -467,9 +467,12 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
       return ok(JSON.stringify(user) + '\n')
     }
     // #3398: what git answers a rev-parse question put with these exact words, where a test says:
-    // a folder, or null for a question git fails (no such folder, no repository there).
+    // a folder, or null for a question git fails (no such folder, no repository there). `says` is
+    // git failing in other words of its own (lessons review of #3398): every such failure exits 128,
+    // whatever it is, so only the words tell nothing there from a question git could not answer.
     if (cmd === 'git' && args.includes('rev-parse') && o.tops && args.join(' ') in o.tops) {
-      const top = o.tops[args.join(' ')]
+      const top = o.tops[args.join(' ')] as string | null | { says: string }
+      if (top !== null && typeof top === 'object') return { value: { exitCode: 128, stdout: '', stderr: top.says, isStdoutTruncated: false, isStderrTruncated: false } }
       return top === null ? { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false } } : ok(`${top}\n`)
     }
     if (cmd === 'git' && args.includes('rev-parse')) return ok((o.repo ?? '/repo') + '\n')
@@ -828,6 +831,118 @@ test('the controls: one -C into another checkout puts its one question to git an
   expect(revParses(there)).toEqual(['git -C /other rev-parse --show-toplevel'])
   expect(there.prompts.length).toBe(1)
   expect(there.prompts[0]?.prompt).toContain('The checkout: /other, on branch')
+})
+
+// Lessons review of #3398: a lookup in that path that FAILED was read as "no checkout there", so
+// the command ran with nothing asked beside a session it really acts on. Nothing there is an
+// answer (git says so in words of its own, mod-kit's walk answers null); a question nobody could
+// answer is not one, and stops the command (Dan, 2026-10-03: anything that cannot be judged or
+// read is Stop).
+const namedAlone = '-C /repo --git-dir=/other/.git rev-parse'
+const namedLinked = '-C /repo --git-dir=/main/.git/worktrees/w rev-parse'
+// Words of git's that are none of its nothing there answers. The first is measured from git 2.51.1
+// asked about a folder it may not enter; the second is git's own wording, not measured here.
+const denied = (folder: string) => `fatal: cannot change to '${folder}': Permission denied`
+const unanswered = 'fatal: unknown error occurred while reading the configuration files'
+const couldNotTell = (why: string) => `Blocked: Couldn't tell which checkout git checkout main acts on (${why}), and another session is open, so this was stopped. Try again, or ask Dan.`
+// A session whose own repository could not be read, matched to a checkout by its folder.
+const byFolder = (cwd: string) => [rec('them', { cwd, repoRoot: null })]
+
+test('a named repository whose checkout mod-kit could not look for stops the command, never reads as no checkout (#3398 review)', withDeps, async ($, on) => {
+  const w = world($, on, { open: byFolder('/other'), locked: '/other', tops: { [`${namedAlone} --show-toplevel`]: '/repo', [`${namedAlone} --absolute-git-dir`]: '/other/.git' } })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell('the checkout around /other/.git could not be looked for: the disk cannot read /other/.git'))
+  expect(w.cards.length).toBe(1)
+  // There is no checkout to name to the judge or to a session.
+  expect(w.prompts.length).toBe(0)
+  expect(w.sent.length).toBe(0)
+})
+
+test('the control: a named repository mod-kit finds no checkout around has nobody to ask there (#3398 review)', withDeps, async ($, on) => {
+  const w = world($, on, { open: byFolder('/other'), gits: {}, tops: { [`${namedAlone} --show-toplevel`]: '/repo', [`${namedAlone} --absolute-git-dir`]: '/other/.git' } })
+  await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.prompts.length).toBe(0)
+  expect(w.cards.length).toBe(0)
+})
+
+test('the control: with no other session open no lookup is made, so one that would fail stops nothing (#3398 review)', withDeps, async ($, on) => {
+  const w = world($, on, { locked: '/other', tops: { [`${namedAlone} --show-toplevel`]: { says: unanswered }, [`${namedAlone} --absolute-git-dir`]: { says: unanswered } } })
+  await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(revParses(w)).toEqual(['git -C /repo rev-parse --show-toplevel'])
+  expect(w.cards.length).toBe(0)
+})
+
+test('git failing to say which checkout the command runs in stops it (#3398 review)', withDeps, async ($, on) => {
+  const w = world($, on, { open: inOther(), tops: { '-C /other rev-parse --show-toplevel': { says: denied('/other') } } })
+  const r = await $.tool.call(bash('cd /other && git checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell(`git did not say which checkout it runs in: ${denied('/other')}`))
+  expect(w.prompts.length).toBe(0)
+})
+
+test('git failing to say where a named repository puts its files stops the command (#3398 review)', withDeps, async ($, on) => {
+  const tops = { [`${namedAlone} --show-toplevel`]: { says: unanswered }, [`${namedAlone} --absolute-git-dir`]: '/other/.git' }
+  const w = world($, on, { open: [rec('them', { cwd: '/x', repoRoot: '/x' })], gits: {}, tops })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell(`git did not say where its files land: ${unanswered}`))
+  expect(w.prompts.length).toBe(0)
+})
+
+test('git failing to say which checkout the files land in stops the command, never judging the folder alone (#3398 review)', withDeps, async ($, on) => {
+  // The repository keeps its working folder in its settings: a folder inside another checkout.
+  const tops = { [`${namedAlone} --show-toplevel`]: '/x/sub', '-C /x/sub rev-parse --show-toplevel': { says: denied('/x/sub') }, [`${namedAlone} --absolute-git-dir`]: '/other/.git' }
+  const w = world($, on, { open: [rec('them', { cwd: '/x', repoRoot: '/x' })], gits: {}, tops })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell(`git did not say which checkout /x/sub is in: ${denied('/x/sub')}`))
+  expect(w.prompts.length).toBe(0)
+})
+
+test('git failing to say which repository the command names stops it (#3398 review)', withDeps, async ($, on) => {
+  const tops = { [`${namedAlone} --show-toplevel`]: '/repo', [`${namedAlone} --absolute-git-dir`]: { says: unanswered } }
+  const w = world($, on, { open: byFolder('/other'), gits: { '/other/.git': 'dir' }, tops })
+  const r = await $.tool.call(bash('git --git-dir=/other/.git checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell(`git did not say which repository it names: ${unanswered}`))
+  expect(w.prompts.length).toBe(0)
+})
+
+test("git failing to say whether another session's checkout is the named repository stops the command (#3398 review)", withDeps, async ($, on) => {
+  const tops = { [`${namedLinked} --show-toplevel`]: '/repo', [`${namedLinked} --absolute-git-dir`]: '/main/.git/worktrees/w', '-C /wt rev-parse --absolute-git-dir': { says: denied('/wt') } }
+  const w = world($, on, { open: [rec('them', { cwd: '/wt', repoRoot: '/wt' })], gits: {}, tops })
+  const r = await $.tool.call(bash('git --git-dir=/main/.git/worktrees/w checkout main'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toBe(couldNotTell(`git did not say whether /wt is a checkout of the repository it names: ${denied('/wt')}`))
+  expect(w.prompts.length).toBe(0)
+})
+
+test('the controls: what git says when there is nothing there is still an answer, nobody to ask (#3398 review)', withDeps, async ($, on) => {
+  // Each wording measured from git 2.51.1, which exits 128 for all of them: no repository (the
+  // world's null), no such folder, and no working folder (a bare repository).
+  const gone = (folder: string) => ({ says: `fatal: cannot change to '${folder}': No such file or directory` })
+  const tops = {
+    '-C /other rev-parse --show-toplevel': gone('/other'),
+    '-C sub rev-parse --show-toplevel': null,
+    '-C /other/sub rev-parse --show-toplevel': null,
+    [`${namedAlone} --show-toplevel`]: { says: 'fatal: this operation must be run in a work tree' },
+    [`${namedAlone} --absolute-git-dir`]: null,
+    [`${namedLinked} --show-toplevel`]: '/repo',
+    [`${namedLinked} --absolute-git-dir`]: '/main/.git/worktrees/w',
+    '-C /other rev-parse --absolute-git-dir': gone('/other'),
+    '-C /wt rev-parse --absolute-git-dir': null,
+  }
+  const w = world($, on, { open: [...inOther(), rec('more', { cwd: '/wt', repoRoot: '/wt' })], gits: {}, tops })
+  await $.tool.call(bash('cd /other && git checkout main', 'n1'))
+  await $.tool.call(bash('git -C /other -C sub checkout main', 'n2'))
+  await $.tool.call(bash('git --git-dir=/other/.git checkout main', 'n3'))
+  await $.tool.call(bash('git --git-dir=/main/.git/worktrees/w checkout main', 'n4'))
+  expect(w.reached).toEqual(['Bash', 'Bash', 'Bash', 'Bash'])
+  expect(w.prompts.length).toBe(0)
+  expect(w.cards.length).toBe(0)
 })
 
 // #1491: from 2.1.307 every plugin's tool.check hook judges a mod's own $.tool.call, the job

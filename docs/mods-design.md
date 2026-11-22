@@ -4405,9 +4405,10 @@ whatever the number said.
   a run of short options) hold the command, with how to write it. A commit with no such parent is
   one git cannot answer for, and is held.
 - Known limits. A session's own environment may already carry `GIT_DIR` or `GIT_WORK_TREE` before
-  any command is typed, which no reader sees. The collision guard and scope modes place a git
-  command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
-  git reads each from the one before it.
+  any command is typed, which no reader sees. Scope modes places a git command by `-C` alone and
+  is unchanged here. The collision guard did too until #3398 (below), which has it ask about every
+  checkout the command acts on. The shared reader kept only the last `-C`, while git reads each
+  from the one before it, and #3398 added the folder a chain of them leads to.
 
 ### What #3398 changed: the folder more than one -C leads to, 2026-11-22
 
@@ -4476,6 +4477,22 @@ main` each ran unjudged beside a session at work in `/other`.
   command itself (git reads an exported one, which no reader follows). Nothing is put to the
   judge and no session is told, since there is no checkout to name to either. Until now each of
   these ran unjudged. A folder git names no checkout for has nobody in it to ask, as before.
+- A question nobody answers stops the command too, while any other session is open (the lessons
+  review of this change, 2026-11-22). Each question above was read as no checkout there when it
+  failed, so the command ran with nothing asked. git exits 128 for every failure (measured,
+  2.51.1), so its words decide. `not a git repository`, `cannot change to '<folder>': No such file
+  or directory` and `this operation must be run in a work tree` are answers: nobody to ask there,
+  as before. Anything else (a folder git may not enter, a repository it will not read, a timeout,
+  the engine failing to run it) stops the command, and so does a throw from mod-kit's walk for
+  the checkout around a named repository, which had been taken for no checkout. The refusal is
+  the sentence above naming the question, with "Try again, or ask Dan." The walk answering null
+  is still no checkout there.
+- Not closed by that. The folder the guard always asked about, the folder of a command that
+  cannot be read and the judge's own reads still take a failed git for nothing there, as they
+  did before #3398. A folder that is not there when the guard asks has nobody to ask, though the
+  command line may make it first (a clone, then a `cd` into it). `-C` into a repository's own
+  `.git` folder has no working folder, so a command that moves a branch from there (`branch -D`
+  works there, measured) is asked nothing. git's words are matched in English.
 - Not covered: the files such a command writes are still placed by the write reader, by `dir`.
   A session's own environment carrying either variable before any command is typed is seen by
   no reader.
