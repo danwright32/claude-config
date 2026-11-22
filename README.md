@@ -4160,6 +4160,11 @@ gate reads; every file the judgement read and every disk test it answered is rec
 before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
 `lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
 (a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
+A file of over 8 MB is recorded by the start the gate read of it (it reads the first 2 MB of any
+file), and the kept allow is used only while that start is the same; read any other way, such a file
+means nothing is kept. Before pull request #3394 it always meant that: once a quoted command line
+is read as a command (#3304), `bash tests/test-claude-sync.sh` reaches `bash /bin/echo hi`, and on
+CI's Linux runner, where /bin/echo is one program of over 8 MB, it was judged whole every time.
 Each entry is signed with a key only this Mac's user can read, `~/.claude/state/slack-gate-cache.key`
 (made on first use, mode 600), so a process that can write entries cannot forge one; a key that is
 missing, unreadable or readable by others means no cache, never an unsigned one (#2965). The wrapper
@@ -4774,22 +4779,59 @@ missing from it would pass (L96). The question asked of the program is the one a
 own commands are already asked (`sh_command_acts`): `echo`, `grep`, `cat` and the rest of
 `SH_INERT`, a `git` subcommand that only reads, `find` with no `-exec`, `awk` whose program runs
 nothing, and a script the gate reads and sees unable to act on what it is handed are known, so
-`grep -n node test/notify.test.js` passes as before. A function the text itself defines is left
-as it was, because the gate reads its body where it stands and this repository's own gate suite
-hands its functions a program's name as a plain label (`run_slow python`); a body that runs its
-arguments (`"$@"`) is the program named by a variable that #2683 left open, and stays open. A
+`grep -n node test/notify.test.js` passes as before. A function the text itself defines is asked
+that same question of its body since claude-config#3304 (`function_acts`): one whose body runs
+what it is handed (`"$@"`, `eval`, a shell's `-c`), or hands it to a program, a script or another
+function of the text not seen to be unable to act on it, is not known, so `run() { "$@"; }; run
+node --test test/notify.test.js` is refused, and the refusal says what the body does. One that
+only prints, tests or stores what it is handed is known, which is what this repository's own gate
+suite needs: it hands its functions a program's name as a plain label (`run_slow python`). Until
+#3304 every such function was left as it was, and that one line helper was a way round any
+refusal. A
 redirection glued to one of the words (`... notify.test.js>out.txt`) no longer hides the file
 there, behind a script that runs its words as well; the same glued word after a program the gate
 reads by name is the shared reader's to read, which since #3322 hands a gh or git command's words
 with every redirection taken out, and any other program's with it among them, as before. What it
 costs: a program that does
 not run its words and is not known to be unable to (`git add`, `sed`, `docker ps`) is refused
-when the words after it happen to spell a command the gate refuses. Left open: a word that names
-a script file by its path (`op run -- ./post.sh`), since read that way `git add scripts/post.sh`
-and `sed -n 1,5p scripts/post.sh` would each be a run of the script; a command handed as one
-quoted word (`hyperfine 'node x.js'`). Two caps end the reading, and past either a typed command
+when the words after it happen to spell a command the gate refuses. Since #3304 a word that holds
+white space is read too, as a command line of its own, where one of its commands starts with a
+program the gate reads by name: `hyperfine 'node --test test/notify.test.js'` and `tmux send-keys
+'bash post.sh' Enter` are refused, and so is `git commit -m '<exactly a refused command>'`, git
+commit being a program the gate does not know to be unable to run its words. A sentence that
+only mentions such a program starts with another word and is not read, so an ordinary commit
+message passes. The word must also begin like a command line: its first command starts with a
+program the gate knows, which is one it reads by name, a runner, or one it knows to be unable to
+run its words (`cd`, `export`, `echo`). Text in another language does not begin so, and cut at
+its `|` marks it can hold a piece that starts with a program's name: `sed -i '27s|^python3
+a|python3 b|' file` is an edit of a file, and the first build of #3304 refused it.
+Behind a function the text defines, a quoted word is read only where the body
+does something with what it is handed as the words of a command; a body that only pipes it into
+a program's input is left as it was, which is what the gate's own suites do with every command
+they ask it about (`run_bash "<a refused command>"`). Left open, each for a stated reason:
+- a word that names a script file by its path (`op run -- ./post.sh`), since read that way `git
+  add scripts/post.sh` and `sed -n 1,5p scripts/post.sh` would each be a run of the script;
+- a posting address handed to a program the gate does not know as a plain argument, since no
+  command stands behind it to judge and the same shape stores a webhook as a secret;
+- a quoted word whose own command starts with a second program the gate does not know
+  (`hyperfine 'op run -- node x.js'`), or whose first command does (`hyperfine 'mytool && node
+  x.js'`), since read that way every sentence that mentions a program, and every sed script
+  whose replacement starts with one, would be a command line;
+- a function that only pipes what it is handed into a program (`f() { echo "$1" | bash; }`), and
+  one whose body builds the command from a part of its words (`f() { $1 --test x.js; }; f node`).
+
+Counted before it shipped (#3304), on the personal MacBook on 2026-11-21: each of the 62,780
+distinct Bash commands in its session records was judged by main's gate and by this one, in the
+folder it ran in. None was newly refused and none newly allowed (62,318 allowed by both, 462
+refused by both). That count is why a quoted word must begin like a command line: without it,
+four of 62,307 were newly refused, three sed scripts and one awk program. No commit message was
+among them. The work MacBook's records were not counted.
+
+Every refusal of the rule opens with the same words about the program (`NOT_KNOWN`), which is how
+its suite tells this rule's refusals from another rule's.
+Two caps end the reading, and past either a typed command
 is refused as unread and a script on disk is left alone: more than six words that could each
-start a command, and more than three of these readings inside one another, which only strings a
+start a command or be a command line, and more than three of these readings inside one another, which only strings a
 shell runs can reach (`op run -- bash -c 'op run -- bash -c "..."'`, each string holding the next
 such program), since the words of one command are read once however many programs stand among
 them. Until the lessons review of 2026-11-19 the second cap returned nothing, and a fourth such
@@ -7827,13 +7869,26 @@ included, is judged before he is asked: a character he cannot see, more than 1,5
 units, more than 20 rows as a window 76 columns wide wraps, a run of blank lines, a tag, a link, a
 link definition, a character reference or a link to a file. There is one set of limits for every
 picker, and a picker too long for one is asked in parts. The lesson and memory save pickers, the
-design round guard's two questions, the area check's restructure question and sleep mode's
-recorded morning pickers (`hooks/unread.ts` in scope modes) refuse a picker that fails; picker
-manners asks it and writes it onto no issue. The scan fails a mod whose hooks name
-`AskUserQuestion` and read the dialog's `answers` without calling `askFault`. Not covered yet,
-open on #3321: a question a mod asks itself through `$.ui.ask` (scope modes' before bed round and
-its leave open questions, the keystroke guard's), and the database apply and test project
-approvals, which are hooks and cannot call a mod's function. `node tools/picker-check-count.ts`
+design round guard's two questions, the area check's restructure question, sleep mode's recorded
+morning pickers (`hooks/unread.ts` in scope modes) and picker manners, for a picker whose answer it
+would write onto an issue, refuse a picker that fails (picker manners since #3321, Dan, 2026-11-21:
+"Refuse outright"; before that it asked and wrote the answer onto no issue). The database apply
+and test project approvals, which are hooks and cannot call a mod's function, run the same check
+through `hooks/lib/picker-check.mjs` (Dan, 2026-11-21: "One check, called"): a picker that fails is
+not taken as approval, and when node cannot run the check the write is asked about again, with the
+reason. The scan fails a mod whose hooks name `AskUserQuestion` and read the dialog's `answers`
+without calling `askFault`. A question a mod asks Dan itself through `$.ui.ask` (scope modes'
+before bed round and leave open questions, the keystroke guard's) is not held to the check yet
+(Dan, 2026-11-21: "Record, then decide"). `recordedAsk` in `hooks/asked.ts`, kept at
+`hooks/mod-kit/asked.ts` by each mod that asks, records its sizes and never its text, one file a
+question under `~/.claude/state/asked-questions` on this Mac, at most 2,000 kept, and keeps the
+dialog in the asking mod's own `$.state` (key `asking`) while it is open. Picker manners reads that
+state, so a mod's own dialog it would refuse is asked and written onto no issue (the coordinating
+session's rule of 2026-11-21, until Dan settles how the two meet): only the mod writes its state,
+and a session writes none. The scan fails a mod calling `$.ui.ask` other than through
+`recordedAsk`, and an asker missing from `OWN_ASKERS` or from picker manners' reads.
+`node tools/asked-questions-count.ts` reads the records, for the reading due two weeks from
+2026-11-21 on #3321. `node tools/picker-check-count.ts`
 counts, per guard, how many pickers in this Mac's session records the check would have refused.
 `hooks/quoted.ts` holds `pythonText` too
 (moved from `hooks/code.ts` in #2710, which re-exports it), so a reader of python's strings needs

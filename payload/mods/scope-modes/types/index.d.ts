@@ -112,6 +112,13 @@ declare module 'claude-code' {
       pushedInto: ScopeModesPushedInto[]
       /** The branches Dan chose to leave as they are (#1074). */
       leftBranch: ScopeModesLeftBranch[]
+      /**
+       * Each dialog this mod has open that it raised itself (#3321), as one string, kept by
+       * mod-kit's recorder (hooks/mod-kit/asked.ts) for as long as the dialog is open and written
+       * nowhere else. Picker manners reads it to tell this mod's own question from a session's
+       * picker: only this mod can write it, so an entry is this mod's own word.
+       */
+      asking: string[]
       /** The cleanup branches Dan agreed to while winding down (#1051), each removed once used. */
       cleanup: ScopeModesCleanup[]
       /**

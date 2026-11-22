@@ -5,6 +5,7 @@
   "author": {
     "name": "Dan Wright"
   },
+  "types": "./types/index.d.ts",
   "dependencies": [
     "mod-kit"
   ]
