@@ -1775,6 +1775,8 @@ py_follow = _py_aliases.make(PY_INERT)
 NoNetworkRoute = load_lib("no_network_route", "no-network-route.py").make(HERE)
 # The words written after a program the gate does not know, judged as a command (claude-config#3277).
 UnknownProgram = load_lib("unknown_program", "unknown-program.py").make(judged_by_name, SH_REDIRECT)
+# A file, a module or a command that code given to python3 names in its own text (claude-config#3397).
+PyFileRuns = load_lib("py_file_runs", "py-file-runs.py").make(py_nodes, SH_UNKNOWN_DIR)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core
@@ -1856,7 +1858,7 @@ def budget_clock():
 
 
 class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, ShWalkShapes, NoNetworkRoute,
-            UnknownProgram):
+            UnknownProgram, PyFileRuns):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -6183,6 +6185,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                             return reason
                 # The code imports from the directory it runs in (claude-config#2318).
                 reason = self.imports(label, None, here, code, lang) if lang else None
+                if lang == "py" and not reason:
+                    # And a file, a module or a command the code names in its own text
+                    # (lib/py-file-runs.py, claude-config#3397).
+                    reason = self.py_inline_runs(label, code, here, d, depth, text, words)
                 # php runs the code of each of -r, -B, -R and -E it is given (#2978).
                 for more in self.php_codes(words) if lang == "php" and not reason else ():
                     reason = self.imports(label, None, here, more, lang)
@@ -6237,14 +6243,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return self.split_here(name, operand, d, text, whole, depth, False, lang) or \
                     self.unworked_path(text, "operand", d, "runs")
             if stdin:
-                fed = self.fed(fed_by, whole)[0]
+                fed, is_body = self.fed(fed_by, whole)
                 hit = MARKER.search(fed)
                 if hit:
                     return f"{name} runs a script from its input that names {hit.group(0)}"
                 reason = self.input_code(name, d, text, whole, depth, False, lang)
                 if reason:
                     return reason
-                return self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
+                reason = self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
+                if lang == "py" and is_body and not reason:
+                    # Code in a heredoc, read as code given by -c is (lib/py-file-runs.py, #3397).
+                    reason = self.py_fed_runs(f"the code {name} reads from its input", fed, here, d, depth, fed_by)
+                return reason
             return None
         # A launcher handed `.` runs the package in the folder it is in, never the shell's builtin (#3083).
         if name in ("source", ".") and not (launcher and name == "."):
