@@ -31,13 +31,13 @@ has(){ if [[ "$3" == *"$2"* ]]; then pass=$((pass + 1)); else fail=$((fail + 1))
 Y='0.0850, 0.0832, 0.0841, 0.0839, 0.0845, 0.0836, 0.0844, 0.0829, 0.0851, 0.0838, 0.0833'
 BODY="2.54 s of processor time, unit 0.083 s, ceiling 36.0, samples 30.8, 30.7, 31.4; seconds per reading 2.560, 2.541, 2.600; yardstick per reading 0.0832 from 7, 0.0829 from 9, 0.0829 from 11; yardstick 11 samples $Y; yardstick least 0.0829, median 0.0839, greatest 0.0851"
 GOOD="one-lesson nfig/claude-sync lesson L174: 30.7 ($BODY)"
-ROW="$(printf 'one-lesson\t36.0\t30.7\t30.8, 30.7, 31.4\t2.560, 2.541, 2.600\t0.083\t0.0832, 0.0829, 0.0829\t11\t0.0829\t0.0839\t0.0851\tno')"
+ROW="$(printf 'one-lesson\t36.0\t30.7\t30.8, 30.7, 31.4\t2.560, 2.541, 2.600\t0.083\t0.0832, 0.0829, 0.0829\t11\t0.0829\t0.0839\t0.0851\tno\tno')"
 
 # 1. A line as the suite prints it, prefixed "cost measured (#2918): ".
 printf 'noise before\ncost measured (#2918): %s\nnoise after\n' "$GOOD" > "$WORK/local.txt"
 out="$(python3 -B "$TOOL" rows "$WORK/local.txt" 2>&1)"; rc=$?
 check "rows exits 0 on a file holding a cost line" "$([ "$rc" = 0 ] && echo ok || echo "exit $rc: $out")"
-has "the header names every column" "$(printf 'run\tcase\tlimit\tleast\treadings in units\treadings in seconds\tyardstick used\tyardstick per reading\tyardstick samples\tyardstick least\tyardstick median\tyardstick greatest\tstep clock')" "$out"
+has "the header names every column" "$(printf 'run\tcase\tlimit\tleast\treadings in units\treadings in seconds\tyardstick used\tyardstick per reading\tyardstick samples\tyardstick least\tyardstick median\tyardstick greatest\tstep clock\tcache never filled')" "$out"
 has "a cost measured line becomes one row with every figure" "$(printf 'local.txt\t%s' "$ROW")" "$out"
 n="$(printf '%s\n' "$out" | grep -c '^local.txt' || true)"
 check "and only one row" "$([ "$n" = 1 ] && echo ok || echo "$n rows")"
@@ -55,15 +55,33 @@ STEP="short-budget 1.9 (0.19 s of processor time, unit 0.100 s, ceiling 36.0, sa
 out="$(python3 -B "$TOOL" rows "$WORK/ci.txt" 2>&1)"
 n="$(printf '%s\n' "$out" | grep -c '^ci.txt' || true)"
 check "a CI log's two notes give a row for each of their three cases" "$([ "$n" = 3 ] && echo ok || echo "$n rows: $out")"
-has "the suite-cold note gives its row" "$(printf 'ci.txt\tsuite-cold\t77.0\t60.4\t60.4\t5.620\t0.093\t0.0930\t7\t0.0930\t0.0940\t0.0960\tno')" "$out"
+has "the suite-cold note gives its row" "$(printf 'ci.txt\tsuite-cold\t77.0\t60.4\t60.4\t5.620\t0.093\t0.0930\t7\t0.0930\t0.0940\t0.0960\tno\tno')" "$out"
 has "an entry of the costs note gives its row" "$(printf 'ci.txt\t%s' "$ROW")" "$out"
-has "a reading taken on the step clock says so" "$(printf 'ci.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes')" "$out"
+has "a reading taken on the step clock says so" "$(printf 'ci.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes\tno')" "$out"
 
 # A costs note holding one case has no " | " in it, and its record's own "; yardstick 9 samples"
 # must not be read as the start of a second, older style entry.
 printf '          note: drafts gate costs on Linux, every case but suite-cold, in units of the yardstick and how each was read: %s (#3170)\n' "$STEP" > "$WORK/one.txt"
 out="$(python3 -B "$TOOL" rows "$WORK/one.txt" 2>&1)"
-has "a costs note with one case gives that case whole" "$(printf 'one.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes')" "$out"
+has "a costs note with one case gives that case whole" "$(printf 'one.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes\tno')" "$out"
+
+# A cached case whose cache was never filled (#3170): the judgement that fills it ran out of the
+# gate's seconds, so the suite reports the case unmeasured and its record says the cache was never
+# filled. The row says so in its last column, so how often a runner could not measure the case can
+# be counted from saved logs. The figures are those of run 44965167694 (2026-11-21) where the log
+# held them, 52.0 and 1.7 units at 0.151 s a unit after 10.4 s; the yardstick samples are invented.
+# 7.852 / 0.1510 is 52.0 and 0.257 / 0.1510 is 1.7.
+WARM="suite-warm 1.7 (0.26 s of processor time, unit 0.151 s, ceiling 6.0, samples 52.0, 1.7; the cache was never filled, the judgement that fills it having run out of the gate's seconds after 10.4 s at 0.151 s a unit, so the first reading here filled it; seconds per reading 7.852, 0.257; yardstick per reading 0.1510 from 7, 0.1510 from 9; yardstick 9 samples 0.1530, 0.1510, 0.1520, 0.1540, 0.1550, 0.1560, 0.1525, 0.1535, 0.1545; yardstick least 0.1510, median 0.1535, greatest 0.1560)"
+printf '          note: drafts gate costs on Linux, every case but suite-cold, in units of the yardstick and how each was read: %s | %s (#3170)\n' "$STEP" "$WARM" > "$WORK/unfilled.txt"
+out="$(python3 -B "$TOOL" rows "$WORK/unfilled.txt" 2>&1)"
+has "the header's last column is whether the cache was never filled" "$(printf '\tstep clock\tcache never filled')" "$(printf '%s\n' "$out" | sed -n 1p)"
+has "a cached case whose cache was never filled says so in its row" "$(printf 'unfilled.txt\tsuite-warm\t6.0\t1.7\t52.0, 1.7\t7.852, 0.257\t0.151\t0.1510, 0.1510\t9\t0.1510\t0.1535\t0.1560\tno\tyes')" "$out"
+has "and the case beside it, whose cache was not in question, says no" "$(printf 'unfilled.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes\tno')" "$out"
+n="$(printf '%s\n' "$out" | awk -F'\t' 'NF != 14' | grep -c . || true)"
+check "every row and the header have the same 14 columns" "$([ "$n" = 0 ] && echo ok || echo "$n lines with another count: $out")"
+printf '%s\n' "$WARM" | sed 's/^suite-warm /suite-warm LINE: /' > "$WORK/unfilled.log"
+out="$(python3 -B "$TOOL" check "$WORK/unfilled.log" 2>&1)"
+check "check passes the record of a cached case whose cache was never filled" "$([ "$out" = ok ] && echo ok || echo "$out")"
 
 # 3. One run's file holding both shapes (a red run's kept output prints the cost lines and the notes):
 # each case once, from the cost lines, never twice.
@@ -76,7 +94,7 @@ check "a file holding cost lines and notes gives each case once, from the cost l
 # 4. A line from before 2026-11-21, without the new figures: still a row, the missing figures as "-".
 printf 'cost measured (#2918): three-lessons LINE: 55.0 (4.40 s of processor time, unit 0.080 s, ceiling 66.0, samples 55.0)\n' > "$WORK/old.txt"
 out="$(python3 -B "$TOOL" rows "$WORK/old.txt" 2>&1)"
-has "an older line gives a row with what it holds and a dash for the rest" "$(printf 'old.txt\tthree-lessons\t66.0\t55.0\t55.0\t-\t0.080\t-\t-\t-\t-\t-\tno')" "$out"
+has "an older line gives a row with what it holds and a dash for the rest" "$(printf 'old.txt\tthree-lessons\t66.0\t55.0\t55.0\t-\t0.080\t-\t-\t-\t-\t-\tno\tno')" "$out"
 # And the older costs note, whose entries were "<case> <least> (<readings>)" separated by "; ".
 printf '          note: drafts gate costs on Linux from an empty cache, in units of the yardstick, the least and then every reading: one-lesson 30.1 (30.1, 30.4, 31.0); suite-warm 1.9 (1.9) (#3170)\n' > "$WORK/oldnote.txt"
 out="$(python3 -B "$TOOL" rows "$WORK/oldnote.txt" 2>&1)"
