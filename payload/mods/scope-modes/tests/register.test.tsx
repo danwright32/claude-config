@@ -8034,16 +8034,16 @@ test("two calls finishing at once, the session's and an agent's, each keep the f
 // as JSON) measured on 2026-11-21, most naming nothing on disk. The paths of that list moved through
 // $.state in one call, read and written, counted rather than timed (L290).
 const listMoved = (on: On) => {
-  const m = { paths: 0 }
+  const m = { read: 0, written: 0, reset: () => void Object.assign(m, { read: 0, written: 0 }) }
   const count = (v: unknown) => (Array.isArray(v) ? v.length : 0)
   on('state.get', async ($, e, next) => {
     const r = (await next(e)) as { value?: { value?: unknown } }
-    if ((e as { key: string }).key.startsWith('written')) m.paths += count(r?.value?.value)
+    if ((e as { key: string }).key.startsWith('written')) m.read += count(r?.value?.value)
     return r as never
   })
   on('state.set', async ($, e, next) => {
     const { key, value } = e as { key: string; value: unknown }
-    if (key.startsWith('written')) m.paths += count(value)
+    if (key.startsWith('written')) m.written += count(value)
     return next(e)
   })
   return m
@@ -8062,14 +8062,21 @@ test('a call that writes a new file moves a bounded part of the list of files th
   const moved = listMoved(on)
   await start($ as never, clock)
   await seedGone($ as never, 42)
-  moved.paths = 0
+  // Each side of the counter sees the list: every one of the 10,500 paths was written through it at
+  // least once, and parts of it read back, so the bounds below are never met by a counter that
+  // counts nothing (lessons review of 4b789d8).
+  expect(moved.written).toBeGreaterThanOrEqual(10_500)
+  expect(moved.read).toBeGreaterThan(0)
+  moved.reset()
   expect(await call($ as never, bash('echo x > app.ts', 'w1'))).toBe('ran')
   // At most two parts of the list and the call's own path, whatever the list's length: 10,500 paths
-  // and more were moved here before.
-  expect(moved.paths).toBeLessThanOrEqual(520)
-  moved.paths = 0
+  // and more were moved here before. The call's own new path was written, and its part read.
+  expect(moved.written).toBeGreaterThan(0)
+  expect(moved.read).toBeGreaterThan(0)
+  expect(moved.read + moved.written).toBeLessThanOrEqual(520)
+  moved.reset()
   expect(await call($ as never, edit('/repo/app.ts', 'w2'))).toBe('ran')
-  expect(moved.paths).toBeLessThanOrEqual(520)
+  expect(moved.read + moved.written).toBeLessThanOrEqual(520)
   // Nothing is lost by it: the first path noted, a removal git still names, is the session's, as is
   // the newest, and another session's file is not.
   await command($ as never, 'winddown')
