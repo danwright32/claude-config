@@ -5241,6 +5241,85 @@ test('#3036: an unread command inside a shell script the call runs is held on th
   expect(w.ran.length).toBe(passes.length)
 })
 
+// #3416: #3323's rule stopped at a script's edge. Typed whole, `prettier --write app/page.tsx` was
+// held as a program the write reader does not know handed a screen file; the same line inside a
+// script the call runs was judged by nothing, since a script's text was read only for the files its
+// commands write by the reader's own tables. Each file a shell script's own text hands such a
+// program, by a path the reader places, is now judged as a write of it, as the line typed whole is,
+// and the refusal names the script, the program and what to do.
+test('#3416: a shell script whose own text hands a screen file to a program the write reader does not know is held, naming the script and the program', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'fmt.sh': 'set -e\nprettier --write /w/slate/app/page.tsx\n',
+    // Through a variable the script sets to one value, and by a name placed where the script moves to.
+    'var.sh': 'PAGE=/w/slate/app/page.tsx\nmystery "$PAGE"\n',
+    'cd.sh': 'cd /w/slate\nmystery app/globals.css\n',
+    'here.sh': 'mystery app/globals.css\n',
+    // The same test as `[`, on no list Dan signed off, held as it is typed whole (#3323).
+    'test.sh': '[[ -f /w/slate/app/page.tsx ]] || exit 1\n',
+    // A program that only reads, in a form of it that runs a program.
+    'pre.sh': 'rg --pre ./tool x /w/slate/app/page.tsx\n',
+    // In a script that script runs, and in a file it reads in.
+    'outer.sh': `bash ${NOTES}/fmt.sh\n`,
+    'sources.sh': `source ${NOTES}/fmt.sh\n`,
+    'hook.sh': `mystery ${KEYS}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const command of [
+    `bash ${NOTES}/fmt.sh`,
+    `bash ${NOTES}/var.sh`,
+    `bash ${NOTES}/cd.sh`,
+    `cd /w/slate && bash ${NOTES}/here.sh`,
+    `bash ${NOTES}/test.sh`,
+    `bash ${NOTES}/pre.sh`,
+    `sh ${NOTES}/outer.sh`,
+    `bash ${NOTES}/sources.sh`,
+    `source ${NOTES}/fmt.sh`,
+    `cd ${NOTES} && ./fmt.sh`,
+  ])
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  const why = refusalOf(await sh(`bash ${NOTES}/fmt.sh`))
+  BOTH_WAYS(why)
+  expect(why).toContain(`The design round guard judged app/page.tsx, which ${NOTES}/fmt.sh hands prettier, as a write of that file: prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs.`)
+  expect(why).toContain('If prettier only reads too, ask Dan to add it to that list: only he may.')
+  // Never the sentence for a file the script's own commands write, nor the one for its argument.
+  expect(why).not.toContain('which its own code names')
+  expect(why).not.toContain('which it is handed as an argument')
+  expect(refusalOf(await sh(`bash ${NOTES}/pre.sh`))).toContain(`which ${NOTES}/pre.sh hands rg, as a write of that file: rg with --pre runs a program on each file. Without --pre, rg only reads.`)
+  // Run where the folder cannot be followed, the name it would hand over there is held as could not check.
+  expect(refusalOf(await sh(`cd "$SOMEWHERE" && bash ${NOTES}/here.sh`))).toContain(`${NOTES}/here.sh names app/globals.css in its own code, and where that file is could not be followed`)
+  expect(w.ran).toEqual([])
+  // A mod hook file handed over so is judged once the command ran, as a shell write to it is: a
+  // look change the program made is undone and held. One left as it was passes (the test below).
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  expect(refusalOf(await sh(`bash ${NOTES}/hook.sh`))).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+test('#3416: a shell script handing a screen file only to programs on the list of those that only read, or an unknown one no screen file, runs as before', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'reads.sh': 'cat /w/slate/app/page.tsx\ngrep -n main /w/slate/app/page.tsx | head -5\nwc -l /w/slate/app/globals.css\n[ -f /w/slate/app/page.tsx ] || exit 1\ntest -f /w/slate/app/page.tsx\nrg main /w/slate/app/page.tsx\njq . /w/slate/data.json\n',
+    // Not on the list, and handed no look changing file: a number, a test file, a file of no look kind.
+    'other.sh': 'sleep 2\ngh pr view 5\nmystery /w/slate/app/page.test.tsx\nmystery /w/slate/data.json\nexit 1\n',
+    // How deep the reading goes is the script reading's own depth (rules.ts SHELL_DEPTH), kept: the
+    // script the call runs and each script that one runs. A third is not opened by any rule here.
+    'third.sh': `bash ${NOTES}/second.sh\n`,
+    'second.sh': `bash ${NOTES}/first.sh\n`,
+    'first.sh': 'prettier --write /w/slate/app/page.tsx\n',
+    // A mod hook file the program leaves as it was: judged once the command ran, and passed.
+    'hook.sh': `mystery ${KEYS}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const commands = [`bash ${NOTES}/reads.sh`, `cd /w/slate && bash ${NOTES}/reads.sh`, `bash ${NOTES}/other.sh`, `source ${NOTES}/other.sh`, `bash ${NOTES}/third.sh`, `bash ${NOTES}/hook.sh`]
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+  // The same third script one level nearer is read, and held.
+  expect(refusalOf(await sh(`bash ${NOTES}/second.sh`))).toContain(SKIP_QUESTION)  // An answer for the issue lets the unknown one through, as it does the line typed whole.
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await sh(`bash ${NOTES}/first.sh`))).toBe('')
+})
+
 test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
   for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {

@@ -68,6 +68,7 @@ import {
   type ScriptReading,
   type RunCommand,
   closedScripts,
+  handedToUnknown,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -377,6 +378,12 @@ import { askFault } from './mod-kit/shown.ts'
 //   beside it by the usual `$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)` idiom, is read and the
 //   same (rules.ts closedScripts). milestone-candidates.sh handed an issue title naming page.html runs.
 //   A python or node script's arguments, and any script the guard cannot read whole, are judged as before.
+// - Since #3416: a file a shell script's own text hands a program mod-kit's write reader does not
+//   know (#3323's rule for a command typed whole, asked of the reader over the script's text: rules.ts
+//   handedToUnknown) is judged as a write of it, in the script the command runs and each script that
+//   one runs, the depth every rule above reads to. A program on the list of those that only read
+//   hands nothing on there either. What the script itself was handed, passed on to such a program
+//   (`mystery "$1"`), is still not caught (rules.ts argumentUnreached says why).
 // - Since #2830: a git checkout or restore beside other commands is measured by what git puts back
 //   wherever nothing before it, or beside it in a pipe or the background, can change its source: a
 //   command that only reads, git reading only, or another restore of named paths (rules.ts
@@ -1124,6 +1131,22 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
           continue
         }
         targets.push({ path: f.path, word: f.word, inScript: s.word, ...('does' in f && f.does === 'remove' ? { removes: true as const } : {}) })
+      }
+    // #3416: a program the write reader does not know, handed a file in the script's own text
+    // (rules.ts handedToUnknown, the reader's #3323 rule for a command typed whole): `bash fmt.sh`,
+    // fmt.sh holding `prettier --write app/page.tsx`, ran unasked, where that line typed whole was
+    // held. Each such file is judged as a write of it, naming the script and the program, and one
+    // placed only under a folder that cannot be followed is held as could not check, as a file the
+    // script's commands write there is. How deep this goes is the script reading's own depth
+    // (SHELL_DEPTH): `runs` holds the script the command runs and each script that one runs.
+    if (s.lang === 'shell')
+      for (const h of handedToUnknown(read.runs)) {
+        if (h.path.startsWith(`${UNPLACED}/`)) {
+          const rel = h.path.slice(UNPLACED.length + 1)
+          if (shapeKind(rel) !== null || isModHookTs(rel)) targets.push({ word: rel, unread: scriptUnplaced(s.word, rel), inScript: s.word })
+          continue
+        }
+        targets.push({ path: h.path, word: h.word, inScript: s.word, run: h.program, unknown: { why: h.why, remedy: h.remedy } })
       }
     // #3036: a command in the script that mod-kit marks `unread` runs what its words do not say, so
     // the reading above gives no write for it: `bash fix.sh`, fix.sh holding the eval #3021 holds
@@ -2383,9 +2406,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       // A file a script is handed (#1586): the refusal says why it was judged as a write of it. A
       // settled design's own reason is said above, with the way that goes through.
       // One handed to a program the write reader does not know (#3323) says which program, why it
-      // was read as a writer and what to do, in the reader's words.
+      // was read as a writer and what to do, in the reader's words, and since #3416 which script
+      // hands it over, where it is a script the command runs that does.
       const notes = unreadIn.get(tree) ?? []
-      const said = t.unknown ? programUnknown(t.run, relTo(t.path, tree), t.unknown.why, t.unknown.remedy).trimEnd() : scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
+      const said = t.unknown ? programUnknown(t.run, relTo(t.path, tree), t.unknown.why, t.unknown.remedy, t.inScript).trimEnd() : scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     } else if (t.inScript !== undefined && !isDesignRecord(relTo(t.path, tree))) {

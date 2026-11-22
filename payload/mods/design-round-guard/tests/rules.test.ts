@@ -55,6 +55,7 @@ import {
   editWouldNotApply,
   outputTrusted,
   argumentUnreached,
+  handedToUnknown,
   type RunCommand,
   argvStart,
   argvIndex,
@@ -3408,6 +3409,37 @@ test('#2924: argumentUnreached finds no route to a write in a script writing onl
   expect(commandWrites('mystery /s/app/page.tsx', '/s', '/h').runs?.map(r => r.unknown)).toEqual([true])
   expect(unreached(`${BASE_2924}mystery /s/app/page.tsx\n`)).toBeUndefined()
   expect(unreached(`${BASE_2924}python3 -m json.tool "$like"\n`)).toBe('it hands another script its words')
+  // #3416: the file such a run names is judged as a write of it by handedToUnknown, below, so it is
+  // still no route here. What the script was handed, passed on to such a program, is a known limit
+  // and still no route: the reader gives `case`, `[[`, `exit`, `shift` and `basename` as programs it
+  // does not know, so reading every one handed `$1` as a route holds nearly every script again, and
+  // telling them apart takes a list only Dan may add to.
+  expect(unreached(`${BASE_2924}mystery "$like"\n`)).toBeUndefined()
+  expect(unreached(`${BASE_2924}case "$1" in a) shift ;; esac\n`)).toBeUndefined()
+})
+
+// #3416: each file a shell script's own text hands a program the write reader does not know, by a
+// path the reader places, as the reader's rule for a command typed whole gives it (#3323). The list
+// of programs that only read applies in a script's text as it does on a command line, and so does
+// each form of a listed one that writes.
+test('#3416: handedToUnknown gives each file a script text hands a program the reader does not know, with the reader\'s words for it', () => {
+  const handed = (text: string) => handedToUnknown(commandWrites(text, '/s', '/h').runs)
+  expect(handed('set -e\nprettier --write /s/app/page.tsx\n').map(h => ({ program: h.program, path: h.path }))).toEqual([{ program: 'prettier', path: '/s/app/page.tsx' }])
+  const [first] = handed('mystery app/page.tsx\n')
+  expect(first?.path).toBe('/s/app/page.tsx')
+  expect(first?.why).toBe('mystery is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs')
+  expect(first?.remedy).toContain('If mystery only reads too, ask Dan to add it to that list: only he may.')
+  // A variable the script sets to one value is followed; one it is handed, a pattern and a
+  // command's output spell no path, so the reader hands none on.
+  expect(handed('P=/s/app/page.tsx\nmystery "$P"\n').map(h => h.path)).toEqual(['/s/app/page.tsx'])
+  expect(handed('mystery "$1"\nmystery "$@"\nmystery app/*.tsx\nmystery "$(ls app)"\n')).toEqual([])
+  // The programs that only read hand nothing on, but in a form that writes or runs a program.
+  expect(handed('cat /s/app/page.tsx\ngrep -n x /s/app/page.tsx | head -3\n[ -f /s/app/page.tsx ]\ntest -f /s/app/page.tsx\nwc -l /s/app/page.tsx\n')).toEqual([])
+  expect(handed('rg --pre ./tool x /s/app/page.tsx\n').map(h => ({ program: h.program, path: h.path, why: h.why }))).toContainEqual({ program: 'rg', path: '/s/app/page.tsx', why: 'rg with --pre runs a program on each file' })
+  // A script file, a module and a tool run through npx are runs of another kind, judged by the
+  // rules that were there before; none is given here.
+  expect(handed('bash /s/other.sh /s/app/page.tsx\npython3 -m json.tool /s/app/page.tsx\nnpx prettier --write /s/app/page.tsx\n')).toEqual([])
+  expect(handedToUnknown(undefined)).toEqual([])
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were

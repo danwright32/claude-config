@@ -2564,15 +2564,47 @@ known. A member renamed on the way out is not read.
   and over the 51,765 recorded calls the area check's reading is the same as main's in all but 76,
   each an unpack.
 
-**A script's own text is read as before.** The rule covers a command as typed. Where a guard reads
-the text of a script a command runs (the design round guard's `argumentUnreached`, the area check's
-`scriptReach`), a run marked unknown counts for nothing: nearly every script holds one (`exit 1`,
-`sleep 2`), so counting them would have every script handed a folder reach the whole of it, which
-#2924, #2407 and #2565 ended. So a script that hands its folder to a program nobody has listed is
-not caught.
+**Inside a script's own text (#3416), built 2026-11-21 for the design round guard.** The rule first
+covered only a command as typed. Two guards read the text of a script a command runs, the design
+round guard and the area check. Ask before saving, the collision guard and scope modes open no
+script a command runs (they read a patch file, or a program file a write reads from, for the names
+in it), so there was nothing to build in them.
 
-**The count behind it** (the personal MacBook's records, 35 days to 2026-11-21, 51,590 shell calls
-when it was taken): with the built rule 16 past calls are newly held by the two guards it was
+In the design round guard, a file a shell script's own text hands a program the reader does not
+know, by a path the reader places, is judged as a write of that file, as the same line typed whole
+is (`handedToUnknown` in its `rules.ts`). `bash fmt.sh`, fmt.sh holding `prettier --write
+app/page.tsx`, is held, and the refusal names the script and the program. The list of programs that
+only read applies there as it does on a command line, and nothing was added to it. The reading goes
+as deep as every other rule of the script reading (`SHELL_DEPTH`): the script the command runs and
+each script that one runs. A third is opened by no rule, and this rule needed no deeper reading to
+be right about the scripts it does read, so the depth was kept.
+
+Two things are left as they were. The area check reads a script's text as before (`scriptReach`: a
+run marked unknown counts for nothing there), by Dan's fourth decision above, until #3412. And in
+both guards a script that passes what it was handed on to such a program (`mystery "$1"`) is not
+caught. The reader hands on only a word that spells a path, which `$1` never does, and it gives
+`case`, `[[`, `exit`, `shift` and `basename` as programs it does not know exactly as it gives
+`mystery`. A rule reading each one handed `$1` as a route would hold nearly every script handed a
+file again, which #2924, #2407 and #2565 ended, and telling the shell's own words from a real
+program takes a list, which only Dan adds to. In the records below, 1 past call handed a file the
+guard holds to a script it reads as unable to write it, so 1 is the most such a rule could add.
+
+**The count behind #3416** (the personal MacBook's records, counted 2026-11-21: 53,367 shell calls.
+Dan's own sessions hold 22,275 of them over 34 days from 2026-10-19; agents' records hold 30,891
+and worktree and temporary folder records 201, both over only the 8 days from 2026-11-14, since a
+daily job removes those two kinds 7 days after they were last written): 4,830 calls ran a shell
+script the guard reads, as the script is on disk today. 31 of them, 26 distinct, are newly judged:
+27 asked about before they run, and 4 handing over only a mod hook file, which is judged once the
+command ran and passes where it was left as it was. 22 of the 31 are in the agents' 8 days, so at
+that rate a month of full records would hold about 90. Every one is a test suite or a probe script
+calling a shell function, its own or one from a file it reads in, with a word that spells a look
+changing file (`says "..." "... tools/post.swift"`, `fires ... app/page.tsx`). None is a program
+such as prettier. The reader marks a function the text itself defines as a program it does not
+know, on a command line as in a script, and leaving such a function out would be an exemption, so
+it was not built. The same count over the work MacBook's records is still owed.
+
+**The count behind #3323, the rule for a command as typed** (the personal MacBook's records, 35 days
+to 2026-11-21, 51,590 shell calls when it was taken): with the built rule 16 past calls are newly held by the two guards it was
 decided on, the design round guard 13 and ask before saving 3 (swiftc 8, gh 3, chk 2, swift 1, set
 1, one not a plain name), against 36 predicted and a gate of about 60. `[[` was handed a word that
 spells a path in 9 calls, none a path either guard holds. 75 calls were unpacks. The same count over

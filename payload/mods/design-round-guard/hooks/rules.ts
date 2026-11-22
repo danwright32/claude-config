@@ -1741,9 +1741,11 @@ export const scriptUnread = (script: string, file: string): string =>
  * form of a listed one that writes (#3323; Dan, 2026-11-21: "Turn it round, with the list
  * (Recommended)"). `why` and `remedy` are the reader's own words for that run, the same in every
  * guard (L111, L118): which program was not known, or which form writes, and what to do about it.
+ * With `script` (#3416), the program is handed the file by a script file the command runs, in that
+ * script's own text, and the refusal names the script too, as the command names it.
  */
-export const programUnknown = (program: string, file: string, why: string, remedy: string): string =>
-  `The design round guard judged ${file}, which ${program} is handed, as a write of that file: ${why}. ${remedy}`
+export const programUnknown = (program: string, file: string, why: string, remedy: string, script?: string): string =>
+  `The design round guard judged ${file}, which ${script === undefined ? `${program} is handed` : `${script} hands ${program}`}, as a write of that file: ${why}. ${remedy}`
 
 /**
  * What a refusal says of a file a script file's own code writes (#2847): the script was read as
@@ -2229,13 +2231,17 @@ const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPL
  * the runners RUNS_LATER names, and any command mod-kit marks unread), and each file it sources is one the guard read and found the same
  * (`sourced`). An argument reaches a command only through `$1`, `$@` or a variable holding it, which
  * the reader can never place, so each such route shows here as a name it could not place.
- * What this trusts is mod-kit's reader of what a command writes, with one difference from a command
- * typed whole (#3323): there, a program the reader does not know, handed a word that spells a path,
- * is read as writing that file. In a script's own text it is read as writing none, as it was before
- * that rule, so a run the reader marks `unknown` is no route here. Nearly every script holds one
- * (`exit 1`, `sleep 2`, `gh pr view 5`), so counting them would hold every script handed a file,
- * which is what #2924 ended. So a script that hands its argument to a program nobody has listed is
- * not caught by this guard.
+ * What this trusts is mod-kit's reader of what a command writes. A program the reader does not know,
+ * handed a word that spells a path (#3323), is a run it marks `unknown`. The file such a run names
+ * in a script's own text is judged as a write of that file since #3416 (handedToUnknown), and is a
+ * name the text spells, so it is no route here, as a file the script's commands write by a placed
+ * name is none. Nearly every script holds such a run (`exit 1`, `sleep 2`, `gh pr view 5`), so
+ * counting each as a route would hold every script handed a file, which is what #2924 ended.
+ * One limit is left (#3416): a script that passes what it was handed on to such a program
+ * (`mystery "$1"`) is not caught. The reader hands on only a word that spells a path, which `$1`
+ * never does, and it gives `case`, `[[`, `exit`, `shift` and `basename` as programs it does not
+ * know as it does `mystery`, so reading each one handed `$1` as a route would hold nearly every
+ * script again. Telling them apart takes a list of the shell's own words, which only Dan may add.
  */
 export const argumentUnreached = (reading: ScriptReading, commands: readonly RunCommand[], temp: (word: string) => boolean, sourced: (c: RunCommand) => boolean): string | undefined => {
   for (const c of commands) {
@@ -2255,6 +2261,29 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
   if (reading.runs?.some(r => !r.unknown)) return 'it hands another script its words'
   return undefined
 }
+
+/** A run as mod-kit's write reader gives it, as handedToUnknown reads it (#3416). */
+export type HandedRun = { script: string; what: string; unknown?: true; why?: string; remedy?: string; args: readonly { word: string; path?: string }[] }
+
+/**
+ * Each file a shell script's own text hands a program mod-kit's write reader does not know (#3416),
+ * from `runs`, the reader's runs over that text: every run it marks `unknown` (#3323: a program on
+ * none of its lists, or a form of one that only reads which writes a file or runs a program), with
+ * each word it is handed that spells a path. Each is judged as a write of that file, as the same
+ * line typed whole is; before, a script's text was read only for the files its commands write by
+ * the reader's own tables, so `bash fmt.sh`, fmt.sh holding `prettier --write app/page.tsx`, ran
+ * unasked. `program` is the program as written, and `why` and `remedy` are the reader's own words
+ * for the run, the same in every guard. The rule is the reader's, asked here and never kept here:
+ * the list of programs that only read applies in a script's text as it does on a command line.
+ * A word the reader cannot place is not handed on by it (a variable the script never sets to one
+ * value, what the script itself was handed, a pattern, a command's output), so none is given here;
+ * argumentUnreached says what that leaves open. A script file, a module and a tool run through
+ * npx are runs of another kind, read by the rules that were there before.
+ */
+export const handedToUnknown = (runs: readonly HandedRun[] | undefined): { word: string; path: string; program: string; why: string; remedy: string }[] =>
+  (runs ?? [])
+    .filter(r => r.unknown)
+    .flatMap(r => r.args.flatMap(a => (a.path === undefined ? [] : [{ word: a.word, path: a.path, program: r.script, why: r.why ?? `${r.script} is ${r.what}`, remedy: r.remedy ?? '' }])))
 
 /**
  * The shell script files a command runs that cannot write a file they are handed (#2924), by path:
