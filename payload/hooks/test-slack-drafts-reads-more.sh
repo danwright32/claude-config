@@ -25,6 +25,10 @@
 #   * an error inside either reading refuses the call (seen to fail against a copy of the gate
 #     that swallowed the error, on 2026-11-22);
 #   * a script read once and found clean is read again when it is handed other words.
+#
+# The last section holds the words of a refusal #3395 left as it was: a script handed a file that
+# only names the send call is refused as a check that could not be made, never as a post found
+# (claude-config#3410).
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -536,6 +540,49 @@ run_failing "bash FAILS-3395.sh lib/calm.sh"
 refused "#3395 a reading of a script's words that fails is refused"
 says "#3395 and that refusal says the call could not be judged" "could not judge"
 reached "#3395 and it is the made failure in the reading of a script's words that refused it" params
+
+echo "slack drafts only: a script handed a file that only names the send call is a check that could not be made (claude-config#3410)"
+# A script not seen to be unable to act, handed a file that only names Slack's send call, is
+# refused as it was (Dan, 2026-11-21, #3218: "Leave it refused, fix the big groups"). No post was
+# found, so the refusal may not say one was (L11): it led with "this command posts to Slack" 55
+# times in the personal MacBook's records of 2026-11-08 to 11-21, and a count by the could not
+# check wording missed every one. Only the words change: every command here is refused or passed
+# as on this change's base (35afab0dba).
+N="$T/n3410"
+mkdir -p "$N"
+lacks() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; *) check "$1" ok ;; esac; }
+printf '%s\n' 'a recorded line that only names chat.postMessage and sends nothing' > "$N/named.txt"
+printf '%s\n' 'NAMES = ("chat.postMessage",)' 'print(len(NAMES))' > "$N/rules.py"
+printf '%s\n' 'import concurrent.futures, sys' 'print(len(open(sys.argv[1]).read()))' > "$N/sweep.py"
+printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(json.load(open(sys.argv[1]))["url"])' > "$N/send.py"
+printf '%s\n' 'import sys' 'print(len(open(sys.argv[1]).read()))' > "$N/reads.py"
+printf '%s\n' 'import sys' 'exec(open(sys.argv[1]).read())' > "$N/runit.py"
+printf '%s\n' 'curl -s --data-binary "@$1" https://example.com/collect' > "$N/fetch.sh"
+printf '%s\n' 'frobnicate python3 sweep.py named.txt' > "$N/outer.sh"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$N/poster.py"
+# The last of the five holds that nothing but the words changed. Inside a script on disk, behind a
+# program the gate does not know, a reason recorded as one the walk could not follow is dropped and
+# the script passes (lib/unknown-program.py), so this refusal is recorded apart from those. Seen to
+# fail on 2026-11-22 against a copy of the gate that recorded it with unfollow(): bash outer.sh passed.
+for c in "python3 sweep.py named.txt" "python3 sweep.py rules.py" "python3 send.py named.txt" \
+  "bash fetch.sh named.txt" "bash outer.sh"; do
+  run "$c" "$N"
+  refused "#3410 a script handed a file that only names the send call is still refused: $c"
+  says "#3410 the refusal still names the file and what it names: $c" ", which names chat.postMessage"
+  says "#3410 it says the check could not be made: $c" "REFUSED: $UNREAD"
+  lacks "#3410 and does not claim a post was found: $c" "$FOUND"
+  says "#3410 it says why, that the file only names the endpoint: $c" \
+    "This is not a finding that it posts: the file only names a Slack posting endpoint, and the gate could not tell whether the script sends anything to it"
+  says "#3410 the draft rule is still stated, for a command that does send a message: $c" "slack_send_message_draft"
+done
+run "python3 reads.py named.txt" "$N"
+allowed "#3410 a script that only reads the file it is handed still passes"
+# A file that posts, handed to a script that runs what it is handed, is read as the script it is,
+# and that is still a post found.
+run "python3 runit.py poster.py" "$N"
+refused "#3410 a file that posts, handed to a script that runs what it is handed, is still refused"
+says "#3410 and that is still a post found" "$FOUND"
+lacks "#3410 not a check that could not be made" "$UNREAD"
 
 echo
 

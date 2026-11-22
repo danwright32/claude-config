@@ -1791,8 +1791,8 @@ raise_qos = gate_qos.raise_qos
 QOS = [(None, "")]
 
 
-def draft_advice(where):
-    return (f"Save it as a draft instead: call slack_send_message_draft {where}, then tell Dan where the draft is "
+def draft_advice(where, opening="Save it as a draft instead"):
+    return (f"{opening}: call slack_send_message_draft {where}, then tell Dan where the draft is "
             "(the channel, or the person for a direct message, and the thread) and that nothing was sent. "
             f"Sessions never send or schedule a Slack message (Dan, 2026-11-05: \"it should only ever save as "
             f"draft in slack, never send directly\"; {ISSUE}). If he asked you to post it, still save the draft "
@@ -1877,6 +1877,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         self.no_network = self.installed_wrapper()  # no-network-run.sh beside this file (#3173)
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
+        self.named_only = []  # each refusal for a file that only names an endpoint (name_only, #3410)
         # (the reason, the mod's folder) of a refused `bun test` the call's own line runs in a mod's
         # folder, for the sentence that names the command to run instead (mod_tests_seen, #3356).
         self.mod_tests = None
@@ -3319,6 +3320,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
         be made, keyed on this cause rather than on the words it is put in; and give it back. Every
         one is kept, so a later cause the verdict does not carry cannot hide the one it does (#2922)."""
         self.unfollowed.append(why)
+        return why
+
+    def name_only(self, why):
+        """Record a refusal that is no post the gate found, and give it back: a file that only names
+        an endpoint, handed to a script not seen to be unable to act on it (claude-config#3410).
+        main() then says the check could not be made, keyed on this cause as it is on unfollow's.
+        Kept apart from unfollowed, which the readings of a script's own words consult to decide
+        what is refused: inside a script on disk they drop a reason found there (judge_unread_shapes,
+        lib/unknown-program.py), and this refusal stands wherever it stood (Dan, 2026-11-21, #3218).
+        Nothing reads this list but main(), so recording here changes no verdict."""
+        self.named_only.append(why)
         return why
 
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True, tagged=False, path=None,
@@ -6677,7 +6689,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 # A file naming an endpoint is still read against a script that writes, as before.
                 acts = script_acts(runs_only=True) if unread else script_acts()
                 if acts:
-                    return f"{script_label} {acts}, and is handed {what}"
+                    reason = f"{script_label} {acts}, and is handed {what}"
+                    # A file that names an endpoint is not a post found (#3410); unread() has
+                    # already recorded one the gate could not read.
+                    return reason if unread else self.name_only(reason)
                 if unread and script_label in on_disk and script_acts():
                     self.note_handed(on_disk[script_label], words, d, script_label)
             # Data every script beside it only reads; none sends or runs what it is handed.
@@ -8068,9 +8083,21 @@ def main():
         # cannot read; never matched by its wording) is not a post it found, so it says the check
         # could not be made rather than claiming a post (#2922).
         unfollowed = any(why in reason for why in judge.unfollowed)
+        # Nor is a file that only names an endpoint, handed to a script the gate could not see to be
+        # unable to act on it (name_only): it stays refused, and says what was measured (#3410).
+        named_only = not unfollowed and any(why in reason for why in judge.named_only)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if unfollowed else "REFUSED: this command posts to Slack: ")
-        if unfollowed and not MARKER.search(cmd):
+                if unfollowed or named_only else "REFUSED: this command posts to Slack: ")
+        if named_only:
+            # The file may be a message's payload or a text that mentions the name, and the gate
+            # cannot tell which, so both are answered: the draft rule, and where to go with neither.
+            advice = ("This is not a finding that it posts: the file only names a Slack posting endpoint, and "
+                      "the gate could not tell whether the script sends anything to it. If the command sends no "
+                      "Slack message, there is no message to save as a draft: if it must run as written, say so "
+                      "to Dan (claude-config#3410). "
+                      + draft_advice("with the same channel and thread",
+                                     "If it does send one, save that message as a draft instead"))
+        elif unfollowed and not MARKER.search(cmd):
             # Nothing in the command names a posting endpoint, so it is no message, and telling the
             # session to save one as a draft only misleads it (claude-config#2631).
             advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "
