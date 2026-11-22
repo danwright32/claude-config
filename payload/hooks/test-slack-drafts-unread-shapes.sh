@@ -879,11 +879,14 @@ echo "slack drafts only: a quoted pattern handed to a program that is no runner 
 
 # Found by the sweep of this Mac's past commands, 2026-11-19: the first build expanded every pattern
 # handed to any program, and seven harmless commands were newly refused. This repository's own
-# tests/test-undated-measurements.sh runs `bash "$root/payload/hooks/lib/repo-files.sh" "$root"
-# '*.md'`, a pathspec for git: its matches were read as files bash may run, and CLAUDE.md, which
-# names an endpoint, made the whole suite a command that posts. A quoted pattern is expanded only
-# for a package a launcher or a package script runs, which expands it itself; written bare, the
-# shell expands it for any program, and the files are judged as if written out.
+# tests/test-undated-measurements.sh lists the Markdown files through the shared file lister in
+# payload/hooks/lib, handing it `"$root" '*.md'`, a pathspec for git: its matches were read as files
+# bash may run, and CLAUDE.md, which names an endpoint, made the whole suite a command that posts.
+# The lister is described here and not named, because the scanners push gate takes its name
+# anywhere in a suite's text, a comment included, as the mark of a whole repository scanner, and
+# this suite is not one: named, it ran before every push (claude-config#3270). A quoted pattern is
+# expanded only for a package a launcher or a package script runs, which expands it itself; written
+# bare, the shell expands it for any program, and the files are judged as if written out.
 printf '%s\n' 'Call chat.postMessage to send.' 'Run `bash posts.sh` to send it.' > "$S/notes.md"
 printf '%s\n' 'root="$1"' 'found="$(bash "$root/lib/list.sh" "$root" '"'"'*.md'"'"' 2>/dev/null)"' > "$S/scan-md.sh"
 each allowed "#3251 a quoted pattern handed to a script is not expanded" 3<<'EOF'

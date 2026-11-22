@@ -90,8 +90,14 @@ import {
   moveUnread,
   moveUnreadCard,
   movedSaid,
+  exactRestoreWay,
   pathRestore,
   indexSource,
+  wholeRestoreSource,
+  plainLine,
+  runsAfter,
+  holdsAsFile,
+  restoredSaid,
   settledNotSealed,
   settledUnchecked,
   settledUnread,
@@ -1496,7 +1502,15 @@ const BACKGROUND = /(^|[^&>|<])&(?![&>])/
 // restores name) stay whole, since one may change the index the other reads, and so does a line
 // writing inside .git. Only a settled design record keeps the strict rule of one restore alone.
 // Until #2830 the restore had to run first, be the line's only one and run in no pipe or background.
-const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = []): Promise<string | undefined> => {
+// With `sequenced` (#3280, asked only for a file put back exactly as the default branch holds it), a
+// pipe between commands that run once the last restore has finished is no longer read as running
+// beside it (rules.ts runsAfter): `restore && test | tail` is a builder's ordinary line, and nothing
+// in it runs before the restore is done. Only on a plain line (rules.ts plainLine): a command piped
+// from the restore or from anything the guard cannot place after it, and every command on a line
+// that groups commands or puts one in the background, is still read as beside. The reading of a
+// restore by its lines is unchanged. `found.before` says whether the command it names runs before the
+// last restore, for the refusal's way out (#3280, exactRestoreWay); it changes no answer.
+const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = [], sequenced = false, found: { before?: boolean } = {}): Promise<string | undefined> => {
   const notAlone = 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
   try {
     const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
@@ -1516,8 +1530,10 @@ const restoreAlone = async ($: EngineInterface, command: string, named = false, 
     if (/(^|[\s/'"=])\.git(\/|\s|$)/.test(command)) return 'the command writes inside .git, which may change what the git checkout or restore puts back'
     const beside = all.some(c => c.pipedFrom !== undefined) || BACKGROUND.test(command)
     const last = restoring.lastIndexOf(true)
+    const later = sequenced && plainLine(command) && !BACKGROUND.test(command) ? runsAfter(all, last) : undefined
     for (const [i, c] of all.entries()) {
-      if (restoring[i] || (!beside && i > last) || leavesGitAlone(c.words, gits[i])) continue
+      if (restoring[i] || (later ? later.has(i) : !beside && i > last) || leavesGitAlone(c.words, gits[i])) continue
+      found.before = i < last
       return `\`${c.words.join(' ')}\` runs ${beside ? 'beside' : 'before'} the git checkout or restore and may change what it puts back`
     }
     if (restoring.filter(Boolean).length > 1 && sources.some(indexSource))
@@ -1526,6 +1542,60 @@ const restoreAlone = async ($: EngineInterface, command: string, named = false, 
   } catch (err) {
     return `mod-kit could not read the command: ${message(err)}`
   }
+}
+
+// #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)"): the sources of a call's restores of
+// named paths, where every one of them is written as its source and its paths alone (rules.ts
+// wholeRestoreSource). Null where one is not, or the command cannot be read: no file such a call
+// puts back is read as put back whole.
+const wholeSources = async ($: EngineInterface, command: string): Promise<Set<string> | null> => {
+  const sources = new Set<string>()
+  try {
+    for (const c of await $.modkit.pipeline({ command })) {
+      const g = await $.modkit.git({ words: c.words })
+      if (!pathRestore(g)) continue
+      const source = wholeRestoreSource(g)
+      if (source === undefined) return null
+      sources.add(source)
+    }
+  } catch {
+    return null
+  }
+  return sources
+}
+
+// #3280: whether the file a git checkout or restore names ends up byte for byte as the default
+// branch holds it, so it changes no look that has not shipped: the default branch's ref and the
+// commit it stands at, for the log, or undefined, when the restore is judged as before. Decided here
+// from git, never from the command's words. The default branch is the one mod-kit reads from the
+// checkout's own record of its remote, at the commit last fetched (rules.ts defaultBranchRef),
+// as #3279 reads it; nothing here reaches the network. Three questions that change nothing:
+// the commit that ref stands at and the commit the command's source names (rev-parse, which must
+// agree, so a tag, another branch, a stash, a local main that is ahead and a local branch somebody
+// named origin/main are all told apart by the commit they are), and what that commit holds at the
+// path (ls-tree, rules.ts holdsAsFile). Undefined, so judged as before, for a restore written with
+// anything but its source and paths, one from the index among them, which names no source
+// (`sources`, wholeSources), one beside a command
+// that may change what its source names or what git writes (`beside`, restoreAlone's answer), a
+// checkout with no record of a default branch or one never fetched, and wherever the branch
+// reader or git fails, cannot run, runs past its time or prints more than can be read.
+const exactRestore = async ($: EngineInterface, t: { path: string; from: string }, tree: string, sources: ReadonlySet<string> | null, beside: string | undefined): Promise<{ ref: string; sha: string } | undefined> => {
+  if (beside !== undefined || !sources?.has(t.from)) return undefined
+  let ref: string | undefined
+  try {
+    const b = await $.modkit.branch({ path: tree })
+    ref = b === null || 'unreadable' in b ? undefined : defaultBranchRef(b.defaultBranch)
+  } catch {
+    return undefined
+  }
+  if (ref === undefined) return undefined
+  const tip = await commitOf($, tree, ref)
+  if ('why' in tip) return undefined
+  const named = await commitOf($, tree, t.from)
+  if ('why' in named || named.sha !== tip.sha) return undefined
+  const rel = relTo(t.path, tree)
+  const held = await askGit($, tree, ['ls-tree', '-z', tip.sha, '--', rel])
+  return 'out' in held && holdsAsFile(held.out, rel) ? { ref, sha: tip.sha } : undefined
 }
 
 // What a call changes in a React screen file (rules.ts judgedByText), as the text before and after it:
@@ -1944,6 +2014,15 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // what it puts back for a file judged by its lines (#2777, #2830); null until then.
   let notAlone: string | undefined | null = null
   let notFirst: string | undefined | null = null
+  // For a file put back exactly as the default branch holds it (#3280), once asked: wholeSources'
+  // answer (undefined until then), and restoreAlone's with what runs after the restore left out
+  // (null until then).
+  let whole: Set<string> | null | undefined
+  let notBeside: string | undefined | null = null
+  // Whether the command notBeside names runs before the restore, and the look changing files such a
+  // restore would have put back exactly but for it, whose refusal says how (exactRestoreWay).
+  const besideFound: { before?: boolean } = {}
+  const sayHow = new Map<string, string>()
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
@@ -2158,6 +2237,27 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // of the product, so taking it away (rm, or the source mv moves) passes. What the same command
     // writes, the destination of that mv included, is a target of its own, judged as ever.
     if (t.removes && (await untrackedIn(tree)).has(t.path)) continue
+    // #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)"): a file a git checkout or restore
+    // puts back byte for byte as the default branch holds it changes no look that has not shipped,
+    // and is not asked about, whatever kind of look changing file it is; the guard decides that
+    // from git (exactRestore), and writes each one to its log. Only a restore of named paths: what
+    // a move brings in (#3279) is asked as before, and so is the changed file put back afterwards.
+    if (t.from !== undefined && !t.moved) {
+      const command = String(input.command ?? '')
+      if (whole === undefined) whole = await wholeSources($, command)
+      if (whole?.has(t.from)) {
+        if (notBeside === null) notBeside = await restoreAlone($, command, true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])), true, besideFound)
+        const exact = await exactRestore($, { path: t.path, from: t.from }, tree, whole, notBeside ?? undefined)
+        if (exact) {
+          await $.ui.log(restoredSaid(relTo(t.path, tree), t.from, exact.ref, exact.sha), { to: 'debug' })
+          continue
+        }
+        // Held only for a command before it (Dan, 2026-11-21, "Keep it held, say how (Recommended)"):
+        // still judged as before below, and its refusal says how, where the restore on its own would
+        // go through.
+        if (notBeside !== undefined && besideFound.before && (await exactRestore($, { path: t.path, from: t.from }, tree, whole, undefined))) sayHow.set(t.path, relTo(t.path, tree))
+      }
+    }
     // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
     // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
     // the product, and the design it holds was settled on the issue it came from. Any other text there,
@@ -2343,7 +2443,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   if (missing.length && !unread.length && missingPaths.every(p => logicOnly.has(p))) return passing(await withWords({ files: missingFiles, subjects: missing, trees: missingTrees, worded: [] }))
   // A file held because a git move brings it in (#3279) says so: the command itself names no file.
   const moved = [...new Set(targets.flatMap(t => (t.move && t.path !== undefined && missingPaths.includes(t.path) ? [movedSaid(t.move.said)] : [])))]
-  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread: [...unread, ...moved] } }
+  // A restore held only for what runs before it says how to put the file back in its own call (#3280).
+  const how = [...sayHow].flatMap(([p, rel]) => (missingPaths.includes(p) ? [exactRestoreWay(rel)] : []))
+  if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread: [...unread, ...moved, ...how] } }
   return passing(await withWords())
 }
 

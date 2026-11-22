@@ -798,6 +798,71 @@ else
     || check "#3325 a failing mod's kept output is not handed on to the timings store" ok
 fi
 
+# ---------------------------------------------------------------------------
+# #3170: a flaky suite's first output is kept as a download.
+# ---------------------------------------------------------------------------
+# A suite that fails and then passes its recheck still ends red (#245, L293), and run-all-tests keeps
+# its first, failing output (#1788). On a runner that copy was in ~/.cache, thrown away with the
+# runner, so the FAIL line named a path nobody could open, and the drafts gate's cost readings in it
+# (every one the suite took) were lost with it. So the parts job points HOOK_TESTS_FLAKY_OUTPUT at a
+# folder of the runner's own and, when the part failed, uploads exactly that folder, kept 14 days.
+# A fresh folder per job holds only this run's copies, never one restored from an earlier run.
+FLAKY_STEP="Keep the first output of each suite that failed and then passed"
+flaky_kept(){ # flaky_kept <workflow> -> ok, or each thing missing
+  local out="" suite up dir path days names
+  suite="$(step_lines "$1" parts "Every suite of this part")"
+  up="$(step_lines "$1" parts "$FLAKY_STEP")"
+  [ -n "$suite" ] || { echo "the parts job has no step named 'Every suite of this part'"; return; }
+  [ -n "$up" ] || { echo "the parts job has no step named '$FLAKY_STEP'"; return; }
+  dir="$(sed -n 's/^[[:space:]]*HOOK_TESTS_FLAKY_OUTPUT:[[:space:]]*//p' <<< "$suite" | sed 's/[[:space:]]*$//')"
+  path="$(sed -n 's/^[[:space:]]*path:[[:space:]]*//p' <<< "$up" | sed 's/[[:space:]]*$//')"
+  days="$(sed -n 's/^[[:space:]]*retention-days:[[:space:]]*//p' <<< "$up" | sed 's/[[:space:]]*$//')"
+  names="$(sed -n 's/^[[:space:]]*name:[[:space:]]*//p' <<< "$up" | sed -n 1p)"
+  case "$dir" in '${{ runner.temp }}/'?*) ;; *) out="$out the suites step does not set HOOK_TESTS_FLAKY_OUTPUT to a folder under runner.temp ('$dir');" ;; esac
+  [ -n "$dir" ] && [ "$path" = "$dir" ] || out="$out the upload's path ('$path') is not the folder the runner keeps flaky output in ('$dir');"
+  grep -q 'uses:[[:space:]]*actions/upload-artifact@' <<< "$up" || out="$out the step does not upload an artifact;"
+  grep -qE '^[[:space:]]*if:.*failure\(\)' <<< "$up" || out="$out the upload does not run when the part failed;"
+  case "$days" in [1-9]|1[0-4]) ;; *) out="$out its retention-days is '$days', not 1 to 14;" ;; esac
+  case "$names" in *'matrix.part'*'github.run_attempt'*) ;; *) out="$out its artifact name ('$names') does not carry the part and the attempt;" ;; esac
+  awk -v a="Every suite of this part" -v b="$FLAKY_STEP" '$0 ~ "- name: "a"$" { sa = NR } $0 ~ "- name: "b"$" { sb = NR } END { exit !(sa && sb && sa < sb) }' <<< "$(wf_job_block "$1" parts)" \
+    || out="$out the upload comes before the suites run;"
+  [ -z "$out" ] && echo ok || echo "${out# }"
+}
+cat > "$TMPROOT/flaky-ok.yml" <<'YML'
+jobs:
+  parts:
+    steps:
+      - name: Every suite of this part
+        env:
+          HOOK_TESTS_FLAKY_OUTPUT: ${{ runner.temp }}/flaky-first-output
+        run: bash payload/hooks/run-all-tests.sh
+      - name: Keep the first output of each suite that failed and then passed
+        if: ${{ failure() && needs.deal.outputs.reused-run == '' }}
+        uses: actions/upload-artifact@abc
+        with:
+          name: flaky-first-output-${{ matrix.part }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flaky-first-output
+          retention-days: 14
+YML
+r="$(flaky_kept "$TMPROOT/flaky-ok.yml")"
+[ "$r" = ok ] && check "#3170 a parts job that keeps a flaky suite's first output is accepted" ok \
+  || check "#3170 a parts job that keeps a flaky suite's first output is accepted" "$r"
+sed '/HOOK_TESTS_FLAKY_OUTPUT/d; /^        env:$/d' "$TMPROOT/flaky-ok.yml" > "$TMPROOT/flaky-cache.yml"
+r="$(flaky_kept "$TMPROOT/flaky-cache.yml")"
+[ "$r" != ok ] && check "#3170 one that leaves the flaky output in the runner's cache, uploading another folder, is refused" ok \
+  || check "#3170 one that leaves the flaky output in the runner's cache, uploading another folder, is refused" "it passed"
+sed 's/retention-days: 14/retention-days: 90/' "$TMPROOT/flaky-ok.yml" > "$TMPROOT/flaky-long.yml"
+r="$(flaky_kept "$TMPROOT/flaky-long.yml")"
+[ "$r" = "its retention-days is '90', not 1 to 14;" ] && check "#3170 one kept 90 days is refused, for that alone" ok \
+  || check "#3170 one kept 90 days is refused, for that alone" "got: $r"
+sed 's/failure() && //' "$TMPROOT/flaky-ok.yml" > "$TMPROOT/flaky-green.yml"
+r="$(flaky_kept "$TMPROOT/flaky-green.yml")"
+[ "$r" = "the upload does not run when the part failed;" ] && check "#3170 one that uploads only from a passing part, when no suite can have flaked, is refused" ok \
+  || check "#3170 one that uploads only from a passing part, when no suite can have flaked, is refused" "got: $r"
+r="$(flaky_kept "$REAL")"
+[ "$r" = ok ] && check "#3170 the real parts job keeps a flaky suite's first output as a download for 14 days at most" ok \
+  || check "#3170 the real parts job keeps a flaky suite's first output as a download for 14 days at most" "$r"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
