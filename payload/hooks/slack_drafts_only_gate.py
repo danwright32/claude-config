@@ -1656,12 +1656,13 @@ def remember_readings(mod):
     second each; command_rest() three times for each of its 14,000 commands (claude-config#2784).
     Only this run's own copy of the reader is changed. Each caller gets lists of its own. A call
     asking for heredoc bodies, their spans or the runners passed is read afresh, and a text the
-    reader cannot read raises as it did, every time it is asked for."""
+    reader cannot read raises as it did, every time it is asked for. So is one asking where the
+    comments are (claude-config#3464)."""
     plain, memo = mod.commands, {}
 
-    def commands(s, cwd="", heredocs=None, parts=None, spans=None):
-        if heredocs is not None or spans is not None:
-            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+    def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
+        if heredocs is not None or spans is not None or comments is not None:
+            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans, comments=comments)
         key = (s, cwd)
         if key not in memo:
             # A large text's parse is kept between runs too, keyed on its contents, wherever the
@@ -3859,7 +3860,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
             body = self.content(os.path.realpath(self.resolve(v, d))).decode("utf-8", "replace")
         except OSError:
             return False
-        body = re.sub(r"(?m)(^|\s)#.*$", r"\1", body)  # comments, which say "set" in prose
+        # Comments, which say "set" in prose, are left out: the ones the reader itself reads as
+        # comments, and of those only one that starts the text or follows white space. A pattern
+        # took every # after white space for one, quoted or not, so a quoted # before a shift on
+        # its line hid the shift, and the string's $1 stayed where the shell had moved on
+        # (claude-config#3464). A file the reader cannot read is not known to keep them.
+        try:
+            body = self.sw.uncommented(body, spaced=True)
+        except self.sw.Unreadable:
+            return False
         # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
         return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
 

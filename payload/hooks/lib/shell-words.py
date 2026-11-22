@@ -464,7 +464,80 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd="", heredocs=None, parts=None, spans=None):
+# ---- where a comment starts: the one rule every reader here asks (claude-config#3464) ----
+#
+# The shell starts a comment at a # only where a WORD starts. commands() took any # after white
+# space, a separator or a parenthesis for one, so it left out the rest of the line where the shell
+# read the # inside a word and ran what followed: after a space, a ; or a parenthesis that a
+# backslash escapes (`echo a\ #b; cmd`), right after the ) closing a $( ), a <( ) or a $(( )), which
+# is still inside its word, and at the start of a line a backslash joined to a word. Measured
+# 2026-11-22 against bash 3.2.57 and zsh 5.9 (test-shell-words-comment-start.sh runs the table
+# against the shells of the machine it is on): 18 of 120 shapes ran a command the reader left out.
+#
+# The other mistake hides a command as well: a real comment read as text can open a quote at an
+# apostrophe in it, and the string then holds the commands of the lines after. So a reader that
+# cannot tell says so (None here, Unreadable from commands()), and never guesses either way.
+WORD_BREAKS = " \t\n;&|()"
+
+
+def word_starts(s, i, breaks=WORD_BREAKS, closed=None, layered=False):
+    """Whether a word starts at s[i], so that a # there starts a comment: True, False where s[i] is
+    inside a word, and None where that cannot be told. i is where a reader that follows the quoting
+    is outside every quote, and s[i] is not itself escaped.
+
+    A word starts at the start of s and after one of breaks that no backslash escapes. A backslash
+    newline is gone before the shell reads words, so what stands before it decides. closed is
+    (the index just past the last `)` the reader went by, what a word starting there would mean:
+    True after one that ends a command (a subshell's, a case pattern's), False after one still
+    inside its word (a substitution's), None where the shells differ or the reader does not know
+    what it closed); with no closed, a `)` before s[i] cannot be told. layered says the text is
+    inside backquotes, whose own reading of backslashes comes before the shell's, so a backslash
+    before the break cannot be counted here."""
+    while True:
+        if i <= 0:
+            return True
+        p = s[i - 1]
+        if p not in breaks:
+            return False
+        k = i - 2
+        while k >= 0 and s[k] == "\\":
+            k -= 1
+        slashes = i - 2 - k
+        if slashes and layered:
+            return None
+        if slashes % 2:
+            if p != "\n":
+                return False
+            i -= 2
+            continue
+        if p == ")":
+            return closed[1] if closed and closed[0] == i else None
+        return True
+
+
+def uncommented(s, spaced=False):
+    """s with every comment commands() reads blanked to spaces, each offset kept, for a caller that
+    searches a text's code for a word (claude-config#3464): a # in a quoted string, an escaped one
+    and one inside a word stay, with whatever follows them on the line. Raises Unreadable where
+    commands() does.
+
+    spaced=True blanks only a comment that starts s or follows white space, for a caller that used
+    to take every such # for a comment and no other: what it kept then (a comment right after a ;
+    or a parenthesis) it keeps now, so it only ever reads more than it did."""
+    found = []
+    commands(s, comments=found)
+    out, at = [], 0
+    for start, end in sorted(found):
+        if spaced and start and not s[start - 1].isspace():
+            continue
+        if start >= at:
+            out += [s[at:start], " " * (end - start)]
+            at = end
+    out.append(s[at:])
+    return "".join(out)
+
+
+def commands(s, cwd="", heredocs=None, parts=None, spans=None, comments=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -478,6 +551,10 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     same order: opener is where its << is in s, the same start parts gives the opener, and s[start:end]
     is the body, from the line break that ends the opener's line to the start of its closing line
     (claude-config#2722), so a caller can tell which command a body is given to.
+
+    comments, when a list, is given one (start, end) for each comment the reading left out, s[start]
+    its # and end the line break that ends it (claude-config#3464). A # starts one only where a word
+    starts (word_starts); where that cannot be told, the reading raises Unreadable.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -521,6 +598,68 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     # holds text the way a double quoted string does (its quotes are only text), from where its body
     # starts to "end", the start of its closing line, and then the reading goes on at "next".
     bodies = []
+    # Where the last ) the reading went by ended, and what a # right after it is (word_starts): True
+    # where the ) ended a command, False where it is still inside a word, None where that is not known.
+    closed = [-1, None]
+    # The rest of a line being read past a # that was taken for a comment until #3464 (comment_end).
+    watch = [None]
+
+    def state():
+        """What decides how the text after a line is read, beyond which frames are open: each
+        frame's directory and open case commands, and the heredocs waiting for their bodies."""
+        return ([(g.get("cwd"), g.get("old"), tuple(g.get("cases", ())), g.get("pat")) for g in frames],
+                len(pending), len(bodies))
+
+    def line_read(at):
+        """Called where the reading reaches the end of a watched line, or first goes past it. The
+        text after that line must be read just as it was while the # hid the rest of the line, so
+        that reading the rest only ever ADDS the commands written on it: a quote, a group, a
+        heredoc or a case left open by it, one it closed, a cd in it, or a backslash joining the
+        next line to it, would each change what the lines after it are, and a command read on them
+        until now could stop being one. Then the text is not read at all (Unreadable), and each
+        caller falls to what it does with a text it cannot trust."""
+        w, watch[0] = watch[0], None
+        if w["end"] >= n:
+            return  # the last line: nothing comes after it
+        same = len(frames) == len(w["frames"]) and all(a is b for a, b in zip(frames, w["frames"]))
+        if same and frames[-1]["k"] in COMMAND_FRAMES:
+            # The last command of the line is cut after this, at the line break: what its cut will
+            # do is asked here, a case head noted and a cd refused.
+            note_case(frames[-1], w["end"])
+            same = cd_target(s[frames[-1]["start"]:w["end"]]) is None
+        same = same and state() == w["state"]
+        if not same or (at > w["end"] and frames[-1]["k"] in COMMAND_FRAMES):
+            raise Unreadable()
+
+    def comment_end(at, breaks):
+        """Where the comment starting at the # at `at` ends, or None where that # starts none
+        (word_starts, claude-config#3464). Raises Unreadable where it cannot be told: what the ) before
+        it closed is not known or is read differently by bash and zsh, or the text is inside
+        backquotes and either a backslash stands before the # (the backquotes read backslashes
+        first) or a backquote stands after it on its line (bash ends the backquotes there, comment or
+        not)."""
+        ticked = any(g["k"] == "tick" for g in frames)
+        starts = word_starts(s, at, breaks, closed, ticked)
+        if starts is False:
+            if s[at - 1] in breaks and watch[0] is None:
+                # Taken for a comment until #3464, so the rest of its line was nobody's text. Read
+                # now, it may only add the commands written on it: see line_read. The first such #
+                # on a line is where the rest of it starts.
+                j = s.find(line_break, at)
+                held = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
+                if j >= 0 and cd_target(s[held["start"]:at]) is not None:
+                    raise Unreadable()  # a cd whose directory was the words before the #, until now
+                watch[0] = {"end": n if j < 0 else j, "frames": list(frames), "state": state()}
+            return None
+        if starts is None:
+            raise Unreadable()
+        j = s.find(line_break, at)
+        end = n if j < 0 else j
+        if ticked and "`" in s[at:end]:
+            raise Unreadable()
+        if comments is not None:
+            comments.append((at, end))
+        return end
 
     def note_case(f, end):
         """Read the command so far, from f's start to end, for a case head or an esac (#2074).
@@ -605,6 +744,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     def close_commands(end):
         f = frames.pop()
         cut(f, end, ")")
+        closed[:] = end + 1, f["k"] == "sub"
         if f["k"] in ("subst", "tick", "proc"):
             parent = next(g for g in reversed(frames) if g["k"] in COMMAND_FRAMES)
             parent["inner"].append((f["open"], end + 1, f["dq"]))
@@ -613,6 +753,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
 
     i = 0
     while i < n:
+        if watch[0] is not None and i >= watch[0]["end"]:
+            line_read(i)
         if bodies and i >= bodies[-1]["end"]:
             # A body ends at its closing line whatever is open in it, as the shell finds the line
             # before it expands anything; a substitution or quote still open there runs nothing in
@@ -667,6 +809,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 else:
                     frames.pop()
                     i += 2 if nx == ")" else 1
+                    # $(( )) is inside its word; an arithmetic command's )) ends it.
+                    closed[:] = i, bool(f.get("command"))
                 continue
         elif k == "param":
             if c == "}":
@@ -682,14 +826,17 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 i += 1
                 continue
         elif k == "paren":
-            if c == "#" and f.get("array") and s[i - 1] in " \t\n(":
+            if c == "#" and f.get("array"):
                 # A comment inside an array's ( ), as the shell reads one there too: an apostrophe in
                 # it opened a quote that ran on past the array (tools/check-mod-shared-parts.sh's
                 # PARTS, so no compound after it paired; claude-config#2683). It ends at the line
-                # break, "; " in the flattened form, as a comment between commands does.
-                j = s.find(line_break, i)
-                i = n if j < 0 else j
-                continue
+                # break, "; " in the flattened form, as a comment between commands does. Only where
+                # a word starts: after an escaped space the # is text, and a substitution written
+                # after it on the line is run (claude-config#3464).
+                end = comment_end(i, " \t\n(")
+                if end is not None:
+                    i = end
+                    continue
             if c == "(":
                 if proc_opens(i):
                     open_commands("proc", i + 1)  # in an array's words (claude-config#3213)
@@ -700,6 +847,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             if c == ")":
                 if frames.pop().get("pattern"):
                     end_pattern(frames[-1], i)
+                    closed[:] = i + 1, True
+                else:
+                    # An array's, a function header's or any other plain ( ): bash reads a # right
+                    # after an array's ) inside the word and zsh as a comment, so it is not known.
+                    closed[:] = i + 1, None
                 i += 1
                 continue
         if k not in ('"', "hd"):
@@ -738,12 +890,16 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             i += 1
             continue
         # Where commands begin and end: only here, in a frame that holds commands.
-        if c == "#" and (i == 0 or s[i - 1] in " \t\n;&|()"):
-            cut(f, i, "#")
-            j = s.find(line_break, i)
-            i = n if j < 0 else j
-            f["start"] = i
-            continue
+        if c == "#":
+            # A comment, only where a word starts (word_starts): one read after an escaped space,
+            # or right after the ) of a substitution, left out the commands the shell ran after it
+            # on its line (claude-config#3464).
+            end = comment_end(i, WORD_BREAKS)
+            if end is not None:
+                cut(f, i, "#")
+                i = end
+                f["start"] = i
+                continue
         if s.startswith("<<<", i):
             i += 3
             continue
@@ -826,6 +982,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             continue
         if c == ")" and in_pattern(f, i):
             end_pattern(f, i)
+            closed[:] = i + 1, True
             i += 1
             continue
         if c == "(":
@@ -840,7 +997,7 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                     and not (before.rstrip()[-1:] != ")" and EMPTY_PARENS.match(s, i)))
             if body or (all(w in RESERVED for w in before.split()) and (not header or before.split())):
                 if nx == "(":
-                    frames.append({"k": "arith", "depth": 0})
+                    frames.append({"k": "arith", "depth": 0, "command": True})
                     i += 2
                 else:
                     open_commands("sub", i + 1)
@@ -850,8 +1007,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 frames.append({"k": "paren", "array": s[i - 1:i] == "="})
                 i += 1
             continue
-        if c == ")" and k in ("sub", "subst", "proc"):
-            close_commands(i)
+        if c == ")":
+            if k in ("sub", "subst", "proc"):
+                close_commands(i)
+            else:
+                closed[:] = i + 1, None  # one that closes nothing the reading opened
         i += 1
     if len(frames) > 1:
         raise Unreadable(next((f["at"] for f in frames if "at" in f), None))
