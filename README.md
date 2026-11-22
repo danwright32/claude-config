@@ -4888,6 +4888,24 @@ two checks of a second asking are held the other way by the same reading: the tr
 cache answered. That the first kind fails was not seen: the installed gate refused both commands
 that would have run it with the samples left in one folder.
 
+Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
+127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
+reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
+sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
+or yardstick changes until a few days of runs can be read. So since then every cost case records,
+on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
+by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
+shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
+reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
+reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
+already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
+from any of the three shapes. And a suite that fails and then passes its recheck now has its first
+output uploaded from the CI job as the download `flaky-first-output-<part>-attempt-<n>`, kept 14
+days; until then it was kept in the runner's cache and thrown away with the runner. The flake rule
+is unchanged: such a suite still ends the run red (#245).
+
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
 refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts

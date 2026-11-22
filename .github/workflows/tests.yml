@@ -478,6 +478,9 @@ jobs:
           # Every part a suite said it could not measure here, with its reason, for the fan in to
           # put on the run's summary (claude-config#3312). The log caps them and nothing reads it.
           HOOK_TESTS_UNMEASURED_FILE: ${{ runner.temp }}/unmeasured.tsv
+          # Where the first, failing output of a suite that then passed its recheck is kept (#1788),
+          # in a folder of this job's own so the step below can upload it (claude-config#3170).
+          HOOK_TESTS_FLAKY_OUTPUT: ${{ runner.temp }}/flaky-first-output
         # Captured as well as printed, so the step below can assert on what it said. `tee` keeps
         # the log identical to what it was, and the pipeline's exit status is taken from the
         # runner rather than from tee, or a failing suite would be reported as a pass.
@@ -485,6 +488,26 @@ jobs:
           set -o pipefail
           printf '%s\n' "$DEALT" > "$HOOK_TESTS_DEALT"
           bash payload/hooks/run-all-tests.sh 2>&1 | tee "$RUNNER_TEMP/run-all-tests.log"
+
+      # A suite that fails and then passes its recheck still ends red (#245, L293), and its first,
+      # failing output is the only record of what went wrong (#1788). Kept in ~/.cache it was thrown
+      # away with the runner, so the FAIL line named a path nobody could open, and the drafts gate's
+      # cost readings in it with it (claude-config#3170, Dan's decision of 2026-11-21 to measure more
+      # before changing any limit). Uploaded only from a failed part, which is the only part a suite
+      # can have flaked in; a part where nothing flaked has an empty folder and uploads nothing. The
+      # folder is new on every runner, so it holds this run's copies alone. Priced on 2026-11-21:
+      # skipped on every passing part, so nothing added there; on a failed part an upload of a few
+      # hundred KB, seconds, on a Linux runner (multiplier 1, free on this public repository), which
+      # can add a billed minute only where the job was within seconds of a minute's end (L276, L310).
+      - name: Keep the first output of each suite that failed and then passed
+        if: ${{ failure() && needs.deal.outputs.reused-run == '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flaky-first-output-${{ matrix.part }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flaky-first-output
+          retention-days: 14
+          if-no-files-found: ignore
 
       # From a failing part too, since what a red run did not test is still worth saying. A part
       # whose runner never wrote the record uploads nothing, and the fan in names it as missing
