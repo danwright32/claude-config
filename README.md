@@ -9179,10 +9179,10 @@ and classic Stop, Notification or PermissionRequest hook, claude-sync's `notify`
 that neither reads the sleep record nor sits on its exempt list with a reason. It also keeps a
 recorded list of the routes that read it, held both ways, so one that is no longer found, or no
 longer reads it, fails by name until the list changes in the same pull request (#3411). It then
-runs each shell route asleep and awake, and runs the same way the one exempt settings route whose reason is that it
-prints nothing, the write gate on `PermissionDenied` (#3253). The night's report (#835),
-`~/Downloads/Sleep report <night>.md`, is written
-from the first minute of `/sleep` (start time ET, power, workers), rebuilt after every note, and
+runs each shell route asleep and awake, and runs the same way the one exempt settings route
+whose reason is that it prints nothing, the write gate on `PermissionDenied` (#3253). The night's
+report (#835), `~/Downloads/Sleep report <night>.md`, is written from the first minute of `/sleep`
+(start time ET, power, workers), rebuilt after every note, and
 once more at wake or the limit with done read from GitHub and checked against the notes, sessions
 and claims that went quiet flagged, each rate limit wait and paid usage; every note, the noun's and
 the shell's `sleep_note` in `hooks/lib/sleep.sh` alike, goes through `hooks/lib/sleep-report.py`,
