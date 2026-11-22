@@ -26138,7 +26138,8 @@ section "== the watcher's timer wake stops an ask the shared repo never answers,
 # without a word. An ask that waited it out would end after the transport did, so a transport still
 # running once the watcher has ended is what shows the ask was stopped. The watcher's timer is one
 # second, and the stand in fswatch ends the watcher as soon as the wake's record is written, so
-# nothing here waits on a duration (L290, L524).
+# nothing here waits on a duration (L290, L524). Every number in this paragraph is one the code or
+# this fixture sets, not measured.
 WAB="$WORK/ask-bound"; mkdir -p "$WAB/home" "$WAB/bin"
 echo '{"hooks":{}}' > "$WAB/home/settings.json"
 WAB_R="$WAB/repo"; git init -q -b main "$WAB_R"
@@ -26183,7 +26184,8 @@ check "#3396 and the stopped ask failed nothing in the watcher" "! grep -q 'FAIL
 
 # The bound's fallback. A perl on the path stands in for run_bounded's for the ask alone: it writes
 # the bound it was handed and answers as a stopped ask does, so the 60 second fallback is read
-# without waiting 60 seconds. Every other perl call goes to the real one.
+# without waiting 60 seconds (the code's setting, not measured). Every other perl call goes to the
+# real one.
 wab_perl="$(command -v perl)"
 cat > "$WAB/bin/perl" <<WABPERL
 #!/usr/bin/env bash
