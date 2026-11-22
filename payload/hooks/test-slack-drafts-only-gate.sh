@@ -4099,11 +4099,11 @@ def yard():
     return time.process_time() - t
 # SLACK_GATE_COST_REPLAY names a doctored record to judge in place of the gate (#3170): a JSON list
 # of judgements, each with its "units", what the cache "said" of it and, for a refusal, its "exit"
-# and "stderr". With it set no gate is run and no yardstick is timed (a unit is 1 s, so a
-# judgement's seconds are its units); everything after that, which samples are taken, what each
-# must show and the verdict, is the code every measurement runs. It is how the suite sees the cached
-# cases' verdicts on records this machine cannot make, a judgement that ran out of the gate's
-# seconds among them. No measurement sets it.
+# and "stderr". With it set no gate is run and no yardstick is timed (the code sets the unit to one
+# second, which is not a measurement, so a judgement's seconds are its units); everything after
+# that, which samples are taken, what each must show and the verdict, is the code every measurement
+# runs. It is how the suite sees the cached cases' verdicts on records this machine cannot make, a
+# judgement that ran out of the gate's seconds among them. No measurement sets it.
 replay = None
 if os.environ.get("SLACK_GATE_COST_REPLAY"):
     with open(os.environ["SLACK_GATE_COST_REPLAY"]) as f:
@@ -4531,7 +4531,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     cost="$(SLACK_GATE_COST_LABEL=unfilled-warm SLACK_GATE_COST_LOG="$T/cost-unfilled.log" SLACK_GATE_CACHE_DIR="$short_cold" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 L174 2>&1)"
     case "$cost" in
       "unmeasured: the cache this case was handed was never filled"*"short-budget"*"ran out of the gate's seconds"*) cost=ok ;;
-      *) cost="cost.py answered: ${cost:0:700}; the record of judgements that ran out: $(cat "$T/cost-cache-unfilled.log" 2>&1 | head -c 300)" ;;
+      *) cost="cost.py answered: ${cost:0:700}; the record of judgements that ran out: $(head -c 300 "$T/cost-cache-unfilled.log" 2>&1)" ;;
     esac
     check "a cached case in the folder where a real judgement ran out of the gate's seconds is unmeasured, from the record that judgement left (#3170)" "$cost"
   else
