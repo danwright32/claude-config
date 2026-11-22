@@ -191,6 +191,16 @@ mk_stack s1
 pr_json base/one OPEN "$BASE_TIP"
 check_eq "S1 an open pull request at the base's pushed head, under this branch: established" "base origin/base/one $BASE_TIP 7" "$(sb)"
 
+# The commonest stack: a branch cut from origin's copy of its base tracks that base. The upstream is
+# a candidate on the same terms as any other branch, and the lessons review reads from it.
+mk_stack s1b
+pr_json base/one OPEN "$BASE_TIP"
+G branch -q --set-upstream-to=origin/base/one
+check_eq "S1b the base is also the branch's upstream: established" "base origin/base/one $BASE_TIP 7" "$(sb)"
+run_review_gate "git push origin HEAD:refs/heads/child/two"
+check_eq "S1b and the lessons review reads from it: allowed" "0" "$RG_RC"
+check_not "S1b without the base's change" "BASE_ONLY_MARKER" "$(cat "$REVIEW_LOG")"
+
 mk_stack s2
 out="$(sb)"
 check "S2 the base has no pull request: not established" "none " "$out"

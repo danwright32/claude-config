@@ -22,11 +22,14 @@
 # A base is ESTABLISHED only when every one of these holds:
 #   1. HEAD is on a named branch. Detached, the branch's own copy on origin cannot be told from a
 #      base by name.
-#   2. A branch on origin, which is not the default branch, not this branch's own copy and not its
-#      upstream, has its tip in HEAD's history, short of HEAD, past the floor (where the gate's
-#      range starts today; the merge base with the default branch when none is given) and not
-#      already on the default branch. The tip is this checkout's copy of the ref, which is what the
-#      next step checks against GitHub. A branch that merely NAMES a base (an upstream, the setting
+#   2. A branch on origin, which is not the default branch and not this branch's own copy (the one
+#      of its own name), has its tip in HEAD's history, short of HEAD, past the floor (where the
+#      gate's range starts today; the merge base with the default branch when none is given) and
+#      not already on the default branch. The tip is this checkout's copy of the ref, which is what
+#      the next step checks against GitHub. The branch's upstream is neither favoured nor left out:
+#      a branch cut from origin's copy of its base tracks that base, which is the commonest stack,
+#      and it is a candidate on the same terms as any other branch.
+#      A branch that merely NAMES a base (an upstream, the setting
 #      gh pr create records, its own pull request's base) and does not descend from it has no such
 #      tip, so naming establishes nothing.
 #   3. It is the NEAREST such tip: every other one is in its history. Two that do not hold each
@@ -85,7 +88,7 @@ sb_field() {   # $1 = sb_stacked_base's answer  $2 = ref | tip | pr
 sb__none() { printf 'none %s\n' "$1"; return 1; }
 
 sb__answer() {
-  local dir="$1" floor="$2" head branch def up tip ref near="" i j n holds
+  local dir="$1" floor="$2" head branch def tip ref near="" i j n holds
   local -a tips=() refs=()
   cd "$dir" 2>/dev/null || { sb__none "$dir is not a directory that can be entered"; return 1; }
   head="$(git rev-parse --verify --quiet 'HEAD^{commit}' 2>/dev/null)"
@@ -98,20 +101,25 @@ sb__answer() {
   [ -n "$floor" ] || floor="$(git merge-base "$def" "$head" 2>/dev/null)"
   floor="$(git rev-parse --verify --quiet "$floor^{commit}" 2>/dev/null)"
   [ -n "$floor" ] || { sb__none "this branch has no merge base with $def"; return 1; }
-  up="$(git rev-parse --symbolic-full-name '@{u}' 2>/dev/null)" || up=""
 
+  # Read into a variable first, which waits for git, then fed from a here document: a child the
+  # shell never waits for can cost bash 3.2 what it prints next (claude-config#1984). An empty
+  # listing is one empty line, which the first test in the loop skips.
+  local listing
+  listing="$(git for-each-ref --merged "$head" --format='%(objectname) %(refname)' refs/remotes/origin 2>/dev/null)" || listing=""
   while read -r tip ref; do
     [ -n "$ref" ] || continue
     case "$ref" in
       refs/remotes/origin/HEAD|"refs/remotes/$def"|"refs/remotes/origin/$branch") continue ;;
     esac
-    [ -n "$up" ] && [ "$ref" = "$up" ] && continue
     [ "$tip" = "$head" ] && continue
     [ "$tip" = "$floor" ] && continue
     git merge-base --is-ancestor "$floor" "$tip" 2>/dev/null || continue
     git merge-base --is-ancestor "$tip" "$def" 2>/dev/null && continue
     tips+=("$tip"); refs+=("$ref")
-  done < <(git for-each-ref --merged "$head" --format='%(objectname) %(refname)' refs/remotes/origin 2>/dev/null)
+  done <<SB_REFS
+$listing
+SB_REFS
   n=${#tips[@]}
   [ "$n" -gt 0 ] || { sb__none "no other branch on origin lies between $def and this branch"; return 1; }
 

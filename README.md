@@ -3500,7 +3500,7 @@ A base is established only when all of this holds, and anything short of it is j
 default branch exactly as before:
 
 - HEAD is on a named branch.
-- A branch on origin, other than the default branch, this branch's own copy and its upstream, has
+- A branch on origin, other than the default branch and this branch's own copy, has
   its head in this branch's history, short of HEAD and not already on the default branch. A branch
   that only names a base (an upstream, the setting `gh pr create` records, its own pull request's
   base) and does not descend from it establishes nothing.
@@ -3509,8 +3509,8 @@ default branch exactly as before:
 - GitHub says an open pull request of this repository, never a fork's, has that branch as its head
   at exactly that commit. A remote ref in a checkout can be moved by hand, so this checkout's copy
   alone is not believed. A base that was never pushed, was deleted, or whose pull request is closed
-  or merged fails here, and so does a read of GitHub that fails or takes longer than 10 seconds
-  (`SB_READ_SECONDS`).
+  or merged fails here, and so does a read of GitHub that fails or runs past its own time limit
+  (`SB_READ_SECONDS` in that file).
 
 How each gate knows the base's own changes are judged:
 

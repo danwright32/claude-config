@@ -189,17 +189,20 @@ pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range sta
   [ -r "$file" ] || return 1
   tiptree="$(git rev-parse --verify --quiet "$1^{tree}" 2>/dev/null)"
   [ -n "$tiptree" ] || return 1
+  # The base's own commits and their trees, on one line ("commit tree commit tree ..."), handed to
+  # awk as a variable: one input file, so nothing has to tell two files apart.
   commits="$(git log --format='%H %T' "$2..$1" 2>/dev/null)" || return 1
+  commits="$(printf '%s' "$commits" | tr '\n' ' ')"
   [ -n "$commits" ] || return 1
-  awk -F '\t' -v gate="${PC_GATE:-}" -v tiptree="$tiptree" '
-    NR == FNR { split($0, p, " "); sha[p[1]] = 1; tree[p[2]] = 1; next }
+  awk -F '\t' -v gate="${PC_GATE:-}" -v tiptree="$tiptree" -v commits="$commits" '
+    BEGIN { n = split(commits, p, " "); for (i = 1; i + 1 <= n; i += 2) { sha[p[i]] = 1; tree[p[i + 1]] = 1 } }
     $3 != gate { next }
     {
       hit = ($15 != "") ? ($15 in tree) : ($6 in sha)
       if (hit && ($4 == "override" || $4 == "failopen")) bad = 1
       if ($15 == tiptree && ($4 == "pass" || $4 == "nosource" || $4 == "docsonly")) good = 1
     }
-    END { exit (good && !bad) ? 0 : 1 }' <(printf '%s\n' "$commits") "$file"
+    END { exit (good && !bad) ? 0 : 1 }' "$file"
 }
 
 # ---- leaving out what a merge of the default branch brought in (claude-config#2028) ----
