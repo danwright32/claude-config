@@ -3766,6 +3766,16 @@ test('#3416: the files a suite reads in are counted against the limit, and past 
   expect(await readLeft(text, files, { read })).toEqual(['run /s/app/page.tsx'])
   expect(read.chars).toBeGreaterThan(0)
   expect(read.chars).toBeLessThan(ownBudget(text) + 2 * big.length)
+  // A file whose commands the guard holds already is handed to no reader again, so only the count
+  // of its own text bounds it: without that count all sixty are handed over.
+  const had = { chars: 0 }
+  const commands = pipelineIn(big, '/s', '/h') as readonly RunCommand[]
+  const known: OwnCallIo['sourced'] = async c => {
+    had.chars += big.length
+    return { path: `/s/${c.words[1]}`, text: big, commands }
+  }
+  expect(await ownLeft(text, known)).toEqual(['run /s/app/page.tsx'])
+  expect(had.chars).toBeLessThan(ownBudget(text) + big.length)
   // The same file read in sixty times is read from the disk once.
   const again = { chars: 0 }
   expect(await readLeft(`run() { true; }\n${'. lib/f0.sh\n'.repeat(60)}run app/page.tsx\n`, { '/s/lib/f0.sh': 'helper() { echo x; }\n' }, { read: again })).toEqual([])

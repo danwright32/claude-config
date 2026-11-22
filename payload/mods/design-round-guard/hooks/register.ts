@@ -1148,7 +1148,6 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     if (s.lang === 'shell') {
       const mine = readings.get(s)
       const cwd = s.folder ?? UNPLACED
-      const placedIn = (c: RunCommand) => (c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder)
       const left =
         mine?.commands && mine.text !== undefined
           ? await withoutOwnCalls(
