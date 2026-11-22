@@ -477,6 +477,25 @@ if git -C "$R" init -q 2>/dev/null && cp "$G/lib/posts.sh" "$G/lib/calm.sh" "$R/
   refused "#3395 git show after GIT_DIR is exported is still refused"
   run "git show $SHA:absent.sh > old.sh; bash old.sh" "$R"
   unread "git show of a file the commit does not hold" "$by_git"
+  # Whether the command is git, with which options in front and which subcommand, is asked of the
+  # one reading of it (lib/shell-words.py git_read, claude-config#1188). Each verdict below is the
+  # one the library gave while it read the words itself (35afab0dba, 2026-11-22).
+  run "/usr/bin/git show $SHA:posts.sh > old.sh; bash old.sh" "$R"
+  posts "git named by its path in a system folder"
+  run "git 2>/dev/null show $SHA:posts.sh > old.sh; bash old.sh" "$R"
+  posts "git show with a redirection before the subcommand"
+  run "git -C $R --no-pager show $SHA:calm.sh > old.sh; bash old.sh"
+  unread "git with -C before --no-pager" "$by_git"
+  run "git -c core.quotepath=off show $SHA:calm.sh > old.sh; bash old.sh" "$R"
+  unread "git with an option of its own other than --no-pager and -C" "$by_git"
+  run "env git show $SHA:posts.sh > old.sh; bash old.sh" "$R"
+  posts "git show behind env, which the gate reads as the command it runs,"
+  run "'(git' show $SHA:calm.sh > old.sh; bash old.sh" "$R"
+  unread "a program named (git, which is not git,"
+  run "git '>x' show $SHA:calm.sh > old.sh; bash old.sh" "$R"
+  unread "git with a quoted word that looks like a redirection before the subcommand" "$by_git"
+  run "git 'show>x' $SHA:calm.sh > old.sh; bash old.sh" "$R"
+  unread "git with a subcommand named show>x" "$by_git"
 else
   # git could not make and commit to a repository here, a state this suite cannot set: said on the
   # runner's one line for that, never a failure (L411, run-all-tests.sh #1444).

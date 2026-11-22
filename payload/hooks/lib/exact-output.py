@@ -43,6 +43,9 @@ print the file as the commit holds it, and the gate reads it with the same `git 
 already uses for a checkout (git_out). Only where REV is an object name in hex that is no ref: a
 branch or HEAD can be moved by an earlier command of the same call, and the gate would have read
 the file as it was before. No GIT_ variable may be set in front of it or exported in the text.
+That the command is git, and which of its words are git's own options, its subcommand and the
+words after, is asked of the one reading of that (lib/shell-words.py git_read, claude-config#1188),
+as the gate itself asks it: lib/word-position-scan.py refuses a second reading written here.
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (shell) and readers (made_from, resolve, sh_cwd, sh_funcs,
@@ -460,7 +463,19 @@ def make(unknown_dir):
             what it prints where that is known exactly (module docstring), else None. vals are the
             command's words, each worked out or None, stdin the pieces of its input or None, and
             text the command as written."""
-            if (name not in SEDS and name != "git") or any(v is None for v in vals):
+            if any(v is None for v in vals):
+                return None
+            # Whether the command is git, with which options of git's own and which subcommand, is
+            # the one reading's answer (lib/shell-words.py git_read, claude-config#1188): never
+            # read from the words here, where a second reading could come to disagree with it.
+            git = None if name in SEDS else self.sw.git_read(vals)
+            if git is None and name not in SEDS:
+                return None
+            if git is not None and vals[0].lstrip("({") != vals[0]:
+                # That reading takes a ( or a { glued in front of the program as the shell's, which
+                # it is in a command as written. These words are worked out, where one is part of
+                # the name: a program called `(git` is not git, and was never read as it (seen
+                # allowed without this line, test-slack-drafts-reads-more.sh, 2026-11-22).
                 return None
             if self.sw.command_rest(text)[1].strip() or self.sh_cwd(d) == unknown_dir:
                 return None
@@ -468,13 +483,13 @@ def make(unknown_dir):
             while ctx is not None:
                 if self.exact_shadowed(ctx["text"], name):
                     return None  # a function or an alias of that name is not the program
-                if name == "git" and any(n.startswith("GIT_") for n in list(ctx["exported"]) + list(ctx["pending"])):
+                if git is not None and any(n.startswith("GIT_") for n in list(ctx["exported"]) + list(ctx["pending"])):
                     return None
                 ctx = ctx.get("parent")
-            if name == "git":
+            if git is not None:
                 if any(n in os.environ for n in GIT_PLACES):
                     return None  # git_out leaves these out, and the command itself would not
-                return self.git_file_printed(vals[1:], d)
+                return self.git_file_printed(*git, d)
             plan = sed_plan(vals[1:])
             if plan is None:
                 return None
@@ -531,19 +546,28 @@ def make(unknown_dir):
                     return None
             return out
 
-        def git_file_printed(self, words, d):
+        def git_file_printed(self, sub, front, after, d):
             """What `git show REV:PATH` and the two cat-file forms print, as one text piece, where
-            REV is a hex object name that is no ref (module docstring); else None."""
-            k = 1 if words[:1] == ["--no-pager"] else 0
+            REV is a hex object name that is no ref (module docstring); else None.
+
+            sub, front and after are the one reading's answer for the command (lib/shell-words.py
+            git_read): its subcommand, git's own options in front of that, and every word after
+            it. What is decided here is only this library's own: which of git's options leave the
+            object it names the same (--no-pager, then -C and its folder, and nothing else), and
+            which subcommands print one object whole. A word that reading passed over as a
+            redirection is among the words after, so a count of them that fits is a command
+            holding none."""
+            k = 1 if front[:1] == ["--no-pager"] else 0
             where = self.resolve(".", d)
-            if words[k:k + 1] == ["-C"] and len(words) > k + 1:
-                where = self.resolve(words[k + 1], d)
+            if front[k:k + 1] == ["-C"] and len(front) > k + 1:
+                where = self.resolve(front[k + 1], d)
                 k += 2
-            rest = words[k:]
-            if len(rest) == 2 and rest[0] == "show":
-                spec = rest[1]
-            elif len(rest) == 3 and rest[0] == "cat-file" and rest[1] in ("-p", "blob"):
-                spec = rest[2]
+            if len(front) != k:
+                return None  # another option of git's own, or these two the other way round
+            if sub == "show" and len(after) == 1:
+                spec = after[0]
+            elif sub == "cat-file" and len(after) == 2 and after[0] in ("-p", "blob"):
+                spec = after[1]
             else:
                 return None
             m = GIT_SPEC.fullmatch(spec)
