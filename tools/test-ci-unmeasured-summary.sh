@@ -149,17 +149,97 @@ grep -qF "Main's last run left no record" <<< "$sum" \
   && check "#3312 and an empty path for main's record reads the same" ok \
   || check "#3312 and an empty path for main's record reads the same" "summary: $sum"
 
-# 6. A list too long for one notice: capped, saying how many more are in the summary.
+# GitHub cuts a notice's message at 4,096 characters of the DECODED text (on run 44826519963 the
+# annotation came back 4,096 long with real newlines, where the escaped line it was sent as was longer),
+# so the tool holds the decoded message to NOTICE_BYTES bytes, never more than characters.
+NOTICE_BYTES=4000
+# decode <title>: the message of the notice with exactly that title, with its escapes undone, into
+# $TMPROOT/decoded (no trailing newline), as GitHub stores it.
+decode(){
+  grep -F "::notice title=$1::" <<< "$notices" | head -1 | sed "s/^::notice title=$1:://" \
+    | perl -pe 'chomp; s/%(25|0A|0D)/$1 eq "25" ? "%" : $1 eq "0A" ? "\n" : "\r"/ge' > "$TMPROOT/decoded"
+}
+# fits <case> <title> <what>: the decoded message is within the bytes the tool holds itself to.
+fits(){
+  local b; b="$(LC_ALL=C wc -c < "$TMPROOT/decoded" | tr -d ' ')"
+  [ -s "$TMPROOT/decoded" ] && [ "$b" -le "$NOTICE_BYTES" ] \
+    && check "#3312 $3: the message is within $NOTICE_BYTES bytes" ok \
+    || check "#3312 $3: the message is within $NOTICE_BYTES bytes" "$b bytes"
+}
+# a fixture's reasons the length of the real ones (about 150 bytes), made up, numbered so each is unique.
+long_why(){ printf '#%d the settle step wired end to end through the hook and its picker, because the tool it reads is macOS only, and the runner here is Linux (case %d)' "$((1800 + $1))" "$1"; }
+
+# 6. Fifty short parts fit one notice whole: every one listed, and no line saying more.
 mkdir -p "$TMPROOT/many/parts"
 for n in 1 2 3 4; do mkdir -p "$TMPROOT/many/parts/part-unmeasured-$n"; : > "$TMPROOT/many/parts/part-unmeasured-$n/unmeasured.tsv"; done
 for n in $(seq 1 50); do printf 'test-m%02d.sh\tpart %s\n' "$n" "$n"; done > "$TMPROOT/many/parts/part-unmeasured-4/unmeasured.tsv"
 summarise many ""
-main_notice="$(grep '^::notice title=Not tested by the checks::' <<< "$notices")"
-lines="$(awk -F'%0A' '{ print NF - 1 }' <<< "$main_notice")"
-grep -qF '%0A...and 10 more, listed in the run' <<< "$main_notice" && [ "$lines" = 41 ] \
+decode "Not tested by the checks"
+lines="$(awk 'END { print NR }' "$TMPROOT/decoded")"
+[ "$lines" = 51 ] && ! grep -q 'more part' "$TMPROOT/decoded" && grep -qx 'test-m50.sh: part 50' "$TMPROOT/decoded" \
   && [ "$(grep -c '^| test-m' <<< "$sum")" = 50 ] \
-  && check "#3312 a long list is capped at 40 in the notice, saying how many more, and whole in the summary" ok \
-  || check "#3312 a long list is capped at 40 in the notice, saying how many more, and whole in the summary" "lines=$lines notice: ${main_notice:0:300}"
+  && check "#3312 a list that fits is written whole in the notice, with no line saying more" ok \
+  || check "#3312 a list that fits is written whole in the notice, with no line saying more" "lines=$lines notice: $(head -c 300 "$TMPROOT/decoded")"
+fits many "Not tested by the checks" "a short list"
+
+# 6b. About fifty parts with reasons as long as the real ones, one part missing: the notice lists the
+# whole parts that fit, in the record's order, then the missing part, and its LAST line says how
+# many more there are and where they all are.
+mkdir -p "$TMPROOT/long/parts"
+for n in 1 2 3 4; do mkdir -p "$TMPROOT/long/parts/part-unmeasured-$n"; : > "$TMPROOT/long/parts/part-unmeasured-$n/unmeasured.tsv"; done
+rm -rf "$TMPROOT/long/parts/part-unmeasured-2"
+for n in $(seq 1 52); do printf 'test-long-%02d.sh\t%s\n' "$(( (n + 1) / 2 + n % 3 ))" "$(long_why "$n")"; done > "$TMPROOT/long/parts/part-unmeasured-1/unmeasured.tsv"
+summarise long ""
+decode "Not tested by the checks"
+fits long "Not tested by the checks" "a long list"
+total="$(grep -c . "$TMPROOT/long/parts/part-unmeasured-1/unmeasured.tsv")"
+# The listed parts: every line after the first, up to the missing part's line.
+sed -n '2,$p' "$TMPROOT/decoded" | sed '/^Part 2 handed back/,$d' > "$TMPROOT/listed"
+shown="$(grep -c . "$TMPROOT/listed" || true)"
+LC_ALL=C sort -t "$(printf '\t')" -k1,1 -k2,2 "$TMPROOT/long/parts/part-unmeasured-1/unmeasured.tsv" \
+  | awk -F'\t' '{ print $1 ": " substr($0, length($1) + 2) }' | head -n "$shown" > "$TMPROOT/expected"
+last="$(tail -n 1 "$TMPROOT/decoded")"
+[ "$shown" -gt 0 ] && [ "$shown" -lt "$total" ] && cmp -s "$TMPROOT/listed" "$TMPROOT/expected" \
+  && check "#3312 a long list shows only whole parts, the first ones in the record's order" ok \
+  || check "#3312 a long list shows only whole parts, the first ones in the record's order" "shown=$shown of $total; diff: $(diff "$TMPROOT/listed" "$TMPROOT/expected" | head -4)"
+[ "$last" = "...and $((total - shown)) more parts, listed in the run's summary." ] \
+  && grep -qx 'Part 2 handed back no record of what it did not test.' "$TMPROOT/decoded" \
+  && check "#3312 and its last line says how many more parts there are and where they are" ok \
+  || check "#3312 and its last line says how many more parts there are and where they are" "last line: $last"
+
+# 6c. Reasons made of characters of two bytes each: the notice is held in bytes, so it still fits.
+mkdir -p "$TMPROOT/wide/parts"
+for n in 1 2 3 4; do mkdir -p "$TMPROOT/wide/parts/part-unmeasured-$n"; : > "$TMPROOT/wide/parts/part-unmeasured-$n/unmeasured.tsv"; done
+wide="$(printf 'caf\303\251 %.0s' $(seq 1 30))"
+for n in $(seq 1 50); do printf 'test-w%02d.sh\t%s%s\n' "$n" "$wide" "$n"; done > "$TMPROOT/wide/parts/part-unmeasured-3/unmeasured.tsv"
+summarise wide ""
+decode "Not tested by the checks"
+fits wide "Not tested by the checks" "a list with reasons of more than one byte a character"
+last="$(tail -n 1 "$TMPROOT/decoded")"
+shown="$(sed -n '2,$p' "$TMPROOT/decoded" | grep -c '^test-w' || true)"
+[ "$last" = "...and $((50 - shown)) more parts, listed in the run's summary." ] && [ "$shown" -gt 0 ] \
+  && [ "$(sed -n '2,$p' "$TMPROOT/decoded" | grep '^test-w' | grep -cv "$wide[0-9]*\$" || true)" = 0 ] \
+  && check "#3312 and it ends on a whole part followed by how many more" ok \
+  || check "#3312 and it ends on a whole part followed by how many more" "shown=$shown last: $last"
+
+# 6d. More suites grown than main than fit one notice: the second notice is held the same way.
+mkdir -p "$TMPROOT/grown/parts"
+for n in 1 2 3 4; do mkdir -p "$TMPROOT/grown/parts/part-unmeasured-$n"; : > "$TMPROOT/grown/parts/part-unmeasured-$n/unmeasured.tsv"; done
+for n in $(seq 1 120); do printf 'test-grown-with-a-long-suite-name-%03d.sh\tpart %s\n' "$n" "$n"; done > "$TMPROOT/grown/parts/part-unmeasured-1/unmeasured.tsv"
+: > "$TMPROOT/grown/main.tsv"
+summarise grown "$TMPROOT/grown/main.tsv"
+decode "Not tested by the checks and more than on main"
+fits grown "Not tested by the checks and more than on main" "a long list of suites that grew"
+last="$(tail -n 1 "$TMPROOT/decoded")"
+first="$(head -n 1 "$TMPROOT/decoded")"
+shown="$(grep -o 'test-grown-with-a-long-suite-name-[0-9]*\.sh 1 part, none on main' <<< "$first" | grep -c . || true)"
+[ "$shown" -gt 0 ] && [ "$last" = "...and $((120 - shown)) more suites, listed in the run's summary." ] \
+  && [[ "$first" == *"none on main." ]] \
+  && check "#3312 the notice that says more than main lists whole suites, then how many more" ok \
+  || check "#3312 the notice that says more than main lists whole suites, then how many more" "shown=$shown first: ${first:0:200} last: $last"
+grep -qF "test-grown-with-a-long-suite-name-120.sh 1 part, none on main." <<< "$(head -1 <<< "$sum")" \
+  && check "#3312 and the summary's first line still names every suite that grew" ok \
+  || check "#3312 and the summary's first line still names every suite that grew" "first: $(head -c 200 <<< "$sum")"
 
 # 7. A percent sign in a reason cannot be read as an escape and break the notice into lines.
 parts esc
