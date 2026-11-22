@@ -258,8 +258,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     // Given the folder the call starts in, each command with the folder it runs in (#2000), as mod-kit's own pipeline gives it.
     if (cmd === '__modkit' && args[0] === 'pipeline') {
-      const input = JSON.parse(String(args[1])) as { command: string; cwd?: string; home?: string }
-      return ok(JSON.stringify(input.cwd === undefined ? pipeline(input.command) : pipelineIn(input.command, input.cwd, input.home ?? '')))
+      // With the commands that only set a value where the caller asks for them (#3093), as mod-kit's
+      // own handler passes that on: without it a reading that asks for them here was given none (#3416).
+      const input = JSON.parse(String(args[1])) as { command: string; cwd?: string; home?: string; assignments?: boolean }
+      const opts = input.assignments === true ? { assignments: true } : {}
+      return ok(JSON.stringify(input.cwd === undefined ? pipeline(input.command, opts) : pipelineIn(input.command, input.cwd, input.home ?? '', opts)))
     }
     // mod-kit's git reader (#1158), read here with its copy; JSON has no undefined, so none is null.
     // The settings the command runs with go with its words (#3337), as mod-kit's own member takes them.
@@ -5342,6 +5345,46 @@ test('#3416: a script calling a function its own text defines, which hands what 
   const commands = [`bash ${NOTES}/suite.sh`, `cd /w/slate && bash ${NOTES}/suite.sh`, `bash ${NOTES}/fn.sh`, `bash ${NOTES}/after.sh`, `sh ${NOTES}/outer.sh`, `source ${NOTES}/suite.sh`, `bash ${NOTES}/hook.sh`]
   for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
   expect(w.ran.length).toBe(commands.length)
+})
+
+// #3416, Dan 2026-11-22 ("Read the files a suite reads in (Recommended)"): the guard reads a file
+// a suite reads in from beside it (rules.ts readInFile) and checks it as it checks the suite's own
+// text, so a file read in after a helper no longer leaves the helper's calls held, and a helper
+// that comes from such a file is read as its own commands with the call's words in place.
+test('#3416: a suite that reads in a file beside it runs as before where the file hands the page to nothing judged, and is held where it does, is rewritten first, or cannot be read', withKit, async ($, on) => {
+  const DIR = 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+  const scripts: Record<string, string> = {
+    // The shape the count found six times: DIR set once as a command, and again in text the suite
+    // writes into a fixture; the helper its own, a file read in under DIR after it.
+    'gate.sh': `${DIR}${OWN_CHECK}${OWN_SAYS}top='DIR=/elsewhere'\nprintf '%s\\n' "$top" 'DIR=/x' > "$T/fixture.sh"\nERR=x\n. "$DIR/lib/settings.sh"\nsays "the refusal names /w/slate/app/page.tsx" "refused app/page.tsx"\n`,
+    'lib/settings.sh': 'settings_file() { echo "$HOME/.claude/settings.json"; }\n',
+    // A helper from the file read in, which only prints what it is handed.
+    'helper.sh': `${DIR}. "$DIR/lib/fns.sh"\nlib_note /w/slate/app/page.tsx\n`,
+    'plain.sh': `. ${NOTES}/lib/fns.sh\nlib_note /w/slate/app/page.tsx\n`,
+    'lib/fns.sh': 'lib_note() { echo "$1"; }\nlib_fmt() { prettier --write "$1"; }\n',
+    // Held: the file's helper hands the page on; the file defines the suite's helper again; the
+    // suite writes the file before it reads it in; the file is not there; it is outside the folder.
+    'hands.sh': `${DIR}. "$DIR/lib/fns.sh"\nlib_fmt /w/slate/app/page.tsx\n`,
+    'again.sh': `${DIR}note() { echo "$1"; }\n. "$DIR/lib/redefines.sh"\nnote /w/slate/app/page.tsx\n`,
+    'lib/redefines.sh': 'note() { mystery "$1"; }\n',
+    'rewrites.sh': `${DIR}echo 'lib_note() { rm "$1"; }' > ${NOTES}/lib/fns.sh\n. "$DIR/lib/fns.sh"\nlib_note /w/slate/app/page.tsx\n`,
+    'missing.sh': `${DIR}. "$DIR/lib/none.sh"\nlib_note /w/slate/app/page.tsx\n`,
+    'outside.sh': '. /w/elsewhere/fns.sh\nlib_note /w/slate/app/page.tsx\n',
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, '/w/elsewhere/fns.sh': scripts['lib/fns.sh'] as string, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const cleared = [`bash ${NOTES}/gate.sh`, `bash ${NOTES}/helper.sh`, `bash ${NOTES}/plain.sh`]
+  for (const command of cleared) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(cleared.length)
+  for (const command of [
+    ...['hands', 'again', 'rewrites', 'missing', 'outside'].map(name => `bash ${NOTES}/${name}.sh`),
+    // The command itself writes the file before it runs the suite that reads it in.
+    `echo 'lib_note() { rm "$1"; }' > ${NOTES}/lib/fns.sh; bash ${NOTES}/helper.sh`,
+    `rm -rf ${NOTES}/lib && bash ${NOTES}/helper.sh`,
+  ])
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  expect(w.ran.length).toBe(cleared.length)
+  expect(refusalOf(await sh(`bash ${NOTES}/hands.sh`))).toContain(`${NOTES}/hands.sh hands lib_fmt, as a write of that file: lib_fmt is a program the mods do not know`)
 })
 
 test('#3416: a function of the script that hands on what it was handed, or that the text does not surely define, is still held as the direct call is', withKit, async ($, on) => {

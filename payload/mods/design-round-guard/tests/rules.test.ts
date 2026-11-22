@@ -57,6 +57,8 @@ import {
   argumentUnreached,
   handedToUnknown,
   withoutOwnCalls,
+  readInFile,
+  type OwnCallIo,
   ownBudget,
   calledWith,
   ownDefinitions,
@@ -3450,7 +3452,7 @@ test('#3416: handedToUnknown gives each file a script text hands a program the r
 // text defines is not read as a program the reader does not know. All 31 newly judged calls in the
 // count were a suite calling its own helper. What is left of a script's runs once such calls are
 // read as the function's own commands, as `program path` for each look changing file still handed on.
-const ownLeft = async (text: string, sourced?: (c: RunCommand) => readonly RunCommand[] | undefined): Promise<string[]> => {
+const ownLeft = async (text: string, sourced?: OwnCallIo['sourced']): Promise<string[]> => {
   const io = {
     pipeline: async (t: string, assignments?: boolean) => pipelineIn(t, '/s', '/h', assignments ? { assignments: true } : {}) as readonly RunCommand[],
     writes: async (t: string) => commandWrites(t, '/s', '/h') as never,
@@ -3529,17 +3531,245 @@ test('#3416: a function that hands on what it was handed is still a run of a pro
     'run() { true; } # zz3416\nrun app/page.tsx\n',
   ])
     expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
-  // A function from a file the script reads in is no function of its own text.
+  // A function from a file the guard did not read is no function it can read the body of.
   expect(await ownLeft('. /s/lib.sh\nlib_fn app/page.tsx\n')).toEqual(['lib_fn /s/app/page.tsx'])
   // A file read in after the definition: left out only where the guard read it and it leaves the name alone.
   const after = 'run() { true; }\n. /s/lib.sh\nrun app/page.tsx\n'
-  const lib = (text: string) => () => pipelineIn(text, '/s', '/h') as readonly RunCommand[]
+  const lib = (text: string) => async () => ({ path: '/s/lib.sh', text, commands: pipelineIn(text, '/s', '/h') as readonly RunCommand[] })
   expect(await ownLeft(after, lib('helper() { echo x; }\n'))).toEqual([])
   expect(await ownLeft(after, lib('run() { mystery "$1"; }\n'))).toEqual(held)
   expect(await ownLeft(after, lib('eval "$x"\n'))).toEqual(held)
-  expect(await ownLeft(after, () => undefined)).toEqual(held)
+  expect(await ownLeft(after, async () => undefined)).toEqual(held)
   // A mod hook file handed to a helper that passes it to a script is still judged.
   expect(await ownLeft('mutant(){\n  local file="$4" expr="$5"\n  bash /s/tools/prove.sh --sed "$file" "$expr"\n}\nmutant a b PROVED payload/mods/x/hooks/rules.ts s/a/b/\n')).toEqual(['mutant /s/payload/mods/x/hooks/rules.ts'])
+})
+
+// #3416, Dan 2026-11-22 ("Read the files a suite reads in (Recommended)"): what is left of a suite's
+// runs where the guard reads each file the suite reads in from a disk holding `files` (readInFile).
+// The suite is /s/suite.sh, run in /s. `read` counts the characters read from that disk.
+const OWN_DIR = 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+const readLeft = async (text: string, files: Record<string, string>, given: { written?: string[]; unreadable?: string[]; links?: string[]; read?: { chars: number } } = {}): Promise<string[]> => {
+  const disk = {
+    stat: async (p: string) => {
+      const f = files[p]
+      if (f === undefined) throw new Error('ENOENT')
+      return { kind: 'file', size: f.length, isLink: given.links?.includes(p) ?? false }
+    },
+    read: async (p: string) => {
+      if (given.unreadable?.includes(p)) throw new Error('EACCES')
+      if (given.read) given.read.chars += (files[p] as string).length
+      return files[p] as string
+    },
+  }
+  return ownLeft(text, (c, beside) => readInFile(disk, c, beside, { path: '/s/suite.sh', text, folder: '/s' }, '/h', () => undefined, given.written ?? []))
+}
+
+test('#3416: a file a suite reads in after its helper, by a path the guard can work out, is read from the disk', async () => {
+  const RUN = 'run() { true; }\n'
+  const CALL = 'run app/page.tsx\n'
+  const held = ['run /s/app/page.tsx']
+  const lib = { '/s/lib/x.sh': 'helper() { echo x; }\n' }
+  // The shape the count found six times: the suite sets DIR to its own folder once, as a command of
+  // its own, and holds the same line again as text it writes into fixtures, with a cd inside the
+  // same idiom on an earlier line. Read as text alone (mod-kit's ownFolderVar) that is no one value.
+  const suite = `. "$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {\n  exit 1\n}\n${OWN_DIR}${CHECK}${SAYS}top='DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"'\nprintf '%s\\n' "$top" 'DIR=/elsewhere' > "$T/fixture.sh"\ncat > "$T/other.sh" <<'EOF'\nDIR=/elsewhere\nEOF\n. "$DIR/lib/x.sh"\nsays app/page.tsx "refused"\n`
+  expect(await readLeft(suite, lib)).toEqual([])
+  for (const text of [
+    `${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}source "\${DIR}/lib/x.sh" || {\n  exit 1\n}\n${CALL}`,
+    // Whether the file is read in or not, it leaves the name alone: a branch around it changes nothing.
+    `${OWN_DIR}${RUN}if [ -f "$DIR/lib/x.sh" ]; then\n  . "$DIR/lib/x.sh"\nfi\n${CALL}`,
+    // A path with no expansion, from the folder the suite runs in or from the top of the disk.
+    `${RUN}. lib/x.sh\n${CALL}`,
+    `${RUN}. /s/lib/x.sh\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, lib) }).toEqual({ text, left: [] })
+  // The control: the same suites with nothing on the disk to read are held, so the file is what clears them.
+  expect(await readLeft(suite, {})).toEqual(['says /s/app/page.tsx'])
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, {})).toEqual(held)
+
+  // A path the guard cannot work out: the file is not read, and the call is judged as before.
+  for (const text of [
+    // A variable set from a command, an argument, a pattern, a file that is not there.
+    `${RUN}LIB="$(find . -name x.sh)"\n. "$LIB"\n${CALL}`,
+    `${OWN_DIR}${RUN}LIB="$DIR/lib/x.sh"\n. "$LIB"\n${CALL}`,
+    `${RUN}. "$1"\n${CALL}`,
+    `${RUN}. lib/*.sh\n${CALL}`,
+    `${RUN}. lib/missing.sh\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/$NAME.sh"\n${CALL}`,
+    // DIR is not surely the suite's own folder: set twice, in a function, in a branch, only where
+    // another command says so, by a builtin, by a default, after the file is read in, as text in
+    // single quotes, from $0 (the caller's name in a file read in), with more joined on, or after a
+    // cd has moved the folder a relative name of the suite is read from.
+    `${OWN_DIR}DIR=/elsewhere\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { DIR=/elsewhere; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `if [ -n "$X" ]; then\n${OWN_DIR}fi\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `[ -n "$X" ] && ${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `[ -n "$X" ] &&\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}read -r DIR\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { local DIR; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}other() { local DIR=/elsewhere; }\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}printf -v DIR '%s' /elsewhere\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}for DIR in a b; do true; done\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}: "\${DIR:=/elsewhere}"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}DIR=/elsewhere true\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `export ${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${RUN}. "$DIR/lib/x.sh"\n${OWN_DIR}${CALL}`,
+    `DIR='$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)'\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `DIR="$(cd "$(dirname "$0")" && pwd)"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)/lib"\n${RUN}. "$DIR/x.sh"\n${CALL}`,
+    `cd /elsewhere\n${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\ncd /s\n${CALL}`,
+    // Or something between the assignment and the file could set it again unseen: an eval, another
+    // file read in, arithmetic naming it.
+    `${OWN_DIR}eval "$SETUP"\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}. lib/quiet.sh\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/quiet.sh"\n. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}: $((DIR = 1))\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    `${OWN_DIR}(( DIR++ ))\n${RUN}. "$DIR/lib/x.sh"\n${CALL}`,
+    // The file read in under DIR may set DIR itself, so a second reading of it could be of another file.
+    `${OWN_DIR}${RUN}. "$DIR/lib/sets.sh"\n${CALL}`,
+    `${OWN_DIR}${RUN}. "$DIR/lib/locals.sh"\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, { ...lib, '/s/lib/.sh': lib['/s/lib/x.sh'], '/s/x.sh': lib['/s/lib/x.sh'], '/s/lib/quiet.sh': 'quiet() { echo x; }\n', '/s/lib/sets.sh': 'DIR=/elsewhere\n', '/s/lib/locals.sh': 'helper() { local DIR; }\n' }) }).toEqual({ text, left: held })
+  // The same file read in twice under DIR, and one that only reads DIR, are read.
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n. "$DIR/lib/x.sh"\n${CALL}`, lib)).toEqual([])
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/x.sh"\n${CALL}`, { '/s/lib/x.sh': 'helper() { cat "$DIR/notes" "${DIR}/more"; }\n' })).toEqual([])
+  // A file that is there and cannot be read, a link (which may point outside the folder), and one too large to read.
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { unreadable: ['/s/lib/x.sh'] })).toEqual(held)
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { links: ['/s/lib/x.sh'] })).toEqual(held)
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, { '/s/lib/x.sh': `helper() { echo x; }\n${'#'.repeat(allRules.SCRIPT_MAX)}\n` })).toEqual(held)
+
+  // A file outside the folder the suite is in is not read: by a whole path, by a climb, in the home folder.
+  const outside = { '/elsewhere/lib.sh': lib['/s/lib/x.sh'], '/lib.sh': lib['/s/lib/x.sh'], '/h/lib.sh': lib['/s/lib/x.sh'], '/s/lib/x.sh': lib['/s/lib/x.sh'] }
+  for (const text of [`${RUN}. /elsewhere/lib.sh\n${CALL}`, `${OWN_DIR}${RUN}. "$DIR/../lib.sh"\n${CALL}`, `${RUN}. ../lib.sh\n${CALL}`, `${RUN}. ~/lib.sh\n${CALL}`, `${OWN_DIR}${RUN}. "$DIR/lib/../../elsewhere/lib.sh"\n${CALL}`])
+    expect({ text, left: await readLeft(text, outside) }).toEqual({ text, left: held })
+  // The climb that stays inside the folder is read.
+  expect(await readLeft(`${OWN_DIR}${RUN}. "$DIR/lib/../lib/x.sh"\n${CALL}`, outside)).toEqual([])
+
+  // A file the command, or a script it runs, writes, removes or changes by a name the reader places,
+  // or a folder above it so written: what the guard read may not be what the suite reads in.
+  for (const written of [['/s/lib/x.sh'], ['/s/lib'], ['/s'], ['/s/app/other.tsx', '/s/lib/x.sh']]) expect({ written, left: await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { written }) }).toEqual({ written, left: held })
+  expect(await readLeft(`${RUN}. lib/x.sh\n${CALL}`, lib, { written: ['/s/lib/y.sh', '/s/library', '/s/lib/x.sh.bak'] })).toEqual([])
+
+  // What the file holds: the name again, an eval, a file it reads in itself, an alias, an unset.
+  for (const file of ['run() { mystery "$1"; }\n', 'run () { mystery "$1"; }\n', 'helper() { echo x; }\neval "$X"\n', 'helper() { echo x; }\n. /s/lib/more.sh\n', 'helper() { echo x; }\nsource /s/lib/more.sh\n', 'alias run=mystery\n', 'unset -f run\n'])
+    expect({ file, left: await readLeft(`${RUN}. lib/x.sh\n${CALL}`, { '/s/lib/x.sh': file, '/s/lib/more.sh': 'helper2() { echo x; }\n' }) }).toEqual({ file, left: held })
+})
+
+test('#3416: a helper from a file a suite reads in is read as its body with the call\'s words in place, by the checks a helper of the suite\'s own gets', async () => {
+  const CALL = 'lib_fn app/page.tsx\n'
+  const held = ['lib_fn /s/app/page.tsx']
+  const libs = { '/s/lib.sh': 'lib_fn() { echo "$1"; }\nlib_two() {\n  lib_fn "$1"\n}\nlib_fmt() { prettier --write "$1"; }\n' }
+  for (const text of [
+    `. lib.sh\n${CALL}`,
+    `. /s/lib.sh\n${CALL}`,
+    `${OWN_DIR}. "$DIR/lib.sh" || {\n  exit 1\n}\n${CALL}`,
+    // A helper of the file that passes the file on to another helper of the file.
+    '. lib.sh\nlib_two app/page.tsx\n',
+    // A helper of the suite's own that passes the file on to a helper of the file.
+    '. lib.sh\nfires() {\n  if lib_fn "$1"; then pass=$((pass + 1)); else fail=$((fail + 1)); fi\n}\nfires app/page.tsx\n',
+  ])
+    expect({ text, left: await readLeft(text, libs) }).toEqual({ text, left: [] })
+  // The controls: nothing on the disk, and a file that does not define the name.
+  expect(await readLeft(`. lib.sh\n${CALL}`, {})).toEqual(held)
+  expect(await readLeft(`. lib.sh\n${CALL}`, { '/s/lib.sh': 'other() { echo "$1"; }\n' })).toEqual(held)
+
+  // The name is never what is trusted: a body that hands the file on, writes it, removes it, runs
+  // it or keeps it in a variable is judged, as the same body in the suite's own text is.
+  expect(await readLeft('. lib.sh\nlib_fmt app/page.tsx\n', libs)).toEqual(['lib_fmt /s/app/page.tsx'])
+  expect(await readLeft('. lib.sh\nfires() {\n  if lib_fmt "$1"; then pass=1; fi\n}\nfires app/page.tsx\n', libs)).toEqual(['fires /s/app/page.tsx'])
+  // A helper that runs the predicate it is handed (`fires lib_fn app/page.tsx`, the shape the count
+  // found four times) is judged as before, whichever predicate: the predicate's name is a word the
+  // reader places as a file, and a file run as the command is not followed.
+  for (const predicate of ['lib_fn', 'lib_fmt']) expect(await readLeft(`. lib.sh\nfires() {\n  if "$1" "$2"; then pass=1; fi\n}\nfires ${predicate} app/page.tsx\n`, libs)).toEqual(['fires /s/app/page.tsx'])
+  for (const file of [
+    'lib_fn() { someunknownprogram "$@"; }\n',
+    'lib_fn() { echo x > "$1"; }\n',
+    'lib_fn() { sed -i s/a/b/ "$1"; }\n',
+    'lib_fn() { rm -f "$1"; }\n',
+    'lib_fn() { "$1" --fix; }\n',
+    'lib_fn() { eval "$1"; }\n',
+    'lib_fn() { local f="$1"; mystery "$f"; }\n',
+    'lib_fn() { for f in "$@"; do mystery "$f"; done; }\n',
+    'lib_fn() { shift; mystery "$1"; }\n',
+    'lib_fn() { mystery "${1:-x}"; }\n',
+    'lib_fn() { timeout 5 prettier --write "$1"; }\n',
+    'lib_fn() { lib_inner "$1"; }\nlib_inner() { prettier --write "$1"; }\n',
+    'lib_fn() {\n  cat <<EOF\n$1\nEOF\n}\n',
+    // A definition the shell may not make, or makes more than once, in the file.
+    'if [ -n "$X" ]; then\nlib_fn() { echo "$1"; }\nfi\n',
+    '[ -n "$X" ] && lib_fn() { echo "$1"; }\n',
+    '[ -n "$X" ] &&\nlib_fn() { echo "$1"; }\n',
+    'echo x | lib_fn() { echo "$1"; }\n',
+    'wrap() {\n  lib_fn() { echo "$1"; }\n}\n',
+    'lib_fn() { echo "$1"; }\nlib_fn() { echo "$1"; }\n',
+    'lib_fn () { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; } > "$1"\n',
+    // The file leaves early before the definition, so the shell may never make it.
+    '[ -n "$LOADED" ] && return 0\nlib_fn() { echo "$1"; }\n',
+    '[ -n "$LOADED" ] && exit 0\nlib_fn() { echo "$1"; }\n',
+    // The file holds an eval, an alias or an unset, or reads in a file itself: one file deep, no deeper.
+    'lib_fn() { echo "$1"; }\neval "$X"\n',
+    'alias lib_fn=mystery\nlib_fn() { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; }\nunset -f lib_fn\n',
+    'lib_fn() { echo "$1"; }\n. /s/more.sh\n',
+    '. /s/more.sh\nlib_fn() { echo "$1"; }\n',
+    'lib_fn() { echo "$1"; } # zz3416\n',
+  ])
+    expect({ file, left: await readLeft(`. lib.sh\n${CALL}`, { '/s/lib.sh': file, '/s/more.sh': 'more() { echo x; }\n' }) }).toEqual({ file, left: held })
+
+  // What the suite does around the file it reads in.
+  for (const text of [
+    // The name is defined in the suite and in the file, whichever comes last.
+    `lib_fn() { true; }\n. lib.sh\n${CALL}`,
+    `. lib.sh\nlib_fn() { true; }\n${CALL}`,
+    // The call comes before the file is read in, or runs a program of that name.
+    `${CALL}. lib.sh\n`,
+    '. lib.sh\ntimeout 5 lib_fn app/page.tsx\n',
+    '. lib.sh\nfind . -name x -exec lib_fn app/page.tsx \\;\n',
+    // The file is read in only sometimes, in a subshell, with words of its own, or twice.
+    `[ -f lib.sh ] && . lib.sh\n${CALL}`,
+    `[ -f lib.sh ] &&\n. lib.sh\n${CALL}`,
+    `if [ -f lib.sh ]; then\n  . lib.sh\nfi\n${CALL}`,
+    `load() {\n  . lib.sh\n}\nload\n${CALL}`,
+    `( . lib.sh )\n${CALL}`,
+    `echo x | . lib.sh\n${CALL}`,
+    `. lib.sh extra\n${CALL}`,
+    `command . lib.sh\n${CALL}`,
+    `. lib.sh\n. lib.sh\n${CALL}`,
+    // An eval, an alias, an unset, or a file the guard did not read, after it.
+    `. lib.sh\neval "$X"\n${CALL}`,
+    `. lib.sh\nalias lib_fn=mystery\n${CALL}`,
+    `. lib.sh\nunset -f lib_fn\n${CALL}`,
+    `. lib.sh\n. "$1"\n${CALL}`,
+    `. lib.sh\n. lib/missing.sh\n${CALL}`,
+    // Two files read in define it.
+    `. lib.sh\n. second.sh\n${CALL}`,
+    `. second.sh\n. lib.sh\n${CALL}`,
+    // A path the guard cannot work out, or a file outside the suite's folder.
+    `LIB="$(find . -name lib.sh)"\n. "$LIB"\n${CALL}`,
+    `. /elsewhere/lib.sh\n${CALL}`,
+  ])
+    expect({ text, left: await readLeft(text, { ...libs, '/s/second.sh': 'lib_fn() { echo "$1"; }\n', '/elsewhere/lib.sh': libs['/s/lib.sh'] }) }).toEqual({ text, left: held })
+  // A file the command or a script it runs writes is not read for a helper either.
+  expect(await readLeft(`. lib.sh\n${CALL}`, libs, { written: ['/s/lib.sh'] })).toEqual(held)
+})
+
+test('#3416: the files a suite reads in are counted against the limit, and past it no more are read from the disk', async () => {
+  // Counted in characters read from the disk, never timed. Without the count every file is read:
+  // sixty files of this size are 6.4 million characters, in a hook that runs before the command.
+  const big = `helper() { echo x; }\n${'# a line of a long library\n'.repeat(4000)}`
+  const files = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`/s/lib/f${i}.sh`, big]))
+  const text = `run() { true; }\n${Array.from({ length: 60 }, (_, i) => `. lib/f${i}.sh`).join('\n')}\nrun app/page.tsx\n`
+  const read = { chars: 0 }
+  // Past the limit the run is given back as it was, a run of a program the reader does not know.
+  expect(await readLeft(text, files, { read })).toEqual(['run /s/app/page.tsx'])
+  expect(read.chars).toBeGreaterThan(0)
+  expect(read.chars).toBeLessThan(ownBudget(text) + 2 * big.length)
+  // The same file read in sixty times is read from the disk once.
+  const again = { chars: 0 }
+  expect(await readLeft(`run() { true; }\n${'. lib/f0.sh\n'.repeat(60)}run app/page.tsx\n`, { '/s/lib/f0.sh': 'helper() { echo x; }\n' }, { read: again })).toEqual([])
+  expect(again.chars).toBe('helper() { echo x; }\n'.length)
 })
 
 test('#3416: a definition the shell may not make, and a call that runs a program of the same name, are still held', async () => {

@@ -70,7 +70,7 @@ import {
   closedScripts,
   handedToUnknown,
   withoutOwnCalls,
-  scriptPath,
+  readInFile,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -1155,11 +1155,27 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
               {
                 pipeline: async (command, assignments) => (await $.modkit.pipeline({ command, cwd, home: at.home, ...(assignments ? { assignments: true } : {}) })) as readonly RunCommand[],
                 writes: async command => (await $.modkit.writes({ command, cwd, home: at.home })) as Awaited<ReturnType<Parameters<typeof withoutOwnCalls>[0]['writes']>>,
-                sourced: c => {
-                  const path = scriptPath(c.words[1] ?? '', s.text, placedIn(c), at.home, s.path)
-                  const file = path === undefined ? undefined : runs.find(r => !('unread' in r) && r.path === path && r.lang === 'shell')
-                  return file ? readings.get(file)?.commands : undefined
-                },
+                // A file the script reads in, read from the disk now (rules.ts readInFile; Dan,
+                // 2026-11-22: "Read the files a suite reads in (Recommended)"): one beside the script
+                // or below its folder, by a path the guard can work out, that neither the command
+                // nor any script it runs writes by a name the reader places. A link is not read.
+                sourced: (c, beside) =>
+                  readInFile(
+                    {
+                      stat: async path => (await $.fs.stat(path, { resolve: true })) as { kind: string; size?: number; isLink?: boolean },
+                      read: async path => String(await $.fs.read(path)),
+                    },
+                    c,
+                    beside,
+                    s,
+                    at.home,
+                    path => {
+                      const file = runs.find(r => !('unread' in r) && r.path === path && r.lang === 'shell')
+                      const had = file && !('unread' in file) ? readings.get(file) : undefined
+                      return had?.commands && had.text !== undefined ? { path, text: had.text, commands: had.commands } : undefined
+                    },
+                    [w, ...[...readings.values()].map(r => r.read)].flatMap(r => [...r.files, ...r.changes].map(f => f.path)),
+                  ),
               },
               mine.text,
               mine.commands,
