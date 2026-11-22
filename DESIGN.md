@@ -361,6 +361,15 @@ worktree and /private/tmp folders plus 5.1 GB of subagent transcripts):
   short), and lesson-citations (60 days), which loses days 8 to 60 of worktree and headless sessions
   in other repositories. disk-clean's transcripts kind offers only past 90 days, unreachable since
   Claude Code's own 30, and still unreachable (L174).
+- **Raised to 14 days on 2026-11-21 (#3413, Dan: "Keep 14 days").** The 7 days above were found
+  cutting counts short: #3230 read one 14 day window twice, hours apart, and got 4,545 record files
+  and then 4,275, because a run of this job fell between the reads, and the counts posted on #3230,
+  #3323 and #3218 had only 7 to 8 days of agent and worktree records. At about 280 MB a day the 7
+  more days cost about 2 GB on each Mac. Of the readers above, audit-sessions now loses nothing of
+  its 14 days, and agent-cap-report and wrapped-refusal-followups come back short only past 14 days.
+  What the job removes is otherwise unchanged. Counts now run `tools/record-copy.py` first, which
+  reads the kinds from `transcript_files` here, refuses a window longer than the records reach, and
+  copies the window to `~/.claude/state/record-copies`, so a recount reads the same set.
 
 ### Keeping the test runner's boundary at one directory
 
@@ -939,6 +948,7 @@ that is added both fail until this table is updated.
 | 20 minutes | `SUITE_WALL_DEFAULT=1200` in hooks/lib/suite-deadline.sh, the limit every suite arms with, overridden for one run by `SUITE_WALL_TIMEOUT` | Any suite, started directly or by the runner, is stopped as hung, and everything it started is killed | One number for all of them, derived from the slowest suite that takes it. Measured 2026-09-18 on this Mac: test-run-all-tests.sh, the slowest of those, took 89 seconds alone at load 6 and 70 to 76 seconds with three copies at once at load 25. Re-read 2026-09-19 from the runner's own timings store (~/.cache/claude-config/suite-timings), where the slowest suite armed with this default is test-run-all-tests.sh at 90 seconds and the next is test-subagent-issue-harvest.sh at 62, so every other suite has more headroom still. The worst slowdown on record is 5.6x, the sync suite's 348 seconds idle against 1943 at load 160 to 188 on 2026-08-22, which would put the slowest of these near 500 seconds, so the limit is 13x its idle time and 2.4x that worst case. Before this only one suite had a bound at all, and 152 copies of that one were found at zero CPU the day it was measured, the oldest seven hours old. tests/test-claude-sync.sh is the one suite that does NOT take this default: it legitimately runs for 1943 seconds under load, so it arms at its own `SUITE_TIMEOUT` plus 60 seconds, which is 30 of its watchdog's 2 second polls, so the watchdog that can name the section it stopped in is always the one that speaks at the ceiling, proved by #444 | 2026-09-19 |
 | 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
+| 1 minute | `SYNC_WATCH_ASK_TIMEOUT=60` | The watcher's timer wake stops its one `git ls-remote` of the shared repo and records the repo as unreachable for that wake | A chosen number, not a measurement. One ask took 0.22 to 0.33 seconds over five samples on this Mac on 2026-11-22 at a load average of 7.5, so this is about 180x the slowest. The ask runs in the watcher's only loop, so the cost of waiting too long is every later send behind a stalled connection, while a stopped ask costs one wake, since the next wake asks again, proved by #3396 | 2026-11-22 |
 | 1 hour | `SYNC_SUITE_MAX_AGE=3600` | `status` and the per prompt notice report a suite process of this repo as left running, and name it for `kill -9`; a run of the runner is judged by its newest suite instead, and named only when none under it is younger (#2106, where full runs passed the hour at load 80 to 176 while still finishing suites) | Equal to `SUITE_TIMEOUT`, the ceiling of the slowest suite there is, which is the longest any suite is allowed to run at all. The slowest real run on record is that suite's 1943 seconds at load 160 to 188 on 2026-08-22, so a healthy run never reaches it. The pile of 2026-09-18 had 354 processes past 40 minutes and one at seven hours, proved by #444 | 2026-09-18 |
 | 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` and the per prompt notice report this repo's suites as a pile when more than this many were started independently | Set equal to the runner's old ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, then the cores capped at 8. Since #2548 (2026-11-09) that budget is the cores up to 8, then two thirds of them (12 on 18 cores), so the two numbers no longer match on a bigger Mac. The count is kept at 8 because it counts independent STARTS, not processes, and the budget changes neither how many starts a whole run makes nor how many agents start suites; it was not re-measured on the 18 core Mac. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |
 | 10 minutes | `SYNC_SUITE_PILE_REARM=600` | The per prompt notice that this repo's suites have piled up treats a pile as a new stretch, and says it again in a session, only after this long without one | A chosen number, not a measurement: long enough that suites starting and finishing around the breadth limit read as one stretch, short enough that a pile killed and rebuilt the same afternoon is said again. The notice runs on every prompt in every project, so its cost was measured with it, 2026-09-19 on this Mac at 944 processes and load 5: 58ms median, 60ms p90 and 162ms max over 200 prompts with no pile, of which `ps` alone is 37ms median; with a 559 process pile added to that table as a fixture, 32ms median and 43ms max over 100 (no `ps`). Both are far inside the hook's 5 second timeout, proved by #466 | 2026-09-19 |
@@ -2668,6 +2678,71 @@ clock the suite moves and the load set through the shared reader's seams: the fi
 owed and not notified, a busy Mac deferring, the watcher leaving it, a held claim respected and a
 dead one taken over, a second stopped run notifying once and then never running again, a rerun
 passing and one failing, and a record past the bound given up on.
+
+## The watcher receives on a timer, and unverified config reaches the session (#3396)
+
+On 2026-11-21 on the personal MacBook two merges with green checks (#3381 at 7:54 AM ET, #3382 at
+8:11 AM ET) sat uninstalled: the watcher wakes only on a change fswatch reports here, its last tick
+was 7:29 AM ET, and the receive timer runs once a day. A pull typed at about 8:22 AM ET installed
+both, and its hook suite was then stopped at 1800 seconds, which was said only in that pull's own
+output. These choices were made by the session that built it, not by Dan, and are his to change.
+
+- **The watcher wakes on a timer, rather than the receive timer running more often.** Two facts in
+  the code decided it. The receive timer runs `claude-sync sync` without `SYNC_IN_WATCH`, and
+  `ci_gate_blocks_pull` lets every such run through, so the timer is NOT CI gated: run every ten
+  minutes it would install commits nobody has tested. And its interval is a launch agent, a copy
+  each Mac rewrites only by running `install-autosync` (L423), while a change to the watcher reaches
+  each Mac through the `launchctl kickstart` the pull carrying it already does. The watcher's tick is
+  already the one locked, gated receive, so the timer wake adds a question in front of it and no new
+  process: the loop's `read` takes a timeout. macOS's /bin/bash 3.2 returns 1 from `read -t` both on
+  a timeout and at end of input (measured 2026-11-22), so the loop tells them apart by how long the
+  read took; a misread costs one look at the shared repo.
+- **One question when nothing is new.** `git ls-remote` of the branch reads refs and writes nothing
+  in the clone, so it takes no lock and two watchers asking at once cannot collide. It runs inside
+  the watcher's only loop, so it goes through `run_bounded` with `SYNC_WATCH_ASK_TIMEOUT` (60
+  seconds, a setting): a stalled connection would otherwise stop every later send with nothing
+  logged. Only when main
+  holds a commit the clone lacks does a GitHub verdict get read, and only for a head a tick has
+  already been handed: a new head goes straight to the tick, which fetches it and asks the gate, and
+  a head the tick left is asked about until it, or a commit below it, passes. Those are the gate's
+  own `remote_ci_state` and `newest_tested_ancestor`, so the wake and the gate cannot disagree about
+  what counts as tested (L370). A failed or cancelled head is not ticked again, as the gate would
+  take nothing in. Measured 2026-11-22: 0.22 to 0.33 seconds per `ls-remote` (five samples), 0.43 for
+  a verdict read, 0.01 for the hash of claude-sync it compares first.
+- **A held lock or a hold skips the wake.** A run holding the sync lock or a pull waiting its turn
+  (`.sync-lock.next`) is left alone (the waits below are settings in the code, not measurements),
+  so a wake never waits ninety seconds behind a merge or a long
+  send and logs a failure for it. The next wake asks again. So is a wake inside the hold off a
+  refused catch up gets (`SYNC_RECONCILE_RETRY`, 300 seconds): the send would refuse it again and
+  count one more skipped send. At the ten minute default the hold off has always ended by the next
+  wake; a shorter `SYNC_WATCH_POLL` meets it, which is how the suite found it.
+- **Ten minutes.** A product choice, not a measurement, and the same order as the CI run a merge
+  waits on anyway; it is `SYNC_WATCH_POLL`, and 0 switches the timer off. Worst case, while the Mac
+  is awake, from a commit passing its tests to its install: ten minutes plus the tick, or twenty when
+  the first wake found the lock held. 144 `ls-remote` calls a day on a level day.
+- **Silence on a wake that finds nothing, and a record.** `.watch-idle` holds what the last wake
+  found, which status reads; a line in the log every ten minutes saying nothing happened would bury
+  the lines that matter. A wake that ticks logs why.
+- **Status reads "tested" through the gate.** After its own fetch, status asks the verdict of main's
+  head and, unless it passed, walks below it as the gate does, and says how far behind the newest
+  tested commit the clone is and since the first of those commits landed on main. It says nothing
+  when the clone is level or behind only commits still being tested, and says the verdicts could not
+  be read rather than nothing when gh cannot answer.
+- **Unverified config is a stuck record, from the record that exists.** `.hook-tests` already said
+  `incomplete` and `slotwait` (#3195, #2758), and status already said nothing that landed was
+  verified. What was missing was the session: the per prompt notice reads `claude-sync stuck`, so
+  stuck reports an `unverified` record keyed on `owed_since`. It is said at once, because the session
+  is already running on the hooks that landed, and its end is said only when nothing unverified is
+  reported at all, so a new chain is a new notice rather than a false all clear. Status skips that
+  record and keeps its hook suite line, so the fact is said once there.
+
+The levers not pulled, both Dan's to decide: the 1800 second `SYNC_HOOK_TESTS_TIMEOUT` (a setting
+in the code, not measured), and the size of the suite a pull runs.
+
+`tests/test-watch-timer.sh` holds the watcher and status halves against a bare repo on disk and a gh
+stand in answering per commit, with a one second timer and every run ending on the record it waits
+for; `tests/test-hook-suite-rerun.sh` and `hooks/test-sync-stuck-notice.sh` hold the unverified
+record and its notice.
 
 ## Things known to be wrong and left that way
 

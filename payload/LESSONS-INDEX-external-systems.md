@@ -51,3 +51,4 @@ which is NOT loaded into the session.
 - L745. An existence check must treat a record marked deleted, such as Google's status cancelled or a trash label, as absent, never only a 404.
 - L746. Order every OFFSET or range paged read by a unique key, or pages silently skip and repeat rows while the total looks right.
 - L753. In a Next.js error boundary wire Try again to retry, never reset: reset re-renders the payload the browser holds, so the button looks dead.
+- L866. Never export or pass as an argument a value of unbounded size (commit message, diff, API body): pipe it or use a file, or every later exec fails.

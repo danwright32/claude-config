@@ -1726,6 +1726,15 @@ is still asked once at bedtime and closed if unanswered.
   claude-sync's `notify`, and fails on one that neither reads the sleep predicate nor sits on its
   exempt list with a reason (L129). A text match proves only that the predicate is named, so every
   shell route is also run asleep and awake in the same fixture (L159).
+- A route that consulted the predicate cannot vanish unnoticed (#3411): the suite also keeps a
+  recorded list of the routes that consult it, `CONSULTING`, held both ways against the derivation.
+  A route found consulting but not listed fails, and so does a listed one no longer found or no
+  longer consulting, so a refactor that renames a checked route or folds it into a helper (as #3407
+  first did with five) fails by name until the list changes in the same pull request.
+  `bash tests/test-sleep-silence.sh --list-consulting` prints the list the tree gives. It was chosen
+  over comparing against main at run time, which needs a fetched main that CI's checkout and a
+  worktree do not reliably have, and a check that cannot find its baseline would have to pass or
+  skip. The recorded list is not the exempt list, which this change left as it was.
 - While asleep: a question (AskUserQuestion, `switch_to_build`) is refused in every session and noted
   for the morning; the goal tracker sends no notification; ask before saving notes a save rather than
   asking; the turn end sound (`hooks/turn-end-sound.sh`, in the per prompt hook cost suite), the

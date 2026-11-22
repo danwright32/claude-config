@@ -4097,6 +4097,18 @@ def yard():
                 q = text.find('"', q + 1)
             total += len(text.split()) + (text.rfind("#") > 0)
     return time.process_time() - t
+# SLACK_GATE_COST_REPLAY names a doctored record to judge in place of the gate (#3170): a JSON list
+# of judgements, each with its "units", what the cache "said" of it and, for a refusal, its "exit"
+# and "stderr". With it set no gate is run and no yardstick is timed (the code sets the unit to one
+# second, which is not a measurement, so a judgement's seconds are its units); everything after
+# that, which samples are taken, what each must show and the verdict, is the code every measurement
+# runs. It is how the suite sees the cached cases' verdicts on records this machine cannot make, a
+# judgement that ran out of the gate's seconds among them. No measurement sets it.
+replay = None
+if os.environ.get("SLACK_GATE_COST_REPLAY"):
+    with open(os.environ["SLACK_GATE_COST_REPLAY"]) as f:
+        replay = json.load(f)
+    yard = lambda: 1.0
 # Several samples, and the least is the unit (L656): load only ever adds to a sample.
 samples = [yard() for _ in range(5)]
 payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd": "/", "permission_mode": "auto",
@@ -4124,6 +4136,9 @@ cold = bool(cache) and os.path.isdir(cache) and not os.listdir(cache)
 trace = os.path.join(os.path.dirname(cache.rstrip("/")), "cost-cache-trace.log") if cache else ""
 def judge(env):
     """One judgement: the finished process, its processor seconds, and what the cache traced for it."""
+    if replay is not None:
+        r = replay.pop(0)
+        return subprocess.CompletedProcess(["replay"], r.get("exit", 0), "", r.get("stderr", "")), float(r["units"]), list(r["said"])
     if trace:
         env["SLACK_GATE_CACHE_TRACE"] = trace
     at = os.path.getsize(trace) if trace and os.path.exists(trace) else 0
@@ -4136,7 +4151,38 @@ def judge(env):
             f.seek(at)
             said = [s for s in f.read().splitlines() if not s.startswith("parse ")]
     return p, (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime), said
+# A cached case is handed the folder an earlier cold measurement made its first judgement in, and
+# needs that judgement kept there. The gate keeps only a judgement it finished, so where that one
+# ran out of the gate's seconds the folder holds no judgement, and nothing the cached case does can
+# put the earlier one there. On 2026-11-21 that failed a pull request that did not touch the gate
+# (run 44965167694, a runner at 0.151 s a unit): the cold judgement ran out after 10.4 s, and the
+# cached case failed on its own first sample, 52.0 units, where the cache traced "miss: no entry |
+# stored", though the next was answered from the cache at 1.7. It is a state this case cannot set
+# and can see, so it says unmeasured and never fails or passes on it (L411; Dan's decision of
+# 2026-11-21, "Build it", with no limit changed).
+# What it sees, both required: the cold measurement wrote down here that the one judgement it made
+# in the folder it was handed was refused for running out (its exit code and its refusal, never the
+# cache's word, L345; later cold samples get folders of their own and write nothing), and the
+# cache's own trace for this case's first sample says nothing was kept: "miss: no entry", or "miss:
+# no signing key" where the judgement ran out before anything at all was kept and left the folder
+# empty. Every other miss is the defect these cases exist to catch and still fails: no such record
+# (the entry should have been there), an entry that was there and not used, a stale one, and any
+# later sample the cache did not answer, the first having stored it. The later samples' least is
+# still held to the ceiling.
+unfilled_log = os.path.join(os.path.dirname(cache.rstrip("/")), "cost-cache-unfilled.log") if cache else ""
+ran_out_before = None
+if unfilled_log and os.path.exists(unfilled_log):
+    with open(unfilled_log) as f:
+        for l in f:
+            parts = l.rstrip("\n").split("\t")
+            if len(parts) == 3 and parts[0] == os.path.basename(cache.rstrip("/")):
+                ran_out_before = (parts[1], parts[2])
+# Such a folder can be empty and is a cached case's all the same, never a cold measurement's.
+cold = cold and not ran_out_before
 warm = bool(cache) and os.path.isdir(cache) and not cold
+NOTHING_KEPT = ("miss: no entry", "miss: no signing key")
+UNFILLED = "unmeasured: the cache this case was handed was never filled: the judgement that fills it (%s) ran out of the gate's seconds on this machine, after %s, and a judgement that runs out is not kept. "
+filled_here = ""
 ratios, ran_out, unfit = [], [], []
 # How many yardstick samples had been taken when each reading's unit was read, printed beside the
 # readings (#3170) and used for nothing else.
@@ -4159,12 +4205,22 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
         # units are held to the same ceiling: a gate that does more work still fails here, on any
         # machine (L411). That the seconds ran out is recorded beside the reading.
         ran_out.append("%.1f s at %.3f s a unit" % (spent, unit))
+        if not attempt:
+            # The one judgement made in the folder this measurement was handed, so the folder holds
+            # no judgement: written down for the cached case that is handed the folder next.
+            with open(unfilled_log, "a") as f:
+                f.write("%s\t%s\t%s\n" % (os.path.basename(cache.rstrip("/")), os.environ.get("SLACK_GATE_COST_LABEL", "?"), ran_out[-1]))
         env.update(HOOK_TESTS_RUNNING="1", SLACK_GATE_TICK_BUDGET="1000000000",
                    SLACK_GATE_CACHE_DIR=tempfile.mkdtemp(dir=os.path.dirname(cache.rstrip("/"))))
         p, spent, said = judge(env)
         samples += [yard(), yard()]
         unit = min(samples)
+    # The first sample of a cached case whose cache was never filled, by both things it must see.
+    empty = bool(warm and ran_out_before and not ratios and "hit" not in said and any(s in NOTHING_KEPT for s in said))
     if p.returncode != 0:
+        if empty and "ran out of time judging this call" in p.stderr:
+            print((UNFILLED + "This case's first judgement found nothing kept and ran out as well, after %.1f s of processor time at %.3f s a unit, where the cache traced %s, so nothing could be kept on this machine and no answer from the cache was there to measure")
+                  % (ran_out_before + (spent, unit, " | ".join(s[:80] for s in said)))); sys.exit()
         print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
     ratios.append((spent / unit, spent, unit))
     taken.append(len(samples))
@@ -4173,7 +4229,11 @@ for attempt in range(max(need, int(os.environ.get("SLACK_GATE_COST_ATTEMPTS", "3
     # warm cases), and there every sample must be a "hit": the same reading of the trace, required
     # to say the opposite, so each run of the suite shows it telling the two apart.
     afresh = "hit" not in said and any(s.startswith(("miss: ", "off: ")) for s in said)
-    if (cold and not afresh) or (warm and "hit" not in said):
+    if empty:
+        # It did the whole work and, where its trace says "stored", filled the cache itself. It is
+        # not a sample of the cache answering and not a defect; every sample after it is held as ever.
+        filled_here = "%.1f units, where the cache traced %s" % (spent / unit, " | ".join(s[:80] for s in said))
+    elif (cold and not afresh) or (warm and "hit" not in said):
         unfit.append("sample %d, %.1f units, where the cache traced %s"
                      % (len(ratios), spent / unit, " | ".join(s[:80] for s in said) or "nothing"))
     if len(ratios) >= need and min(ratios)[0] <= ceiling:
@@ -4195,11 +4255,15 @@ ratio, spent, unit = min(ratios)
 log = os.environ.get("SLACK_GATE_COST_LOG")
 if log:
     with open(log, "a") as f:
-        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s; %s)\n"
+        f.write("%s %s: %.1f (%.2f s of processor time, unit %.3f s, ceiling %s, samples %s%s%s; %s)\n"
                 % (os.environ.get("SLACK_GATE_COST_LABEL", "?"), line[-40:], ratio, spent, unit, ceiling,
                    ", ".join("%.1f" % r[0] for r in ratios),
                    "; the gate's 11 s ran out on this machine, after %s, so those were read on the step clock"
                    % " and ".join(ran_out) if ran_out else "",
+                   # Read by tools/gate-cost-rows.py for its last column, so the words are held there
+                   # too; no bar and no bracket, which separate the entries of the note this goes in.
+                   "; the cache was never filled, the judgement that fills it having run out of the gate's seconds after %s, so the first reading here filled it"
+                   % ran_out_before[1] if filled_here else "",
                    "seconds per reading %s; yardstick per reading %s; yardstick %d samples %s; yardstick least %.4f, median %.4f, greatest %.4f"
                    % (", ".join("%.3f" % r[1] for r in ratios),
                       ", ".join("%.4f from %d" % (r[2], n) for r, n in zip(ratios, taken)),
@@ -4210,6 +4274,13 @@ if unfit:
           % (len(unfit), len(ratios),
              "an empty cache were not shown to be judged afresh" if cold else "a filled cache were not answered from it",
              ", ".join("%.1f" % r[0] for r in ratios), "; ".join(unfit)))
+    sys.exit()
+if filled_here and ratio <= ceiling:
+    later = ratios[1:]
+    print((UNFILLED + "So the first sample here did the whole work, %s, and %s; an answer from a judgement kept by an earlier measurement was not measured")
+          % (ran_out_before + (filled_here,
+             "the %d after it %s answered from the cache, at %s units" % (len(later), "was" if len(later) == 1 else "were", ", ".join("%.1f" % r[0] for r in later))
+             if later else "no sample was taken after it")))
     sys.exit()
 print("ok" if ratio <= ceiling else "judging it took at least %.1f s of processor time, %.1f units of the fixed yardstick (%.3f s each), past %s, in each of %d samples (%s)"
       % (spent, ratio, unit, ceiling, len(ratios), ", ".join("%.1f" % r[0] for r in ratios)))
@@ -4340,10 +4411,83 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
     # With a claude-sync to judge the copy is always made above, so its absence is a fault, not a skip.
     check "a gate whose reader is eleven times as slow is past the $cold_ceiling unit limit for bash tests/test-claude-sync.sh on $(uname -s) (#3167)" "the slowed copy of the gate was not made at $T/slow-gate, so this limit was not seen to fail"
   fi
+  # A cached case's answer from cost.py, counted: ok or a failure as every check is, and where the
+  # cache it was handed was never filled, a part this machine could not measure, in the one shape
+  # run-all-tests reads for that (L411, #3170, Dan's decision of 2026-11-21: "Build it"). The line is
+  # printed on every run it happens in, under the suite's own line and in the run's summary, so a
+  # runner where this is unmeasured every time is seen as that, never as a pass (L557).
+  cached_case() {  # <the check's name> <cost.py's answer>
+    case "$2" in
+      "unmeasured: "*) echo "SUITE-PART-UNMEASURED #3170: $1: ${2#unmeasured: }" ;;
+      *) check "$1" "$2" ;;
+    esac
+  }
   # Judged again with nothing changed, it is answered from the judgement cache: every file it read
   # and every disk test it answered is checked again, and nothing is walked.
   cost="$(SLACK_GATE_COST_LABEL=suite-warm SLACK_GATE_PHASE_LOG="$T/phases.log" SLACK_GATE_CACHE_DIR="$warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $REPO/tests/test-claude-sync.sh" 2>&1)"
-  check "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
+  cached_case "judged a second time, bash tests/test-claude-sync.sh takes at most 6 units of the yardstick, from the cache (#2918)" "$cost"
+  # What a cached case answers, on doctored records in place of the gate (#3170, L1): cost.py's own
+  # loop and verdict, replayed (SLACK_GATE_COST_REPLAY), so no gate runs and each takes a fraction of
+  # a second. The first is run 44965167694's own record (2026-11-21, a Linux runner at 0.151 s a
+  # unit): the cold judgement ran out after 10.4 s, and the cached case's samples read 52.0 units,
+  # where the cache traced "miss: no entry | stored", and then 1.7 from the cache. It failed there,
+  # and it is the state the case cannot set (L411), so it is unmeasured, with those figures. Every
+  # other miss still fails, because a miss is what these cases exist to catch: the same samples with
+  # no record that the filling judgement ran out (the entry should have been there), an entry that
+  # was there and not used, a stale entry, and an entry stored by the first sample that the next did
+  # not read back. The folder each is handed holds one kept parse and no judgement, which is what a
+  # judgement that runs out late leaves (measured on the personal MacBook, 2026-11-21, with a copy
+  # of the gate whose budget is 1 s); one that runs out early leaves the folder empty and the next
+  # asking traces "miss: no signing key" (the same copy at 0.2 s), which is replayed too.
+  replay_cached() {  # <ran-out|kept> <parse|empty> <the judgements, a JSON list>: cost.py's answer
+    local d
+    d="$(mktemp -d "$T/replay.XXXXXX")" && mkdir "$d/cache" || { echo "no folder to replay in"; return; }
+    [ "$2" = empty ] || : > "$d/cache/parse-kept"
+    [ "$1" = kept ] || printf 'cache\tsuite-cold\t10.4 s at 0.151 s a unit\n' > "$d/cost-cache-unfilled.log"
+    printf '%s\n' "$3" > "$d/judgements.json"
+    SLACK_GATE_COST_LABEL=replay SLACK_GATE_COST_LOG="$d/cost.log" SLACK_GATE_COST_REPLAY="$d/judgements.json" SLACK_GATE_CACHE_DIR="$d/cache" \
+      env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash tests/test-claude-sync.sh" 2>&1
+    sed 's/^/logged: /' "$d/cost.log" 2>/dev/null
+  }
+  replayed() {  # <the check's name> <a pattern its answer must match> <the answer>
+    # shellcheck disable=SC2254
+    case "$3" in
+      $2) check "$1" ok ;;
+      *) check "$1" "cost.py answered: ${3:0:700}" ;;
+    esac
+  }
+  rp_miss() { printf '{"units": 52.0, "said": ["qos: not raised: not macOS", "miss: %s", "stored"]}' "$1"; }
+  rp_hit() { printf '{"units": %s, "said": ["qos: not raised: not macOS", "hit"]}' "$1"; }
+  rp_fill="$(rp_miss "no entry")"
+  rp_out='{"exit": 2, "stderr": "BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after 11 seconds", "units": 70.2, "said": ["qos: not raised: not macOS", "miss: no entry"]}'
+  replayed "replayed, a cached case answered from the cache at once is ok, so the replay can pass (#3170)" \
+    "ok*" "$(replay_cached kept parse "[$(rp_hit 1.7)]")"
+  replayed "a cached case whose cache was never filled, the judgement that fills it having run out of the gate's seconds, is unmeasured and says why with the figures (#3170)" \
+    "unmeasured: the cache this case was handed was never filled*suite-cold*ran out of the gate's seconds*10.4 s at 0.151 s a unit*52.0 units*miss: no entry | stored*1.7 units*logged: replay *the cache was never filled*" \
+    "$(replay_cached ran-out parse "[$rp_fill, $(rp_hit 1.7)]")"
+  replayed "the same where the judgement that fills it ran out early and left the folder empty (#3170)" \
+    "unmeasured: the cache this case was handed was never filled*miss: no signing key | stored*1.7 units*" \
+    "$(replay_cached ran-out empty "[$(rp_miss "no signing key"), $(rp_hit 1.7)]")"
+  replayed "and where this case's first judgement runs out of the gate's seconds as well, so nothing could be kept (#3170)" \
+    "unmeasured: the cache this case was handed was never filled*10.4 s at 0.151 s a unit*This case's first judgement found nothing kept and ran out as well, after 70.2 s*miss: no entry*" \
+    "$(replay_cached ran-out parse "[$rp_out]")"
+  replayed "with no record that the filling judgement ran out, the same miss still fails: the entry should have been there (#3170)" \
+    "1 of the 2 samples of this measurement from a filled cache were not answered from it*sample 1, 52.0 units*miss: no entry | stored*" \
+    "$(replay_cached kept parse "[$rp_fill, $(rp_hit 1.7)]")"
+  replayed "with no such record, a cached case refused for running out of time still fails (#3170)" \
+    "the line was refused (exit 2)*" "$(replay_cached kept parse "[$rp_out]")"
+  replayed "an entry that was there and not used still fails where the filling judgement ran out (#3170)" \
+    "1 of the 2 samples of this measurement from a filled cache were not answered from it*the entry is not a whole allow for this key*" \
+    "$(replay_cached ran-out parse "[$(rp_miss "the entry is not a whole allow for this key"), $(rp_hit 1.7)]")"
+  replayed "a stale entry still fails where the filling judgement ran out (#3170)" \
+    "1 of the 2 samples of this measurement from a filled cache were not answered from it*answers differently now*" \
+    "$(replay_cached ran-out parse "[$(rp_miss "stat ['claude-sync'] answers differently now"), $(rp_hit 1.7)]")"
+  replayed "an entry the first sample stored and the next did not read back still fails where the filling judgement ran out (#3170)" \
+    "2 of the 3 samples of this measurement from a filled cache were not answered from it*sample 2, 52.0 units*sample 3, 52.0 units*" \
+    "$(replay_cached ran-out parse "[$rp_fill, $rp_fill, $rp_fill]")"
+  replayed "a cache the first sample filled that then answers past 6 units still fails where the filling judgement ran out (#3170)" \
+    "judging it took*past 6*52.0, 8.1, 8.3*" \
+    "$(replay_cached ran-out parse "[$rp_fill, $(rp_hit 8.1), $(rp_hit 8.3)]")"
   # A machine too slow for the gate's budget, stood in for by a copy of the gate whose budget is a
   # fifth of a second, judging the one lesson line (#3170, L411): the seconds run out, cost.py reads
   # the same line on the step clock and holds those units to the ceiling it was given. So such a
@@ -4353,7 +4497,8 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   mkdir -p "$short" && cp "$HOOK" "$short/" && cp -R "$DIR/lib" "$short/lib" \
     && sed 's/^BUDGET_SECONDS = 11$/BUDGET_SECONDS = 0.2/' "$DIR/slack_drafts_only_gate.py" > "$short/slack_drafts_only_gate.py"
   if grep -q '^BUDGET_SECONDS = 0\.2$' "$short/slack_drafts_only_gate.py" 2>/dev/null; then
-    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$(mktemp -d "$T/cold.XXXXXX")" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
+    short_cold="$(mktemp -d "$T/cold.XXXXXX")"
+    cost="$(SLACK_GATE_COST_LABEL=short-budget SLACK_GATE_COST_SAMPLES=3 SLACK_GATE_CACHE_DIR="$short_cold" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$short/slack-drafts-only-gate.sh" "$CS" 36 L174 2>&1)"
     if [ "$cost" = ok ] && ! grep -q '^short-budget .*ran out on this machine' "$T/cost.log"; then
       cost="the copy with a budget of 0.2 s did not run out of it, so the step clock reading was never taken: $(grep '^short-budget' "$T/cost.log")"
     fi
@@ -4377,6 +4522,18 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
       ok) cost="a ceiling of 1 unit passed, so a gate whose seconds run out is held to nothing: $(grep '^short-budget-over' "$T/cost.log")" ;;
     esac
     check "where the gate's seconds run out, a gate past its ceiling still fails (#3170)" "$cost"
+    # The never filled cache, made by this machine and not doctored (L48, L3): the first judgement
+    # of the short-budget measurement above was made in $short_cold and ran out, so nothing is kept
+    # there. Asked for the one lesson line in that folder as a cached case is, the gate itself must
+    # be reported unmeasured: cost.py wrote down that the judgement ran out, read that back here, and
+    # the cache's own trace for the first sample says it found nothing. Its record is kept out of the
+    # cost log, in a log of its own, so the notes and the counts above hold the measurements only.
+    cost="$(SLACK_GATE_COST_LABEL=unfilled-warm SLACK_GATE_COST_LOG="$T/cost-unfilled.log" SLACK_GATE_CACHE_DIR="$short_cold" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 L174 2>&1)"
+    case "$cost" in
+      "unmeasured: the cache this case was handed was never filled"*"short-budget"*"ran out of the gate's seconds"*) cost=ok ;;
+      *) cost="cost.py answered: ${cost:0:700}; the record of judgements that ran out: $(head -c 300 "$T/cost-cache-unfilled.log" 2>&1)" ;;
+    esac
+    check "a cached case in the folder where a real judgement ran out of the gate's seconds is unmeasured, from the record that judgement left (#3170)" "$cost"
   else
     check "a copy of the gate with a budget of 0.2 s is made, for a machine too slow for the budget (#3170)" "slack_drafts_only_gate.py has no line 'BUDGET_SECONDS = 11' to change, so $short holds the gate's own budget"
   fi
@@ -4414,7 +4571,7 @@ if [ -n "$CS" ] && [ -n "$REPO" ] && [ -f "$REPO/tests/test-claude-sync.sh" ]; t
   # Measured that day on the personal MacBook with a unit at 0.097 s, one cache for every reading:
   # 19.4 to 20.1 units each time before (5 readings), and 20.2 then 1.8, 1.8, 1.8, 1.8 after.
   cost="$(SLACK_GATE_COST_LABEL=own-suite-warm SLACK_GATE_CACHE_DIR="$own_warm" env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$CS" 6 --line "bash $DIR/test-slack-drafts-only-gate.sh" 2>&1)"
-  check "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
+  cached_case "judged a second time, the command that starts this suite takes at most 6 units of the yardstick, from the cache (#3255)" "$cost"
   # Its readings are printed with every other cost case's, in the one note at the end of this part
   # (#3170), which took the place of a note of its own when the note cap was full.
   if [ -f "$unheld_made/slack-drafts-only-gate.sh" ]; then
@@ -4472,7 +4629,7 @@ if [ -f "$T/cost.log" ]; then
     printf '          note: %s\n' "${cold_note_text:-}" "${cost_note:-}" > "$T/notes.txt"
     rows="$(python3 -B "$REPO/tools/gate-cost-rows.py" rows "$T/notes.txt" 2>&1)"
     rows_want="$(grep -c . "$T/cost.log" || true)"
-    rows_got="$(printf '%s\n' "$rows" | awk -F'\t' 'NR > 1 && NF == 13 && $6 != "-" && $8 != "-" && $9 != "-"' | grep -c . || true)"
+    rows_got="$(printf '%s\n' "$rows" | awk -F'\t' 'NR > 1 && NF == 14 && $6 != "-" && $8 != "-" && $9 != "-"' | grep -c . || true)"
     [ "$rows_got" = "$rows_want" ] && rows=ok || rows="the reader found ${rows_got:-0} cases with seconds and yardstick in the notes, of the cost log's ${rows_want:-0}: $rows"
     check "tools/gate-cost-rows.py reads every case's seconds and yardstick from the notes a passing run shows (#3170)" "$rows"
     # The verdict never reads a printed only figure (#3170): every reading must be its seconds over
