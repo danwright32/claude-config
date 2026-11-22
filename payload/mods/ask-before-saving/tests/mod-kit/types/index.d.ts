@@ -93,8 +93,13 @@ export type ModKit = {
    * versioned), a script fed on standard input from a file (the file in `inputs`) or from something
    * that cannot be read, a command xargs gives its files to, a download the server names (`curl -J`,
    * `wget --content-disposition`), a recursive wget, or one of the addresses in a file (`wget -i`,
-   * the file in `inputs`). The one reader of what a command changes (L613); a script file named as
-   * an operand is not guessed at, and each argument it is handed is given apart, in `runs` (#1586).
+   * the file in `inputs`), or since #3323 an archive unpacked (`tar -x`, `unzip`, `cpio -i`: the
+   * folder it unpacks into in `into` and `folder`, each member it names in `files`). The one reader
+   * of what a command changes (L613); a script file named as an operand is not guessed at, and each
+   * argument it is handed is given apart, in `runs` (#1586). So, since #3323, is each word spelling a
+   * path that a program on none of the reader's lists is handed, its run marked `unknown`: such a
+   * program is read as a writer unless it is one of the programs Dan signed off as only reading
+   * (`READ_ONLY` in hooks/writes.ts; docs/mods-design.md, "The programs that only read").
    */
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /**
@@ -615,8 +620,25 @@ export type ModKitWrites = {
    * out, is given once, worked out.
    * `env` is the settings the run is given in front of it (#3093), as `ModKitCommand.env` gives them
    * (`TMPDIR=x bash s.sh`), absent where there are none.
+   * `unknown` marks a program on none of the reader's lists (#3323; Dan, 2026-11-21: "Turn it round,
+   * with the list (Recommended)"): what it does with a file it is handed cannot be read, so it is a
+   * run like a tool's (`tool` is set, `script` is the program as written, with no `path`), and each
+   * guard that judges a run's arguments judges it as writing them, but for the area check, which
+   * leaves these runs out until gh has a reading of its own (#3412). Only the words that spell a path
+   * are in its `args` (every one has a `path`); one built from a variable the command never sets, a
+   * pattern or a command's output is not handed on, nor is a file on standard input or one xargs
+   * hands over. `what` is 'a program the write reader does not know', or, for a form of a program
+   * that otherwise only reads, that form and what it does (`rg with --pre, which runs a program on
+   * each file`). `why` and `remedy`, on such a run only, are what a guard says of it after its own
+   * words, so every guard says the same (L111): why it was read as a writer ("prettier is a program
+   * the mods do not know, so what it does with a file it is handed cannot be read before it runs"),
+   * and what a person can do (use a program that only reads, or ask Dan to add this one to the list;
+   * for a form, "Without --pre, rg only reads."). The programs that only read, signed off by Dan by
+   * name, give no run at all (writes.ts READ_ONLY; docs/mods-design.md "The programs that only
+   * read"). A guard reading a script's own text by this reader leaves such a run out: the rule is
+   * for a command as typed.
    */
-  runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[]; env?: string[] }[]
+  runs?: { what: string; script: string; path?: string; tool?: true; unknown?: true; why?: string; remedy?: string; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[]; env?: string[] }[]
   /**
    * The files a redirect sends standard output into (#1976), present when there are any: `>`, `>>`,
    * `>|`, `1>`, `&>`, `&>>` and `>& file`, each also in `files`, its `word`, `path` and `folder` as

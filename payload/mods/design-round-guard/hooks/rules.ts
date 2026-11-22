@@ -1737,6 +1737,15 @@ export const scriptUnread = (script: string, file: string): string =>
   `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
 
 /**
+ * What a refusal says of a file handed to a program mod-kit's write reader does not know, or to a
+ * form of a listed one that writes (#3323; Dan, 2026-11-21: "Turn it round, with the list
+ * (Recommended)"). `why` and `remedy` are the reader's own words for that run, the same in every
+ * guard (L111, L118): which program was not known, or which form writes, and what to do about it.
+ */
+export const programUnknown = (program: string, file: string, why: string, remedy: string): string =>
+  `The design round guard judged ${file}, which ${program} is handed, as a write of that file: ${why}. ${remedy}`
+
+/**
  * What a refusal says of a file a script file's own code writes (#2847): the script was read as
  * mod-kit reads inline code, and the file its code names cannot be read as it will be until it ran.
  */
@@ -2204,7 +2213,7 @@ export type ScriptReading = {
   changes: readonly { word: string; path?: string; does: string }[]
   unnamed: readonly { targets?: readonly string[]; onlyLoads?: true }[]
   byGit?: readonly { word: string; path?: string }[]
-  runs?: readonly unknown[]
+  runs?: readonly { unknown?: true }[]
 }
 
 const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPLACED && !p.startsWith(`${UNPLACED}/`)
@@ -2220,8 +2229,13 @@ const placed = (p: string | undefined): boolean => p !== undefined && p !== UNPL
  * the runners RUNS_LATER names, and any command mod-kit marks unread), and each file it sources is one the guard read and found the same
  * (`sourced`). An argument reaches a command only through `$1`, `$@` or a variable holding it, which
  * the reader can never place, so each such route shows here as a name it could not place.
- * What this trusts is what the guard trusts of a command typed whole: mod-kit's reader of what a
- * command writes, so a program it does not know as a writer is read as writing none.
+ * What this trusts is mod-kit's reader of what a command writes, with one difference from a command
+ * typed whole (#3323): there, a program the reader does not know, handed a word that spells a path,
+ * is read as writing that file. In a script's own text it is read as writing none, as it was before
+ * that rule, so a run the reader marks `unknown` is no route here. Nearly every script holds one
+ * (`exit 1`, `sleep 2`, `gh pr view 5`), so counting them would hold every script handed a file,
+ * which is what #2924 ended. So a script that hands its argument to a program nobody has listed is
+ * not caught by this guard.
  */
 export const argumentUnreached = (reading: ScriptReading, commands: readonly RunCommand[], temp: (word: string) => boolean, sourced: (c: RunCommand) => boolean): string | undefined => {
   for (const c of commands) {
@@ -2238,7 +2252,7 @@ export const argumentUnreached = (reading: ScriptReading, commands: readonly Run
   for (const f of [...reading.files, ...reading.changes.filter(c => c.does !== 'folder' && c.does !== 'mode'), ...(reading.byGit ?? [])])
     if (!placed(f.path) && !temp(f.word)) return `it writes ${f.word}`
   for (const u of reading.unnamed) if (!u.onlyLoads && !(u.targets && u.targets.every(placed))) return 'it runs a program whose writes are not all named'
-  if (reading.runs?.length) return 'it hands another script its words'
+  if (reading.runs?.some(r => !r.unknown)) return 'it hands another script its words'
   return undefined
 }
 

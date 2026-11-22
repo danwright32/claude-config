@@ -141,6 +141,17 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 // What mod-kit's readers give for each request these tests make (commands, writes and git), each
 // measured from the reader itself (#712).
 const KIT = new Map<string, unknown>([
+  // #3323: a program the reader does not know, handed words that spell a path, measured from mod-kit's readers on 2026-11-21.
+  ["commands {\"command\":\"prettier --write notes.txt\"}",[["prettier","--write","notes.txt"]]],
+  ["git {\"words\":[\"prettier\",\"--write\",\"notes.txt\"]}",null],
+  ["writes {\"command\":\"prettier --write notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}],
+  ["commands {\"command\":\"gh pr view 5\"}",[["gh","pr","view","5"]]],
+  ["git {\"words\":[\"gh\",\"pr\",\"view\",\"5\"]}",null],
+  ["writes {\"command\":\"gh pr view 5\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/repo/pr"},{"word":"view","path":"/repo/view"},{"word":"5","path":"/repo/5"}]}]}],
+  ["commands {\"command\":\"prettier --check other.txt && ./tidy.sh other.txt\"}",[["prettier","--check","other.txt"],["./tidy.sh","other.txt"]]],
+  ["git {\"words\":[\"prettier\",\"--check\",\"other.txt\"]}",null],
+  ["git {\"words\":[\"./tidy.sh\",\"other.txt\"]}",null],
+  ["writes {\"command\":\"prettier --check other.txt && ./tidy.sh other.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"other.txt","path":"/repo/other.txt"}]},{"what":"a script file run directly","script":"./tidy.sh","path":"/repo/tidy.sh","args":[{"word":"other.txt","path":"/repo/other.txt"}]}]}],
   // #1592: a script file handed files as its arguments, measured from mod-kit's readers on 2026-10-23.
   ["commands {\"command\":\"python3 tools/fix.py notes.txt\"}",[["python3","tools/fix.py","notes.txt"]]],
   ["git {\"words\":[\"python3\",\"tools/fix.py\",\"notes.txt\"]}",null],
@@ -863,6 +874,40 @@ test('a script file handed that file, judged Proceed, runs once with the toast a
   expect(w.reached).toEqual(['Bash', 'Bash'])
   expect(w.prompts.length).toBe(1)
   expect(w.edits).toEqual(['/repo/notes.txt', '/repo/other.txt'])
+})
+
+// #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): a program mod-kit's write
+// reader does not know was read as writing nothing, so one handed a file another session edited
+// ran unjudged. It is now judged as an edit of that file is, the question naming the program.
+test('a program the write reader does not know, handed a file another open session edited, is judged, naming the program, and a Stop blocks it (#3323)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const r = await $.tool.call(bash('prettier --write notes.txt', 'un1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('hand /repo/notes.txt to prettier (a program the write reader does not know), which may write it, with the shell command: prettier --write notes.txt')
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  expect(w.edits).toEqual([])
+})
+
+// What such a program is handed is judged and never noted as this session's edit. Most words it is
+// handed spell a path without being a file it writes (`gh pr view 5` hands pr, view and 5 in the
+// checkout), a session's edits are capped at twenty, and each one noted is a file another session
+// would be asked about. So a real write by such a program is still not recorded as an edit, as it
+// was not before. A script handed the file is noted, as it was.
+test("such a program judged Proceed runs, and what it was handed is not noted as this session's edit; a program that only reads is neither judged nor noted (#3323)", withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('prettier --write notes.txt', 'un2'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual([])
+  await $.tool.call(bash('gh pr view 5', 'un3'))
+  await $.tool.call(bash('cat notes.txt', 'un4'))
+  expect(w.reached).toEqual(['Bash', 'Bash', 'Bash'])
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual([])
+  // Handed the same file beside a script that is handed it: an edit, noted.
+  await $.tool.call(bash('prettier --check other.txt && ./tidy.sh other.txt', 'un6'))
+  expect(w.edits).toEqual(['/repo/other.txt'])
 })
 
 // Decided (docs/mods-design.md, #654): a write the command reader cannot see is not guessed at.

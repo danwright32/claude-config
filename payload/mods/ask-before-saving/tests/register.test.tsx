@@ -666,6 +666,35 @@ test('a script handed a lasting memory file as its argument is asked about, as a
   expect(w.ran.length).toBe(4)
 })
 
+// #3323 (Dan, 2026-11-21, "Turn it round, with the list (Recommended)"): a program mod-kit's write
+// reader does not know was read as writing nothing, so the next writer nobody had listed wrote
+// lasting memory unasked. A lasting memory file handed to one is now asked about as an Edit of it
+// is, naming the program, why it was read as a writer and what to do. One of the programs Dan
+// listed as only reading runs unasked, as it did.
+test('a program the write reader does not know, handed a lasting memory file, is asked about, naming the program; one that only reads runs unasked (#3323)', withKit, async ($, on) => {
+  const w = world($, on)
+  const handed: [string, string, string][] = [
+    ['prettier --write CLAUDE.md', '~/Apps/slate/CLAUDE.md', 'prettier'],
+    ['mystery ~/.claude/projects/p/memory/MEMORY.md', '~/.claude/projects/p/memory/MEMORY.md', 'mystery'],
+    // The same test as `[`, and on no list Dan signed off.
+    ['[[ -f AGENTS.md ]]', '~/Apps/slate/AGENTS.md', '[['],
+  ]
+  for (const [command, file, program] of handed) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(why).toContain(`this hands lasting memory (${file}) to ${program}, which may write it (${program} is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs), so Dan decides first. `)
+    expect(why).toContain(`If ${program} only reads too, ask Dan to add it to that list: only he may. Ask him now with AskUserQuestion`)
+    expect(why).not.toContain('to a script')
+  }
+  // A listed program in a form of it that runs a program says which form.
+  const pre = refusalOf(await call($, { tool: 'Bash', command: 'rg --pre ./tool rule CLAUDE.md' }))
+  expect(pre).toContain('this hands lasting memory (~/Apps/slate/CLAUDE.md) to rg, which may write it (rg with --pre runs a program on each file), so Dan decides first. Without --pre, rg only reads. ')
+  expect(w.ran).toEqual([])
+  const reads = ['cat CLAUDE.md', 'grep -n rule ~/.claude/CLAUDE.md', 'rg rule CLAUDE.md', 'wc -l AGENTS.md', 'head -5 CLAUDE.md', '[ -f AGENTS.md ]', 'diff CLAUDE.md AGENTS.md', 'mystery notes.md', 'sleep 2', 'gh pr view 5']
+  for (const command of reads) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(reads.length)
+})
+
 test('For good on a script handed lasting memory lets that same call through once, as it does an Edit (#1592)', withKit, async ($, on) => {
   const w = world($, on, { auto: true })
   const command = 'python3 tool.py ~/.claude/projects/p/memory/MEMORY.md'
