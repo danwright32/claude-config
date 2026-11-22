@@ -4552,6 +4552,52 @@ for byte what origin/main holds, which changes no look that has not already ship
   needs mod-kit's reader saying which commands a line groups, so a parenthesis in a quoted pattern
   need not count.
 
+### What #3401 changed: a quoted parenthesis after an exact restore, 2026-11-22
+
+`plainLine` read any brace, parenthesis or backtick anywhere in the call's text as grouping, so
+`git checkout origin/main -- <file> && <test> | grep -E "(fail|pass)"` stayed held, though the
+parentheses sit in a quoted search pattern. The rule the issue sets: a change may only pass a line
+whose commands after the restore provably run once it has finished.
+
+- **Nothing was added to mod-kit's reader.** It already says what this needs. It marks a word
+  `literal` only where every pattern character in it (its list holds `(`, `)`, `{` and `}`) is in
+  quotes or after a backslash and the word holds no `$` or backtick, so a subshell's parenthesis, a
+  group's closing brace, a function's `()`, an unquoted pattern and a brace expansion are words it
+  does not mark. And it marks where a command stands: inside a substitution, inside arithmetic,
+  behind a shell, a runner, xargs or find, fed a heredoc, or unread (eval, ssh, an alias).
+- **The rule** (rules.ts `groupsNothing`, asked by `plainLine` only where the text holds such a
+  character): every command of the reading carries only marks that say nothing of where it runs;
+  every word holding a grouping character is marked `literal`; and those words hold as many of each
+  of the four characters as the text does, so one the reader left out of every word (a group's
+  opening brace, which it looks past, a comment, a setting's value, a heredoc's body) is not taken
+  as accounted for. A mark the rule does not know, one added to the reader later included, shows
+  nothing, and the line is read as grouping, as before.
+- **Two things read from the text, each only ever holding more.** A backtick anywhere, since no
+  mark says one is text. And `$'`: the reader does not read such a string, whose `\'` does not end
+  it, so it gave `echo $'\' x' | (cat; echo ran) #'` as one echo with a quoted word while bash and
+  zsh ran the group (measured 2026-11-22). The reader's own gap is recorded for an issue of its own.
+- **A compound command's word is read as before**, from the text, quoted or not: a search for
+  `"then"` still makes a line no plain one. Not widened here, since the issue is the characters.
+- **What newly passes** is a line the text test called grouped where the reading shows only quoted
+  or escaped braces and parentheses in the words of the line's own commands: a search pattern, a
+  test's name, a program for sed or for awk that holds no `$`. A quote that never ends passes too:
+  bash and zsh refuse the command it is in and run nothing of it (measured the same day).
+- **What stays held**, each pinned by a test seen held before and after: a subshell, a group and a
+  pipe out of either; a substitution in double quotes or backticks; a process substitution;
+  arithmetic; a function; every compound word; a heredoc; text handed to eval, a shell's `-c`,
+  xargs, find's `-exec`, ssh, a trap or an alias; a command behind a runner (timeout, sudo, rtk),
+  since the reader names what a command is behind and never whether that is a shell; an unquoted
+  pattern or brace expansion; a word holding a `$`, so `awk '{print $1}'` and `"$X (y)"`; a comment
+  or a setting's value holding one; a line that backgrounds anything.
+- **Everything that passed still passes.** The reading is asked only where the old test said no.
+- **Counted** over this Mac's session records (54,956 Bash calls, 2026-10-19 to 2026-11-22), with
+  the rule modules of the branch and of its base: 26 calls put a file back from a source spelled
+  as a default branch, written as #3280 reads it. The base passes 18 and holds 8, three for a
+  command before the restore and five for one beside it. One of the eight is held by the plain
+  line test alone, and the branch passes that one and no other: a restore, then a test run sent to
+  a file, then that file searched for `"(fail)"` and cut. None is newly held. The count is an
+  upper bound, since it cannot ask git what a past checkout held.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

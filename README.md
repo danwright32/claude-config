@@ -8639,7 +8639,10 @@ commit, and `git ls-tree` for whether that commit holds the file; the command mu
 its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
 origin/main <file>`), with nothing before or beside it that may change what the name means, though
 on a line that groups nothing what runs once the restore has finished no longer counts, a test run
-piped to its last lines included; any other commit, a local branch that differs from what was
+piped to its last lines included, and since #3401 a brace or parenthesis that mod-kit's own reading
+of the line shows to be quoted text groups nothing (a search for `"(fail|pass)"`), while a
+subshell, a group, a substitution, text handed to a shell and anything that reading does not
+account for still do; any other commit, a local branch that differs from what was
 fetched, the index, any option, a pattern, a file the default branch does not hold and every case
 git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
