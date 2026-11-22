@@ -5320,6 +5320,65 @@ test('#3416: a shell script handing a screen file only to programs on the list o
   expect(refusalOf(await sh(`bash ${NOTES}/first.sh`))).toBe('')
 })
 
+// #3416, Dan 2026-11-22 ("Build the exemption (Recommended)"): all 31 newly judged calls in the
+// count were a test suite calling a helper its own text defines, with a label or a needle that
+// ends in a screen file's name. Such a call is read as the helper's own commands with the call's
+// words in place (rules.ts withoutOwnCalls), so one that only compares and prints runs unasked.
+const OWN_CHECK = 'check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }\n'
+const OWN_SAYS = `says() { case "$ERR" in *"$2"*) check "$1" ok ;; *) check "$1" "stderr did not say '$2': \${ERR:0:400}" ;; esac; }\n`
+test('#3416: a script calling a function its own text defines, which hands what it was handed to nothing the reader judges, runs as before', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    'suite.sh': `${OWN_CHECK}${OWN_SAYS}ERR=x\nsays "the refusal names /w/slate/app/page.tsx" "refused app/page.tsx"\ncheck "a write to /w/slate/app/globals.css is held" ok\n`,
+    'fn.sh': 'function note {\n  [ -n "$1" ] || { echo "no file"; return 1; }\n  printf \'%s\\n\' "$1" | grep -c tsx\n}\nnote /w/slate/app/page.tsx\n',
+    // Read in by another script, and with a file read in after the definition that leaves it alone.
+    'lib.sh': 'helper() { echo "$1"; }\n',
+    'after.sh': `note() { echo "$1"; }\n. ${NOTES}/lib.sh\nnote /w/slate/app/page.tsx\n`,
+    'outer.sh': `bash ${NOTES}/suite.sh\n`,
+    // A mod hook file the helper only prints.
+    'hook.sh': `note() { echo "$1"; }\nnote ${KEYS}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  const commands = [`bash ${NOTES}/suite.sh`, `cd /w/slate && bash ${NOTES}/suite.sh`, `bash ${NOTES}/fn.sh`, `bash ${NOTES}/after.sh`, `sh ${NOTES}/outer.sh`, `source ${NOTES}/suite.sh`, `bash ${NOTES}/hook.sh`]
+  for (const command of commands) expect({ command, why: refusalOf(await sh(command)) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+})
+
+test('#3416: a function of the script that hands on what it was handed, or that the text does not surely define, is still held as the direct call is', withKit, async ($, on) => {
+  const scripts: Record<string, string> = {
+    // A wrapper, by "$@", by "$1", through a variable, and through another function of the script.
+    'wrap.sh': 'run() { someunknownprogram "$@"; }\nrun /w/slate/app/page.tsx\n',
+    'one.sh': 'run() { prettier --write "$1"; }\ncd /w/slate\nrun app/page.tsx\n',
+    'var.sh': 'run() { local f="$1"; prettier --write "$f"; }\nrun /w/slate/app/page.tsx\n',
+    'two.sh': 'inner() { mystery "$1"; }\nrun() { inner "$1"; }\nrun /w/slate/app/page.tsx\n',
+    // Its body writes the file itself.
+    'writes.sh': 'run() { sed -i s/a/b/ "$1"; }\nrun /w/slate/app/page.tsx\n',
+    // Defined after the call, only in a branch that may not run, unset, or defined twice.
+    'late.sh': 'run /w/slate/app/page.tsx\nrun() { true; }\n',
+    'branch.sh': 'if [ -n "$X" ]; then\n  run() { true; }\nfi\nrun /w/slate/app/page.tsx\n',
+    'unset.sh': 'run() { true; }\nunset -f run\nrun /w/slate/app/page.tsx\n',
+    'twice.sh': 'run() { true; }\nrun /w/slate/app/page.tsx\nrun() { mystery "$1"; }\n',
+    // A function from a file the script reads in, and one a file read in afterwards defines again.
+    'lib.sh': 'run() { mystery "$1"; }\n',
+    'reads.sh': `. ${NOTES}/lib.sh\nrun /w/slate/app/page.tsx\n`,
+    'again.sh': `run() { true; }\n. ${NOTES}/lib.sh\nrun /w/slate/app/page.tsx\n`,
+    'hook.sh': `run() { mystery "$1"; }\nrun ${KEYS}\n`,
+  }
+  const w = world($, on, { files: { ...WITH_SCRATCH, ...Object.fromEntries(Object.entries(scripts).map(([name, text]) => [`${NOTES}/${name}`, text])) } })
+  const sh = (command: string) => call($, { tool: 'Bash', command })
+  for (const name of ['wrap', 'one', 'var', 'two', 'writes', 'late', 'branch', 'unset', 'twice', 'reads', 'again']) {
+    const command = `bash ${NOTES}/${name}.sh`
+    expect({ command, held: refusalOf(await sh(command)).includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+  }
+  // Said as it was before: the script, the name it hands the file to, and that the mods do not know it.
+  expect(refusalOf(await sh(`bash ${NOTES}/wrap.sh`))).toContain(`The design round guard judged app/page.tsx, which ${NOTES}/wrap.sh hands run, as a write of that file: run is a program the mods do not know`)
+  expect(w.ran).toEqual([])
+  // A mod hook file a wrapper hands on is judged once the command ran, and a look change is undone.
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  expect(refusalOf(await sh(`bash ${NOTES}/hook.sh`))).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
 test('#2855: a script named through a variable the command sets is read; one a loop names is not', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
   for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {

@@ -56,6 +56,10 @@ import {
   outputTrusted,
   argumentUnreached,
   handedToUnknown,
+  withoutOwnCalls,
+  ownBudget,
+  calledWith,
+  ownDefinitions,
   type RunCommand,
   argvStart,
   argvIndex,
@@ -3440,6 +3444,247 @@ test('#3416: handedToUnknown gives each file a script text hands a program the r
   // rules that were there before; none is given here.
   expect(handed('bash /s/other.sh /s/app/page.tsx\npython3 -m json.tool /s/app/page.tsx\nnpx prettier --write /s/app/page.tsx\n')).toEqual([])
   expect(handedToUnknown(undefined)).toEqual([])
+})
+
+// #3416, Dan 2026-11-22 ("Build the exemption (Recommended)"): a call of a function the script's own
+// text defines is not read as a program the reader does not know. All 31 newly judged calls in the
+// count were a suite calling its own helper. What is left of a script's runs once such calls are
+// read as the function's own commands, as `program path` for each look changing file still handed on.
+const ownLeft = async (text: string, sourced?: (c: RunCommand) => readonly RunCommand[] | undefined): Promise<string[]> => {
+  const io = {
+    pipeline: async (t: string, assignments?: boolean) => pipelineIn(t, '/s', '/h', assignments ? { assignments: true } : {}) as readonly RunCommand[],
+    writes: async (t: string) => commandWrites(t, '/s', '/h') as never,
+    ...(sourced ? { sourced } : {}),
+  }
+  const worth = (p: string) => allRules.shapeKind(p) !== null || isModHookTs(p)
+  const left = await withoutOwnCalls(io, text, pipelineIn(text, '/s', '/h') as readonly RunCommand[], commandWrites(text, '/s', '/h').runs as never, worth)
+  return handedToUnknown(left)
+    .filter(h => worth(h.path))
+    .map(h => `${h.program} ${h.path}`)
+}
+const CHECK = 'check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }\n'
+const SAYS = `says() { case "$ERR" in *"$2"*) check "$1" ok ;; *) check "$1" "stderr did not say '$2': \${ERR:0:400}" ;; esac; }\n`
+
+test('#3416: a call of a function the script itself defines, whose body hands what it was handed to nothing the reader judges, is left out', async () => {
+  // The shapes the count found: a helper that compares and prints, one calling another helper of the
+  // script, one that pipes what it was handed to a program that only reads.
+  expect(await ownLeft(`${CHECK}${SAYS}says "the refusal names app/page.tsx" "refused app/page.tsx"\n`)).toEqual([])
+  expect(await ownLeft(`${CHECK}check "a label naming app/page.tsx" ok\n`)).toEqual([])
+  expect(await ownLeft('assert_contains() {\n  # $1 desc, $2 needle, $3 haystack\n  if printf \'%s\' "$3" | grep -qF "$2"; then\n    PASS=$((PASS+1)); echo "PASS: $1"\n  else\n    FAIL=$((FAIL+1)); echo "FAIL: $1 (missing: $2)"\n  fi\n}\nassert_contains "names the page" app/page.tsx "$out"\n')).toEqual([])
+  expect(await ownLeft('function note {\n  echo "$1"\n}\nnote /s/app/page.tsx\nnote "${2}" /s/app/globals.css\n')).toEqual([])
+  // A group inside the body does not end it early, and what follows the group is still read.
+  expect(await ownLeft('need() { [ -n "$1" ] || { echo "no file"; return 1; }; echo "$1"; }\nneed /s/app/page.tsx\n')).toEqual([])
+  // Each file of a call by itself: the one the body only prints is left out, the other is not.
+  expect(await ownLeft('note() { echo "$1"; mystery "$2"; }\nnote /s/app/a.tsx /s/app/b.tsx\n')).toEqual(['note /s/app/b.tsx'])
+  // Every other run is given back as it was.
+  expect(await ownLeft(`${CHECK}prettier --write /s/app/page.tsx\ncheck app/page.tsx ok\n`)).toEqual(['prettier /s/app/page.tsx'])
+})
+
+test('#3416: a function that hands on what it was handed is still a run of a program the reader does not know', async () => {
+  const held = ['run /s/app/page.tsx']
+  for (const text of [
+    // A wrapper: the program it hands the file to is the one that was never known.
+    'run() { someunknownprogram "$@"; }\nrun /s/app/page.tsx\n',
+    'run() { prettier --write "$1"; }\nrun app/page.tsx\n',
+    'run() { [ -n "$1" ] || { echo no; return 1; }; prettier --write "$1"; }\nrun app/page.tsx\n',
+    'function run {\n  timeout 5 prettier --write "${1}"\n}\nrun app/page.tsx\n',
+    // Its body writes the file, takes it away or runs it.
+    'run() { sed -i s/a/b/ "$1"; }\nrun app/page.tsx\n',
+    'run() { echo x > "$1"; }\nrun app/page.tsx\n',
+    'run() { rm -f "$1"; }\nrun app/page.tsx\n',
+    'run() { "$1" --fix; }\nrun app/page.tsx\n',
+    'run() { eval "$1"; }\nrun app/page.tsx\n',
+    // It keeps the file in a variable, loops over it, or changes what `$1` is.
+    'run() { local f="$1"; mystery "$f"; }\nrun app/page.tsx\n',
+    'run() {\n  f=$1\n  mystery "$f"\n}\nrun app/page.tsx\n',
+    'run() { for f in "$@"; do mystery "$f"; done; }\nrun app/page.tsx\n',
+    'run() { for f; do mystery "$f"; done; }\nrun app/page.tsx\n',
+    'run() { shift; mystery "$1"; }\nrun x app/page.tsx\n',
+    'run() { mystery "${1:-x}"; }\nrun app/page.tsx\n',
+    'run() { mystery "${@:1}"; }\nrun app/page.tsx\n',
+    // A name joined to another value, and one handed on through another function of the script.
+    'run() { prettier --write "$ROOT/$1"; }\nrun app/page.tsx\n',
+    'inner() { mystery "$1"; }\nrun() { inner "$1"; }\nrun app/page.tsx\n',
+    'inner() { mystery "$1"; }\nrun() { inner "see $1"; }\nrun app/page.tsx\n',
+    // Defined after the call, only inside a branch, loop, group or function, or as no group.
+    'run /s/app/page.tsx\nrun() { true; }\n',
+    'if [ -n "$X" ]; then\n  run() { true; }\nfi\nrun app/page.tsx\n',
+    'for x in 1; do run() { true; }; done\nrun app/page.tsx\n',
+    '{ run() { true; }; }\nrun app/page.tsx\n',
+    'outer() {\n  run() { true; }\n}\nrun app/page.tsx\n',
+    'run()( true )\nrun app/page.tsx\n',
+    'run () { true; }\nrun app/page.tsx\n',
+    // Defined, then unset, defined again (before the call or after it), or behind an alias.
+    'run() { true; }\nunset -f run\nrun app/page.tsx\n',
+    'run() { true; }\nunset "$which"\nrun app/page.tsx\n',
+    'run() { true; }\nrun() { mystery "$1"; }\nrun app/page.tsx\n',
+    'run() { true; }\nrun app/page.tsx\nrun() { mystery "$1"; }\n',
+    'run() { true; }\nrun () { mystery "$1"; }\nrun app/page.tsx\n',
+    'alias run=prettier\nrun() { true; }\nrun app/page.tsx\n',
+    // Text run as commands after the definition may define it again.
+    'run() { true; }\neval "$later"\nrun app/page.tsx\n',
+    'run() { true; }\n. /s/lib.sh\nrun app/page.tsx\n',
+    // A heredoc in the body, and a name this reading writes into the text it hands the reader.
+    'run() {\n  cat <<EOF\n$1\nEOF\n}\nrun app/page.tsx\n',
+    'run() { true; } # zz3416\nrun app/page.tsx\n',
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+  // A function from a file the script reads in is no function of its own text.
+  expect(await ownLeft('. /s/lib.sh\nlib_fn app/page.tsx\n')).toEqual(['lib_fn /s/app/page.tsx'])
+  // A file read in after the definition: left out only where the guard read it and it leaves the name alone.
+  const after = 'run() { true; }\n. /s/lib.sh\nrun app/page.tsx\n'
+  const lib = (text: string) => () => pipelineIn(text, '/s', '/h') as readonly RunCommand[]
+  expect(await ownLeft(after, lib('helper() { echo x; }\n'))).toEqual([])
+  expect(await ownLeft(after, lib('run() { mystery "$1"; }\n'))).toEqual(held)
+  expect(await ownLeft(after, lib('eval "$x"\n'))).toEqual(held)
+  expect(await ownLeft(after, () => undefined)).toEqual(held)
+  // A mod hook file handed to a helper that passes it to a script is still judged.
+  expect(await ownLeft('mutant(){\n  local file="$4" expr="$5"\n  bash /s/tools/prove.sh --sed "$file" "$expr"\n}\nmutant a b PROVED payload/mods/x/hooks/rules.ts s/a/b/\n')).toEqual(['mutant /s/payload/mods/x/hooks/rules.ts'])
+})
+
+test('#3416: a definition the shell may not make, and a call that runs a program of the same name, are still held', async () => {
+  const held = ['run /s/app/page.tsx']
+  const CALL = '\nrun app/page.tsx\n'
+  for (const text of [
+    // Made only where the command before it says so, or in the subshell a pipe runs it in.
+    `[ -n "$X" ] && run() { true; }${CALL}`,
+    `false || run() { true; }${CALL}`,
+    `echo x | run() { true; }${CALL}`,
+    `[ -n "$X" ] &&\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] && \\\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] && # only then\nrun() { true; }${CALL}`,
+    `[ -n "$X" ] ||\n\n# only then\n\nrun() { true; }${CALL}`,
+    `cat <<EOF &&\nx\nEOF\nrun() { true; }${CALL}`,
+    `cat <<'E-O-F' |\nx\nE-O-F\nrun() { true; }${CALL}`,
+    // Made in a subshell, a case, a loop, the other branch, or a command substitution.
+    `( run() { true; } )${CALL}`,
+    `case "$X" in a) run() { true; } ;; esac${CALL}`,
+    `case "$X" in\n  a)\n    run() { true; }\n    ;;\nesac${CALL}`,
+    `while false; do run() { true; }; done${CALL}`,
+    `until true; do\n  run() { true; }\ndone${CALL}`,
+    `if x; then :; else\n  run() { true; }\nfi${CALL}`,
+    `x=$(run() { true; }; echo)${CALL}`,
+    `x=$(\nrun() { true; }\n)${CALL}`,
+    'cat <<EOF\n$(\nrun() { true; }\n)\nEOF\nrun() { true; }\nrun app/page.tsx\n',
+    // What follows the body's closing brace is part of every call: a file it writes, a pipe, a subshell.
+    `run() { true; } > "$1"${CALL}`,
+    `run() { true; } >> "$1"${CALL}`,
+    `run() { echo x; } 2>"$1"${CALL}`,
+    `run() { true; } &${CALL}`,
+    `run() { true; } | cat${CALL}`,
+    // Unset or run as text behind the shell's own words for running a builtin.
+    `run() { true; }\ncommand unset -f run${CALL}`,
+    `run() { true; }\nbuiltin unset -f run${CALL}`,
+    `run() { true; }\nbuiltin eval "$later"${CALL}`,
+    `run() { true; }\nbuiltin . /s/lib.sh${CALL}`,
+    // A call behind a program that runs its words is a run of the program of that name, never the
+    // function: timeout, env, command, a new shell, xargs and find know nothing of a shell function.
+    'run() { true; }\ntimeout 5 run app/page.tsx\n',
+    'run() { true; }\nenv run app/page.tsx\n',
+    'run() { true; }\ncommand run app/page.tsx\n',
+    'run() { true; }\nnohup run app/page.tsx\n',
+    'run() { true; }\nexec run app/page.tsx\n',
+    "run() { true; }\nbash -c 'run app/page.tsx'\n",
+    'run() { true; }\nxargs run app/page.tsx\n',
+    'run() { true; }\nfind . -exec run app/page.tsx \\;\n',
+    // The same inside a body: what it hands on goes to the program, not the script's function.
+    `inner() { true; }\nrun() { timeout 5 inner "$1"; }${CALL}`,
+    `inner() { true; }\nrun() { command inner "$1"; }${CALL}`,
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: held })
+  // One such call, or one before the definition, among plain calls with the same words cannot be
+  // told from them, so each is held.
+  expect(await ownLeft('run() { true; }\nrun app/page.tsx\ntimeout 5 run app/page.tsx\n')).toEqual([...held, ...held])
+  expect(await ownLeft('run app/page.tsx\nrun() { true; }\nrun app/page.tsx\n')).toEqual([...held, ...held])
+  // What is surely the script's own stays left out: a definition after a whole line, a comment or a
+  // semicolon, with a comment after its brace, called in a subshell, a pipe or a substitution.
+  for (const text of [
+    `[ -d "$T" ] || mkdir "$T"\n# a helper\n\nrun() { true; }${CALL}`,
+    `cat <<EOF\nx &&\nEOF\nrun() { true; }${CALL}`,
+    `if [ -n "$X" ]; then\n  true\nfi\nrun() { true; }${CALL}`,
+    `set -u; run() { true; }; run app/page.tsx\n`,
+    `run() { true; } # says nothing${CALL}`,
+    `run() { (true)}${CALL}`,
+    'run() {\n  # one } in a comment\n  true\n}\nrun app/page.tsx\n',
+    'run() { true; }\n( run app/page.tsx )\n',
+    'run() { true; }\necho x | run app/page.tsx\n',
+    'run() { true; }\nx=$(run app/page.tsx)\n',
+  ])
+    expect({ text, left: await ownLeft(text) }).toEqual({ text, left: [] })
+})
+
+// A made up suite the shape of the repository's long ones: each section defines its own helper and
+// calls it once a case with a file the guard holds, six lines a case. What reading its own calls
+// costs scales with the helpers times the text before each, so the helpers are spread through it.
+const longSuite = (sections: number, cases: number): string => {
+  const out = ['#!/bin/bash', 'set -u', 'PASS=0; FAIL=0', 'ROOT="$(cd "$(dirname "$0")" && pwd)"', 'pass() { PASS=$((PASS + 1)); }', 'fail() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }', '']
+  for (let s = 0; s < sections; s++) {
+    out.push(`# section ${s}`, `check_${s}() {`, '  if grep -qF "$2" "$1"; then', '    pass', '  else', '    fail "$2"', '    echo "$1"', '  fi', '}')
+    for (let c = 0; c < cases; c++)
+      out.push(
+        `OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"echo ${s} ${c}"}}' | bash "$ROOT/gate.sh" 2>&1)`,
+        'RC=$?',
+        `if [ "$RC" -eq 0 ]; then pass; else fail "case ${s}.${c} left $RC"; fi`,
+        `check_${s} docs/rounds/round-${s}-${c}.html "expected ${c}"`,
+        `[ -n "$OUT" ] || { echo "case ${s}.${c} said nothing"; FAIL=$((FAIL + 1)); }`,
+        '',
+      )
+  }
+  out.push('echo "$PASS passed, $FAIL failed"', '[ "$FAIL" -eq 0 ]', '')
+  return out.join('\n')
+}
+// What withoutOwnCalls leaves of a text's runs, and how many characters of text it handed mod-kit's
+// readers to decide it: the work a hook does before the command runs, counted and never timed.
+const ownCost = async (text: string): Promise<{ held: number; runs: number; handed: number }> => {
+  let handed = 0
+  const io = {
+    pipeline: async (t: string, assignments?: boolean) => {
+      handed += t.length
+      return pipelineIn(t, '/s', '/h', assignments ? { assignments: true } : {}) as readonly RunCommand[]
+    },
+    writes: async (t: string) => {
+      handed += t.length
+      return commandWrites(t, '/s', '/h') as never
+    },
+  }
+  const runs = commandWrites(text, '/s', '/h').runs ?? []
+  const left = await withoutOwnCalls(io, text, pipelineIn(text, '/s', '/h') as readonly RunCommand[], runs as never, p => allRules.shapeKind(p) !== null)
+  return { held: handedToUnknown(left).length, runs: runs.length, handed }
+}
+
+test('#3416: reading a long suite\'s own calls hands the reader a few times its text, however many helpers it defines', async () => {
+  // 2026-11-22: finding each helper reread the whole script before it, once a helper, so this
+  // suite's 308,214 characters cost 6,711,692 handed to the reader (21.8 times the text, 6.4 to 7.4
+  // seconds in five readings) and a real 6,388 line suite took minutes, before every command.
+  const text = longSuite(40, 25)
+  expect(text.split('\n').length).toBeGreaterThan(6000)
+  const cost = await ownCost(text)
+  // Every call was read and left out: the cost below is the work done, not the work skipped.
+  expect({ runs: cost.runs, held: cost.held }).toEqual({ runs: 1000, held: 0 })
+  expect(cost.handed / text.length).toBeLessThan(4)
+})
+
+test('#3416: a script whose own calls would cost more to read than the limit keeps the rest held', async () => {
+  // The other way the cost grows: calls times the size of the body each is read as. Past the limit
+  // (ownBudget) every run not yet read is given back as it was, a run of a program not known.
+  const body = Array.from({ length: 60 }, (_, i) => `  if grep -qF "needle ${i}" "$1"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); fi`).join('\n')
+  const text = `check() {\n${body}\n}\n${Array.from({ length: 400 }, (_, i) => `check docs/rounds/round-${i}.html`).join('\n')}\n`
+  const cost = await ownCost(text)
+  expect(cost.runs).toBe(400)
+  expect(cost.handed).toBeLessThan(ownBudget(text) + 4 * text.length)
+  expect(cost.held).toBeGreaterThan(0)
+  expect(cost.held).toBeLessThan(400)
+  // A short script is nowhere near it.
+  expect((await ownCost(`check() {\n${body}\n}\ncheck docs/rounds/round-1.html\n`)).held).toBe(0)
+})
+
+test('#3416: calledWith writes a call\'s words in place of what the body names, and ownDefinitions finds each definition', () => {
+  expect(calledWith(' echo "$1" $2 "${3}" \'$1\' \\$1 "it\'s $1" # $1\n mystery "$@" $* ', ['/a', '/b'])).toBe(' echo "/a" /b "${zz3416none}" \'$1\' \\$1 "it\'s /a" # $1\n mystery "/a /b" /a /b ')
+  expect(calledWith('grep -q x <<< "$1"', ['/a'])).toBe('grep -q x <<< "/a"')
+  expect(calledWith('cat <<EOF\n$1\nEOF', ['/a'])).toBeUndefined()
+  const defs = (text: string) => ownDefinitions(pipelineIn(text, '/s', '/h') as readonly RunCommand[], 'run')
+  expect(defs('run() { true; }\nfunction run { true; }\nfunction run() { true; }\nrunner() { true; }\n')).toEqual({ braces: [0, 3, 6], other: 0 })
+  expect(defs('run () { true; }\n')).toEqual({ braces: [], other: 1 })
 })
 
 // #3017: on 2026-11-15 the conflict fixes for #3008 and #3011 in this guard's own register.ts were

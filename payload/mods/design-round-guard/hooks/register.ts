@@ -69,6 +69,8 @@ import {
   type RunCommand,
   closedScripts,
   handedToUnknown,
+  withoutOwnCalls,
+  scriptPath,
   UNPLACED,
   asProgram,
   mentionedModHookFiles,
@@ -978,7 +980,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // reads in may set is held to every assignment in any of them, and a TMPDIR the command sets
   // (`TMPDIR=app bash suite.sh`) counts as one the script sets.
   const scriptsText = [command, ...runs.map(r => ('unread' in r ? '' : r.text))].join('\n')
-  const readings = new Map<ScriptRun, { read: ScriptReading & Awaited<ReturnType<typeof $.modkit.writes>>; commands?: readonly RunCommand[] }>()
+  const readings = new Map<ScriptRun, { read: ScriptReading & Awaited<ReturnType<typeof $.modkit.writes>>; commands?: readonly RunCommand[]; text?: string }>()
   for (const s of runs) {
     if ('unread' in s) continue
     const cwd = s.folder ?? UNPLACED
@@ -988,7 +990,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     }
     const plain = (await $.modkit.pipeline({ command: s.text, cwd, home: at.home })) as readonly RunCommand[]
     const { text, commands } = await spelt($, s.text, plain, cwd, scriptsText, at.home)
-    readings.set(s, { read: await $.modkit.writes({ command: text, cwd, home: at.home }), commands })
+    readings.set(s, { read: await $.modkit.writes({ command: text, cwd, home: at.home }), commands, text })
   }
   // #2924: a shell script that cannot write what it is handed (rules.ts closedScripts: every file its
   // own commands write named in its own text or a temporary file it made, nothing run later from a
@@ -1139,8 +1141,33 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     // placed only under a folder that cannot be followed is held as could not check, as a file the
     // script's commands write there is. How deep this goes is the script reading's own depth
     // (SHELL_DEPTH): `runs` holds the script the command runs and each script that one runs.
-    if (s.lang === 'shell')
-      for (const h of handedToUnknown(read.runs)) {
+    // A call of a function the script's own text defines is first read as that function's own
+    // commands with the call's words in place (rules.ts withoutOwnCalls; Dan, 2026-11-22), so a
+    // helper that only compares and prints what it was handed is no program handed a file, and one
+    // that hands it on, or that the text does not surely define, is judged here as it was.
+    if (s.lang === 'shell') {
+      const mine = readings.get(s)
+      const cwd = s.folder ?? UNPLACED
+      const placedIn = (c: RunCommand) => (c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder)
+      const left =
+        mine?.commands && mine.text !== undefined
+          ? await withoutOwnCalls(
+              {
+                pipeline: async (command, assignments) => (await $.modkit.pipeline({ command, cwd, home: at.home, ...(assignments ? { assignments: true } : {}) })) as readonly RunCommand[],
+                writes: async command => (await $.modkit.writes({ command, cwd, home: at.home })) as Awaited<ReturnType<Parameters<typeof withoutOwnCalls>[0]['writes']>>,
+                sourced: c => {
+                  const path = scriptPath(c.words[1] ?? '', s.text, placedIn(c), at.home, s.path)
+                  const file = path === undefined ? undefined : runs.find(r => !('unread' in r) && r.path === path && r.lang === 'shell')
+                  return file ? readings.get(file)?.commands : undefined
+                },
+              },
+              mine.text,
+              mine.commands,
+              read.runs,
+              p => shapeKind(p) !== null || isModHook(p) || isModHookTs(p),
+            )
+          : read.runs
+      for (const h of handedToUnknown(left)) {
         if (h.path.startsWith(`${UNPLACED}/`)) {
           const rel = h.path.slice(UNPLACED.length + 1)
           if (shapeKind(rel) !== null || isModHookTs(rel)) targets.push({ word: rel, unread: scriptUnplaced(s.word, rel), inScript: s.word })
@@ -1148,6 +1175,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
         }
         targets.push({ path: h.path, word: h.word, inScript: s.word, run: h.program, unknown: { why: h.why, remedy: h.remedy } })
       }
+    }
     // #3036: a command in the script that mod-kit marks `unread` runs what its words do not say, so
     // the reading above gives no write for it: `bash fix.sh`, fix.sh holding the eval #3021 holds
     // typed whole, ran unasked. Judged as that one is, by the look and mod hook files its words
