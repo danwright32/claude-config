@@ -1780,7 +1780,7 @@ PyFileRuns = load_lib("py_file_runs", "py-file-runs.py").make(py_nodes, SH_UNKNO
 # A script's own $0 and $1..., from the command that runs it (claude-config#3395).
 ScriptParams = load_lib("script_params", "script-params.py").make(SHELLS, SH_REDIRECT, SH_UNKNOWN_DIR)
 # What a sed filter or a git show of one file prints, where that is known exactly (claude-config#3395).
-ExactOutput = load_lib("exact_output", "exact-output.py").make(SH_UNKNOWN_DIR)
+ExactOutput = load_lib("exact_output", "exact-output.py").make(SH_UNKNOWN_DIR, SYSTEM_BIN)
 # The cache of the calls this gate allowed (claude-config#2918).
 _cache = load_lib("judgement_cache", "judgement-cache.py")
 # The scheduling priority the gate judges at, raised so a busy Mac keeps it on a performance core

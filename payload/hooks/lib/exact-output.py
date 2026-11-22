@@ -43,6 +43,25 @@ print the file as the commit holds it, and the gate reads it with the same `git 
 already uses for a checkout (git_out). Only where REV is an object name in hex that is no ref: a
 branch or HEAD can be moved by an earlier command of the same call, and the gate would have read
 the file as it was before. No GIT_ variable may be set in front of it or exported in the text.
+That the command is git, and which of its words are git's own options, its subcommand and the
+words after, is asked of the one reading of that (lib/shell-words.py git_read, claude-config#1188),
+as the gate itself asks it: lib/word-position-scan.py refuses a second reading written here.
+
+The program. All of the above is what the SYSTEM's sed or git prints, and a command may run another
+program of that name: `./git show REV:PATH > old.sh` with a script called git in the folder was
+read as the commit's file and allowed (seen on af3a86bcf5, 2026-11-22). So nothing is read unless
+the program the shell would run is that one for certain:
+
+  * by a path, only in a folder the gate already takes for the system's (its SYSTEM_BIN);
+  * by its bare name, only where every folder of the session's own PATH is a whole path (an empty
+    or relative entry is the folder the command runs in), and no text that runs the command, the
+    line itself or a script around it, names PATH in any way, set or only read;
+  * with no word in front that runs it for the shell (env, exec, command, sudo, nice, xargs:
+    lib/shell-words.py's runners), since one can change where the program is looked for.
+
+Not looked at, and so still believed: a bare name the session's PATH resolves outside those
+folders, a file an earlier command wrote into a PATH folder, zsh's path array, the shell's hash
+table (hash -p), and a PATH or function set by a file the command sources.
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (shell) and readers (made_from, resolve, sh_cwd, sh_funcs,
@@ -69,6 +88,8 @@ GIT_PLACES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTOR
               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES", "GIT_CONFIG_GLOBAL",
               "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 ALIAS = r"(?m)(?<![\w.-])alias\s[^\n]*(?<![\w.-])%s="
+# PATH as a name of its own (never part of PYTHONPATH or GIT_EXEC_PATH), written any way at all.
+PATH_NAMED = re.compile(r"(?<!\w)PATH(?!\w)")
 
 
 class Outside(Exception):
@@ -449,9 +470,10 @@ def sed_apply(prog, quiet, text):
     return "".join(line + "\n" for line in out)
 
 
-def make(unknown_dir):
+def make(unknown_dir, system_bin):
     """The Judge's base for the rule. unknown_dir is the gate's word for a directory that is not
-    certain."""
+    certain, system_bin the folders it takes a program in for the system's own (its SYSTEM_BIN,
+    the one list of them)."""
 
     class ExactOutput:
 
@@ -460,21 +482,47 @@ def make(unknown_dir):
             what it prints where that is known exactly (module docstring), else None. vals are the
             command's words, each worked out or None, stdin the pieces of its input or None, and
             text the command as written."""
-            if (name not in SEDS and name != "git") or any(v is None for v in vals):
+            if any(v is None for v in vals):
+                return None
+            # Whether the command is git, with which options of git's own and which subcommand, is
+            # the one reading's answer (lib/shell-words.py git_read, claude-config#1188): never
+            # read from the words here, where a second reading could come to disagree with it.
+            git = None if name in SEDS else self.sw.git_read(vals)
+            if git is None and name not in SEDS:
+                return None
+            if git is not None and vals[0].lstrip("({") != vals[0]:
+                # That reading takes a ( or a { glued in front of the program as the shell's, which
+                # it is in a command as written. These words are worked out, where one is part of
+                # the name: a program called `(git` is not git, and was never read as it (seen
+                # allowed without this line, test-slack-drafts-reads-more.sh, 2026-11-22).
+                return None
+            # What is read is what the SYSTEM's sed or git prints, so the program the shell would
+            # run has to be that one for certain (module docstring, "The program"). By a path, only
+            # in a folder the gate takes for the system's; by its bare name, only where nothing
+            # says the shell may find another: the session's PATH, PATH named in a text that runs
+            # the command, a word in front that runs it for the shell.
+            bare = "/" not in vals[0]
+            if not bare and os.path.dirname(vals[0]) not in system_bin:
+                return None
+            if bare and not self.exact_session_path():
                 return None
             if self.sw.command_rest(text)[1].strip() or self.sh_cwd(d) == unknown_dir:
+                return None
+            if self.exact_run_for_it(text):
                 return None
             ctx = self.shell
             while ctx is not None:
                 if self.exact_shadowed(ctx["text"], name):
                     return None  # a function or an alias of that name is not the program
-                if name == "git" and any(n.startswith("GIT_") for n in list(ctx["exported"]) + list(ctx["pending"])):
+                if bare and self.exact_names_path(ctx["text"]):
+                    return None
+                if git is not None and any(n.startswith("GIT_") for n in list(ctx["exported"]) + list(ctx["pending"])):
                     return None
                 ctx = ctx.get("parent")
-            if name == "git":
+            if git is not None:
                 if any(n in os.environ for n in GIT_PLACES):
                     return None  # git_out leaves these out, and the command itself would not
-                return self.git_file_printed(vals[1:], d)
+                return self.git_file_printed(*git, d)
             plan = sed_plan(vals[1:])
             if plan is None:
                 return None
@@ -507,6 +555,42 @@ def make(unknown_dir):
                 memo[key] = name in self.sh_funcs(text) or bool(re.search(ALIAS % re.escape(name), text))
             return memo[key]
 
+        def exact_once(self, key, work):
+            """work()'s answer for key, worked out once: each of the three askings below depends
+            only on its key, and is made again for every sed and git command of a long script."""
+            memo = self.__dict__.get("_exact_once")
+            if memo is None:
+                memo = self.__dict__["_exact_once"] = {}
+            if key not in memo:
+                memo[key] = work()
+            return memo[key]
+
+        def exact_session_path(self):
+            """Whether every folder of the session's own PATH, as the gate has it, is a whole path.
+            An empty entry or a relative one names the folder the command runs in, or one under
+            it, where a file called sed or git may be anything, an earlier command's included."""
+            def work():
+                path = os.environ.get("PATH")
+                return bool(path) and all(os.path.isabs(entry) for entry in path.split(os.pathsep))
+            return self.exact_once(("session path",), work)
+
+        def exact_names_path(self, text):
+            """Whether text names PATH at all: set, exported, added to, unset or only read. Where
+            it does, which folders the shell searches when the command runs is not certain, and no
+            attempt is made to tell a change that reaches the command from one that does not."""
+            return self.exact_once(("names path", text), lambda: bool(PATH_NAMED.search(text)))
+
+        def exact_run_for_it(self, text):
+            """Whether a word in front of the command runs it for the shell (env, exec, sudo, nice,
+            xargs and the rest of lib/shell-words.py's RUNNERS, which is the reading that says so).
+            Such a word can change where the program is looked for (env -i, env PATH=, sudo's own
+            PATH), so the command behind one is not read here."""
+            def work():
+                passed = []
+                self.sw.command_rest(text, passed)
+                return bool(passed)
+            return self.exact_once(("run for it", text), work)
+
         def exact_bytes(self, pieces):
             """The bytes that pieces certainly are, or None: text the gate worked out, and files no
             earlier command of this call wrote, each ending in a newline, under MAX_INPUT in all."""
@@ -531,19 +615,28 @@ def make(unknown_dir):
                     return None
             return out
 
-        def git_file_printed(self, words, d):
+        def git_file_printed(self, sub, front, after, d):
             """What `git show REV:PATH` and the two cat-file forms print, as one text piece, where
-            REV is a hex object name that is no ref (module docstring); else None."""
-            k = 1 if words[:1] == ["--no-pager"] else 0
+            REV is a hex object name that is no ref (module docstring); else None.
+
+            sub, front and after are the one reading's answer for the command (lib/shell-words.py
+            git_read): its subcommand, git's own options in front of that, and every word after
+            it. What is decided here is only this library's own: which of git's options leave the
+            object it names the same (--no-pager, then -C and its folder, and nothing else), and
+            which subcommands print one object whole. A word that reading passed over as a
+            redirection is among the words after, so a count of them that fits is a command
+            holding none."""
+            k = 1 if front[:1] == ["--no-pager"] else 0
             where = self.resolve(".", d)
-            if words[k:k + 1] == ["-C"] and len(words) > k + 1:
-                where = self.resolve(words[k + 1], d)
+            if front[k:k + 1] == ["-C"] and len(front) > k + 1:
+                where = self.resolve(front[k + 1], d)
                 k += 2
-            rest = words[k:]
-            if len(rest) == 2 and rest[0] == "show":
-                spec = rest[1]
-            elif len(rest) == 3 and rest[0] == "cat-file" and rest[1] in ("-p", "blob"):
-                spec = rest[2]
+            if len(front) != k:
+                return None  # another option of git's own, or these two the other way round
+            if sub == "show" and len(after) == 1:
+                spec = after[0]
+            elif sub == "cat-file" and len(after) == 2 and after[0] in ("-p", "blob"):
+                spec = after[1]
             else:
                 return None
             m = GIT_SPEC.fullmatch(spec)
