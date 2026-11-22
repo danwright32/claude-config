@@ -128,6 +128,12 @@ has "and names what is missing" "one-lesson: no seconds per reading" "$out"
 printf '%s\n' "$GOOD" | sed 's/seconds per reading 2\.560, 2\.541, 2\.600; yardstick per reading 0\.0832 from 7, 0\.0829 from 9/seconds per reading 2.551, 2.541, 2.600; yardstick per reading 0.0832 from 7, 0.0829 from 9/; s/samples 30\.8, 30\.7, 31\.4/samples 30.7, 30.7, 31.4/' > "$WORK/tie.log"
 out="$(python3 -B "$TOOL" check "$WORK/tie.log" 2>&1)"
 check "check accepts the judged figures of either of two readings that print alike" "$([ "$out" = ok ] && echo ok || echo "$out")"
+# A cost log holds cost records only, so a line in it that is not one is a record whose shape the
+# check no longer reads, and its case would otherwise go unchecked.
+{ printf '%s\n' "$GOOD"; printf 'three-lessons LINE: 37.3 [a shape nobody reads]\n'; } > "$WORK/odd.log"
+out="$(python3 -B "$TOOL" check "$WORK/odd.log" 2>&1)"; rc=$?
+check "check refuses a cost log line it cannot read rather than skipping it" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
+has "and quotes it" "line 2 is not a cost record this check reads: three-lessons LINE" "$out"
 : > "$WORK/none.log"
 out="$(python3 -B "$TOOL" check "$WORK/none.log" 2>&1)"; rc=$?
 check "check on a log holding no record fails rather than passing nothing" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"

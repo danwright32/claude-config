@@ -201,15 +201,19 @@ def check(path):
     except OSError as e:
         print("%s could not be read: %s" % (path, e))
         return 1
-    found = []
-    for raw in text.splitlines():
+    found, unread = [], []
+    for n, raw in enumerate(text.splitlines(), 1):
         m = COST_LINE.match(raw.split(MARK, 1)[-1].strip())
         if m:
             found.append(body_fields(*m.groups()))
+        elif raw.strip():
+            # A cost log holds records only, so this is one whose shape is no longer read, and its
+            # case would go unchecked if it were skipped.
+            unread.append("line %d is not a cost record this check reads: %s" % (n, raw.strip()[:120]))
     if not found:
         print("%s holds no cost record, so nothing was checked" % path)
         return 1
-    wrong = [f for r in found for f in faults(r)]
+    wrong = unread + [f for r in found for f in faults(r)]
     print("\n".join(wrong) if wrong else "ok")
     return 1 if wrong else 0
 
