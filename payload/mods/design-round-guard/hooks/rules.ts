@@ -4092,9 +4092,56 @@ export const wholeRestoreSource = (git: { sub: string | undefined; args: readonl
  * (a group, a subshell, a function, a command the shell runs to fill in a word, a pattern in a
  * search), and any word a compound command is written with, makes it none: a pipe out of a group
  * runs beside everything in the group, which the order of the commands alone cannot show.
+ * Given `read`, mod-kit's own reading of the same text (its pipeline, every command of it), such a
+ * character is read as text where that reading shows it to be (#3401, groupsNothing), so a search
+ * for "(fail|pass)" groups nothing. A compound command's word is read as before, quoted or not.
  */
-export const plainLine = (command: string): boolean =>
-  !/[(){}`]/.test(command) && !/(^|[\s;&|!])(if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|coproc|time)(?=$|[\s;&|])/.test(command)
+export const plainLine = (command: string, read?: readonly ReadCommand[]): boolean =>
+  (!/[(){}`]/.test(command) || (read !== undefined && groupsNothing(command, read))) &&
+  !/(^|[\s;&|!])(if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|coproc|time)(?=$|[\s;&|])/.test(command)
+
+/** A command as mod-kit's reader gives it (commands.ts Command), by its words and whichever of its marks it carries. */
+export type ReadCommand = { readonly words: readonly string[]; readonly literal?: readonly boolean[] } & Readonly<Record<string, unknown>>
+
+// The reader's marks that say what a command is and nothing of where it runs (#3401): its words,
+// what a pipe feeds it, the settings written in front of it, how the shell hands each word on, and
+// the program, script or inline code it is given. Every other mark places it somewhere a line's own
+// command does not stand (in a substitution, in arithmetic, behind a shell or a runner, under xargs
+// or find, fed a heredoc, unread) or is one this rule has not read, and either way nothing is shown.
+const SAYS_NO_PLACE = new Set(['words', 'pipedFrom', 'env', 'splits', 'literal', 'unexpanded', 'asWritten', 'language', 'program', 'script', 'verdict'])
+
+/**
+ * Whether mod-kit's reading of a call's text shows that the text groups nothing (#3401), though it
+ * holds a brace or a parenthesis: every such character is one the reader found in a word the shell
+ * hands on as its characters. Three things, each from the reading, never from the text's own quotes:
+ * every command carries only marks that say nothing of where it runs (SAYS_NO_PLACE), so each is
+ * one of the line's own commands, standing where it is typed; every word holding a grouping
+ * character is marked `literal`, which the reader gives only a word whose every pattern character,
+ * these four among them, is in quotes or after a backslash and which holds no $ or backtick, so a
+ * subshell's parenthesis, a group's brace, a function's `()`, an unquoted pattern or brace
+ * expansion and any word the shell expands are none; and those words hold as many of each of the
+ * four as the text does, so one the reader left out of every word (a group's opening brace, a
+ * comment, a case's pattern, a heredoc's body, a setting's value) is not taken as accounted for.
+ * A backtick is never text here, since no mark says so of one. Nor is anything on a line holding
+ * `$'`: the reader does not read such a string, whose `\'` does not end it, so it can take what
+ * follows one for a quoted word (measured 2026-11-22: bash and zsh ran the group in
+ * `echo $'\' x' | (cat; echo ran) #'`, which the reader gave as one echo). A reading that shows
+ * less than all of this shows nothing, and the line is read as grouping, as before.
+ */
+export const groupsNothing = (command: string, read: readonly ReadCommand[]): boolean => {
+  if (command.includes('`') || command.includes("$'")) return false
+  const count = (text: string, c: string) => text.split(c).length - 1
+  const inWords = { '(': 0, ')': 0, '{': 0, '}': 0 }
+  for (const c of read) {
+    if (!Object.keys(c).every(mark => SAYS_NO_PLACE.has(mark))) return false
+    for (const [i, word] of c.words.entries()) {
+      if (!/[(){}`]/.test(word)) continue
+      if (c.literal?.[i] !== true) return false
+      for (const k of Object.keys(inWords) as (keyof typeof inWords)[]) inWords[k] += count(word, k)
+    }
+  }
+  return (Object.keys(inWords) as (keyof typeof inWords)[]).every(k => inWords[k] === count(command, k))
+}
 
 /**
  * Which of a plain line's commands (plainLine), by their place in it, run only once its last

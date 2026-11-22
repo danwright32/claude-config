@@ -4432,6 +4432,98 @@ test('#3280: where the guard cannot tell from git that the file ends up as the d
   expect(w.ran.length).toBe(1)
 })
 
+// #3401: #3280 read any brace, parenthesis or backtick anywhere in the call's text as grouping, so
+// the restore followed by a test piped through a search for "(fail|pass)" stayed held: the
+// parentheses there sit in a quoted pattern and group nothing. Such a character is read as text
+// where mod-kit's own reading of the line shows it so (rules.ts plainLine), and only there: every
+// command after the restore still has to be one that runs once it has finished.
+test('#3401: an exact restore, then a test piped through a search that quotes a parenthesis, runs unasked', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main']) })
+  knows(w, 'origin/main', TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const R = `git checkout origin/main -- ${MOD_REL}`
+  const lines = [
+    // The issue's own line, in double and in single quotes, and piped on.
+    `${R} && claude plugin test payload/mods/demo 2>&1 | grep -E "(fail|pass)"`,
+    `${R} && claude plugin test payload/mods/demo 2>&1 | grep -E '(fail|pass)'`,
+    `${R} && claude plugin test payload/mods/demo 2>&1 | grep -E "(fail|pass)" | tail -3`,
+    // A quoted parenthesis in a word of the test command itself, a quoted brace, an escaped one.
+    `${R} && claude plugin test payload/mods/demo -t "renders (dark)" 2>&1 | tail -3`,
+    `${R} && claude plugin test payload/mods/demo | grep -E "a{2}"`,
+    `${R} && claude plugin test payload/mods/demo | grep fail\\(`,
+    `${R}; claude plugin test payload/mods/demo | awk '{print}'`,
+  ]
+  for (const command of lines) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(lines.length)
+  expect(w.cards).toEqual([])
+  expect(restored(w, MOD_REL).length).toBe(lines.length)
+})
+
+test('#3401: after an exact restore, a line that groups, substitutes or hands text to a shell is held with the words it had', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...BUILT_FILES }, blobs: MAIN_COPIES(['origin/main']) })
+  knows(w, 'origin/main', TIP)
+  mainHolds(w, [MOD_REL, PAGE_REL, 'app/globals.css'])
+  const R = `git checkout origin/main -- ${MOD_REL}`
+  const T = 'claude plugin test payload/mods/demo'
+  // Each line, and the command its refusal names as running beside the restore.
+  const held: [string, string][] = [
+    // A subshell, a group, and a pipe out of either.
+    [`${R} && (${T} | tail -5)`, '('],
+    [`${R} && { ${T}; } | tail -5`, T],
+    [`${R} && ${T} | grep "(x)" | (cat)`, T],
+    // A command the shell runs to fill in a word, double quoted or not, and a process substitution.
+    [`${R} && ${T} | grep "$(cat pattern.txt)"`, T],
+    [`${R} && ${T} | grep \`cat pattern.txt\``, T],
+    [`${R} && ${T} | grep "\`cat pattern.txt\`"`, T],
+    [`${R} && ${T} | diff <(cat a.txt) -`, T],
+    // Arithmetic, as a word and as a command.
+    [`${R} && ${T} | head -$((1+2))`, T],
+    [`${R} && (( x = 1 )); ${T} | tail -5`, '('],
+    // A function, and every word a compound command is written with.
+    [`t() { ${T}; }; ${R} && t | tail -5`, 't()'],
+    [`${R}; if true; then ${T} | grep "(x)"; fi`, T],
+    [`${R}; for f in a; do ${T} | grep "(x)"; done`, 'for f in a'],
+    [`${R}; while true; do ${T} | grep "(x)"; break; done`, T],
+    [`${R}; until false; do ${T} | grep "(x)"; break; done`, T],
+    [`${R}; case x in x) ${T} | grep "(x)";; esac`, 'case x in'],
+    [`${R}; select f in a; do ${T} | grep "(x)"; break; done`, 'select f in a'],
+    [`${R}; coproc ${T} | grep "(x)"`, `coproc ${T}`],
+    [`${R}; time ${T} | grep "(x)"`, T],
+    // A heredoc whose body holds the characters.
+    [`${R} && ${T} | grep -f - <<EOF\n(fail|pass)\nEOF`, T],
+    // Text another shell reads: eval, a shell's -c, xargs.
+    [`${R} && eval "(${T})" | tail -5`, `eval (${T})`],
+    [`${R} && bash -c '(${T}) | tail -5'`, '('],
+    [`${R} && bash -c '${T} | grep "(x)"' | tail -5`, T],
+    [`${R} && sh -c '${T} | grep "(x)"' | tail -5`, T],
+    [`${R} && ls | xargs -I'{}' claude plugin test '{}'`, 'claude plugin test {}'],
+    // A parenthesis in an unquoted pattern, and braces that make more words.
+    [`${R} && ${T} | grep -f @(a|b)`, T],
+    [`${R} && ${T} | grep -f !(x)`, T],
+    [`${R} && ${T} | grep -e {fail,pass}`, T],
+    // A word holding a $, awk's own program included, and a $'...' string.
+    [`${R} && ${T} | grep "$PATTERN (x)"`, T],
+    [`${R} && ${T} | awk '{print $1}'`, T],
+    [`${R} && ${T} | grep $'(fail|pass)'`, T],
+    // A comment holding one.
+    [`${R} && ${T} | tail -5 # (the last five)`, T],
+    // A line that puts anything in the background, whatever it quotes.
+    [`${R} && ${T} | grep "(x)" & wait`, T],
+    // Piped from the restore itself.
+    [`${R} | ${T} | grep "(x)"`, T],
+  ]
+  const said: [string, string][] = []
+  for (const [command] of held) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    said.push([command, !why.includes(SKIP_QUESTION) ? 'not held' : (/`(.*)` runs beside the git checkout or restore and may change what it puts back/s.exec(why)?.[1] ?? 'held, naming no command beside it')])
+  }
+  expect(said).toEqual(held)
+  expect(w.ran).toEqual([])
+  // With nothing grouped, the same restore and test run.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `${R} && ${T} | tail -5` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
 // #3280 (Dan, 2026-11-21, "Keep it held, say how (Recommended)"): a copy of the file set aside before
 // an exact restore in the same call stays held, and the refusal says how to get the same result. Only
 // where the restore would have gone through but for what runs before it: no other refusal changes.
