@@ -338,6 +338,9 @@ the `claudesync` shell alias:
 - **`com.claudesync.watch`** — an fswatch process that runs a two-way `sync` on
   every change to a synced folder, however deep, so edits push within seconds.
   Requires fswatch: `brew install fswatch` (then re-run `install-autosync`).
+  With no change here it also asks the shared repo every `SYNC_WATCH_POLL` seconds
+  (600, ten minutes) whether main holds a commit this clone does not, and takes in what
+  passed its tests (#3396, "The watcher receives on a timer" below).
 - **`com.claudesync.timer`** (a periodic two-way `sync`, `SYNC_INTERVAL=86400`
   seconds by default, which is daily) so the other Mac's changes arrive even when
   this Mac makes no local edits. That number is a product choice about how often to
@@ -438,8 +441,9 @@ refuse unless `SYNC_LAUNCHAGENTS` names where to write, skip the alias unless `S
 and never call launchctl, saying so; a pull that changes `claude-sync` leaves the watch daemon
 alone the same way (#1470).
 
-Sending is automatic on change; receiving is automatic on the timer. A no-op sync
-writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
+Sending is automatic on change; receiving is automatic on the watcher's ten minute timer, on
+any change, and on the daily receive timer. A no-op sync writes nothing (idempotent), so the
+watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
 
 ### Retiring a Mac
@@ -710,6 +714,56 @@ on main's own line whose tests passed (at most `SYNC_CI_TESTED_SEARCH` commits b
 default), and nothing newer. The log says `applied the newest shared commit whose tests passed`.
 This Mac's own changes still go up on top of the newest commit, as above. A newest commit that
 FAILED still takes nothing in, so a red main stays visible on every Mac.
+
+### The watcher receives on a timer (#3396)
+
+Until #3396 the watcher woke only when fswatch reported a change on this Mac, and the receive timer
+runs once a day. On 2026-11-21 two merges with green checks (#3381 at 7:54 AM ET, #3382 at 8:11 AM
+ET) sat uninstalled on the personal MacBook, whose watcher had last ticked at 7:29 AM ET, until a
+pull was typed at about 8:22 AM ET.
+
+Now a watcher that has seen no change for `SYNC_WATCH_POLL` seconds (600, ten minutes; 0 switches
+it off) asks the shared repo one question, `git ls-remote` of its branch, which reads refs and writes
+nothing, and is stopped after `SYNC_WATCH_ASK_TIMEOUT` seconds (60, a setting) so a stalled
+connection cannot hold up the watcher's later sends. What it does with the answer:
+
+- main's head is already in this clone: nothing more, and no request to GitHub at all;
+- a head no tick has been handed yet: the ordinary tick an edit runs, under the sync lock and the CI
+  gate, which takes in the newest commit whose tests passed and never one that has not;
+- the head a tick already left: one CI verdict read for it. Passed, or a commit below it passed
+  since: the tick. Still being tested, failed or cancelled: nothing, since the gate would take
+  nothing in either;
+- a hold in force, or another run holding the sync lock or waiting its turn for it: nothing, so a
+  wake never queues behind a merge, a pull or a suite run;
+- a catch up refused less than `SYNC_RECONCILE_RETRY` seconds ago (300): nothing, since the send
+  holds it off for that long and would only count another skipped send;
+- a claude-sync on disk that is not the copy the watcher runs: the tick, which restarts onto it as
+  it does on a change (#1569).
+
+Each wake rewrites one line in the clone's `.watch-idle` (when, what it found, main's head, the head
+last handed to a tick, and why). A wake that finds nothing logs nothing; one that ticks logs
+`woke on its timer:` and the reason, then the tick's own line. Two watchers waking at once each run
+the tick, and the sync lock puts them one after the other.
+
+The worst case, while the Mac is awake: a commit on main that has passed its tests is installed
+within ten minutes plus the time the tick itself takes, or twenty minutes when the wake found another
+run holding the sync lock. From the merge, add the CI run on main (15 to 50 minutes in the incidents
+recorded above). The cost on a level day is one `git ls-remote` per wake, 144 a day, measured at
+0.22 to 0.33 seconds each on 2026-11-22 (five samples), and nothing against GitHub's API limit. While
+a head is under test it adds one verdict read per wake (0.43 seconds measured) and, when that head is
+still being tested, at most `SYNC_CI_TESTED_SEARCH` (ten) more for the commits below it.
+
+`claude-sync status` says when the clone is behind main's newest tested commit: by how many commits,
+since when (the moment the first of them landed on main), and what the watcher last found when it
+asked. It reads "tested" through the gate's own verdict and walk, and says nothing when the clone is
+level, behind only commits still being tested, or under a head that failed or was cancelled (the gate
+takes nothing in then, and the receiving stuck line says why). When the verdicts cannot be read it says so rather
+than nothing.
+
+It takes effect on each Mac with the pull that carries it: a pull that changes `claude-sync`
+restarts the watch agent (`launchctl kickstart`), and the watcher started then runs the new code. No
+`install-autosync` is needed, since no launch agent changed. A Mac whose watcher does not restart
+that way (it was not running) starts it with `claude-sync install-autosync`.
 
 ### A send that catches up says what it sent
 
@@ -1056,6 +1110,13 @@ been stopped, never by the runner, and it is a file in the clone, so it survives
 - **What status says.** `claude-sync status` says the run is owed and why it has not run (the load
   the last try found), that it is being run again now by a named pid, or that it was given up on and
   what to run.
+- **What the session hears** (#3396). `claude-sync stuck` reports an `unverified` record from the
+  same `.hook-tests` while it is `incomplete` or `slotwait`, keyed on `owed_since`, so the per prompt
+  sync notice says at once, once per session, that config which landed here is UNVERIFIED and why,
+  and says its end once a run of the suite completes. A later hook whose own run is stopped too
+  starts a new chain, which is a new notice and never the end of the old one. Status says it only on
+  its hook suite line, not a second time. Desktop notifications are unchanged: none for the first
+  stopped run.
 
 A pull whose suite could not be verified still exits 0. A nonzero exit would make the scheduled
 job report a condition that a quiet hour clears by itself, which is the alert this record replaces.
