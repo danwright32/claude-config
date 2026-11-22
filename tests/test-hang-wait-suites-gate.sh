@@ -27,6 +27,28 @@ suite_deadline_arm || exit $?
 pass=0; fail=0
 check(){ if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
+# How many scripts this suite judges at once is its share of the runner, HOOK_TESTS_SLOTS, which
+# run-all-tests.sh hands every suite (claude-config#3170): a fixed 4 ran here on CI's runners of 4,
+# where the share is 2. Read as tests/test-claude-sync.sh reads it: empty is absent, anything not a
+# whole number above zero is refused (L50), and 4 when nothing granted a share, a run started by hand.
+. "$DIR/../payload/hooks/lib/whole-number.sh" && declare -F whole_above_zero >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/whole-number.sh is missing, so this suite's share of the runner cannot be read. Refusing to guess how many scripts to judge at once."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+HW_WIDTH=4
+if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
+  if _wn_got="$(whole_above_zero "$HOOK_TESTS_SLOTS")"; then HW_WIDTH="$_wn_got"; else
+    echo "FAIL: $(basename "$0"): HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of scripts this suite may judge at once. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong."
+    printf 'SUITE-RESULT passed=0 failed=1\n'
+    exit 1
+  fi
+fi
+# The most judgements this suite had going at once, counted at every start, so the share is
+# measured in what ran rather than read off the number above.
+HW_MOST=0
+live_now(){ local n=0 p; for p in "$@"; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; printf '%s' "$n"; }
+
 HOOKS="$DIR/../payload/hooks"
 GATE="$HOOKS/slack-drafts-only-gate.sh"
 ROOT="$(bash "$HOOKS/lib/checkout-root.sh" "$HOOKS/.." 2>/dev/null || true)"
@@ -52,18 +74,20 @@ print(json.dumps({"session_id": "f6017250-8f33-47ac-bbb2-b82a7c319d0d", "transcr
 ' "$1" "$2" | SLACK_GATE_CACHE_DIR="$c" bash "$GATE" 2>&1)"; rc=$?
   printf '%s\t%s\t%s\n' "$rc" "$2" "$(printf '%s' "$words" | tr '\n' ' ')" > "$3"
 }
-# judge <cwd> <list file> <out file>: each path in the list judged, four at a time, the lines
-# gathered in the list's order.
+# judge <cwd> <list file> <out file>: each path in the list judged, HW_WIDTH at a time (the suite's
+# share, read above), the lines gathered in the list's order.
 judge(){
-  local i=0 p
+  local i=0 p live pids=()
   : > "$3"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     i=$((i + 1))
     judge_one "$1" "$p" "$W/one.$i" &
-    [ $((i % 4)) -eq 0 ] && wait
+    pids+=("$!")
+    live="$(live_now "${pids[@]}")"; [ "$live" -le "$HW_MOST" ] || HW_MOST="$live"
+    if [ "${#pids[@]}" -ge "$HW_WIDTH" ]; then wait "${pids[@]}"; pids=(); fi
   done < "$2"
-  wait
+  [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
   local k=1
   while [ "$k" -le "$i" ]; do cat "$W/one.$k" >> "$3"; rm -f "$W/one.$k"; k=$((k + 1)); done
 }
@@ -120,6 +144,8 @@ while IFS=$'\t' read -r rc path words; do
     echo "NOTE: $path is refused for another reason, not this suite's: ${words:0:300}"
   fi
 done < "$W/real.out"
+[ "$HW_MOST" -le "$HW_WIDTH" ] && check "no more scripts were judged at once than this suite's share of $HW_WIDTH" ok \
+  || check "no more scripts were judged at once than this suite's share of $HW_WIDTH" "$HW_MOST went at once (HOOK_TESTS_SLOTS='${HOOK_TESTS_SLOTS:-}', 4 when unset), taking processors run-all-tests.sh gave to the suites beside it"
 
 echo
 echo "passed: $pass, failed: $fail"
