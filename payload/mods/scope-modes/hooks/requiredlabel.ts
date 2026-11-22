@@ -14,10 +14,17 @@ import { LABEL_REFUSAL, SETS_LABEL } from './overnight.ts'
 //   label removed and any flag neither command may carry, and held the write to the checkout's own
 //   repository);
 // - that repository's merge gate says it requires a label on its pull requests, and the label is one
-//   the gate takes that needs no sentence a manager reads (Dan has not said such a one may be set
-//   while he sleeps, so it waits for the morning);
+//   the gate takes;
 // - for `gh pr edit`, the command names one pull request by its number or its own link, and the
 //   session's record of the pull requests it opened holds that repository and number.
+//
+// A label the gate says needs a sentence a manager reads (today changelog/visible) is allowed like
+// the others: Dan's decision of 2026-11-22, by picker, "Also allow changelog/visible", knowing a
+// session can then merge overnight a pull request whose changelog sentence he has not read. The gate
+// still refuses the merge of a pull request carrying it whose description has no such sentence, so
+// the session is told that as the label goes on (`note`, which register.ts puts on the call's
+// result). Whether a label needs one is still the gate's answer, and an answer that does not say is
+// one that could not be read.
 //
 // Which labels those are is the gate's answer, never a list here, so the two cannot drift: the gate
 // (payload/hooks/require-changelog-tag.sh) keeps its rule in payload/hooks/lib/changelog-entry.js,
@@ -122,11 +129,21 @@ const editedPr = async (g: ModKitGh, repo: string, linkRepo: LinkRepo): Promise<
 }
 
 /**
+ * What a session is told as it sets a label the gate takes only with a sentence in the description:
+ * the merge is refused until that sentence is there. What the sentence must look like is the gate's
+ * to say, in its own refusal, so it is not restated here.
+ */
+export const sentenceNote = (label: string, repo: string) =>
+  `The merge gate of ${repo} refuses the merge of a PR labelled ${label} until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.`
+
+/**
  * Why a `gh pr create` or `gh pr edit` that sets a label is refused tonight in `repo` (the repository
  * the overnight write rule resolved it to), or undefined when it may run. The command has passed
  * overnight.ts: it carries no milestone, removes no label, and no flag its action may not carry.
+ * `note` is handed `sentenceNote` when the call may run and its label needs a sentence, never on a
+ * refusal.
  */
-export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, opened: Opened, linkRepo: LinkRepo): Promise<string | undefined> => {
+export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, opened: Opened, linkRepo: LinkRepo, note?: (text: string) => void): Promise<string | undefined> => {
   const flags = SETS_LABEL[g.act]
   if (g.sub !== 'pr' || !flags) return LABEL_REFUSAL
   const values = g.flags.filter(f => flags.includes(f.name)).map(f => f.value)
@@ -147,8 +164,11 @@ export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, 
   // The gate's own spelling, exactly: a label in another case or with a space is another label here.
   const label = answer.labels.find(l => l.label === name)
   if (!label) return because(`${shown(name)} is not a label the merge gate of ${repo} requires`)
-  if (label.needsSentence) return because(`${label.label} needs a Changelog sentence a manager reads, so a PR carrying it waits for Dan in the morning`)
-  if (g.act === 'create') return undefined
+  const allowed = () => {
+    if (label.needsSentence) note?.(sentenceNote(label.label, repo))
+    return undefined
+  }
+  if (g.act === 'create') return allowed()
 
   const pr = await editedPr(g, repo, linkRepo)
   if (pr === null) return because('the command names no one PR by its number, so whether this session opened it could not be told')
@@ -160,5 +180,5 @@ export const judgeRequiredLabel = async (g: ModKitGh, repo: string, gate: Gate, 
   }
   if ('why' in mine) return because(`whether this session opened PR #${pr} could not be told: ${mine.why}`)
   if (!mine.some(o => o.repo.toLowerCase() === repo.toLowerCase() && o.number === pr)) return because(`PR #${pr} in ${repo} is not one this session opened`)
-  return undefined
+  return allowed()
 }

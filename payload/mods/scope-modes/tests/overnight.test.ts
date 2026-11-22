@@ -121,7 +121,9 @@ describe('the label a merge gate requires, on a PR this session opened (#3439)',
   // This checkout's repository is gated; nothing else is.
   const gate: Gate = async repo => (repo === 'o/r' ? said({ ...gated.answer, why: '' }) : said({ state: 'not-required', why: `${repo} is not listed`, labels: [] }))
   const opened: Opened = async () => [{ repo: 'O/R', number: 12 }]
-  const judgeWith = (g: Gate, o: Opened): NonNullable<OvernightCall['requiredLabel']> => (gh, repo) => judgeRequiredLabel(gh, repo, g, o, async link => linkRepo(link))
+  // What the judge said beside allowing a call, as register.ts collects it for the call's result.
+  const notes: string[] = []
+  const judgeWith = (g: Gate, o: Opened): NonNullable<OvernightCall['requiredLabel']> => (gh, repo) => judgeRequiredLabel(gh, repo, g, o, async link => linkRepo(link), text => notes.push(text))
   const judge = judgeWith(gate, opened)
   const night = (command: string, o: { cwd?: string; ghRepo?: string } = {}) => bash(command, { ...o, requiredLabel: judge })
 
@@ -186,10 +188,45 @@ describe('the label a merge gate requires, on a PR this session opened (#3439)',
     expect(await bash('gh pr create --title x --label changelog/technical')).toBe(LABELS)
     expect(await bash('gh pr edit 12 --add-label changelog/none')).toBe(LABELS)
   })
-  test('a label that needs a sentence a manager reads waits for the morning', async () => {
-    const sentence = `${LABELS} (changelog/visible needs a Changelog sentence a manager reads, so a PR carrying it waits for Dan in the morning)`
-    expect(await night('gh pr create --title x --body-file /tmp/b.md --label changelog/visible')).toBe(sentence)
-    expect(await night('gh pr edit 12 --add-label changelog/visible')).toBe(sentence)
+  // Dan's decision of 2026-11-22 (picker answer "Also allow changelog/visible"): the label that needs
+  // a sentence a manager reads is one of the gate's labels like the others. The merge gate still
+  // refuses the merge of a PR carrying it whose description has no such sentence, so the session is
+  // told that as the label goes on. Nothing else about the judging changes.
+  test('a label that needs a sentence a manager reads may be set too, and the session is told the merge waits on that sentence', async () => {
+    const NOTE = 'The merge gate of o/r refuses the merge of a PR labelled changelog/visible until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.'
+    const noted = async (command: string, o: Parameters<typeof bash>[1] = {}) => {
+      notes.length = 0
+      const refused = await bash(command, { requiredLabel: judge, ...o })
+      return { refused, notes: [...notes] }
+    }
+    const allowed = { refused: undefined, notes: [NOTE] }
+    expect(await noted('gh pr create --title x --body-file /tmp/b.md --label changelog/visible')).toEqual(allowed)
+    expect(await noted('gh pr create -t x -F /tmp/b.md -l changelog/visible --draft')).toEqual(allowed)
+    expect(await noted('gh pr edit 12 --add-label changelog/visible')).toEqual(allowed)
+    expect(await noted('gh pr edit https://github.com/o/r/pull/12 --add-label=changelog/visible --body-file /tmp/b.md')).toEqual(allowed)
+    // A label that needs no sentence is set with nothing said.
+    expect(await noted('gh pr create --title x --label changelog/technical')).toEqual({ refused: undefined, notes: [] })
+    expect(await noted('gh pr edit 12 --add-label changelog/none')).toEqual({ refused: undefined, notes: [] })
+    // Everything else is refused for it as for any required label, and a refusal carries no note.
+    const no = (why?: string) => ({ refused: why ? `${LABELS} (${why})` : LABELS, notes: [] })
+    const many = 'more than one label is named, and only the one label the merge gate of o/r requires may be set overnight'
+    expect(await noted('gh pr edit 13 --add-label changelog/visible')).toEqual(no('PR #13 in o/r is not one this session opened'))
+    expect(await noted('gh pr edit --add-label changelog/visible')).toEqual(no('the command names no one PR by its number, so whether this session opened it could not be told'))
+    expect(await noted('gh pr create --title x --label changelog/visible --label changelog/technical')).toEqual(no(many))
+    expect(await noted('gh pr create --title x --label changelog/visible,bug')).toEqual(no(many))
+    expect(await noted('gh pr create --title x --label Changelog/Visible')).toEqual(no('Changelog/Visible is not a label the merge gate of o/r requires'))
+    expect(await noted('gh pr edit 12 --add-label changelog/visible --remove-label changelog/technical')).toEqual(no())
+    expect(await noted('gh pr create --title x --label changelog/visible --milestone Ungrouped')).toEqual(no())
+    expect(await noted('gh pr create --title x --label changelog/visible', { cwd: `${'/Users'}/x/theirs` })).toEqual(no('the merge gate of other/x requires no label'))
+    const unread = judgeWith(gate, async () => ({ why: 'the state could not be read' }))
+    expect(await noted('gh pr edit 12 --add-label changelog/visible', { requiredLabel: unread })).toEqual(no('whether this session opened PR #12 could not be told: the state could not be read'))
+    // A gate whose answer does not say whether the label needs a sentence is one that could not be read.
+    const silent = judgeWith(async () => said({ state: 'required', why: '', labels: [{ label: 'changelog/visible' }] }), opened)
+    expect(await noted('gh pr create --title x --label changelog/visible', { requiredLabel: silent })).toEqual(no('whether the merge gate of o/r requires a label could not be told: its answer was not one this reader knows'))
+    // With no judge handed in, it is refused in the words every label on a PR always was.
+    notes.length = 0
+    expect(await bash('gh pr create --title x --label changelog/visible')).toBe(LABELS)
+    expect(notes).toEqual([])
   })
   test('a project whose merge gate requires no label, and a gate that cannot be asked, stay refused, each saying why', async () => {
     const theirs = `${'/Users'}/x/theirs`

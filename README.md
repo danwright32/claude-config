@@ -9503,8 +9503,11 @@ gate's answer, never a list in the mod: the mod runs `node ~/.claude/hooks/lib/c
 required-labels <owner/name>`, which answers `required` with every label the gate takes and whether
 each needs a sentence in the description, `not-required` for a repository nobody gated, or `unknown`
 with why (a registry missing or unreadable, a repository listed with no start date or a bad one). A
-label the gate says needs a sentence a manager reads (`changelog/visible`) stays refused overnight,
-since Dan has not said it may merge unseen. Still refused, in the words it always was (`set labels
+label the gate says needs a sentence a manager reads (`changelog/visible`) may be set like the
+others (Dan, 2026-11-22, by picker: "Also allow changelog/visible"), so a session can merge
+overnight a PR whose changelog sentence he has not read. The gate still refuses that merge while
+the description has no such sentence, and the result of the call that sets the label says so, to
+the session or the agent that made it. Still refused, in the words it always was (`set labels
 or a milestone on a PR`), with the reason in brackets wherever the judge was reached: any other
 label, a second label beside it, `--remove-label`, a milestone, a PR the session did not open or
 does not name by number, a repository whose gate requires no label, a gate or a record that cannot
@@ -10493,9 +10496,10 @@ end and the report says why.
 
 **What it will not do overnight.** Ask you anything; file or edit issues, labels or milestones
 (a comment is allowed, and so is the one label a project's own merge gate requires on a pull
-request the session opened, such as `changelog/technical` or `changelog/none` where a merge is
-refused without a changelog label; `changelog/visible`, which needs a sentence a manager reads,
-still waits for you); add lessons; merge or deploy anywhere the list below says wait, or anywhere it has no
+request the session opened, such as `changelog/technical` or `changelog/visible` where a merge is
+refused without a changelog label; a pull request labelled `changelog/visible` can then merge
+overnight with a changelog sentence you have not read, as you chose on 2026-11-22); add lessons;
+merge or deploy anywhere the list below says wait, or anywhere it has no
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
 write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or

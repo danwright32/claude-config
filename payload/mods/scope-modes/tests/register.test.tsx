@@ -5833,9 +5833,34 @@ test('asleep, the label the merge gate requires goes on a PR this session opens,
   // The PR that call opened is now in the session's record, read from the link gh printed.
   expect(await call($ as never, bash('gh pr edit 31 --add-label changelog/none', 'p2'))).toBe('ran')
   expect(await call($ as never, bash('gh pr edit 32 --add-label changelog/none', 'p3'))).toMatch(asRegExp(`${LABEL_REFUSED} (PR #32 in o/r is not one this session opened).`))
-  expect(await call($ as never, bash('gh pr edit 31 --add-label changelog/visible', 'p4'))).toMatch(asRegExp(`${LABEL_REFUSED} (changelog/visible needs a Changelog sentence a manager reads, so a PR carrying it waits for Dan in the morning).`))
   expect(await call($ as never, bash('gh pr edit 31 --add-label bug', 'p5'))).toMatch(asRegExp(`${LABEL_REFUSED} (bug is not a label the merge gate of o/r requires).`))
   expect(await call($ as never, bash('gh pr edit 31 --remove-label changelog/none', 'p6'))).toMatch(asRegExp(`${LABEL_REFUSED}.`))
+})
+
+// Dan's decision of 2026-11-22 (picker answer "Also allow changelog/visible"). The merge gate still
+// refuses the merge of a PR carrying that label whose description has no Changelog sentence, so the
+// result of the call that sets it says so, to whichever of the session or its agents made the call.
+test('asleep, the label that needs a sentence a manager reads may be set too, and the result of that call says the merge waits on the sentence (#3439)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), created: 'https://github.com/o/r/pull/31\n', night: gateSays(GATED) })
+  await start($ as never, clock)
+  const NOTE = 'The merge gate of o/r refuses the merge of a PR labelled changelog/visible until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.'
+  const whole = async (command: string, id: string, agentId?: string) =>
+    (await ($ as unknown as $T).tool.call({ ...(bash(command, id) as object), ...(agentId ? { agentId } : {}) } as never)) as { deny?: string; text?: string; context?: string[] }
+  const opened = await whole('gh pr create --fill --label changelog/visible', 'v1')
+  expect(opened.deny).toBeUndefined()
+  expect(opened.text).toBe('https://github.com/o/r/pull/31\n')
+  expect(opened.context).toEqual([NOTE])
+  const edited = await whole('gh pr edit 31 --add-label changelog/visible', 'v2', 'a1')
+  expect(edited.deny).toBeUndefined()
+  expect(edited.context).toEqual([NOTE])
+  // One line setting it twice is told once.
+  expect((await whole('gh pr edit 31 --add-label changelog/visible && gh pr edit 31 --add-label changelog/visible', 'v6')).context).toEqual([NOTE])
+  // A label that needs no sentence is set with nothing said, and a refusal carries no note.
+  expect((await whole('gh pr edit 31 --add-label changelog/none', 'v3')).context ?? []).toEqual([])
+  const notMine = await whole('gh pr edit 32 --add-label changelog/visible', 'v4')
+  expect(notMine.deny).toMatch(asRegExp(`${LABEL_REFUSED} (PR #32 in o/r is not one this session opened).`))
+  expect(notMine.context ?? []).toEqual([])
+  expect((await whole('gh pr edit 31 --add-label changelog/visible --remove-label changelog/none', 'v5')).deny).toMatch(asRegExp(`${LABEL_REFUSED}.`))
 })
 
 test('asleep, a label on a PR stays refused where the merge gate requires none, and where the gate cannot be asked, each saying why (#3439)', withDeps, async ($, on) => {
