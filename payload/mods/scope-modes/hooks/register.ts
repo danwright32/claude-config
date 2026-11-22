@@ -154,6 +154,7 @@ import {
   stashTaken,
   whatIsLeft,
   whoseFiles,
+  WRITTEN_PART,
   type DeployState,
   type IssueRead,
   type MergeRun,
@@ -202,6 +203,7 @@ const pushedIntoRef = { plugin: 'scope-modes', key: 'pushedInto' } as const
 const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
+const writtenPartsRef = { plugin: 'scope-modes', key: 'writtenParts' } as const
 const wakeHeldRef = { plugin: 'scope-modes', key: 'wakeHeld' } as const
 const nightSeenRef = { plugin: 'scope-modes', key: 'nightSeen' } as const
 const morningPutRef = { plugin: 'scope-modes', key: 'morningPut' } as const
@@ -4248,8 +4250,16 @@ const uncommittedIn = async ($: EngineInterface, root: string): Promise<string[]
   return st.exitCode === 0 ? porcelainFiles(st.stdout) : { unreadable: st.stderr.trim() || `git status exited ${st.exitCode}` }
 }
 
-// The files this session or its agents wrote (#1108), noted after each call that ran (noteWritten).
-const writtenOf = async ($: EngineInterface) => (await $.state.get(writtenRef)).value ?? []
+// The files this session or its agents wrote (#1108), noted after each call that ran (noteWritten):
+// the list kept whole before #3418, which a session reloaded onto #3418 still holds, then each part
+// noted since. Every path is kept, one naming nothing on disk included: a file this session removed
+// names nothing and is still uncommitted work while git names its removal (#3418).
+const writtenOf = async ($: EngineInterface): Promise<string[]> => {
+  const out = [...((await $.state.get(writtenRef)).value ?? [])]
+  const parts = (await $.state.get(writtenPartsRef)).value ?? 0
+  for (let i = 0; i < parts; i++) out.push(...((await $.state.get({ plugin: 'scope-modes', key: 'writtenPart', id: String(i) })).value ?? []))
+  return out
+}
 /**
  * The files uncommitted in a checkout split into this session's own, which it or its agents wrote, and
  * the rest (#1108): in a shared checkout the rest is another session's work, or a job's, never this
@@ -4987,6 +4997,45 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
 // on each (lessons review); later ones go to the debug log.
 let writeNoteSaid = false
 let patchSaid = false
+// What the list of written files holds, kept in this copy's memory so a call is checked against it
+// without reading the whole list (#3418): read once from $.state on the first call after the mod
+// loads, a read that fails being tried again on the next call. A path counts as held only once its
+// write landed. A second copy of the mod writing at once (a reload) can add a path twice, which the
+// reader takes as once.
+let writtenHeld: Promise<Set<string>> | null = null
+const heldWritten = ($: EngineInterface) =>
+  (writtenHeld ??= writtenOf($).then(
+    l => new Set(l),
+    err => {
+      writtenHeld = null
+      throw err
+    },
+  ))
+// Adds what a call wrote to the list of written files (#1108) without reading or writing the whole of
+// it (#3418): only to its last part, a new part begun once that holds WRITTEN_PART paths, each write
+// made with ifVersion and again on a miss, since the session's calls and its agents' finish at once.
+const addWritten = async ($: EngineInterface, files: readonly string[]) => {
+  const held = await heldWritten($)
+  let rest = [...new Set(files)].filter(f => !held.has(f))
+  for (let misses = 0; rest.length; ) {
+    if (misses === 10) throw new Error('the list changed under every one of 10 attempts to add to it')
+    const parts = await $.state.get(writtenPartsRef)
+    const n = parts.value ?? 0
+    const last = n ? await $.state.get({ plugin: 'scope-modes', key: 'writtenPart', id: String(n - 1) }) : null
+    const now = last?.value ?? []
+    if (!last || now.length >= WRITTEN_PART) {
+      if (!(await $.state.set(writtenPartsRef, n + 1, { ifVersion: parts.version })).isSet) misses++
+      continue
+    }
+    const add = rest.slice(0, WRITTEN_PART - now.length)
+    if (!(await $.state.set({ plugin: 'scope-modes', key: 'writtenPart', id: String(n - 1) }, [...now, ...add], { ifVersion: last.version })).isSet) {
+      misses++
+      continue
+    }
+    for (const f of add) held.add(f)
+    rest = rest.slice(add.length)
+  }
+}
 const noteWritten =async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, stashed: readonly string[] = []) => {
   try {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
@@ -5004,7 +5053,7 @@ const noteWritten =async ($: EngineInterface, tool: string, input: Record<string
       patchSaid = true
     }
     const files = [...filesWritten({ tool, input, writes }), ...patched, ...stashed]
-    await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
+    await addWritten($, files)
   } catch (err) {
     const said = `Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`
     if (writeNoteSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
@@ -6211,6 +6260,11 @@ export const register: Register = on => {
     await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])
+    // Each part emptied before the count, so a part begun again in a new session holds nothing old.
+    const parts = (await $.state.get(writtenPartsRef)).value ?? 0
+    for (let i = 0; i < parts; i++) await $.state.set({ plugin: 'scope-modes', key: 'writtenPart', id: String(i) }, [] as string[])
+    await $.state.set(writtenPartsRef, 0)
+    writtenHeld = null
     writeNoteSaid = false
     // What was held overnight, the night seen and the morning put are this session's (#1284, #1285, #1383), so a new session starts with none.
     heldNow = []

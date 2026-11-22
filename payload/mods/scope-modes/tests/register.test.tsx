@@ -8029,6 +8029,78 @@ test("two calls finishing at once, the session's and an agent's, each keep the f
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(a\.ts, b\.ts, c\.ts\): /)
 })
 
+// #3418: the list of files a session wrote was read whole and written whole after every call that
+// named a new path, so a long session paid for its whole list on every call: 10,547 paths (1.5 MB
+// as JSON) measured on 2026-11-21, most naming nothing on disk. The paths of that list moved through
+// $.state in one call, read and written, counted rather than timed (L290).
+const listMoved = (on: On) => {
+  const m = { paths: 0 }
+  const count = (v: unknown) => (Array.isArray(v) ? v.length : 0)
+  on('state.get', async ($, e, next) => {
+    const r = (await next(e)) as { value?: { value?: unknown } }
+    if ((e as { key: string }).key.startsWith('written')) m.paths += count(r?.value?.value)
+    return r as never
+  })
+  on('state.set', async ($, e, next) => {
+    const { key, value } = e as { key: string; value: unknown }
+    if (key.startsWith('written')) m.paths += count(value)
+    return next(e)
+  })
+  return m
+}
+// A path handed to a program and never written, as most of the measured list's were.
+const gonePath = (i: number, j: number) => `gone/run-${i}/a-path-handed-to-a-program-that-never-wrote-it-and-names-nothing-on-disk-${j}.json`
+const seedGone = async ($: $T, runs: number) => {
+  for (let i = 0; i < runs; i++) {
+    const words = Array.from({ length: 250 }, (_, j) => gonePath(i, j)).join(' ')
+    expect(await call($, bash(`rm -f ${words}`, `seed${i}`))).toBe('ran')
+  }
+}
+
+test('a call that writes a new file moves a bounded part of the list of files the session wrote, not all 10,500 of them (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', gonePath(0, 0), 'other/plan.md'] })
+  const moved = listMoved(on)
+  await start($ as never, clock)
+  await seedGone($ as never, 42)
+  moved.paths = 0
+  expect(await call($ as never, bash('echo x > app.ts', 'w1'))).toBe('ran')
+  // At most two parts of the list and the call's own path, whatever the list's length: 10,500 paths
+  // and more were moved here before.
+  expect(moved.paths).toBeLessThanOrEqual(520)
+  moved.paths = 0
+  expect(await call($ as never, edit('/repo/app.ts', 'w2'))).toBe('ran')
+  expect(moved.paths).toBeLessThanOrEqual(520)
+  // Nothing is lost by it: the first path noted, a removal git still names, is the session's, as is
+  // the newest, and another session's file is not.
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts, gone\/run-0\/[^)]*-0\.json\): /)
+  expect(block).not.toContain('other/plan.md')
+})
+
+test('a list of written files kept whole before #3418, as a session running when this ships holds it, still counts, beside what is noted after (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['before.ts', 'after.ts', 'other/plan.md'] })
+  reloadedWith(on, { written: ['/repo/before.ts'] })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo x > after.ts', 'w1'))).toBe('ran')
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(before\.ts, after\.ts\): /)
+  expect(block).not.toContain('other/plan.md')
+})
+
+test('a new session starts with none of the files the last one wrote, however many parts its list took (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', gonePath(0, 0)] })
+  await start($ as never, clock)
+  await seedGone($ as never, 3)
+  expect(await call($ as never, bash('echo x > app.ts', 'w1'))).toBe('ran')
+  await $.session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo y > later.ts', 'w2'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
 test('a call refused beneath the mod wrote nothing, so its file is not the session\'s (#1108)', withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], refusedBeneath: 'app.ts' })
   await start($ as never, clock)
