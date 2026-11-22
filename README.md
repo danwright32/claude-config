@@ -5521,11 +5521,15 @@ The pull request checks say the same where a reviewer looks, not only in a part'
 hands its file on as the artifact `part-unmeasured-<part>`, a failing part included, and the `suite`
 job runs `tools/ci-unmeasured-summary.sh` over them: the run's summary page lists every suite that
 left a part untested, with the part that ran it and the reason the suite gave, and a notice titled
-`Not tested by the checks` on the pull request's checks carries the same list (capped at 40 lines,
-a limit the tool sets, not a measurement; the rest is on the summary). The run is compared, suite by suite, with the record of main's last green
+`Not tested by the checks` on the pull request's checks carries the same list. GitHub cuts a
+notice's message at 4,096 characters of the text it stores (measured on run 44826519963, where a
+list capped only by count was cut mid reason with nothing saying so), so the tool holds each notice
+to 4,000 bytes, never fewer than characters: it lists the whole parts that fit, in order, and when
+any are left out its last line says how many more there are and that the run's summary lists them
+all. The run is compared, suite by suite, with the record of main's last green
 full run, kept in the Actions cache under `claude-config-untested-main-`: a run that left more
 untested says so on the summary's first line and in a second notice,
-`Not tested by the checks and more than on main`. A part that handed back no record is named, and
+`Not tested by the checks and more than on main`, held to the same length the same way. A part that handed back no record is named, and
 such a run is neither compared nor kept as main's baseline. None of it can turn a run red: the tool
 exits 0 and every step it adds continues on an error. `merge-when-ready.sh` reads those notices back
 from each check's annotations before it merges and prints them, so a merge's log says what its green
