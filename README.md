@@ -62,7 +62,10 @@ so an absolute path inside one is correct on both machines. The top-level rules 
 exception: they are merged entry by entry, so their bytes are left exactly as written, and a path
 in one of them should be a `~` path. `hooks/check-home-paths.sh` enforces that split. Its suite
 lists the checkout's synced files, so the gate before a push (`scanners-before-push.sh`) runs it as
-well as CI, over the checkout with no allowance for this Mac's own home (#1734).
+well as CI, over the checkout with no allowance for this Mac's own home (#1734). The gate runs
+before every push each suite with a line of code that lists the repository's files, through
+`hooks/lib/repo-files.sh` or git itself. A string or a heredoc holding either name counts as code,
+and a comment naming one selects nothing (#3409).
 
 A file stored that way never equals its payload copy byte for byte, so every comparison between the
 two sides goes through one view of the payload as it should look on THIS Mac. `claude-sync status`
@@ -1943,6 +1946,8 @@ refuse the push with their read key, and `PR_REVIEW_READ=<key> <the push command
 findings and an empty diff pass; a review that could not run refuses in its own words with the
 restart command and `SKIP_PR_REVIEW=1 <the push command>`, explained to Dan first. A commit and a
 push in one command is refused, because the head it pushes does not exist yet for anything to read.
+A branch stacked on another open branch is read from that branch's head, when that is established
+("A stacked branch is judged from its base, when the base is established", claude-config#3444).
 
 The merge gate is exactly as strict as before. Reviews are keyed by repository (a hash of the origin
 URL, so every worktree and clone of one repository shares them) and commit, so the merge finds the
@@ -3484,6 +3489,68 @@ long a Linux run takes is not measured on this Mac, whose docker daemon was not 
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
+### A stacked branch is judged from its base, when the base is established
+
+A branch cut from another open branch used to be judged all the way back to the default branch when
+it was pushed, so its push answered for the base branch's changes too (claude-config#3444). On
+2026-11-21 the test gate refused a branch stacked on pull request 3421 for changes that belong to
+3421, and on 2026-11-22 the lessons review twice refused a branch stacked two deep for stopping
+findings in files its base branches own.
+
+Two gates now judge such a branch from its base: the pre push test gate
+(`require-tests-before-push.sh`) and the lessons review before a push (`pr-review-push-gate.sh`,
+with the review `ai-review-on-pr.sh` starts at a commit). Whether a branch is stacked, and on what,
+is one function both ask, `sb_stacked_base` in `hooks/lib/stacked-base.sh`. Every other push gate
+(the simplify gate, style, deferrals, scanners and the rest) still judges from where it always did.
+
+A base is established only when all of this holds, and anything short of it is judged from the
+default branch exactly as before:
+
+- HEAD is on a named branch.
+- A branch on origin, other than the default branch and this branch's own copy, has
+  its head in this branch's history, short of HEAD and not already on the default branch. A branch
+  that only names a base (an upstream, the setting `gh pr create` records, its own pull request's
+  base) and does not descend from it establishes nothing.
+- It is the nearest such branch. When it fails the next check, the branch under it is never tried,
+  because the nearest one's own changes would then be judged by nobody.
+- GitHub says an open pull request of this repository, never a fork's, has that branch as its head
+  at exactly that commit. A remote ref in a checkout can be moved by hand, so this checkout's copy
+  alone is not believed. A base that was never pushed, was deleted, or whose pull request is closed
+  or merged fails here, and so does a read of GitHub that fails or runs past its own time limit
+  (`SB_READ_SECONDS` in that file).
+
+How each gate knows the base's own changes are judged:
+
+- The lessons review: the base is an open pull request, and no pull request merges until the merge
+  gate's review of its whole range has been read. The push gate now names the base it reads from to
+  the checker on every push, the default branch included, so a review that read from a base which
+  has since stopped being an open pull request is run again from the default branch, never reused.
+  At the merge of the stacked branch's own pull request the existing rule still applies: a review is
+  reused only when it covers the pull request's base.
+- The test gate: nothing judges tests at a merge, so an open pull request is not enough. The range
+  moves to the base's head only when this Mac's push gate ledger shows the test gate judged the push
+  that delivered that head (an outcome of pass, nosource or docsonly for that tree) and holds no
+  override or could not judge line for any commit of the base's own range. The ledger is per Mac, so
+  a base pushed from the other Mac leaves the branch on top of it judged from the default branch.
+  Judged from its base, a stacked branch answers for its own tests: the base's test files are not
+  counted as tests it pushed earlier.
+
+A stopping finding the narrowed review raises still refuses the push wherever it points, a file the
+base owns included; nothing is waived for where a finding points. A refusal by either gate, and the
+test gate's ledger line (`range started at the head of <base> (pull request #N)`), says when the
+base was used. When
+another branch lies under the pushed one and was not taken as its base, a refusal by either gate
+says why (no pull request, a pull request that is not open, a read of GitHub that failed, no record
+that the test gate judged the base's push), since that branch's changes are then in what was judged.
+`test-stacked-base.sh` holds both refusals as cases, and one case for every push that must stay
+judged from the default branch.
+
+Not covered: a branch not rebased onto its base's current head is judged from the default branch
+(the base's head is then not in its history), and so is a review of the same head that a commit
+started before the base's pull request was open, which read the whole range and is reused; restart
+it with `bash ~/.claude/hooks/lib/pr-review.sh restart --dir <repo> --sha <head> --base-ref
+origin/<base>`, which the push gate still checks against the base it establishes itself.
+
 ### The two model judged push gates, and their record
 
 `require-tests-before-push.sh` (a sonnet judge of whether each change carries a test) and
@@ -3493,7 +3560,8 @@ what a push carries, and call their judge, through one library, `hooks/lib/push-
 written in the same `git add ... && git commit ... && git push` reached the test judge as a file
 name with none of its text, and a push run from a subdirectory showed both judges nothing outside
 that subdirectory, so it went through unjudged. `test-push-changes.sh` fails if either gate grows
-its own copy again.
+its own copy again. Only the test gate asks the library to start a stacked branch's range at its
+base (`pc_resolve "$cmd" stacked`, the section above, #3444); the simplify gate does not.
 
 The simplify judge is shown the diff's hunks, never whole files, so it cannot see a use on an
 unchanged line away from them. On 2026-10-25 it blocked a work project's push calling an import unused
