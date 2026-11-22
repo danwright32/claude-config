@@ -15,7 +15,10 @@
 #     through unjudged, exactly like a push it had approved.
 # One copy now, which every gate calls:
 #
-#   pc_resolve <cmd>      which files the push carries, and from where (sets PC_* below)
+#   pc_resolve <cmd> [stacked]
+#                         which files the push carries, and from where (sets PC_* below); with
+#                         "stacked", a branch cut from another open branch starts at that branch's
+#                         head when that is established (pc__stacked_start, claude-config#3444)
 #   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs; nonzero, named
 #                         by pc_diff_failure, when git failed reading it
 #   pc_messages           the subjects of the commits it carries
@@ -56,6 +59,10 @@ pc_files_since() {   # $1 = commit or tree
 #   PC_MERGED          the default branch commit that merge took, empty when none was set apart
 #   PC_MERGE_UNSPLIT   why a range holding a merge was judged whole, empty when it was not; a
 #                      refusal must say so, since part of what it judged came in from elsewhere
+#   PC_STACKED         the base branch and pull request a stacked branch was judged from, empty when
+#                      the range starts where it always did (pc__stacked_start, claude-config#3444)
+#   PC_STACKED_WHY     when another branch lies under this one and was NOT taken as its base, why;
+#                      a refusal must say so, since that branch's changes are in what it judged
 #   PC_COMMIT_IN_CHAIN 1 when the command commits before it pushes
 #   PC_WIDENED         1 when the command's git add could not be read and the whole working tree
 #                      was counted instead; a refusal must say so (lib/push-scope.sh, #457)
@@ -69,7 +76,7 @@ pc_files_since() {   # $1 = commit or tree
 # (#736), and the caller must say so. Returns 3 when git failed a listing (#2349), whatever the
 # others found: PC_FILES is then only part of the push, and an empty one is not an empty push, so
 # the caller refuses or says it could not read, never passes quietly as it does on 1.
-pc_resolve() {   # $1 = command
+pc_resolve() {   # $1 = command  $2 = stacked, for a gate that judges a stacked branch from its base
   local pending_list top f
   PC_UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
   PC_BASE="$(ps_base_ref)"
@@ -90,6 +97,8 @@ pc_resolve() {   # $1 = command
     esac
   fi
   [ "$base_is_head" -eq 1 ] || PC_MB="$(ps_pending_base "$PC_BASE")"
+  PC_STACKED=""; PC_STACKED_WHY=""
+  if [ "${2:-}" = stacked ] && [ -n "$PC_MB" ]; then pc__stacked_start; fi
   PC_FROM="$PC_MB"; PC_MERGED=""; PC_MERGE_UNSPLIT=""
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
@@ -133,6 +142,105 @@ LOOP_INPUT
     return 1
   fi
   return 0
+}
+
+# ---- judging a stacked branch from its base (claude-config#3444) ----
+# A branch cut from another open branch was judged from the default branch, so its push answered for
+# the base branch's changes too: on 2026-11-21 the test gate refused a branch stacked on pull request
+# 3421 for changes that belong to 3421. Which branch is the base, and whether that is established at
+# all, is the ONE answer in lib/stacked-base.sh, which the lessons review asks too. This only moves
+# where the committed range starts FORWARD, onto the base's head, and only for a gate that asks
+# (pc_resolve's second argument): the simplify gate and every gate that reads lib/push-scope.sh
+# directly still judge from where they always did.
+#
+# The base being an open pull request says its changes will be read before they merge. It does not
+# say THIS gate judged them, and nothing judges tests at a merge, so the range moves only when the
+# push gate ledger on this Mac shows it did (pc_base_judged). Without that record the range starts
+# where it always did, and PC_STACKED_WHY says why, which the test gate's refusal carries
+# (stacked_note in require-tests-before-push.sh).
+pc__stacked_start() {
+  local ans ref tip pr
+  declare -F sb_stacked_base >/dev/null || . "$_PC_LIB/stacked-base.sh" 2>/dev/null
+  if ! declare -F sb_stacked_base >/dev/null; then
+    PC_STACKED_WHY="lib/stacked-base.sh is missing"; return 0
+  fi
+  local rc
+  ans="$(sb_stacked_base . "$PC_MB")"; rc=$?
+  case "$ans" in
+    "base "*) ;;
+    # 2: a branch does lie under this one and was not established as its base, which a refusal
+    # says. 1 is an ordinary branch, with nothing under it and nothing to say.
+    *) [ "$rc" -eq 2 ] && PC_STACKED_WHY="${ans#none }"
+       return 0 ;;
+  esac
+  ref="$(sb_field "$ans" ref)"; tip="$(sb_field "$ans" tip)"; pr="$(sb_field "$ans" pr)"
+  if ! pc_base_judged "$tip" "$PC_MB"; then
+    PC_STACKED_WHY="$ref is an open pull request (#$pr), but $PC_BASE_JUDGED_WHY"
+    return 0
+  fi
+  PC_MB="$tip"; PC_BASE="$ref"; PC_STACKED="$ref (pull request #$pr)"
+  return 0
+}
+
+# Did this gate, on this Mac, judge the push that delivered the base's head, with no push of the
+# base's own commits let through unjudged? Read from the push gate ledger (pc_record), by the TREE
+# each line carries, which is exact for a plain push and for one that commits first.
+#   yes: a line of this gate (PC_GATE) whose tree is the base head's, with an outcome that judged it
+#        (pass, nosource or docsonly), and no line of this gate with override or failopen for any
+#        commit from $2 to the base's head. A line with no tree is matched on its HEAD.
+#   no:  anything else, an unreadable or missing ledger included. `empty` proves nothing: a second
+#        push of a head an override delivered reads as empty.
+# On a no, PC_BASE_JUDGED_WHY says which of those it was, for the refusal to carry.
+# The ledger is this Mac's own, so a base pushed from the other Mac has no record here, and the
+# branch on top of it is judged from the default branch.
+PC_BASE_JUDGED_MAX=500   # the most commits a base's own range may hold and still be looked up
+pc_base_judged() {   # $1 = the base's head  $2 = where the base's own range starts
+  local file commits tiptree rc
+  PC_BASE_JUDGED_WHY=""
+  file="$(pc_ledger_path)"
+  # No ledger yet is no record of any push; one that exists and cannot be read is a failed read.
+  if [ ! -e "$file" ]; then
+    PC_BASE_JUDGED_WHY="this Mac has no record that this gate judged the push that put it at ${1:0:7} (it has no push gate ledger yet)"; return 1
+  fi
+  if [ ! -r "$file" ]; then
+    PC_BASE_JUDGED_WHY="this Mac's push gate ledger could not be read"; return 1
+  fi
+  tiptree="$(git rev-parse --verify --quiet "$1^{tree}" 2>/dev/null)"
+  if [ -z "$tiptree" ]; then
+    PC_BASE_JUDGED_WHY="git could not read the base's head, ${1:0:7}"; return 1
+  fi
+  # The base's own commits and their trees, on one line ("commit tree commit tree ..."), handed to
+  # awk as a variable: one input file, so nothing has to tell two files apart.
+  # At most PC_BASE_JUDGED_MAX commits, so the variable stays far inside what a command line may
+  # carry (about 83 bytes a commit); a longer base is "not judged", the side that reads more.
+  if ! commits="$(git log --format='%H %T' -n "$((PC_BASE_JUDGED_MAX + 1))" "$2..$1" 2>/dev/null)"; then
+    PC_BASE_JUDGED_WHY="git could not read the base's own commits"; return 1
+  fi
+  if [ -z "$commits" ]; then
+    PC_BASE_JUDGED_WHY="it holds no commits of its own over the default branch"; return 1
+  fi
+  if [ "$(printf '%s\n' "$commits" | awk 'END { print NR }')" -gt "$PC_BASE_JUDGED_MAX" ]; then
+    PC_BASE_JUDGED_WHY="it holds more than $PC_BASE_JUDGED_MAX commits of its own, more than this gate looks up in the ledger"; return 1
+  fi
+  commits="$(printf '%s' "$commits" | tr '\n' ' ')"
+  # Exit 0 judged, 3 a push of the base's own commits let through unjudged, 1 no judged push found.
+  awk -F '\t' -v gate="${PC_GATE:-}" -v tiptree="$tiptree" -v commits="$commits" '
+    BEGIN { n = split(commits, p, " "); for (i = 1; i + 1 <= n; i += 2) { sha[p[i]] = 1; tree[p[i + 1]] = 1 } }
+    $3 != gate { next }
+    {
+      hit = ($15 != "") ? ($15 in tree) : ($6 in sha)
+      if (hit && ($4 == "override" || $4 == "failopen")) bad = 1
+      if ($15 == tiptree && ($4 == "pass" || $4 == "nosource" || $4 == "docsonly")) good = 1
+    }
+    END { if (bad) exit 3; exit good ? 0 : 1 }' "$file"
+  rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    3) PC_BASE_JUDGED_WHY="a push of that branch's own commits was let through unjudged, by an override or a gate that failed open" ;;
+    1) PC_BASE_JUDGED_WHY="this Mac has no record that this gate judged the push that put it at ${1:0:7}" ;;
+    *) PC_BASE_JUDGED_WHY="this Mac's push gate ledger could not be read" ;;
+  esac
+  return 1
 }
 
 # ---- leaving out what a merge of the default branch brought in (claude-config#2028) ----
@@ -383,6 +491,12 @@ pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was calle
   repo="$(git rev-parse --show-toplevel 2>/dev/null)"
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
   now="$(date +%s)"
+  # A range that started at a stacked branch's base says so on its line (claude-config#3444), first,
+  # so the cut below never drops it: the record of a gate that read less must say what it read. It
+  # says where the range STARTED, never that it was judged, since an override, a fail open or an
+  # empty push records the same prefix and judged nothing. pc_base_judged reads the outcome and the
+  # tree columns, never this text.
+  [ -n "${PC_STACKED:-}" ] && detail="range started at the head of $PC_STACKED${detail:+; $detail}"
   detail="$(printf '%s' "$detail" | tr '\t\n\r' '   ' | cut -c 1-400)"
   local model="" wall="" ms="" cost="" bytes="" start="$now"
   if [ "$judged" = judged ]; then

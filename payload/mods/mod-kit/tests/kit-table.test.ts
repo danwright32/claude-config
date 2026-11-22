@@ -11,6 +11,16 @@ import { commandWrites } from '../hooks/writes.ts'
 
 type Entry = { method: 'commands' | 'writes' | 'git'; input: Record<string, unknown>; want: unknown }
 const ENTRIES: Entry[] = [
+  {"method":"commands","input":{"command":"prettier --write notes.txt"},"want":[["prettier","--write","notes.txt"]]},
+  {"method":"git","input":{"words":["prettier","--write","notes.txt"]},"want":null},
+  {"method":"writes","input":{"command":"prettier --write notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}},
+  {"method":"commands","input":{"command":"gh pr view 5"},"want":[["gh","pr","view","5"]]},
+  {"method":"git","input":{"words":["gh","pr","view","5"]},"want":null},
+  {"method":"writes","input":{"command":"gh pr view 5","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"gh","tool":true,"unknown":true,"why":"gh is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If gh only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"pr","path":"/repo/pr"},{"word":"view","path":"/repo/view"},{"word":"5","path":"/repo/5"}]}]}},
+  {"method":"commands","input":{"command":"prettier --check other.txt && ./tidy.sh other.txt"},"want":[["prettier","--check","other.txt"],["./tidy.sh","other.txt"]]},
+  {"method":"git","input":{"words":["prettier","--check","other.txt"]},"want":null},
+  {"method":"git","input":{"words":["./tidy.sh","other.txt"]},"want":null},
+  {"method":"writes","input":{"command":"prettier --check other.txt && ./tidy.sh other.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a program the write reader does not know","script":"prettier","tool":true,"unknown":true,"why":"prettier is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs","remedy":"To only read a file, use a program the mods know only reads (cat, grep, head, tail, wc, diff and the others listed under \"The programs that only read\" in claude-config's docs/mods-design.md). If prettier only reads too, ask Dan to add it to that list: only he may.","args":[{"word":"other.txt","path":"/repo/other.txt"}]},{"what":"a script file run directly","script":"./tidy.sh","path":"/repo/tidy.sh","args":[{"word":"other.txt","path":"/repo/other.txt"}]}]}},
   {"method":"commands","input":{"command":"python3 tools/fix.py notes.txt"},"want":[["python3","tools/fix.py","notes.txt"]]},
   {"method":"git","input":{"words":["python3","tools/fix.py","notes.txt"]},"want":null},
   {"method":"writes","input":{"command":"python3 tools/fix.py notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 script file","script":"tools/fix.py","path":"/repo/tools/fix.py","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}},
@@ -224,8 +234,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 203 entries', () => {
-    expect(ENTRIES.length).toBe(203)
+  test('holds 213 entries', () => {
+    expect(ENTRIES.length).toBe(213)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

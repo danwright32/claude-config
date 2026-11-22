@@ -2286,6 +2286,24 @@ the one place the gate never reads. Which pushes the gate holds is one function,
 answer would drift apart in silence (L261). The advisory hook asks it after the push, so it judges
 the branch the command left the checkout on.
 
+Since claude-config#3444 the whole branch means, for a branch stacked on another open branch, what
+it adds to that branch's head, at the push's lessons review and at the pre push test gate. The two
+refusals behind it were a stacked push answering for its base's changes. The decision was what may
+count as evidence of a base, because the change makes two gates read less. A setting the push
+carries and the branch's recorded upstream were both rejected: the pusher alone controls them, and
+either would let a branch name a base to shrink what is judged. What is used is ancestry (the base's
+head is in the branch's history, so nothing is claimed) checked against GitHub (an open pull request
+has that branch as its head at exactly that commit, so a ref moved by hand in the checkout is not
+believed), in one function both gates ask, `sb_stacked_base` in `lib/stacked-base.sh`. The two gates
+then differ in what proves the base's own changes are judged, because they differ in what happens at
+a merge. The lessons review runs again at the merge of the base's pull request, so an open pull
+request is enough, and the push gate names its base to the checker so a review of a base that
+stopped being open is not reused. Nothing judges tests at a merge, so the test gate also needs its
+own ledger to show it judged the push that delivered the base's head, with no override among the
+base's commits. Every doubt falls to the default branch, the range both gates read before. Findings
+are not waived by where they point: matching a finding against the base's own review would be an
+exemption list keyed on a model's wording, and was left for a decision rather than built.
+
 ### What the thresholds measured
 
 Each is in its hook header with the date; the two that decided a design are here because they cut

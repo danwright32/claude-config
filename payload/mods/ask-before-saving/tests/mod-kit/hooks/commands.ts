@@ -429,7 +429,7 @@ const testEndFrom = (cmd: string, from: number): number => {
   }
   return -1
 }
-const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>): Split[] => {
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>, worked?: Map<number, string>, compares?: Set<number>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -667,6 +667,16 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     } else if (c === '"' || c === "'") {
       quote = c
       begin(i)
+    } else if ((c === '<' || c === '>') && i < testEnd && wordParens === 0 && !/[<>|&]/.test(cmd[i + 1] ?? '') && !/[<>&]/.test(cmd[i - 1] ?? '') && !(inWord && /^\d+$/.test(word))) {
+      // Inside a test a `<` or a `>` standing alone compares two strings (#3415): a word of its own,
+      // as the shell reads `[[ a>b ]]`, and marked, so no reader takes it for a redirect. Measured
+      // 2026-11-21 on bash 3.2, zsh 5.9 and ksh: `[[ a > b ]]` and `[[ a>b ]]` write no file. One
+      // written with anything a redirect can carry (`>>`, `>|`, `2>`, `&>`, `<<`, `<>`) is read as
+      // it was before: no shell takes it for a comparison, and each refuses the test.
+      endWord()
+      words.push(c)
+      starts.push(i)
+      compares?.add(i)
     } else if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
       // An output redirect is its own word however it is spaced (#654): 2>&1, &>, >>, >| each one
       // word, a file descriptor number written before it included, so its & joins no two commands.
@@ -1171,9 +1181,19 @@ const printfText = (args: readonly string[]): string | undefined => {
  * absent for a command typed as it runs. Each of those can change the folder or the environment
  * the command runs in with no setting written (`env -C`, `env -i`, `env -u`, sudo, a login shell),
  * and the options that do it are not given, so a reader that needs the plain run takes any as not it.
+ * `arithmetic` marks a command standing inside `(( ))` in a shell that works it out as arithmetic
+ * (#3415, worksTests: bash, zsh and ksh, never sh or dash): its words are a sum's, so it runs no
+ * program, a `<` or `>` in it compares two numbers, and nothing in it names a file. The four
+ * parentheses are marked too, since they open and close no subshell: a name the sum gives a value
+ * keeps it after them. A substitution inside one still runs, and is given as every substitution is.
+ * `compares` gives for each word whether it is a `<` or a `>` comparing two strings inside a `[[ ]]`
+ * test of such a shell (#3415), never a redirect; absent where no word is one. A redirect after the
+ * test's `]]` is a redirect, and is not marked.
  */
 export type Command = {
   words: string[]
+  arithmetic?: true
+  compares?: boolean[]
   env?: string[]
   behind?: string[]
   pipedFrom?: string[]
@@ -1295,11 +1315,13 @@ export type Line = (Command | { sub: Line })[]
 // says the shell running them splits an unquoted expansion's value into words (#1834): the one a
 // Bash call runs in, at the top, and the shell itself for the script it is given. `proxied` and
 // `unread` say rtk's proxy runs them, and why what it runs cannot be read (#2983). `arithmetic` says
-// the one command it feeds stands inside `(( ))`, where a value names no command (#3021). `env` is
+// the one command it feeds stands inside `(( ))`, where a value names no command (#3021), and
+// `summed` that it does, or is one of the four parentheses, in a shell that works `(( ))` out as
+// arithmetic (#3415, worksTests): the command is marked `arithmetic`. `env` is
 // the settings they are run with (#3093): those of the shell running them, then their own. `behind`
 // is what they are run behind (#3093): what the shell running them is behind, that shell, then
 // their own runners.
-type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean; env?: string[]; behind?: string[] }
+type Feed = { pipedFrom?: string[]; stdin?: Stdin; xargs?: boolean; found?: string[]; splits?: boolean; proxied?: boolean; unread?: string; arithmetic?: boolean; summed?: boolean; env?: string[]; behind?: string[] }
 // The marks a feed gives each command it feeds.
 const carried = (f: Feed) => ({
   ...(f.xargs ? { xargs: true as const } : {}),
@@ -1315,6 +1337,16 @@ const marksOf = (b: Begun, outer: Feed): Feed => {
   const env = [...(outer.env ?? []), ...b.env]
   const behind = [...(outer.behind ?? []), ...b.behind]
   return { ...(b.xargs || outer.xargs ? { xargs: true } : {}), ...(b.proxied || outer.proxied ? { proxied: true } : {}), ...(unread ? { unread } : {}), ...(env.length ? { env } : {}), ...(behind.length ? { behind } : {}) }
+}
+// Whether the shell reading a command works `(( ))` out as arithmetic and reads `[[ ]]` as a test of
+// its own (#3415): the nearest shell it is behind, or the one the Bash call runs in, which is bash
+// or zsh. Measured 2026-11-21 on this Mac: bash 3.2, zsh 5.9 and ksh write no file for `(( n > 3 ))`
+// or `[[ a > b ]]`, and dash writes 3 and b, since to it `((` opens two subshells and `[[` is a
+// program's name. macOS's sh is bash, but sh is dash on other machines, so what sh runs is read as
+// what dash runs: a write that may not happen is held, never one that happens missed (L648).
+const worksTests = (behind: readonly string[] | undefined): boolean => {
+  const shell = [...(behind ?? [])].reverse().find(name => SHELLS.has(name))
+  return shell !== 'sh' && shell !== 'dash'
 }
 // What the commands a program runs are behind (#3093): what the program is, then the program, by its name.
 const behindIt = (feed: Feed, program: string | undefined): string[] => [...(feed.behind ?? []), (program ?? '').split('/').pop() ?? '']
@@ -1342,8 +1374,10 @@ const ownRedirects = (words: readonly string[]): string[] => {
 // reads its script there, when what they read is the rest of that script. What a find -exec runs
 // is read after it, as a command of its own. The script is read as that shell splits words (#1834),
 // and `splits` is where each word's expansions outside quotes are, when the shell running this one
-// splits their values. `literal` is which words the shell hands on as written (#1951).
-const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[], worked?: (string | null)[]) => {
+// splits their values. `literal` is which words the shell hands on as written (#1951). `compares` is
+// which words are a `<` or a `>` comparing two strings inside a `[[ ]]` test (#3415), given only for
+// a shell that reads `[[ ]]` as a test of its own.
+const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOptions, splits?: number[][], literal?: boolean[], unexpanded?: boolean[], derived?: (Derived | null)[], worked?: (string | null)[], compares?: boolean[]) => {
   const stdin = ownStdin(words, fed) ?? feed.stdin
   const kind = kindOf(words[0])
   const { program, script } = kind ? readProgram(words, stdin) : {}
@@ -1366,6 +1400,8 @@ const emit = (words: string[], fed: Fed, feed: Feed, out: Line, opts: ReadOption
   const unread = feed.unread ?? unreadOf(words, { unexpanded, bare: splits, arithmetic: feed.arithmetic })
   out.push({
     words,
+    ...(feed.summed ? { arithmetic: true as const } : {}),
+    ...(compares && compares.some(Boolean) ? { compares } : {}),
     ...(feed.pipedFrom ? { pipedFrom: feed.pipedFrom } : {}),
     ...(fed.length ? { heredocs: fed } : {}),
     ...carried({ ...feed, unread }),
@@ -1579,7 +1615,9 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
   // `$((...))` (#3088), and the one bash and zsh hand on where it holds a `$[...]` (#3070), which
   // dash and ksh hand on as typed.
   const worked = new Map<number, string>()
-  const read = split(text, bare, literal, unexpanded, subbed, worked)
+  // Each `<` and `>` that compares two strings inside a `[[ ]]` test (#3415), by its place in the text.
+  const compares = new Set<number>()
+  const read = split(text, bare, literal, unexpanded, subbed, worked, compares)
   const begun = read.map(r => begins(r.words, r.starts, (w, at) => /[$`]/.test(w) && !unexpanded.has(at)))
   // A substitution runs in the shell running the line, so it splits words as that shell does, and
   // is run with that shell's settings, behind what that shell is (#3093).
@@ -1649,16 +1687,29 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
     return fed
   }
   // The commands standing inside `(( ... ))` (#3021), where a value names no command: between two (
-  // written together and the two ) written together that close them, no other parenthesis between.
+  // written together and the two ) written together that close them. Parentheses of its own between
+  // them are part of the arithmetic (#3415: `(( (n + 1) > 3 ))`), as bash and zsh both decide it: the
+  // ) closing the second ( is followed at once by another. `((echo a) > f.txt)` is two subshells,
+  // since the ) closing its second ( is followed by a space (measured 2026-11-21: it writes f.txt).
+  // `fences` is the four parentheses themselves, which open and close no subshell.
   const arithmetic = new Set<number>()
+  const fences = new Set<number>()
   const paren = (k: number, p: string) => read[k]?.words.length === 1 && read[k]?.words[0] === p
   const together = (k: number) => read[k + 1]?.starts[0] === (read[k]?.starts[0] ?? -2) + 1
   for (let k = 0; k + 1 < read.length; k++) {
     if (!paren(k, '(') || !paren(k + 1, '(') || !together(k)) continue
     let j = k + 2
-    while (j < read.length && !paren(j, '(') && !paren(j, ')')) j++
-    if (paren(j, ')') && paren(j + 1, ')') && together(j)) for (let m = k + 2; m < j; m++) arithmetic.add(m)
+    for (let depth = 0; j < read.length; j++) {
+      if (paren(j, '(')) depth++
+      else if (paren(j, ')') && depth-- === 0) break
+    }
+    if (!paren(j, ')') || !paren(j + 1, ')') || !together(j)) continue
+    for (let m = k + 2; m < j; m++) arithmetic.add(m)
+    for (const m of [k, k + 1, j, j + 1]) fences.add(m)
   }
+  // Whether the shell reading this text works `(( ))` out as arithmetic and reads `[[ ]]` as a test
+  // of its own (#3415): only then is a command marked `arithmetic` or a word of one `compares`.
+  const tests = worksTests(outer.behind)
   // Each command whose program is a loop's variable over words written out, with those words (#3272).
   const looped = loopPrograms(text, read, begun, literal, unexpanded, heredocs.length > 0 || unended !== undefined || arithmetic.size > 0)
   // Each trap's text (#3021, trapText), read as the commands it runs once the rest of what its
@@ -1682,7 +1733,7 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       // A command that only sets variables runs nothing, so it is no command, unless the reader
       // asked for it (#743): then it is given as its assignments.
       const sets = r.words.filter(w => ASSIGNMENT.test(w))
-      if (opts.assignments && sets.length) out.push({ words: sets })
+      if (opts.assignments && sets.length) out.push({ words: sets, ...(tests && arithmetic.has(k) ? { arithmetic: true as const } : {}) })
       return
     }
     let feed: Feed = {}
@@ -1692,14 +1743,14 @@ export const readLine = (cmd: string, opts: ReadOptions = {}, outer: Feed = {}):
       const feeder = f.words.length ? f.words : (read[r.from] as Split).words
       feed = { pipedFrom: feeder, stdin: piped(feeder, fedOf(f)) }
     } else if (!CLOSERS.has(b.words[0] as string)) feed = { pipedFrom: outer.pipedFrom, stdin: outer.stdin }
-    feed = { ...feed, ...marksOf(b, outer), ...(arithmetic.has(k) ? { arithmetic: true } : {}) }
+    feed = { ...feed, ...marksOf(b, outer), ...(arithmetic.has(k) ? { arithmetic: true } : {}), ...(tests && (arithmetic.has(k) || fences.has(k)) ? { summed: true } : {}) }
     if (outer.found) feed = { ...feed, found: outer.found }
     // A program a loop names is read once for each name, the name standing where the variable did
     // and carrying no place in the text, so nothing said of the variable's word is said of it.
     const names = looped.get(k)
     const readAs: Begun[] = names ? names.map(v => ({ ...b, words: [v, ...b.words.slice(1)], starts: [-1, ...b.starts.slice(1)] })) : [b]
     for (const c of readAs)
-      emit(c.words, fedOf(c), feed, out, opts, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null))
+      emit(c.words, fedOf(c), feed, out, opts, outer.splits ? c.starts.map(s => bare.get(s) ?? []) : undefined, c.starts.map(s => literal.has(s)), c.starts.map(s => unexpanded.has(s)), derivedOf(c), c.starts.map(s => worked.get(s) ?? null), tests ? c.starts.map(s => compares.has(s)) : undefined)
   })
   for (const texts of later.reverse()) runLater(texts)
   return out

@@ -91,6 +91,12 @@ const RUNS_TEXT = new Set(['eval', 'source', '.'])
 // `${T:=x}` or `${T=x}`, or any text eval, source, trap or alias runs, which may set it.
 const RUNS_TEXT_LATER = new Set(['trap', 'alias'])
 const SETS_IF_UNSET = /\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g
+// Inside `(( ))` (#3415): a name given a whole number written out (`F=3`, never `F=010`, which is 8),
+// and each name a sum gives a value, by `=` alone or after an operator (`+=`, `<<=`), or by `++` or
+// `--` on either side of it. `==`, `!=`, `<=` and `>=` give none. The words are joined by a space, so
+// an operator the command reader split in two (`>>` and `=`) is still read.
+const ARITHMETIC_NUMBER = /^[A-Za-z_][A-Za-z0-9_]*=(?:0|[1-9][0-9]*)$/
+const ARITHMETIC_SETS = /([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\]\s*)?(?:(?:[-+*/%&|^]|<<|>>)?\s*=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_][A-Za-z0-9_]*)/g
 const ALONE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/
 type Vars = Map<string, string | null>
 // A loop word the reader follows: nothing the shell expands or matches against files. One holding a
@@ -665,13 +671,16 @@ const isRemote = (w: string) => /^[^/]*:/.test(w) && !w.startsWith('/')
 
 // Input words: `<` and the file after it, `<file`, a heredoc's `<<EOF` (or `<<` and its delimiter
 // as the next word, #698), a here-string's `<<<` and its text, each with any descriptor number
-// before it. Taken out of a command's words, so its operands are what is left.
-const splitInputs = (words: string[]): { rest: string[]; files: string[] } => {
+// before it. Taken out of a command's words, so its operands are what is left. `comparing` is the
+// place of each `<` that compares two strings inside a `[[ ]]` test (#3415): a word of the test,
+// with the word after it, and no input.
+const splitInputs = (words: string[], comparing?: ReadonlySet<number>): { rest: string[]; files: string[] } => {
   const rest: string[] = []
   const files: string[] = []
   for (let i = 0; i < words.length; i++) {
     const w = words[i] as string
-    if (/^\d*<<<$/.test(w)) i++
+    if (comparing?.has(i)) rest.push(w)
+    else if (/^\d*<<<$/.test(w)) i++
     else if (/^\d*<<</.test(w)) continue
     else if (/^\d*<</.test(w)) {
       if (/^\d*<<-?$/.test(w)) i++
@@ -682,6 +691,224 @@ const splitInputs = (words: string[]): { rest: string[]; files: string[] } => {
   }
   return { rest, files }
 }
+
+// #3323: a program on none of the reader's lists, handed a word that spells a path, is read as
+// writing that file (Dan, 2026-11-21, picker answer "Turn it round, with the list (Recommended)").
+// Before, such a program was read as writing nothing, so the next writer nobody had listed was
+// exempt from every guard (L96). The programs below are the exemption: the ones that only read, each
+// signed off by Dan by name, thirteen with that answer and nineteen with "Add them now" the same
+// day. NOTHING IS ADDED HERE WITHOUT HIS SIGN OFF: no name, no pattern, no rule that reads some other
+// program as harmless. docs/mods-design.md ("The programs that only read") holds the same list with
+// his words, and tests/test-read-only-programs.sh fails when the two differ or a name has no reason.
+//
+// `why` is why it only reads, checked against this Mac's own manual page or help text on
+// 2026-11-21: what it sends anywhere goes to standard output, and a redirect is read as the write
+// it is. `writes` is each form of it that does write a file or run a program, which is read as any
+// program not listed here is: `when` finds the form in its words, `form` and `does` say it.
+// `rg --pre` and `file -C` are the two Dan was told of. The other three were found in that check and
+// are read the stricter way, which narrows what he approved and never widens it.
+type ReadOnly = { why: string; writes?: readonly { form: string; does: string; when: (args: readonly string[]) => boolean }[] }
+const hasOption = (...names: string[]) => (args: readonly string[]) => args.some(a => names.some(n => a === n || a.startsWith(`${n}=`)))
+export const READ_ONLY: Readonly<Record<string, ReadOnly>> = {
+  grep: { why: 'prints the lines that match; no option of it writes a file' },
+  cat: { why: 'prints the files it is given' },
+  wc: { why: 'prints counts of lines, words and bytes' },
+  cmp: { why: 'compares two files and prints where they differ' },
+  rg: {
+    why: 'prints matches; its replace option changes only what is printed',
+    // The whole name, alone or joined to its value with =, is every spelling: ripgrep 14.1.1 refuses
+    // a shortened long option ("unrecognized flag --pr", measured 2026-11-22) and runs nothing.
+    writes: [
+      { form: '--pre', does: 'runs a program on each file', when: hasOption('--pre') },
+      { form: '--hostname-bin', does: 'runs a program', when: hasOption('--hostname-bin') },
+    ],
+  },
+  diff: { why: 'prints the difference between files; it has no output file option' },
+  tail: { why: 'prints the end of a file' },
+  ls: { why: 'lists names and details' },
+  head: { why: 'prints the start of a file' },
+  cksum: { why: 'prints a checksum' },
+  '[': { why: "the shell's test: answers a question about a file with its exit code" },
+  stat: { why: "prints a file's details" },
+  echo: { why: 'prints its words and opens no file at all' },
+  cut: { why: 'prints chosen columns or characters' },
+  df: { why: 'prints free disk space' },
+  du: { why: 'prints sizes' },
+  shasum: { why: 'prints a checksum; its check mode also only reads' },
+  jq: { why: 'prints what it selects from JSON; it has no in place option and runs no program' },
+  pgrep: { why: 'lists processes; its pid file option reads that file' },
+  file: {
+    why: 'prints what kind of file something is',
+    // -C in any cluster of short options: one written after a letter that takes a value (-mC) is
+    // read as the flag too, the side that holds. And --compile in any start of it: file takes each
+    // start that names no other option (file 5.41, measured 2026-11-22: --co and every longer one
+    // compile). --c, which it refuses as ambiguous, is read as the form too. These are the words
+    // scope modes' own judge of file uses (refusals.ts), and each suite holds the same starts.
+    writes: [{ form: '-C', does: 'compiles a magic file', when: args => args.some(a => /^-[A-Za-z0-9]*C/.test(a) || (a.length >= 3 && '--compile'.startsWith(a))) }],
+  },
+  strings: { why: 'prints the text inside a file' },
+  tr: { why: 'translates standard input to standard output' },
+  comm: { why: 'prints the lines two files share or do not' },
+  paste: { why: 'prints the lines of the files it is given side by side' },
+  test: { why: 'the same program as [: answers with its exit code' },
+  lsof: {
+    why: 'prints which files are open',
+    // This Mac's lsof 4.91 is built without the device cache, and its manual still documents -D,
+    // which builds or updates a cache file wherever it is built in. -D in any cluster of short
+    // options: lsof answers `-nD b` and `-nDb` as it answers `-D b` ("unsupported option: -D",
+    // measured 2026-11-22). A D inside a value written against its option's letter (-cDock) is read
+    // as the form too, the side that holds. +D, which only searches a folder, is not.
+    writes: [{ form: '-D', does: 'builds or updates its device cache file', when: args => args.some(a => /^-[A-Za-z0-9]*D/.test(a)) }],
+  },
+  mdls: {
+    why: "prints a file's Spotlight attributes",
+    // Not in its manual page; its own usage text lists it: "-plist -p : output attributes in XML
+    // format to file". mdls takes any start of plist, after one dash or two, and the file joined to
+    // it with = (macOS 26.6.2, measured 2026-11-22: -pl, --p and -plist=out each wrote the file).
+    writes: [{ form: '-plist', does: 'writes the file it names', when: args => args.some(a => /^--?(p|pl|pli|plis|plist)(=.*)?$/.test(a)) }],
+  },
+  which: { why: 'prints where a command is' },
+  readlink: { why: 'prints what a link points to' },
+  mdfind: { why: 'prints the files Spotlight finds' },
+  pdfinfo: { why: "prints a PDF's details; it has no output file option" },
+  ps: { why: 'lists processes' },
+}
+/** What a run of a program on none of the reader's lists is called (#3323). */
+export const NOT_KNOWN = 'a program the write reader does not know'
+// The few of them a refusal names, each checked to be on the list where the reader loads.
+const READ_EXAMPLES = ['cat', 'grep', 'head', 'tail', 'wc', 'diff'].filter(n => Object.prototype.hasOwnProperty.call(READ_ONLY, n)).join(', ')
+// The names the reader reads by a rule that is not one of its tables, where a name reaching the end
+// of its dispatch would be taken for a program it does not know: printf (its -v sets a variable, and
+// it prints), npx (the tool it runs is read as a run; its -c command line is not read, #1682), and
+// the words that run text (eval, source, a trap, an alias), read by `pipeline`. These are the names
+// the count Dan decided on took as known (87 names read out of this file on 2026-11-21);
+// tests/test-read-only-programs.sh fails when a name this file compares against is read as unknown.
+const READ_BY_RULE: ReadonlySet<string> = new Set(['printf', 'npx', ...RUNS_TEXT, ...RUNS_TEXT_LATER])
+
+// #3323 (Dan, 2026-11-21, picker answer "Yes, in the same change (Recommended)"): unpacking an
+// archive is a write into the folder it unpacks into, and a member named on the command line is a
+// write of that file. Read for tar (bsdtar and gtar too) extracting, unzip unpacking and cpio -i;
+// any other form of the three (tar -t or -c, unzip -l, -t, -p, -c, -z, -v or -Z, cpio -o or -p, cpio
+// -it) is no unpack, and is read as any program not on the list above is. `folder` is the folder
+// named (tar -C, unzip -d), undefined where none is, so it unpacks where it runs; `archive` the file
+// read, undefined on standard input; `members` the names it is told to unpack.
+// What is not read: a member renamed on its way out (tar --strip-components, -s, --transform) is
+// named where the archive holds it; tar -O and unzip's modes that only print are caught for unzip
+// and not for tar, which reads as a write that is none (the side that holds).
+type Unpack = { program: string; folders: string[]; archive?: string; members: string[] }
+// tar's short options that take a value: in old style (`tar xzfC a.tgz dir`) each takes the next
+// word in turn; after a dash the rest of the cluster is the value, or the next word.
+const TAR_VALUED = 'bCfIsTX'
+const TAR_LONG_VALUED = new Set(['--strip-components', '--exclude', '--include', '--files-from', '--exclude-from', '--newer', '--newer-mtime', '--newer-than', '--options', '--format', '--use-compress-program', '--transform', '--uid', '--gid', '--uname', '--gname', '--owner', '--group', '--blocking-factor'])
+const tarUnpack = (program: string, args: readonly string[]): Unpack | undefined => {
+  let mode = ''
+  const folders: string[] = []
+  let archive: string | undefined
+  const members: string[] = []
+  const short = (letter: string, value: string | undefined) => {
+    if (letter === 'C' && value !== undefined) folders.push(value)
+    if (letter === 'f') archive = value
+  }
+  let i = 0
+  const first = args[0]
+  if (first !== undefined && /^[A-Za-z]+$/.test(first)) {
+    i = 1
+    for (const letter of first) {
+      if ('xtcru'.includes(letter)) mode += letter
+      if (TAR_VALUED.includes(letter)) short(letter, args[i++])
+    }
+  }
+  for (; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '--') {
+      members.push(...args.slice(i + 1))
+      break
+    }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=')
+      const name = eq > 0 ? a.slice(0, eq) : a
+      const value = () => (eq > 0 ? a.slice(eq + 1) : args[++i])
+      if (name === '--extract' || name === '--get') mode += 'x'
+      else if (name === '--list') mode += 't'
+      else if (name === '--create' || name === '--append' || name === '--update') mode += 'c'
+      else if (name === '--directory' || name === '--cd') short('C', value())
+      else if (name === '--file') short('f', value())
+      else if (TAR_LONG_VALUED.has(name) && eq < 0) i++
+    } else if (a.startsWith('-') && a !== '-') {
+      for (let k = 1; k < a.length; k++) {
+        const letter = a[k] as string
+        if ('xtcru'.includes(letter)) mode += letter
+        if (TAR_VALUED.includes(letter)) {
+          short(letter, a.length > k + 1 ? a.slice(k + 1) : args[++i])
+          break
+        }
+      }
+    } else members.push(a)
+  }
+  if (!mode.includes('x') || /[tcru]/.test(mode)) return undefined
+  return { program, folders, ...(archive !== undefined && archive !== '-' ? { archive } : {}), members }
+}
+const unzipUnpack = (args: readonly string[]): Unpack | undefined => {
+  const folders: string[] = []
+  const ops: string[] = []
+  let excluding = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '-d') {
+      const d = args[++i]
+      if (d !== undefined) folders.push(d)
+      excluding = false
+    } else if (a === '-x') excluding = true
+    else if (a === '-P' || a === '-O' || a === '-I') i++
+    // -d with its folder attached (`-dapp`).
+    else if (a.startsWith('-d')) folders.push(a.slice(2))
+    else if (a.startsWith('-') && a !== '-') {
+      // A mode that unpacks nothing: list, test, print to standard output, the comment, zipinfo.
+      if (/[ltpczvZ]/.test(a.slice(1))) return undefined
+    } else if (!excluding) ops.push(a)
+  }
+  if (!ops.length) return undefined
+  return { program: 'unzip', folders: folders.slice(-1), archive: ops[0] as string, members: ops.slice(1) }
+}
+const CPIO_VALUED = 'IFEHCRDOM'
+const cpioUnpack = (args: readonly string[]): Unpack | undefined => {
+  let mode = ''
+  let archive: string | undefined
+  const folders: string[] = []
+  const members: string[] = []
+  const short = (letter: string, value: string | undefined) => {
+    if (letter === 'I' || letter === 'F') archive = value
+    if (letter === 'D' && value !== undefined) folders.push(value)
+  }
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=')
+      const name = eq > 0 ? a.slice(0, eq) : a
+      const value = () => (eq > 0 ? a.slice(eq + 1) : args[++i])
+      if (name === '--extract') mode += 'i'
+      else if (name === '--list') mode += 't'
+      else if (name === '--create') mode += 'o'
+      else if (name === '--pass-through') mode += 'p'
+      else if (name === '--file') short('F', value())
+      else if (name === '--directory') short('D', value())
+      else if (['--format', '--owner', '--pattern-file', '--block-size', '--io-size', '--rsh-command'].includes(name) && eq < 0) i++
+    } else if (a.startsWith('-') && a !== '-') {
+      for (let k = 1; k < a.length; k++) {
+        const letter = a[k] as string
+        if ('itop'.includes(letter)) mode += letter
+        if (CPIO_VALUED.includes(letter)) {
+          short(letter, a.length > k + 1 ? a.slice(k + 1) : args[++i])
+          break
+        }
+      }
+    } else members.push(a)
+  }
+  if (!mode.includes('i') || /[top]/.test(mode)) return undefined
+  return { program: 'cpio', folders, ...(archive !== undefined && archive !== '-' ? { archive } : {}), members }
+}
+const unpackOf = (name: string, args: readonly string[]): Unpack | undefined =>
+  name === 'tar' || name === 'bsdtar' || name === 'gtar' ? tarUnpack('tar', args) : name === 'unzip' ? unzipUnpack(args) : name === 'cpio' ? cpioUnpack(args) : undefined
 
 // The commands that change files by their operands, so one xargs gives its operands to changes
 // files no word names (#730). An editor that edits in place only with its flag is told apart where
@@ -1101,6 +1328,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     folders.push(dir)
     const written = c.words
     for (const w of written) for (const m of w.matchAll(SETS_IF_UNSET)) setBy.set(m[1] as string, null)
+    // What stands inside `(( ))` is a sum the shell works out (#3415, Command.arithmetic): it runs
+    // no program, its `<` and `>` compare two numbers, and no word of it names a file, so it is no
+    // write, no input and no run. Read as a command, `(( n > 3 ))` was a write of a file named 3.
+    // A name it gives a value is one whose value the reader no longer knows, but for a whole number
+    // written out (`((F=3))`), which is the value the shell gives it.
+    if (c.arithmetic) {
+      if (written.length === 1 && ARITHMETIC_NUMBER.test(written[0] as string)) assign(written[0] as string)
+      else for (const m of written.join(' ').matchAll(ARITHMETIC_SETS)) unknown((m[1] ?? m[2]) as string)
+      continue
+    }
     if (written.length === 1 && written[0] === '(') {
       outside.push(dir)
       varsOutside.push(new Map(vars))
@@ -1158,7 +1395,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
-      const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
+      const target = !c.compares?.[n - 1] && (WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior))
       const asText = c.unexpanded?.[n] === true
       const loopText = !asText && handsOnAsText(w, c.splits?.[n])
       for (const read of asText ? [w] : target ? [expand(w)] : fields(w, c.splits?.[n]))
@@ -1179,10 +1416,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // Output redirects first, and taken out of the words, with descriptor copies (2>&1). A `>&`
     // with nothing attached takes the next word: a number or - is a descriptor copied, anything
     // else a file both outputs go to (the collision guard's reading, #654, kept in #712).
+    // A `<` or a `>` comparing two strings inside a `[[ ]]` test (#3415, Command.compares) is a word
+    // of the test like `==`, by its place in `words`: no redirect here, and no input below.
     const words: string[] = []
+    const comparing = new Set<number>()
     for (let i = 0; i < raw.length; i++) {
       const w = raw[i] as string
-      if (WRITE_REDIRECT.test(w)) {
+      if (c.compares?.[from[i] as number]) {
+        comparing.add(words.length)
+        words.push(w)
+      } else if (WRITE_REDIRECT.test(w)) {
         const target = raw[++i]
         if (target !== undefined) named(target, undefined, written[from[i] as number])
         if (target !== undefined && STDOUT_REDIRECT.test(w)) toStdout(target, written[from[i] as number])
@@ -1196,7 +1439,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       else words.push(w)
     }
     if (raw[0] === ')') continue
-    const { rest: args, files: inputs } = splitInputs(words)
+    const { rest: args, files: inputs } = splitInputs(words, comparing)
     const name = baseOf(args[0] ?? '')
     const kind = kindOf(args[0])
     const rest = args.slice(1)
@@ -1255,6 +1498,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const packer = own(PACKERS, name)
     const copier = own(VALUED, name)
     const changer = own(CHANGERS, name)
+    const unpack = unpackOf(name, rest)
+    // Whether the command is one no list here reads (#3323), judged once every list has been asked.
+    let onNoList = false
     if (name === 'tee') for (const f of operands(rest, new Set()).ops) named(f)
     else if (kind === 'sed') {
       const e = sedInPlace(rest)
@@ -1390,8 +1636,35 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       if (ops[0] !== undefined) named(ops[0])
       const patches = [opts.get('-i'), opts.get('--input'), ops[1], ...inputs].filter((p): p is string => typeof p === 'string' && p !== '')
       unnamed.push({ what: 'a patch', words: written, inputs: absAll(patches) })
+    } else if (unpack) {
+      // #3323: the folder unpacked into, each one named read from the one before it as tar reads
+      // them, and from the folder the command runs in. One that cannot be worked out (a variable's
+      // value, a cd that cannot be followed) is given as none, so each guard takes its cautious
+      // reading, as for a download into a folder it cannot follow. It is `folder` too, so a guard
+      // that places a write its words do not name by the folder it lands in (the area check) judges
+      // the checkout unpacked into, never the session's own.
+      let into: string | undefined = dir
+      let intoWord = ''
+      for (const f of unpack.folders) {
+        into = into === undefined && !f.startsWith('/') && !f.startsWith('~') ? undefined : pathOf(f, into)
+        intoWord = f.startsWith('/') || f.startsWith('~') || !intoWord ? f : `${intoWord.replace(/\/+$/, '')}/${f}`
+      }
+      // The archive is no file to read to find out: it is not text, so no guard is handed it.
+      unnamed.push({ what: `an archive ${unpack.program} unpacks`, words: written, inputs: [], ...(into ? { into, folder: into } : {}) })
+      // A member named on the command line is a write of that file where it lands: under the
+      // folder named, as written where that folder cannot be worked out, so it still says so.
+      for (const m of unpack.members) {
+        const member = m.replace(/^\/+/, '')
+        if (!member) continue
+        if (!intoWord) named(member)
+        else {
+          const word = `${intoWord.replace(/\/+$/, '')}/${member}`
+          add(word, into === undefined ? undefined : pathOf(`${into}/${member}`, into), undefined, `${(asWritten.get(intoWord) ?? intoWord).replace(/\/+$/, '')}/${member}`)
+        }
+      }
     } else {
       const g = git(args, c.env)
+      onNoList = g === undefined
       // #3337: the folder git reads a relative path from. Told where its working folder is
       // (--work-tree, GIT_WORK_TREE), git reads one from the folder the command runs in when that is
       // inside the working folder, and from the top of the working folder when it is not (measured
@@ -1481,6 +1754,29 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const handed = handedOf(toolArgs(tool.name, args.slice(tool.args)))
       const what = runner ? `the test runner ${tool.name}` : kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx'
       if (handed.length) runs.push({ what, script: tool.name, tool: true, args: handed, ...ranWith })
+    }
+    // #3323: a program on none of the lists above, read by no rule of its own, is read as writing
+    // each file it is handed, as a tool is: what it does with one cannot be read before it runs. It
+    // is a run marked `unknown`, so each guard that judges a run's arguments judges these, and says
+    // which program it did not know. Only a word that spells a path is handed on: one the reader
+    // cannot place (a variable the command never sets, a pattern, a command's output), a file on
+    // standard input and one handed over by xargs are not, since none was counted before Dan decided
+    // (the count is in docs/mods-design.md). A program on the list of those that only read
+    // (READ_ONLY) writes nothing, but in a form of it that writes a file or runs a program.
+    // A command pipeline marks `unread` is already given as one, which every guard holds.
+    if (onNoList && kind === undefined && !scriptFile && !tool && name && !c.unread && !READ_BY_RULE.has(name)) {
+      const reader = own(READ_ONLY, name)
+      const writing = reader?.writes?.find(w => w.when(rest))
+      if (!reader || writing) {
+        const handed = handedOf(scriptArgs(rest)).filter(a => a.path !== undefined)
+        const program = asWritten.get(args[0] as string) ?? (args[0] as string)
+        // What a guard says of it after its own words (L111), kept here so every guard says the same:
+        // why it was read as a writer, and what a person can do about it.
+        const said = writing
+          ? { why: `${name} with ${writing.form} ${writing.does}`, remedy: `Without ${writing.form}, ${name} only reads.` }
+          : { why: `${program} is a program the mods do not know, so what it does with a file it is handed cannot be read before it runs`, remedy: `To only read a file, use a program the mods know only reads (${READ_EXAMPLES} and the others listed under "The programs that only read" in claude-config's docs/mods-design.md). If ${program} only reads too, ask Dan to add it to that list: only he may.` }
+        if (handed.length) runs.push({ what: writing ? `${name} with ${writing.form}, which ${writing.does}` : NOT_KNOWN, script: program, tool: true, unknown: true, ...said, args: handed, ...ranWith })
+      }
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script

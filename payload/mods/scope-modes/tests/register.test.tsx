@@ -6,6 +6,8 @@ import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { adminEndpoints } from '../hooks/adminmerge.ts'
+import { gateArgv } from '../hooks/requiredlabel.ts'
+import { GATE_LABEL_FIXTURES } from './gate-label-fixtures.ts'
 import { answerKey, GO_TO_SLEEP, goalQuestion, goalUnreadQuestion, NO_GOAL, SKIP_QUESTION } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { overnightRules, REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
@@ -5813,6 +5815,66 @@ test('an admin merge overnight is refused in a repository whose entry does not o
   expect(w.runs.some(r => r[0] === 'gh' && r[1] === 'api' && r[2]?.startsWith('repos/o/r/pulls/'))).toBe(false)
 })
 
+// #3439: a label set on a PR overnight is judged by the repository's own merge gate, asked through
+// its library in the installed hooks, and by this session's own record of the PRs it opened. The
+// gate's answer is the committed one its own suite holds it to (gate-label-fixtures.ts).
+const GATE_ASKED = gateArgv(`${'/Users'}/x`, 'o/r')
+const gateSays = (answer: unknown): Record<string, string> => ({ [GATE_ASKED.join(' ')]: `${JSON.stringify(answer)}\n` })
+const GATED = { ...GATE_LABEL_FIXTURES[0]?.answer, why: '' }
+const LABEL_REFUSED = 'Refused: sleep mode is on and Dan bans this while he sleeps, so this did not set labels or a milestone on a PR'
+
+test('asleep, the label the merge gate requires goes on a PR this session opens, and by gh pr edit only on a PR it opened (#3439)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night(OPTED_NIGHT), created: 'https://github.com/o/r/pull/31\n', night: gateSays(GATED) })
+  await start($ as never, clock)
+  // Before it has opened anything, no PR is its own.
+  expect(await call($ as never, bash('gh pr edit 31 --add-label changelog/none', 'p0'))).toMatch(asRegExp(`${LABEL_REFUSED} (PR #31 in o/r is not one this session opened).`))
+  expect(await call($ as never, bash('gh pr create --fill --label changelog/technical', 'p1'))).toBe('https://github.com/o/r/pull/31\n')
+  expect(w.runs.filter(r => r[0] === 'node' && r[2] === 'required-labels')).toEqual([GATE_ASKED, GATE_ASKED])
+  // The PR that call opened is now in the session's record, read from the link gh printed.
+  expect(await call($ as never, bash('gh pr edit 31 --add-label changelog/none', 'p2'))).toBe('ran')
+  expect(await call($ as never, bash('gh pr edit 32 --add-label changelog/none', 'p3'))).toMatch(asRegExp(`${LABEL_REFUSED} (PR #32 in o/r is not one this session opened).`))
+  expect(await call($ as never, bash('gh pr edit 31 --add-label bug', 'p5'))).toMatch(asRegExp(`${LABEL_REFUSED} (bug is not a label the merge gate of o/r requires).`))
+  expect(await call($ as never, bash('gh pr edit 31 --remove-label changelog/none', 'p6'))).toMatch(asRegExp(`${LABEL_REFUSED}.`))
+})
+
+// Dan's decision of 2026-11-22 (picker answer "Also allow changelog/visible"). The merge gate still
+// refuses the merge of a PR carrying that label whose description has no Changelog sentence, so the
+// result of the call that sets it says so, to whichever of the session or its agents made the call.
+test('asleep, the label that needs a sentence a manager reads may be set too, and the result of that call says the merge waits on the sentence (#3439)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), created: 'https://github.com/o/r/pull/31\n', night: gateSays(GATED) })
+  await start($ as never, clock)
+  const NOTE = 'The merge gate of o/r refuses the merge of a PR labelled changelog/visible until its description carries the Changelog sentence a manager reads, so see that the description has it before merging.'
+  const whole = async (command: string, id: string, agentId?: string) =>
+    (await ($ as unknown as $T).tool.call({ ...(bash(command, id) as object), ...(agentId ? { agentId } : {}) } as never)) as { deny?: string; text?: string; context?: string[] }
+  const opened = await whole('gh pr create --fill --label changelog/visible', 'v1')
+  expect(opened.deny).toBeUndefined()
+  expect(opened.text).toBe('https://github.com/o/r/pull/31\n')
+  expect(opened.context).toEqual([NOTE])
+  const edited = await whole('gh pr edit 31 --add-label changelog/visible', 'v2', 'a1')
+  expect(edited.deny).toBeUndefined()
+  expect(edited.context).toEqual([NOTE])
+  // One line setting it twice is told once.
+  expect((await whole('gh pr edit 31 --add-label changelog/visible && gh pr edit 31 --add-label changelog/visible', 'v6')).context).toEqual([NOTE])
+  // A label that needs no sentence is set with nothing said, and a refusal carries no note.
+  expect((await whole('gh pr edit 31 --add-label changelog/none', 'v3')).context ?? []).toEqual([])
+  const notMine = await whole('gh pr edit 32 --add-label changelog/visible', 'v4')
+  expect(notMine.deny).toMatch(asRegExp(`${LABEL_REFUSED} (PR #32 in o/r is not one this session opened).`))
+  expect(notMine.context ?? []).toEqual([])
+  expect((await whole('gh pr edit 31 --add-label changelog/visible --remove-label changelog/none', 'v5')).deny).toMatch(asRegExp(`${LABEL_REFUSED}.`))
+})
+
+test('asleep, a label on a PR stays refused where the merge gate requires none, and where the gate cannot be asked, each saying why (#3439)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), night: gateSays({ state: 'not-required', why: 'o/r is not listed in the /pennie-dev-update registry', labels: [] }) })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr create --fill --label changelog/technical', 'n1'))).toMatch(asRegExp(`${LABEL_REFUSED} (the merge gate of o/r requires no label).`))
+})
+
+test('asleep, a merge gate that answers nothing readable refuses the label, and never reads as a gate requiring none (#3439)', withDeps, async ($, on) => {
+  const { clock } = world(on, { ...night(OPTED_NIGHT), night: { [GATE_ASKED.join(' ')]: { fails: 'Error: Cannot find module changelog-entry.js' } } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr create --fill --label changelog/technical', 'u1'))).toMatch(asRegExp(`${LABEL_REFUSED} (whether the merge gate of o/r requires a label could not be told: Error: Cannot find module changelog-entry.js).`))
+})
+
 test('a repository first met after sleep began is closed and noted once', withDeps, async ($, on) => {
   const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
   await start($ as never, clock)
@@ -8027,6 +8089,85 @@ test("two calls finishing at once, the session's and an agent's, each keep the f
   ])
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(a\.ts, b\.ts, c\.ts\): /)
+})
+
+// #3418: the list of files a session wrote was read whole and written whole after every call that
+// named a new path, so a long session paid for its whole list on every call: 10,547 paths (1.5 MB
+// as JSON) measured on 2026-11-21, most naming nothing on disk. The paths of that list moved through
+// $.state in one call, read and written, counted rather than timed (L290).
+const listMoved = (on: On) => {
+  const m = { read: 0, written: 0, reset: () => void Object.assign(m, { read: 0, written: 0 }) }
+  const count = (v: unknown) => (Array.isArray(v) ? v.length : 0)
+  on('state.get', async ($, e, next) => {
+    const r = (await next(e)) as { value?: { value?: unknown } }
+    if ((e as { key: string }).key.startsWith('written')) m.read += count(r?.value?.value)
+    return r as never
+  })
+  on('state.set', async ($, e, next) => {
+    const { key, value } = e as { key: string; value: unknown }
+    if (key.startsWith('written')) m.written += count(value)
+    return next(e)
+  })
+  return m
+}
+// A path handed to a program and never written, as most of the measured list's were.
+const gonePath = (i: number, j: number) => `gone/run-${i}/a-path-handed-to-a-program-that-never-wrote-it-and-names-nothing-on-disk-${j}.json`
+const seedGone = async ($: $T, runs: number) => {
+  for (let i = 0; i < runs; i++) {
+    const words = Array.from({ length: 250 }, (_, j) => gonePath(i, j)).join(' ')
+    expect(await call($, bash(`rm -f ${words}`, `seed${i}`))).toBe('ran')
+  }
+}
+
+test('a call that writes a new file moves a bounded part of the list of files the session wrote, not all 10,500 of them (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', gonePath(0, 0), 'other/plan.md'] })
+  const moved = listMoved(on)
+  await start($ as never, clock)
+  await seedGone($ as never, 42)
+  // Each side of the counter sees the list: every one of the 10,500 paths was written through it at
+  // least once, and parts of it read back, so the bounds below are never met by a counter that
+  // counts nothing (lessons review of 4b789d8).
+  expect(moved.written).toBeGreaterThanOrEqual(10_500)
+  expect(moved.read).toBeGreaterThan(0)
+  moved.reset()
+  expect(await call($ as never, bash('echo x > app.ts', 'w1'))).toBe('ran')
+  // At most two parts of the list and the call's own path, whatever the list's length: 10,500 paths
+  // and more were moved here before. The call's own new path was written, and its part read.
+  expect(moved.written).toBeGreaterThan(0)
+  expect(moved.read).toBeGreaterThan(0)
+  expect(moved.read + moved.written).toBeLessThanOrEqual(520)
+  moved.reset()
+  expect(await call($ as never, edit('/repo/app.ts', 'w2'))).toBe('ran')
+  expect(moved.read + moved.written).toBeLessThanOrEqual(520)
+  // Nothing is lost by it: the first path noted, a removal git still names, is the session's, as is
+  // the newest, and another session's file is not.
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts, gone\/run-0\/[^)]*-0\.json\): /)
+  expect(block).not.toContain('other/plan.md')
+})
+
+test('a list of written files kept whole before #3418, as a session running when this ships holds it, still counts, beside what is noted after (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['before.ts', 'after.ts', 'other/plan.md'] })
+  reloadedWith(on, { written: ['/repo/before.ts'] })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo x > after.ts', 'w1'))).toBe('ran')
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(before\.ts, after\.ts\): /)
+  expect(block).not.toContain('other/plan.md')
+})
+
+test('a new session starts with none of the files the last one wrote, however many parts its list took (#3418)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', gonePath(0, 0)] })
+  await start($ as never, clock)
+  await seedGone($ as never, 3)
+  expect(await call($ as never, bash('echo x > app.ts', 'w1'))).toBe('ran')
+  await $.session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo y > later.ts', 'w2'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
 })
 
 test('a call refused beneath the mod wrote nothing, so its file is not the session\'s (#1108)', withDeps, async ($, on) => {

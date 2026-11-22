@@ -130,6 +130,10 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     slowLogOnce?: boolean
     // mod-kit's shell reader failing (#2142), and the default branch's 90 days in place of NUMSTAT.
     writesThrows?: boolean
+    // mod-kit's shell reader answering from a table of recorded answers, by command, in place of
+    // this mod's copy of it (#3323: the reader as it stood on main before a change to it). A command
+    // the table lacks fails to be read, so a test can never compare against no answer at all.
+    writesAs?: Record<string, unknown>
     // mod-kit's pipeline reader failing, and the session's folder failing to be read (#2173): the one
     // inside the pull request check, the other before it, so the hook itself fails.
     pipelineThrows?: boolean
@@ -296,6 +300,9 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
       // What a Bash call writes (#2142), from the same copy of mod-kit's reader.
       if (argv[1] === 'writes') {
         if (ctl.writesThrows) return answer({ exitCode: 1, stdout: '', stderr: 'the command could not be read' })
+        const recorded = ctl.writesAs?.[input.command]
+        if (ctl.writesAs && recorded === undefined) return answer({ exitCode: 1, stdout: '', stderr: `no recorded answer for ${input.command}` })
+        if (recorded !== undefined) return answer(ok(JSON.stringify(recorded)))
         const w = commandWrites(input.command, input.cwd, input.home ?? '')
         return answer(ok(JSON.stringify(ctl.oldReader && w.runs ? { ...w, runs: w.runs.map(({ env: _env, ...r }) => r) } : w)))
       }
