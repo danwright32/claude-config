@@ -97,7 +97,12 @@ def records(text):
         m = COSTS_NOTE.search(raw.rstrip())
         if m:
             entries = m.group(1)
-            parts = entries.split(" | ") if " | " in entries else re.split(r"; (?=[a-z][a-z-]* [0-9])", entries)
+            # Entries are separated by " | " since 2026-11-21, and a note of one case has none; only a
+            # note without the new figures is the older kind, whose entries were separated by "; ".
+            if " | " in entries or "; seconds per reading " in entries:
+                parts = entries.split(" | ")
+            else:
+                parts = re.split(r"; (?=[a-z][a-z-]* [0-9])", entries)
             for part in parts:
                 e = ENTRY.match(part.strip())
                 if e:
@@ -178,8 +183,10 @@ def faults(r):
     if abs(judged - min(readings)) > 0.05:
         out.append("%s: judged at %s, but the least reading is %.1f" % (name, r["least"], min(readings)))
     else:
-        k = min(range(len(readings)), key=lambda j: readings[j])
-        if abs(float(r["unit"]) - per[k][0]) > 0.0006 or abs(float(r["spent"]) - secs[k]) > 0.006:
+        # Readings print to one decimal, so two can print alike; the judged figures are either one's.
+        tied = [j for j in range(len(readings)) if readings[j] == min(readings)]
+        if not any(abs(float(r["unit"]) - per[j][0]) <= 0.0006 and abs(float(r["spent"]) - secs[j]) <= 0.006 for j in tied):
+            k = tied[0]
             out.append("%s: judged with %s s over a unit of %s s, which is not its least reading's %.3f s over %.4f s" % (name, r["spent"], r["unit"], secs[k], per[k][0]))
     want = ("%.4f" % min(ys_f), "%.4f" % statistics.median(ys_f), "%.4f" % max(ys_f))
     if tuple(r["spread"]) != want:

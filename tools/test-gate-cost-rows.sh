@@ -59,6 +59,12 @@ has "the suite-cold note gives its row" "$(printf 'ci.txt\tsuite-cold\t77.0\t60.
 has "an entry of the costs note gives its row" "$(printf 'ci.txt\t%s' "$ROW")" "$out"
 has "a reading taken on the step clock says so" "$(printf 'ci.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes')" "$out"
 
+# A costs note holding one case has no " | " in it, and its record's own "; yardstick 9 samples"
+# must not be read as the start of a second, older style entry.
+printf '          note: drafts gate costs on Linux, every case but suite-cold, in units of the yardstick and how each was read: %s (#3170)\n' "$STEP" > "$WORK/one.txt"
+out="$(python3 -B "$TOOL" rows "$WORK/one.txt" 2>&1)"
+has "a costs note with one case gives that case whole" "$(printf 'one.txt\tshort-budget\t36.0\t1.9\t1.9\t0.190\t0.100\t0.1000\t9\t0.1000\t0.1040\t0.1080\tyes')" "$out"
+
 # 3. One run's file holding both shapes (a red run's kept output prints the cost lines and the notes):
 # each case once, from the cost lines, never twice.
 cat "$WORK/local.txt" "$WORK/ci.txt" > "$WORK/both.txt"
@@ -116,6 +122,12 @@ printf 'one-lesson LINE: 30.1 (2.50 s of processor time, unit 0.083 s, ceiling 3
 out="$(python3 -B "$TOOL" check "$WORK/bare.log" 2>&1)"; rc=$?
 check "check refuses a record without the per reading figures" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
 has "and names what is missing" "one-lesson: no seconds per reading" "$out"
+# Two readings printed alike, 30.7 each, with different seconds and yardsticks: the judged figures
+# are those of either one, so the second one's must be accepted. 2.541 / 0.0829 and 2.551 / 0.0832
+# both print 30.7, and the record's 2.54 s is the second's, never the first's.
+printf '%s\n' "$GOOD" | sed 's/seconds per reading 2\.560, 2\.541, 2\.600; yardstick per reading 0\.0832 from 7, 0\.0829 from 9/seconds per reading 2.551, 2.541, 2.600; yardstick per reading 0.0832 from 7, 0.0829 from 9/; s/samples 30\.8, 30\.7, 31\.4/samples 30.7, 30.7, 31.4/' > "$WORK/tie.log"
+out="$(python3 -B "$TOOL" check "$WORK/tie.log" 2>&1)"
+check "check accepts the judged figures of either of two readings that print alike" "$([ "$out" = ok ] && echo ok || echo "$out")"
 : > "$WORK/none.log"
 out="$(python3 -B "$TOOL" check "$WORK/none.log" 2>&1)"; rc=$?
 check "check on a log holding no record fails rather than passing nothing" "$([ "$rc" = 1 ] && echo ok || echo "exit $rc: $out")"
