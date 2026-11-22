@@ -76,7 +76,8 @@ measured 2026-11-22, each passes where x.py posts. Refusing all such code refuse
 #3278 holds must pass. A module run by a name built at run time is not followed, as an import
 built at run time is not. A program started with a command built at run time (`subprocess.run(cmd)`)
 is not read, as `$cmd` typed in a shell is not (#2683). Text the code reads from a pipe and runs
-(`cat x.py | python3 -c 'exec(sys.stdin.read())'`) is not read. A way to open a file that
+(a file's text piped into inline code that execs whatever its input holds) is not read where it
+comes from a file, since the code names no file. A way to open a file that
 OPENERS does not hold, by a path built at run time, is not seen. Code handed to a module python3
 runs with -m (`python3 -m timeit "..."`) is not read as code. A Python file on disk that runs a
 file it names (`python3 runner.py`, `import runner`, `python3 - < runner.py`) is read as it was:
