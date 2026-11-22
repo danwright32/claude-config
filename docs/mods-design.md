@@ -2612,7 +2612,7 @@ they read any other. A file of the call is left out only where nothing in that r
 The function's name is never what is trusted, so a wrapper cannot hide a program:
 `run() { prettier --write "$@"; }; run app/page.tsx` is still a write of app/page.tsx, as that line
 typed whole is. Everything the reading cannot tell stays judged as it was: a function from a file
-the script reads in; a name not defined exactly once, at the top of the script, as a command of its
+the script reads in that the reader cannot place (see the next paragraph); a name not defined exactly once, at the top of the script, as a command of its
 own (after `&&`, `||` or a pipe it is defined only sometimes, or in a subshell); a name the text
 unsets, an alias, or text run as commands after the definition; a call before the definition, or
 behind `timeout`, `env`, `command`, `xargs`, `find` or a new shell, which run the program of that
@@ -2623,6 +2623,57 @@ command whose name is itself a variable is not followed, so one whose value is `
 could change a function unseen. The built in list of the shell's own words was not widened (a
 helper handing a file to `[[` is judged as that line typed whole is), and neither was following a
 variable: each is a wider exemption, Dan's to decide.
+
+**A function from a file the script reads in (#3416), built 2026-11-22.** Dan chose it by picker
+that day: "Read the files a suite reads in (Recommended)". A file a `source` or `.` command reads in
+is read, and a function it defines is checked exactly as one the script's own text defines (rules.ts
+`readInFile`, used only by `withoutOwnCalls`); nothing new is trusted. Only a file the reader can
+place is read: one in the script's own folder or below, named in the text or under a variable the
+script sets to its own folder. That variable must be set once, by mod-kit's own folder idiom typed
+at the top of the script as a command of its own, with nothing else setting it (no other assignment,
+builtin, loop, default or arithmetic naming it), no eval and no other file read in between that
+assignment and the read, and the file read in must not spell the variable itself. A link is not
+followed, and the reading goes one file deep: a file that itself reads in a file, or holds an eval,
+an alias or an unset, lends no function. The function must be defined once at that file's top, the
+file read in by exactly one command at the script's top as a command of its own (in no pipe, behind
+no program, with no words after the file), and the file must not `return` or `exit` before the
+definition; a name the script and a file both define stays judged. A file that the command, or a
+script it runs, writes, removes or changes by a name the reader places, or under a folder so
+written, is not read, since what would run is the changed file. Left open: a write by a name the
+reader cannot place, or by a program it does not know, could change a file between the reading and
+the run. A design file written that way is not judged directly either, so this adds no route that
+was not already open. The stricter form, judging any script that holds such a write, was measured
+on the Slack gate's suite: it holds 465 file writes the reader cannot place and does not call
+temporary, so the stricter form would clear none of the earlier count's 24 calls.
+
+The recount (2026-11-22, the personal MacBook's records for the 45 days to that day: 56,698 shell
+calls, 51,250 distinct, 5,339 running a shell script the guard reads, as the scripts are on disk that
+day; every rule asked of the guard's own modules, the files read in handed over as register.ts hands
+them). 51 calls, 47 distinct, are newly judged by the rule. The reading clears 27 of them, 25
+distinct: all 25 `says` calls (the Slack gate's suite and a suite of the same shape in another
+project, whose `lib/settings-file.sh` is now read) and 2 `call_has` calls. 24, 22 distinct, stay
+judged; for each, the files held before the exemption are the files still held. An eval after the
+definition: assert_contains and make_repo, 5 calls, and a sixth that runs that suite and the next. A
+function from a file the reader cannot place: fh_code_only, 6 calls, from an agent's check script
+that reads in hooks/lib/failure-handling.sh from outside its own folder; silent and fires, 3 calls
+and the sixth above, whose suite reads the same library through `$LIB`, set from `$DIR`, inside an
+`if`, and hands the predicate's name over as `"$1"`, a word run as the command, which is not
+followed. A body that keeps what it was handed in a variable: mutant, 4 calls, and control, 2, whose
+named_rule comes from a file read in after another file read in through `$ROOT`. A function defined
+before a file read in that the reader cannot place, because another file was read in between the
+folder variable's assignment and it (test-pr-review-push.sh and test-check-duplication.sh, 1 call
+each), or because it is read in under `$ROOT`, set from `$DIR` (test-stat-order.sh, 1). Of the
+earlier count's 24 calls, replayed with reasons the same day, 6 are cleared and 18 stay, for the same
+reasons. Each remaining kind needs a widening that was not built, and no count below was measured
+with one in place, so each is a most: trusting an eval, 5 alone; following a word a helper runs as
+its command together with a library read through a second variable inside an `if`, 3 alone (the
+sixth call needs that and the eval); a bound wider than the script's own folder together with
+following a variable a function keeps its argument in, 6 (fh_code_only's body hands its file to
+fh__run, which keeps it in a variable); following such a variable, 4 alone for mutant, whose file
+goes to tools/prove-it-fails.sh `--sed`, which does change it for a while, and 2 for control only
+with a folder variable set from another placed as well; letting a file read in between stand where
+the reader read it and found it does not spell the variable, 2; placing a folder variable set from
+the script's own folder variable, 1.
 
 What the reading costs is bounded, since it runs in a hook before the command. Placing each
 definition by rereading the script before it, once a function, took 6.4 to 7.4 seconds on a made up

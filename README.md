@@ -8718,8 +8718,12 @@ as a write of it, as that line typed whole is since #3323, in the script the com
 script that one runs, the list of programs that only read applying there as on a command line,
 and a call of a shell function the script's own text defines read as that function's commands with
 the call's words in place, so a helper that only compares and prints is no such program and a
-wrapper around one still is (Dan, 2026-11-22; a function from a file the script reads in, or one
-that keeps what it was handed in a variable, stays judged),
+wrapper around one still is (Dan, 2026-11-22), a function from a file the script reads in checked
+the same way where the reader can say which file it is, a file in the script's own folder or below
+read in by name or under the folder the script sets as its own, one file deep (a function from a
+file outside that folder, from a path held in any other variable, from a file read in only inside
+an `if`, or one that keeps what it was handed in a variable, stays judged; of the 51 past calls in
+45 days the rule newly judges, this reading clears 27),
 while what the script itself was handed, passed on to such a program (`mystery "$1"`), is still not
 caught), a patch git apply, git am or patch reads from a file judged
 since #3022 by the files it changes (mod-kit's patch reader, placed as the command places them), and
