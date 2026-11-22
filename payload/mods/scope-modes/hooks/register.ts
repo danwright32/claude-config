@@ -627,17 +627,19 @@ const heldBy = ($: EngineInterface, id: string, what: string, ms: number = HOLD_
 // A question this mod asks Dan itself, through its own dialog (#3321; Dan, 2026-11-21: "Record,
 // then decide"). It reaches the dialog a session's picker does and no session record holds it, so
 // mod-kit's one recorder (hooks/mod-kit/asked.ts) notes its size first, never a word of it, and
-// asks it whatever the record says. `which` is this mod's short name for the question. The one
-// place this mod calls the dialog: the scan holds every call to the recorder's line.
+// asks it whatever the record says. `which` is this mod's short name for the question. Each caller
+// hands in its own call of the dialog (`dialog`), written in the one shape the shared parts scan
+// allows, so the dialog stays inside the route that asks it: tests/test-sleep-silence.sh finds a
+// route by where the dialog is called, and holds each to the sleep predicate or its exemption.
 const askingRef = { plugin: 'scope-modes', key: 'asking' } as const
-const askDan = ($: EngineInterface, which: string, question: string, options?: AskedOptions): Promise<string> => {
+const askDan = ($: EngineInterface, which: string, question: string, options: AskedOptions | undefined, dialog: Pick<AskedIo, 'ask'>): Promise<string> => {
   const io: AskedIo = {
     now: () => $.clock.now(),
     home: () => $.env.get('HOME'),
     write: (path, text) => $.fs.write(path, text),
     list: async dir => (await $.fs.list(dir)).map(entry => entry.name),
     run: argv => $.process.run(argv, { timeoutMs: 5_000 }),
-    ask: (asked, offered) => $.ui.ask(asked, offered),
+    ask: dialog.ask,
     // The recorder keeps the dialog in this mod's own state for as long as it is open, which only
     // this mod can write, so picker manners never takes it for a session's picker.
     own: { read: () => $.state.get(askingRef), write: (value, ifVersion) => $.state.set(askingRef, value, { ifVersion }) },
@@ -648,7 +650,7 @@ const askDan = ($: EngineInterface, which: string, question: string, options?: A
 
 const askOne = async ($: EngineInterface, which: string, question: string, options: string[], header: string, waitMs: number, late: (a: string) => Promise<void>): Promise<Asked> => {
   let isLate = false
-  const ask = (): Promise<Asked> => askDan($, which, question, { options, header }).then(
+  const ask = (): Promise<Asked> => askDan($, which, question, { options, header }, { ask: (question, options) => $.ui.ask(question, options) }).then(
     async (a: string) => {
       if (isLate && a !== GO_TO_SLEEP) await late(a).catch(err => $.ui.toast(`A late answer to "${question}" was not kept: ${msg(err)}`))
       return { answer: a }
@@ -4743,7 +4745,7 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => askDan($, 'left open', question, [asIs.keep, asIs.other]))
+    answer = await whileHeld(heldBy($, 'left open', "Dan's answer about leaving a PR open"), () => askDan($, 'left open', question, [asIs.keep, asIs.other], { ask: (question, options) => $.ui.ask(question, options) }))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on ${pr}.`
   }
@@ -4810,7 +4812,7 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => askDan($, 'left branch', question, ['Leave it as it is', 'Clean it up']))
+    answer = await whileHeld(heldBy($, 'left branch', "Dan's answer about leaving a branch as it is"), () => askDan($, 'left branch', question, ['Leave it as it is', 'Clean it up'], { ask: (question, options) => $.ui.ask(question, options) }))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on the branch ${branch}.`
   }
@@ -4855,7 +4857,7 @@ const openCleanupBranch = async ($: EngineInterface, input: Record<string, unkno
   if (asleep) return asleep
   let answer: string
   try {
-    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => askDan($, 'cleanup branch', question, ['Open it', 'Do not']))
+    answer = await whileHeld(heldBy($, 'cleanup branch', "Dan's answer about opening a cleanup branch"), () => askDan($, 'cleanup branch', question, ['Open it', 'Do not'], { ask: (question, options) => $.ui.ask(question, options) }))
   } catch (err) {
     return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still refuses the branch ${branch}.`
   }
@@ -5846,7 +5848,7 @@ export const register: Register = on => {
       }
       let answer: string
       try {
-        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => askDan($, 'no build', question, ['Yes', 'No']))
+        answer = await whileHeld(heldBy($, 'no build', "Dan's answer to whether Claude may switch to build"), () => askDan($, 'no build', question, ['Yes', 'No'], { ask: (question, options) => $.ui.ask(question, options) }))
       } catch (err) {
         const text = `Dan was not asked (${msg(err)}): no build stays on.`
         return { result: text, text }
