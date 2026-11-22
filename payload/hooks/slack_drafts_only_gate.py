@@ -2570,7 +2570,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns, CodeLoaders, DataNames, Sh
                 return f"{name} runs a script from its input that names {hit.group(0)}" if unread is None else \
                     f"{name} {text_how}, which names {hit.group(0)}"
             here = os.path.abspath(d or os.getcwd())
-            return self.imports(f"the script {name} reads from its input", None, here, body, lang) if lang else None
+            reason = self.imports(f"the script {name} reads from its input", None, here, body, lang) if lang else None
+            if lang == "py" and not reason:
+                # Code the command writes out and feeds python3 (a here string, echo into a pipe),
+                # read as code given by -c is (lib/py-file-runs.py, claude-config#3397).
+                reason = self.py_file_runs(f"the code {name} reads from its input", body, here, d, depth)
+            return reason
 
         return self.fed_reason(name, pieces, read_file, read_text, unread)
 

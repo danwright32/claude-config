@@ -24,7 +24,10 @@ refuse a command those let through and never the reverse:
     as an f-string, a + or os.path.join of such strings, a name set once to one, a value the
     command puts in the environment or in sys.argv (py_path_expr), each from the folder the
     command runs in and from a folder the code moves to with os.chdir. So is the file the command
-    feeds the code on its input (`python3 -c '...' < file`).
+    feeds the code on its input (`python3 -c '...' < file`). A string naming a folder that holds
+    __main__.py names that file, which runpy.run_path and python3 run when handed the folder.
+  * The code is whatever the command itself carries for python3: given by -c, fed in a heredoc or a
+    here string, or written out and piped in (`echo "..." | python3`).
   * Every string that is a command line starting with a program the gate reads by its name
     (holds_command, the reading lib/unknown-program.py gives a quoted word), and every list, tuple
     or call whose strings hold such a name (`['bash', 'run']`, `os.execlp('python3', 'python3',
@@ -39,21 +42,38 @@ refuse a command those let through and never the reverse:
     One holding a $ or a backquote the shell fills in, in code given in double quotes or in a
     heredoc the shell expands, is not worked out unless the gate can fill it in itself (sh_word),
     and nor is a relative one where the folder is not certain.
+  * A file run that way which is not text (an archive holding __main__.py, compiled code) is one
+    the gate cannot read, and is refused as unread where it is typed.
+  * Code this python3 cannot parse is read for its quoted strings alone. Where the shell fills
+    part of it in and the gate cannot work that out (`python3 -c "$(cat x.py)"`, `"$CODE"`, a
+    `$N` outside a string), or where it names a way to run a file (SINK_WORDS), what it runs was
+    never read, and it is refused as unread where it is typed. The gate's python3 can be older
+    than the one the command starts, so code it cannot parse may still run.
 
 WHERE IT CANNOT TELL, AND WHICH WAY IT FALLS. Code that can run code and also names a file it only
 reads (`import subprocess, json; json.load(open('named.json'))`) is not told from code that runs
 that file: the file is read as one the code may run, and a data file naming an endpoint refuses
-the command. Code that names exec and opens a file by a path that cannot be worked out is refused
-whether or not the text it reads is what it runs. Both fall toward refusing.
+the command. "Can run code" is the gate's own answer, so it holds every module the gate does not
+know to be unable to (`import shutil`). Code that names exec and opens a file by a path that cannot
+be worked out is refused whether or not the text it reads is what it runs. Code it cannot parse
+that holds the word exec only in a string, or a number the shell fills in outside a string, is
+refused as code that runs something unread. All fall toward refusing.
+
+WHAT IS LEFT ALONE ON PURPOSE. A file that open() is handed with a mode written out that only
+writes (w, a or x, with neither r nor +) is not one the code reads, so it is not read as one it
+may run (py_opens_to_write). The same path named anywhere else in the code still is.
 
 WHAT IT DOES NOT COVER. A module run by a name built at run time is not followed, as an import
 built at run time is not. A program started with a command built at run time (`subprocess.run(cmd)`)
 is not read, as `$cmd` typed in a shell is not (#2683). Text the code reads from a pipe and runs
 (`cat x.py | python3 -c 'exec(sys.stdin.read())'`) is not read. A way to open a file that
-OPENERS does not hold, by a path built at run time, is not seen. A Python script on disk that runs
-a file it names is read as it was: this reading is of code the command itself carries. In a script
-on disk only a finding that something posts stands, and a path that cannot be worked out is left
-as it was there, as an unread feed is.
+OPENERS does not hold, by a path built at run time, is not seen. Code handed to a module python3
+runs with -m (`python3 -m timeit "..."`) is not read as code. A Python file on disk that runs a
+file it names (`python3 runner.py`, `import runner`, `python3 - < runner.py`) is read as it was:
+this reading is of code the command itself carries. `python3 <folder holding __main__.py>` and
+`python3 <archive>` typed as a command are not this reading's either. In a script on disk only a
+finding that something posts stands, and a path or code that cannot be worked out is left as it
+was there, as an unread feed is.
 """
 import ast
 import os
@@ -72,6 +92,7 @@ PATH_SINKS = {
     "ExtensionFileLoader": (1, ("path",)),
     "load_source": (1, ("pathname",)),
     "load_compiled": (1, ("pathname",)),
+    "zipimporter": (0, ("archivepath", "path")),
 }
 # A call that runs a module by its name, and the keyword that name goes by.
 MODULE_SINKS = {"run_module": "mod_name", "import_module": "name", "__import__": "name"}
@@ -354,7 +375,7 @@ def make(py_nodes, unknown_dir):
             from_words = self.py_from_words(nodes, pairs)
             value = lambda n: self.py_text_value(n, here, known)  # noqa: E731
             runs_text = any(isinstance(n, ast.Name) and n.id in TEXT_RUNNERS for n in nodes)
-            texts, folders, rows, mods, unworked = [], [], [], [], []
+            texts, folders, rows, mods, unworked, ran = [], [], [], [], [], []
             written = set()  # id() of each path a call of open() only writes
             moved_unknown = False
             sinks = []  # (the call's name, the expression holding its path)
@@ -402,6 +423,7 @@ def make(py_nodes, unknown_dir):
                         unworked.append(f"{name}({ast.unparse(arg)[:80]})")
                     continue
                 texts.append(got)
+                ran.append((name, got))
                 relative = not os.path.isabs(os.path.expanduser(got))
                 if filled and SHELL_FILLS.search(got):
                     unworked.append(f"{name}({ast.unparse(arg)[:80]}), which the shell fills in before Python reads it")
@@ -419,7 +441,7 @@ def make(py_nodes, unknown_dir):
                     got = value(node)
                     if got is not None:
                         texts.append(got)
-            return texts, folders, rows, mods, unworked
+            return texts, folders, rows, mods, unworked, ran
 
         def py_file_runs(self, label, code, here, d, depth, filled=False, fed=None):
             """The reason code given to python3 posts through a file, a module or a command it names
@@ -438,14 +460,21 @@ def make(py_nodes, unknown_dir):
                 # are still read for a file; where the shell fills part of it in and it names a way
                 # to run one, what it runs cannot be read at all.
                 texts = [m.group(1) if m.group(1) is not None else m.group(2) for m in CRUDE_STRING.finditer(code)]
-                folders, rows, mods, unworked = [], [], [], []
-                if filled and SINK_WORDS.search(code):
+                folders, rows, mods, unworked, ran = [], [], [], [], []
+                # Its strings are all that is read of it, so a path it builds is never seen: where
+                # the shell fills part of it in, what the code is cannot be read at all, and where
+                # it names a way to run a file, the file it runs cannot. The gate's python3 can be
+                # older than the one the command starts, so code it cannot parse may still run.
+                if filled:
                     unparsed = ("which the shell fills in before Python reads it, and which this python3 cannot "
                                 "parse as it is written")
+                elif SINK_WORDS.search(code):
+                    unparsed = "which this python3 cannot parse, and which names a way to run a file"
             else:
-                texts, folders, rows, mods, unworked = self.py_names(nodes, here, filled, cwd_known)
+                texts, folders, rows, mods, unworked, ran = self.py_names(nodes, here, filled, cwd_known)
             # Each file a string names, once, as the code would find it: from the folder it runs in,
-            # and from each folder it moves to.
+            # and from each folder it moves to. A folder holding __main__.py is that file, which
+            # runpy.run_path and python3 run when handed the folder.
             named, seen = [], set()
             for text in texts + ([fed] if fed else []):
                 if not text or len(text) > MAX_PATH or "\0" in text or "\n" in text:
@@ -457,6 +486,24 @@ def make(py_nodes, unknown_dir):
                     seen.add(path)
                     if self.is_file(path):
                         named.append((text if k == 0 else path, path))
+                    elif self.is_file(os.path.join(path, "__main__.py")):
+                        named.append((os.path.join(text if k == 0 else path, "__main__.py"),
+                                      os.path.join(path, "__main__.py")))
+            # A file the code runs by its path that is not text (an archive holding __main__.py,
+            # compiled code) is one the gate cannot read.
+            opaque = []
+            for name, text in ran:
+                if not text or len(text) > MAX_PATH or "\0" in text or "\n" in text:
+                    continue
+                for base in [d] + folders:
+                    path = self.resolve(text, base)
+                    try:
+                        binary = self.is_file(path) and bool(self.content(path, part="binary"))
+                    except OSError:
+                        binary = False  # unreadable to us is unreadable to Python
+                    if binary:
+                        opaque.append(f"{name}({text[:80]!r})")
+                        break
             lines, spelled = [], set()
             for text in texts:
                 if text not in spelled and len(text) <= MAX_PATH * 4 and "\0" not in text and \
@@ -470,7 +517,7 @@ def make(py_nodes, unknown_dir):
                 if line not in spelled:
                     spelled.add(line)
                     lines.append(line)
-            if not (named or lines or mods or unworked or unparsed):
+            if not (named or lines or mods or unworked or unparsed or opaque):
                 return None
             runs = self.acts_inline(code, here, "py", runs_only=True)
             if not runs:
@@ -518,9 +565,13 @@ def make(py_nodes, unknown_dir):
                     return why
             if unparsed:
                 return self.unread_typed(
-                    f"{label} runs code {unparsed}, so the file it runs is not read and whether it posts "
-                    "cannot be checked (claude-config#3397). Write the path out in the code, or hand the file "
-                    "to python3 as an argument")
+                    f"{label} is code {unparsed}, so what it runs is not read and whether it posts cannot be "
+                    "checked (claude-config#3397). Write the code out in full, and hand it any value the shell "
+                    "holds as an argument, read from sys.argv")
+            if opaque:
+                return self.unread_typed(
+                    f"{label} runs a file that is not text, {opaque[0]}, an archive or compiled code the gate "
+                    "cannot read, so whether it posts cannot be checked (claude-config#3397)")
             if unworked:
                 return self.unread_typed(
                     f"{label} runs a file by a path the gate cannot work out, {unworked[0]}, so that file is "

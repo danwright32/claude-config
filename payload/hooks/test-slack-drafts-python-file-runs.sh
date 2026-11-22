@@ -24,6 +24,12 @@
 #     a script on disk; a file handed in the words after the code is read by those words, as before;
 #   * code that only reads a file as data, and can run nothing, is not read as running it; where the
 #     code can run code the two cannot be told apart, and the file is read as one it may run;
+#   * a folder holding __main__.py named in the code is read as that file, code written out and fed
+#     on the input (a here string, echo into a pipe) is read as code given by -c is, and a file run
+#     that is not text, code the shell fills in that cannot be worked out, and code this python3
+#     cannot parse that names a way to run a file are each refused as unread where typed;
+#   * an error inside the reading refuses the call (seen to fail against a copy of the library that
+#     swallowed the error, on 2026-11-22);
 #   * a judgement kept in the cache does not outlive the file it read.
 set -uo pipefail
 
@@ -268,7 +274,11 @@ for code in "print(open('./posts.py').read())" \
   "import json, sys; d = json.load(open('named.json')); print(sorted(d))" \
   "import pathlib; print(len(pathlib.Path('posts.py').read_text()))" \
   "import re; print(re.findall('url', open('posts.py').read()))" \
-  "import os; print(os.path.getsize('posts.py'), os.path.exists('./named.json'))"; do
+  "import os; print(os.path.getsize('posts.py'), os.path.exists('./named.json'))" \
+  "import hashlib; print(hashlib.sha256(open('posts.py', 'rb').read()).hexdigest())" \
+  "import ast; print(ast.dump(ast.parse(open('posts.py').read()))[:10])" \
+  "import csv; print(list(csv.reader(open('named.json'))))" \
+  "import os, sys, re, json, pathlib; print(json.loads(pathlib.Path('named.json').read_text()))"; do
   ip_code "$code"
   allowed "#3397 code that only reads a file as data passes: ${code:0:60}"
 done
@@ -290,6 +300,19 @@ ip_code "import subprocess, json; print(json.load(open('./named.json')))"
 read_refused "#3397 code that can run code, naming a data file that names an endpoint, is refused"
 ip_code "import subprocess; print(open('./posts.py').read())"
 read_refused "#3397 code that can run code, printing a file that posts, is refused: the two cannot be told apart"
+# "Can run code" is the gate's own answer, so it holds any module the gate does not know to be unable to.
+ip_code "import shutil; shutil.copy('posts.py', 'copy.py')"
+read_refused "#3397 code importing a module not known to be unable to run code, copying a file that posts, is refused"
+ip_code "import shutil; shutil.copy('quiet.py', 'copy.py')"
+allowed "#3397 and copying the quiet twin passes"
+# A file the code opens only to write is not one it reads, so it is not read as one it may run; one
+# it opens to read and write is.
+ip_code "import subprocess; open('posts.py', 'w').write('x')"
+allowed "#3397 code that can run code and opens a file that posts only to write it passes"
+ip_code "import subprocess; open('posts.py', 'r+').write('x')"
+read_refused "#3397 and opening it to read and write is refused"
+ip_code "import runpy; runpy.run_path(open('posts.py', 'a').name)"
+read_refused "#3397 and a file opened only to write whose name is then run is refused as a path that cannot be worked out"
 
 echo "slack drafts only: a judgement kept in the cache does not outlive the file it read (claude-config#3397)"
 
@@ -332,6 +355,128 @@ for runs in "python3 - < quiet.py" "python3 < quiet.py" "cat quiet.py | python3"
   run_at "$runs" "$IP"
   allowed "#3397 and its quiet twin still passes: $runs"
 done
+
+echo "slack drafts only: a folder holding __main__.py that the code names is read as that file (claude-config#3397)"
+
+# runpy.run_path, and python3 started on it, run the __main__.py of a folder handed in place of a file.
+ip_pair "runpy.run_path of a folder holding __main__.py" "import runpy; runpy.run_path('FILE')" pkg qpkg
+ip_pair "subprocess run on python3 and a folder holding __main__.py" "import subprocess; subprocess.run(['python3', 'FILE'])" pkg qpkg
+ip_pair "a folder holding __main__.py behind os.chdir" "import os, runpy; os.chdir('later'); runpy.run_path('../FILE')" pkg qpkg
+
+echo "slack drafts only: code the command writes out and feeds python3 on its input is read the same way (claude-config#3397)"
+
+for feed in "python3 <<< \"CODE\"" "echo \"CODE\" | python3" "printf '%s\\n' \"CODE\" | python3 -"; do
+  how="${feed%% *} ...${feed: -10}"
+  code="exec(open('./posts.py').read())"
+  run_at "${feed//CODE/$code}" "$IP"
+  read_refused "#3397 exec of open(...).read() in code written out and fed to python3 is refused: $how"
+  says "#3397 and that refusal names the file: $how" "posts.py"
+  code="import runpy; runpy.run_path('./posts.py')"
+  run_at "${feed//CODE/$code}" "$IP"
+  read_refused "#3397 runpy.run_path in code written out and fed to python3 is refused: $how"
+  code="exec(open('./quiet.py').read())"
+  run_at "${feed//CODE/$code}" "$IP"
+  allowed "#3397 and of the quiet twin passes: $how"
+  code="print(open('./posts.py').read())"
+  run_at "${feed//CODE/$code}" "$IP"
+  allowed "#3397 and code fed that way that only reads the file as data passes: $how"
+done
+
+echo "slack drafts only: code this python3 cannot parse that names a way to run a file is refused as unread (claude-config#3397)"
+
+# The reading of such code is of its quoted strings alone, so a path it builds is never seen. The
+# gate's python3 can be older than the one the command starts, so code it cannot parse may still run.
+ip_code "print 'x'; exec(open(raw_input()).read())"
+read_refused "#3397 code the gate cannot parse, running a file by a path it builds, is refused"
+says "#3397 and the refusal says it cannot be parsed" "cannot parse"
+ip_code "print 'x'; exec(open('./posts.py').read())"
+read_refused "#3397 code the gate cannot parse, running a file that posts by a path written out, is refused"
+says "#3397 and that refusal names the file" "posts.py"
+ip_code "print 'x'; y = 1"
+allowed "#3397 code the gate cannot parse that names no way to run a file passes as before"
+# It cannot tell the word from the call there, and falls toward refusing.
+ip_code "print 'x'; y = 'exec'"
+read_refused "#3397 code the gate cannot parse that only holds the word exec in a string is refused: the two cannot be told apart"
+printf '%s\n' "python3 -c \"print 'x'; exec(open(raw_input()).read())\"" > "$IP/wrapp.sh"
+run_at "bash wrapp.sh" "$IP"
+allowed "#3397 and the same code in a script on disk is left as it was"
+
+echo "slack drafts only: an error inside the reading refuses the call, never lets it through (claude-config#3397)"
+
+# The gate's own code, with the one step of this reading that gathers what the code names made to
+# fail on a marker. The wrapper refuses a judge that failed (claude-config#2302), and nothing between
+# it and this reading may turn the failure into an answer. The control is the same copy without it.
+mkdir -p "$T/failing"
+cp "$HOOK" "$T/failing/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/failing/lib"
+cat > "$T/failing/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os
+spec = importlib.util.spec_from_file_location("gate", os.environ["REAL_GATE_3397"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real = gate.Judge.py_names
+def failing(self, nodes, *a, **k):
+    if any(getattr(n, "value", None) == "FAILS-3397" for n in nodes):
+        raise RuntimeError("made to fail by the suite")
+    return real(self, nodes, *a, **k)
+gate.Judge.py_names = failing
+gate.main()
+PY
+run_failing() { # run_failing <command>: judged by the copy whose gathering fails on FAILS-3397
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$1")" "$IP" | REAL_GATE_3397="$DIR/slack_drafts_only_gate.py" bash "$T/failing/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+run_failing "python3 -c \"import runpy; runpy.run_path('./quiet.py'); print('plain')\""
+allowed "#3397 the copy made to fail judges code as the gate does where nothing fails"
+run_failing "python3 -c \"import runpy; runpy.run_path('./posts.py'); print('plain')\""
+refused "#3397 and refuses a file that posts as the gate does"
+run_failing "python3 -c \"import runpy; runpy.run_path('./quiet.py'); print('FAILS-3397')\""
+refused "#3397 a reading that fails part way is refused, not taken as code that names nothing"
+says "#3397 and that refusal says the call could not be judged" "could not judge"
+run_failing "python3 <<'EOF'
+import runpy
+runpy.run_path('./quiet.py'); print('FAILS-3397')
+EOF"
+refused "#3397 and so is one that fails on code fed in a heredoc"
+says "#3397 and that refusal says the call could not be judged" "could not judge"
+
+echo "slack drafts only: a file the code runs that is not text is one the gate cannot read (claude-config#3397)"
+
+# runpy.run_path and zipimport run the __main__.py inside an archive, which the gate does not open.
+# The archives are made by the standard library's own tool from the two __main__.py files above.
+( cd "$IP/pkg" && python3 -m zipfile -c ../app.zip __main__.py ) && ( cd "$IP/qpkg" && python3 -m zipfile -c ../quiet.zip __main__.py )
+if [ -s "$IP/app.zip" ] && [ -s "$IP/quiet.zip" ]; then
+  ip_code "import runpy; runpy.run_path('app.zip')"
+  read_refused "#3397 runpy.run_path of an archive whose __main__.py posts is refused"
+  ip_code "import runpy; runpy.run_path('quiet.zip')"
+  read_refused "#3397 runpy.run_path of an archive is refused whatever it holds: the gate cannot read it"
+  says "#3397 and that refusal says the file is not text" "not text"
+  ip_code "import zipimport; zipimport.zipimporter('quiet.zip').load_module('__main__')"
+  read_refused "#3397 zipimport of an archive is refused the same way"
+  ip_code "import zipfile; print(zipfile.ZipFile('quiet.zip').namelist())"
+  allowed "#3397 code that only lists what an archive holds passes"
+else
+  check "#3397 the archives for these cases could be made" "python3 -m zipfile made no archive, so the cases were not run"
+fi
+
+echo "slack drafts only: code the shell fills in that the gate cannot work out is code it never read (claude-config#3397)"
+
+run_at "python3 -c \"\$(cat posts.py)\"" "$IP"
+read_refused "#3397 code that is a file's text, put there by the shell, is refused"
+says "#3397 and the refusal says the shell fills it in" "the shell fills in"
+run_at "python3 -c \"\$CODE\"" "$IP"
+read_refused "#3397 code that is a variable the gate cannot work out is refused"
+# It cannot tell a number from code there, and falls toward refusing.
+run_at "python3 -c \"print(\$N + 1)\"" "$IP"
+read_refused "#3397 code holding a value outside a string that the gate cannot work out is refused: the two cannot be told apart"
+run_at "N=3; python3 -c \"print(\$N + 1)\"" "$IP"
+allowed "#3397 code holding a value the gate can work out passes"
+run_at "python3 -c \"print('\$N')\"" "$IP"
+allowed "#3397 code holding a value it cannot work out inside a string, running nothing, passes"
+printf '%s\n' 'python3 -c "$CODE"' > "$IP/wrapc.sh"
+run_at "bash wrapc.sh" "$IP"
+allowed "#3397 and a script on disk whose code is a variable is left as it was"
 
 echo
 
