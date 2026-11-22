@@ -8600,7 +8600,9 @@ changes after he answers (what git holds of the file, where a move lands, what a
 asked about again, his "from now on" words cover no removal, and a subagent's removal is refused.
 A command that removes lasting memory and also writes other lasting memory is refused
 whole, each part to be sent by itself, and one that also writes the lessons file by shell is
-refused as it was before (#3343). Not covered: what git itself removes or puts back (Dan's
+refused as it was before (#3343). What the command does is read again when its question arrives,
+and one that has become either by then, or takes files away in more than one way, is refused
+before Dan reads the question. Not covered: what git itself removes or puts back (Dan's
 decision on #1136 stands), `git clean`, `git stash` and `git reset --hard`, what a `find -exec`
 hands to rm by a pattern, what `xargs` hands to rm, and any other folder taken whole that holds a
 lasting memory file the command does not name (docs/mods-design.md, "A removal is asked about in a

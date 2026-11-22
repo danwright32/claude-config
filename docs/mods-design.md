@@ -3340,10 +3340,12 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   session, not by Dan). It is tied to the call by the same `metadata.source` a save's question
   carries. Claude's sentence names what goes and says why; the mod adds, as Dan is asked, what it
   measured: where a move puts the file and whether one is there already, or whether git can bring a
-  deleted file back (`git ls-files` and `git status` on the file: held unchanged, held with changes
+  deleted or emptied file back (`git ls-files` and `git status` on the file: held unchanged, held with changes
   since its last commit, not held, or not readable, which is said as not readable and never as
   held). The header is "Memory file" and the answers are "Keep as is", first, and "Delete", "Move"
-  or "Empty". None of a save's words or answers appear in it (L9, L180).
+  or "Empty". None of a save's words or answers appear in it (L9, L180), nor in its refusal when
+  the answer cannot be read, which said "Not saved" until 2026-11-22 and says "Not deleted", "Not
+  moved" or "Not emptied" and that nothing was.
 - **The two approvals never stand in for each other.** A removal's approval is a record with
   `removes` (what goes, how, where to, what git held), and lets through only the same call removing
   exactly that with the same consequence (`coversRemoval`), so a removal whose consequence changes
@@ -3352,12 +3354,25 @@ lasting memory file, or moved one away, ran with no question. Measured in the mo
   is not compared, so a file git does not hold can change after he answers and still go. A save's approval carries no `removes` and lets no removal through;
   an approval with `removes` lets no save through, and `$.askBeforeSaving.isApproved` answers false
   for it. Dan's own permanent words ("from now on") cover no removal. A subagent's removal is
-  refused and never asked about, as its save is.
+  refused and never asked about, as its save is, and one that takes files away in more than one
+  way is refused in words that say each way, never all of it as a deletion.
 - **One question per command.** A command that removes lasting memory and also writes lasting
   memory other than where its move lands, or that takes files away in more than one way (one
   deleted, another moved or emptied), is refused whole with no question waiting, and each part is
   asked about when sent by itself. A lasting memory file moved onto another is one move question,
   which says the file there is replaced.
+- **The same rule again as Dan would be asked** (lessons review of #3430). What a command does is
+  read from the disk when the call is sent and again when its question arrives, and the two can
+  differ though the command's words are the same: a file its other half takes away has arrived, or
+  the patch it applies has come to name lasting memory. Measured 2026-11-22 at e369a51a35, where the answer
+  applied neither refusal: `rm CLAUDE.md && mv AGENTS.md /tmp/A.md`, first sent while AGENTS.md was
+  absent, was put to Dan under Delete with "Deletes" said of both files once it had arrived, and
+  his Delete ran both halves; `rm *.md && git apply fix.patch` was put to him as a plain deletion
+  after the patch came to name a memory file, and the call was refused whole only once he had
+  answered. So the answer asks the one rule the first check asks (`splitBy`), and the lessons file
+  by shell with it, and such a command is refused before Dan reads the question, saying what it
+  does now, with nothing left waiting. The approval's `files` are those of the first check that
+  are still written as he is asked, never more.
 - **The lessons file by shell stays refused.** A command that removes lasting memory and also
   writes the lessons file by shell (`mv CLAUDE.md ~/.claude/LESSONS.md` among them) was refused
   outright before #3402, with no question waiting (#3343). With the first pass built it had become

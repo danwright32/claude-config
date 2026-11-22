@@ -96,14 +96,18 @@ import {
   agentRemovalRefusal,
   approvedFor,
   coversRemoval,
+  lessonsAtAnswer,
   removalAsleep,
   removalCandidates,
   removalInstruction,
   removalNote,
   removalOptions,
   removalSaid,
+  removalUnread,
   removalWords,
   removedNames,
+  splitAtAnswer,
+  splitBy,
   splitRefusal,
   takesAway,
 } from './rules.ts'
@@ -379,7 +383,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   return { files: out, guessed, handed, unknown, writes: w }
 }
 
-// Whether git can bring a file back once it is deleted (#3402), asked of git itself in the file's
+// Whether git can bring a file back once it is deleted or emptied (#3402), asked of git itself in the file's
 // folder: held with no changes since its last commit ('git'), held with changes since ('changed'),
 // or not held, in a repository or in none ('none'). Anything else git says, or a git that cannot
 // run, is 'unknown' with its words, never read as held: the question then says it could not be read.
@@ -683,6 +687,13 @@ const lessonEdit = ($: EngineInterface, tool: string, input: Record<string, unkn
 // covers a call whose one file is a MEMORY.md). Never an Edit or a Write, which are read
 // (lessonEdit), nor a command that only reads the file.
 const shellLessons = (tool: string, targets: Targets, home: string): boolean => tool === 'Bash' && lessonsByShell(targets.files, home)
+// What such a command is refused with, the Edit route named: said where the call is sent, and again
+// where a removal's question finds its command has come to be one (#3402).
+const shellLessonsRefusal = (targets: Targets, home: string): string => {
+  const file = display(lessonsFile(home), home)
+  const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file), unknown: targets.unknown }
+  return byShellOnly(file, how, targets.files.filter(f => f !== file))
+}
 
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
@@ -1024,9 +1035,8 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
     if (beneath.decision === 'deny') return beneath
     // One question cannot cover a removal and a save that is not where its move lands, nor files
     // taken away in more than one way (deleted, moved, emptied): refused whole, and no question waits.
-    const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
-    const others = files.filter(f => !lands.includes(f))
-    if (others.length || new Set(removes.map(r => r.how)).size > 1) return { decision: 'deny', reason: splitRefusal(removes, others) }
+    const others = splitBy(removes, files)
+    if (others !== undefined) return { decision: 'deny', reason: splitRefusal(removes, others) }
     const night = await removalWhileAsleep($, removes, String(input.command ?? ''))
     if (night !== null) return { decision: 'deny', reason: night }
     const q: AskBeforeSavingQuestion = { id: id || `save-${++saves}`, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key, removes }
@@ -1088,11 +1098,7 @@ const saveCheck: Hook<'tool.check'> = async ($, e, next) => {
   }
   // A shell command that writes or may write the lessons file (#3343): refused the same way, with
   // the Edit route named, where the write is read. No question waits, so no For good can be given.
-  if (byShell) {
-    const file = display(lessonsFile(at.home), at.home)
-    const how = { guessed: targets.guessed.includes(file), handed: targets.handed.includes(file), unknown: targets.unknown }
-    return { decision: 'deny', reason: byShellOnly(file, how, files.filter(f => f !== file)) }
-  }
+  if (byShell) return { decision: 'deny', reason: shellLessonsRefusal(targets, at.home) }
   // A write to a lessons file that could not be read (#3343 route 2): what it takes out cannot be
   // told, so no question can be held to it. Refused, and no question waits.
   if (edit.facts.unread !== undefined) return { decision: 'deny', reason: cannotHold(display(lessonsFile(at.home), at.home), tool, edit.facts.unread) }
@@ -1327,16 +1333,32 @@ export const register: Register = on => {
     if (id === undefined) return e.agentId === undefined && asksBeforeTheSave(ask) ? { deny: askedBeforeSave } : next(e)
     // The removal's question (#3402): Claude's sentence names what goes and says why, and the mod
     // adds what it measures as Dan is asked, where a move puts the file or whether git can bring a
-    // deleted one back, with its own header and answers. What goes is read again here, so the
-    // question says what is true now, and the approval holds exactly that. Keep as is and a typed
-    // answer approve nothing, and neither does any answer of a save's question.
+    // deleted or emptied one back, with its own header and answers. What goes is read again here,
+    // so the question says what is true now, and the approval holds exactly that. Keep as is and a
+    // typed answer approve nothing, and neither does any answer of a save's question.
     const removalAnswered = async (q: AskBeforeSavingQuestion) => {
       const at = await whereOf($)
-      const w = await $.modkit.writes({ command: String(q.input.command ?? ''), cwd: at.cwd, home: at.home })
-      const removes = await removalsOf($, q.tool, q.input, at, w)
+      const targets = await lastingTargets($, q.tool, q.input, at)
+      const removes = await removalsOf($, q.tool, q.input, at, targets.writes)
+      const waitsNoMore = () => update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
       if (!removes.length) {
-        await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
+        await waitsNoMore()
         return { deny: `Nothing waits under ${id} any more: ${removedNames(q.removes ?? [])} is no longer there to remove. Do not ask Dan about it.` }
+      }
+      // The refusals the call passed when it was first sent, applied again to what it does now
+      // (lessons review of #3430). The command's words are the same, and what they do is read from
+      // the disk: a file its other half takes away can have arrived since, or the patch it applies
+      // come to name lasting memory. Asked here, Dan's Delete ran a deletion and a move together,
+      // "Deletes" said of both; or he answered and the call was refused whole all the same. So such
+      // a command is refused before he reads it, as one first sent now is, and nothing waits.
+      if (shellLessons(q.tool, targets, at.home)) {
+        await waitsNoMore()
+        return { deny: lessonsAtAnswer(id, shellLessonsRefusal(targets, at.home)) }
+      }
+      const others = splitBy(removes, targets.files)
+      if (others !== undefined) {
+        await waitsNoMore()
+        return { deny: splitAtAnswer(id, removes, others) }
       }
       const words = removalWords(removes)
       const where = removedNames(removes)
@@ -1365,7 +1387,9 @@ export const register: Register = on => {
       await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
       if (chosen === KEEP_IT) return say(`Dan answered ${KEEP_IT} to ${words.doing} ${where}: ${words.nothing}. Do not ${words.verb} it.`)
       const key: string = q.key ?? saveKey(q.tool, q.input, at.cwd, at.home)
-      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files, until: (await $.clock.now()) + APPROVAL_MS, asked: full, removes }
+      // The lasting memory the approved call may write is what a move of its own landed on both when
+      // it was first sent and as Dan was asked: never more than it was before the answer read it again.
+      const made: AskBeforeSavingApproval = { id: q.id, key, files: q.files.filter(f => targets.files.includes(f)), until: (await $.clock.now()) + APPROVAL_MS, asked: full, removes }
       await update($, approvalsRef, a => [...(a ?? []).filter(x => x.key !== key), made])
       lapseAfter($, APPROVAL_MS, made)
       return say(
@@ -1378,7 +1402,15 @@ export const register: Register = on => {
       const q = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
       if (!q) return { deny: `No save is waiting under ${id}: it was answered already, or the session ended. Send the save again, and you will be told how to ask.` }
       // A removal's question (#3402) is its own, in every word Dan reads and every answer he can give.
-      if (q.removes?.length) return removalAnswered(q)
+      // One that cannot be read is refused as a save's is, below, in the removal's words: nothing
+      // was to be saved, so "Not saved" would say the wrong thing was kept.
+      if (q.removes?.length) {
+        try {
+          return await removalAnswered(q)
+        } catch (err) {
+          return { deny: removalUnread(q.removes, message(err)) }
+        }
+      }
       const where = q.files.join(', ')
       const questions = Array.isArray(ask.questions) ? ask.questions : []
       if (questions.length !== 1 || typeof questions[0]?.question !== 'string')

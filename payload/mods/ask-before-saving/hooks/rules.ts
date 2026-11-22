@@ -1840,8 +1840,8 @@ export const removalOptions = (removes: readonly Removal[]) => {
 /**
  * What the mod adds to Claude's question (#3402): for each file what it is where that is not plain
  * from its name (a whole folder, a folder holding lasting memory, a pattern, a guess), and its
- * consequence as measured: where a move puts it, or whether git can bring a deleted file back. One
- * file is "it"; several are each named.
+ * consequence as measured: where a move puts it, or whether git can bring a deleted or emptied
+ * file back. One file is "it"; several are each named.
  */
 export const removalSaid = (removes: readonly Removal[]): string => {
   const one = removes.length === 1
@@ -1894,13 +1894,9 @@ const sameRemoval = (y: Removal, r: Removal): boolean =>
 export const coversRemoval =(x: AskBeforeSavingApproval, removes: readonly Removal[], files: readonly string[]): boolean =>
   x.removes !== undefined && x.removes.length > 0 && removes.every(r => (x.removes ?? []).some(y => sameRemoval(y, r))) && files.every(f => x.files.includes(f))
 
-/**
- * What a command is refused with when one question cannot cover it (#3402): it removes lasting
- * memory and also writes lasting memory that is not where a move lands, or it takes files away in
- * more than one way (one deleted, another moved or emptied). No question waits: each part is asked
- * about when it is sent by itself.
- */
-export const splitRefusal = (removes: readonly Removal[], saves: readonly string[]): string => {
+// Each thing a command one question cannot cover does, in the words of its own kind: what it
+// deletes, what it moves away, what it empties, then the lasting memory it writes.
+const splitSaid = (removes: readonly Removal[], saves: readonly string[]): string => {
   const deletes = removes.filter(r => r.how === 'delete')
   const moves = removes.filter(r => r.how === 'move')
   const empties = removes.filter(r => r.how === 'empty')
@@ -1910,13 +1906,70 @@ export const splitRefusal = (removes: readonly Removal[], saves: readonly string
     ...(empties.length ? [removesWhat(empties).replace(/^this /, '')] : []),
     ...(saves.length ? [`writes lasting memory (${saves.join(', ')})`] : []),
   ]
-  return `Not run: this command ${parts[0]} and also ${parts.slice(1).join(', and ')}. Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+  return `${parts[0]} and also ${parts.slice(1).join(', and ')}`
 }
 
-/** What a subagent is told when its command would remove lasting memory: refused, never asked (#777). */
-export const agentRemovalRefusal = (removes: readonly Removal[]): string =>
-  `${removalWords(removes).not}: ${removesWhat(removes)}, which only the main session may do, after asking Dan; a subagent never asks him. ` +
-  `If it has to go, put the file and why in your final report, and the main session will ask him. A test fixture kept in a temporary folder outside any checkout is no lasting memory, and removing it is never asked about.`
+const severalWays = (removes: readonly Removal[]): boolean => new Set(removes.map(r => r.how)).size > 1
+
+/**
+ * What a command is refused with when one question cannot cover it (#3402): it removes lasting
+ * memory and also writes lasting memory that is not where a move lands, or it takes files away in
+ * more than one way (one deleted, another moved or emptied). No question waits: each part is asked
+ * about when it is sent by itself.
+ */
+export const splitRefusal = (removes: readonly Removal[], saves: readonly string[]): string =>
+  `Not run: this command ${splitSaid(removes, saves)}. Dan is asked about each by itself, since one answer cannot cover both. Send each as a command of its own.`
+
+/**
+ * Whether one question can cover a command that removes lasting memory (#3402): undefined when it
+ * can, and otherwise the lasting memory the command writes that is not where a move of its own
+ * lands (none of it, when the command only takes files away in more than one way). One rule, asked
+ * where the call is first sent and again as Dan would be asked, since what a command does is read
+ * from the disk both times and can differ (lessons review of #3430).
+ */
+export const splitBy = (removes: readonly Removal[], files: readonly string[]): string[] | undefined => {
+  const lands = removes.flatMap(r => (r.how === 'move' && r.to !== undefined ? [r.to] : []))
+  const others = files.filter(f => !lands.includes(f))
+  return others.length || severalWays(removes) ? others : undefined
+}
+
+/**
+ * What Claude is told when a removal's question arrives and the command has become one no single
+ * question covers (lessons review of #3430): a file its other half takes away has arrived, or what
+ * it applies has come to name lasting memory. Dan is not asked, and the waiting question is gone.
+ */
+export const splitAtAnswer = (id: string, removes: readonly Removal[], saves: readonly string[]): string =>
+  `Dan is not asked: read again now, this command ${splitSaid(removes, saves)}, which it did not when it was first sent. ` +
+  `One answer cannot cover both, so nothing waits under ${id} any more. Send each as a command of its own, and he is asked about each by itself.`
+
+/**
+ * The same, where the command has come to write the lessons file by shell, which no question
+ * covers (#3343): `refusal` is what the call itself is refused with, the Edit route named.
+ */
+export const lessonsAtAnswer = (id: string, refusal: string): string =>
+  `Dan is not asked about this removal, and nothing waits under ${id} any more, because what the command would write has changed since it was first sent. ${refusal}`
+
+/**
+ * What a subagent is told when its command would remove lasting memory: refused, never asked
+ * (#777). One that takes files away in more than one way is said way by way, as the main session's
+ * refusal of it is, never all of it as a deletion.
+ */
+export const agentRemovalRefusal = (removes: readonly Removal[]): string => {
+  const head = severalWays(removes)
+    ? `Not run: this command ${splitSaid(removes, [])}, which only the main session may do, after asking Dan about each by itself; a subagent never asks him. If they have to go, put each file and why in your final report`
+    : `${removalWords(removes).not}: ${removesWhat(removes)}, which only the main session may do, after asking Dan; a subagent never asks him. If it has to go, put the file and why in your final report`
+  return `${head}, and the main session will ask him. A test fixture kept in a temporary folder outside any checkout is no lasting memory, and removing it is never asked about.`
+}
+
+/**
+ * What Claude is told when the answer to a removal's question could not be read (#3402): the same
+ * refusal a save's question gets, in the removal's words, since nothing was to be saved. `removes`
+ * is the removal as the waiting question holds it, read when the call was first sent.
+ */
+export const removalUnread = (removes: readonly Removal[], why: string): string => {
+  const w = removalWords(removes)
+  return `${w.not}: Ask before saving could not read Dan's answer about ${w.doing} ${removedNames(removes)} (${why}), so ${w.nothing}. Ask him again.`
+}
 
 /** The night's note of a removal held while Dan is asleep (#841), for his morning report. */
 export const removalNote = (removes: readonly Removal[], command: string): string =>
