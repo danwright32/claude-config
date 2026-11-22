@@ -4888,6 +4888,24 @@ two checks of a second asking are held the other way by the same reading: the tr
 cache answered. That the first kind fails was not seen: the installed gate refused both commands
 that would have run it with the samples left in one folder.
 
+Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
+127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
+reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
+sample. Dan's decision on 2026-11-21, from a picker, was "Measure more first": no limit, sample count
+or yardstick changes until a few days of runs can be read. So since then every cost case records,
+on every run, the gate's processor seconds for each reading, the yardstick each reading was divided
+by (the least of the samples taken by then, and how many), every yardstick sample the case took, and
+their least, median and greatest. They are on each `cost measured (#2918)` line, and a passing run
+shows them in the suite's two notes. Nothing is judged by them: a case is still judged by its least
+reading against its limit, and the suite checks, with `tools/gate-cost-rows.py check`, that each
+reading is its seconds over the least sample taken by then, so a verdict taken from any figure
+printed beside it fails. No extra yardstick is timed for this; the figures are the ones each case
+already took. `python3 tools/gate-cost-rows.py rows <saved logs>` prints one row per case per run
+from any of the three shapes. And a suite that fails and then passes its recheck now has its first
+output uploaded from the CI job as the download `flaky-first-output-<part>-attempt-<n>`, kept 14
+days; until then it was kept in the runner's cache and thrown away with the runner. The flake rule
+is unchanged: such a suite still ends the run red (#245).
+
 What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
 commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
 refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
@@ -8549,7 +8567,19 @@ is measured the same way, since nothing after it can change what it puts back, a
 chained, piped, backgrounded or paired with another is too, wherever every command before or beside
 it only reads (cat, grep, git status, git log) or is another restore of named paths; one git cannot
 read, one beside a command that may move its source (a switch, an add, a fetch, a script), two where
-one reads the index, or a line writing inside .git, is judged whole with the refusal saying why),
+one reads the index, or a line writing inside .git, is judged whole with the refusal saying why;
+since #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)") a look changing file of any kind
+that a checkout or restore puts back byte for byte as the default branch holds it is not asked
+about, since it changes no look that has not shipped: the guard decides that from git, never from
+the command's words, with `git rev-parse --verify --quiet` for the commit the checkout's record of
+its remote's default branch stands at and for the commit the command names, which must be the same
+commit, and `git ls-tree` for whether that commit holds the file; the command must be written as
+its source and its paths alone (`git checkout origin/main -- <file>`, `git restore --source
+origin/main <file>`), with nothing before or beside it that may change what the name means, though
+on a line that groups nothing what runs once the restore has finished no longer counts, a test run
+piped to its last lines included; any other commit, a local branch that differs from what was
+fetched, the index, any option, a pattern, a file the default branch does not hold and every case
+git cannot answer for is judged as before, and so is putting the changed file back afterwards),
 since #3279 what a git command that moves committed work brings into the working tree (Dan,
 2026-11-19, "Ask only if a look file arrives": `git merge`, `rebase`, `cherry-pick`, `revert`,
 `switch`, a checkout of a branch or of one name, `reset --hard`, `--merge` or `--keep`, `stash pop`

@@ -105,6 +105,11 @@ import {
   leavesGitAlone,
   pathRestore,
   indexSource,
+  wholeRestoreSource,
+  plainLine,
+  runsAfter,
+  holdsAsFile,
+  restoredSaid,
   scriptOf,
   scriptPath,
   neverSetVariable,
@@ -3216,6 +3221,118 @@ test('#2830: leavesGitAlone passes reading commands and git reading only; pathRe
   expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
   expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
   expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])
+})
+
+// #3280: a restore is read as putting a whole file back only where its words are the source and the
+// paths alone. Measured with git 2.51.1: `-p` with answers piped in puts back part of a file.
+test('#3280: wholeRestoreSource gives the source of a restore whose words are its source and paths alone', () => {
+  const source = (sub: string, ...args: string[]) => wholeRestoreSource({ sub, args })
+  expect(source('checkout', 'origin/main', '--', 'f.tsx')).toBe('origin/main')
+  expect(source('checkout', 'origin/main', 'f.tsx', 'g.tsx')).toBe('origin/main')
+  expect(source('checkout', 'origin/main', '--', '-odd.tsx', '--')).toBe('origin/main')
+  expect(source('restore', '--source', 'origin/main', '--', 'f.tsx')).toBe('origin/main')
+  expect(source('restore', '--source=origin/main', 'f.tsx')).toBe('origin/main')
+  expect(source('restore', '-s', 'origin/main', 'f.tsx', 'g.tsx')).toBe('origin/main')
+  expect(source('restore', 'f.tsx', '--source', 'origin/main')).toBe('origin/main')
+  const none: string[][] = [
+    // No source, no path, or more than the two.
+    ['checkout', '--', 'f.tsx'],
+    ['checkout', 'origin/main'],
+    ['checkout', 'origin/main', '--'],
+    ['checkout', 'origin/main', 'other', '--', 'f.tsx'],
+    ['restore', 'f.tsx'],
+    ['restore', '--source', 'origin/main'],
+    ['restore', '--source'],
+    ['restore', '--source=', 'f.tsx'],
+    ['restore', '--source', 'origin/main', '-s', 'other', 'f.tsx'],
+    ['restore', '--source', 'origin/main', '--source', 'origin/main', 'f.tsx'],
+    // Any other option, the ones that only say where to write included: none is read as harmless.
+    ['checkout', '-p', 'origin/main', '--', 'f.tsx'],
+    ['checkout', '--patch', 'origin/main', '--', 'f.tsx'],
+    ['checkout', '-f', 'origin/main', '--', 'f.tsx'],
+    ['checkout', '-q', 'origin/main', 'f.tsx'],
+    ['checkout', '--ours', '--', 'f.tsx'],
+    ['checkout', '-b', 'x', 'origin/main'],
+    ['checkout', '--pathspec-from-file=list', 'origin/main'],
+    ['restore', '-p', '--source', 'origin/main', 'f.tsx'],
+    ['restore', '--source', 'origin/main', '--staged', '--worktree', 'f.tsx'],
+    ['restore', '-s', 'origin/main', '-W', 'f.tsx'],
+    ['restore', '-sorigin/main', 'f.tsx'],
+    ['restore', '--sourc=origin/main', 'f.tsx'],
+    ['restore', '--source', '--', 'f.tsx'],
+    // A source spelled like an option is never handed to git.
+    ['restore', '--source=--textconv', 'f.tsx'],
+    // No restore at all.
+    ['switch', 'origin/main'],
+    ['reset', '--hard', 'origin/main'],
+    ['show', 'origin/main:f.tsx'],
+  ]
+  for (const [sub, ...args] of none) expect({ sub, args, source: source(sub as string, ...args) }).toEqual({ sub, args, source: undefined })
+  expect(wholeRestoreSource(undefined)).toBe(undefined)
+})
+
+test('#3280: runsAfter gives the commands that run only once the last restore has finished', () => {
+  const R = ['git', 'checkout', 'origin/main', '--', 'f.tsx']
+  const TEST = ['claude', 'plugin', 'test', 'x']
+  const after = (commands: { words: string[]; pipedFrom?: string[] }[], last = 0) => [...runsAfter(commands, last)]
+  // A pipe between commands that both run after it.
+  expect(after([{ words: R }, { words: TEST }, { words: ['tail', '-5'], pipedFrom: TEST }])).toEqual([1, 2])
+  expect(after([{ words: ['git', 'status'] }, { words: R }], 1)).toEqual([])
+  // Piped from the restore, straight or through another command, runs beside it; what follows unpiped runs after.
+  expect(after([{ words: R }, { words: ['cat'], pipedFrom: R }, { words: ['git', 'fetch'], pipedFrom: ['cat'] }, { words: ['bun', 'test'] }])).toEqual([3])
+  // Piped from words that are no command after it is not placed after.
+  expect(after([{ words: R }, { words: ['git', 'fetch'], pipedFrom: ['git', 'log'] }])).toEqual([])
+  // Words that name both a command beside it and one after it place nothing piped from them after.
+  expect(after([{ words: ['cat'] }, { words: R, pipedFrom: ['cat'] }, { words: ['cat'] }, { words: ['git', 'fetch'], pipedFrom: ['cat'] }], 1)).toEqual([2])
+  expect(after([{ words: R }, { words: ['tee', 'x'], pipedFrom: R }, { words: ['tee', 'x'] }, { words: ['git', 'fetch'], pipedFrom: ['tee', 'x'] }])).toEqual([2])
+})
+
+test('#3280: plainLine is a line that groups nothing, whatever it quotes', () => {
+  for (const line of ['git checkout origin/main -- f.tsx && claude plugin test x 2>&1 | tail -5', 'git status; git checkout origin/main -- f.tsx || echo no', 'git checkout origin/main -- f.tsx\nbun test | head -3', 'git checkout origin/main -- format.tsx && echo finished'])
+    expect({ line, plain: plainLine(line) }).toEqual({ line, plain: true })
+  for (const line of [
+    '{ git checkout origin/main -- f.tsx; } | git fetch',
+    '(git checkout origin/main -- f.tsx) | git fetch',
+    'git checkout origin/main -- f.tsx > >(git fetch)',
+    'X=$(git fetch) git checkout origin/main -- f.tsx',
+    'git checkout origin/main -- f.tsx `git fetch`',
+    'if git checkout origin/main -- f.tsx; then true; fi | git fetch',
+    'while git checkout origin/main -- f.tsx; do break; done | git fetch',
+    'for f in a; do git checkout origin/main -- f.tsx; done | git fetch',
+    'case x in x) git checkout origin/main -- f.tsx;; esac | git fetch',
+    'time git checkout origin/main -- f.tsx | git fetch',
+    'coproc git fetch; git checkout origin/main -- f.tsx',
+    // A parenthesis in quotes is not told from one that groups, so it is none either.
+    'git checkout origin/main -- f.tsx && bun test | grep -E "(fail|pass)"',
+  ])
+    expect({ line, plain: plainLine(line) }).toEqual({ line, plain: false })
+})
+
+test('#3280: holdsAsFile reads git ls-tree as holding exactly the one file asked for', () => {
+  const sha = 'a'.repeat(40)
+  expect(holdsAsFile(`100644 blob ${sha}\tapp/page.tsx\0`, 'app/page.tsx')).toBe(true)
+  expect(holdsAsFile(`100755 blob ${sha}\todd dir/b c.tsx\0`, 'odd dir/b c.tsx')).toBe(true)
+  expect(holdsAsFile(`100644 blob ${'a'.repeat(64)}\tapp/page.tsx\0`, 'app/page.tsx')).toBe(true)
+  for (const listed of [
+    '',
+    `040000 tree ${sha}\tapp/page.tsx\0`,
+    `160000 commit ${sha}\tapp/page.tsx\0`,
+    `100644 blob ${sha}\tapp/Page.tsx\0`,
+    `100644 blob ${sha}\tapp/page.tsx.bak\0`,
+    `100644 blob ${sha}\tapp/page.tsx`,
+    `100644 blob ${sha}\tapp/page.tsx\0` + `100644 blob ${sha}\tapp/page.tsx/x\0`,
+    `100644 blob ${sha.slice(1)}\tapp/page.tsx\0`,
+    `100644 blob ${sha} app/page.tsx\0`,
+  ])
+    expect({ listed, holds: holdsAsFile(listed, 'app/page.tsx') }).toEqual({ listed, holds: false })
+})
+
+test('#3280: restoredSaid names the file, the source, and the commit of the default branch it was read against', () => {
+  const said = restoredSaid('app/page.tsx', 'origin/main', 'refs/remotes/origin/main', 'd'.repeat(40))
+  expect(said).toContain('app/page.tsx')
+  expect(said).toContain('origin/main')
+  expect(said).toContain('(refs/remotes/origin/main at dddddddddddd)')
+  expect(said).toContain('byte for byte')
 })
 
 // #2924: a shell script's arguments are not judged as writes only where argumentUnreached finds no

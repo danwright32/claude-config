@@ -4361,6 +4361,78 @@ whatever the number said.
   command by `-C` alone and are unchanged here. The shared reader keeps only the last `-C`, while
   git reads each from the one before it.
 
+### What #3280 changed: a file put back exactly as the default branch holds it, 2026-11-21
+
+On 2026-11-19 a builder set its edit to a mod's `.tsx` hook file aside and ran
+`git checkout origin/main -- <that file>` to see a new test fail on the unchanged file. The guard
+held it, and the builder ran the test on an archive of main instead. Dan's answer on 2026-11-21,
+asked whether the guard should let a file be restored to what main holds: "Allow exact restore
+(Recommended)", the guard lets a look changing file be restored only when the file ends up byte
+for byte what origin/main holds, which changes no look that has not already shipped.
+
+- **Exactly main is decided from git, never from the command's words.** The default branch is the
+  one #3279 reads: `$.modkit.branch`'s reading of the checkout's own record of its remote, as the
+  ref under `refs/remotes/origin/`, at the commit last fetched. The guard asks git for the commit
+  that ref stands at and for the commit the command's source names (`git rev-parse --verify
+  --quiet`), and the two must be the same commit. So `origin/main`, a local main level with it and
+  the commit's own id all pass, and a tag, another branch, a stash, a local main that is ahead and
+  a local branch somebody named origin/main (which git reads before the remote's, measured) are
+  told apart by the commit they are.
+- **The commit must hold the file.** `git ls-tree -z <commit> -- <path>` must list exactly that
+  path as a file (rules.ts `holdsAsFile`). Measured with git 2.51.1: it matches a name as written,
+  in its own case, and no pattern. A file the default branch does not hold is one `git restore`
+  takes away, which is a removal and is judged as one.
+- **The command is its source and its paths alone** (rules.ts `wholeRestoreSource`):
+  `git checkout <source> -- <path>`, the same without the `--`, and `git restore` with one
+  `--source <source>`, `--source=<source>` or `-s <source>`. No option is read as harmless, the
+  ones that only say where to write included: `-p` with answers piped in puts back part of a file
+  (measured), and an option the guard does not know may do the same. One restore on the line
+  written any other way leaves every file the call puts back judged as before.
+- **Nothing before or beside it may change what the name means.** The same rule a restore read by
+  its lines has (`restoreAlone`): only commands that read, or other restores of named paths. A
+  fetch, a copy, a script, a `GIT_` variable, an option before the subcommand and a write inside
+  `.git` leave it judged as before.
+- **A copy set aside before the restore stays held, and the refusal says how.** Dan's answer on
+  2026-11-21, asked whether a `cp` of the file may run before an exact restore in the same call:
+  "Keep it held, say how (Recommended)". Where a restore would have gone through but for a command
+  before it on its line, and the guard finds from git that the restore on its own would, the refusal
+  gains one sentence (rules.ts `exactRestoreWay`): run what comes before it in an earlier call, a
+  copy set aside outside the repository included, then the restore by itself or followed by a test
+  run. No verdict moves, and no other refusal's text changes.
+- **What runs once the restore has finished does not count, on a plain line.** Before this, any
+  pipe on the line made every command on it count as beside the restore, so the ordinary
+  `restore && test | tail` was judged whole. For this rule alone, on a line that groups nothing
+  (rules.ts `plainLine`: no brace, parenthesis or backtick anywhere, quoted or not, and no word a
+  compound command is written with) and puts nothing in the background, a command after the last
+  restore that nothing is piped into, or that is piped from one which itself runs after, is left
+  out (rules.ts `runsAfter`). A pipe out of a group runs beside everything in the group, which the
+  order of the commands cannot show, so a grouped line keeps the old reading. The reading of a
+  restore by its lines is unchanged: nothing that was held by its lines passes because of this.
+- **Only a restore of named paths.** A folder is read file by file, each one git lists under it.
+  A pattern is held as a write the guard cannot follow, as before. What a move brings in (#3279)
+  is asked as before, and so is the same text reached by a Write, an Edit, a copy or
+  `git show <commit>:<file> > <file>`.
+- **The way back is not loosened.** Putting the changed file back over main's copy is a write like
+  any other. From the branch's own commit it is judged by the lines it changes; copied back, an
+  app's screen file is held before the copy runs and a mod's hook file is judged by what the copy
+  leaves and undone where that draws something new; written whole it is held. A change that draws
+  nothing new goes back unasked, as it always did.
+- **Each one is written to the guard's log** (rules.ts `restoredSaid`): the file, the source, and
+  the commit of the default branch it was read against. Nothing is asked and nothing recorded for
+  Dan.
+- **Costs three reads of git a file**, and only for a look changing file a restore names from a
+  commit: two `rev-parse` and one `ls-tree`.
+- **Known limits.** The limit #3279 names holds here too: the guard trusts the checkout's record of
+  its remote, as old as the last fetch. What git writes is what a checkout of that commit writes in
+  this repository, so a repository's own filters and line ending settings apply as they do to any
+  checkout. Over 30 days of this Mac's session records the guard held six restores, three of them
+  written this way from origin/main; none of the three would pass as built, two because a `cp` of
+  the file ran before the restore in the same call (the builder's own shape) and one because its
+  line, a test run piped through three commands after the restore, is not a plain one. The two
+  with a copy stay held by Dan's answer above, and their refusal now says how. Reading the third
+  needs mod-kit's reader saying which commands a line groups, so a parenthesis in a quoted pattern
+  need not count.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

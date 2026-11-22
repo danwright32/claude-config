@@ -4039,6 +4039,113 @@ export const pathRestore = (git: { sub: string | undefined; args: readonly strin
 /** Whether a restore's source, as `git cat-file blob <from>:<path>` reads it, is git's index or one side of a conflict in it (#2830). */
 export const indexSource = (from: string): boolean => from === '' || from.startsWith(':')
 
+// #3280 (Dan, 2026-11-21, "Allow exact restore (Recommended)"): a look changing file put back byte
+// for byte as the default branch holds it changes no look that has not already shipped, so such a
+// restore is not asked about. On 2026-11-19 a builder could not put a mod's .tsx hook file back to
+// main to see a new test fail on the unchanged file. What "exactly as the default branch holds it"
+// means is decided by the guard from git, never from the command's words: the commit the command
+// names is the commit the checkout's own record of its remote's default branch stands at
+// (defaultBranchRef, as last fetched), that commit holds the path as a file (holdsAsFile), and the
+// command's words are its source and its paths alone (wholeRestoreSource). Any other commit, a
+// local branch that differs from what was fetched, the index, any option, a command beside it that
+// may change what the name means, and every case git cannot answer for is judged as before. No
+// other route to the same text is read this way: a write, an edit, a copy, a merge or a reset.
+
+/**
+ * The source a git checkout or restore of named paths puts back from (#3280), where the command's
+ * words are that source and its paths alone, so git writes each whole file as the source holds it:
+ * `checkout <source> -- <path>...`, `checkout <source> <path>...`, and `restore` with one
+ * `--source <source>`, `--source=<source>` or `-s <source>` and its paths. Undefined for anything
+ * else. No option is read as harmless: `-p` puts back part of a file (measured with git 2.51.1,
+ * answers piped in), and an option the guard does not know may do the same, so a restore carrying
+ * any, one that only says where to write included, is judged as before.
+ */
+export const wholeRestoreSource = (git: { sub: string | undefined; args: readonly string[] } | undefined): string | undefined => {
+  if (git?.sub !== 'checkout' && git?.sub !== 'restore') return undefined
+  const dashes = git.args.indexOf('--')
+  const before = dashes < 0 ? git.args : git.args.slice(0, dashes)
+  const after = dashes < 0 ? [] : git.args.slice(dashes + 1)
+  let source: string | undefined
+  let paths = after.length
+  if (git.sub === 'checkout') {
+    // With a `--`, the one word before it is the source; with none, the first of two or more is.
+    if (before.some(a => a.startsWith('-')) || (dashes < 0 ? before.length < 2 : before.length !== 1)) return undefined
+    source = before[0]
+    paths += before.length - 1
+  } else
+    for (let i = 0; i < before.length; i++) {
+      const a = before[i] as string
+      const named = a === '--source' || a === '-s' ? before[++i] : a.startsWith('--source=') ? a.slice('--source='.length) : undefined
+      if (named !== undefined) {
+        if (source !== undefined) return undefined
+        source = named
+      } else if (a.startsWith('-')) return undefined
+      else paths++
+    }
+  // A source spelled like an option is never handed to git, which would read it as one.
+  return source === undefined || source === '' || source.startsWith('-') || paths === 0 ? undefined : source
+}
+
+/**
+ * Whether a call's text is a plain line (#3280): commands joined only by `&&`, `||`, `;`, a new line
+ * or a pipe, with nothing grouped. Any brace, parenthesis or backtick anywhere in it, quoted or not
+ * (a group, a subshell, a function, a command the shell runs to fill in a word, a pattern in a
+ * search), and any word a compound command is written with, makes it none: a pipe out of a group
+ * runs beside everything in the group, which the order of the commands alone cannot show.
+ */
+export const plainLine = (command: string): boolean =>
+  !/[(){}`]/.test(command) && !/(^|[\s;&|!])(if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|coproc|time)(?=$|[\s;&|])/.test(command)
+
+/**
+ * Which of a plain line's commands (plainLine), by their place in it, run only once its last
+ * restore has finished (#3280), given the commands in order (cd left out) and the place of that
+ * restore: one after it that nothing is piped into, or that is piped from a command which itself
+ * runs after. A pipe joins commands tighter than `&&` or `;`, so in `restore && test | tail` both
+ * run after, while in `restore | a | b` neither does. A command piped from anything else (the
+ * restore, a command beside it, words that also name an earlier command) is left out, as one that
+ * may run beside it. The caller reads a `&` that puts a command in the background for itself.
+ */
+export const runsAfter = (commands: readonly { words: readonly string[]; pipedFrom?: readonly string[] }[], last: number): Set<number> => {
+  const key = (words: readonly string[]) => words.join('\u0000')
+  const after = new Set<number>()
+  const afterKeys = new Set<string>()
+  const besideKeys = new Set<string>(commands.slice(0, last + 1).map(c => key(c.words)))
+  for (let i = last + 1; i < commands.length; i++) {
+    const c = commands[i] as (typeof commands)[number]
+    const from = c.pipedFrom === undefined ? undefined : key(c.pipedFrom)
+    if (from === undefined || (afterKeys.has(from) && !besideKeys.has(from))) {
+      after.add(i)
+      afterKeys.add(key(c.words))
+    } else besideKeys.add(key(c.words))
+  }
+  return after
+}
+
+/**
+ * Whether what `git ls-tree -z <commit> -- <path>` printed says the commit holds exactly that path,
+ * as a file (#3280): one entry, a blob, under that very name. Measured with git 2.51.1: it matches a
+ * name as it is written, in the case it is written in, and no pattern; a folder is a tree, a path
+ * ending in a slash lists what is under it, and a path the commit does not hold lists nothing. A
+ * file the default branch does not hold is one `git restore` would take away, which is no restore.
+ */
+export const holdsAsFile = (listed: string, rel: string): boolean => {
+  const m = /^\d{6} blob [0-9a-f]{40,64}\t/.exec(listed)
+  return m !== null && listed.slice(m[0].length) === `${rel}\0`
+}
+
+/** What the guard's log says of a look changing file a restore was not asked about (#3280): the file, the source the command names, and the commit of the default branch it was read against. */
+export const restoredSaid = (file: string, from: string, ref: string, sha: string): string =>
+  `design-round-guard: not asked about ${file}, which a git checkout or restore from ${from} puts back byte for byte as the default branch holds it (${ref} at ${sha.slice(0, 12)}): a file put back as it shipped changes no look that has not (#3280).`
+
+/**
+ * What a refusal adds for a look changing file a restore would have put back exactly as the default
+ * branch holds it, held only because a command runs before the restore on its line (#3280; Dan,
+ * 2026-11-21, "Keep it held, say how (Recommended)"): how to get the same result, the copy a builder
+ * sets aside first included, which stays held in the same call.
+ */
+export const exactRestoreWay = (file: string): string =>
+  `To put ${file} back as the default branch holds it, run what comes before the git checkout or restore in an earlier call (a copy of the file set aside in a folder outside the repository, such as the scratchpad, included), then run the git checkout or restore by itself or followed by a test run: it then goes through unasked.`
+
 // #3279 (Dan, 2026-11-19, "Ask only if a look file arrives"): a git command that moves committed
 // work into the working tree (merge, rebase, cherry-pick, revert, switch, a checkout of a branch, a
 // hard reset, stash pop and apply, pull) names no file, so it ran with nothing asked whatever it
