@@ -10168,6 +10168,15 @@ checkout, a changed copy, a second argument, a file or a pattern in place of the
 shell, the file its output is redirected into, and the script chained with any other command, in a
 loop or in a function, which is judged with that command as before. Each such run is one
 `named-reader` line in the log, `passed` or `judged` with why.
+A hold on what a run that was not let through reaches says that reason (#3162). Where the reason
+is what else the command runs (the script run more than once, another command before or after it,
+a value set on its own), the hold also says the one shape let through: the script once, with
+nothing before it but a `cd` and nothing after it but readers its output is piped into (#3417).
+So several mods are checked with one command each, and an exit code is read from the command's own
+result, never from an `echo` after it. On 2026-11-21 a line running the check three times, an
+`echo` after each, was held with the reason alone and taken for a hold on every run of the check.
+What is held did not change: letting such a line through would widen the exemption, which is
+Dan's to sign off.
 `tests/test-area-check-check-mods-read-only.sh` is the proof: it runs the real script from a
 throwaway checkout and is red when a run changes a file git tracks there or adds one git does not
 ignore (the pinned compiler's links under the ignored `tools/typescript/node_modules` are all it
