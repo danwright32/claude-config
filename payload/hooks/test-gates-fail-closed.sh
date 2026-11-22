@@ -377,10 +377,11 @@ tally_verdicts(){ # tally_verdicts <file of verdict lines>
 LIBRARY_SCAN="for refusing PreToolUse gates that need a library"
 BLOCKING_SCAN="for PreToolUse gates registered with onFailure block"
 # `bash payload/hooks/test-gates-fail-closed.sh --list-found` prints what each scan finds in this
-# tree, the gates each table must name, and runs no check.
+# tree, the gates each table must name, and stops before any gate is run. The scans above still run,
+# so a FAIL line among the listing is one of theirs.
 if [ "${1:-}" = --list-found ]; then
-  sed 's/^/library\t/' "$WORK/needing"
-  registered_pre "$SETTINGS" block | sed 's/^/blocking\t/'
+  awk '{ print "library\t" $0 }' "$WORK/needing"
+  registered_pre "$SETTINGS" block | awk '{ print "blocking\t" $0 }'
   exit 0
 fi
 vanished_from_scan "$WORK/needing" "$WORK/table" "$LIBRARY_SCAN" > "$WORK/vanished-library"
@@ -1096,7 +1097,7 @@ fx_tree(){
 # fx_judge <name> <gates in the tables, one per line> -> the FAIL lines of both checks for that tree
 fx_judge(){
   local t="$WORK/fx-$1"
-  printf '%s\n' "$2" | sed '/^$/d; s/$/\tcall\t-/' > "$t/table"
+  printf '%s\n' "$2" | awk 'NF { print $0 "\tcall\t-" }' > "$t/table"
   library_gates "$t/settings.json" "$t/hooks" > "$t/needing"
   registered_pre "$t/settings.json" block > "$t/blocking"
   { vanished_from_scan "$t/needing" "$t/table" "$LIBRARY_SCAN"
