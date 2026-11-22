@@ -2224,6 +2224,79 @@ describe('writes: a program the reader does not know is read as writing what it 
     for (const command of ['rg --pretty color app/globals.css', 'rg -p color app/globals.css', 'file -b app/globals.css', 'mdls -name kMDItemKind app/globals.css', 'lsof +D app'])
       expect([command, read(command).runs]).toEqual([command, undefined])
   })
+  // Each program below takes more spellings of its form than the one its row names. Measured on this
+  // Mac on 2026-11-22 (file 5.41, mdls of macOS 26.6.2, lsof 4.91, ripgrep 14.1.1): what the program
+  // itself takes as the form is read as the form, and so is a spelling it refuses (the side that holds).
+  test('file: every start of --compile that file takes compiles a magic file, so each is read as the form', () => {
+    const writer = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => [r.what, r.args.map(a => a.path)])
+    const whole = writer('file --compile -m app/page.tsx')
+    expect(whole).toEqual([['file with -C, which compiles a magic file', [`${CWD}/app/page.tsx`]]])
+    // --co and every longer start compile one. --c is refused by file as ambiguous (--checking-printout
+    // starts the same) and compiles nothing; it is read as the form too.
+    for (const start of ['--c', '--co', '--com', '--comp', '--compi', '--compil', '--compile'])
+      expect([start, writer(`file ${start} -m app/page.tsx`)]).toEqual([start, whole])
+    expect(writer('/usr/bin/file --comp --magic-file app/page.tsx').length).toBe(1)
+    // The forms that compile nothing stay read as only reading: a long option starting with another
+    // letter, --checking-printout and its starts, a magic file that is used and not compiled, and the
+    // two dashes that end the options.
+    for (const command of [
+      'file notes.txt',
+      'file -b notes.txt',
+      'file --mime-type notes.txt',
+      'file --brief notes.txt',
+      'file -m magic notes.txt',
+      'file --magic-file magic notes.txt',
+      'file --checking-printout -m magic notes.txt',
+      'file --ch -m magic notes.txt',
+      'file -- notes.txt',
+    ])
+      expect([command, read(command).runs]).toEqual([command, undefined])
+  })
+  test('mdls: -plist in every spelling mdls takes writes the file it names, so each is read as the form', () => {
+    const writer = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => [r.what, r.args.map(a => a.path)])
+    const whole = writer('mdls -plist app/globals.css app/page.tsx')
+    expect(whole).toEqual([['mdls with -plist, which writes the file it names', [F, `${CWD}/app/page.tsx`]]])
+    // mdls takes any start of plist, after one dash or two.
+    for (const form of ['-p', '-pl', '-pli', '-plis', '-plist', '--p', '--pl', '--pli', '--plis', '--plist'])
+      expect([form, writer(`mdls ${form} app/globals.css app/page.tsx`)]).toEqual([form, whole])
+    // And the file joined to it with =, which is then the file written.
+    for (const form of ['-plist', '-p', '-pl', '--plist', '--p'])
+      expect([form, writer(`mdls ${form}=app/globals.css app/page.tsx`)]).toEqual([form, whole])
+    for (const command of [
+      'mdls app/globals.css',
+      'mdls -name kMDItemKind app/globals.css',
+      'mdls -n kMDItemKind app/globals.css',
+      'mdls -raw -name kMDItemKind app/globals.css',
+      'mdls -r -nullMarker none -name kMDItemKind app/globals.css',
+      'mdls -name=kMDItemKind app/globals.css',
+    ])
+      expect([command, read(command).runs]).toEqual([command, undefined])
+  })
+  test('lsof: -D inside a cluster of short options is -D, so it is read as the form', () => {
+    const writer = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => [r.what, r.args.map(a => a.path)])
+    const D = 'lsof with -D, which builds or updates its device cache file'
+    // lsof 4.91 answers each of these four with "unsupported option: -D" (it is built without the
+    // device cache here), so it reads the D of a cluster as the option.
+    expect(writer('lsof -D b app/globals.css')).toEqual([[D, [`${CWD}/b`, F]]])
+    expect(writer('lsof -Db app/globals.css')).toEqual([[D, [F]]])
+    expect(writer('lsof -nD b app/globals.css')).toEqual([[D, [`${CWD}/b`, F]]])
+    expect(writer('lsof -nDb app/globals.css')).toEqual([[D, [F]]])
+    // A D inside the value of an option written against its letter (-cDock, the command Dock) is read
+    // as the form too, the side that holds, as file -mC is.
+    expect(writer('lsof -cDock app/globals.css')).toEqual([[D, [F]]])
+    for (const command of ['lsof app/globals.css', 'lsof -n -P app/globals.css', 'lsof -nP -p 1 app/globals.css', 'lsof -c Dock app/globals.css', 'lsof -a +D app -c Dock', 'lsof +D app'])
+      expect([command, read(command).runs]).toEqual([command, undefined])
+  })
+  test('rg: its two forms are read as rg takes them, whole or joined with =, and no shorter', () => {
+    const writer = (command: string) => (read(command).runs ?? []).filter(r => r.unknown).map(r => r.what)
+    // ripgrep 14.1.1 refuses a shortened long option (--pr, --hostname-b: "unrecognized flag") and
+    // runs nothing, so only the whole name is the form. --pre-glob is another option and runs nothing.
+    expect(writer('rg --pre ./pre.sh color app/globals.css')).toEqual(['rg with --pre, which runs a program on each file'])
+    expect(writer('rg --pre=./pre.sh color app/globals.css')).toEqual(['rg with --pre, which runs a program on each file'])
+    expect(writer('rg --hostname-bin=./host.sh color app/globals.css')).toEqual(['rg with --hostname-bin, which runs a program'])
+    for (const command of ["rg --pre-glob '*.css' color app/globals.css", 'rg --pretty color app/globals.css'])
+      expect([command, read(command).runs]).toEqual([command, undefined])
+  })
   test('a program the reader reads by a rule of its own is not unknown', () => {
     for (const command of [
       "sed -n '1,5p' app/globals.css",

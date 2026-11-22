@@ -31,9 +31,10 @@ describe('which refused calls only read', () => {
   })
   // #3323: mod-kit's write reader now gives a program it does not know as a run marked unknown
   // wherever it is handed a word that spells a path. Whether a refused call only read is judged here
-  // by this file's own list of programs that only read (READ_PROGRAMS), which is longer than the
-  // list the reader keeps, so such a run decides nothing here: a program on this list handed a file
-  // still only reads, and one on neither list is still no read, by this list as before.
+  // by this file's own list of programs that only read (READ_PROGRAMS), which holds programs the
+  // reader's list lacks (and lacks some the reader's holds), so such a run decides nothing here: a
+  // program on this list handed a file still only reads, and one on neither list is still no read,
+  // by this list as before.
   test('a program this list knows only reads still only reads when the write reader does not know it (#3323)', () => {
     const marked = (c: string) => commandWrites(c, CWD, HOME).runs?.some(r => r.unknown) ?? false
     for (const c of ['basename src/a.txt', 'dirname src/a.txt', 'realpath a.txt', 'nl a.txt', 'egrep -n x a.txt', 'fgrep x a.txt', 'md5 a.txt', 'column -t a.txt'])
@@ -67,6 +68,23 @@ describe('which refused calls only read', () => {
       expect([c, raised(c), bashReads(c)]).toEqual([c, [], false])
     // file takes any unambiguous start of a long option, as git does: --comp is --compile.
     for (const c of ['file --comp -m magic', 'file --compil', 'file --co -m magic']) expect([c, bashReads(c)]).toEqual([c, false])
+  })
+  // The write reader and this list each judge file's --compile, and were found disagreeing (the
+  // reader took only the whole word). file 5.41 compiles on --co and every longer start and refuses
+  // --c as ambiguous; both read every start from --c as the form, and this holds them together.
+  test("every start of file's --compile is the form to the write reader and to this list alike", () => {
+    const FILE = 'file with -C, which compiles a magic file'
+    for (const start of ['--c', '--co', '--com', '--comp', '--compi', '--compil', '--compile']) {
+      expect([start, raised(`file ${start} -m magic`), bashReads(`file ${start} -m magic`)]).toEqual([start, [FILE], false])
+      // Handed no word that spells a path, the reader gives no run and this list alone holds it.
+      expect([start, raised(`file ${start}`), bashReads(`file ${start}`)]).toEqual([start, [], false])
+    }
+    for (const c of ['file --brief notes.txt', 'file --checking-printout notes.txt', 'file --ch notes.txt', 'file -- notes.txt', 'file -m magic notes.txt'])
+      expect([c, raised(c), bashReads(c)]).toEqual([c, [], true])
+  })
+  test('a program only the write reader lists is no read here, since every command is judged against this list alone', () => {
+    for (const c of ['cksum a.txt', 'ps', 'ps aux', 'lsof a.txt', 'mdls a.txt', 'strings a.txt', 'paste a.txt b.txt', 'pgrep bun', 'mdfind x', 'pdfinfo a.pdf'])
+      expect([c, raised(c), bashReads(c)]).toEqual([c, [], false])
   })
   test('the plain forms of those programs still only read', () => {
     for (const c of ['file notes.txt', 'file -b notes.txt', 'file -c notes.txt', 'file --mime-type -b notes.txt', '/usr/bin/file notes.txt', 'rg pattern src', 'rg -n pattern', 'rg -C 2 pattern src', 'rg --files src', 'rg --hyperlink-format default pattern src'])
