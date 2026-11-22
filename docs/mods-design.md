@@ -2528,7 +2528,10 @@ known. A member renamed on the way out is not read.
   on disk and 48 a folder, and 76 a file inside a checkout. No build does not read runs, by its own
   rule that running programs is allowed, so such a program handed a file still runs there; it does
   refuse an unpack that lands outside the notes. The morning report's judgement of whether a refused
-  call only read keeps its own longer list of programs (`READ_PROGRAMS` in `refusals.ts`).
+  call only read keeps its own longer list of programs (`READ_PROGRAMS` in `refusals.ts`), so a
+  program on that list which the reader does not know still only reads there; a form of a listed
+  program that the reader says writes a file or runs a program (`file -C`, `rg --hostname-bin`) is
+  no read.
 - **The area check is left out for now (#3412).** It judges a command exactly as it did before the
   reader marked these runs (`judgedRuns` in its `rules.ts`). Why: in the 35 days of records such a program
   was handed a source file or a folder in a checkout in 726 past calls, 713 of them a folder, `gh`

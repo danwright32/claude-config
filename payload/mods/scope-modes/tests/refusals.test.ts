@@ -1,8 +1,8 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { callKey, readsOnly, refusalNote } from '../hooks/refusals.ts'
+import { callKey, READER_DOES_NOT_KNOW, readsOnly, refusalNote } from '../hooks/refusals.ts'
 import { toolArgs } from '../hooks/mod-kit/toolargs.ts'
-import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { commandWrites, NOT_KNOWN } from './mod-kit/hooks/writes.ts'
 import { readCommands } from './read.ts'
 
 // #3158: on the night of 16 Nov 2026 auto mode's check was unavailable for hours and the morning
@@ -41,6 +41,51 @@ describe('which refused calls only read', () => {
     for (const c of ['mystery a.txt', 'prettier --check a.txt', 'gh issue view 3', 'npm test']) expect([c, marked(c), bashReads(c)]).toEqual([c, true, false])
     // A run that is not one of those (a script, a tool) is no read, as before.
     for (const c of ['python3 x.py a.txt', 'npx prettier a.txt']) expect([c, marked(c), bashReads(c)]).toEqual([c, false, false])
+  })
+  // #3323: the reader marks a second kind of run `unknown`, a form of a program on its own list
+  // that writes a file or runs a program (`file -C` compiles a magic file, `rg --hostname-bin` runs
+  // a program). This file's list called `file` a read whatever its words and looked only for --pre
+  // on rg, so those forms were reads before the reader raised them, and stayed reads while every
+  // run marked `unknown` was left out here.
+  const raised = (c: string) => (commandWrites(c, CWD, HOME).runs ?? []).filter(r => r.unknown).map(r => r.what)
+  test('a form of a program that only reads which the write reader says writes or runs is not a read (#3323)', () => {
+    const FILE = 'file with -C, which compiles a magic file'
+    const HOST = 'rg with --hostname-bin, which runs a program'
+    const PRE = 'rg with --pre, which runs a program on each file'
+    for (const [c, what] of [
+      ['file -C -m magic', FILE], ['file --compile -m magic', FILE], ['file -bC -m magic', FILE], ['file -m magic -C', FILE], ['/usr/bin/file -C -m magic', FILE],
+      ['cat a.txt | file -C -m magic', FILE], ['cd /r/repo && file -C -m magic', FILE], ['rtk file -C -m magic', FILE],
+      ['rg --hostname-bin ./x foo src', HOST], ['rg --hostname-bin=./x foo', HOST], ['rg --hostname-bin x foo', HOST], ['rg --hostname-bin=x --files', HOST],
+      ['rg --pre ./x foo src', PRE], ['rg --pre=./x foo', PRE], ['rg --pre=x --files', PRE],
+      ['lsof -D b /r/repo/x', 'lsof with -D, which builds or updates its device cache file'],
+      ['mdls -plist out.plist a.txt', 'mdls with -plist, which writes the file it names'],
+    ] as const)
+      expect([c, raised(c), bashReads(c)]).toEqual([c, [what], false])
+  })
+  test('the same forms handed no word that spells a path, which the write reader gives no run for, are not reads either', () => {
+    for (const c of ['file -C', 'file --compile', 'file -bC', 'file -C -m $M', 'rg --hostname-bin $HB --files', 'rg --hostname-bin=$HB --files', 'rg --pre $P --files', "rg --pre-glob '*.pdf' --files"])
+      expect([c, raised(c), bashReads(c)]).toEqual([c, [], false])
+    // file takes any unambiguous start of a long option, as git does: --comp is --compile.
+    for (const c of ['file --comp -m magic', 'file --compil', 'file --co -m magic']) expect([c, bashReads(c)]).toEqual([c, false])
+  })
+  test('the plain forms of those programs still only read', () => {
+    for (const c of ['file notes.txt', 'file -b notes.txt', 'file -c notes.txt', 'file --mime-type -b notes.txt', '/usr/bin/file notes.txt', 'rg pattern src', 'rg -n pattern', 'rg -C 2 pattern src', 'rg --files src', 'rg --hyperlink-format default pattern src'])
+      expect([c, raised(c), bashReads(c)]).toEqual([c, [], true])
+  })
+  test('a run marked unknown decides nothing only when it carries the reader\'s plain label and its program is on this list', () => {
+    // The label is the reader's own, written here because a mod's hooks cannot load mod-kit's.
+    expect(READER_DOES_NOT_KNOW).toBe(NOT_KNOWN)
+    const withRun = (command: string, run: { what: string; script: string }) =>
+      readsOnly('Bash', readCommands(command), { files: [], changes: [], unnamed: [], runs: [{ ...run, tool: true, unknown: true, args: [{ word: 'a.txt', path: '/r/repo/a.txt' }] }] })
+    expect(withRun('basename a.txt', { what: NOT_KNOWN, script: 'basename' })).toBe(true)
+    expect(withRun('/usr/bin/basename a.txt', { what: NOT_KNOWN, script: '/usr/bin/basename' })).toBe(true)
+    // As the reader gives it in a session, rtk written in front by the rewrite hook included.
+    for (const c of ['rtk md5 a.txt', '/sbin/md5 a.txt', 'md5 a.txt | head -3']) expect([c, raised(c), bashReads(c)]).toEqual([c, [NOT_KNOWN], true])
+    // A form the reader learns after this was written: nothing here names it, and it is no read.
+    expect(withRun('cat a.txt', { what: 'cat with --new, which writes a file', script: 'cat' })).toBe(false)
+    expect(withRun('basename a.txt', { what: 'basename with --new, which runs a program', script: 'basename' })).toBe(false)
+    // A program on neither list that the commands read here do not show is no read.
+    expect(withRun('cat a.txt', { what: NOT_KNOWN, script: 'mystery' })).toBe(false)
   })
   test('a tool that only reads by its name is a read; a writer or an unknown tool is not', () => {
     expect(readsOnly('Read', [], { files: [], changes: [], unnamed: [] })).toBe(true)
