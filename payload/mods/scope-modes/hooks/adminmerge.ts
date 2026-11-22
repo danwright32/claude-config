@@ -43,11 +43,12 @@ export const ghApiOf = (run: (argv: string[]) => Promise<Ran>): GhJson => async 
 }
 
 const SHA = /^[0-9a-f]{40}$/i
-const NUMBER = /^[1-9]\d{0,9}$/
+// How a command names one PR, by number or by link; requiredlabel.ts reads the same two (#3439).
+export const NUMBER = /^[1-9]\d{0,9}$/
 // A PR link: the number is read here, the repository it names only by mod-kit's link reader
 // (#961), handed in to judgeAdminMerge as `linkRepo`.
-const LINKED = 'https://github.com/'
-const PULL = /\/pull\/([1-9]\d{0,9})\/?$/
+export const LINKED = 'https://github.com/'
+export const PULL = /\/pull\/([1-9]\d{0,9})\/?$/
 // The flags an admin merge may carry: the merge itself, its pin, its message, and the repository.
 const ALLOWED = new Set(['--admin', '-s', '--squash', '--match-head-commit', '-t', '--subject', '-b', '--body', '-F', '--body-file', '-R', '--repo'])
 // A check that did not fail: green for a check nothing requires. A required one must be a success.

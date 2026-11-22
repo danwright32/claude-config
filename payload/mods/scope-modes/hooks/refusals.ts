@@ -33,8 +33,12 @@ const READ_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', '
 const always = () => true
 const noneOf = (bad: readonly string[]) => (args: readonly string[]) => !args.some(a => bad.some(b => a === b || a.startsWith(`${b}=`)))
 const READ_PROGRAMS: ReadonlyMap<string, (args: readonly string[]) => boolean> = new Map([
-  ...['cat', 'head', 'tail', 'ls', 'wc', 'pwd', 'stat', 'file', 'which', 'echo', 'printf', 'basename', 'dirname', 'realpath', 'readlink', 'du', 'df', 'diff', 'cmp', 'comm', 'cut', 'tr', 'nl', 'grep', 'egrep', 'fgrep', 'test', '[', 'true', 'false', 'cd', 'jq', 'shasum', 'md5', 'column'].map(p => [p, always] as const),
-  ['rg', (args: readonly string[]) => !args.some(a => a.startsWith('--pre'))],
+  ...['cat', 'head', 'tail', 'ls', 'wc', 'pwd', 'stat', 'which', 'echo', 'printf', 'basename', 'dirname', 'realpath', 'readlink', 'du', 'df', 'diff', 'cmp', 'comm', 'cut', 'tr', 'nl', 'grep', 'egrep', 'fgrep', 'test', '[', 'true', 'false', 'cd', 'jq', 'shasum', 'md5', 'column'].map(p => [p, always] as const),
+  // file -C, alone or in a cluster of short options, compiles a magic file, and so does --compile,
+  // which file takes any start of (--comp). rg runs a program with --pre and with --hostname-bin.
+  // The write reader raises these forms too, but only where a word spells a path (readsOnly).
+  ['file', (args: readonly string[]) => !args.some(a => /^-[A-Za-z0-9]*C/.test(a) || (a.length >= 3 && '--compile'.startsWith(a)))],
+  ['rg', (args: readonly string[]) => !args.some(a => a.startsWith('--pre') || a.startsWith('--hostname-bin'))],
   ['find', noneOf(['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'])],
   ['sort', (args: readonly string[]) => !args.some(a => a.startsWith('--output') || /^-[A-Za-z]*o/.test(a))],
 ])
@@ -59,6 +63,13 @@ const gitReads = (c: Cmd): boolean => {
   return true
 }
 
+/**
+ * What mod-kit's write reader calls a run of a program on none of its lists (its NOT_KNOWN, given in
+ * the kit's types under `runs`). Written here because a mod's hooks cannot load mod-kit's; the
+ * suite holds the two together.
+ */
+export const READER_DOES_NOT_KNOW = 'a program the write reader does not know'
+
 const commandReads = (c: Cmd): boolean => {
   if (c.unread || c.verdict || c.script || c.xargs || c.language || c.program || c.heredocs?.length || c.derived?.some(d => d !== null)) return false
   if ((c.behind ?? []).some(b => b !== 'rtk')) return false
@@ -69,17 +80,26 @@ const commandReads = (c: Cmd): boolean => {
 
 /**
  * Whether a call only reads: a tool that reads by its name, or a Bash call whose every command is a
- * known read and that writes nothing mod-kit's writes reader can see. Anything else is not a read.
+ * known read and in which mod-kit's writes reader finds no write, change or run. One kind of run
+ * decides nothing: a program the reader does not know, under its plain label, when this file's own
+ * list holds it. Every other run, write or change makes the call no read, and so does anything else.
  */
 export const readsOnly = (tool: string, commands: readonly Cmd[], writes: ModKitWrites): boolean => {
   if (READ_TOOLS.has(tool)) return true
   if (tool !== 'Bash' || !commands.length) return false
   const w = writes
-  // A run the write reader marks `unknown` (#3323: a program on none of its lists, handed a word
-  // that spells a path) decides nothing here. This file judges every command by its own list of
-  // programs that only read (READ_PROGRAMS), which is longer than the reader's, so a program on
-  // neither is no read by that list, as it was before the reader gave such a run.
-  const runs = (w.runs ?? []).filter(r => !r.unknown)
+  // The write reader marks two kinds of run `unknown` (#3323), each handed a word that spells a
+  // path. A program on none of its lists, under its plain label, decides nothing here when this
+  // file's own list of programs that only read (READ_PROGRAMS) holds it. Neither list holds all of
+  // the other: this one has basename, dirname, pwd, nl, md5 and others the reader does not list,
+  // and the reader's has cksum, ps, lsof, mdls and others this one lacks. So the filter drops only
+  // a run of a program this list holds, which the list then judges below; a program only the
+  // reader lists is no read here either, because every command is judged against this list alone
+  // (commandReads). Every other one stays and makes the call no read: a
+  // program on neither list, and a form of a program the reader lists that writes a file or runs a
+  // program (`file -C`, `rg --hostname-bin`), whose `what` names the form. So a form the reader
+  // learns later is no read here with no change to this file.
+  const runs = (w.runs ?? []).filter(r => !(r.unknown && r.what === READER_DOES_NOT_KNOW && READ_PROGRAMS.has(base(r.script))))
   if (w.files.length || w.changes.length || w.unnamed.length || w.byGit?.length || runs.length || w.stdout?.length || w.unread?.length) return false
   return commands.every(commandReads)
 }
