@@ -4930,6 +4930,28 @@ two checks of a second asking are held the other way by the same reading: the tr
 cache answered. That the first kind fails was not seen: the installed gate refused both commands
 that would have run it with the samples left in one folder.
 
+The two checks of a second asking need a cache an earlier check filled, and on a slow runner it may
+never be filled (#3170). The gate keeps only a judgement it finished, so where the cold judgement
+made in that folder runs out of the gate's 11 seconds, the folder holds no judgement. In CI run
+44965167694 on 2026-11-21 it ran out after 10.4 s at 0.151 s a unit; the second asking then did the
+whole work (52.0 units, the cache tracing `miss: no entry | stored`), was answered from the cache at
+1.7 units the time after, and failed all the same, on a change that did not touch the gate. Dan's
+decision that day, from a picker, was "Build it": the check reports that state as unmeasured, and no
+limit moved. The cold measurement writes down that its judgement in the folder ran out, and the
+check of a second asking is unmeasured only when that record is there and the cache's own trace for
+its first sample says nothing was kept (`miss: no entry`, or `miss: no signing key` where the
+judgement ran out early and left the folder empty). Everything else still fails: a miss with no
+such record, a miss with any other trace (an entry that was there and not used, a stale one), a
+sample after the first that the cache did not answer, and an answer from the cache past 6 units. A
+cold judgement that runs out is still held to its own limit on the step clock, as above. The part is
+printed in every run it happens in (`SUITE-PART-UNMEASURED #3170: ...`, with the figures), so
+run-all-tests counts it on the suite's line and CI lists it in the run's "Not tested by the checks"
+summary and notice, and the case's cost record says the cache was never filled, which
+`tools/gate-cost-rows.py rows` shows in its last column, so how often a runner could not measure
+the case can be counted from saved logs. The suite sees each of those verdicts on doctored records
+replayed through the check's own code (`SLACK_GATE_COST_REPLAY`, which runs no gate), and once per
+run on a real folder, where a copy of the gate with a budget of 0.2 s ran out.
+
 Some CI runners still read a few cost cases over their limits with the gate unchanged (#3170: 4 of
 127 runs from 2026-11-20 to 2026-11-21), and the logs could not say why: they held each case's
 reading in units, but the yardstick and the seconds only for one case, and only the least yardstick
