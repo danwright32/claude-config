@@ -50,7 +50,7 @@ export type AskBeforeSavingRemoval = {
   /** Taken from what the command mentions, since its words do not name the file it removes. */
   guessed?: true
   /**
-   * Whether git can bring a deleted file back: 'git' when git holds it with no changes since its
+   * Whether git can bring a deleted or emptied file back: 'git' when git holds it with no changes since its
    * last commit, 'changed' when it holds an older version, 'none' when it does not hold it, and
    * 'unknown' when that could not be read, with `why`. Absent on a move.
    */
