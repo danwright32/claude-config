@@ -5865,9 +5865,15 @@ set BY the runner
 </td><td>
 
 Each suite's share of the budget, which is the budget divided by how many suites are running at
-once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its
-own processes it may start. Point the runner at one directory holding one suite and that suite is
-handed the whole budget, so running the long suite on its own is as fast as it ever was.
+once. A suite that splits itself or runs its work several at a time reads it as how many of its own
+processes it may start: `test-claude-sync.sh` its shards, `test-gates-fail-closed.sh` the gates it
+judges and `test-hang-wait-suites-gate.sh` the scripts it judges (#3170). Started by hand, with
+nothing granted, each keeps the width it had before (4 shards, 6 gates, 4 scripts), and a value that
+is not a whole number above zero is refused. Each of the last two counts, at every start, how many
+of the runs it started are still going, and fails when that passes its share, which is what a launch
+loop that ignores the share looks like (at a share of 2 before #3170: 6 and 4). Point the runner at one
+directory holding one suite and that suite is handed the whole budget, so running the long suite on
+its own is as fast as it ever was.
 
 </td></tr>
 </tbody>
